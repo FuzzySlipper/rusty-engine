@@ -3,12 +3,15 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use content_store::{decode_manifest, encode_manifest, ArtifactClass, ContentManifest};
+use content_store::{
+    decode_manifest, encode_manifest, ArtifactClass, ArtifactRole, ContentManifest,
+};
 use product_model::{
     admit_checked_product_composition, decode_compiled_composition,
     link_admitted_product_composition, CapabilityAvailability, CapabilityKind, CapabilityUse,
     ProductKernelCapabilityDescriptor, ProductManifest, ProductPath,
 };
+use serde::Serialize;
 
 use crate::{
     error::ProductAssemblyError,
@@ -25,6 +28,13 @@ const BROWSER_MAIN_PATH: &str = "main.js";
 const BROWSER_BRIDGE_PATH: &str = "bridge.js";
 const BROWSER_ENGINE_PATH: &str = "engine/product-browser-host.js";
 const BROWSER_RUNTIME_ADAPTER_PATH: &str = "runtime-adapter.js";
+const BROWSER_RENDERER_PRELOAD_PATH: &str = "renderer-preload.json";
+const RENDERER_TEXTURE_ROLE: &str = "resource:renderer-texture";
+const RENDERER_AUDIO_ROLE: &str = "resource:renderer-audio";
+const RENDERER_TEXTURE_MAX_COUNT: usize = 256;
+const RENDERER_TEXTURE_MAX_BYTES: usize = 16 * 1024 * 1024;
+const RENDERER_AUDIO_MAX_COUNT: usize = 64;
+const RENDERER_AUDIO_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// The generated, product-specific Rust source plan. The returned source is
 /// ordinary closed Rust; no callback table, registry, or erased function is
@@ -792,6 +802,13 @@ pub fn plan_product_assembly_with_kernel_capabilities(
             "Engine or Product Kernel capability bindings require the fixed RustyProductRuntime definition; the no-kernel empty runtime cannot silently dispatch them",
         ));
     }
+    let renderer_preload = PublicationFile::new(
+        BROWSER_RENDERER_PRELOAD_PATH,
+        render_renderer_preload(&content.renderer_preload)?,
+    )?;
+    let mut generated_browser_files = browser_bundle.files().to_vec();
+    generated_browser_files.push(renderer_preload.clone());
+    generated_browser_files.sort_by(|left, right| left.relative_path().cmp(right.relative_path()));
     let source_plan = generate_source_plan(
         manifest,
         kernel_source.as_ref(),
@@ -799,7 +816,7 @@ pub fn plan_product_assembly_with_kernel_capabilities(
         kernel_capabilities,
         engine_dependency_path,
         inputs.kernel_dependency_path(),
-        browser_bundle.files(),
+        &generated_browser_files,
         &content.runtime_files,
     )?;
 
@@ -879,7 +896,7 @@ pub fn plan_product_assembly_with_kernel_capabilities(
             file.bytes.clone(),
         )?);
     }
-    for file in browser_bundle.files() {
+    for file in &generated_browser_files {
         bundle_files.push(file.clone());
     }
     validate_generated_count(&bundle_files)?;
@@ -1053,6 +1070,7 @@ pub fn verify_existing_product_assembly_with_kernel_capabilities(
             continue;
         };
         if relative == "assembly.json"
+            || relative == BROWSER_RENDERER_PRELOAD_PATH
             || relative.starts_with("artifacts/")
             || relative.starts_with("content/")
         {
@@ -1092,6 +1110,25 @@ pub fn verify_existing_product_assembly_with_kernel_capabilities(
 struct ContentClosure {
     manifest_source: Option<ProductFile>,
     runtime_files: Vec<ProductFile>,
+    renderer_preload: Vec<RendererPreloadResource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RendererPreloadResource {
+    identity: String,
+    #[serde(rename = "contentHash")]
+    content_hash: String,
+    #[serde(rename = "mediaType")]
+    media_type: &'static str,
+    path: String,
+    #[serde(rename = "byteLength")]
+    byte_length: usize,
+}
+
+#[derive(Serialize)]
+struct RendererPreloadDescriptor<'a> {
+    artifact: &'static str,
+    resources: &'a [RendererPreloadResource],
 }
 
 fn collect_content(
@@ -1127,6 +1164,7 @@ fn collect_content(
                         .expect("fixed path"),
                     bytes: empty.into_bytes(),
                 }],
+                renderer_preload: Vec::new(),
             });
         }
         return Err(ProductAssemblyError::new(
@@ -1211,6 +1249,9 @@ fn collect_content(
         relative_path: manifest_path,
         bytes: encoded.into_bytes(),
     }];
+    let mut renderer_preload = Vec::new();
+    let mut texture_count = 0_usize;
+    let mut audio_count = 0_usize;
     for artifact in canonical.load_required() {
         let Some(file) = by_path.get(&artifact.path) else {
             return Err(ProductAssemblyError::new(
@@ -1228,12 +1269,122 @@ fn collect_content(
                 "content body does not match its admitted manifest identity",
             ));
         }
+        let renderer_kind = match &artifact.role {
+            ArtifactRole::Resource(role) if role == RENDERER_TEXTURE_ROLE => Some("texture"),
+            ArtifactRole::Resource(role) if role == RENDERER_AUDIO_ROLE => Some("audio"),
+            _ => None,
+        };
+        if let Some(kind) = renderer_kind {
+            validate_renderer_preload_resource(kind, &artifact.path, &file.bytes)?;
+            match kind {
+                "texture" => {
+                    texture_count += 1;
+                    if texture_count > RENDERER_TEXTURE_MAX_COUNT {
+                        return Err(ProductAssemblyError::new(
+                            "ASSEMBLY_RENDERER_RESOURCE_COUNT",
+                            format!("content/{}", artifact.path),
+                            "renderer texture resource count exceeds the application-host bound",
+                        ));
+                    }
+                }
+                "audio" => {
+                    audio_count += 1;
+                    if audio_count > RENDERER_AUDIO_MAX_COUNT {
+                        return Err(ProductAssemblyError::new(
+                            "ASSEMBLY_RENDERER_RESOURCE_COUNT",
+                            format!("content/{}", artifact.path),
+                            "renderer audio resource count exceeds the application-host bound",
+                        ));
+                    }
+                }
+                _ => unreachable!("fixed renderer preload kind"),
+            }
+            let hash = artifact
+                .content_hash
+                .expect("load-required content has identity")
+                .to_hex();
+            renderer_preload.push(RendererPreloadResource {
+                identity: format!("{kind}-resource/{hash}"),
+                content_hash: format!("sha256:{hash}"),
+                media_type: match kind {
+                    "texture" => "image/png",
+                    "audio" => "audio/wav",
+                    _ => unreachable!("fixed renderer preload kind"),
+                },
+                path: format!("content/{}", artifact.path),
+                byte_length: file.bytes.len(),
+            });
+        }
         runtime_files.push(file.clone());
     }
     runtime_files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    renderer_preload.sort_by(|left, right| left.identity.cmp(&right.identity));
     Ok(ContentClosure {
         manifest_source: Some(source_manifest),
         runtime_files,
+        renderer_preload,
+    })
+}
+
+pub(crate) fn validate_renderer_preload_resource(
+    kind: &str,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), ProductAssemblyError> {
+    if !content_store::is_safe_relative_path(path) {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_RENDERER_RESOURCE_PATH",
+            format!("content/{path}"),
+            "renderer preload resources must retain a safe content-manifest relative path",
+        ));
+    }
+    let (extension, media_type, minimum, maximum, signature) = match kind {
+        "texture" => (
+            "png",
+            "image/png",
+            8,
+            RENDERER_TEXTURE_MAX_BYTES,
+            bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        ),
+        "audio" => (
+            "wav",
+            "audio/wav",
+            44,
+            RENDERER_AUDIO_MAX_BYTES,
+            bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE",
+        ),
+        _ => unreachable!("fixed renderer preload kind"),
+    };
+    if !path.ends_with(&format!(".{extension}")) {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_RENDERER_RESOURCE_MEDIA",
+            format!("content/{path}"),
+            format!("{kind} renderer resources must use {media_type} {extension} files"),
+        ));
+    }
+    if bytes.len() < minimum || bytes.len() > maximum || !signature {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_RENDERER_RESOURCE_MEDIA",
+            format!("content/{path}"),
+            format!("{kind} renderer resource bytes do not match bounded {media_type} media"),
+        ));
+    }
+    Ok(())
+}
+
+fn render_renderer_preload(
+    resources: &[RendererPreloadResource],
+) -> Result<Vec<u8>, ProductAssemblyError> {
+    serde_json::to_vec(&RendererPreloadDescriptor {
+        artifact: "rusty.product.renderer-preload.v1",
+        resources,
+    })
+    .map_err(|error| {
+        ProductAssemblyError::new(
+            "ASSEMBLY_RENDERER_PRELOAD",
+            BROWSER_RENDERER_PRELOAD_PATH,
+            error.to_string(),
+        )
     })
 }
 
@@ -2039,6 +2190,7 @@ fn browser_content_type(path: &str) -> Option<&'static str> {
         "svg" => Some("image/svg+xml"),
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
+        "wav" => Some("audio/wav"),
         "wasm" => Some("application/wasm"),
         _ => None,
     }
@@ -2135,6 +2287,7 @@ fn validate_browser_path(path: &str) -> Result<(), ProductAssemblyError> {
             | BROWSER_BRIDGE_PATH
             | BROWSER_ENGINE_PATH
             | BROWSER_RUNTIME_ADAPTER_PATH
+            | BROWSER_RENDERER_PRELOAD_PATH
     );
     if !fixed && !path.starts_with("ui/") && !path.starts_with("assets/") {
         return Err(ProductAssemblyError::new(
@@ -2161,6 +2314,7 @@ fn validate_browser_bytes(path: &str, bytes: &[u8]) -> Result<(), ProductAssembl
             | BROWSER_BRIDGE_PATH
             | BROWSER_ENGINE_PATH
             | BROWSER_RUNTIME_ADAPTER_PATH
+            | BROWSER_RENDERER_PRELOAD_PATH
     ) || path.ends_with(".js")
         || path.ends_with(".mjs")
         || path.ends_with(".css")

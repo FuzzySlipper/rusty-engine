@@ -7,6 +7,10 @@ only the declared TypeScript closure into private scratch space, typechecks the
 rules lane without DOM types and the UI lane with DOM types, evaluates the
 build-time composition DSL, re-admits canonical bytes through Product Model,
 and bundles the named `mountProductUi` export with Engine-owned browser roots.
+`product-assembly` then derives the receipt-covered renderer preload descriptor
+from admitted content roles (`resource:renderer-texture` PNG and
+`resource:renderer-audio` WAV); materialization neither opens runtime content
+nor gives product UI a resource-fetch surface.
 
 Authored scanners, typechecking, and rules evaluation run under the admitted
 Node permission boundary. Vite is an explicit trusted Engine tool over a

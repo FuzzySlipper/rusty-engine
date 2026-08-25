@@ -148,6 +148,28 @@ fn is_allowed_content_type(value: &str) -> bool {
             | "image/svg+xml"
             | "image/png"
             | "image/jpeg"
+            | "audio/wav"
             | "application/wasm"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProductDevBundleEntry;
+
+    #[test]
+    fn admits_bounded_wav_bundle_bytes_without_opening_a_product_path() {
+        let entry =
+            ProductDevBundleEntry::new("content/renderer/theme.wav", "audio/wav", vec![0_u8; 44])
+                .expect("WAV content type is an admitted immutable bundle resource");
+        assert_eq!(entry.path(), "content/renderer/theme.wav");
+        assert_eq!(entry.content_type(), "audio/wav");
+    }
+
+    #[test]
+    fn rejects_media_types_outside_the_fixed_bundle_allowlist() {
+        let error = ProductDevBundleEntry::new("content/renderer/theme.ogg", "audio/ogg", vec![1])
+            .expect_err("unadmitted media type");
+        assert!(error.to_string().contains("DEV_HOST_BUNDLE_CONTENT_TYPE"));
+    }
 }

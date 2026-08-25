@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
@@ -37,8 +38,9 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
       expectedContract: 'product.local.current',
     },
   });
+  const rendererResources = rendererPreloadResources();
   const requests: string[] = [];
-  const server = await createBundleServer(generatedAssets, requests);
+  const server = await createBundleServer(generatedAssets, rendererResources, requests);
   const address = server.address();
   if (address === null || typeof address === 'string') {
     throw new Error('plain HTTP Product Bundle server did not expose a TCP address');
@@ -52,6 +54,9 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
     await expect.poll(() => requests.some((request) => request === 'GET /__rusty/product/runtime/outputs')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'POST /__rusty/product/runtime/lifecycle/start')).toBe(true);
     await expect.poll(() => requests.some((request) => request.startsWith('POST /__rusty/product/runtime/advance-realtime'))).toBe(true);
+    await expect.poll(() => requests.some((request) => request === 'GET /renderer-preload.json')).toBe(true);
+    await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/sky.png')).toBe(true);
+    await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/theme.wav')).toBe(true);
     expect(pageErrors).toEqual([]);
   } finally {
     await closeBundleServer(server);
@@ -60,9 +65,10 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
 
 async function createBundleServer(
   generatedAssets: readonly ProductBrowserBundleAsset[],
+  rendererResources: readonly RendererPreloadResource[],
   requests: string[],
 ): Promise<Server> {
-  const assetMap = new Map<string, { readonly body: string; readonly contentType: string }>();
+  const assetMap = new Map<string, { readonly body: string | Uint8Array; readonly contentType: string }>();
   for (const asset of generatedAssets) {
     assetMap.set(`/${asset.name}`, { body: asset.content, contentType: contentTypeFor(asset.name) });
   }
@@ -70,6 +76,16 @@ async function createBundleServer(
     body: 'export const PRODUCT_RUNTIME_HTTP_BASE_PATH = "/__rusty/product/runtime/";\n',
     contentType: 'text/javascript; charset=utf-8',
   });
+  assetMap.set('/renderer-preload.json', {
+    body: JSON.stringify({
+      artifact: 'rusty.product.renderer-preload.v1',
+      resources: rendererResources.map(({ bytes: _bytes, ...resource }) => resource),
+    }),
+    contentType: 'application/json; charset=utf-8',
+  });
+  for (const resource of rendererResources) {
+    assetMap.set(`/${resource.path}`, { body: resource.bytes, contentType: resource.mediaType });
+  }
   assetMap.set('/ui/main.js', {
     body: [
       'export function mountProductUi(root, context) {',
@@ -103,7 +119,7 @@ async function createBundleServer(
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  assets: ReadonlyMap<string, { readonly body: string; readonly contentType: string }>,
+  assets: ReadonlyMap<string, { readonly body: string | Uint8Array; readonly contentType: string }>,
   requests: string[],
 ): Promise<void> {
   const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
@@ -160,6 +176,46 @@ async function handleRequest(
   }
   response.writeHead(200, { 'content-type': asset.contentType });
   response.end(asset.body);
+}
+
+interface RendererPreloadResource {
+  readonly identity: string;
+  readonly contentHash: string;
+  readonly mediaType: 'image/png' | 'audio/wav';
+  readonly path: string;
+  readonly byteLength: number;
+  readonly bytes: Uint8Array;
+}
+
+function rendererPreloadResources(): readonly RendererPreloadResource[] {
+  const png = Uint8Array.from(Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL95wAAAABJRU5ErkJggg==',
+    'base64',
+  ));
+  const wav = new Uint8Array(44);
+  wav.set([82, 73, 70, 70], 0);
+  wav.set([87, 65, 86, 69], 8);
+  return Object.freeze([
+    preloadResource('texture', 'image/png', 'content/renderer/sky.png', png),
+    preloadResource('audio', 'audio/wav', 'content/renderer/theme.wav', wav),
+  ]);
+}
+
+function preloadResource(
+  kind: 'texture' | 'audio',
+  mediaType: 'image/png' | 'audio/wav',
+  path: string,
+  bytes: Uint8Array,
+): RendererPreloadResource {
+  const hash = createHash('sha256').update(bytes).digest('hex');
+  return Object.freeze({
+    identity: `${kind}-resource/${hash}`,
+    contentHash: `sha256:${hash}`,
+    mediaType,
+    path,
+    byteLength: bytes.byteLength,
+    bytes,
+  });
 }
 
 function sendJson(response: ServerResponse, value: unknown): void {

@@ -151,6 +151,9 @@ test('bundle assets are fixed JS composition roots and descriptor bytes are repr
   assert.match(first[0]!.content, /main\.js/u);
   assert.match(first[1]!.content, /\.\/engine\/product-browser-host\.js/u);
   assert.match(first[1]!.content, /initialInteractionMode: 'gameplay'/u);
+  assert.match(first[1]!.content, /renderer-preload\.json/u);
+  assert.match(first[1]!.content, /renderer: \{ initialContent: rendererInitialContent \}/u);
+  assert.match(first[1]!.content, /crypto\.subtle\.digest\('SHA-256'/u);
   assert.match(first[1]!.content, /realtimeAdvanceOwner: bridge\.realtimeAdvanceOwner/u);
   assert.match(first[2]!.content, /\.\/engine\/product-browser-host\.js/u);
   assert.equal(first[3]!.content, options.engineHostModule);

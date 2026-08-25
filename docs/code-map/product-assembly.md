@@ -36,6 +36,14 @@ concrete adapter from immutable `include_bytes!` resources, and places that
 adapter in the same `RuntimeComposition`. Capability arms are never emitted as
 callbacks, erased registrations, or silent no-ops.
 
+For renderer startup, Assembly recognizes only manifest roles
+`resource:renderer-texture` (PNG) and `resource:renderer-audio` (WAV). It
+rechecks each declared SHA-256/length and bounded media bytes, derives
+application-host identities from that SHA-256, and publishes one deterministic
+`renderer-preload.json` plus the already admitted `content/` files. The
+descriptor is part of the browser-bundle receipt and generated Rust bundle map;
+the generated browser root—not product UI—uses it to preload same-origin bytes.
+
 ## Primary paths
 
 - [`product-assembly/src/lib.rs`](../../rust/crates/product-assembly/src/lib.rs)
@@ -81,7 +89,8 @@ callbacks, erased registrations, or silent no-ops.
 - no symlink-following directory traversal, dynamic registries, callback
   storage, erased invocation, or silently generated no-op capability arms;
 - no whole-root content admission that bypasses `ContentManifest`, no cache
-  bodies in runtime content, and no generated output as the source of a fresh
+  bodies in runtime content, no renderer preload role with unrecognized media
+  or an unchecked identity, and no generated output as the source of a fresh
   regeneration; and
 - no claim that this crate supplies the CLI command family, TypeScript
   compiler, browser host, or desktop wrapper.

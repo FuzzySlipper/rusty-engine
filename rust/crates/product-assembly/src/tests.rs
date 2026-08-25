@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use content_store::{encode_manifest, ContentArtifact, ContentManifest};
+use content_store::{encode_manifest, ArtifactRole, ContentArtifact, ContentManifest};
 use product_model::{
     decode_product_manifest, CapabilityAccess, CapabilityAvailability, CapabilityBudget,
     CapabilityKind, CapabilityMetadata, CapabilityProvenance, CapabilityUses,
@@ -1144,6 +1144,121 @@ fn cache_bodies_are_rejected_explicitly() {
         plan_product_assembly(&fixture.root, &fixture.manifest, &inputs).expect_err("cache body");
     assert_eq!(error.diagnostic().code(), "ASSEMBLY_CONTENT_CACHE_BODY");
     fixture.cleanup();
+}
+
+#[test]
+fn renderer_resource_roles_generate_a_hashed_browser_preload_descriptor() {
+    let fixture = Fixture::new("renderer-preload");
+    let png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut wav = vec![0_u8; 44];
+    wav[..4].copy_from_slice(b"RIFF");
+    wav[8..12].copy_from_slice(b"WAVE");
+    fs::create_dir_all(fixture.root.join("content/renderer")).expect("renderer content");
+    let manifest = ContentManifest::new(vec![
+        ContentArtifact::durable(
+            "renderer/sky.png",
+            ArtifactRole::Resource("resource:renderer-texture".to_owned()),
+            &png,
+        ),
+        ContentArtifact::durable(
+            "renderer/theme.wav",
+            ArtifactRole::Resource("resource:renderer-audio".to_owned()),
+            &wav,
+        ),
+        ContentArtifact::durable(
+            "renderer/ordinary.png",
+            ArtifactRole::Resource("resource:dagger-render".to_owned()),
+            &png,
+        ),
+    ]);
+    fs::write(
+        fixture.root.join("content/manifest.json"),
+        encode_manifest(&manifest).expect("manifest"),
+    )
+    .expect("write manifest");
+    fs::write(fixture.root.join("content/renderer/sky.png"), &png).expect("texture");
+    fs::write(fixture.root.join("content/renderer/theme.wav"), &wav).expect("audio");
+    fs::write(fixture.root.join("content/renderer/ordinary.png"), &png).expect("ordinary");
+
+    let inputs = fixture.inputs();
+    let plan = plan_product_assembly(&fixture.root, &fixture.manifest, &inputs).expect("plan");
+    plan.publish(&fixture.root).expect("publish");
+    let preload: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .root
+                .join("generated/product-bundle/renderer-preload.json"),
+        )
+        .expect("preload"),
+    )
+    .expect("preload JSON");
+    assert_eq!(preload["artifact"], "rusty.product.renderer-preload.v1");
+    let resources = preload["resources"].as_array().expect("resources");
+    assert_eq!(resources.len(), 2);
+    assert!(resources.iter().any(|resource| {
+        resource["identity"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("texture-resource/"))
+            && resource["mediaType"] == "image/png"
+            && resource["path"] == "content/renderer/sky.png"
+    }));
+    assert!(resources.iter().any(|resource| {
+        resource["identity"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("audio-resource/"))
+            && resource["mediaType"] == "audio/wav"
+            && resource["path"] == "content/renderer/theme.wav"
+    }));
+    fixture.cleanup();
+}
+
+#[test]
+fn renderer_resource_roles_fail_closed_on_wrong_media_or_hash() {
+    let fixture = Fixture::new("renderer-preload-invalid");
+    fs::create_dir_all(fixture.root.join("content/renderer")).expect("renderer content");
+    let declared = b"not a png";
+    let manifest = ContentManifest::new(vec![ContentArtifact::durable(
+        "renderer/texture.png",
+        ArtifactRole::Resource("resource:renderer-texture".to_owned()),
+        declared,
+    )]);
+    fs::write(
+        fixture.root.join("content/manifest.json"),
+        encode_manifest(&manifest).expect("manifest"),
+    )
+    .expect("write manifest");
+    fs::write(fixture.root.join("content/renderer/texture.png"), declared).expect("texture");
+    let error = plan_product_assembly(&fixture.root, &fixture.manifest, &fixture.inputs())
+        .expect_err("invalid PNG must fail");
+    assert_eq!(
+        error.diagnostic().code(),
+        "ASSEMBLY_RENDERER_RESOURCE_MEDIA"
+    );
+
+    let png = b"\x89PNG\r\n\x1a\n";
+    fs::write(fixture.root.join("content/renderer/texture.png"), png).expect("changed texture");
+    let error = plan_product_assembly(&fixture.root, &fixture.manifest, &fixture.inputs())
+        .expect_err("changed hash must fail");
+    assert_eq!(error.diagnostic().code(), "ASSEMBLY_CONTENT_HASH_MISMATCH");
+    fixture.cleanup();
+}
+
+#[test]
+fn renderer_preload_validation_rejects_escaping_paths_and_oversized_media() {
+    let png = b"\x89PNG\r\n\x1a\n";
+    let error = crate::source::validate_renderer_preload_resource("texture", "../escape.png", png)
+        .expect_err("renderer resource path must not escape content");
+    assert_eq!(error.diagnostic().code(), "ASSEMBLY_RENDERER_RESOURCE_PATH");
+
+    let mut oversized = vec![0_u8; 16 * 1024 * 1024 + 1];
+    oversized[..8].copy_from_slice(png);
+    let error =
+        crate::source::validate_renderer_preload_resource("texture", "texture.png", &oversized)
+            .expect_err("renderer texture byte bound");
+    assert_eq!(
+        error.diagnostic().code(),
+        "ASSEMBLY_RENDERER_RESOURCE_MEDIA"
+    );
 }
 
 #[cfg(unix)]

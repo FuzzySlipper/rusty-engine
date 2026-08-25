@@ -234,6 +234,28 @@ Downstream retains snapshot/request/result/error meaning and calls ordinary
 typed functions; authoritative publication remains in the named
 `runtime-mutation` lane.
 
+Product Assembly admits either the legacy source-linked `kernel.entry` module
+or the current bounded `kernel.package` rooted at `kernel/Cargo.toml`; the two
+forms are mutually exclusive. Package admission copies the complete authored
+local closure into the generated Assembly and rejects symlinks, workspace
+inheritance, registry dependencies, and local dependency escapes. The generated
+crate addresses the admitted package directly and requires its fixed
+`RustyProductRuntime` export. It never compiles a lone source file with ambient
+workspace reach-through, dynamically loads a product library, or reads the
+product filesystem after generation.
+
+Runtime content remains an immutable Assembly input. A content manifest entry
+with role `resource:renderer-texture` admits one bounded PNG; an entry with
+role `resource:renderer-audio` admits one bounded WAV. Assembly checks the
+declared SHA-256/length, media signature, extension, and application-host
+resource limits, then emits a receipt-covered `renderer-preload.json` beside
+the copied `content/` bytes. The generated Product Browser Host fetches only
+that same-origin descriptor and its declared bundle-relative bytes before
+mounting; it rechecks SHA-256, media, path, and byte length and passes a valid
+empty retained frame plus immutable bytes as `renderer.initialContent`. UI
+code does not fetch or select these resources, and neither the Rust runtime nor
+the renderer-neutral provider crates gain a browser or filesystem seam.
+
 `ProductProjectionContext` is the matching read-only context for a typed
 downstream projection function. It can only be constructed with a live,
 validated `RuntimePhase::Projection` token and exposes the immutable
