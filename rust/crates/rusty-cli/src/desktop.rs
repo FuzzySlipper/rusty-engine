@@ -40,6 +40,10 @@ const DESKTOP_ENTRY_TEMPLATE: &str = "desktop-entry.template";
 const DESKTOP_POLICY: &str = "desktop-policy.json";
 const DESKTOP_CAPABILITY: &str = "capabilities/main.json";
 const DESKTOP_ACTIVATION_RECEIPT: &str = "activation.json";
+// The generated browser entry owns renderer-preload admission and loading.
+// Native desktop keeps it under a stable secondary name before replacing the
+// public entry with the bounded startup/failure bootstrap below.
+const DESKTOP_PRODUCT_MAIN: &str = "product-main.js";
 const DESKTOP_STAGE_PREFIX: &str = ".rusty-product-desktop-stage-";
 const INSTALL_STAGE_PREFIX: &str = ".rusty-product-install-stage-";
 const DESKTOP_BUILD_WORKSPACE: &str = "target/product-desktop-workspace";
@@ -545,6 +549,11 @@ fn build_staged_release(input: StagedReleaseInput<'_>) -> Result<StagedRelease, 
     )?;
     check_javascript_syntax(&bridge_check)?;
     let bootstrap_source = desktop_bootstrap_source();
+    copy_regular_file(
+        &staged_frontend.join("main.js"),
+        &staged_frontend.join(DESKTOP_PRODUCT_MAIN),
+        "RUSTY_DESKTOP_PRODUCT_MAIN",
+    )?;
     replace_regular_file_atomic(
         &staged_frontend.join("main.js"),
         bootstrap_source.as_bytes(),
@@ -1744,30 +1753,8 @@ function renderDesktopStartupFailure(error) {
 }
 
 try {
-  const [
-    { mountProductBrowserHost },
-    { createProductBridge },
-    { mountProductUi },
-  ] = await Promise.all([
-    import('./engine/product-browser-host.js'),
-    import('./bridge.js'),
-    import('./ui/main.js'),
-  ]);
-  const root = document.querySelector('#application');
-  if (root === null) throw new Error('generated Product Browser Host root is missing');
-  const bridge = createProductBridge();
-  const host = await mountProductBrowserHost({
-    root,
-    transport: bridge.transport,
-    lifecycleMode: bridge.lifecycleMode,
-    realtimeAdvanceOwner: bridge.realtimeAdvanceOwner,
-    initialInteractionMode: 'gameplay',
-    mountUi: mountProductUi,
-    uiProjection: bridge.uiProjection,
-    runtimeInput: bridge.runtimeInput,
-  });
+  await import('./product-main.js');
   document.body.dataset.rustyProductReady = 'true';
-  void host;
 } catch (error) {
   renderDesktopStartupFailure(error);
 }
@@ -3685,7 +3672,9 @@ if (outputs.length !== 2 || !calls.includes('unlisten:rusty-runtime-output') || 
     #[test]
     fn desktop_bootstrap_reports_visible_startup_failures() {
         let source = desktop_bootstrap_source();
-        assert!(source.contains("import('./engine/product-browser-host.js')"));
+        assert!(source.contains("await import('./product-main.js')"));
+        assert!(source.contains("document.body.dataset.rustyProductReady = 'true';"));
+        assert!(!source.contains("renderer: { initialContent"));
         assert!(source.contains("data-desktop-startup-error"));
         assert!(source.contains("data-startup-error"));
         assert!(source.contains("MAX_STARTUP_ERROR_BYTES"));
@@ -3697,6 +3686,59 @@ if (outputs.length !== 2 || !calls.includes('unlisten:rusty-runtime-output') || 
         let bootstrap = directory.path().join("main.mjs");
         fs::write(&bootstrap, desktop_bootstrap_source()).unwrap();
         check_javascript_syntax(&bootstrap).unwrap();
+    }
+
+    #[test]
+    fn native_frontend_preserves_browser_preload_module_and_relocates_its_hash() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("bundle");
+        let frontend = directory.path().join("frontend");
+        fs::create_dir_all(&bundle).unwrap();
+        let browser_main = b"const descriptor = new URL('./renderer-preload.json', import.meta.url);\nconst renderer = { initialContent: descriptor };\n";
+        fs::write(bundle.join("main.js"), browser_main).unwrap();
+        fs::write(bundle.join("bridge.js"), b"browser bridge").unwrap();
+
+        copy_tree_without_bridge(&bundle, &frontend, "test").unwrap();
+        write_file(&frontend.join("bridge.js"), b"native bridge", "test").unwrap();
+        copy_regular_file(
+            &frontend.join("main.js"),
+            &frontend.join(DESKTOP_PRODUCT_MAIN),
+            "test",
+        )
+        .unwrap();
+        replace_regular_file_atomic(
+            &frontend.join("main.js"),
+            desktop_bootstrap_source().as_bytes(),
+            "test",
+        )
+        .unwrap();
+
+        let staged = collect_tree(&frontend, "test").unwrap();
+        assert_eq!(
+            staged.get(DESKTOP_PRODUCT_MAIN),
+            Some(&browser_main.to_vec())
+        );
+        assert_eq!(
+            staged.get("bridge.js"),
+            Some(&b"native bridge".to_vec()),
+            "native bridge override must remain the active bridge module",
+        );
+        assert!(String::from_utf8_lossy(staged.get("main.js").unwrap())
+            .contains("await import('./product-main.js')"));
+        assert!(
+            String::from_utf8_lossy(staged.get(DESKTOP_PRODUCT_MAIN).unwrap())
+                .contains("renderer-preload.json")
+        );
+        let staged_hash = sha256_tree(&staged);
+
+        let relocated = directory.path().join("relocated/frontend");
+        copy_tree(&frontend, &relocated, "test").unwrap();
+        let relocated_files = collect_tree(&relocated, "test").unwrap();
+        assert_eq!(sha256_tree(&relocated_files), staged_hash);
+        assert_eq!(
+            fs::read(relocated.join(DESKTOP_PRODUCT_MAIN)).unwrap(),
+            browser_main,
+        );
     }
 
     #[test]
