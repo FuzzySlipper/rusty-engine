@@ -9,9 +9,13 @@ path = "src/main.rs"
 
 [dependencies]
 product-model.workspace = true
+product-materializer.workspace = true
+product-assembly.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 cap-std.workspace = true
+tempfile.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

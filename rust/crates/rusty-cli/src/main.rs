@@ -4,8 +4,13 @@
 
 mod args;
 mod check;
+mod commands;
 mod init;
+mod inspect;
+mod kernel_probe;
+mod package;
 mod report;
+mod workflow;
 
 use std::{
     env,
@@ -18,7 +23,6 @@ use report::{emit, Report};
 pub(crate) const EXIT_USAGE: i32 = 2;
 pub(crate) const EXIT_ROOT: i32 = 3;
 pub(crate) const EXIT_CONFORMANCE: i32 = 4;
-pub(crate) const EXIT_INCOMPLETE: i32 = 5;
 
 pub(crate) struct Execution {
     pub(crate) report: Report,
@@ -47,10 +51,18 @@ fn main() {
 }
 
 pub(crate) fn execute(invocation: Invocation, cwd: &Path) -> Execution {
+    let format = invocation.format;
     match invocation.command {
         Command::Init { target, product_id } => init::init(resolve_from(cwd, &target), product_id),
-        Command::Check { start } => check::check(resolve_from(cwd, &start)),
-        Command::Doctor { start } => check::doctor(resolve_from(cwd, &start)),
+        Command::Check { start } => commands::check(resolve_from(cwd, &start)),
+        Command::Doctor { start } => commands::doctor(resolve_from(cwd, &start)),
+        Command::Dev { start, port } => commands::dev(resolve_from(cwd, &start), port, format),
+        Command::Test { start } => commands::test(resolve_from(cwd, &start)),
+        Command::Inspect { start, subject } => {
+            commands::inspect(resolve_from(cwd, &start), &subject)
+        }
+        Command::Build { start } => commands::build(resolve_from(cwd, &start)),
+        Command::Package { start } => commands::package(resolve_from(cwd, &start)),
     }
 }
 

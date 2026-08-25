@@ -759,13 +759,27 @@ impl ClosureCompiler<'_> {
             let scan = run_node(
                 node,
                 scanner,
-                &[typescript.as_os_str(), destination_file.as_os_str()],
+                &[
+                    typescript.as_os_str(),
+                    destination_file.as_os_str(),
+                    OsStr::new(entry.as_str().split('/').next().unwrap_or_default()),
+                ],
                 scanner.parent().unwrap_or(destination),
                 limits,
             )?;
             let scan = check_output("MATERIALIZER_IMPORT_PARSE", &relative, scan)?;
             let imports: Imports = serde_json::from_slice(&scan.stdout)
                 .map_err(|e| fail("MATERIALIZER_IMPORT_PARSE", &relative, e.to_string()))?;
+            if let Some(violation) = imports.violations.first() {
+                return Err(fail(
+                    &violation.code,
+                    &relative,
+                    format!(
+                        "{} (line {}, column {})",
+                        violation.message, violation.line, violation.column
+                    ),
+                ));
+            }
             if imports.dynamic {
                 return Err(fail(
                     "MATERIALIZER_DYNAMIC_IMPORT",
@@ -813,6 +827,16 @@ impl ClosureCompiler<'_> {
 struct Imports {
     specifiers: Vec<String>,
     dynamic: bool,
+    #[serde(default)]
+    violations: Vec<SourcePolicyViolation>,
+}
+
+#[derive(Deserialize)]
+struct SourcePolicyViolation {
+    code: String,
+    message: String,
+    line: usize,
+    column: usize,
 }
 
 fn resolve_extension(root: &Dir, relative: &str) -> Result<String, MaterializationError> {
@@ -1394,12 +1418,126 @@ fn bound(mut text: String) -> String {
 }
 
 const SCANNER: &str = r#"import { pathToFileURL } from 'node:url';
-const [typescriptPath, file] = process.argv.slice(2);
-const imported = await import(pathToFileURL(typescriptPath).href); const ts = imported.default ?? imported;
-const source = ts.createSourceFile(file, await (await import('node:fs/promises')).readFile(file, 'utf8'), ts.ScriptTarget.ESNext, true);
-const specifiers = []; let dynamic = false;
-function visit(node) { if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) specifiers.push(node.moduleSpecifier.text); if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || ts.isIdentifier(node.expression) && node.expression.text === 'require')) dynamic = true; ts.forEachChild(node, visit); }
-visit(source); console.log(JSON.stringify({ specifiers, dynamic }));
+const [typescriptPath, file, lane] = process.argv.slice(2);
+const imported = await import(pathToFileURL(typescriptPath).href);
+const ts = imported.default ?? imported;
+const source = ts.createSourceFile(
+  file,
+  await (await import('node:fs/promises')).readFile(file, 'utf8'),
+  ts.ScriptTarget.ESNext,
+  true,
+);
+const specifiers = [];
+const violations = [];
+let dynamic = false;
+
+function textLiteral(node) {
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : undefined;
+}
+function memberName(expression) {
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  if (ts.isElementAccessExpression(expression)) return expression.argumentExpression ? textLiteral(expression.argumentExpression) : undefined;
+  return undefined;
+}
+function expressionName(expression) {
+  if (ts.isIdentifier(expression)) return expression.text;
+  return memberName(expression);
+}
+function report(node, code, message) {
+  const position = source.getLineAndCharacterOfPosition(node.getStart(source));
+  violations.push({ code, message, line: position.line + 1, column: position.character + 1 });
+}
+function hostBootstrapSpecifier(specifier) {
+  return specifier.startsWith('node:')
+    || ['vite', 'webpack', 'esbuild', 'express', 'fastify', 'http', 'https', 'net'].includes(specifier);
+}
+function rendererImplementationSpecifier(specifier) {
+  return specifier.startsWith('@rusty-engine/renderer-')
+    || specifier.includes('/private/')
+    || specifier.endsWith('/private');
+}
+function importedName(importDeclaration, name) {
+  const bindings = importDeclaration.importClause?.namedBindings;
+  if (bindings && ts.isNamedImports(bindings)) {
+    return bindings.elements.some((entry) => (entry.propertyName ?? entry.name).text === name);
+  }
+  return Boolean(bindings && ts.isNamespaceImport(bindings));
+}
+function directInputEvent(value) {
+  return ['keydown', 'keyup', 'keypress', 'gamepadconnected', 'gamepaddisconnected', 'controllerconnected', 'controllerdisconnected'].includes(value);
+}
+function directInputProperty(value) {
+  return ['onkeydown', 'onkeyup', 'onkeypress', 'ongamepadconnected', 'ongamepaddisconnected', 'oncontrollerconnected', 'oncontrollerdisconnected'].includes(value);
+}
+function hostBootstrapCall(name) {
+  return ['mountRustyApplication', 'mountProductBrowserHost', 'productBrowserBundleDescriptor', 'createServer', 'listen', 'serve'].includes(name);
+}
+function retainedExportCallback(node) {
+  const parent = node.parent;
+  if (!(ts.isPropertyAssignment(parent) && parent.initializer === node)
+      && !(ts.isArrayLiteralExpression(parent) && parent.elements.includes(node))) return false;
+  for (let current = parent.parent; current && !ts.isSourceFile(current); current = current.parent) {
+    if (ts.isExportAssignment(current)) return true;
+    if (ts.isFunctionLike(current)) return false;
+  }
+  return false;
+}
+function visit(node) {
+  if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+    const specifier = textLiteral(node.moduleSpecifier);
+    if (specifier !== undefined) {
+      specifiers.push(specifier);
+      if (rendererImplementationSpecifier(specifier)) {
+        report(node.moduleSpecifier, 'MATERIALIZER_RENDERER_IMPORT', 'renderer implementation or private module imports are not admitted; render through the Engine-owned application host');
+      } else if (hostBootstrapSpecifier(specifier)) {
+        report(node.moduleSpecifier, 'MATERIALIZER_HOST_BOOTSTRAP', 'downstream source must not bootstrap a dev server or host; use generated Product Assembly and `rusty dev`');
+      }
+    }
+    if (ts.isImportDeclaration(node) && node.moduleSpecifier && textLiteral(node.moduleSpecifier) === '@rusty-engine/application-host' && importedName(node, 'mountRustyApplication')) {
+      report(node, 'MATERIALIZER_HOST_BOOTSTRAP', 'downstream UI may mount presentation only; the Engine-owned bundle mounts the application host');
+    }
+    if (ts.isImportDeclaration(node) && node.moduleSpecifier && textLiteral(node.moduleSpecifier) === '@rusty-engine/product-browser-host' && (importedName(node, 'mountProductBrowserHost') || importedName(node, 'productBrowserBundleDescriptor'))) {
+      report(node, 'MATERIALIZER_HOST_BOOTSTRAP', 'downstream UI must not bootstrap the browser host or alter its bundle; use generated Product Assembly');
+    }
+  }
+  if (ts.isCallExpression(node)) {
+    const name = expressionName(node.expression);
+    if (node.expression.kind === ts.SyntaxKind.ImportKeyword || name === 'require') dynamic = true;
+    if (lane === 'ui' && name === 'requestAnimationFrame') {
+      report(node, 'MATERIALIZER_UI_RENDER_LOOP', 'downstream UI must not run a render loop; subscribe to bounded presentation or UI projection instead');
+    }
+    if (lane === 'ui' && name === 'addEventListener') {
+      const eventName = node.arguments.length > 0 ? textLiteral(node.arguments[0]) : undefined;
+      if (eventName !== undefined && directInputEvent(eventName)) {
+        report(node, 'MATERIALIZER_UI_INPUT_LISTENER', 'downstream UI must not capture keyboard or controller gameplay input; declare input mappings in Runtime Composition');
+      }
+    }
+    if (lane === 'ui' && (name === 'createElement' || name === 'createElementNS')) {
+      const canvasArgument = node.arguments.length === 0 ? undefined : textLiteral(node.arguments[node.arguments.length - 1]);
+      if (canvasArgument?.toLowerCase() === 'canvas') {
+        report(node, 'MATERIALIZER_UI_CANVAS', 'downstream UI must not create a canvas; the Engine-owned application host owns the sole renderer canvas');
+      }
+    }
+    if (name !== undefined && hostBootstrapCall(name)) {
+      report(node, 'MATERIALIZER_HOST_BOOTSTRAP', 'downstream source must not start or configure a host; use the generated Engine-owned host');
+    }
+    if (lane === 'rules' && ['eval', 'Function', 'setTimeout', 'setInterval', 'queueMicrotask'].includes(name ?? '')) {
+      report(node, 'MATERIALIZER_COMPOSITION_DYNAMIC', 'Runtime Composition must be serializable authored data, not dynamically evaluated behavior');
+    }
+  }
+  if (lane === 'ui' && ts.isNewExpression(node) && expressionName(node.expression) === 'OffscreenCanvas') {
+    report(node, 'MATERIALIZER_UI_CANVAS', 'downstream UI must not create a canvas; the Engine-owned application host owns the sole renderer canvas');
+  }
+  if (lane === 'ui' && ts.isBinaryExpression(node) && ts.isAssignmentOperator(node.operatorToken.kind) && directInputProperty(memberName(node.left) ?? '')) {
+    report(node, 'MATERIALIZER_UI_INPUT_LISTENER', 'downstream UI must not capture keyboard or controller gameplay input; declare input mappings in Runtime Composition');
+  }
+  if (lane === 'rules' && (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && retainedExportCallback(node)) {
+    report(node, 'MATERIALIZER_COMPOSITION_CALLBACK', 'Runtime Composition must not retain callbacks; express behavior with admitted DSL declarations and Product Kernel bindings');
+  }
+  ts.forEachChild(node, visit);
+}
+visit(source);
+console.log(JSON.stringify({ specifiers, dynamic, violations }));
 "#;
 const RULES_RUNNER: &str = r#"import { pathToFileURL } from 'node:url';
 const [product, joinedEntries, output] = process.argv.slice(2);
@@ -1584,7 +1722,7 @@ mod tests {
             &[
                 (
                     "rules/main.ts",
-                    "export default { product: 'rusty.test', capabilities: [] };\n",
+                    "const authored = (value: string): string => value; export default { product: authored('rusty.test'), capabilities: [] };\n",
                 ),
                 ("ui/main.ts", "export const notTheMount = 1;\n"),
             ],
@@ -1614,6 +1752,147 @@ mod tests {
             assert_eq!(error.diagnostic().code(), expected, "{label}");
             fixture.cleanup();
         }
+    }
+
+    #[test]
+    fn rejects_authored_host_authority_with_source_path_diagnostics() {
+        let valid_rules = "export default { product: 'rusty.test', capabilities: [] };\n";
+        let valid_ui =
+            "export function mountProductUi(_root: Element, _context: unknown): void {}\n";
+        for (label, path, source, expected) in [
+            (
+                "canvas",
+                "ui/main.ts",
+                "export function mountProductUi(root: Element, _context: unknown): void { root.append(document.createElement('canvas')); }\n",
+                "MATERIALIZER_UI_CANVAS",
+            ),
+            (
+                "mixed-case-canvas",
+                "ui/main.ts",
+                "export function mountProductUi(root: Element, _context: unknown): void { root.append(document.createElement('Canvas')); }\n",
+                "MATERIALIZER_UI_CANVAS",
+            ),
+            (
+                "offscreen-canvas",
+                "ui/main.ts",
+                "export function mountProductUi(_root: Element, _context: unknown): void { void new OffscreenCanvas(1, 1); }\n",
+                "MATERIALIZER_UI_CANVAS",
+            ),
+            (
+                "render-loop",
+                "ui/main.ts",
+                "export function mountProductUi(_root: Element, _context: unknown): void { requestAnimationFrame(() => {}); }\n",
+                "MATERIALIZER_UI_RENDER_LOOP",
+            ),
+            (
+                "keyboard-listener",
+                "ui/main.ts",
+                "export function mountProductUi(_root: Element, _context: unknown): void { document.addEventListener('keydown', () => {}); }\n",
+                "MATERIALIZER_UI_INPUT_LISTENER",
+            ),
+            (
+                "controller-property",
+                "ui/main.ts",
+                "export function mountProductUi(_root: Element, _context: unknown): void { window.ongamepadconnected = () => {}; }\n",
+                "MATERIALIZER_UI_INPUT_LISTENER",
+            ),
+            (
+                "renderer-import",
+                "ui/main.ts",
+                "import '@rusty-engine/renderer-three'; export function mountProductUi(_root: Element, _context: unknown): void {}\n",
+                "MATERIALIZER_RENDERER_IMPORT",
+            ),
+            (
+                "private-import",
+                "ui/main.ts",
+                "import '@rusty-engine/application-host/private/bridge'; export function mountProductUi(_root: Element, _context: unknown): void {}\n",
+                "MATERIALIZER_RENDERER_IMPORT",
+            ),
+            (
+                "host-bootstrap",
+                "ui/main.ts",
+                "import { mountRustyApplication } from '@rusty-engine/application-host'; export function mountProductUi(_root: Element, _context: unknown): void { void mountRustyApplication; }\n",
+                "MATERIALIZER_HOST_BOOTSTRAP",
+            ),
+            (
+                "node-server",
+                "ui/main.ts",
+                "import { createServer } from 'node:http'; export function mountProductUi(_root: Element, _context: unknown): void { void createServer; }\n",
+                "MATERIALIZER_HOST_BOOTSTRAP",
+            ),
+            (
+                "composition-callback",
+                "rules/main.ts",
+                "export default { product: 'rusty.test', capabilities: [], callback: () => 1 };\n",
+                "MATERIALIZER_COMPOSITION_CALLBACK",
+            ),
+            (
+                "composition-dynamic",
+                "rules/main.ts",
+                "setInterval(() => {}, 1); export default { product: 'rusty.test', capabilities: [] };\n",
+                "MATERIALIZER_COMPOSITION_DYNAMIC",
+            ),
+        ] {
+            let fixture = Fixture::new(
+                label,
+                &[
+                    (
+                        "rules/main.ts",
+                        if path == "rules/main.ts" {
+                            source
+                        } else {
+                            valid_rules
+                        },
+                    ),
+                    (
+                        "ui/main.ts",
+                        if path == "ui/main.ts" { source } else { valid_ui },
+                    ),
+                ],
+            );
+            let error = materialize_product(
+                &fixture.root,
+                &fixture.manifest,
+                &fixture.assets,
+                &toolchain(),
+                MaterializationLimits::default(),
+            )
+            .expect_err(label);
+            assert_eq!(error.diagnostic().code(), expected, "{label}");
+            assert_eq!(error.diagnostic().path(), path, "{label}");
+            assert!(
+                error.diagnostic().message().contains("line "),
+                "{label}: {}",
+                error.diagnostic().message()
+            );
+            fixture.cleanup();
+        }
+    }
+
+    #[test]
+    fn permits_ordinary_dom_ui_click_intents_and_presentation() {
+        let fixture = Fixture::new(
+            "ui-click-intent",
+            &[
+                (
+                    "rules/main.ts",
+                    "export default { product: 'rusty.test', capabilities: [] };\n",
+                ),
+                (
+                    "ui/main.ts",
+                    "import type { RustyApplicationUiContext } from '@rusty-engine/application-host';\nexport function mountProductUi(root: HTMLElement, context: RustyApplicationUiContext): void { const button = document.createElement('button'); button.textContent = 'continue'; button.addEventListener('click', () => context.intents?.claim('continue', { kind: 'digital', active: true })); root.append(button); }\n",
+                ),
+            ],
+        );
+        materialize_product(
+            &fixture.root,
+            &fixture.manifest,
+            &fixture.assets,
+            &toolchain(),
+            MaterializationLimits::default(),
+        )
+        .expect("ordinary DOM UI click intent and presentation must remain admitted");
+        fixture.cleanup();
     }
 
     #[cfg(unix)]

@@ -888,7 +888,7 @@ fn generate_source_plan(
         format!("\nproduct-kernel = {{ path = {} }}", rust_string(path))
     });
     let cargo = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\n{engine_dependency}{kernel_dependency}\nserde_json = \"1\"\n\n# Dependencies are product-relative paths supplied by the assembly caller; no absolute path is embedded.\n",
+        "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\n{engine_dependency}{kernel_dependency}\nserde_json = \"1\"\n\n# Dependencies are product-relative paths supplied by the assembly caller; no absolute path is embedded.\n\n# This generated package is a detached build root even when its product lives below an Engine checkout.\n[workspace]\n",
     )
     .into_bytes();
     let kernel = manifest.kernel_entry().map(|path| path.as_str().to_owned());

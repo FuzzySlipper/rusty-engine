@@ -18,8 +18,6 @@ use crate::{
 
 const MANIFEST_NAME: &str = "rusty.toml";
 const GENERATED_LANE: &str = "generated";
-const MINIMUM_RULES: &str = "// Runtime Composition authoring enters here.\nexport {};\n";
-const MINIMUM_UI: &str = "// Product UI composition enters here.\nexport {};\n";
 const MINIMUM_MANIFEST_PREFIX: &str = "[product]\nid = \"";
 const INIT_TARGET_PATH: &str = "$target";
 const INIT_PARENT_PATH: &str = "$parent";
@@ -112,11 +110,15 @@ impl MinimumProduct {
                 error.diagnostic().message(),
             )
         })?;
+        let rules = format!(
+            "import {{ schedule }} from '@rusty-engine/runtime-composition-authoring';\n\nexport default {{\n  product: '{product_id}',\n  capabilities: [],\n  intentDescriptors: [],\n  inputMap: [],\n  schedule: schedule({{}}),\n  gameplayDefinitions: [],\n  timelines: [],\n}};\n"
+        );
+        let ui = "import type { RustyApplicationUiOwner } from '@rusty-engine/application-host';\n\nexport function mountProductUi(root: HTMLElement): RustyApplicationUiOwner {\n  const label = document.createElement('p');\n  label.textContent = 'Rusty product ready';\n  root.append(label);\n  return { dispose: () => label.remove() };\n}\n";
         Ok(Self {
             files: vec![
                 (MANIFEST_NAME, manifest.into_bytes()),
-                ("rules/main.ts", MINIMUM_RULES.as_bytes().to_vec()),
-                ("ui/main.ts", MINIMUM_UI.as_bytes().to_vec()),
+                ("rules/main.ts", rules.into_bytes()),
+                ("ui/main.ts", ui.as_bytes().to_vec()),
                 ("content/.keep", Vec::new()),
                 ("generated/.keep", Vec::new()),
             ],

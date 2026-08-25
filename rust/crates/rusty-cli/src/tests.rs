@@ -83,22 +83,15 @@ fn repeated_init_rejects_symlinked_expected_files_and_directories() {
     let parent = TempDir::new("init-symlink");
     let product = parent.path().join("product");
     init(&product);
+    let expected_rules = fs::read(product.join("rules/main.ts")).unwrap();
     let external = parent.path().join("external.ts");
-    fs::write(
-        &external,
-        "// Runtime Composition authoring enters here.\nexport {};\n",
-    )
-    .unwrap();
+    fs::write(&external, &expected_rules).unwrap();
     fs::remove_file(product.join("rules/main.ts")).unwrap();
     std::os::unix::fs::symlink(&external, product.join("rules/main.ts")).unwrap();
     assert_eq!(init(&product).exit_code, EXIT_CONFORMANCE);
 
     fs::remove_file(product.join("rules/main.ts")).unwrap();
-    fs::write(
-        product.join("rules/main.ts"),
-        "// Runtime Composition authoring enters here.\nexport {};\n",
-    )
-    .unwrap();
+    fs::write(product.join("rules/main.ts"), expected_rules).unwrap();
     let external_content = parent.path().join("external-content");
     fs::create_dir(&external_content).unwrap();
     fs::remove_dir_all(product.join("content")).unwrap();
@@ -344,7 +337,7 @@ fn discovery_rejects_a_symlinked_manifest_before_accepting_the_root() {
 }
 
 #[test]
-fn doctor_is_explicitly_incomplete_and_output_is_stable() {
+fn doctor_reports_the_complete_product_workflow_without_a_wrapper_claim() {
     let parent = TempDir::new("doctor");
     let product = parent.path().join("product");
     init(&product);
@@ -357,12 +350,13 @@ fn doctor_is_explicitly_incomplete_and_output_is_stable() {
         },
         parent.path(),
     );
-    assert_eq!(doctor.exit_code, crate::EXIT_INCOMPLETE);
-    assert_eq!(doctor.report.status, "incomplete");
-    assert_eq!(
-        doctor.report.diagnostics[0].code,
-        "RUSTY_DOCTOR_FOUNDATION_INCOMPLETE"
-    );
+    assert_eq!(doctor.exit_code, 0);
+    assert_eq!(doctor.report.status, "ok");
+    assert!(doctor
+        .report
+        .facts
+        .iter()
+        .any(|fact| fact.path == "doctor.desktopWrapper"));
     let encoded = serde_json::to_string(&doctor.report).unwrap();
     assert_eq!(encoded, serde_json::to_string(&doctor.report).unwrap());
     assert!(encoded.len() < 32 * 1024);

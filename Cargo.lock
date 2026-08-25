@@ -3006,9 +3006,13 @@ name = "rusty-cli"
 version = "0.1.0"
 dependencies = [
  "cap-std",
+ "product-assembly",
+ "product-materializer",
  "product-model",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

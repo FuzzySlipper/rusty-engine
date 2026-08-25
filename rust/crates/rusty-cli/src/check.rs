@@ -10,7 +10,7 @@ use product_model::{
 
 use crate::{
     report::{Diagnostic, Report},
-    Execution, EXIT_CONFORMANCE, EXIT_INCOMPLETE, EXIT_ROOT,
+    Execution, EXIT_CONFORMANCE, EXIT_ROOT,
 };
 
 const MANIFEST_NAME: &str = "rusty.toml";
@@ -42,28 +42,6 @@ pub(crate) fn check(start: PathBuf) -> Execution {
             EXIT_CONFORMANCE
         } else {
             0
-        },
-        report,
-    }
-}
-
-pub(crate) fn doctor(start: PathBuf) -> Execution {
-    let root = match discover_root(&start) {
-        Ok(root) => root,
-        Err(diagnostic) => return failure_execution(EXIT_ROOT, diagnostic),
-    };
-    let mut diagnostics = validate_layout(&root);
-    diagnostics.push(Diagnostic::note(
-        "RUSTY_DOCTOR_FOUNDATION_INCOMPLETE",
-        "$",
-        "Product Model foundation only: Runtime Composition compilation, runtime admission, product assembly, bundle publication, and external product certification are not implemented by this command",
-    ));
-    let report = Report::incomplete(diagnostics);
-    Execution {
-        exit_code: if report.has_errors() {
-            EXIT_CONFORMANCE
-        } else {
-            EXIT_INCOMPLETE
         },
         report,
     }

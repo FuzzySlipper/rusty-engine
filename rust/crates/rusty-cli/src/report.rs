@@ -7,6 +7,7 @@ use crate::args::OutputFormat;
 /// JSON remains below this conservative aggregate ceiling without ever
 /// truncating JSON into an invalid document.
 pub(crate) const MAX_DIAGNOSTICS: usize = 12;
+pub(crate) const MAX_FACTS: usize = 256;
 pub(crate) const MAX_SERIALIZED_REPORT_BYTES: usize = 160 * 1024;
 const MAX_DIAGNOSTIC_BYTES: usize = 1_024;
 
@@ -17,6 +18,22 @@ pub(crate) struct Diagnostic {
     pub(crate) code: &'static str,
     pub(crate) path: String,
     pub(crate) message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Fact {
+    pub(crate) path: String,
+    pub(crate) value: String,
+}
+
+impl Fact {
+    pub(crate) fn new(path: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            path: bounded(path.into()),
+            value: bounded(value.into()),
+        }
+    }
 }
 
 impl Diagnostic {
@@ -68,6 +85,8 @@ fn bounded(value: String) -> String {
 pub(crate) struct Report {
     pub(crate) status: &'static str,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) facts: Vec<Fact>,
 }
 
 impl Report {
@@ -75,6 +94,7 @@ impl Report {
         Self {
             status: "ok",
             diagnostics: Vec::new(),
+            facts: Vec::new(),
         }
     }
 
@@ -87,6 +107,7 @@ impl Report {
                 "incomplete"
             },
             diagnostics,
+            facts: Vec::new(),
         }
     }
 
@@ -99,6 +120,7 @@ impl Report {
                 "ok"
             },
             diagnostics,
+            facts: Vec::new(),
         }
     }
 
@@ -106,7 +128,24 @@ impl Report {
         Self {
             status,
             diagnostics: vec![diagnostic],
+            facts: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_facts(mut self, mut facts: Vec<Fact>) -> Self {
+        facts.sort_by(|left, right| (&left.path, &left.value).cmp(&(&right.path, &right.value)));
+        facts.dedup();
+        if facts.len() > MAX_FACTS {
+            facts.truncate(MAX_FACTS);
+            self.diagnostics.push(Diagnostic::error(
+                "RUSTY_FACT_LIMIT",
+                "$",
+                format!("report facts are limited to {MAX_FACTS} entries"),
+            ));
+            self.status = "error";
+        }
+        self.facts = facts;
+        self
     }
 
     pub(crate) fn has_errors(&self) -> bool {
@@ -159,6 +198,9 @@ pub(crate) fn emit(report: &Report, format: OutputFormat) {
                     diagnostic.path,
                     diagnostic.message
                 );
+            }
+            for fact in &report.facts {
+                println!("{}: {}", fact.path, fact.value);
             }
         }
     }
