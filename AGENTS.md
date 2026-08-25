@@ -277,6 +277,11 @@ it into one.
   exact missing boundary instead of creating mocks, placeholders, fake
   presentation, parallel authority, test-only product behavior, or a substitute
   implementation merely to make a proof pass.
+- When the required capability belongs upstream or to another named owner,
+  file one exact Den request if authorized, link it in the handoff, and stop.
+  Do not vendor, copy, shim, simulate, or recreate that capability inside the
+  assigned task merely to make the task appear complete. A completion packet
+  that names the upstream request and why local work stopped is a valid result.
 - Proof work must not add product behavior or an adjacent mechanism absent from
   the proposed architecture. If proof becomes larger than the mechanism being
   evaluated, stop and reassess the task.
@@ -285,9 +290,10 @@ it into one.
   or another owner is more useful than artificial end-to-end evidence.
 - At meaningful subagent milestones, require a brief report naming the original
   goal advanced, necessary surfaces changed, proof/scaffolding added, any
-  unsupported boundary or drift, and the next task-faithful step. Use that
-  exchange to redirect work early; do not add a permanent drift-agent or
-  validation lane unless the task explicitly needs one.
+  unsupported boundary or drift, any upstream request and stop decision, and
+  the next task-faithful step. Use that exchange to redirect work early; do not
+  add a permanent drift-agent or validation lane unless the task explicitly
+  needs one.
 
 ## Task-faithful review
 
