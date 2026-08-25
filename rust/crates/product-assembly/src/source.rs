@@ -917,6 +917,7 @@ pub fn plan_product_assembly_with_kernel_capabilities(
         inputs.kernel_dependency_path(),
         &generated_browser_files,
         &content.runtime_files,
+        &content.runtime_json_content,
         &content.renderer_preload,
         vm_runtime_program,
     )?;
@@ -1217,6 +1218,7 @@ pub fn verify_existing_product_assembly_with_kernel_capabilities(
 struct ContentClosure {
     manifest_source: Option<ProductFile>,
     runtime_files: Vec<ProductFile>,
+    runtime_json_content: Vec<ProductFile>,
     renderer_preload: Vec<RendererPreloadResource>,
 }
 
@@ -1271,6 +1273,7 @@ fn collect_content(
                         .expect("fixed path"),
                     bytes: empty.into_bytes(),
                 }],
+                runtime_json_content: Vec::new(),
                 renderer_preload: Vec::new(),
             });
         }
@@ -1356,6 +1359,7 @@ fn collect_content(
         relative_path: manifest_path,
         bytes: encoded.into_bytes(),
     }];
+    let mut runtime_json_content = Vec::new();
     let mut renderer_preload = Vec::new();
     let mut texture_count = 0_usize;
     let mut audio_count = 0_usize;
@@ -1378,6 +1382,16 @@ fn collect_content(
                 format!("content/{}", artifact.path),
                 "content body does not match its admitted manifest identity",
             ));
+        }
+        if artifact.path.ends_with(".json") {
+            serde_json::from_slice::<serde_json::Value>(&file.bytes).map_err(|error| {
+                ProductAssemblyError::new(
+                    "ASSEMBLY_RUNTIME_JSON_DECODE",
+                    format!("content/{}", artifact.path),
+                    error.to_string(),
+                )
+            })?;
+            runtime_json_content.push(file.clone());
         }
         let renderer_kind = match &artifact.role {
             ArtifactRole::Resource(role) if role == RENDERER_TEXTURE_ROLE => Some("texture"),
@@ -1459,10 +1473,12 @@ fn collect_content(
         runtime_files.push(file.clone());
     }
     runtime_files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    runtime_json_content.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     renderer_preload.sort_by(|left, right| left.identity.cmp(&right.identity));
     Ok(ContentClosure {
         manifest_source: Some(source_manifest),
         runtime_files,
+        runtime_json_content,
         renderer_preload,
     })
 }
@@ -1558,6 +1574,7 @@ fn generate_source_plan(
     kernel_dependency_path: Option<&str>,
     browser_files: &[PublicationFile],
     runtime_files: &[ProductFile],
+    runtime_json_content: &[ProductFile],
     renderer_preload: &[RendererPreloadResource],
     runtime_program: Option<&[u8]>,
 ) -> Result<AssemblySourcePlan, ProductAssemblyError> {
@@ -1624,6 +1641,7 @@ fn generate_source_plan(
     let product = if runtime_program.is_some() {
         render_vm_runtime_product_source(
             &bundle_entries,
+            runtime_json_content,
             manifest.ui_projection_stream().unwrap_or("product.runtime"),
             manifest
                 .ui_projection_contract()
@@ -1789,6 +1807,7 @@ fn render_runtime_resources(
 /// remain visible, direct named owners in the generated product.
 fn render_vm_runtime_product_source(
     bundle_entries: &str,
+    runtime_json_content: &[ProductFile],
     projection_stream: &str,
     projection_contract: &str,
 ) -> String {
@@ -1802,6 +1821,8 @@ use rusty_engine::{
 const ADMITTED_COMPILED_COMPOSITION: &[u8] =
     include_bytes!("../artifacts/compiled-composition.json");
 const RUNTIME_PROGRAM: &str = include_str!("../runtime/main.js");
+const ADMITTED_RUNTIME_JSON_CONTENT: &[(&str, &[u8])] =
+    &[__VM_RUNTIME_JSON_CONTENT__];
 const VM_PROJECTION_STREAM: &str = __VM_PROJECTION_STREAM__;
 const VM_PROJECTION_CONTRACT: &str = __VM_PROJECTION_CONTRACT__;
 
@@ -1814,6 +1835,23 @@ pub struct GeneratedProductDevRuntime {
     input: Option<runtime_input::RuntimeInputLane>,
     projection: Option<runtime_ui::RuntimeUiProjection>,
     vm: Option<runtime_vm::RuntimeVm>,
+}
+
+fn initialization_facts() -> Result<serde_json::Value, String> {
+    let composition: serde_json::Value = serde_json::from_slice(ADMITTED_COMPILED_COMPOSITION)
+        .map_err(|error| format!("compiled composition facts: {error}"))?;
+    let content = ADMITTED_RUNTIME_JSON_CONTENT
+        .iter()
+        .map(|(path, bytes)| {
+            let value: serde_json::Value = serde_json::from_slice(bytes)
+                .map_err(|error| format!("runtime JSON facts {path}: {error}"))?;
+            Ok(serde_json::json!({ "path": path, "value": value }))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(serde_json::json!({
+        "composition": composition,
+        "content": content,
+    }))
 }
 
 impl GeneratedProductDevRuntime {
@@ -1845,7 +1883,7 @@ impl GeneratedProductDevRuntime {
     fn initialize_vm(&mut self) -> Result<(), String> {
         let mut vm = runtime_vm::RuntimeVm::new(RUNTIME_PROGRAM, runtime_vm::RuntimeVmConfig::default())
             .map_err(|error| format!("VM configuration: {error}"))?;
-        vm.initialize(serde_json::json!({}))
+        vm.initialize(initialization_facts()?)
             .map_err(|error| format!("VM initialization: {error}"))?;
         self.vm = Some(vm);
         Ok(())
@@ -2185,6 +2223,24 @@ pub fn run(port: u16) {
     .replace("__BUNDLE_ENTRIES__", bundle_entries)
     .replace("__VM_PROJECTION_STREAM__", &rust_string(projection_stream))
     .replace("__VM_PROJECTION_CONTRACT__", &rust_string(projection_contract))
+    .replace(
+        "__VM_RUNTIME_JSON_CONTENT__",
+        &render_vm_runtime_json_content(runtime_json_content),
+    )
+}
+
+fn render_vm_runtime_json_content(runtime_json_content: &[ProductFile]) -> String {
+    runtime_json_content
+        .iter()
+        .map(|file| {
+            let path = file.relative_path.as_str();
+            format!(
+                "({}, include_bytes!({})),",
+                rust_string(path),
+                rust_string(&format!("../{path}")),
+            )
+        })
+        .collect()
 }
 
 /// Emits the Product Assembly executable and its fixed local host bridge. The

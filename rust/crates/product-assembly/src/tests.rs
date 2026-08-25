@@ -565,15 +565,33 @@ fn generated_vm_product_initializes_and_preserves_state_across_two_demand_turns(
         "export default { initialize: () => ({ count: 0 }), turn: ({ state }) => ({ count: state.count + 1 }), project: ({ state }) => ({ ui: { count: state.count } }) };\n",
     )
     .expect("runtime source");
+    let runtime_content = br#"{ "start": 40 }"#;
+    fs::write(fixture.root.join("content/runtime.json"), runtime_content).expect("runtime content");
+    fs::write(
+        fixture.root.join("content/manifest.json"),
+        encode_manifest(&ContentManifest::new(vec![ContentArtifact::durable(
+            "runtime.json",
+            ArtifactRole::GeneratedMetadata,
+            runtime_content,
+        )]))
+        .expect("content manifest"),
+    )
+    .expect("write content manifest");
     let manifest = decode_product_manifest(&manifest_text).expect("VM manifest admission");
     let generated_package = fixture.root.join("generated/product-assembly");
     let engine_package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rusty-engine");
     let program = br#"globalThis.__rustyEngineRuntime = {
-  initialize() { return { count: 0 }; },
-  turn({ state, step }) { return { count: state.count + 1, step: step.sequence }; },
+  initialize({ facts }) {
+    return {
+      count: facts.content[0].value.start,
+      composition: facts.composition.product,
+      contentPath: facts.content[0].path,
+    };
+  },
+  turn({ state, step }) { return { count: state.count + 1, step: step.sequence, composition: state.composition, contentPath: state.contentPath }; },
   project({ state }) {
-    if (state.step === 1) return { ui: { count: state.count }, render: { malformed: true } };
-    return { ui: { count: state.count } };
+    if (state.step === 1) return { ui: { count: state.count, composition: state.composition, contentPath: state.contentPath }, render: { malformed: true } };
+    return { ui: { count: state.count, composition: state.composition, contentPath: state.contentPath } };
   },
 };
 "#;
@@ -583,6 +601,36 @@ fn generated_vm_product_initializes_and_preserves_state_across_two_demand_turns(
         .expect("engine dependency path")
         .with_runtime_program(program.to_vec())
         .expect("runtime program");
+    let malformed_runtime_content = br#"{ not-json }"#;
+    fs::write(
+        fixture.root.join("content/runtime.json"),
+        malformed_runtime_content,
+    )
+    .expect("malformed runtime content");
+    fs::write(
+        fixture.root.join("content/manifest.json"),
+        encode_manifest(&ContentManifest::new(vec![ContentArtifact::durable(
+            "runtime.json",
+            ArtifactRole::GeneratedMetadata,
+            malformed_runtime_content,
+        )]))
+        .expect("malformed content manifest"),
+    )
+    .expect("write malformed content manifest");
+    let error = plan_product_assembly(&fixture.root, &manifest, &inputs)
+        .expect_err("malformed runtime JSON must be rejected during planning");
+    assert_eq!(error.diagnostic().code(), "ASSEMBLY_RUNTIME_JSON_DECODE");
+    fs::write(fixture.root.join("content/runtime.json"), runtime_content).expect("runtime content");
+    fs::write(
+        fixture.root.join("content/manifest.json"),
+        encode_manifest(&ContentManifest::new(vec![ContentArtifact::durable(
+            "runtime.json",
+            ArtifactRole::GeneratedMetadata,
+            runtime_content,
+        )]))
+        .expect("content manifest"),
+    )
+    .expect("restore content manifest");
     let plan = plan_product_assembly(&fixture.root, &manifest, &inputs).expect("VM plan");
     assert_eq!(
         plan.source_plan().runtime_program_path(),
@@ -622,18 +670,20 @@ fn assert_projection(
     let encoded = serde_json::to_string(&outputs).expect("outputs encode");
     assert!(encoded.contains(&format!(r#""count":{expected}"#)), "projection output: {encoded}");
     assert!(encoded.contains(r#""stream":"rusty.test.ui""#), "projection stream: {encoded}");
+    assert!(encoded.contains(r#""composition":"rusty.test""#), "composition facts: {encoded}");
+    assert!(encoded.contains(r#""contentPath":"content/runtime.json""#), "content facts: {encoded}");
 }
 
 fn main() {
     let mut runtime = rusty_product::product::GeneratedProductDevRuntime::new().expect("runtime");
     runtime.lifecycle(ProductDevLifecycleOperation::Start).expect("start");
-    assert_projection(runtime.admit_demand_step().expect("first turn"), 1);
+    assert_projection(runtime.admit_demand_step().expect("first turn"), 41);
     runtime.lifecycle(ProductDevLifecycleOperation::Pause).expect("pause");
     runtime.lifecycle(ProductDevLifecycleOperation::Resume).expect("resume");
     let rejected = runtime.admit_demand_step().expect("rejected turn receipt");
     let (result, _) = rejected.into_parts();
     assert!(format!("{result:?}").contains("accepted: false"), "rejected result: {result:?}");
-    assert_projection(runtime.admit_demand_step().expect("second committed turn"), 2);
+    assert_projection(runtime.admit_demand_step().expect("second committed turn"), 42);
 }
 "###,
     )

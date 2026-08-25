@@ -35,8 +35,19 @@ pub const DEFAULT_MAX_PROGRAM_BYTES: usize = 256 * 1024;
 pub const DEFAULT_MAX_STATE_BYTES: usize = 256 * 1024;
 /// Maximum serialized projection by default.
 pub const DEFAULT_MAX_PROJECTION_BYTES: usize = 256 * 1024;
+/// Maximum serialized initialization facts by default.
+///
+/// Initialization facts are admitted product inputs, not persistent product
+/// state. They may include a compiled composition and a large static navgrid.
+pub const DEFAULT_MAX_INITIALIZE_FACTS_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum JSON depth accepted for one initialization facts value by default.
+pub const DEFAULT_MAX_INITIALIZE_FACTS_JSON_DEPTH: usize = 64;
+/// Maximum JSON nodes accepted for one initialization facts value by default.
+pub const DEFAULT_MAX_INITIALIZE_FACTS_JSON_NODES: usize = 512 * 1024;
+/// Maximum UTF-8 bytes in one initialization facts JSON string by default.
+pub const DEFAULT_MAX_INITIALIZE_FACTS_JSON_STRING_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum QuickJS heap allocation per disposable realm by default.
-pub const DEFAULT_MAX_VM_MEMORY_BYTES: usize = 4 * 1024 * 1024;
+pub const DEFAULT_MAX_VM_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 /// Maximum QuickJS stack allocation per disposable realm by default.
 pub const DEFAULT_MAX_VM_STACK_BYTES: usize = 512 * 1024;
 /// Maximum interrupt polls allowed while one ABI call executes by default.
@@ -48,6 +59,10 @@ pub struct RuntimeVmConfig {
     pub max_program_bytes: usize,
     pub max_state_bytes: usize,
     pub max_projection_bytes: usize,
+    pub max_initialize_facts_bytes: usize,
+    pub max_initialize_facts_json_depth: usize,
+    pub max_initialize_facts_json_nodes: usize,
+    pub max_initialize_facts_json_string_bytes: usize,
     pub max_json_depth: usize,
     pub max_json_nodes: usize,
     pub max_json_string_bytes: usize,
@@ -62,6 +77,10 @@ impl Default for RuntimeVmConfig {
             max_program_bytes: DEFAULT_MAX_PROGRAM_BYTES,
             max_state_bytes: DEFAULT_MAX_STATE_BYTES,
             max_projection_bytes: DEFAULT_MAX_PROJECTION_BYTES,
+            max_initialize_facts_bytes: DEFAULT_MAX_INITIALIZE_FACTS_BYTES,
+            max_initialize_facts_json_depth: DEFAULT_MAX_INITIALIZE_FACTS_JSON_DEPTH,
+            max_initialize_facts_json_nodes: DEFAULT_MAX_INITIALIZE_FACTS_JSON_NODES,
+            max_initialize_facts_json_string_bytes: DEFAULT_MAX_INITIALIZE_FACTS_JSON_STRING_BYTES,
             max_json_depth: DEFAULT_MAX_JSON_DEPTH,
             max_json_nodes: DEFAULT_MAX_JSON_NODES,
             max_json_string_bytes: DEFAULT_MAX_JSON_STRING_BYTES,
@@ -319,15 +338,11 @@ impl RuntimeVm {
                 "initialize may only be called once for a VM instance".into(),
             ));
         }
-        validate_json(
-            "initialize facts",
-            &facts,
-            &self.config,
-            self.config.max_state_bytes,
-        )?;
+        let facts = canonicalize_initialize_facts(facts, &self.config)?;
         let candidate = self.call(
             AbiMethod::Initialize,
             serde_json::json!({ "facts": facts }),
+            initialize_input_bounds(&self.config),
             self.config.max_state_bytes,
         )?;
         self.prepare_candidate(candidate)
@@ -361,6 +376,7 @@ impl RuntimeVm {
                 "step": turn.step,
                 "input": turn.input,
             }),
+            ordinary_input_bounds(&self.config, self.config.max_state_bytes),
             self.config.max_state_bytes,
         )?;
         self.prepare_candidate(candidate)
@@ -391,6 +407,7 @@ impl RuntimeVm {
         let projection = self.call(
             AbiMethod::Project,
             serde_json::json!({ "state": candidate }),
+            ordinary_input_bounds(&self.config, self.config.max_state_bytes),
             self.config.max_projection_bytes,
         )?;
         let projection = decode_projection(projection, &self.config)?;
@@ -426,14 +443,10 @@ impl RuntimeVm {
         &self,
         method: AbiMethod,
         input: Value,
+        input_bounds: JsonValidationBounds,
         maximum_result_bytes: usize,
     ) -> Result<Value, RuntimeVmError> {
-        let input = canonicalize_json(
-            "runtime input",
-            input,
-            &self.config,
-            self.config.max_state_bytes,
-        )?;
+        let input = canonicalize_json_with_bounds("runtime input", input, input_bounds)?;
         let input_json = serde_json::to_string(&input).expect("JSON value must serialize");
         let counter = Arc::new(AtomicUsize::new(0));
         let runtime = Runtime::new().map_err(|error| vm_error("runtime creation", error))?;
@@ -568,6 +581,10 @@ fn validate_config(config: &RuntimeVmConfig) -> Result<(), RuntimeVmError> {
     if config.max_program_bytes == 0
         || config.max_state_bytes == 0
         || config.max_projection_bytes == 0
+        || config.max_initialize_facts_bytes == 0
+        || config.max_initialize_facts_json_depth == 0
+        || config.max_initialize_facts_json_nodes == 0
+        || config.max_initialize_facts_json_string_bytes == 0
         || config.max_json_depth == 0
         || config.max_json_nodes == 0
         || config.max_json_string_bytes == 0
@@ -588,7 +605,31 @@ fn canonicalize_json(
     config: &RuntimeVmConfig,
     maximum_bytes: usize,
 ) -> Result<Value, RuntimeVmError> {
-    validate_json(stage, &value, config, maximum_bytes)?;
+    canonicalize_json_with_bounds(stage, value, ordinary_input_bounds(config, maximum_bytes))
+}
+
+fn canonicalize_initialize_facts(
+    value: Value,
+    config: &RuntimeVmConfig,
+) -> Result<Value, RuntimeVmError> {
+    canonicalize_json_with_bounds(
+        "initialize facts",
+        value,
+        JsonValidationBounds {
+            maximum_bytes: config.max_initialize_facts_bytes,
+            maximum_depth: config.max_initialize_facts_json_depth,
+            maximum_nodes: config.max_initialize_facts_json_nodes,
+            maximum_string_bytes: config.max_initialize_facts_json_string_bytes,
+        },
+    )
+}
+
+fn canonicalize_json_with_bounds(
+    stage: &'static str,
+    value: Value,
+    bounds: JsonValidationBounds,
+) -> Result<Value, RuntimeVmError> {
+    validate_json_with_bounds(stage, &value, bounds)?;
     let bytes = serde_json::to_vec(&value).expect("JSON value must serialize");
     serde_json::from_slice(&bytes).map_err(|error| RuntimeVmError::InvalidJson {
         stage,
@@ -667,61 +708,106 @@ fn validate_json(
     config: &RuntimeVmConfig,
     maximum_bytes: usize,
 ) -> Result<(), RuntimeVmError> {
+    validate_json_with_bounds(
+        stage,
+        value,
+        JsonValidationBounds {
+            maximum_bytes,
+            maximum_depth: config.max_json_depth,
+            maximum_nodes: config.max_json_nodes,
+            maximum_string_bytes: config.max_json_string_bytes,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct JsonValidationBounds {
+    maximum_bytes: usize,
+    maximum_depth: usize,
+    maximum_nodes: usize,
+    maximum_string_bytes: usize,
+}
+
+fn ordinary_input_bounds(config: &RuntimeVmConfig, maximum_bytes: usize) -> JsonValidationBounds {
+    JsonValidationBounds {
+        maximum_bytes,
+        maximum_depth: config.max_json_depth,
+        maximum_nodes: config.max_json_nodes,
+        maximum_string_bytes: config.max_json_string_bytes,
+    }
+}
+
+fn initialize_input_bounds(config: &RuntimeVmConfig) -> JsonValidationBounds {
+    JsonValidationBounds {
+        // The ABI wrapper contributes only the "facts" key and object braces;
+        // the separately admitted facts value remains at its exact bound.
+        maximum_bytes: config.max_initialize_facts_bytes.saturating_add(10),
+        maximum_depth: config.max_initialize_facts_json_depth.saturating_add(1),
+        maximum_nodes: config.max_initialize_facts_json_nodes.saturating_add(1),
+        maximum_string_bytes: config.max_initialize_facts_json_string_bytes,
+    }
+}
+
+fn validate_json_with_bounds(
+    stage: &'static str,
+    value: &Value,
+    bounds: JsonValidationBounds,
+) -> Result<(), RuntimeVmError> {
     let encoded = serde_json::to_vec(value).expect("JSON value must serialize");
-    if encoded.len() > maximum_bytes {
+    if encoded.len() > bounds.maximum_bytes {
         return Err(RuntimeVmError::JsonTooLarge {
             stage,
             actual: encoded.len(),
-            maximum: maximum_bytes,
+            maximum: bounds.maximum_bytes,
         });
     }
     let mut nodes = 0;
-    validate_json_value(stage, value, config, 0, &mut nodes)
+    validate_json_value(stage, value, bounds, 0, &mut nodes)
 }
 
 fn validate_json_value(
     stage: &'static str,
     value: &Value,
-    config: &RuntimeVmConfig,
+    bounds: JsonValidationBounds,
     depth: usize,
     nodes: &mut usize,
 ) -> Result<(), RuntimeVmError> {
-    if depth > config.max_json_depth {
+    if depth > bounds.maximum_depth {
         return Err(RuntimeVmError::JsonTooDeep {
             stage,
-            maximum: config.max_json_depth,
+            maximum: bounds.maximum_depth,
         });
     }
     *nodes += 1;
-    if *nodes > config.max_json_nodes {
+    if *nodes > bounds.maximum_nodes {
         return Err(RuntimeVmError::TooManyJsonNodes {
             stage,
-            maximum: config.max_json_nodes,
+            maximum: bounds.maximum_nodes,
         });
     }
     match value {
         Value::String(string) => {
-            if string.len() > config.max_json_string_bytes {
+            if string.len() > bounds.maximum_string_bytes {
                 return Err(RuntimeVmError::JsonStringTooLarge {
                     stage,
-                    maximum: config.max_json_string_bytes,
+                    maximum: bounds.maximum_string_bytes,
                 });
             }
         }
         Value::Array(values) => {
             for value in values {
-                validate_json_value(stage, value, config, depth + 1, nodes)?;
+                validate_json_value(stage, value, bounds, depth + 1, nodes)?;
             }
         }
         Value::Object(entries) => {
             for (key, value) in entries {
-                if key.len() > config.max_json_string_bytes {
+                if key.len() > bounds.maximum_string_bytes {
                     return Err(RuntimeVmError::JsonStringTooLarge {
                         stage,
-                        maximum: config.max_json_string_bytes,
+                        maximum: bounds.maximum_string_bytes,
                     });
                 }
-                validate_json_value(stage, value, config, depth + 1, nodes)?;
+                validate_json_value(stage, value, bounds, depth + 1, nodes)?;
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
@@ -751,7 +837,12 @@ mod tests {
         let program = r#"
           globalThis.__rustyEngineRuntime = {
             initialize({ facts }) {
-              return { count: facts.start, last: 'initialize' };
+              return {
+                count: facts.content[0].value.start,
+                composition: facts.composition.id,
+                contentPath: facts.content[0].path,
+                last: 'initialize',
+              };
             },
             turn({ state, step, input }) {
               if (input.failTurn) throw new Error('rejected turn');
@@ -784,9 +875,25 @@ mod tests {
         "#;
         let mut vm = RuntimeVm::new(program, RuntimeVmConfig::default()).unwrap();
 
-        let initialized = vm.initialize(serde_json::json!({ "start": 1 })).unwrap();
+        let initialized = vm
+            .initialize(serde_json::json!({
+                "composition": { "id": "test-composition" },
+                "content": [{
+                    "path": "content/runtime.json",
+                    "value": { "start": 1 },
+                }],
+            }))
+            .unwrap();
         assert_eq!(initialized.state().revision(), 1);
         assert_eq!(initialized.projection().ui()["text"], "initialize:1");
+        assert_eq!(
+            initialized.state().state()["composition"],
+            "test-composition"
+        );
+        assert_eq!(
+            initialized.state().state()["contentPath"],
+            "content/runtime.json"
+        );
         assert!(initialized.projection().ui()["ambient"]
             .as_object()
             .unwrap()
