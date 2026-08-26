@@ -1,14 +1,13 @@
-# Rusty Engine — C# NativeAOT trial branch
+# Rusty Engine — C# downstream runtime
 
-This is the experimental Engine worktree for testing ordinary C# as the
-downstream application/game language:
+Rusty Engine uses ordinary C# as its downstream application/game language:
 
-- worktree: `/home/dev/worktrees/rusty-engine-csharp-runtime`
-- branch: `codex/csharp-nativeaot-trial`
-- paired product: `/home/dev/worktrees/rusty-dagger-csharp-runtime`
-- paired product branch: `codex/csharp-product-runtime`
+- Engine checkout: `/home/dev/rusty-engine`
+- paired proving product: `/home/dev/rusty-dagger`
 
-It is not stable `main` and must not be promoted incidentally.
+The current NativeAOT implementation proves the direction but still has
+walking-spike organization. Engine ABI, host, generator, and public C# SDK
+ownership are the next architecture-planning focus before broad API expansion.
 
 ## Current model
 
@@ -64,8 +63,7 @@ Generated sources belong under `obj/Generated` and are not committed.
 
 ## Documentation
 
-The prior mainline documentation was intentionally removed from this branch so
-it cannot steer the experiment back toward superseded assumptions. Stable
-`main` and Git history retain it. If this direction is selected, a later focused
-task will recover useful durable mechanisms and write new documentation from
-the proven architecture.
+The prior architecture documentation was intentionally removed so it cannot
+steer implementation back toward superseded assumptions. Git history retains
+it. A later focused task will recover useful durable mechanisms and write new
+documentation from the proven architecture.

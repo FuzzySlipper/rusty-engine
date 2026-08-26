@@ -1,16 +1,15 @@
-# Rusty Engine C# NativeAOT trial guidance
+# Rusty Engine C# downstream guidance
 
 ## Scope
 
-This guidance applies only to the experimental worktree
-`/home/dev/worktrees/rusty-engine-csharp-runtime` on branch
-`codex/csharp-nativeaot-trial`. It intentionally replaces the mainline Engine
-guidance for this branch. Do not promote this branch to `main` as part of an
-ordinary task.
+This is the current mainline direction for `/home/dev/rusty-engine`. The paired
+downstream proving product is `/home/dev/rusty-dagger`.
 
-The paired downstream experiment is
-`/home/dev/worktrees/rusty-dagger-csharp-runtime` on branch
-`codex/csharp-product-runtime`.
+The NativeAOT work has established technical viability, but its current crate,
+ABI, generator, and C# facade layout is walking-spike scaffolding. Before broad
+new capability work, follow the current Den planning work that separates those
+owners into a durable SDK shape. Do not treat file placement in the spike as an
+architecture decision.
 
 ## Den
 
@@ -74,8 +73,9 @@ The paired downstream experiment is
 
 ## Work and verification
 
-- Make the smallest coherent mechanism change that enables the current product
-  task. Do not generalize ahead of demonstrated Dagger needs.
+- Add capabilities as coherent Engine service families, informed by concrete
+  downstream needs. Do not accumulate a Dagger-shaped callback list or claim
+  blanket coverage of Rust source-level APIs.
 - Report a short milestone before expensive integration: goal advanced,
   necessary surfaces, proof scaffolding, drift/unsupported boundary, and any
   upstream request.
@@ -85,12 +85,13 @@ The paired downstream experiment is
 - Do not run old documentation, provider-wide, browser, packaging, security,
   conformance, or downstream-Rust gates unless the current task explicitly
   requires one.
-- Preserve unrelated work. Commit and push only the experimental branch.
+- Preserve unrelated work and follow the current task's branch and promotion
+  instructions.
 
 ## Documentation status
 
-The branch deliberately contains no `docs/` corpus. The deleted documents
-remain available on stable `main` and in Git history. If the C# direction is
-selected for main, a later focused documentation task will extract still-useful
-durable mechanisms and write a new coherent architecture from demonstrated
-behavior. Do not recreate aspirational documentation during the trial.
+The repository deliberately contains no broad `docs/` corpus during this
+transition. Deleted documents remain available in Git history. A later focused
+documentation task will extract still-useful durable mechanisms and write a
+coherent architecture from demonstrated behavior. Until then, keep this short
+guidance truthful and do not recreate aspirational documentation.
