@@ -1,234 +1,224 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Collections.Generic;
+using Rusty.Engine.Native;
 
-// Fixture ABI for task 7283. It deliberately models one trusted product, not
-// a versioned extension point. Product state lives in this C# allocation.
+// This fixture implements one trusted product. All ABI layouts and the direct
+// Engine function table are generated from Rust; this file owns only product
+// lifecycle, state, input meaning, and calls to the generated Engine API.
 public static unsafe class Product
 {
-    private static readonly object OutputLock = new();
-    private static readonly HashSet<nint> ActiveOutputPointers = new();
-    private static int FreedOutputs;
-    private static int DuplicateFrees;
-    [StructLayout(LayoutKind.Sequential)]
-    public struct ContentFile
-    {
-        public byte* Path;
-        public nuint PathLen;
-        public byte* Bytes;
-        public nuint BytesLen;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct CreateArgs
-    {
-        public ContentFile* Content;
-        public nuint ContentLen;
-        public EngineFunctionTable Engine;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct InputEvent
-    {
-        public uint Kind;
-        public uint Edge;
-        public ulong Sequence;
-        public float X;
-        public float Y;
-        public byte* Label;
-        public nuint LabelLen;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct TurnArgs
-    {
-        public uint Kind;
-        public uint Reserved;
-        public ulong ObservedTimeOrStep;
-        public InputEvent* Events;
-        public nuint EventCount;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct OutputBuffer
-    {
-        public byte* Data;
-        public nuint Len;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct VisualFact
-    {
-        public ulong ObjectId;
-        public byte* Appearance;
-        public nuint AppearanceLen;
-        public float TranslationX;
-        public float TranslationY;
-        public float TranslationZ;
-        public float RotationX;
-        public float RotationY;
-        public float RotationZ;
-        public float RotationW;
-        public float ScaleX;
-        public float ScaleY;
-        public float ScaleZ;
-        public uint Visible;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct EngineFunctionTable
-    {
-        public void* Context;
-        public delegate* unmanaged[Cdecl]<void*, VisualFact*, nuint, int> PublishVisualSnapshot;
-    }
-
     private sealed class State
     {
-        public int ContentFiles;
         public int Turns;
-        public int InputEvents;
+        public float X;
         public bool Started;
         public bool Paused;
         public bool Shutdown;
-        public EngineFunctionTable Engine;
+        public NativeEngineApi Engine;
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_create", CallConvs = [typeof(CallConvCdecl)])]
-    public static int Create(CreateArgs* args, void** handle, OutputBuffer* output)
+    [UnmanagedCallersOnly(EntryPoint = "rusty_product_bind", CallConvs = [typeof(CallConvCdecl)])]
+    public static int Bind(NativeProductApi* api)
+    {
+        if (api is null)
+        {
+            return 2;
+        }
+        api->create = &Create;
+        api->start = &Start;
+        api->turn = &Turn;
+        api->pause = &Pause;
+        api->resume = &Resume;
+        api->shutdown = &Shutdown;
+        api->destroy = &Destroy;
+        return 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static int Create(NativeProductCreateArgs* args, void** handle)
     {
         try
         {
-            if (args is null || handle is null || (args->ContentLen != 0 && args->Content is null)) return 2;
-            for (nuint index = 0; index < args->ContentLen; index++)
+            if (args is null || handle is null || (args->content_len != 0 && args->content is null))
             {
-                ContentFile file = args->Content[index];
-                if ((file.PathLen != 0 && file.Path is null) || (file.BytesLen != 0 && file.Bytes is null)) return 3;
+                return 2;
             }
-            var state = new State { ContentFiles = checked((int)args->ContentLen), Engine = args->Engine };
+            for (nuint index = 0; index < args->content_len; index++)
+            {
+                NativeContentFile file = args->content[index];
+                if ((file.path_len != 0 && file.path is null) ||
+                    (file.bytes_len != 0 && file.bytes is null))
+                {
+                    return 3;
+                }
+            }
+
+            var state = new State { Engine = args->engine };
             *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(state));
-            return WriteOutput(state, output, publishVisualSnapshot: false);
+            return 1;
         }
-        catch { return 99; }
+        catch
+        {
+            return 99;
+        }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_start", CallConvs = [typeof(CallConvCdecl)])]
-    public static int Start(void* handle, OutputBuffer* output)
-    {
-        try { var state = Get(handle); state.Started = true; state.Paused = false; return WriteOutput(state, output); } catch { return 99; }
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_turn", CallConvs = [typeof(CallConvCdecl)])]
-    public static int Turn(void* handle, TurnArgs* args, OutputBuffer* output)
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static int Start(void* handle)
     {
         try
         {
-            var state = Get(handle);
-            if (!state.Started || state.Paused || state.Shutdown) return 4;
-            if (args is null || args->Kind is < 1 or > 3) return 5;
-            if (args->EventCount != 0 && args->Events is null) return 6;
-            for (nuint index = 0; index < args->EventCount; index++)
-            {
-                if (args->Events[index].LabelLen != 0 && args->Events[index].Label is null) return 7;
-            }
-            state.InputEvents = checked((int)args->EventCount);
-            state.Turns++;
-            return WriteOutput(state, output);
+            State state = Get(handle);
+            state.Started = true;
+            state.Paused = false;
+            return PublishVisualSnapshot(state);
         }
-        catch { return 99; }
+        catch
+        {
+            return 99;
+        }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_pause", CallConvs = [typeof(CallConvCdecl)])]
-    public static int Pause(void* handle, OutputBuffer* output)
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static int Turn(void* handle, NativeTurnArgs* args)
     {
-        try { var state = Get(handle); state.Paused = true; return WriteOutput(state, output); } catch { return 99; }
+        try
+        {
+            State state = Get(handle);
+            if (!state.Started || state.Paused || state.Shutdown)
+            {
+                return 4;
+            }
+            if (args is null || args->kind is < 1 or > 3)
+            {
+                return 5;
+            }
+            if (args->event_count != 0 && args->events is null)
+            {
+                return 6;
+            }
+
+            for (nuint index = 0; index < args->event_count; index++)
+            {
+                NativeInputEvent input = args->events[index];
+                if (input.label_len != 0 && input.label is null)
+                {
+                    return 7;
+                }
+                if (input.kind == 1 && input.edge == 1 && IsKeyW(input))
+                {
+                    state.X += 1.0f;
+                }
+            }
+            state.Turns++;
+            return PublishVisualSnapshot(state);
+        }
+        catch
+        {
+            return 99;
+        }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_resume", CallConvs = [typeof(CallConvCdecl)])]
-    public static int Resume(void* handle, OutputBuffer* output)
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static int Pause(void* handle)
     {
-        try { var state = Get(handle); state.Paused = false; return WriteOutput(state, output); } catch { return 99; }
+        try
+        {
+            Get(handle).Paused = true;
+            return 1;
+        }
+        catch
+        {
+            return 99;
+        }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_shutdown", CallConvs = [typeof(CallConvCdecl)])]
-    public static int Shutdown(void* handle, OutputBuffer* output)
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static int Resume(void* handle)
     {
-        try { var state = Get(handle); state.Shutdown = true; return WriteOutput(state, output); } catch { return 99; }
+        try
+        {
+            Get(handle).Paused = false;
+            return 1;
+        }
+        catch
+        {
+            return 99;
+        }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_destroy", CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static int Shutdown(void* handle)
+    {
+        try
+        {
+            Get(handle).Shutdown = true;
+            return 1;
+        }
+        catch
+        {
+            return 99;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     public static void Destroy(void* handle)
     {
-        try { if (handle is not null) GCHandle.FromIntPtr((nint)handle).Free(); } catch { }
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_free_output", CallConvs = [typeof(CallConvCdecl)])]
-    public static void FreeOutput(OutputBuffer output)
-    {
         try
         {
-            if (output.Data is null) return;
-            lock (OutputLock)
+            if (handle is not null)
             {
-                if (!ActiveOutputPointers.Remove((nint)output.Data)) { DuplicateFrees++; return; }
-                FreedOutputs++;
+                GCHandle.FromIntPtr((nint)handle).Free();
             }
-            Marshal.FreeCoTaskMem((nint)output.Data);
         }
-        catch { }
+        catch
+        {
+        }
     }
 
     private static State Get(void* handle)
     {
-        if (handle is null) throw new ArgumentNullException(nameof(handle));
+        if (handle is null)
+        {
+            throw new ArgumentNullException(nameof(handle));
+        }
         return (State)GCHandle.FromIntPtr((nint)handle).Target!;
     }
 
-    private static int WriteOutput(State state, OutputBuffer* output, bool publishVisualSnapshot = true)
+    private static bool IsKeyW(NativeInputEvent input)
     {
-        if (output is null) return 1;
-        if (publishVisualSnapshot && PublishVisualSnapshot(state) != 1) return 8;
-        string ui = "{\"artifact\":\"rusty.product.ui-projection\",\"runtime\":{\"instanceId\":\"1\",\"generation\":\"1\",\"controlRevision\":\"1\"},\"sequence\":\"" + state.Turns + "\",\"stream\":\"csharp.trial.hud\",\"contract\":\"csharp.trial.ui.v1\",\"value\":{\"turns\":" + state.Turns + ",\"contentFiles\":" + state.ContentFiles + ",\"paused\":" + (state.Paused ? "true" : "false") + "}}";
-        int frees;
-        int duplicates;
-        lock (OutputLock) { frees = FreedOutputs; duplicates = DuplicateFrees; }
-        byte[] bytes = Encoding.UTF8.GetBytes("{\"turns\":" + state.Turns + ",\"frees\":" + frees + ",\"duplicateFrees\":" + duplicates + ",\"inputEvents\":" + state.InputEvents + ",\"ui\":" + ui + "}");
-        output->Data = (byte*)Marshal.AllocCoTaskMem(bytes.Length);
-        output->Len = (nuint)bytes.Length;
-        lock (OutputLock) { ActiveOutputPointers.Add((nint)output->Data); }
-        bytes.CopyTo(new Span<byte>(output->Data, bytes.Length));
-        return 1;
+        return input.label_len == 4 &&
+            input.label[0] == (byte)'K' &&
+            input.label[1] == (byte)'e' &&
+            input.label[2] == (byte)'y' &&
+            input.label[3] == (byte)'W';
     }
 
     private static int PublishVisualSnapshot(State state)
     {
-        if (state.Engine.Context is null || state.Engine.PublishVisualSnapshot is null) return 8;
+        var engine = new EngineApi(state.Engine);
         if (state.Turns >= 2)
         {
-            return state.Engine.PublishVisualSnapshot(state.Engine.Context, null, 0) == 1 ? 1 : 8;
+            return engine.PublishVisualSnapshot(ReadOnlySpan<NativeVisualFact>.Empty) == 1 ? 1 : 8;
         }
-        byte[] appearance = Encoding.UTF8.GetBytes("appearance/nativeaot-trial");
+
+        ReadOnlySpan<byte> appearance = "appearance/nativeaot-trial"u8;
         fixed (byte* appearancePointer = appearance)
         {
-            VisualFact fact = new()
+            NativeVisualFact fact = new()
             {
-                ObjectId = 41,
-                Appearance = appearancePointer,
-                AppearanceLen = (nuint)appearance.Length,
-                TranslationX = state.Turns,
-                TranslationY = 0,
-                TranslationZ = 0,
-                RotationX = 0,
-                RotationY = 0,
-                RotationZ = 0,
-                RotationW = 1,
-                ScaleX = 1,
-                ScaleY = 1,
-                ScaleZ = 1,
-                Visible = 1,
+                object_id = 41,
+                appearance = appearancePointer,
+                appearance_len = (nuint)appearance.Length,
+                visible = 1,
             };
-            return state.Engine.PublishVisualSnapshot(state.Engine.Context, &fact, 1) == 1 ? 1 : 8;
+            fact.translation[0] = state.X;
+            fact.rotation[3] = 1.0f;
+            fact.scale[0] = 1.0f;
+            fact.scale[1] = 1.0f;
+            fact.scale[2] = 1.0f;
+            return engine.PublishVisualSnapshot(new ReadOnlySpan<NativeVisualFact>(&fact, 1)) == 1 ? 1 : 8;
         }
     }
 }

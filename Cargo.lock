@@ -535,8 +535,6 @@ dependencies = [
  "render-model",
  "render-projection",
  "runtime-input",
- "runtime-ui",
- "serde",
  "serde_json",
 ]
 

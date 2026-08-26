@@ -9,6 +9,4 @@ product-dev-host.workspace = true
 render-model.workspace = true
 render-projection.workspace = true
 runtime-input.workspace = true
-runtime-ui.workspace = true
-serde.workspace = true
 serde_json.workspace = true

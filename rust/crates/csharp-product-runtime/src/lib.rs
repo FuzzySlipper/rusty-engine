@@ -5,6 +5,10 @@
 //! fixed C ABI, copying borrowed/owned buffers, and deterministic library
 //! lifetime; the C# product owns its gameplay state and orchestration.
 
+mod native_api;
+
+pub use native_api::*;
+
 use std::{ffi::c_void, fs, path::Path, ptr};
 
 use libloading::Library;
@@ -20,115 +24,27 @@ use render_projection::{
     RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
 };
 use runtime_input::{RuntimeInputEvent, RuntimeIntentValue};
-use serde::Deserialize;
-use serde_json::Value;
 
 const ABI_OK: i32 = 1;
 const INSTANCE_ID: u64 = 1;
 const GENERATION: u64 = 1;
 const CONTROL_REVISION: u64 = 1;
 
-/// One file made broadly available to trusted product code at creation time.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeContentFile {
-    pub path: *const u8,
-    pub path_len: usize,
-    pub bytes: *const u8,
-    pub bytes_len: usize,
-}
-
-/// Borrowed input supplied for the duration of one direct C# turn call.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeInputEvent {
-    pub kind: u32,
-    pub edge: u32,
-    pub sequence: u64,
-    pub x: f32,
-    pub y: f32,
-    pub label: *const u8,
-    pub label_len: usize,
-}
-
-/// Explicit turn timing supplied by the host; time never masquerades as input.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeTurnArgs {
-    /// 1 realtime (nanoseconds), 2 demand (step), 3 external (step).
-    pub kind: u32,
-    pub reserved: u32,
-    pub observed_time_or_step: u64,
-    pub events: *const NativeInputEvent,
-    pub event_count: usize,
-}
-
-/// Product-owned bytes. Rust copies them immediately and calls the matching
-/// `rusty_product_free_output` exactly once before parsing the copy.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeOutputBuffer {
-    pub data: *mut u8,
-    pub len: usize,
-}
-
-/// One product-selected visual fact. The Engine owns interpretation, admitted
-/// content lookup, retained handles, resource definitions, and frame delivery.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeVisualFact {
-    pub object_id: u64,
-    pub appearance: *const u8,
-    pub appearance_len: usize,
-    pub translation: [f32; 3],
-    pub rotation: [f32; 4],
-    pub scale: [f32; 3],
-    pub visible: u32,
-}
-
-type PublishVisualSnapshot =
-    unsafe extern "C" fn(*mut c_void, *const NativeVisualFact, usize) -> i32;
-
-/// The one fixed Engine capability table offered to trusted NativeAOT code.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeEngineFunctionTable {
-    pub context: *mut c_void,
-    pub publish_visual_snapshot: PublishVisualSnapshot,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct NativeCreateArgs {
-    content: *const NativeContentFile,
-    content_len: usize,
-    engine: NativeEngineFunctionTable,
-}
-
-type Create =
-    unsafe extern "C" fn(*const NativeCreateArgs, *mut *mut c_void, *mut NativeOutputBuffer) -> i32;
-type Action = unsafe extern "C" fn(*mut c_void, *mut NativeOutputBuffer) -> i32;
-type Turn =
-    unsafe extern "C" fn(*mut c_void, *const NativeTurnArgs, *mut NativeOutputBuffer) -> i32;
-type Destroy = unsafe extern "C" fn(*mut c_void);
-type FreeOutput = unsafe extern "C" fn(NativeOutputBuffer);
-
-struct NativeProductApi {
+struct LoadedProductApi {
     // NativeAOT initializes process-wide managed runtime support. It does not
     // provide a safe shared-library unload contract, so a successfully created
     // product keeps its library mapped until process exit after destroy.
     library: Option<Library>,
-    create: Create,
-    start: Action,
-    turn: Turn,
-    pause: Action,
-    resume: Action,
-    shutdown: Action,
-    destroy: Destroy,
-    free_output: FreeOutput,
+    create: NativeProductCreate,
+    start: NativeProductAction,
+    turn: NativeProductTurn,
+    pause: NativeProductAction,
+    resume: NativeProductAction,
+    shutdown: NativeProductAction,
+    destroy: NativeProductDestroy,
 }
 
-impl NativeProductApi {
+impl LoadedProductApi {
     fn load(path: &Path) -> Result<Self, CsharpProductRuntimeError> {
         // SAFETY: Loading is the explicitly requested trusted-first-party
         // product boundary. `Library` remains owned by `Self` until after the
@@ -160,25 +76,36 @@ impl NativeProductApi {
                     )
                 })
         }
+        let bind: NativeProductBind = unsafe { symbol(&library, b"rusty_product_bind\0") }?;
+        let mut product = NativeProductApi::default();
+        // SAFETY: `product` is a writable generated table with exact C layout.
+        let status = unsafe { bind(&mut product) };
+        checked_status(status, "bind")?;
         Ok(Self {
-            // Resolve every export before invoking product code, so a malformed
-            // library fails as an actionable load error rather than mid-session.
-            create: unsafe { symbol(&library, b"rusty_product_create\0") }?,
-            start: unsafe { symbol(&library, b"rusty_product_start\0") }?,
-            turn: unsafe { symbol(&library, b"rusty_product_turn\0") }?,
-            pause: unsafe { symbol(&library, b"rusty_product_pause\0") }?,
-            resume: unsafe { symbol(&library, b"rusty_product_resume\0") }?,
-            shutdown: unsafe { symbol(&library, b"rusty_product_shutdown\0") }?,
-            destroy: unsafe { symbol(&library, b"rusty_product_destroy\0") }?,
-            free_output: unsafe { symbol(&library, b"rusty_product_free_output\0") }?,
+            create: required_function(product.create, "create")?,
+            start: required_function(product.start, "start")?,
+            turn: required_function(product.turn, "turn")?,
+            pause: required_function(product.pause, "pause")?,
+            resume: required_function(product.resume, "resume")?,
+            shutdown: required_function(product.shutdown, "shutdown")?,
+            destroy: required_function(product.destroy, "destroy")?,
             library: Some(library),
         })
     }
 }
 
+fn required_function<T>(function: Option<T>, name: &str) -> Result<T, CsharpProductRuntimeError> {
+    function.ok_or_else(|| {
+        CsharpProductRuntimeError::new(
+            "CSHARP_REQUIRED_FUNCTION",
+            format!("C# product did not bind required function `{name}`"),
+        )
+    })
+}
+
 /// A loaded trusted C# product adapted to the existing local browser host.
 pub struct CsharpProductRuntime {
-    api: NativeProductApi,
+    api: LoadedProductApi,
     handle: *mut c_void,
     binding: ProductDevRuntimeBinding,
     state: ProductDevRuntimeState,
@@ -218,8 +145,8 @@ impl RuntimeAppearanceBridge {
         }
     }
 
-    fn function_table(&mut self) -> NativeEngineFunctionTable {
-        NativeEngineFunctionTable {
+    fn function_table(&mut self) -> NativeEngineApi {
+        NativeEngineApi {
             context: (self as *mut Self).cast(),
             publish_visual_snapshot,
         }
@@ -279,12 +206,6 @@ impl RuntimeAppearanceBridge {
                     "C# visual fact had a null appearance pointer with non-zero length",
                 ));
             }
-            if fact.visible > 1 {
-                return Err(CsharpProductRuntimeError::new(
-                    "CSHARP_VISUAL_VISIBLE",
-                    "C# visual fact visibility must be 0 or 1",
-                ));
-            }
             // Zero length is handled without constructing a raw slice; non-zero
             // pointers were checked above. UTF-8 identity bytes are copied before return.
             let appearance = if fact.appearance_len == 0 {
@@ -299,12 +220,6 @@ impl RuntimeAppearanceBridge {
                     "C# visual fact appearance identity was not UTF-8",
                 )
             })?;
-            if appearance.is_empty() {
-                return Err(CsharpProductRuntimeError::new(
-                    "CSHARP_VISUAL_APPEARANCE_EMPTY",
-                    "C# visual fact appearance identity was empty",
-                ));
-            }
             decoded.push(RuntimeAppearanceFact {
                 object_id: fact.object_id,
                 appearance: appearance.to_owned(),
@@ -313,7 +228,7 @@ impl RuntimeAppearanceBridge {
                     rotation: fact.rotation,
                     scale: fact.scale,
                 },
-                visible: fact.visible == 1,
+                visible: fact.visible != 0,
             });
         }
         let mut candidate = self.projector.clone();
@@ -355,7 +270,7 @@ impl CsharpProductRuntime {
         library_path: impl AsRef<Path>,
         content_root: impl AsRef<Path>,
     ) -> Result<Self, CsharpProductRuntimeError> {
-        let api = NativeProductApi::load(library_path.as_ref())?;
+        let api = LoadedProductApi::load(library_path.as_ref())?;
         let content = collect_content(content_root.as_ref())?;
         let catalog = load_runtime_appearance_catalog(content_root.as_ref())?;
         let mut visual_bridge = Box::new(RuntimeAppearanceBridge::new(catalog));
@@ -368,20 +283,25 @@ impl CsharpProductRuntime {
                 bytes_len: file.bytes.len(),
             })
             .collect();
-        let args = NativeCreateArgs {
+        let args = NativeProductCreateArgs {
             content: native_content.as_ptr(),
             content_len: native_content.len(),
             engine: visual_bridge.function_table(),
         };
         let mut handle = ptr::null_mut();
         visual_bridge.begin_call();
-        let output = match call_create(&api, &args, &mut handle) {
-            Ok(output) => output,
+        match call_create(&api, &args, &mut handle) {
+            Ok(()) => {}
             Err(error) => {
                 visual_bridge.discard_call();
+                if !handle.is_null() {
+                    // SAFETY: a failing create may still have returned an owned
+                    // handle; releasing it is part of the fixed ownership ABI.
+                    unsafe { (api.destroy)(handle) };
+                }
                 return Err(error);
             }
-        };
+        }
         let staged = match visual_bridge.take_staged_call() {
             Ok(staged) => staged,
             Err(error) => {
@@ -399,14 +319,6 @@ impl CsharpProductRuntime {
                 "rusty_product_create succeeded but returned a null product handle",
             ));
         }
-        // The create output is intentionally accepted as a normal first
-        // projection, but this walking host has no consumer until `start`.
-        if let Err(error) = decode_output(output) {
-            // SAFETY: successful create produced this owned product handle, and
-            // the returned output was not accepted into the Rust runtime.
-            unsafe { (api.destroy)(handle) };
-            return Err(error);
-        }
         let initial_frame = staged.as_ref().map(|staged| staged.frame.clone());
         visual_bridge.commit(staged);
         Ok(Self {
@@ -423,8 +335,8 @@ impl CsharpProductRuntime {
         })
     }
 
-    /// Calls two direct stateful product turns and verifies their published UI
-    /// values prove C# state survived the first call.
+    /// Calls two direct stateful product turns and verifies their Engine-owned
+    /// retained projection proves C# state survived the first call.
     pub fn exercise_turns(&mut self) -> Result<(), CsharpProductRuntimeError> {
         self.action(
             self.api.start,
@@ -464,26 +376,27 @@ impl CsharpProductRuntime {
             })?;
         self.pending_inputs
             .push(input_owned(1, 1, 1, 0.0, 0.0, "KeyW".to_owned()));
-        let first = self.turn(2, 1)?;
+        self.turn(2, 1)?;
         let first_frame = self.last_visual_frame.as_ref().ok_or_else(|| {
             CsharpProductRuntimeError::new(
                 "CSHARP_VISUAL_TURN_UPDATE",
                 "first C# turn did not publish an Engine-projected visual snapshot",
             )
         })?;
-        if !first_frame.ops.iter().any(|operation| {
-            matches!(
-                operation,
-                render_model::RenderDiff::Update { handle: updated, transform: Some(_), .. }
-                    if *updated == handle
-            )
+        if !first_frame.ops.iter().any(|operation| match operation {
+            render_model::RenderDiff::Update {
+                handle: updated,
+                transform: Some(transform),
+                ..
+            } => *updated == handle && transform.translation == [1.0, 0.0, 0.0],
+            _ => false,
         }) {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_VISUAL_HANDLE_UPDATE",
-                "first C# turn did not update the same retained Engine handle",
+                "queued KeyW input did not move the same retained Engine handle",
             ));
         }
-        let second = self.turn(2, 2)?;
+        self.turn(2, 2)?;
         let second_frame = self.last_visual_frame.as_ref().ok_or_else(|| {
             CsharpProductRuntimeError::new(
                 "CSHARP_VISUAL_TURN_DESTROY",
@@ -499,24 +412,6 @@ impl CsharpProductRuntime {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_VISUAL_HANDLE_DESTROY",
                 "second C# turn did not destroy the retained Engine handle",
-            ));
-        }
-        if first.turns >= second.turns || second.turns < 2 {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_STATEFUL_TURNS",
-                "C# turn outputs did not report increasing persistent state",
-            ));
-        }
-        if first.input_events != 1 || second.input_events != 0 {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_INPUT_TURN",
-                "a queued key input was not delivered exactly once on the next C# turn",
-            ));
-        }
-        if second.frees < 3 || second.duplicate_frees != 0 {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_OUTPUT_RELEASE",
-                "C# fixture did not observe exactly one release for each preceding product output",
             ));
         }
         self.action(
@@ -536,14 +431,14 @@ impl CsharpProductRuntime {
         &mut self,
         kind: u32,
         observed_time_or_step: u64,
-    ) -> Result<DecodedOutput, CsharpProductRuntimeError> {
+    ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
         let events: Vec<NativeInputEvent> = self
             .pending_inputs
             .iter()
             .map(NativeInputOwned::as_native)
             .collect();
         self.visual_bridge.begin_call();
-        let output = match call_turn(
+        match call_turn(
             &self.api,
             self.handle,
             NativeTurnArgs {
@@ -554,19 +449,19 @@ impl CsharpProductRuntime {
                 event_count: events.len(),
             },
         ) {
-            Ok(output) => output,
+            Ok(()) => {}
             Err(error) => {
                 self.visual_bridge.discard_call();
                 return Err(error);
             }
-        };
+        }
         let staged = self.visual_bridge.take_staged_call()?;
-        // The C# call has accepted the batch. Decode errors must not replay
-        // already-applied product input on a later timing turn.
+        // The C# call has accepted the batch. Do not replay already-applied
+        // product input on a later timing turn.
         self.pending_inputs.clear();
-        let mut decoded = decode_output(output)?;
+        let mut outputs = Vec::new();
         append_frame(
-            &mut decoded.outputs,
+            &mut outputs,
             staged.as_ref().map(|staged| staged.frame.clone()),
         )?;
         let turns = self.turns.checked_add(1).ok_or_else(|| {
@@ -575,35 +470,35 @@ impl CsharpProductRuntime {
         self.last_visual_frame = staged.as_ref().map(|staged| staged.frame.clone());
         self.visual_bridge.commit(staged);
         self.turns = turns;
-        Ok(decoded)
+        Ok(outputs)
     }
 
     fn action(
         &mut self,
-        action: Action,
+        action: NativeProductAction,
         operation: ProductDevOperationKind,
         state: ProductDevRuntimeState,
     ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
         self.visual_bridge.begin_call();
-        let output = match call_action(&self.api, action, self.handle, operation) {
-            Ok(output) => output,
+        match call_action(action, self.handle, operation) {
+            Ok(()) => {}
             Err(error) => {
                 self.visual_bridge.discard_call();
                 return Err(error);
             }
-        };
+        }
         let staged = self.visual_bridge.take_staged_call()?;
-        let mut decoded = decode_output(output)?;
-        append_frame(&mut decoded.outputs, self.initial_frame.clone())?;
+        let mut outputs = Vec::new();
+        append_frame(&mut outputs, self.initial_frame.clone())?;
         append_frame(
-            &mut decoded.outputs,
+            &mut outputs,
             staged.as_ref().map(|staged| staged.frame.clone()),
         )?;
         self.initial_frame = None;
         self.last_visual_frame = staged.as_ref().map(|staged| staged.frame.clone());
         self.visual_bridge.commit(staged);
         self.state = state;
-        Ok(decoded.outputs)
+        Ok(outputs)
     }
 
     fn receipt(
@@ -705,29 +600,29 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         observed_time_ns: CanonicalU64,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        let decoded = self
+        let outputs = self
             .turn(1, observed_time_ns.get())
             .map_err(|error| self.runtime_error(error))?;
-        self.receipt(ProductDevOperationKind::AdvanceRealtime, decoded.outputs)
+        self.receipt(ProductDevOperationKind::AdvanceRealtime, outputs)
     }
 
     fn admit_demand_step(
         &mut self,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        let decoded = self
+        let outputs = self
             .turn(2, self.turns.saturating_add(1))
             .map_err(|error| self.runtime_error(error))?;
-        self.receipt(ProductDevOperationKind::AdmitDemandStep, decoded.outputs)
+        self.receipt(ProductDevOperationKind::AdmitDemandStep, outputs)
     }
 
     fn admit_external_step(
         &mut self,
         step: CanonicalU64,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        let decoded = self
+        let outputs = self
             .turn(3, step.get())
             .map_err(|error| self.runtime_error(error))?;
-        self.receipt(ProductDevOperationKind::AdmitExternalStep, decoded.outputs)
+        self.receipt(ProductDevOperationKind::AdmitExternalStep, outputs)
     }
 
     fn complete_timeline(
@@ -751,7 +646,7 @@ impl Drop for CsharpProductRuntime {
         if !self.shutdown_called {
             // SAFETY: `handle` was produced by this retained library, and no
             // other Rust path destroys it. Native exceptions must not cross ABI.
-            let _ = unsafe { (self.api.shutdown)(self.handle, ptr::null_mut()) };
+            let _ = unsafe { (self.api.shutdown)(self.handle) };
         }
         // SAFETY: destroy runs exactly once before the `Library` field drops.
         unsafe { (self.api.destroy)(self.handle) };
@@ -774,84 +669,44 @@ fn binding() -> ProductDevRuntimeBinding {
 }
 
 fn call_create(
-    api: &NativeProductApi,
-    args: &NativeCreateArgs,
+    api: &LoadedProductApi,
+    args: &NativeProductCreateArgs,
     handle: &mut *mut c_void,
-) -> Result<Vec<u8>, CsharpProductRuntimeError> {
-    let mut output = NativeOutputBuffer {
-        data: ptr::null_mut(),
-        len: 0,
-    };
+) -> Result<(), CsharpProductRuntimeError> {
     // SAFETY: fixed ABI pointers are valid for the duration of this call.
-    let status = unsafe { (api.create)(args, handle, &mut output) };
-    copied_output(api, status, output, "create")
+    let status = unsafe { (api.create)(args, handle) };
+    checked_status(status, "create")
 }
 
 fn call_action(
-    api: &NativeProductApi,
-    action: Action,
+    action: NativeProductAction,
     handle: *mut c_void,
     operation: ProductDevOperationKind,
-) -> Result<Vec<u8>, CsharpProductRuntimeError> {
-    let mut output = NativeOutputBuffer {
-        data: ptr::null_mut(),
-        len: 0,
-    };
-    // SAFETY: `handle` is retained by the runtime and output is stack-owned.
-    let status = unsafe { action(handle, &mut output) };
-    copied_output(api, status, output, operation_name(operation))
+) -> Result<(), CsharpProductRuntimeError> {
+    // SAFETY: `handle` is retained by the runtime.
+    let status = unsafe { action(handle) };
+    checked_status(status, operation_name(operation))
 }
 
 fn call_turn(
-    api: &NativeProductApi,
+    api: &LoadedProductApi,
     handle: *mut c_void,
     args: NativeTurnArgs,
-) -> Result<Vec<u8>, CsharpProductRuntimeError> {
-    let mut output = NativeOutputBuffer {
-        data: ptr::null_mut(),
-        len: 0,
-    };
+) -> Result<(), CsharpProductRuntimeError> {
     // SAFETY: event label pointers borrow local strings that remain alive for
     // the call; the C# product is required to copy anything it retains.
-    let status = unsafe { (api.turn)(handle, &args, &mut output) };
-    copied_output(api, status, output, "turn")
+    let status = unsafe { (api.turn)(handle, &args) };
+    checked_status(status, "turn")
 }
 
-fn copied_output(
-    api: &NativeProductApi,
-    status: i32,
-    output: NativeOutputBuffer,
-    operation: &str,
-) -> Result<Vec<u8>, CsharpProductRuntimeError> {
+fn checked_status(status: i32, operation: &str) -> Result<(), CsharpProductRuntimeError> {
     if status != ABI_OK {
-        if !output.data.is_null() {
-            // SAFETY: an error-status buffer is still product-owned output and
-            // must be released exactly once even though Rust does not inspect it.
-            unsafe { (api.free_output)(output) };
-        }
         return Err(CsharpProductRuntimeError::new(
             "CSHARP_PRODUCT_CALL",
             format!("C# product {operation} returned status {status}"),
         ));
     }
-    if output.len > 0 && output.data.is_null() {
-        return Err(CsharpProductRuntimeError::new(
-            "CSHARP_OUTPUT_POINTER",
-            format!("C# product {operation} returned a null output pointer with non-zero length"),
-        ));
-    }
-    // SAFETY: a non-null product buffer is valid for its reported length until
-    // `free_output`. Copying happens before release and release happens once.
-    let copied = if output.len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(output.data, output.len).to_vec() }
-    };
-    if !output.data.is_null() {
-        // SAFETY: this is the one owning release for the returned buffer.
-        unsafe { (api.free_output)(output) };
-    }
-    Ok(copied)
+    Ok(())
 }
 
 fn operation_name(operation: ProductDevOperationKind) -> &'static str {
@@ -1019,64 +874,6 @@ fn edge_value(edge: runtime_input::PhysicalEdge) -> u32 {
         runtime_input::PhysicalEdge::Pressed => 1,
         runtime_input::PhysicalEdge::Released => 2,
     }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProductOutputWire {
-    #[serde(default)]
-    ui: Option<Value>,
-    #[serde(default)]
-    turns: Option<u64>,
-    #[serde(default)]
-    frees: Option<u64>,
-    #[serde(default, rename = "duplicateFrees")]
-    duplicate_frees: Option<u64>,
-    #[serde(default, rename = "inputEvents")]
-    input_events: Option<u64>,
-}
-
-struct DecodedOutput {
-    outputs: Vec<ProductDevRuntimeOutput>,
-    turns: u64,
-    frees: u64,
-    duplicate_frees: u64,
-    input_events: u64,
-}
-
-fn decode_output(bytes: Vec<u8>) -> Result<DecodedOutput, CsharpProductRuntimeError> {
-    if bytes.is_empty() {
-        return Ok(DecodedOutput {
-            outputs: Vec::new(),
-            turns: 0,
-            frees: 0,
-            duplicate_frees: 0,
-            input_events: 0,
-        });
-    }
-    let wire: ProductOutputWire = serde_json::from_slice(&bytes)
-        .map_err(|error| CsharpProductRuntimeError::new("CSHARP_OUTPUT_JSON", error.to_string()))?;
-    let mut outputs = Vec::new();
-    if let Some(ui) = wire.ui {
-        let encoded = serde_json::to_vec(&ui).map_err(|error| {
-            CsharpProductRuntimeError::new("CSHARP_UI_ENCODE", error.to_string())
-        })?;
-        let envelope =
-            runtime_ui::RuntimeUiProjectionEnvelope::decode_json(&encoded).map_err(|_| {
-                CsharpProductRuntimeError::new(
-                    "CSHARP_UI_DECODE",
-                    "C# product returned an invalid runtime-ui projection",
-                )
-            })?;
-        outputs.push(ProductDevRuntimeOutput::ui_projection(&envelope).map_err(host_error)?);
-    }
-    Ok(DecodedOutput {
-        outputs,
-        turns: wire.turns.unwrap_or(0),
-        frees: wire.frees.unwrap_or(0),
-        duplicate_frees: wire.duplicate_frees.unwrap_or(0),
-        input_events: wire.input_events.unwrap_or(0),
-    })
 }
 
 fn append_frame(

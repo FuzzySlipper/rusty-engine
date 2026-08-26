@@ -7,5 +7,15 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <InvariantGlobalization>true</InvariantGlobalization>
     <StripSymbols>true</StripSymbols>
+    <NativeBindingsOutputDir>$(MSBuildProjectDirectory)/obj/Generated</NativeBindingsOutputDir>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="obj/Generated/NativeBindings.g.cs" />
+    <Compile Include="obj/Generated/EngineApi.g.cs" />
+  </ItemGroup>
+
+  <Target Name="GenerateNativeBindings" BeforeTargets="CoreCompile">
+    <Exec Command="&quot;$(MSBuildProjectDirectory)/../../scripts/generate-csharp-native-bindings.sh&quot; &quot;$(NativeBindingsOutputDir)&quot;" />
+  </Target>
 </Project>
