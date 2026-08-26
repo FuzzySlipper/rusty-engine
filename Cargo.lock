@@ -530,12 +530,20 @@ dependencies = [
 name = "csharp-product-runtime"
 version = "0.1.0"
 dependencies = [
+ "core-ids",
+ "core-math",
+ "core-space",
+ "engine-spatial",
+ "entity-state",
  "libloading",
  "product-dev-host",
  "render-model",
  "render-projection",
  "runtime-input",
+ "runtime-lifecycle",
+ "runtime-ui",
  "serde_json",
+ "svc-pathfinding",
 ]
 
 [[package]]

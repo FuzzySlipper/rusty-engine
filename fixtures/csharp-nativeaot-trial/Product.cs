@@ -15,6 +15,10 @@ public static unsafe class Product
         public bool Started;
         public bool Paused;
         public bool Shutdown;
+        public ulong UiSequence;
+        public NativeUiStreamHandle UiStream;
+        public NativeSpatialSessionHandle Spatial;
+        public NativeLookState Look;
         public NativeEngineApi Engine;
     }
 
@@ -55,6 +59,30 @@ public static unsafe class Product
             }
 
             var state = new State { Engine = args->engine };
+            state.UiStream = new EngineApi(state.Engine).Ui.OpenStream(
+                "nativeaot-trial",
+                "nativeaot.trial.hud");
+            var spatial = new EngineApi(state.Engine).Spatial;
+            state.Spatial = spatial.CreateSession(new NativeSpatialSessionConfig
+            {
+                collision_voxel_size = 1.0,
+                collision_chunk_size = 16,
+            });
+            spatial.ReplaceNavigation(
+                state.Spatial,
+                new NativePlanarNavConfig { grid_id = 1, cell_size = 1.0, chunk_size = 16 },
+                [
+                    new NativePlanarNavCell { x = 0, y = 0, z = 0 },
+                    new NativePlanarNavCell { x = 1, y = 0, z = 0 },
+                ]);
+            _ = spatial.ProposeNavigationStep(new NativeNavigationStepRequest
+            {
+                session = state.Spatial,
+                from = new NativeVec3 { x = 0.5f, y = 0.5f, z = 0.5f },
+                target = new NativeVec3 { x = 1.5f, y = 0.5f, z = 0.5f },
+                max_step_units = 0.5f,
+                max_visited = 16,
+            });
             *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(state));
             return 1;
         }
@@ -72,7 +100,7 @@ public static unsafe class Product
             State state = Get(handle);
             state.Started = true;
             state.Paused = false;
-            return PublishVisualSnapshot(state);
+            return PublishPresentation(state);
         }
         catch
         {
@@ -110,9 +138,18 @@ public static unsafe class Product
                 {
                     state.X += 1.0f;
                 }
+                if (input.kind == 3)
+                {
+                    state.Look = new EngineApi(state.Engine).Look.Integrate(new NativeLookRequest
+                    {
+                        state = state.Look,
+                        delta = new NativeVec2 { x = input.x, y = input.y },
+                        config = LookConfig(),
+                    }).state;
+                }
             }
             state.Turns++;
-            return PublishVisualSnapshot(state);
+            return PublishPresentation(state);
         }
         catch
         {
@@ -169,6 +206,8 @@ public static unsafe class Product
         {
             if (handle is not null)
             {
+                State state = Get(handle);
+                new EngineApi(state.Engine).Spatial.DestroySession(state.Spatial);
                 GCHandle.FromIntPtr((nint)handle).Free();
             }
         }
@@ -195,12 +234,46 @@ public static unsafe class Product
             input.label[3] == (byte)'W';
     }
 
-    private static int PublishVisualSnapshot(State state)
+    private static NativeLookConfig LookConfig() => new()
     {
-        var engine = new EngineApi(state.Engine);
+        horizontal_radians_per_unit = 0.01f,
+        vertical_radians_per_unit = 0.01f,
+        minimum_pitch_radians = -1.4f,
+        maximum_pitch_radians = 1.4f,
+        maximum_delta_radians = 1.0f,
+        wrap_yaw = 1,
+    };
+
+    private static int PublishPresentation(State state)
+    {
+        try
+        {
+            var engine = new EngineApi(state.Engine);
+            PublishVisualSnapshot(engine, state);
+            engine.Ui.PublishProjection(state.UiStream, ++state.UiSequence, UiValue(state));
+            return 1;
+        }
+        catch
+        {
+            return 8;
+        }
+    }
+
+    private static StructuredValueArena UiValue(State state)
+    {
+        var values = new StructuredValueBuilder();
+        uint turns = values.Number(state.Turns);
+        uint yaw = values.Number(state.Look.yaw_radians);
+        uint x = values.Number(state.X);
+        return values.Build(values.Object(("turns", turns), ("yaw", yaw), ("x", x)));
+    }
+
+    private static void PublishVisualSnapshot(EngineApi engine, State state)
+    {
         if (state.Turns >= 2)
         {
-            return engine.PublishVisualSnapshot(ReadOnlySpan<NativeVisualFact>.Empty) == 1 ? 1 : 8;
+            engine.PublishVisualSnapshot(ReadOnlySpan<NativeVisualFact>.Empty);
+            return;
         }
 
         ReadOnlySpan<byte> appearance = "appearance/nativeaot-trial"u8;
@@ -209,16 +282,17 @@ public static unsafe class Product
             NativeVisualFact fact = new()
             {
                 object_id = 41,
+                transform = new NativeTransform
+                {
+                    translation = new NativeVec3 { x = state.X },
+                    rotation = new NativeQuat { w = 1.0f },
+                    scale = new NativeVec3 { x = 1.0f, y = 1.0f, z = 1.0f },
+                },
                 appearance = appearancePointer,
                 appearance_len = (nuint)appearance.Length,
                 visible = 1,
             };
-            fact.translation[0] = state.X;
-            fact.rotation[3] = 1.0f;
-            fact.scale[0] = 1.0f;
-            fact.scale[1] = 1.0f;
-            fact.scale[2] = 1.0f;
-            return engine.PublishVisualSnapshot(new ReadOnlySpan<NativeVisualFact>(&fact, 1)) == 1 ? 1 : 8;
+            engine.PublishVisualSnapshot(new ReadOnlySpan<NativeVisualFact>(&fact, 1));
         }
     }
 }

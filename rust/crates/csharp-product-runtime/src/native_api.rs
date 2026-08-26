@@ -1,10 +1,300 @@
-//! The sole Rust-owned C ABI definition for trusted NativeAOT products.
+//! The sole Rust-owned C ABI declaration for trusted NativeAOT products.
 //!
-//! C# declarations are generated mechanically from these layouts. This module
-//! intentionally contains no compatibility, permission, registry, or wire-format
-//! layer: the product calls named Engine functions directly through the table.
+//! C# raw declarations and its safe direct facade are generated mechanically
+//! from this module. The table names Engine service families; it intentionally
+//! has no generic invocation, target strings, capability catalogue, or JSON
+//! command protocol.
 
 use std::ffi::c_void;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVec2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeQuat {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeTransform {
+    pub translation: NativeVec3,
+    pub rotation: NativeQuat,
+    pub scale: NativeVec3,
+}
+
+/// Opaque domain handles reserve typed direct service families without a
+/// universal identity/capability table. Phase A needs the UI stream handle.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpatialSessionHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialSessionConfig {
+    pub collision_voxel_size: f64,
+    pub collision_chunk_size: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStaticMeshAsset {
+    pub id: u64,
+    pub first_vertex: u32,
+    pub vertex_count: u32,
+    pub first_triangle: u32,
+    pub triangle_count: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeTriangle {
+    pub a: u32,
+    pub b: u32,
+    pub c: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStaticMeshInstance {
+    pub id: u64,
+    pub asset: u64,
+    pub transform: NativeTransform,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCollisionReplaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub assets: *const NativeStaticMeshAsset,
+    pub assets_len: usize,
+    pub vertices: *const NativeVec3,
+    pub vertices_len: usize,
+    pub triangles: *const NativeTriangle,
+    pub triangles_len: usize,
+    pub instances: *const NativeStaticMeshInstance,
+    pub instances_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCollisionReplaceReceipt {
+    pub revision_before: u64,
+    pub revision_after: u64,
+    pub asset_count: u64,
+    pub instance_count: u64,
+    pub projection_hash: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePlanarNavConfig {
+    pub grid_id: u64,
+    pub cell_size: f64,
+    pub chunk_size: u32,
+    pub max_step_cells: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePlanarNavCell {
+    pub x: i64,
+    pub y: i64,
+    pub z: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationReplaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub config: NativePlanarNavConfig,
+    pub cells: *const NativePlanarNavCell,
+    pub cells_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationReplaceReceipt {
+    pub walkable_cell_count: u64,
+    pub projection_hash: u64,
+}
+
+/// The continuity facts the C# product retains between Engine-owned proposal calls.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterMotion {
+    pub controlled_velocity: NativeVec3,
+    pub external_velocity: NativeVec3,
+    pub grounded: u32,
+    pub stance: u32,
+    pub jump_buffer_remaining: f32,
+    pub coyote_remaining: f32,
+    pub landing_lockout_remaining: f32,
+    pub support_entity_present: u32,
+    pub support_entity: u64,
+    pub support_local_anchor: NativeVec3,
+    pub support_previous_translation: NativeVec3,
+    pub support_previous_rotation: NativeQuat,
+    pub support_point_velocity: NativeVec3,
+    pub fall_origin_y: f32,
+    pub peak_y: f32,
+    pub last_command_sequence: u64,
+    pub collision_world_hash: u64,
+}
+
+/// The current call's support-entity facts. This is deliberately borrowed by
+/// value into one controller proposal; spatial sessions never retain product
+/// entities or poses.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterSupport {
+    pub present: u32,
+    pub lifecycle: u32,
+    pub entity: u64,
+    pub transform: NativeTransform,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCharacterControllerConfig {
+    pub standing_height: f32,
+    pub crouched_height: f32,
+    pub radius: f32,
+    pub contact_skin: f32,
+    pub forward_speed: f32,
+    pub backward_speed: f32,
+    pub strafe_speed: f32,
+    pub acceleration: f32,
+    pub braking: f32,
+    pub friction: f32,
+    pub gravity: f32,
+    pub jump_speed: f32,
+    pub maximum_slope_radians: f32,
+    pub maximum_step_height: f32,
+    pub floor_snap_distance: f32,
+    pub maximum_displacement_per_step: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCharacterControllerCommand {
+    pub planar_intent: NativeVec2,
+    pub heading_yaw_radians: f32,
+    pub jump_pressed: u32,
+    pub jump_held: u32,
+    pub crouch_requested: u32,
+    pub reserved: u32,
+    pub step_seconds: f32,
+    pub sequence: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCharacterStepRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub position: NativeVec3,
+    pub motion: NativeCharacterMotion,
+    pub support: NativeCharacterSupport,
+    pub config: NativeCharacterControllerConfig,
+    pub command: NativeCharacterControllerCommand,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterContact {
+    pub present: u32,
+    pub kind: u32,
+    pub start_solid: u32,
+    pub reserved: u32,
+    pub point: NativeVec3,
+    pub normal: NativeVec3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterGround {
+    pub present: u32,
+    pub reserved: u32,
+    pub point: NativeVec3,
+    pub normal: NativeVec3,
+    pub snapped_distance: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterStepReceipt {
+    pub transform: NativeTransform,
+    pub motion: NativeCharacterMotion,
+    pub displacement: NativeVec3,
+    pub contact: NativeCharacterContact,
+    pub ground: NativeCharacterGround,
+    pub stepped: u32,
+    pub step_accepted: u32,
+    pub cast_count: u32,
+    pub recovery_passes: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationStepRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub from: NativeVec3,
+    pub target: NativeVec3,
+    pub max_step_units: f32,
+    pub max_visited: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationStepReceipt {
+    pub next_waypoint: NativeVec3,
+    pub reached: u32,
+    pub visited: u32,
+    pub path_len: u32,
+    pub reserved: u32,
+    pub projection_hash: u64,
+    pub path_hash: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAppearanceHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeUiStreamHandle {
+    pub value: u64,
+}
+
+/// One borrowed UTF-8 identity. It is valid only for the immediate direct
+/// service call that accepts it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUtf8Slice {
+    pub bytes: *const u8,
+    pub len: usize,
+}
 
 /// One file borrowed by trusted product code for the duration of creation.
 #[repr(C)]
@@ -41,28 +331,197 @@ pub struct NativeTurnArgs {
     pub event_count: usize,
 }
 
-/// One product-selected renderer-neutral visual fact.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeLookState {
+    pub yaw_radians: f32,
+    pub pitch_radians: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLookConfig {
+    pub horizontal_radians_per_unit: f32,
+    pub vertical_radians_per_unit: f32,
+    pub minimum_pitch_radians: f32,
+    pub maximum_pitch_radians: f32,
+    pub maximum_delta_radians: f32,
+    pub invert_horizontal: u32,
+    pub invert_vertical: u32,
+    pub wrap_yaw: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLookRequest {
+    pub state: NativeLookState,
+    pub delta: NativeVec2,
+    pub config: NativeLookConfig,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeLookReceipt {
+    pub state: NativeLookState,
+    pub orientation: NativeQuat,
+    pub forward: NativeVec3,
+    pub right: NativeVec3,
+    pub up: NativeVec3,
+}
+
+/// A renderer-neutral product fact preserved from the initial NativeAOT trial.
+/// Appearance admission remains Engine-owned; later work replaces the trial
+/// catalog source without changing this product-facing fact.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVisualFact {
     pub object_id: u64,
+    pub transform: NativeTransform,
     pub appearance: *const u8,
     pub appearance_len: usize,
-    pub translation: [f32; 3],
-    pub rotation: [f32; 4],
-    pub scale: [f32; 3],
     pub visible: u32,
+    pub reserved: u32,
 }
 
-pub type NativePublishVisualSnapshot =
-    unsafe extern "C" fn(*mut c_void, *const NativeVisualFact, usize) -> i32;
+/// Tags for one borrowed node in a fixed-layout UI value arena.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeStructuredValueKind {
+    Null = 0,
+    Bool = 1,
+    Number = 2,
+    String = 3,
+    Array = 4,
+    Object = 5,
+}
 
-/// Direct Engine functions available to trusted NativeAOT product code.
+/// A node's object key/text ranges refer to `NativeStructuredValue::utf8`.
+/// Array/object child ranges refer to its separate edge array, so nested
+/// values never depend on incidental node layout. This is presentation data,
+/// never an invocation or semantic-program representation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStructuredValueNode {
+    pub kind: u32,
+    pub bool_value: u32,
+    pub number_value: f64,
+    pub key_offset: u32,
+    pub key_len: u32,
+    pub text_offset: u32,
+    pub text_len: u32,
+    pub first_edge: u32,
+    pub child_count: u32,
+}
+
+/// Borrowed structured UI value storage. Rust copies it to `serde_json::Value`
+/// before an envelope is staged; neither side retains these pointers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStructuredValue {
+    pub nodes: *const NativeStructuredValueNode,
+    pub node_count: usize,
+    pub edges: *const u32,
+    pub edge_count: usize,
+    pub root: u32,
+    pub utf8: *const u8,
+    pub utf8_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUiProjection {
+    pub stream: NativeUiStreamHandle,
+    pub sequence: u64,
+    pub value: NativeStructuredValue,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUiStreamRequest {
+    pub stream: NativeUtf8Slice,
+    pub contract: NativeUtf8Slice,
+}
+
+pub type NativeIntegrateLook = unsafe extern "C" fn(
+    *mut c_void,
+    NativeLookRequest,
+    *mut NativeLookReceipt,
+) -> i32;
+pub type NativeCreateSpatialSession = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpatialSessionConfig,
+    *mut NativeSpatialSessionHandle,
+) -> i32;
+pub type NativeDestroySpatialSession = unsafe extern "C" fn(*mut c_void, NativeSpatialSessionHandle) -> i32;
+pub type NativeReplaceCollision = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCollisionReplaceRequest,
+    *mut NativeCollisionReplaceReceipt,
+) -> i32;
+pub type NativeReplaceNavigation = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeNavigationReplaceRequest,
+    *mut NativeNavigationReplaceReceipt,
+) -> i32;
+pub type NativeProposeCharacterStep = unsafe extern "C" fn(
+    *mut c_void,
+    NativeCharacterStepRequest,
+    *mut NativeCharacterStepReceipt,
+) -> i32;
+pub type NativeProposeNavigationStep = unsafe extern "C" fn(
+    *mut c_void,
+    NativeNavigationStepRequest,
+    *mut NativeNavigationStepReceipt,
+) -> i32;
+pub type NativePublishVisualSnapshot = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVisualFact,
+    usize,
+) -> i32;
+pub type NativeOpenUiStream = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeUiStreamRequest,
+    *mut NativeUiStreamHandle,
+) -> i32;
+pub type NativePublishUiProjection = unsafe extern "C" fn(*mut c_void, *const NativeUiProjection) -> i32;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLookApi {
+    pub context: *mut c_void,
+    pub integrate: NativeIntegrateLook,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialApi {
+    pub context: *mut c_void,
+    pub create_session: NativeCreateSpatialSession,
+    pub destroy_session: NativeDestroySpatialSession,
+    pub replace_collision: NativeReplaceCollision,
+    pub replace_navigation: NativeReplaceNavigation,
+    pub propose_character_step: NativeProposeCharacterStep,
+    pub propose_navigation_step: NativeProposeNavigationStep,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUiApi {
+    pub context: *mut c_void,
+    pub open_stream: NativeOpenUiStream,
+    pub publish_projection: NativePublishUiProjection,
+}
+
+/// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeEngineApi {
     pub context: *mut c_void,
     pub publish_visual_snapshot: NativePublishVisualSnapshot,
+    pub look: NativeLookApi,
+    pub spatial: NativeSpatialApi,
+    pub ui: NativeUiApi,
 }
 
 /// Borrowed creation inputs plus the direct Engine API.
