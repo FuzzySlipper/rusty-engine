@@ -533,6 +533,7 @@ dependencies = [
  "libloading",
  "product-dev-host",
  "render-model",
+ "render-projection",
  "runtime-input",
  "runtime-ui",
  "serde",

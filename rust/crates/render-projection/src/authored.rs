@@ -10,13 +10,15 @@ use render_model::{
 
 use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ProjectionMode {
     AuthoredPreview,
     Runtime,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ProjectionAvailability {
     #[default]
     Both,
@@ -35,7 +37,13 @@ impl ProjectionAvailability {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 // Appearance values are low-volume authored candidates. Keeping the complete
 // sprite descriptor inline preserves the existing direct composition API and
 // avoids a mandatory heap allocation in every unlit/default sprite.
@@ -59,7 +67,8 @@ pub enum Appearance {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceNode {
     pub id: u64,
     pub parent: Option<u64>,
@@ -70,7 +79,8 @@ pub struct AppearanceNode {
     pub appearance: Appearance,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceLight {
     pub id: u64,
     pub parent: Option<u64>,
@@ -78,16 +88,23 @@ pub struct AppearanceLight {
     pub light: LightDescriptor,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceResources {
+    #[serde(default)]
     pub materials: Vec<RenderMaterialDescriptor>,
+    #[serde(default)]
     pub textures: Vec<TextureDescriptor>,
+    #[serde(default)]
     pub sprite_atlases: Vec<SpriteAtlasDescriptor>,
+    #[serde(default)]
     pub static_meshes: Vec<StaticMeshAsset>,
+    #[serde(default)]
     pub animated_meshes: Vec<AnimatedMeshAsset>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppearanceScene {
     pub resources: AppearanceResources,
     pub nodes: Vec<AppearanceNode>,

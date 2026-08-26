@@ -26,6 +26,7 @@ public static unsafe class Product
     {
         public ContentFile* Content;
         public nuint ContentLen;
+        public EngineFunctionTable Engine;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -57,6 +58,32 @@ public static unsafe class Product
         public nuint Len;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct VisualFact
+    {
+        public ulong ObjectId;
+        public byte* Appearance;
+        public nuint AppearanceLen;
+        public float TranslationX;
+        public float TranslationY;
+        public float TranslationZ;
+        public float RotationX;
+        public float RotationY;
+        public float RotationZ;
+        public float RotationW;
+        public float ScaleX;
+        public float ScaleY;
+        public float ScaleZ;
+        public uint Visible;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct EngineFunctionTable
+    {
+        public void* Context;
+        public delegate* unmanaged[Cdecl]<void*, VisualFact*, nuint, int> PublishVisualSnapshot;
+    }
+
     private sealed class State
     {
         public int ContentFiles;
@@ -65,6 +92,7 @@ public static unsafe class Product
         public bool Started;
         public bool Paused;
         public bool Shutdown;
+        public EngineFunctionTable Engine;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "rusty_product_create", CallConvs = [typeof(CallConvCdecl)])]
@@ -78,9 +106,9 @@ public static unsafe class Product
                 ContentFile file = args->Content[index];
                 if ((file.PathLen != 0 && file.Path is null) || (file.BytesLen != 0 && file.Bytes is null)) return 3;
             }
-            var state = new State { ContentFiles = checked((int)args->ContentLen) };
+            var state = new State { ContentFiles = checked((int)args->ContentLen), Engine = args->Engine };
             *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(state));
-            return WriteOutput(state, output);
+            return WriteOutput(state, output, publishVisualSnapshot: false);
         }
         catch { return 99; }
     }
@@ -157,19 +185,50 @@ public static unsafe class Product
         return (State)GCHandle.FromIntPtr((nint)handle).Target!;
     }
 
-    private static int WriteOutput(State state, OutputBuffer* output)
+    private static int WriteOutput(State state, OutputBuffer* output, bool publishVisualSnapshot = true)
     {
         if (output is null) return 1;
+        if (publishVisualSnapshot && PublishVisualSnapshot(state) != 1) return 8;
         string ui = "{\"artifact\":\"rusty.product.ui-projection\",\"runtime\":{\"instanceId\":\"1\",\"generation\":\"1\",\"controlRevision\":\"1\"},\"sequence\":\"" + state.Turns + "\",\"stream\":\"csharp.trial.hud\",\"contract\":\"csharp.trial.ui.v1\",\"value\":{\"turns\":" + state.Turns + ",\"contentFiles\":" + state.ContentFiles + ",\"paused\":" + (state.Paused ? "true" : "false") + "}}";
-        const string frame = "{\"schemaVersion\":1,\"ops\":[{\"op\":\"create\",\"handle\":1,\"parent\":null,\"node\":{\"geometry\":{\"kind\":\"cube\"},\"material\":{\"color\":[1,1,1,1],\"wireframe\":false},\"transform\":{\"translation\":[1,0,0],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]},\"visible\":true,\"layer\":\"scene\",\"metadata\":{\"sourceEntity\":1,\"sourceSceneNode\":null,\"tags\":[\"csharp-trial\"],\"label\":\"csharp trial\"}}}]}";
         int frees;
         int duplicates;
         lock (OutputLock) { frees = FreedOutputs; duplicates = DuplicateFrees; }
-        byte[] bytes = Encoding.UTF8.GetBytes("{\"turns\":" + state.Turns + ",\"frees\":" + frees + ",\"duplicateFrees\":" + duplicates + ",\"inputEvents\":" + state.InputEvents + ",\"ui\":" + ui + ",\"frame\":" + frame + "}");
+        byte[] bytes = Encoding.UTF8.GetBytes("{\"turns\":" + state.Turns + ",\"frees\":" + frees + ",\"duplicateFrees\":" + duplicates + ",\"inputEvents\":" + state.InputEvents + ",\"ui\":" + ui + "}");
         output->Data = (byte*)Marshal.AllocCoTaskMem(bytes.Length);
         output->Len = (nuint)bytes.Length;
         lock (OutputLock) { ActiveOutputPointers.Add((nint)output->Data); }
         bytes.CopyTo(new Span<byte>(output->Data, bytes.Length));
         return 1;
+    }
+
+    private static int PublishVisualSnapshot(State state)
+    {
+        if (state.Engine.Context is null || state.Engine.PublishVisualSnapshot is null) return 8;
+        if (state.Turns >= 2)
+        {
+            return state.Engine.PublishVisualSnapshot(state.Engine.Context, null, 0) == 1 ? 1 : 8;
+        }
+        byte[] appearance = Encoding.UTF8.GetBytes("appearance/nativeaot-trial");
+        fixed (byte* appearancePointer = appearance)
+        {
+            VisualFact fact = new()
+            {
+                ObjectId = 41,
+                Appearance = appearancePointer,
+                AppearanceLen = (nuint)appearance.Length,
+                TranslationX = state.Turns,
+                TranslationY = 0,
+                TranslationZ = 0,
+                RotationX = 0,
+                RotationY = 0,
+                RotationZ = 0,
+                RotationW = 1,
+                ScaleX = 1,
+                ScaleY = 1,
+                ScaleZ = 1,
+                Visible = 1,
+            };
+            return state.Engine.PublishVisualSnapshot(state.Engine.Context, &fact, 1) == 1 ? 1 : 8;
+        }
     }
 }

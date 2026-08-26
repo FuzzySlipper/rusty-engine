@@ -1,0 +1,51 @@
+{
+  "resources": {
+    "materials": [
+      {
+        "schemaVersion": 2,
+        "id": "material/nativeaot-trial",
+        "color": [0.4, 0.6, 0.9, 1.0],
+        "texture": null,
+        "roughness": 1.0,
+        "textureTint": [1.0, 1.0, 1.0, 1.0],
+        "emissionColor": [0.0, 0.0, 0.0],
+        "emissionIntensity": 0.0,
+        "uvStrategy": "flat"
+      }
+    ],
+    "staticMeshes": [
+      {
+        "asset": "mesh/nativeaot-trial",
+        "payload": {
+          "layout": {
+            "vertexCount": 3,
+            "indexCount": 3,
+            "indexWidth": "u32",
+            "attributes": [
+              { "name": "position", "components": 3, "kind": "f32" },
+              { "name": "normal", "components": 3, "kind": "f32" }
+            ]
+          },
+          "groups": [{ "materialSlot": 0, "start": 0, "count": 3 }],
+          "bounds": { "min": [-0.5, 0.0, 0.0], "max": [0.5, 1.0, 0.0] },
+          "source": {
+            "kind": "inline",
+            "positions": [-0.5, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0, 0.0],
+            "normals": [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            "indices": [0, 1, 2]
+          },
+          "provenance": "staticAsset"
+        },
+        "materialSlots": [{ "slot": 0, "material": "material/nativeaot-trial" }],
+        "collision": { "kind": "visualOnly" }
+      }
+    ]
+  },
+  "appearances": {
+    "appearance/nativeaot-trial": {
+      "kind": "staticMesh",
+      "asset": "mesh/nativeaot-trial",
+      "materialOverrides": []
+    }
+  }
+}
