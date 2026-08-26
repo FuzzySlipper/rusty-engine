@@ -9,8 +9,12 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 crate_dir="$repo_root/rust/crates/csharp-engine-abi"
 output_dir=${1:-"$repo_root/fixtures/csharp-nativeaot-trial/obj/Generated"}
+inputs_dir=${2:-"$output_dir/GeneratedInputs"}
 if [[ "$output_dir" != /* ]]; then
     output_dir="$repo_root/$output_dir"
+fi
+if [[ "$inputs_dir" != /* ]]; then
+    inputs_dir="$repo_root/$inputs_dir"
 fi
 
 mkdir -p "$output_dir"
@@ -26,12 +30,14 @@ if ! command -v clang >/dev/null 2>&1; then
     echo "generate-csharp-native-bindings: clang is required by ClangSharpPInvokeGenerator" >&2
     exit 1
 fi
+clang_resource_dir=$(clang -print-resource-dir)
 
 dotnet tool restore --tool-manifest "$repo_root/.config/dotnet-tools.json" --verbosity quiet
 
 header="$output_dir/rusty_engine.h"
 bindings="$output_dir/NativeBindings.g.cs"
-facade="$output_dir/EngineApi.g.cs"
+contracts="$output_dir/EngineContracts.g.cs"
+values="$output_dir/EngineValues.g.cs"
 
 (
     cd "$crate_dir"
@@ -56,4 +62,7 @@ facade="$output_dir/EngineApi.g.cs"
         -e 'rusty_product_*'
 )
 
-python3 "$script_dir/generate-csharp-safe-facade.py" "$header" "$facade"
+dotnet run \
+    --project "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj" \
+    --no-restore \
+    -- "$header" "$contracts" "$values" "$inputs_dir" "$clang_resource_dir"

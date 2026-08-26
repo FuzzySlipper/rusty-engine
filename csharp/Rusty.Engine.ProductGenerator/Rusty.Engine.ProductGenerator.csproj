@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="obj/GeneratedInputs/Interop.g.cs" LogicalName="Rusty.Engine.ProductGenerator.GeneratedInputs.Interop.g.cs" />
+    <EmbeddedResource Include="obj/GeneratedInputs/EngineServiceImplementations.g.cs" LogicalName="Rusty.Engine.ProductGenerator.GeneratedInputs.EngineServiceImplementations.g.cs" />
+  </ItemGroup>
+  <Target Name="GenerateNativeProductInputs" BeforeTargets="PrepareResources">
+    <Exec Command="&quot;$(MSBuildThisFileDirectory)../../scripts/generate-csharp-native-bindings.sh&quot; &quot;$(MSBuildProjectDirectory)/obj/Generated&quot; &quot;$(MSBuildProjectDirectory)/obj/GeneratedInputs&quot;" />
+  </Target>
+</Project>
