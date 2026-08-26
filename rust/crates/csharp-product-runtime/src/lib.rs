@@ -32,9 +32,18 @@ use product_dev_host::{
     ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
     ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
-use render_model::Transform;
+use render_model::{
+    BillboardMode, Geometry, Material, MaterialAlphaModeDescriptor, MaterialUvStrategy,
+    MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout,
+    MeshCollisionPolicy, MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot,
+    MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance, MeshResourceEncoding,
+    RenderMaterialDescriptor, RenderMetadata, SpriteAtlasDescriptor, SpriteAttachment,
+    SpriteDepthPolicy, SpriteFrameRect, SpriteInstanceDescriptor, SpriteMaterialDescriptor,
+    SpriteShading, SpriteSizeMode, StaticMeshAsset, TextureDescriptor, TextureFilter, TextureWrap,
+    Transform,
+};
 use render_projection::{
-    RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
+    Appearance, RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
 };
 use runtime_input::{RuntimeInputEvent, RuntimeIntentValue};
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
@@ -162,13 +171,26 @@ struct RuntimeUiStream {
     last_sequence: Option<u64>,
 }
 
-/// The retained visual path from the original NativeAOT trial remains live
-/// through phase A. It owns its own staged retained projector so a failing C#
-/// call never advances the renderer-visible retained state.
-struct RuntimeAppearanceBridge {
+#[derive(Clone)]
+struct RuntimeAppearanceState {
     projector: RuntimeAppearanceProjector,
+    appearances: BTreeMap<u64, String>,
+    next_appearance: u64,
+}
+
+struct RuntimeAppearanceCall {
+    state: RuntimeAppearanceState,
+    frame: Option<render_model::RenderFrameDiff>,
+}
+
+/// Engine-owned appearance admission and retained projection for trusted C# products.
+/// Calls stage both newly admitted appearances and snapshots so a failing product call
+/// cannot partly advance renderer-visible state.
+struct RuntimeAppearanceBridge {
+    state: RuntimeAppearanceState,
     render_resources: Vec<ProductDevRendererResource>,
-    staged: Option<(RuntimeAppearanceProjector, render_model::RenderFrameDiff)>,
+    resource_paths: BTreeMap<String, u64>,
+    staged: Option<RuntimeAppearanceCall>,
     callback_error: Option<CsharpProductRuntimeError>,
 }
 
@@ -177,16 +199,32 @@ impl RuntimeAppearanceBridge {
         catalog: RuntimeAppearanceCatalog,
         render_resources: Vec<ProductDevRendererResource>,
     ) -> Self {
+        let mut resource_paths = BTreeMap::new();
+        for (index, resource) in render_resources.iter().enumerate() {
+            let handle = index as u64 + 1;
+            resource_paths.insert(resource.path().to_owned(), handle);
+            if let Some(relative) = resource.path().strip_prefix("content/") {
+                resource_paths.insert(relative.to_owned(), handle);
+            }
+        }
         Self {
-            projector: RuntimeAppearanceProjector::new(catalog),
+            state: RuntimeAppearanceState {
+                projector: RuntimeAppearanceProjector::new(catalog),
+                appearances: BTreeMap::new(),
+                next_appearance: 1,
+            },
             render_resources,
+            resource_paths,
             staged: None,
             callback_error: None,
         }
     }
 
     fn begin_call(&mut self) {
-        self.staged = None;
+        self.staged = Some(RuntimeAppearanceCall {
+            state: self.state.clone(),
+            frame: None,
+        });
         self.callback_error = None;
     }
 
@@ -197,10 +235,7 @@ impl RuntimeAppearanceBridge {
 
     fn take_staged_call(
         &mut self,
-    ) -> Result<
-        Option<(RuntimeAppearanceProjector, render_model::RenderFrameDiff)>,
-        CsharpProductRuntimeError,
-    > {
+    ) -> Result<Option<RuntimeAppearanceCall>, CsharpProductRuntimeError> {
         if let Some(error) = self.callback_error.take() {
             self.staged = None;
             return Err(error);
@@ -208,18 +243,310 @@ impl RuntimeAppearanceBridge {
         Ok(self.staged.take())
     }
 
-    fn commit(
-        &mut self,
-        staged: Option<(RuntimeAppearanceProjector, render_model::RenderFrameDiff)>,
-    ) {
-        if let Some((projector, _)) = staged {
-            self.projector = projector;
+    fn commit(&mut self, staged: Option<RuntimeAppearanceCall>) {
+        if let Some(staged) = staged {
+            self.state = staged.state;
         }
+    }
+
+    fn staged_mut(&mut self) -> Result<&mut RuntimeAppearanceCall, CsharpProductRuntimeError> {
+        self.staged.as_mut().ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_APPEARANCE_CALL",
+                "appearance service was called outside a product call",
+            )
+        })
+    }
+
+    fn open_resource(
+        &self,
+        request: &NativeRenderResourceRequest,
+    ) -> Result<NativeRenderResourceInfo, CsharpProductRuntimeError> {
+        // SAFETY: the borrowed path is copied before the direct callback returns.
+        let path = unsafe { borrowed_utf8(request.path.bytes, request.path.len, "resource path")? };
+        let handle = self.resource_paths.get(path).copied().ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_RENDER_RESOURCE_UNKNOWN",
+                format!("product content has no admitted renderer resource `{path}`"),
+            )
+        })?;
+        let resource = self.resource(handle)?;
+        Ok(NativeRenderResourceInfo {
+            handle: NativeRenderResourceHandle { value: handle },
+            kind: match resource.kind() {
+                product_dev_host::ProductDevRendererResourceKind::Texture => 1,
+                product_dev_host::ProductDevRendererResourceKind::Mesh => 2,
+            },
+            byte_length: u32::try_from(resource.bytes().len()).map_err(|_| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_RENDER_RESOURCE_SIZE",
+                    "renderer resource byte length exceeded u32",
+                )
+            })?,
+        })
+    }
+
+    fn resource(
+        &self,
+        handle: u64,
+    ) -> Result<&ProductDevRendererResource, CsharpProductRuntimeError> {
+        let index = usize::try_from(handle.saturating_sub(1)).map_err(|_| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_RENDER_RESOURCE_HANDLE",
+                "invalid resource handle",
+            )
+        })?;
+        self.render_resources.get(index).ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_RENDER_RESOURCE_HANDLE",
+                "unknown resource handle",
+            )
+        })
+    }
+
+    fn allocate_appearance(
+        &mut self,
+        appearance: Appearance,
+    ) -> Result<NativeAppearanceHandle, CsharpProductRuntimeError> {
+        let staged = self.staged_mut()?;
+        let handle = staged.state.next_appearance;
+        staged.state.next_appearance = handle.checked_add(1).ok_or_else(|| {
+            CsharpProductRuntimeError::new("CSHARP_APPEARANCE_HANDLE", "appearance handle overflow")
+        })?;
+        let identity = format!("appearance/native-{handle}");
+        staged
+            .state
+            .projector
+            .insert_appearance(identity.clone(), appearance);
+        staged.state.appearances.insert(handle, identity);
+        Ok(NativeAppearanceHandle { value: handle })
+    }
+
+    fn create_primitive(
+        &mut self,
+        request: NativePrimitiveAppearanceRequest,
+    ) -> Result<NativeAppearanceHandle, CsharpProductRuntimeError> {
+        let geometry = match request.geometry {
+            1 => Geometry::Cube,
+            2 => Geometry::Sphere,
+            3 => Geometry::Quad,
+            4 => Geometry::Point,
+            _ => {
+                return Err(CsharpProductRuntimeError::new(
+                    "CSHARP_PRIMITIVE_GEOMETRY",
+                    "unknown primitive geometry",
+                ))
+            }
+        };
+        self.allocate_appearance(Appearance::Primitive {
+            geometry,
+            material: Material {
+                color: native_color(request.color),
+                wireframe: request.wireframe != 0,
+            },
+        })
+    }
+
+    unsafe fn create_static_mesh(
+        &mut self,
+        request: &NativeStaticMeshAppearanceRequest,
+    ) -> Result<NativeAppearanceHandle, CsharpProductRuntimeError> {
+        let resource = self.resource(request.resource.value)?.clone();
+        if resource.kind() != product_dev_host::ProductDevRendererResourceKind::Mesh {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_STATIC_MESH_RESOURCE",
+                "static mesh appearance requires a mesh resource",
+            ));
+        }
+        let native_groups = borrowed_slice(request.groups, request.groups_len, "mesh groups")?;
+        let mut groups = Vec::with_capacity(native_groups.len());
+        let mut slots = BTreeMap::new();
+        for group in native_groups {
+            let material_slot = u16::try_from(group.material_slot).map_err(|_| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_STATIC_MESH_SLOT",
+                    "mesh material slot exceeded u16",
+                )
+            })?;
+            groups.push(MeshGroupDescriptor {
+                material_slot,
+                start: group.start,
+                count: group.count,
+            });
+            slots.insert(material_slot, ());
+        }
+        let handle = self.staged_mut()?.state.next_appearance;
+        let mesh_id = format!("mesh/native-{handle}");
+        let mut material_slots = Vec::with_capacity(slots.len());
+        let mut materials = Vec::with_capacity(slots.len());
+        for slot in slots.keys().copied() {
+            let material = format!("material/native-{handle}-{slot}");
+            material_slots.push(MeshMaterialSlot {
+                slot,
+                material: material.clone(),
+            });
+            materials.push(render_material(material, request.color));
+        }
+        let uvs = (request.uvs_byte_offset != 0).then_some(request.uvs_byte_offset);
+        let colors = (request.colors_byte_offset != 0).then_some(request.colors_byte_offset);
+        let mut attributes = vec![
+            MeshAttribute {
+                name: MeshAttributeName::Position,
+                components: 3,
+                kind: MeshAttributeKind::F32,
+            },
+            MeshAttribute {
+                name: MeshAttributeName::Normal,
+                components: 3,
+                kind: MeshAttributeKind::F32,
+            },
+        ];
+        if uvs.is_some() {
+            attributes.push(MeshAttribute {
+                name: MeshAttributeName::Uv,
+                components: 2,
+                kind: MeshAttributeKind::F32,
+            });
+        }
+        if colors.is_some() {
+            attributes.push(MeshAttribute {
+                name: MeshAttributeName::Color,
+                components: 4,
+                kind: MeshAttributeKind::F32,
+            });
+        }
+        let encoding = match request.encoding {
+            1 => MeshResourceEncoding::PackedStreamsLeV1,
+            2 => MeshResourceEncoding::PackedStreamsLeV2,
+            3 => MeshResourceEncoding::PackedStreamsLeV3,
+            _ => {
+                return Err(CsharpProductRuntimeError::new(
+                    "CSHARP_STATIC_MESH_ENCODING",
+                    "unknown packed mesh encoding",
+                ))
+            }
+        };
+        let byte_length = u32::try_from(resource.bytes().len()).map_err(|_| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_STATIC_MESH_SIZE",
+                "mesh resource byte length exceeded u32",
+            )
+        })?;
+        let asset = StaticMeshAsset {
+            asset: mesh_id.clone(),
+            payload: MeshPayloadDescriptor {
+                layout: MeshBufferLayout {
+                    vertex_count: request.vertex_count,
+                    index_count: request.index_count,
+                    index_width: MeshIndexWidth::U32,
+                    attributes,
+                },
+                groups,
+                bounds: MeshBoundsDescriptor {
+                    min: native_vec3_array(request.bounds_min),
+                    max: native_vec3_array(request.bounds_max),
+                },
+                source: MeshPayloadSource::Resource {
+                    resource: resource.identity().to_owned(),
+                    content_hash: resource.content_hash().to_owned(),
+                    byte_length,
+                    encoding,
+                    positions_byte_offset: request.positions_byte_offset,
+                    normals_byte_offset: request.normals_byte_offset,
+                    uvs_byte_offset: uvs,
+                    colors_byte_offset: colors,
+                    indices_byte_offset: request.indices_byte_offset,
+                },
+                provenance: MeshProvenance::StaticAsset,
+            },
+            material_slots: material_slots.clone(),
+            collision: MeshCollisionPolicy::VisualOnly,
+        };
+        {
+            let resources = self.staged_mut()?.state.projector.resources_mut();
+            resources.materials.extend(materials);
+            resources.static_meshes.push(asset);
+        }
+        self.allocate_appearance(Appearance::StaticMesh {
+            asset: mesh_id,
+            material_overrides: Vec::new(),
+        })
+    }
+
+    fn create_sprite(
+        &mut self,
+        request: NativeSpriteAppearanceRequest,
+    ) -> Result<NativeAppearanceHandle, CsharpProductRuntimeError> {
+        let resource = self.resource(request.texture.value)?.clone();
+        if resource.kind() != product_dev_host::ProductDevRendererResourceKind::Texture {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_SPRITE_RESOURCE",
+                "sprite appearance requires a texture resource",
+            ));
+        }
+        let handle = self.staged_mut()?.state.next_appearance;
+        let texture_id = format!("texture/native-{handle}");
+        let atlas_id = format!("sprite/native-{handle}");
+        let texture = TextureDescriptor::admit_png_rgba8_resource(
+            texture_id.clone(),
+            resource.bytes(),
+            TextureFilter::Nearest,
+            TextureWrap::Clamp,
+            1,
+        )
+        .map_err(|error| {
+            CsharpProductRuntimeError::new("CSHARP_SPRITE_TEXTURE", format!("{error:?}"))
+        })?;
+        let atlas = SpriteAtlasDescriptor {
+            id: atlas_id.clone(),
+            texture: texture_id,
+            frames: vec![SpriteFrameRect {
+                frame: 0,
+                uv_min: native_vec2(request.uv_min),
+                uv_max: native_vec2(request.uv_max),
+                size: None,
+            }],
+        };
+        {
+            let resources = self.staged_mut()?.state.projector.resources_mut();
+            resources.textures.push(texture);
+            resources.sprite_atlases.push(atlas);
+        }
+        let billboard = match request.billboard {
+            0 => BillboardMode::None,
+            1 => BillboardMode::Spherical,
+            2 => BillboardMode::Cylindrical,
+            _ => {
+                return Err(CsharpProductRuntimeError::new(
+                    "CSHARP_SPRITE_BILLBOARD",
+                    "unknown sprite billboard mode",
+                ))
+            }
+        };
+        self.allocate_appearance(Appearance::Sprite {
+            sprite: SpriteInstanceDescriptor {
+                asset: atlas_id,
+                frame: 0,
+                pivot: native_vec2(request.pivot),
+                size: native_vec2(request.size),
+                size_mode: SpriteSizeMode::World,
+                billboard,
+                tint: native_color(request.tint),
+                render_order: request.render_order,
+                depth: SpriteDepthPolicy::Default,
+                shading: SpriteShading::Unlit,
+                material: SpriteMaterialDescriptor::default(),
+                visible: true,
+                transform: Transform::IDENTITY,
+                attachment: SpriteAttachment::default(),
+                metadata: RenderMetadata::default(),
+            },
+        })
     }
 
     unsafe fn stage_snapshot(
         &mut self,
-        facts: *const NativeVisualFact,
+        facts: *const NativeAppearanceFact,
         fact_count: usize,
     ) -> Result<(), CsharpProductRuntimeError> {
         if fact_count > 0 && facts.is_null() {
@@ -234,12 +561,18 @@ impl RuntimeAppearanceBridge {
         } else {
             unsafe { std::slice::from_raw_parts(facts, fact_count) }
         };
+        let appearances = self.staged_mut()?.state.appearances.clone();
         let mut owned = Vec::with_capacity(facts.len());
         for fact in facts {
+            let appearance = appearances.get(&fact.appearance.value).ok_or_else(|| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_APPEARANCE_HANDLE",
+                    "visual fact used an unknown appearance handle",
+                )
+            })?;
             owned.push(RuntimeAppearanceFact {
                 object_id: fact.object_id,
-                appearance: borrowed_utf8(fact.appearance, fact.appearance_len, "appearance")?
-                    .to_owned(),
+                appearance: appearance.clone(),
                 transform: Transform {
                     translation: [
                         fact.transform.translation.x,
@@ -261,21 +594,96 @@ impl RuntimeAppearanceBridge {
                 visible: fact.visible != 0,
             });
         }
-        let mut projector = self.projector.clone();
-        let frame = projector
+        let staged = self.staged_mut()?;
+        let frame = staged
+            .state
+            .projector
             .project(&owned)
             .map_err(|error| {
                 CsharpProductRuntimeError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}"))
             })?
             .frame;
-        self.staged = Some((projector, frame));
+        staged.frame = Some(frame);
         Ok(())
     }
 }
 
-unsafe extern "C" fn publish_visual_snapshot(
+unsafe extern "C" fn open_render_resource(
     context: *mut c_void,
-    facts: *const NativeVisualFact,
+    request: *const NativeRenderResourceRequest,
+    result: *mut NativeRenderResourceInfo,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match bridge.open_resource(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn create_primitive_appearance(
+    context: *mut c_void,
+    request: NativePrimitiveAppearanceRequest,
+    result: *mut NativeAppearanceHandle,
+) -> i32 {
+    appearance_result(context, result, |bridge| bridge.create_primitive(request))
+}
+
+unsafe extern "C" fn create_static_mesh_appearance(
+    context: *mut c_void,
+    request: *const NativeStaticMeshAppearanceRequest,
+    result: *mut NativeAppearanceHandle,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    appearance_result(context, result, |bridge| unsafe {
+        bridge.create_static_mesh(&*request)
+    })
+}
+
+unsafe extern "C" fn create_sprite_appearance(
+    context: *mut c_void,
+    request: NativeSpriteAppearanceRequest,
+    result: *mut NativeAppearanceHandle,
+) -> i32 {
+    appearance_result(context, result, |bridge| bridge.create_sprite(request))
+}
+
+fn appearance_result(
+    context: *mut c_void,
+    result: *mut NativeAppearanceHandle,
+    action: impl FnOnce(
+        &mut RuntimeAppearanceBridge,
+    ) -> Result<NativeAppearanceHandle, CsharpProductRuntimeError>,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match action(bridge) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn publish_appearance_snapshot(
+    context: *mut c_void,
+    facts: *const NativeAppearanceFact,
     fact_count: usize,
 ) -> i32 {
     if context.is_null() {
@@ -290,6 +698,35 @@ unsafe extern "C" fn publish_visual_snapshot(
             bridge.callback_error = Some(error);
             0
         }
+    }
+}
+
+fn native_vec2(value: NativeVec2) -> [f32; 2] {
+    [value.x, value.y]
+}
+
+fn native_vec3_array(value: NativeVec3) -> [f32; 3] {
+    [value.x, value.y, value.z]
+}
+
+fn native_color(value: NativeColor) -> [f32; 4] {
+    [value.r, value.g, value.b, value.a]
+}
+
+fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
+    RenderMaterialDescriptor {
+        schema_version: 1,
+        id,
+        color: native_color(color),
+        texture: None,
+        roughness: 1.0,
+        texture_tint: [1.0; 4],
+        emission_color: [0.0; 3],
+        emission_intensity: 0.0,
+        uv_strategy: MaterialUvStrategy::Flat,
+        alpha_mode: MaterialAlphaModeDescriptor::Opaque,
+        double_sided: false,
+        voxel_surface: None,
     }
 }
 
@@ -1164,8 +1601,6 @@ fn engine_api(
     ui_bridge: &mut RuntimeUiBridge,
 ) -> NativeEngineApi {
     NativeEngineApi {
-        context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
-        publish_visual_snapshot,
         look: NativeLookApi {
             context: ptr::null_mut(),
             integrate: integrate_look,
@@ -1178,6 +1613,14 @@ fn engine_api(
             replace_navigation: replace_spatial_navigation,
             propose_character_step,
             propose_navigation_step,
+        },
+        appearance: NativeAppearanceApi {
+            context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
+            open_resource: open_render_resource,
+            create_primitive: create_primitive_appearance,
+            create_static_mesh: create_static_mesh_appearance,
+            create_sprite: create_sprite_appearance,
+            publish_snapshot: publish_appearance_snapshot,
         },
         ui: NativeUiApi {
             context: (ui_bridge as *mut RuntimeUiBridge).cast(),
@@ -1615,7 +2058,9 @@ impl CsharpProductRuntime {
         let mut outputs = Vec::new();
         append_frame(
             &mut outputs,
-            staged_appearance.as_ref().map(|(_, frame)| frame),
+            staged_appearance
+                .as_ref()
+                .and_then(|staged| staged.frame.as_ref()),
         )?;
         append_ui(&mut outputs, &staged_ui.projections)?;
         let turns = self.turns.checked_add(1).ok_or_else(|| {
@@ -1648,7 +2093,9 @@ impl CsharpProductRuntime {
         let mut outputs = Vec::new();
         append_frame(
             &mut outputs,
-            staged_appearance.as_ref().map(|(_, frame)| frame),
+            staged_appearance
+                .as_ref()
+                .and_then(|staged| staged.frame.as_ref()),
         )?;
         append_ui(&mut outputs, &staged_ui.projections)?;
         self.appearance_bridge.commit(staged_appearance);
@@ -1941,16 +2388,13 @@ impl CsharpProductContent {
 fn load_runtime_appearance_catalog(
     files: &[ContentFile],
 ) -> Result<RuntimeAppearanceCatalog, CsharpProductRuntimeError> {
-    let bytes = files
+    let Some(bytes) = files
         .iter()
         .find(|file| file.path == b"runtime-appearances.json")
         .map(|file| file.bytes.as_slice())
-        .ok_or_else(|| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_RUNTIME_APPEARANCES",
-                "content has no runtime-appearances.json",
-            )
-        })?;
+    else {
+        return Ok(RuntimeAppearanceCatalog::default());
+    };
     serde_json::from_slice(bytes).map_err(|error| {
         CsharpProductRuntimeError::new("CSHARP_RUNTIME_APPEARANCES", error.to_string())
     })

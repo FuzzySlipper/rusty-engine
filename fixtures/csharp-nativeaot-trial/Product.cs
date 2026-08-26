@@ -18,6 +18,7 @@ public static unsafe class Product
         public ulong UiSequence;
         public NativeUiStreamHandle UiStream;
         public NativeSpatialSessionHandle Spatial;
+        public NativeAppearanceHandle Appearance;
         public NativeLookState Look;
         public NativeEngineApi Engine;
     }
@@ -59,6 +60,12 @@ public static unsafe class Product
             }
 
             var state = new State { Engine = args->engine };
+            state.Appearance = new EngineApi(state.Engine).Appearance.CreatePrimitive(
+                new NativePrimitiveAppearanceRequest
+                {
+                    geometry = 1,
+                    color = new NativeColor { r = 0.25f, g = 0.75f, b = 1.0f, a = 1.0f },
+                });
             state.UiStream = new EngineApi(state.Engine).Ui.OpenStream(
                 "nativeaot-trial",
                 "nativeaot.trial.hud");
@@ -249,7 +256,7 @@ public static unsafe class Product
         try
         {
             var engine = new EngineApi(state.Engine);
-            PublishVisualSnapshot(engine, state);
+            PublishAppearanceSnapshot(engine, state);
             engine.Ui.PublishProjection(state.UiStream, ++state.UiSequence, UiValue(state));
             return 1;
         }
@@ -268,31 +275,26 @@ public static unsafe class Product
         return values.Build(values.Object(("turns", turns), ("yaw", yaw), ("x", x)));
     }
 
-    private static void PublishVisualSnapshot(EngineApi engine, State state)
+    private static void PublishAppearanceSnapshot(EngineApi engine, State state)
     {
         if (state.Turns >= 2)
         {
-            engine.PublishVisualSnapshot(ReadOnlySpan<NativeVisualFact>.Empty);
+            engine.Appearance.PublishSnapshot(ReadOnlySpan<NativeAppearanceFact>.Empty);
             return;
         }
 
-        ReadOnlySpan<byte> appearance = "appearance/nativeaot-trial"u8;
-        fixed (byte* appearancePointer = appearance)
+        NativeAppearanceFact fact = new()
         {
-            NativeVisualFact fact = new()
+            object_id = 41,
+            transform = new NativeTransform
             {
-                object_id = 41,
-                transform = new NativeTransform
-                {
-                    translation = new NativeVec3 { x = state.X },
-                    rotation = new NativeQuat { w = 1.0f },
-                    scale = new NativeVec3 { x = 1.0f, y = 1.0f, z = 1.0f },
-                },
-                appearance = appearancePointer,
-                appearance_len = (nuint)appearance.Length,
-                visible = 1,
-            };
-            engine.PublishVisualSnapshot(new ReadOnlySpan<NativeVisualFact>(&fact, 1));
-        }
+                translation = new NativeVec3 { x = state.X },
+                rotation = new NativeQuat { w = 1.0f },
+                scale = new NativeVec3 { x = 1.0f, y = 1.0f, z = 1.0f },
+            },
+            appearance = state.Appearance,
+            visible = 1,
+        };
+        engine.Appearance.PublishSnapshot(new ReadOnlySpan<NativeAppearanceFact>(&fact, 1));
     }
 }

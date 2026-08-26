@@ -9,6 +9,9 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 crate_dir="$repo_root/rust/crates/csharp-product-runtime"
 output_dir=${1:-"$repo_root/fixtures/csharp-nativeaot-trial/obj/Generated"}
+if [[ "$output_dir" != /* ]]; then
+    output_dir="$repo_root/$output_dir"
+fi
 
 mkdir -p "$output_dir"
 

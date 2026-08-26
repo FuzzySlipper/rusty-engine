@@ -21,6 +21,7 @@ def table_name(receiver: str) -> str:
 
 
 def normalize(argument: str) -> str:
+    argument = re.sub(r"/\*.*?\*/", "", argument, flags=re.S)
     argument = re.sub(r"\bconst\b", "", argument)
     argument = re.sub(r"\bstruct\b", "", argument)
     return " ".join(argument.replace(" *", "*").split())
@@ -136,6 +137,15 @@ def method(header: str, receiver: str, field: str, arguments: list[str]) -> str:
         raise SystemExit(f"{field} must have context-first direct signature")
     user = arguments[1:]
     public = pascal(field)
+    if len(user) == 2 and pointer(user[0]) and base_type(user[1]) == "size_t":
+        item = csharp_type(user[0])
+        return f'''        public void {public}(ReadOnlySpan<{item}> values)
+        {{
+            fixed ({item}* pointer = values)
+            {{
+                NativeCall.RequireSuccess(_native.{field}(_native.context, values.Length == 0 ? null : pointer, (nuint)values.Length));
+            }}
+        }}'''
     if len(user) == 2 and not pointer(user[0]) and pointer(user[1]):
         request, result = csharp_type(user[0]), csharp_type(user[1])
         return f'''        public {result} {public}({request} request)
@@ -152,10 +162,11 @@ def method(header: str, receiver: str, field: str, arguments: list[str]) -> str:
             callbacks = ", ".join(utf8_fields)
             slices = ", ".join(f"slice{index}" for index in range(len(utf8_fields)))
             assignments = ", ".join(f"{name} = {slice}" for name, slice in zip(utf8_fields, slices.split(", ")))
+            helper = "WithSlice" if len(utf8_fields) == 1 else "WithSlices"
             return f'''        public {result} {public}({parameters})
         {{
             {table_name(receiver)} native = _native;
-            return BorrowedUtf8.WithSlices(({slices}) =>
+            return BorrowedUtf8.{helper}(({slices}) =>
             {{
                 {request} request = new() {{ {assignments} }};
                 {result} result = default;
@@ -378,7 +389,18 @@ namespace Rusty.Engine.Native
 
     internal static unsafe class BorrowedUtf8
     {{
+        internal delegate T Single<T>(NativeUtf8Slice value);
         internal delegate T Pair<T>(NativeUtf8Slice first, NativeUtf8Slice second);
+
+        internal static T WithSlice<T>(Single<T> callback, string value)
+        {{
+            ArgumentNullException.ThrowIfNull(callback);
+            byte[] bytes = Encoding.UTF8.GetBytes(value ?? throw new ArgumentNullException(nameof(value)));
+            fixed (byte* pointer = bytes)
+            {{
+                return callback(new NativeUtf8Slice {{ bytes = bytes.Length == 0 ? null : pointer, len = (nuint)bytes.Length }});
+            }}
+        }}
 
         internal static T WithSlices<T>(Pair<T> callback, string first, string second)
         {{

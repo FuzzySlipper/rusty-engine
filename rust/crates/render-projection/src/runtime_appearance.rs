@@ -16,12 +16,28 @@ use crate::{
 };
 
 /// Admitted Engine content available to a trusted product runtime.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeAppearanceCatalog {
     #[serde(default)]
     pub resources: AppearanceResources,
     pub appearances: BTreeMap<String, Appearance>,
+}
+
+impl RuntimeAppearanceCatalog {
+    /// Adds or replaces one product-authored appearance and returns the prior value.
+    pub fn insert_appearance(
+        &mut self,
+        identity: String,
+        appearance: Appearance,
+    ) -> Option<Appearance> {
+        self.appearances.insert(identity, appearance)
+    }
+
+    /// Mutable access for trusted composition roots that directly admit renderer resources.
+    pub fn resources_mut(&mut self) -> &mut AppearanceResources {
+        &mut self.resources
+    }
 }
 
 /// One complete product fact for the current retained visual snapshot.
@@ -46,6 +62,20 @@ impl RuntimeAppearanceProjector {
             catalog,
             projector: SceneAppearanceProjector::new(),
         }
+    }
+
+    /// Adds or replaces one product-authored appearance without resetting retained objects.
+    pub fn insert_appearance(
+        &mut self,
+        identity: String,
+        appearance: Appearance,
+    ) -> Option<Appearance> {
+        self.catalog.insert_appearance(identity, appearance)
+    }
+
+    /// Mutable resource access for direct trusted product admission.
+    pub fn resources_mut(&mut self) -> &mut AppearanceResources {
+        self.catalog.resources_mut()
     }
 
     /// Projects one complete snapshot. Omitted object identities are destroyed by the

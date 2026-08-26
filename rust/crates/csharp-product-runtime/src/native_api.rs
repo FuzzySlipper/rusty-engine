@@ -283,6 +283,21 @@ pub struct NativeAppearanceHandle {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeRenderResourceHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeColor {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeUiStreamHandle {
     pub value: u64,
 }
@@ -370,16 +385,80 @@ pub struct NativeLookReceipt {
     pub up: NativeVec3,
 }
 
-/// A renderer-neutral product fact preserved from the initial NativeAOT trial.
-/// Appearance admission remains Engine-owned; later work replaces the trial
-/// catalog source without changing this product-facing fact.
+/// One admitted immutable renderer resource selected by its product content path.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeVisualFact {
+pub struct NativeRenderResourceRequest {
+    pub path: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeRenderResourceInfo {
+    pub handle: NativeRenderResourceHandle,
+    /// 1 texture, 2 static mesh.
+    pub kind: u32,
+    pub byte_length: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePrimitiveAppearanceRequest {
+    /// 1 cube, 2 sphere, 3 quad, 4 point.
+    pub geometry: u32,
+    pub wireframe: u32,
+    pub color: NativeColor,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMeshGroup {
+    pub material_slot: u32,
+    pub start: u32,
+    pub count: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStaticMeshAppearanceRequest {
+    pub resource: NativeRenderResourceHandle,
+    /// 1 packed streams LE v1, 2 v2, 3 v3.
+    pub encoding: u32,
+    pub vertex_count: u32,
+    pub index_count: u32,
+    pub positions_byte_offset: u32,
+    pub normals_byte_offset: u32,
+    pub uvs_byte_offset: u32,
+    pub colors_byte_offset: u32,
+    pub indices_byte_offset: u32,
+    pub bounds_min: NativeVec3,
+    pub bounds_max: NativeVec3,
+    pub color: NativeColor,
+    pub groups: *const NativeMeshGroup,
+    pub groups_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteAppearanceRequest {
+    pub texture: NativeRenderResourceHandle,
+    pub uv_min: NativeVec2,
+    pub uv_max: NativeVec2,
+    pub pivot: NativeVec2,
+    pub size: NativeVec2,
+    /// 0 none, 1 spherical, 2 cylindrical.
+    pub billboard: u32,
+    pub render_order: i32,
+    pub tint: NativeColor,
+}
+
+/// One complete renderer-neutral product appearance fact.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAppearanceFact {
     pub object_id: u64,
     pub transform: NativeTransform,
-    pub appearance: *const u8,
-    pub appearance_len: usize,
+    pub appearance: NativeAppearanceHandle,
     pub visible: u32,
     pub reserved: u32,
 }
@@ -472,8 +551,28 @@ pub type NativeProposeNavigationStep = unsafe extern "C" fn(
     NativeNavigationStepRequest,
     *mut NativeNavigationStepReceipt,
 ) -> i32;
-pub type NativePublishVisualSnapshot =
-    unsafe extern "C" fn(*mut c_void, *const NativeVisualFact, usize) -> i32;
+pub type NativeOpenRenderResource = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeRenderResourceRequest,
+    *mut NativeRenderResourceInfo,
+) -> i32;
+pub type NativeCreatePrimitiveAppearance = unsafe extern "C" fn(
+    *mut c_void,
+    NativePrimitiveAppearanceRequest,
+    *mut NativeAppearanceHandle,
+) -> i32;
+pub type NativeCreateStaticMeshAppearance = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStaticMeshAppearanceRequest,
+    *mut NativeAppearanceHandle,
+) -> i32;
+pub type NativeCreateSpriteAppearance = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpriteAppearanceRequest,
+    *mut NativeAppearanceHandle,
+) -> i32;
+pub type NativePublishAppearanceSnapshot =
+    unsafe extern "C" fn(*mut c_void, *const NativeAppearanceFact, usize) -> i32;
 pub type NativeOpenUiStream = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUiStreamRequest,
@@ -509,14 +608,24 @@ pub struct NativeUiApi {
     pub publish_projection: NativePublishUiProjection,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAppearanceApi {
+    pub context: *mut c_void,
+    pub open_resource: NativeOpenRenderResource,
+    pub create_primitive: NativeCreatePrimitiveAppearance,
+    pub create_static_mesh: NativeCreateStaticMeshAppearance,
+    pub create_sprite: NativeCreateSpriteAppearance,
+    pub publish_snapshot: NativePublishAppearanceSnapshot,
+}
+
 /// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeEngineApi {
-    pub context: *mut c_void,
-    pub publish_visual_snapshot: NativePublishVisualSnapshot,
     pub look: NativeLookApi,
     pub spatial: NativeSpatialApi,
+    pub appearance: NativeAppearanceApi,
     pub ui: NativeUiApi,
 }
 
