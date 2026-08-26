@@ -161,12 +161,29 @@ internal static class Emit
         output.AppendLine("    public EngineCallException(string service, string operation, int status) : base($\"Rusty Engine {service}.{operation} returned status {status}.\") => Status = status;");
         output.AppendLine("    public int Status { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public readonly ref struct ProductUpdate").AppendLine("{");
-        output.AppendLine("    public ProductUpdate(uint kind, ReadOnlySpan<InputEvent> input, ulong observation) { Kind = kind; Input = input; Observation = observation; }");
+        output.AppendLine("    public ProductUpdate(uint kind, ReadOnlySpan<ProductInputEvent> input, ulong observation) { Kind = kind; Input = input; Observation = observation; }");
         output.AppendLine("    public uint Kind { get; }");
-        output.AppendLine("    public ReadOnlySpan<InputEvent> Input { get; }").AppendLine("    public ulong Observation { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("    public ReadOnlySpan<ProductInputEvent> Input { get; }").AppendLine("    public ulong Observation { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public sealed class ProductCreateContext").AppendLine("{");
-        output.AppendLine("    public ProductCreateContext(IEngineContext engine, ReadOnlyMemory<ContentFile> content) { Engine = engine ?? throw new ArgumentNullException(nameof(engine)); Content = content; }");
-        output.AppendLine("    public IEngineContext Engine { get; }").AppendLine("    public ReadOnlyMemory<ContentFile> Content { get; }").AppendLine("}");
+        output.AppendLine("    public ProductCreateContext(IEngineContext engine, ProductContent content) { Engine = engine ?? throw new ArgumentNullException(nameof(engine)); Content = content ?? throw new ArgumentNullException(nameof(content)); }");
+        output.AppendLine("    public IEngineContext Engine { get; }").AppendLine("    public ProductContent Content { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("public sealed class ProductContent").AppendLine("{");
+        output.AppendLine("    public ProductContent(ReadOnlyMemory<ProductContentFile> files) => Files = files;");
+        output.AppendLine("    public ReadOnlyMemory<ProductContentFile> Files { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("public readonly record struct ProductContentFile(ReadOnlyMemory<byte> Path, ReadOnlyMemory<byte> Bytes);");
+        output.AppendLine("public readonly record struct ProductInputEvent(uint Kind, uint Edge, ulong Sequence, float X, float Y, ReadOnlyMemory<byte> Label);");
+        output.AppendLine();
+        output.AppendLine("[AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]");
+        output.AppendLine("public sealed class EngineProductAttribute : Attribute").AppendLine("{");
+        output.AppendLine("    public EngineProductAttribute(Type productType) => ProductType = productType ?? throw new ArgumentNullException(nameof(productType));");
+        output.AppendLine("    public Type ProductType { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("public interface IEngineProduct : IDisposable").AppendLine("{");
+        output.AppendLine("    void Start();");
+        output.AppendLine("    void Update(ProductUpdate update);");
+        output.AppendLine("    void Pause();");
+        output.AppendLine("    void Resume();");
+        output.AppendLine("    void Shutdown();");
+        output.AppendLine("}");
         return output.ToString();
     }
 
@@ -218,7 +235,7 @@ internal static class Emit
     public static string Implementations(BindingModel model)
     {
         StringBuilder output = Header("internal NativeProduct service implementation input");
-        output.AppendLine("using System.Buffers;").AppendLine("using System.Text;").AppendLine("using Rusty.Engine;").AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
+        output.AppendLine("using System.Buffers;").AppendLine("using System.Linq;").AppendLine("using System.Text;").AppendLine("using Rusty.Engine;").AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
         output.AppendLine("// Injected into the NativeProduct compilation. Public Rusty.Engine has contracts and values only.");
         output.AppendLine("internal static class NativeCall").AppendLine("{");
         output.AppendLine("    internal static void Require(string service, string operation, int status) { if (status != 1) throw new EngineCallException(service, operation, status); }");
@@ -418,7 +435,7 @@ internal static class Emit
     private static bool HasDisposableHandleField(BindingModel model, Struct value) => value.Fields.Any(field => IsDisposableHandle(model, BindingModel.Bare(field.Type)));
     private static (string Service, string Operation) DestroyFor(BindingModel model, string handle) => model.Services.SelectMany(service => service.Operations.Select(operation => (service, operation))).First(pair => IsDestroy(model.Callbacks[pair.operation.Callback]) && BindingModel.Bare(model.Callbacks[pair.operation.Callback].Parameters[1]) == handle) is var found ? (found.service.Name, found.operation.Name) : throw new InvalidOperationException($"no destroy operation found for {handle}");
 
-    private static bool IsSafeValue(Struct value) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeUtf8Slice" and not "NativeStructuredValue" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal);
+    private static bool IsSafeValue(Struct value) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeStructuredValue" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal);
     private static IReadOnlyList<(Field Field, string Type)> SafeFields(Struct value, BindingModel model)
     {
         List<(Field, string)> fields = [];

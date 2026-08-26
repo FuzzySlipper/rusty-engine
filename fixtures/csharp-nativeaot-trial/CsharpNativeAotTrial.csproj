@@ -7,15 +7,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <InvariantGlobalization>true</InvariantGlobalization>
     <StripSymbols>true</StripSymbols>
-    <NativeBindingsOutputDir>$(MSBuildProjectDirectory)/obj/Generated</NativeBindingsOutputDir>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="obj/Generated/NativeBindings.g.cs" />
-    <Compile Include="obj/Generated/EngineApi.g.cs" />
+    <Compile Remove="Product.cs" />
+    <ProjectReference Include="../../csharp/Rusty.Engine/Rusty.Engine.csproj" />
+    <ProjectReference Include="CsharpNativeAotTrial.Game.csproj" />
+    <ProjectReference Include="../../csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
-
-  <Target Name="GenerateNativeBindings" BeforeTargets="CoreCompile">
-    <Exec Command="&quot;$(MSBuildProjectDirectory)/../../scripts/generate-csharp-native-bindings.sh&quot; &quot;$(NativeBindingsOutputDir)&quot;" />
-  </Target>
 </Project>

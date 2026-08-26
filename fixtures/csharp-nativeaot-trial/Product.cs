@@ -1,318 +1,124 @@
-using System;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using Rusty.Engine.Native;
+using System.Numerics;
+using Rusty.Engine;
 
-// This fixture implements one trusted product. All ABI layouts and the direct
-// Engine function table are generated from Rust; this file owns only product
-// lifecycle, state, input meaning, and calls to the generated Engine API.
-public static unsafe class Product
+namespace CsharpNativeAotTrial;
+
+// This project owns only trusted product meaning. The composition project
+// receives the generated native ABI and exports as internal source.
+public sealed class Product : IEngineProduct
 {
-    private sealed class State
-    {
-        public int Turns;
-        public float X;
-        public bool Started;
-        public bool Paused;
-        public bool Shutdown;
-        public ulong UiSequence;
-        public NativeUiStreamHandle UiStream;
-        public NativeSpatialSessionHandle Spatial;
-        public NativeAppearanceHandle Appearance;
-        public NativeRngHandle Rng;
-        public NativeRngHandle ForkedRng;
-        public ulong LastRandom;
-        public NativeLookState Look;
-        public NativeEngineApi Engine;
-    }
+    private readonly IEngineContext _engine;
+    private readonly Rng _rng;
+    private readonly Rng _forkedRng;
+    private readonly SpatialSession _spatial;
+    private readonly UiStreamHandle _uiStream;
+    private readonly AppearanceHandle _appearance;
+    private int _turns;
+    private float _x;
+    private bool _started;
+    private bool _paused;
+    private bool _shutdown;
+    private ulong _uiSequence;
+    private ulong _lastRandom;
+    private LookState _look;
 
-    [UnmanagedCallersOnly(EntryPoint = "rusty_product_bind", CallConvs = [typeof(CallConvCdecl)])]
-    public static int Bind(NativeProductApi* api)
+    public Product(ProductCreateContext context)
     {
-        if (api is null)
+        _engine = context.Engine;
+        _appearance = _engine.Appearance.CreatePrimitive(new PrimitiveAppearanceRequest(1, 0, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
+        KeyedRngReceipt keyed = _engine.Random.DrawKeyed(new KeyedRngRequest(17, "nativeaot-trial", "create", -10, 10));
+        if (keyed != _engine.Random.DrawKeyed(new KeyedRngRequest(17, "nativeaot-trial", "create", -10, 10)))
         {
-            return 2;
+            throw new InvalidOperationException("keyed random sequence changed during creation");
         }
-        api->create = &Create;
-        api->start = &Start;
-        api->turn = &Turn;
-        api->pause = &Pause;
-        api->resume = &Resume;
-        api->shutdown = &Shutdown;
-        api->destroy = &Destroy;
-        return 1;
+        _rng = _engine.Random.CreateScoped(new ScopedRngCreateRequest(17, "nativeaot-trial"));
+        _forkedRng = _engine.Random.ForkScoped(new ScopedRngForkRequest(_rng, "child"));
+        _lastRandom = _engine.Random.NextU64(_forkedRng).Value;
+        _uiStream = _engine.Ui.OpenStream(new UiStreamRequest("nativeaot-trial", "nativeaot.trial.hud"));
+        _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1.0, 16, 0));
+        _engine.Spatial.ReplaceNavigation(new NavigationReplaceRequest(
+            _spatial,
+            new PlanarNavConfig(1, 1.0, 16, 0),
+            new[] { new PlanarNavCell(0, 0, 0), new PlanarNavCell(1, 0, 0) }));
+        _ = _engine.Spatial.ProposeNavigationStep(new NavigationStepRequest(
+            _spatial,
+            new Vector3(0.5f),
+            new Vector3(1.5f, 0.5f, 0.5f),
+            0.5f,
+            16));
     }
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static int Create(NativeProductCreateArgs* args, void** handle)
+    public void Start()
     {
-        try
+        _started = true;
+        _paused = false;
+        PublishPresentation();
+    }
+
+    public void Update(ProductUpdate update)
+    {
+        if (!_started || _paused || _shutdown)
         {
-            if (args is null || handle is null || (args->content_len != 0 && args->content is null))
+            throw new InvalidOperationException("the product is not accepting updates");
+        }
+        foreach (ProductInputEvent input in update.Input)
+        {
+            if (input.Kind == 1 && input.Edge == 1 && input.Label.Span.SequenceEqual("KeyW"u8))
             {
-                return 2;
+                _x += 1.0f;
             }
-            for (nuint index = 0; index < args->content_len; index++)
+            if (input.Kind == 3)
             {
-                NativeContentFile file = args->content[index];
-                if ((file.path_len != 0 && file.path is null) ||
-                    (file.bytes_len != 0 && file.bytes is null))
-                {
-                    return 3;
-                }
-            }
-
-            var state = new State { Engine = args->engine };
-            state.Appearance = new EngineApi(state.Engine).Appearance.CreatePrimitive(
-                new NativePrimitiveAppearanceRequest
-                {
-                    geometry = 1,
-                    color = new NativeColor { r = 0.25f, g = 0.75f, b = 1.0f, a = 1.0f },
-                });
-            var rng = new EngineApi(state.Engine).Rng;
-            long keyed = rng.DrawKeyed(17, -10, 10, "nativeaot-trial", "create").value;
-            if (keyed != rng.DrawKeyed(17, -10, 10, "nativeaot-trial", "create").value)
-            {
-                return 4;
-            }
-            state.Rng = rng.CreateScoped(17, "nativeaot-trial");
-            state.ForkedRng = rng.ForkScoped(state.Rng, "child");
-            state.LastRandom = rng.NextU64(state.ForkedRng).value;
-            state.UiStream = new EngineApi(state.Engine).Ui.OpenStream(
-                "nativeaot-trial",
-                "nativeaot.trial.hud");
-            var spatial = new EngineApi(state.Engine).Spatial;
-            state.Spatial = spatial.CreateSession(new NativeSpatialSessionConfig
-            {
-                collision_voxel_size = 1.0,
-                collision_chunk_size = 16,
-            });
-            spatial.ReplaceNavigation(
-                state.Spatial,
-                new NativePlanarNavConfig { grid_id = 1, cell_size = 1.0, chunk_size = 16 },
-                [
-                    new NativePlanarNavCell { x = 0, y = 0, z = 0 },
-                    new NativePlanarNavCell { x = 1, y = 0, z = 0 },
-                ]);
-            _ = spatial.ProposeNavigationStep(new NativeNavigationStepRequest
-            {
-                session = state.Spatial,
-                from = new NativeVec3 { x = 0.5f, y = 0.5f, z = 0.5f },
-                target = new NativeVec3 { x = 1.5f, y = 0.5f, z = 0.5f },
-                max_step_units = 0.5f,
-                max_visited = 16,
-            });
-            *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(state));
-            return 1;
-        }
-        catch
-        {
-            return 99;
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static int Start(void* handle)
-    {
-        try
-        {
-            State state = Get(handle);
-            state.Started = true;
-            state.Paused = false;
-            return PublishPresentation(state);
-        }
-        catch
-        {
-            return 99;
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static int Turn(void* handle, NativeTurnArgs* args)
-    {
-        try
-        {
-            State state = Get(handle);
-            if (!state.Started || state.Paused || state.Shutdown)
-            {
-                return 4;
-            }
-            if (args is null || args->kind is < 1 or > 3)
-            {
-                return 5;
-            }
-            if (args->event_count != 0 && args->events is null)
-            {
-                return 6;
-            }
-
-            for (nuint index = 0; index < args->event_count; index++)
-            {
-                NativeInputEvent input = args->events[index];
-                if (input.label_len != 0 && input.label is null)
-                {
-                    return 7;
-                }
-                if (input.kind == 1 && input.edge == 1 && IsKeyW(input))
-                {
-                    state.X += 1.0f;
-                }
-                if (input.kind == 3)
-                {
-                    state.Look = new EngineApi(state.Engine).Look.Integrate(new NativeLookRequest
-                    {
-                        state = state.Look,
-                        delta = new NativeVec2 { x = input.x, y = input.y },
-                        config = LookConfig(),
-                    }).state;
-                }
-            }
-            state.Turns++;
-            state.LastRandom = new EngineApi(state.Engine).Rng.NextBoundedU32(
-                new NativeScopedRngBoundedRequest { stream = state.Rng, upper = 100 }).value;
-            return PublishPresentation(state);
-        }
-        catch
-        {
-            return 99;
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static int Pause(void* handle)
-    {
-        try
-        {
-            Get(handle).Paused = true;
-            return 1;
-        }
-        catch
-        {
-            return 99;
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static int Resume(void* handle)
-    {
-        try
-        {
-            Get(handle).Paused = false;
-            return 1;
-        }
-        catch
-        {
-            return 99;
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static int Shutdown(void* handle)
-    {
-        try
-        {
-            Get(handle).Shutdown = true;
-            return 1;
-        }
-        catch
-        {
-            return 99;
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static void Destroy(void* handle)
-    {
-        try
-        {
-            if (handle is not null)
-            {
-                State state = Get(handle);
-                var rng = new EngineApi(state.Engine).Rng;
-                _ = rng.NextBool(state.Rng);
-                rng.DestroyScoped(state.ForkedRng);
-                rng.DestroyScoped(state.Rng);
-                new EngineApi(state.Engine).Spatial.DestroySession(state.Spatial);
-                GCHandle.FromIntPtr((nint)handle).Free();
+                _look = _engine.Look.Integrate(new LookRequest(_look, new Vector2(input.X, input.Y), LookConfig())).State;
             }
         }
-        catch
-        {
-        }
+        _turns++;
+        _lastRandom = _engine.Random.NextBoundedU32(new ScopedRngBoundedRequest(_rng, 100)).Value;
+        PublishPresentation();
     }
 
-    private static State Get(void* handle)
+    public void Pause() => _paused = true;
+    public void Resume() => _paused = false;
+    public void Shutdown() => _shutdown = true;
+
+    public void Dispose()
     {
-        if (handle is null)
-        {
-            throw new ArgumentNullException(nameof(handle));
-        }
-        return (State)GCHandle.FromIntPtr((nint)handle).Target!;
+        _ = _engine.Random.NextBool(_rng);
+        _forkedRng.Dispose();
+        _rng.Dispose();
+        _spatial.Dispose();
     }
 
-    private static bool IsKeyW(NativeInputEvent input)
+    private static LookConfig LookConfig() => new(0.01f, 0.01f, -1.4f, 1.4f, 1.0f, 0, 0, 1, 0);
+
+    private void PublishPresentation()
     {
-        return input.label_len == 4 &&
-            input.label[0] == (byte)'K' &&
-            input.label[1] == (byte)'e' &&
-            input.label[2] == (byte)'y' &&
-            input.label[3] == (byte)'W';
+        PublishAppearanceSnapshot();
+        _engine.Ui.PublishProjection(new UiProjection(_uiStream, ++_uiSequence, UiValue()));
     }
 
-    private static NativeLookConfig LookConfig() => new()
+    private UiValue UiValue()
     {
-        horizontal_radians_per_unit = 0.01f,
-        vertical_radians_per_unit = 0.01f,
-        minimum_pitch_radians = -1.4f,
-        maximum_pitch_radians = 1.4f,
-        maximum_delta_radians = 1.0f,
-        wrap_yaw = 1,
-    };
-
-    private static int PublishPresentation(State state)
-    {
-        try
-        {
-            var engine = new EngineApi(state.Engine);
-            PublishAppearanceSnapshot(engine, state);
-            engine.Ui.PublishProjection(state.UiStream, ++state.UiSequence, UiValue(state));
-            return 1;
-        }
-        catch
-        {
-            return 8;
-        }
+        StructuredValueNode[] nodes =
+        [
+            new(5, 0, 0, 0, 0, 0, 0, 0, 3),
+            new(2, 0, _turns, 0, 5, 0, 0, 0, 0),
+            new(2, 0, _look.YawRadians, 5, 3, 0, 0, 0, 0),
+            new(2, 0, _x, 8, 1, 0, 0, 0, 0),
+        ];
+        return new UiValue(nodes, new uint[] { 1, 2, 3 }, 0, "turnsyawx"u8.ToArray());
     }
 
-    private static StructuredValueArena UiValue(State state)
+    private void PublishAppearanceSnapshot()
     {
-        var values = new StructuredValueBuilder();
-        uint turns = values.Number(state.Turns);
-        uint yaw = values.Number(state.Look.yaw_radians);
-        uint x = values.Number(state.X);
-        return values.Build(values.Object(("turns", turns), ("yaw", yaw), ("x", x)));
-    }
-
-    private static void PublishAppearanceSnapshot(EngineApi engine, State state)
-    {
-        if (state.Turns >= 2)
+        if (_turns >= 2)
         {
-            engine.Appearance.PublishSnapshot(ReadOnlySpan<NativeAppearanceFact>.Empty);
+            _engine.Appearance.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
             return;
         }
-
-        NativeAppearanceFact fact = new()
-        {
-            object_id = 41,
-            transform = new NativeTransform
-            {
-                translation = new NativeVec3 { x = state.X },
-                rotation = new NativeQuat { w = 1.0f },
-                scale = new NativeVec3 { x = 1.0f, y = 1.0f, z = 1.0f },
-            },
-            appearance = state.Appearance,
-            visible = 1,
-        };
-        engine.Appearance.PublishSnapshot(new ReadOnlySpan<NativeAppearanceFact>(&fact, 1));
+        _engine.Appearance.PublishSnapshot(
+        [
+            new AppearanceFact(41, new Transform(new Vector3(_x, 0, 0), Quaternion.Identity, Vector3.One), _appearance, 1, 0),
+        ]);
     }
 }
