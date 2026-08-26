@@ -288,6 +288,12 @@ pub struct NativeRenderResourceHandle {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeRngHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeColor {
     pub r: f32,
@@ -522,6 +528,49 @@ pub struct NativeUiStreamRequest {
     pub contract: NativeUtf8Slice,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeKeyedRngRequest {
+    pub seed: u64,
+    pub scope: NativeUtf8Slice,
+    pub key: NativeUtf8Slice,
+    pub minimum: i64,
+    pub maximum: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeKeyedRngReceipt {
+    pub value: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeScopedRngCreateRequest {
+    pub seed: u64,
+    pub scope: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeScopedRngForkRequest {
+    pub parent: NativeRngHandle,
+    pub scope: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeScopedRngBoundedRequest {
+    pub stream: NativeRngHandle,
+    pub upper: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeRngValue {
+    pub value: u64,
+}
+
 pub type NativeIntegrateLook =
     unsafe extern "C" fn(*mut c_void, NativeLookRequest, *mut NativeLookReceipt) -> i32;
 pub type NativeCreateSpatialSession = unsafe extern "C" fn(
@@ -580,6 +629,26 @@ pub type NativeOpenUiStream = unsafe extern "C" fn(
 ) -> i32;
 pub type NativePublishUiProjection =
     unsafe extern "C" fn(*mut c_void, *const NativeUiProjection) -> i32;
+pub type NativeDrawKeyedRng = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeKeyedRngRequest,
+    *mut NativeKeyedRngReceipt,
+) -> i32;
+pub type NativeCreateScopedRng = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeScopedRngCreateRequest,
+    *mut NativeRngHandle,
+) -> i32;
+pub type NativeForkScopedRng = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeScopedRngForkRequest,
+    *mut NativeRngHandle,
+) -> i32;
+pub type NativeDestroyScopedRng = unsafe extern "C" fn(*mut c_void, NativeRngHandle) -> i32;
+pub type NativeNextScopedRng =
+    unsafe extern "C" fn(*mut c_void, NativeRngHandle, *mut NativeRngValue) -> i32;
+pub type NativeNextBoundedScopedRng =
+    unsafe extern "C" fn(*mut c_void, NativeScopedRngBoundedRequest, *mut NativeRngValue) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -619,6 +688,19 @@ pub struct NativeAppearanceApi {
     pub publish_snapshot: NativePublishAppearanceSnapshot,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeRngApi {
+    pub context: *mut c_void,
+    pub draw_keyed: NativeDrawKeyedRng,
+    pub create_scoped: NativeCreateScopedRng,
+    pub fork_scoped: NativeForkScopedRng,
+    pub destroy_scoped: NativeDestroyScopedRng,
+    pub next_u64: NativeNextScopedRng,
+    pub next_bounded_u32: NativeNextBoundedScopedRng,
+    pub next_bool: NativeNextScopedRng,
+}
+
 /// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -626,6 +708,7 @@ pub struct NativeEngineApi {
     pub look: NativeLookApi,
     pub spatial: NativeSpatialApi,
     pub appearance: NativeAppearanceApi,
+    pub rng: NativeRngApi,
     pub ui: NativeUiApi,
 }
 

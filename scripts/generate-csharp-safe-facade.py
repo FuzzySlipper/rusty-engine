@@ -37,7 +37,13 @@ def base_type(argument: str) -> str:
 
 def csharp_type(argument: str) -> str:
     name = base_type(argument)
-    return {"int32_t": "int", "uint32_t": "uint", "uint64_t": "ulong", "size_t": "nuint"}.get(name, name)
+    return {
+        "int32_t": "int",
+        "int64_t": "long",
+        "uint32_t": "uint",
+        "uint64_t": "ulong",
+        "size_t": "nuint",
+    }.get(name, name)
 
 
 def parse_function_types(header: str) -> dict[str, list[str]]:
@@ -83,11 +89,23 @@ def native_struct_fields(header: str, name: str) -> list[tuple[str, str]]:
     return parse_struct(header, name)
 
 
-def request_with_utf8_slices(header: str, request: str) -> list[str] | None:
+def request_with_utf8_slices(
+    header: str, request: str
+) -> tuple[list[tuple[str, str]], list[str]] | None:
     fields = native_struct_fields(header, request)
-    if fields and all(field_type == "NativeUtf8Slice" for field_type, _ in fields):
-        return [field for _, field in fields]
-    return None
+    slices = [field for field_type, field in fields if field_type == "NativeUtf8Slice"]
+    if not 1 <= len(slices) <= 2 or any(
+        pointer(field_type)
+        for field_type, _ in fields
+        if field_type != "NativeUtf8Slice"
+    ):
+        return None
+    values = [
+        (field, csharp_type(field_type))
+        for field_type, field in fields
+        if field_type != "NativeUtf8Slice"
+    ]
+    return (values, slices) if slices else None
 
 
 def structured_projection_fields(header: str, request: str) -> tuple[str, str, str] | None:
@@ -156,19 +174,25 @@ def method(header: str, receiver: str, field: str, arguments: list[str]) -> str:
         }}'''
     if len(user) == 2 and pointer(user[0]) and pointer(user[1]):
         request, result = csharp_type(user[0]), csharp_type(user[1])
-        utf8_fields = request_with_utf8_slices(header, request)
-        if utf8_fields is not None:
-            parameters = ", ".join(f"string {name}" for name in utf8_fields)
+        utf8_request = request_with_utf8_slices(header, request)
+        if utf8_request is not None:
+            values, utf8_fields = utf8_request
+            parameters = [f"{kind} {name}" for name, kind in values]
+            parameters.extend(f"string {name}" for name in utf8_fields)
             callbacks = ", ".join(utf8_fields)
             slices = ", ".join(f"slice{index}" for index in range(len(utf8_fields)))
-            assignments = ", ".join(f"{name} = {slice}" for name, slice in zip(utf8_fields, slices.split(", ")))
+            assignments = [f"{name} = {name}" for name, _ in values]
+            assignments.extend(
+                f"{name} = {slice}"
+                for name, slice in zip(utf8_fields, slices.split(", "))
+            )
             helper = "WithSlice" if len(utf8_fields) == 1 else "WithSlices"
-            return f'''        public {result} {public}({parameters})
+            return f'''        public {result} {public}({", ".join(parameters)})
         {{
             {table_name(receiver)} native = _native;
             return BorrowedUtf8.{helper}(({slices}) =>
             {{
-                {request} request = new() {{ {assignments} }};
+                {request} request = new() {{ {", ".join(assignments)} }};
                 {result} result = default;
                 NativeCall.RequireSuccess(native.{field}(native.context, &request, &result));
                 return result;

@@ -19,6 +19,9 @@ public static unsafe class Product
         public NativeUiStreamHandle UiStream;
         public NativeSpatialSessionHandle Spatial;
         public NativeAppearanceHandle Appearance;
+        public NativeRngHandle Rng;
+        public NativeRngHandle ForkedRng;
+        public ulong LastRandom;
         public NativeLookState Look;
         public NativeEngineApi Engine;
     }
@@ -66,6 +69,15 @@ public static unsafe class Product
                     geometry = 1,
                     color = new NativeColor { r = 0.25f, g = 0.75f, b = 1.0f, a = 1.0f },
                 });
+            var rng = new EngineApi(state.Engine).Rng;
+            long keyed = rng.DrawKeyed(17, -10, 10, "nativeaot-trial", "create").value;
+            if (keyed != rng.DrawKeyed(17, -10, 10, "nativeaot-trial", "create").value)
+            {
+                return 4;
+            }
+            state.Rng = rng.CreateScoped(17, "nativeaot-trial");
+            state.ForkedRng = rng.ForkScoped(state.Rng, "child");
+            state.LastRandom = rng.NextU64(state.ForkedRng).value;
             state.UiStream = new EngineApi(state.Engine).Ui.OpenStream(
                 "nativeaot-trial",
                 "nativeaot.trial.hud");
@@ -156,6 +168,8 @@ public static unsafe class Product
                 }
             }
             state.Turns++;
+            state.LastRandom = new EngineApi(state.Engine).Rng.NextBoundedU32(
+                new NativeScopedRngBoundedRequest { stream = state.Rng, upper = 100 }).value;
             return PublishPresentation(state);
         }
         catch
@@ -214,6 +228,10 @@ public static unsafe class Product
             if (handle is not null)
             {
                 State state = Get(handle);
+                var rng = new EngineApi(state.Engine).Rng;
+                _ = rng.NextBool(state.Rng);
+                rng.DestroyScoped(state.ForkedRng);
+                rng.DestroyScoped(state.Rng);
                 new EngineApi(state.Engine).Spatial.DestroySession(state.Spatial);
                 GCHandle.FromIntPtr((nint)handle).Free();
             }

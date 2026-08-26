@@ -544,6 +544,7 @@ dependencies = [
  "runtime-ui",
  "serde_json",
  "svc-pathfinding",
+ "svc-rng",
 ]
 
 [[package]]

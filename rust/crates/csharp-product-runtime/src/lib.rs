@@ -53,6 +53,7 @@ use svc_pathfinding::{
     find_path_with_policy, propose_direct_nav_movement, DirectNavMovementRequest, NavPathOutcome,
     NavPathQuery, NavProjection, PlanarNavNeighborPolicy,
 };
+use svc_rng::{KeyedRngV1, RngSeed, ScopedRng};
 
 const ABI_OK: i32 = 1;
 const INSTANCE_ID: u64 = 1;
@@ -143,6 +144,8 @@ pub struct CsharpProductRuntime {
     appearance_bridge: Box<RuntimeAppearanceBridge>,
     #[allow(dead_code)] // Retained to keep native EngineApi callback contexts valid.
     spatial_bridge: Box<RuntimeSpatialBridge>,
+    #[allow(dead_code)] // Retained to keep native EngineApi callback contexts valid.
+    rng_bridge: Box<RuntimeRngBridge>,
     ui_bridge: Box<RuntimeUiBridge>,
     shutdown_called: bool,
 }
@@ -730,6 +733,159 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
     }
 }
 
+unsafe extern "C" fn draw_keyed_rng(
+    _context: *mut c_void,
+    request: *const NativeKeyedRngRequest,
+    receipt: *mut NativeKeyedRngReceipt,
+) -> i32 {
+    if request.is_null() || receipt.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let scope = match unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "RNG scope") }
+    {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let key = match unsafe { borrowed_utf8(request.key.bytes, request.key.len, "RNG key") } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    match KeyedRngV1::draw_i64_inclusive(
+        RngSeed::new(request.seed),
+        scope,
+        key.as_bytes(),
+        request.minimum,
+        request.maximum,
+    ) {
+        Ok(value) => {
+            unsafe { *receipt = NativeKeyedRngReceipt { value } };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn create_scoped_rng(
+    context: *mut c_void,
+    request: *const NativeScopedRngCreateRequest,
+    result: *mut NativeRngHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let scope = match unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "RNG scope") }
+    {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeRngBridge>() };
+    match bridge.insert(ScopedRng::new(RngSeed::new(request.seed), scope)) {
+        Some(handle) => {
+            unsafe { *result = handle };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+
+unsafe extern "C" fn fork_scoped_rng(
+    context: *mut c_void,
+    request: *const NativeScopedRngForkRequest,
+    result: *mut NativeRngHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let scope = match unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "RNG scope") }
+    {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeRngBridge>() };
+    let Some(child) = bridge
+        .streams
+        .get(&request.parent.value)
+        .map(|parent| parent.fork(scope))
+    else {
+        return 0;
+    };
+    match bridge.insert(child) {
+        Some(handle) => {
+            unsafe { *result = handle };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+
+unsafe extern "C" fn destroy_scoped_rng(context: *mut c_void, handle: NativeRngHandle) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeRngBridge>() };
+    if bridge.streams.remove(&handle.value).is_some() {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
+unsafe extern "C" fn next_scoped_rng_u64(
+    context: *mut c_void,
+    handle: NativeRngHandle,
+    result: *mut NativeRngValue,
+) -> i32 {
+    next_rng_value(context, result, |bridge| {
+        bridge.stream_mut(handle).map(ScopedRng::next_u64)
+    })
+}
+
+unsafe extern "C" fn next_scoped_rng_bounded(
+    context: *mut c_void,
+    request: NativeScopedRngBoundedRequest,
+    result: *mut NativeRngValue,
+) -> i32 {
+    next_rng_value(context, result, |bridge| {
+        bridge
+            .stream_mut(request.stream)?
+            .next_bounded_u32(request.upper)
+            .map(u64::from)
+    })
+}
+
+unsafe extern "C" fn next_scoped_rng_bool(
+    context: *mut c_void,
+    handle: NativeRngHandle,
+    result: *mut NativeRngValue,
+) -> i32 {
+    next_rng_value(context, result, |bridge| {
+        bridge
+            .stream_mut(handle)
+            .map(|stream| u64::from(stream.next_bool()))
+    })
+}
+
+fn next_rng_value(
+    context: *mut c_void,
+    result: *mut NativeRngValue,
+    action: impl FnOnce(&mut RuntimeRngBridge) -> Option<u64>,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeRngBridge>() };
+    match action(bridge) {
+        Some(value) => {
+            unsafe { *result = NativeRngValue { value } };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+
 /// Engine-owned collision/navigation mechanisms. Player and game state never
 /// live here: a character proposal builds its EntityState only for the call.
 struct RuntimeSpatialBridge {
@@ -741,6 +897,31 @@ struct SpatialSession {
     scene: VoxelCollisionScene,
     navigation: Option<(NavProjection, PlanarNavNeighborPolicy)>,
     controller: CharacterControllerService,
+}
+
+struct RuntimeRngBridge {
+    streams: BTreeMap<u64, ScopedRng>,
+    next_stream: u64,
+}
+
+impl RuntimeRngBridge {
+    fn new() -> Self {
+        Self {
+            streams: BTreeMap::new(),
+            next_stream: 1,
+        }
+    }
+
+    fn insert(&mut self, stream: ScopedRng) -> Option<NativeRngHandle> {
+        let handle = self.next_stream;
+        self.next_stream = handle.checked_add(1)?;
+        self.streams.insert(handle, stream);
+        Some(NativeRngHandle { value: handle })
+    }
+
+    fn stream_mut(&mut self, handle: NativeRngHandle) -> Option<&mut ScopedRng> {
+        self.streams.get_mut(&handle.value)
+    }
 }
 
 impl RuntimeSpatialBridge {
@@ -1598,6 +1779,7 @@ unsafe extern "C" fn propose_navigation_step(
 fn engine_api(
     appearance_bridge: &mut RuntimeAppearanceBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
+    rng_bridge: &mut RuntimeRngBridge,
     ui_bridge: &mut RuntimeUiBridge,
 ) -> NativeEngineApi {
     NativeEngineApi {
@@ -1621,6 +1803,16 @@ fn engine_api(
             create_static_mesh: create_static_mesh_appearance,
             create_sprite: create_sprite_appearance,
             publish_snapshot: publish_appearance_snapshot,
+        },
+        rng: NativeRngApi {
+            context: (rng_bridge as *mut RuntimeRngBridge).cast(),
+            draw_keyed: draw_keyed_rng,
+            create_scoped: create_scoped_rng,
+            fork_scoped: fork_scoped_rng,
+            destroy_scoped: destroy_scoped_rng,
+            next_u64: next_scoped_rng_u64,
+            next_bounded_u32: next_scoped_rng_bounded,
+            next_bool: next_scoped_rng_bool,
         },
         ui: NativeUiApi {
             context: (ui_bridge as *mut RuntimeUiBridge).cast(),
@@ -1919,6 +2111,7 @@ impl CsharpProductRuntime {
             render_resources,
         ));
         let mut spatial_bridge = Box::new(RuntimeSpatialBridge::new());
+        let mut rng_bridge = Box::new(RuntimeRngBridge::new());
         let mut ui_bridge = Box::new(RuntimeUiBridge::new());
         let native_content: Vec<NativeContentFile> = content
             .iter()
@@ -1932,7 +2125,12 @@ impl CsharpProductRuntime {
         let args = NativeProductCreateArgs {
             content: native_content.as_ptr(),
             content_len: native_content.len(),
-            engine: engine_api(&mut appearance_bridge, &mut spatial_bridge, &mut ui_bridge),
+            engine: engine_api(
+                &mut appearance_bridge,
+                &mut spatial_bridge,
+                &mut rng_bridge,
+                &mut ui_bridge,
+            ),
         };
         let mut handle = ptr::null_mut();
         appearance_bridge.begin_call();
@@ -1989,6 +2187,7 @@ impl CsharpProductRuntime {
             pending_inputs: Vec::new(),
             appearance_bridge,
             spatial_bridge,
+            rng_bridge,
             ui_bridge,
             shutdown_called: false,
         })
