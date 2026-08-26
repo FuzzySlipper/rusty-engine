@@ -444,6 +444,15 @@ pub struct NativeStaticMeshAppearanceRequest {
     pub groups_len: usize,
 }
 
+/// Creates a retained visual-only static mesh from an inline `StaticMeshAsset`
+/// JSON document already collected from product content.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStaticMeshContentAppearanceRequest {
+    pub path: NativeUtf8Slice,
+    pub color: NativeColor,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpriteAppearanceRequest {
@@ -615,6 +624,11 @@ pub type NativeCreateStaticMeshAppearance = unsafe extern "C" fn(
     *const NativeStaticMeshAppearanceRequest,
     *mut NativeAppearanceHandle,
 ) -> i32;
+pub type NativeCreateStaticMeshContentAppearance = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStaticMeshContentAppearanceRequest,
+    *mut NativeAppearanceHandle,
+) -> i32;
 pub type NativeCreateSpriteAppearance = unsafe extern "C" fn(
     *mut c_void,
     NativeSpriteAppearanceRequest,
@@ -684,6 +698,7 @@ pub struct NativeAppearanceApi {
     pub open_resource: NativeOpenRenderResource,
     pub create_primitive: NativeCreatePrimitiveAppearance,
     pub create_static_mesh: NativeCreateStaticMeshAppearance,
+    pub create_static_mesh_from_content: NativeCreateStaticMeshContentAppearance,
     pub create_sprite: NativeCreateSpriteAppearance,
     pub publish_snapshot: NativePublishAppearanceSnapshot,
 }

@@ -30,12 +30,12 @@ use product_dev_host::{
     ProductDevOperationKind, ProductDevOperationResult, ProductDevRendererResource,
     ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, MAX_BUNDLE_RESOURCE_BYTES,
 };
 use render_model::{
-    BillboardMode, Geometry, Material, MaterialAlphaModeDescriptor, MaterialUvStrategy,
-    MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout,
-    MeshCollisionPolicy, MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot,
+    pack_mesh_resources, BillboardMode, Geometry, Material, MaterialAlphaModeDescriptor,
+    MaterialUvStrategy, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
+    MeshBufferLayout, MeshCollisionPolicy, MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot,
     MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance, MeshResourceEncoding,
     RenderMaterialDescriptor, RenderMetadata, SpriteAtlasDescriptor, SpriteAttachment,
     SpriteDepthPolicy, SpriteFrameRect, SpriteInstanceDescriptor, SpriteMaterialDescriptor,
@@ -321,49 +321,48 @@ impl RuntimeAppearanceBridge {
             }
         }
         .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))?;
-        let handle = {
-            let staged = self.staged_mut()?;
-            if let Some(handle) = staged
-                .state
-                .resource_identities
-                .get(resource.identity())
-                .copied()
-            {
-                handle
-            } else {
-                let handle = u64::try_from(staged.state.render_resources.len())
-                    .map_err(|_| {
-                        CsharpProductRuntimeError::new(
-                            "CSHARP_RENDER_RESOURCE_HANDLE",
-                            "renderer resource handle overflowed",
-                        )
-                    })?
-                    .checked_add(1)
-                    .ok_or_else(|| {
-                        CsharpProductRuntimeError::new(
-                            "CSHARP_RENDER_RESOURCE_HANDLE",
-                            "renderer resource handle overflowed",
-                        )
-                    })?;
-                staged.state.render_resources.push(resource);
-                staged.state.resource_identities.insert(
-                    staged
-                        .state
-                        .render_resources
-                        .last()
-                        .expect("just pushed resource")
-                        .identity()
-                        .to_owned(),
-                    handle,
-                );
-                handle
-            }
-        };
-        let staged = self.staged_mut()?;
-        staged.state.resource_paths.insert(browser_path, handle);
-        staged.state.resource_paths.insert(relative_path, handle);
-        staged.state.resource_paths.insert(requested_path, handle);
+        let handle =
+            self.stage_resource(resource, [browser_path, relative_path, requested_path])?;
         self.resource_info(handle)
+    }
+
+    fn stage_resource(
+        &mut self,
+        resource: ProductDevRendererResource,
+        paths: impl IntoIterator<Item = String>,
+    ) -> Result<u64, CsharpProductRuntimeError> {
+        let staged = self.staged_mut()?;
+        let handle = if let Some(handle) = staged
+            .state
+            .resource_identities
+            .get(resource.identity())
+            .copied()
+        {
+            handle
+        } else {
+            let handle = u64::try_from(staged.state.render_resources.len())
+                .map_err(|_| {
+                    CsharpProductRuntimeError::new(
+                        "CSHARP_RENDER_RESOURCE_HANDLE",
+                        "renderer resource handle overflowed",
+                    )
+                })?
+                .checked_add(1)
+                .ok_or_else(|| {
+                    CsharpProductRuntimeError::new(
+                        "CSHARP_RENDER_RESOURCE_HANDLE",
+                        "renderer resource handle overflowed",
+                    )
+                })?;
+            let identity = resource.identity().to_owned();
+            staged.state.render_resources.push(resource);
+            staged.state.resource_identities.insert(identity, handle);
+            handle
+        };
+        for path in paths {
+            staged.state.resource_paths.insert(path, handle);
+        }
+        Ok(handle)
     }
 
     fn resource_info(
@@ -578,6 +577,122 @@ impl RuntimeAppearanceBridge {
         })
     }
 
+    fn create_static_mesh_from_content(
+        &mut self,
+        request: &NativeStaticMeshContentAppearanceRequest,
+    ) -> Result<NativeAppearanceHandle, CsharpProductRuntimeError> {
+        // SAFETY: the borrowed path is copied before the direct callback returns.
+        let requested_path = unsafe {
+            borrowed_utf8(
+                request.path.bytes,
+                request.path.len,
+                "static mesh content path",
+            )?
+            .to_owned()
+        };
+        if self.selection_sealed {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_RENDER_RESOURCE_SELECTION_CLOSED",
+                format!(
+                    "static mesh content `{requested_path}` was not selected during product Create"
+                ),
+            ));
+        }
+        let relative_path = requested_path
+            .strip_prefix("content/")
+            .unwrap_or(&requested_path)
+            .to_owned();
+        let bytes = self.content_resources.get(&relative_path).ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_STATIC_MESH_CONTENT_UNKNOWN",
+                format!("product content has no static mesh document `{requested_path}`"),
+            )
+        })?;
+        let asset = serde_json::from_slice::<StaticMeshAsset>(bytes).map_err(|error| {
+            CsharpProductRuntimeError::new("CSHARP_STATIC_MESH_CONTENT_JSON", error.to_string())
+        })?;
+        asset.validate().map_err(|error| {
+            CsharpProductRuntimeError::new("CSHARP_STATIC_MESH_CONTENT", format!("{error:?}"))
+        })?;
+        if !matches!(asset.payload.source, MeshPayloadSource::Inline { .. }) {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_STATIC_MESH_CONTENT_INLINE",
+                "static mesh content must use an inline payload",
+            ));
+        }
+        let maximum_resource_bytes = u32::try_from(MAX_BUNDLE_RESOURCE_BYTES).map_err(|_| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_STATIC_MESH_RESOURCE_SIZE",
+                "product-dev resource byte limit exceeded u32",
+            )
+        })?;
+        let mut packed =
+            pack_mesh_resources(&[asset.payload], maximum_resource_bytes).map_err(|error| {
+                CsharpProductRuntimeError::new("CSHARP_STATIC_MESH_PACK", format!("{error:?}"))
+            })?;
+        let payload = packed.payloads.pop().ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_STATIC_MESH_PACK",
+                "inline mesh pack returned no payload",
+            )
+        })?;
+        let packed_resource = packed.resources.pop().ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_STATIC_MESH_PACK",
+                "inline mesh pack returned no resource",
+            )
+        })?;
+        let content_hash = packed_resource
+            .content_hash
+            .strip_prefix("sha256:")
+            .ok_or_else(|| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_STATIC_MESH_PACK",
+                    "packed mesh resource had an invalid content hash",
+                )
+            })?;
+        let browser_path = format!("content/engine-mesh/{content_hash}.rmesh");
+        let resource =
+            ProductDevRendererResource::admit_mesh(browser_path.clone(), packed_resource.bytes)
+                .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))?;
+        self.stage_resource(resource, [browser_path])?;
+        self.create_retained_static_mesh(payload, asset.material_slots, request.color)
+    }
+
+    fn create_retained_static_mesh(
+        &mut self,
+        payload: MeshPayloadDescriptor,
+        source_material_slots: Vec<MeshMaterialSlot>,
+        color: NativeColor,
+    ) -> Result<NativeAppearanceHandle, CsharpProductRuntimeError> {
+        let handle = self.staged_mut()?.state.next_appearance;
+        let mesh_id = format!("mesh/native-{handle}");
+        let mut material_slots = Vec::with_capacity(source_material_slots.len());
+        let mut materials = Vec::with_capacity(source_material_slots.len());
+        for source_slot in source_material_slots {
+            let material = format!("material/native-{handle}-{}", source_slot.slot);
+            material_slots.push(MeshMaterialSlot {
+                slot: source_slot.slot,
+                material: material.clone(),
+            });
+            materials.push(render_material(material, color));
+        }
+        {
+            let resources = self.staged_mut()?.state.projector.resources_mut();
+            resources.materials.extend(materials);
+            resources.static_meshes.push(StaticMeshAsset {
+                asset: mesh_id.clone(),
+                payload,
+                material_slots,
+                collision: MeshCollisionPolicy::VisualOnly,
+            });
+        }
+        self.allocate_appearance(Appearance::StaticMesh {
+            asset: mesh_id,
+            material_overrides: Vec::new(),
+        })
+    }
+
     fn create_sprite(
         &mut self,
         request: NativeSpriteAppearanceRequest,
@@ -752,6 +867,19 @@ unsafe extern "C" fn create_static_mesh_appearance(
     }
     appearance_result(context, result, |bridge| unsafe {
         bridge.create_static_mesh(&*request)
+    })
+}
+
+unsafe extern "C" fn create_static_mesh_from_content_appearance(
+    context: *mut c_void,
+    request: *const NativeStaticMeshContentAppearanceRequest,
+    result: *mut NativeAppearanceHandle,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    appearance_result(context, result, |bridge| {
+        bridge.create_static_mesh_from_content(unsafe { &*request })
     })
 }
 
@@ -1907,6 +2035,7 @@ fn engine_api(
             open_resource: open_render_resource,
             create_primitive: create_primitive_appearance,
             create_static_mesh: create_static_mesh_appearance,
+            create_static_mesh_from_content: create_static_mesh_from_content_appearance,
             create_sprite: create_sprite_appearance,
             publish_snapshot: publish_appearance_snapshot,
         },
@@ -2877,6 +3006,88 @@ mod tests {
                 .code(),
             "CSHARP_RENDER_RESOURCE_SELECTION_CLOSED"
         );
+    }
+
+    #[test]
+    fn inline_static_mesh_content_packs_one_selected_resource_for_retained_appearances() {
+        let document = StaticMeshAsset {
+            asset: "mesh/test".to_owned(),
+            payload: MeshPayloadDescriptor {
+                layout: MeshBufferLayout {
+                    vertex_count: 3,
+                    index_count: 3,
+                    index_width: MeshIndexWidth::U32,
+                    attributes: vec![
+                        MeshAttribute {
+                            name: MeshAttributeName::Position,
+                            components: 3,
+                            kind: MeshAttributeKind::F32,
+                        },
+                        MeshAttribute {
+                            name: MeshAttributeName::Normal,
+                            components: 3,
+                            kind: MeshAttributeKind::F32,
+                        },
+                    ],
+                },
+                groups: vec![MeshGroupDescriptor {
+                    material_slot: 0,
+                    start: 0,
+                    count: 3,
+                }],
+                bounds: MeshBoundsDescriptor {
+                    min: [0.0, 0.0, 0.0],
+                    max: [1.0, 1.0, 0.0],
+                },
+                source: MeshPayloadSource::Inline {
+                    positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                    uvs: None,
+                    colors: None,
+                    indices: vec![0, 1, 2],
+                },
+                provenance: MeshProvenance::StaticAsset,
+            },
+            material_slots: vec![MeshMaterialSlot {
+                slot: 0,
+                material: "material/test".to_owned(),
+            }],
+            collision: MeshCollisionPolicy::VisualOnly,
+        };
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert(
+            "mesh.json".to_owned(),
+            Arc::from(serde_json::to_vec(&document).expect("mesh JSON")),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let request = NativeStaticMeshContentAppearanceRequest {
+            path: NativeUtf8Slice {
+                bytes: b"mesh.json".as_ptr(),
+                len: b"mesh.json".len(),
+            },
+            color: NativeColor {
+                r: 0.2,
+                g: 0.3,
+                b: 0.4,
+                a: 1.0,
+            },
+        };
+
+        bridge.begin_call();
+        bridge
+            .create_static_mesh_from_content(&request)
+            .expect("first retained appearance");
+        bridge
+            .create_static_mesh_from_content(&request)
+            .expect("second retained appearance");
+        let staged = bridge.take_staged_call().expect("staged static meshes");
+        bridge.commit(staged);
+
+        assert_eq!(bridge.state.render_resources.len(), 1);
+        let resources = bridge.state.projector.resources_mut();
+        assert_eq!(resources.static_meshes.len(), 2);
+        assert_eq!(resources.materials.len(), 2);
     }
 }
 
