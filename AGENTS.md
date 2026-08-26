@@ -233,6 +233,13 @@ These are navigation and ownership rules, not a new governance layer.
   Use TypeScript for typed presentation, host integration, strict boundary
   code, and expressive authoring or content composition; it must not duplicate
   gameplay, project, or persistence state.
+- Outside the named Engine-owned renderer packages and host adapters under
+  `render/`, TypeScript and browser code may render DOM UI only. Downstream
+  product TypeScript must never construct non-UI world geometry, materials,
+  canvases, Three/WebGL objects, render loops, or substitute scene
+  visualizations. If product work appears to require that, stop and report the
+  missing renderer-neutral or Engine-owned presentation boundary; do not work
+  around it in browser code.
 - Treat optional gameplay TypeScript as a build-time authoring DSL: authored
   variation and pure macros may live there, new serialized meaning begins in
   the owning semantic definitions, and live fact gathering, mutation,
@@ -256,15 +263,78 @@ These are navigation and ownership rules, not a new governance layer.
   starter app should remain visibly small enough that its wiring and authority
   boundaries can be understood at a glance.
 
+## Architecture spikes and drift control
+
+An architecture spike answers a named design or code-shape question. It is not
+an unfinished implementation task and ordinary evidence defaults must not turn
+it into one.
+
+- The task's stated learning objective, exclusions, evidence budget, and stop
+  conditions govern the spike. Do not restore ordinary hardening, compatibility,
+  packaging, browser, or conformance expectations that the task deliberately
+  deferred.
+- Unsupported adjacent integration is a valid result. Stop and describe the
+  exact missing boundary instead of creating mocks, placeholders, fake
+  presentation, parallel authority, test-only product behavior, or a substitute
+  implementation merely to make a proof pass.
+- When the required capability belongs upstream or to another named owner,
+  file one exact Den request if authorized, link it in the handoff, and stop.
+  Do not vendor, copy, shim, simulate, or recreate that capability inside the
+  assigned task merely to make the task appear complete. A completion packet
+  that names the upstream request and why local work stopped is a valid result.
+- Proof work must not add product behavior or an adjacent mechanism absent from
+  the proposed architecture. If proof becomes larger than the mechanism being
+  evaluated, stop and reassess the task.
+- Prefer the smallest compile, load, or direct state observation that answers
+  the spike's question. An honest inability to reach UI, rendering, packaging,
+  or another owner is more useful than artificial end-to-end evidence.
+- At meaningful subagent milestones, require a brief report naming the original
+  goal advanced, necessary surfaces changed, proof/scaffolding added, any
+  unsupported boundary or drift, any upstream request and stop decision, and
+  the next task-faithful step. Use that exchange to redirect work early; do not
+  add a permanent drift-agent or validation lane unless the task explicitly
+  needs one.
+
+## Task-faithful review
+
+- Review the user's request, owning task, explicit exclusions, and directly
+  applicable changed-surface contracts before judging the implementation.
+- Do not introduce concerns, acceptance requirements, hardening, preferred
+  approaches, or test obligations beyond the original task. General guidance
+  may reveal a direct boundary violation; it must not enlarge the assignment
+  into unrelated modernization.
+- Passing tests are evidence, not the conclusion, but missing paperwork is not
+  a product defect. Stale commit, branch, packet, gate, or review metadata must
+  never cause changes requested when the reviewed artifact is unambiguous.
+- Every blocking finding must identify a task-owned defect or acceptance gap,
+  direct evidence, material consequence, and the minimum property needed for
+  closure. Keep optional adjacent ideas non-blocking and separate.
+- Do not request additional tests without naming the task-owned product need
+  they would prove. Reuse credible existing evidence and stop when the original
+  acceptance class is resolved.
+- Treat every changes-requested verdict as real implementation cost. Review
+  exists to improve the assigned engineering result, not to commission new work
+  or satisfy procedure.
+
+When available, use the personal `$task-faithful-review` skill for milestone
+drift checks, final reviews, and rereviews.
+
 ## Test and acceptance posture
+
+These are defaults for ordinary implementation tasks. Explicit architecture-
+spike evidence budgets and exclusions override them.
 
 - Run the narrowest relevant check first, then the gate that owns the changed surface.
 - Cross-language contract changes require Rust validation, TypeScript decode
   coverage, and retained-frame fixture/golden updates.
 - Persistence and mutation changes require failure-path and atomicity evidence, not only happy-path serialization.
-- User-visible browser behavior requires the real browser gate.
+- User-visible browser behavior requires the real browser gate only when that
+  behavior is itself part of the requested deliverable. Never create browser
+  presentation or product behavior solely to obtain browser evidence.
 - Synthetic tests are evidence for mechanisms, not proof that a downstream
   product works.
+- Do not add or recommend tests whose product or mechanism need cannot be
+  stated concretely.
 - Report exactly which commands ran and which relevant live checks were
   skipped.
 

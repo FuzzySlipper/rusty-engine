@@ -1174,6 +1174,14 @@ ordinary Rust provider gate. Renderer picks and host readouts are hints/observat
 authority must revalidate; exact held animation sampling, audio completion, particles, cameras, and editor
 previews never mutate gameplay.
 
+Outside that named Engine-owned renderer workspace and its host adapters,
+TypeScript/browser product code renders DOM UI only. It does not construct non-UI
+world geometry, materials, canvases, Three/WebGL objects, render loops, or
+substitute scene visualizations. Product-specific visual meaning crosses through
+renderer-neutral facts and retained projection owned outside the browser UI. If
+that route is unavailable, the missing presentation boundary must remain visible
+rather than being patched around in downstream TypeScript.
+
 Camera-relative retained presentation is one explicit `viewmodel` render layer, not a downstream
 Three scene or weapon API. A caller creates a retained root on that layer and parents existing
 primitive, static-mesh, animated-mesh, voxel-object, or sprite instances below it. The neutral
