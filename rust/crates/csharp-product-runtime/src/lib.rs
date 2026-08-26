@@ -9,7 +9,7 @@ mod native_api;
 
 pub use native_api::*;
 
-use std::{collections::BTreeMap, ffi::c_void, fs, path::Path, ptr};
+use std::{collections::BTreeMap, ffi::c_void, fs, path::Path, ptr, sync::Arc};
 
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
@@ -179,6 +179,9 @@ struct RuntimeAppearanceState {
     projector: RuntimeAppearanceProjector,
     appearances: BTreeMap<u64, String>,
     next_appearance: u64,
+    render_resources: Vec<ProductDevRendererResource>,
+    resource_paths: BTreeMap<String, u64>,
+    resource_identities: BTreeMap<String, u64>,
 }
 
 struct RuntimeAppearanceCall {
@@ -187,12 +190,13 @@ struct RuntimeAppearanceCall {
 }
 
 /// Engine-owned appearance admission and retained projection for trusted C# products.
-/// Calls stage both newly admitted appearances and snapshots so a failing product call
-/// cannot partly advance renderer-visible state.
+/// `Create` selects the immutable renderer resources the browser host will serve; calls stage
+/// both resource selection, newly admitted appearances, and snapshots so a failure cannot partly
+/// advance renderer-visible state.
 struct RuntimeAppearanceBridge {
     state: RuntimeAppearanceState,
-    render_resources: Vec<ProductDevRendererResource>,
-    resource_paths: BTreeMap<String, u64>,
+    content_resources: BTreeMap<String, Arc<[u8]>>,
+    selection_sealed: bool,
     staged: Option<RuntimeAppearanceCall>,
     callback_error: Option<CsharpProductRuntimeError>,
 }
@@ -200,24 +204,19 @@ struct RuntimeAppearanceBridge {
 impl RuntimeAppearanceBridge {
     fn new(
         catalog: RuntimeAppearanceCatalog,
-        render_resources: Vec<ProductDevRendererResource>,
+        content_resources: BTreeMap<String, Arc<[u8]>>,
     ) -> Self {
-        let mut resource_paths = BTreeMap::new();
-        for (index, resource) in render_resources.iter().enumerate() {
-            let handle = index as u64 + 1;
-            resource_paths.insert(resource.path().to_owned(), handle);
-            if let Some(relative) = resource.path().strip_prefix("content/") {
-                resource_paths.insert(relative.to_owned(), handle);
-            }
-        }
         Self {
             state: RuntimeAppearanceState {
                 projector: RuntimeAppearanceProjector::new(catalog),
                 appearances: BTreeMap::new(),
                 next_appearance: 1,
+                render_resources: Vec::new(),
+                resource_paths: BTreeMap::new(),
+                resource_identities: BTreeMap::new(),
             },
-            render_resources,
-            resource_paths,
+            content_resources,
+            selection_sealed: false,
             staged: None,
             callback_error: None,
         }
@@ -252,6 +251,11 @@ impl RuntimeAppearanceBridge {
         }
     }
 
+    fn seal_resource_selection(&mut self) {
+        self.selection_sealed = true;
+        self.content_resources.clear();
+    }
+
     fn staged_mut(&mut self) -> Result<&mut RuntimeAppearanceCall, CsharpProductRuntimeError> {
         self.staged.as_mut().ok_or_else(|| {
             CsharpProductRuntimeError::new(
@@ -262,17 +266,110 @@ impl RuntimeAppearanceBridge {
     }
 
     fn open_resource(
-        &self,
+        &mut self,
         request: &NativeRenderResourceRequest,
     ) -> Result<NativeRenderResourceInfo, CsharpProductRuntimeError> {
         // SAFETY: the borrowed path is copied before the direct callback returns.
-        let path = unsafe { borrowed_utf8(request.path.bytes, request.path.len, "resource path")? };
-        let handle = self.resource_paths.get(path).copied().ok_or_else(|| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_RENDER_RESOURCE_UNKNOWN",
-                format!("product content has no admitted renderer resource `{path}`"),
-            )
-        })?;
+        let requested_path = unsafe {
+            borrowed_utf8(request.path.bytes, request.path.len, "resource path")?.to_owned()
+        };
+        if let Some(handle) = self
+            .staged
+            .as_ref()
+            .and_then(|staged| staged.state.resource_paths.get(&requested_path))
+            .copied()
+        {
+            return self.resource_info(handle);
+        }
+        if self.selection_sealed {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_RENDER_RESOURCE_SELECTION_CLOSED",
+                format!(
+                    "renderer resource `{requested_path}` was not selected during product Create"
+                ),
+            ));
+        }
+        let relative_path = requested_path
+            .strip_prefix("content/")
+            .unwrap_or(&requested_path)
+            .to_owned();
+        let bytes = self
+            .content_resources
+            .get(&relative_path)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_RENDER_RESOURCE_UNKNOWN",
+                    format!("product content has no renderer resource `{requested_path}`"),
+                )
+            })?;
+        let browser_path = format!("content/{relative_path}");
+        let resource = match () {
+            _ if relative_path.ends_with(".png") => {
+                ProductDevRendererResource::admit_texture(browser_path.clone(), bytes.to_vec())
+            }
+            _ if relative_path.ends_with(".rmesh") => {
+                ProductDevRendererResource::admit_mesh(browser_path.clone(), bytes.to_vec())
+            }
+            _ => {
+                return Err(CsharpProductRuntimeError::new(
+                    "CSHARP_RENDER_RESOURCE_KIND",
+                    format!(
+                        "renderer resource `{requested_path}` must be an RGBA PNG or packed .rmesh file"
+                    ),
+                ))
+            }
+        }
+        .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))?;
+        let handle = {
+            let staged = self.staged_mut()?;
+            if let Some(handle) = staged
+                .state
+                .resource_identities
+                .get(resource.identity())
+                .copied()
+            {
+                handle
+            } else {
+                let handle = u64::try_from(staged.state.render_resources.len())
+                    .map_err(|_| {
+                        CsharpProductRuntimeError::new(
+                            "CSHARP_RENDER_RESOURCE_HANDLE",
+                            "renderer resource handle overflowed",
+                        )
+                    })?
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        CsharpProductRuntimeError::new(
+                            "CSHARP_RENDER_RESOURCE_HANDLE",
+                            "renderer resource handle overflowed",
+                        )
+                    })?;
+                staged.state.render_resources.push(resource);
+                staged.state.resource_identities.insert(
+                    staged
+                        .state
+                        .render_resources
+                        .last()
+                        .expect("just pushed resource")
+                        .identity()
+                        .to_owned(),
+                    handle,
+                );
+                handle
+            }
+        };
+        let staged = self.staged_mut()?;
+        staged.state.resource_paths.insert(browser_path, handle);
+        staged.state.resource_paths.insert(relative_path, handle);
+        staged.state.resource_paths.insert(requested_path, handle);
+        self.resource_info(handle)
+    }
+
+    fn resource_info(
+        &self,
+        handle: u64,
+    ) -> Result<NativeRenderResourceInfo, CsharpProductRuntimeError> {
         let resource = self.resource(handle)?;
         Ok(NativeRenderResourceInfo {
             handle: NativeRenderResourceHandle { value: handle },
@@ -299,7 +396,12 @@ impl RuntimeAppearanceBridge {
                 "invalid resource handle",
             )
         })?;
-        self.render_resources.get(index).ok_or_else(|| {
+        let state = self
+            .staged
+            .as_ref()
+            .map(|staged| &staged.state)
+            .unwrap_or(&self.state);
+        state.render_resources.get(index).ok_or_else(|| {
             CsharpProductRuntimeError::new(
                 "CSHARP_RENDER_RESOURCE_HANDLE",
                 "unknown resource handle",
@@ -1312,7 +1414,11 @@ fn character_motion(
             .then_some(EntityId::new(value.support_entity)),
         support_local_anchor: native_vec3_value(value.support_local_anchor),
         support_previous_translation: native_vec3_value(value.support_previous_translation),
-        support_previous_rotation: native_quat_value(value.support_previous_rotation),
+        support_previous_rotation: if value.support_entity_present == 0 {
+            Quat::IDENTITY
+        } else {
+            native_quat_value(value.support_previous_rotation)
+        },
         support_point_velocity: native_vec3_value(value.support_point_velocity),
         fall_origin_y: value.fall_origin_y,
         peak_y: value.peak_y,
@@ -2081,9 +2187,9 @@ fn arena_text<'a>(
 }
 
 impl CsharpProductRuntime {
-    /// Renderer resources admitted from the product content root before host startup.
+    /// Renderer resources selected by product creation before host startup.
     pub fn render_resources(&self) -> &[ProductDevRendererResource] {
-        &self.appearance_bridge.render_resources
+        &self.appearance_bridge.state.render_resources
     }
 
     /// Loads one C# library and creates its authoritative product state.
@@ -2104,11 +2210,19 @@ impl CsharpProductRuntime {
         let CsharpProductContent {
             files: content,
             appearance_catalog,
-            render_resources,
         } = content;
+        let content_resources = content
+            .iter()
+            .map(|file| {
+                let path = std::str::from_utf8(&file.path)
+                    .expect("collected product paths are UTF-8")
+                    .to_owned();
+                (path, Arc::clone(&file.bytes))
+            })
+            .collect();
         let mut appearance_bridge = Box::new(RuntimeAppearanceBridge::new(
             appearance_catalog,
-            render_resources,
+            content_resources,
         ));
         let mut spatial_bridge = Box::new(RuntimeSpatialBridge::new());
         let mut rng_bridge = Box::new(RuntimeRngBridge::new());
@@ -2177,6 +2291,7 @@ impl CsharpProductRuntime {
             ));
         }
         appearance_bridge.commit(staged_appearance);
+        appearance_bridge.seal_resource_selection();
         ui_bridge.commit(staged_ui);
         Ok(Self {
             api,
@@ -2524,15 +2639,15 @@ fn operation_name(operation: ProductDevOperationKind) -> &'static str {
 #[derive(Debug)]
 struct ContentFile {
     path: Vec<u8>,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
 }
 
-/// Exact product content admitted once before the native runtime and immutable
-/// browser bundle are constructed.
+/// Exact product content collected once before the native runtime and immutable
+/// browser bundle are constructed. Renderer bytes stay inert until C# selects a
+/// supported resource through the generated appearance API during `Create`.
 pub struct CsharpProductContent {
     files: Vec<ContentFile>,
     appearance_catalog: RuntimeAppearanceCatalog,
-    render_resources: Vec<ProductDevRendererResource>,
 }
 
 impl CsharpProductContent {
@@ -2547,40 +2662,10 @@ impl CsharpProductContent {
         let mut files = Vec::new();
         collect_content_inner(root, root, &mut files)?;
         let appearance_catalog = load_runtime_appearance_catalog(&files)?;
-        let mut render_resources = Vec::new();
-        for file in &files {
-            let relative =
-                std::str::from_utf8(&file.path).expect("collected product paths are UTF-8");
-            let browser_path = format!("content/{relative}");
-            let resource = if relative.ends_with(".png") {
-                Some(ProductDevRendererResource::admit_texture(
-                    browser_path,
-                    file.bytes.clone(),
-                ))
-            } else if relative.ends_with(".rmesh") {
-                Some(ProductDevRendererResource::admit_mesh(
-                    browser_path,
-                    file.bytes.clone(),
-                ))
-            } else {
-                None
-            };
-            if let Some(resource) = resource {
-                render_resources.push(resource.map_err(|error| {
-                    CsharpProductRuntimeError::new(error.code(), error.detail())
-                })?);
-            }
-        }
-        render_resources.sort_by(|left, right| left.identity().cmp(right.identity()));
         Ok(Self {
             files,
             appearance_catalog,
-            render_resources,
         })
-    }
-
-    pub fn render_resources(&self) -> &[ProductDevRendererResource] {
-        &self.render_resources
     }
 }
 
@@ -2590,7 +2675,7 @@ fn load_runtime_appearance_catalog(
     let Some(bytes) = files
         .iter()
         .find(|file| file.path == b"runtime-appearances.json")
-        .map(|file| file.bytes.as_slice())
+        .map(|file| file.bytes.as_ref())
     else {
         return Ok(RuntimeAppearanceCatalog::default());
     };
@@ -2618,9 +2703,9 @@ fn collect_content_inner(
             let path = relative.to_string_lossy().replace('\\', "/").into_bytes();
             files.push(ContentFile {
                 path,
-                bytes: fs::read(entry.path()).map_err(|error| {
+                bytes: Arc::from(fs::read(entry.path()).map_err(|error| {
                     CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
-                })?,
+                })?),
             });
         }
     }
@@ -2691,6 +2776,107 @@ fn native_event(event: &RuntimeInputEvent) -> NativeInputOwned {
             };
             input_owned(kind, 0, intent.sequence(), x, y, intent.intent().to_owned())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RGBA_PNG: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68,
+        255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
+        130,
+    ];
+
+    fn resource_request(path: &'static str) -> NativeRenderResourceRequest {
+        NativeRenderResourceRequest {
+            path: NativeUtf8Slice {
+                bytes: path.as_ptr(),
+                len: path.len(),
+            },
+        }
+    }
+
+    #[test]
+    fn content_collection_leaves_unselected_png_bytes_unvalidated() {
+        let root = std::env::temp_dir().join(format!(
+            "csharp-product-runtime-content-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("content root");
+        fs::write(root.join("unrelated-ui.png"), b"not an RGBA PNG").expect("content file");
+
+        let content = CsharpProductContent::admit(&root)
+            .expect("collect content without admitting resources");
+        fs::remove_dir_all(&root).expect("remove fixture");
+
+        assert_eq!(content.files.len(), 1);
+    }
+
+    #[test]
+    fn selected_resources_are_transactional_deduplicated_and_create_time_only() {
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert("selected.png".to_owned(), Arc::from(RGBA_PNG));
+        content_resources.insert(
+            "unselected.png".to_owned(),
+            Arc::from(&b"not an RGBA PNG"[..]),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+
+        bridge.begin_call();
+        bridge
+            .open_resource(&resource_request("selected.png"))
+            .expect("selected RGBA texture");
+        assert_eq!(
+            bridge.staged.as_ref().unwrap().state.render_resources.len(),
+            1
+        );
+        bridge.discard_call();
+        assert!(bridge.state.render_resources.is_empty());
+
+        bridge.begin_call();
+        let selected = bridge
+            .open_resource(&resource_request("selected.png"))
+            .expect("selected RGBA texture");
+        let alias = bridge
+            .open_resource(&resource_request("content/selected.png"))
+            .expect("selected resource alias");
+        assert_eq!(selected.handle.value, alias.handle.value);
+        assert_eq!(
+            bridge.staged.as_ref().unwrap().state.render_resources.len(),
+            1
+        );
+        let staged = bridge.take_staged_call().expect("staged call");
+        bridge.commit(staged);
+
+        bridge.begin_call();
+        assert!(bridge
+            .open_resource(&resource_request("unselected.png"))
+            .is_err());
+        bridge.discard_call();
+        assert_eq!(bridge.state.render_resources.len(), 1);
+
+        bridge.seal_resource_selection();
+        bridge.begin_call();
+        assert_eq!(
+            bridge
+                .open_resource(&resource_request("selected.png"))
+                .expect("already selected resource")
+                .handle
+                .value,
+            selected.handle.value
+        );
+        assert_eq!(
+            bridge
+                .open_resource(&resource_request("unselected.png"))
+                .expect_err("new selection is closed")
+                .code(),
+            "CSHARP_RENDER_RESOURCE_SELECTION_CLOSED"
+        );
     }
 }
 

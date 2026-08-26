@@ -15,9 +15,9 @@ fn main() -> Result<(), String> {
     let args = Arguments::parse()?;
     let content =
         CsharpProductContent::admit(&args.content_dir).map_err(|error| error.to_string())?;
-    let bundle = load_bundle(&args.bundle_dir, content.render_resources())?;
     let mut runtime = CsharpProductRuntime::load_admitted(&args.library, content)
         .map_err(|error| error.to_string())?;
+    let bundle = load_bundle(&args.bundle_dir, runtime.render_resources())?;
     if args.exercise {
         runtime
             .exercise_turns()
