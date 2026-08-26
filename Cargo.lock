@@ -527,24 +527,38 @@ dependencies = [
 ]
 
 [[package]]
-name = "csharp-product-runtime"
+name = "csharp-engine-abi"
+version = "0.1.0"
+
+[[package]]
+name = "csharp-engine-services"
 version = "0.1.0"
 dependencies = [
  "core-ids",
  "core-math",
  "core-space",
+ "csharp-engine-abi",
  "engine-spatial",
  "entity-state",
- "libloading",
- "product-dev-host",
  "render-model",
  "render-projection",
- "runtime-input",
  "runtime-lifecycle",
  "runtime-ui",
  "serde_json",
  "svc-pathfinding",
  "svc-rng",
+]
+
+[[package]]
+name = "csharp-product-runtime"
+version = "0.1.0"
+dependencies = [
+ "csharp-engine-abi",
+ "csharp-engine-services",
+ "libloading",
+ "product-dev-host",
+ "runtime-input",
+ "runtime-lifecycle",
 ]
 
 [[package]]

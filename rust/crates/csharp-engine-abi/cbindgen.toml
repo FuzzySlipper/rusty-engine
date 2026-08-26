@@ -1,7 +1,7 @@
 language = "C"
 include_guard = "RUSTY_ENGINE_CSHARP_NATIVE_H"
 pragma_once = true
-autogen_warning = "/* Generated from src/native_api.rs by cbindgen 0.29.4. Do not edit. */"
+autogen_warning = "/* Generated from csharp-engine-abi/src/lib.rs by cbindgen 0.29.4. Do not edit. */"
 usize_is_size_t = true
 
 [export]

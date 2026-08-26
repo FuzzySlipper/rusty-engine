@@ -7,7 +7,7 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
-crate_dir="$repo_root/rust/crates/csharp-product-runtime"
+crate_dir="$repo_root/rust/crates/csharp-engine-abi"
 output_dir=${1:-"$repo_root/fixtures/csharp-nativeaot-trial/obj/Generated"}
 if [[ "$output_dir" != /* ]]; then
     output_dir="$repo_root/$output_dir"
@@ -37,7 +37,7 @@ facade="$output_dir/EngineApi.g.cs"
     cd "$crate_dir"
     "$cbindgen_bin" \
         --config cbindgen.toml \
-        --crate csharp-product-runtime \
+        --crate csharp-engine-abi \
         --output "$header"
 )
 

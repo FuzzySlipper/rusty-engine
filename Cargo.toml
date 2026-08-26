@@ -8,6 +8,8 @@ members = [
     "rust/crates/product-materializer",
     "rust/crates/product-assembly",
     "rust/crates/product-dev-host",
+    "rust/crates/csharp-engine-abi",
+    "rust/crates/csharp-engine-services",
     "rust/crates/csharp-product-runtime",
     "rust/crates/runtime-composition",
     "rust/crates/runtime-vm",
@@ -67,6 +69,8 @@ product-model = { path = "rust/crates/product-model" }
 product-materializer = { path = "rust/crates/product-materializer" }
 product-assembly = { path = "rust/crates/product-assembly" }
 product-dev-host = { path = "rust/crates/product-dev-host" }
+csharp-engine-abi = { path = "rust/crates/csharp-engine-abi" }
+csharp-engine-services = { path = "rust/crates/csharp-engine-services" }
 runtime-composition = { path = "rust/crates/runtime-composition" }
 runtime-vm = { path = "rust/crates/runtime-vm" }
 cap-primitives = "3"
