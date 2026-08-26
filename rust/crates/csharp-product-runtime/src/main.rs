@@ -5,15 +5,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use csharp_product_runtime::CsharpProductRuntime;
+use csharp_product_runtime::{CsharpProductContent, CsharpProductRuntime};
 use product_dev_host::{
-    ProductDevBundle, ProductDevBundleEntry, ProductDevHost, ProductDevHostConfig,
+    product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
+    ProductDevHostConfig, ProductDevRendererResource,
 };
 
 fn main() -> Result<(), String> {
     let args = Arguments::parse()?;
-    let bundle = load_bundle(&args.bundle_dir)?;
-    let mut runtime = CsharpProductRuntime::load(&args.library, &args.content_dir)
+    let content =
+        CsharpProductContent::admit(&args.content_dir).map_err(|error| error.to_string())?;
+    let bundle = load_bundle(&args.bundle_dir, content.render_resources())?;
+    let mut runtime = CsharpProductRuntime::load_admitted(&args.library, content)
         .map_err(|error| error.to_string())?;
     if args.exercise {
         runtime
@@ -91,9 +94,16 @@ impl Arguments {
     }
 }
 
-fn load_bundle(root: &Path) -> Result<ProductDevBundle, String> {
+fn load_bundle(
+    root: &Path,
+    render_resources: &[ProductDevRendererResource],
+) -> Result<ProductDevBundle, String> {
     let mut entries = Vec::new();
     collect_bundle(root, root, &mut entries)?;
+    entries.extend(
+        product_dev_renderer_preload_entries(render_resources)
+            .map_err(|error| error.to_string())?,
+    );
     ProductDevBundle::new(entries).map_err(|error| error.to_string())
 }
 

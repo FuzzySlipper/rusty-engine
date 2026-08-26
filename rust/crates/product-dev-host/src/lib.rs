@@ -21,7 +21,11 @@ mod host;
 mod model;
 mod session;
 
-pub use bundle::{ProductDevBundle, ProductDevBundleEntry, PRODUCT_DEV_INDEX_PATH};
+pub use bundle::{
+    product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry,
+    ProductDevRendererResource, ProductDevRendererResourceKind, PRODUCT_DEV_INDEX_PATH,
+    PRODUCT_DEV_RENDERER_PRELOAD_PATH,
+};
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
 pub use host::{ProductDevHost, ProductDevHostConfig, RunningProductDevHost};
 pub use model::{

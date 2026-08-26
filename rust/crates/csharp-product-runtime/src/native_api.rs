@@ -443,17 +443,15 @@ pub struct NativeUiStreamRequest {
     pub contract: NativeUtf8Slice,
 }
 
-pub type NativeIntegrateLook = unsafe extern "C" fn(
-    *mut c_void,
-    NativeLookRequest,
-    *mut NativeLookReceipt,
-) -> i32;
+pub type NativeIntegrateLook =
+    unsafe extern "C" fn(*mut c_void, NativeLookRequest, *mut NativeLookReceipt) -> i32;
 pub type NativeCreateSpatialSession = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialSessionConfig,
     *mut NativeSpatialSessionHandle,
 ) -> i32;
-pub type NativeDestroySpatialSession = unsafe extern "C" fn(*mut c_void, NativeSpatialSessionHandle) -> i32;
+pub type NativeDestroySpatialSession =
+    unsafe extern "C" fn(*mut c_void, NativeSpatialSessionHandle) -> i32;
 pub type NativeReplaceCollision = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCollisionReplaceRequest,
@@ -474,17 +472,15 @@ pub type NativeProposeNavigationStep = unsafe extern "C" fn(
     NativeNavigationStepRequest,
     *mut NativeNavigationStepReceipt,
 ) -> i32;
-pub type NativePublishVisualSnapshot = unsafe extern "C" fn(
-    *mut c_void,
-    *const NativeVisualFact,
-    usize,
-) -> i32;
+pub type NativePublishVisualSnapshot =
+    unsafe extern "C" fn(*mut c_void, *const NativeVisualFact, usize) -> i32;
 pub type NativeOpenUiStream = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUiStreamRequest,
     *mut NativeUiStreamHandle,
 ) -> i32;
-pub type NativePublishUiProjection = unsafe extern "C" fn(*mut c_void, *const NativeUiProjection) -> i32;
+pub type NativePublishUiProjection =
+    unsafe extern "C" fn(*mut c_void, *const NativeUiProjection) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
