@@ -22,6 +22,8 @@ pub(crate) struct RuntimeUiBridge {
     next_stream: u64,
     staged_next_stream: Option<u64>,
     callback_error: Option<CsharpEngineServicesError>,
+    diagnostic_leases: BTreeMap<u64, RuntimeUiDiagnosticLease>,
+    next_diagnostic_lease: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +31,41 @@ struct RuntimeUiStream {
     stream: String,
     contract: String,
     last_sequence: Option<u64>,
+}
+
+struct RuntimeUiDiagnosticLease {
+    _diagnostics: Box<[RuntimeUiDiagnostic]>,
+    readout: Box<[NativeEngineDiagnostic]>,
+}
+
+struct RuntimeUiDiagnostic {
+    code: Box<[u8]>,
+    message: Box<[u8]>,
+}
+
+impl RuntimeUiDiagnosticLease {
+    fn from_error(error: &CsharpEngineServicesError) -> Self {
+        let diagnostics = vec![RuntimeUiDiagnostic {
+            code: error.code().as_bytes().into(),
+            message: error.detail().as_bytes().into(),
+        }]
+        .into_boxed_slice();
+        let readout = diagnostics
+            .iter()
+            .map(|diagnostic| NativeEngineDiagnostic {
+                code: native_utf8(&diagnostic.code),
+                message: native_utf8(&diagnostic.message),
+                source: NativeUtf8Slice {
+                    bytes: std::ptr::null(),
+                    len: 0,
+                },
+            })
+            .collect();
+        Self {
+            _diagnostics: diagnostics,
+            readout,
+        }
+    }
 }
 
 impl RuntimeUiBridge {
@@ -40,6 +77,8 @@ impl RuntimeUiBridge {
             next_stream: 1,
             staged_next_stream: None,
             callback_error: None,
+            diagnostic_leases: BTreeMap::new(),
+            next_diagnostic_lease: 1,
         }
     }
 
@@ -78,6 +117,45 @@ impl RuntimeUiBridge {
     pub(crate) fn commit(&mut self, staged: RuntimeUiCall) {
         self.streams = staged.streams;
         self.next_stream = staged.next_stream;
+    }
+
+    fn retain_operation_error(
+        &mut self,
+        error: &CsharpEngineServicesError,
+        receipt: *mut NativeOperationErrorReceipt,
+    ) {
+        if receipt.is_null() {
+            return;
+        }
+        let handle = self.next_diagnostic_lease;
+        let Some(next_handle) = handle.checked_add(1) else {
+            return;
+        };
+        let lease = RuntimeUiDiagnosticLease::from_error(error);
+        let diagnostic_lease = NativeEngineDiagnosticLease {
+            handle: NativeEngineDiagnosticLeaseHandle { value: handle },
+            diagnostics: lease.readout.as_ptr(),
+            diagnostics_len: lease.readout.len(),
+        };
+        self.diagnostic_leases.insert(handle, lease);
+        self.next_diagnostic_lease = next_handle;
+        // SAFETY: null was rejected above; this out receipt is valid only for
+        // the direct callback and names the independently retained lease.
+        unsafe {
+            *receipt = NativeOperationErrorReceipt {
+                service: native_utf8(b"Ui"),
+                operation: native_utf8(b"PublishProjection"),
+                status: 0,
+                diagnostics: diagnostic_lease,
+            };
+        }
+    }
+
+    fn release_operation_diagnostic_lease(
+        &mut self,
+        handle: NativeEngineDiagnosticLeaseHandle,
+    ) -> bool {
+        handle.value != 0 && self.diagnostic_leases.remove(&handle.value).is_some()
     }
 
     fn stage_open_stream(
@@ -190,7 +268,14 @@ pub(crate) struct RuntimeUiCall {
 unsafe extern "C" fn publish_ui_projection(
     context: *mut c_void,
     projection: *const NativeUiProjection,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: null was rejected above; initialize the explicit readout on
+    // every observable path before an owner-backed failure can be reported.
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() {
         return 0;
     }
@@ -201,10 +286,24 @@ unsafe extern "C" fn publish_ui_projection(
     match unsafe { bridge.stage_projection(projection) } {
         Ok(()) => 1,
         Err(error) => {
+            bridge.retain_operation_error(&error, receipt);
             bridge.callback_error = Some(error);
             0
         }
     }
+}
+
+unsafe extern "C" fn destroy_ui_operation_diagnostic_lease(
+    context: *mut c_void,
+    handle: NativeEngineDiagnosticLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: context remains valid for the runtime lifetime and the exact
+    // service owning this handle also owns the lease registry.
+    let bridge = unsafe { &mut *context.cast::<RuntimeUiBridge>() };
+    i32::from(bridge.release_operation_diagnostic_lease(handle))
 }
 
 unsafe extern "C" fn open_ui_stream(
@@ -390,5 +489,87 @@ pub(crate) fn api(bridge: &mut RuntimeUiBridge) -> NativeUiApi {
         context: (bridge as *mut RuntimeUiBridge).cast(),
         open_stream: open_ui_stream,
         publish_projection: publish_ui_projection,
+        destroy_operation_diagnostic_lease: destroy_ui_operation_diagnostic_lease,
+    }
+}
+
+fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
+    NativeUtf8Slice {
+        bytes: if value.is_empty() {
+            std::ptr::null()
+        } else {
+            value.as_ptr()
+        },
+        len: value.len(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_projection_returns_owned_error_diagnostic_and_releases_it_once() {
+        let mut bridge = RuntimeUiBridge::new();
+        bridge.begin_call();
+        let api = api(&mut bridge);
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+
+        let status =
+            unsafe { (api.publish_projection)(api.context, std::ptr::null(), &mut receipt) };
+
+        assert_eq!(status, 0);
+        assert_eq!(receipt.status, 0);
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    receipt.service.bytes,
+                    receipt.service.len,
+                ))
+            },
+            "Ui"
+        );
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    receipt.operation.bytes,
+                    receipt.operation.len,
+                ))
+            },
+            "PublishProjection"
+        );
+        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    diagnostic.code.bytes,
+                    diagnostic.code.len,
+                ))
+            },
+            "CSHARP_UI_PROJECTION_POINTER"
+        );
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    diagnostic.message.bytes,
+                    diagnostic.message.len,
+                ))
+            },
+            "C# UI publication had a null projection pointer"
+        );
+
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            1
+        );
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            0
+        );
     }
 }

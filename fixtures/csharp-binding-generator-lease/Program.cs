@@ -8,8 +8,10 @@ namespace Rusty.Engine.NativeProduct;
 internal static unsafe class Program
 {
     private static readonly Dictionary<ulong, (nint Entries, nint Label, nint Payload)> Leases = [];
+    private static readonly Dictionary<ulong, (nint Diagnostics, nint Code, nint Message, nint Source, nint Service, nint Operation)> DiagnosticLeases = [];
     private static ulong _nextLease = 1;
     private static int _destroyed;
+    private static int _diagnosticDestroyed;
 
     private static void Main()
     {
@@ -18,6 +20,7 @@ internal static unsafe class Program
             context = null,
             read_items = new NativeReadLeaseFixtureItems { Pointer = &ReadItems },
             destroy_item_lease = new NativeDestroyLeaseFixtureItemLease { Pointer = &DestroyItemLease },
+            destroy_operation_diagnostic_lease = new NativeDestroyLeaseFixtureOperationDiagnosticLease { Pointer = &DestroyOperationDiagnosticLease },
         };
         LeaseFixtureServiceImplementation service = new(api);
 
@@ -30,12 +33,61 @@ internal static unsafe class Program
         Require(item.Label == "café" && item.Ordinal == 7, "non-ASCII nested UTF-8 was not copied");
         Require(item.Payload.Span.SequenceEqual(new byte[] { 0x00, 0xC3, 0xA9, 0xFF }), "nested bytes were not copied");
         Require(_destroyed == 2 && Leases.Count == 0, "one-element lease was not released exactly once");
+
+        try
+        {
+            service.ReadItems(new LeaseFixtureRequest(2));
+            throw new InvalidOperationException("rich diagnostic failure did not throw");
+        }
+        catch (EngineCallException error)
+        {
+            Require(error.Service == "LeaseFixture" && error.Operation == "ReadItems" && error.Status == -7, "stable operation identity was not copied");
+            Require(error.Diagnostics.Length == 1, "owner diagnostic was not copied");
+            EngineDiagnostic diagnostic = error.Diagnostics.Span[0];
+            Require(diagnostic.Code == "FIXTURE_DENIED" && diagnostic.Message == "fixture rejected request" && diagnostic.Source == "fixture", "owner diagnostic fields were not copied");
+        }
+        Require(_diagnosticDestroyed == 1 && DiagnosticLeases.Count == 0, "rich diagnostic lease was not released exactly once");
+
+        try
+        {
+            service.ReadItems(new LeaseFixtureRequest(3));
+            throw new InvalidOperationException("invalid UTF-8 diagnostic did not fail copying");
+        }
+        catch (DecoderFallbackException)
+        {
+        }
+        Require(_diagnosticDestroyed == 2 && DiagnosticLeases.Count == 0, "diagnostic lease was not released after managed UTF-8 copying failed");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int ReadItems(void* _, NativeLeaseFixtureRequest request, NativeLeaseFixtureItemLease* result)
+    private static int ReadItems(void* _, NativeLeaseFixtureRequest request, NativeLeaseFixtureItemLease* result, NativeOperationErrorReceipt* error)
     {
-        if (result is null) return 0;
+        if (result is null || error is null) return 0;
+        *error = default;
+        if (request.include_item is 2 or 3)
+        {
+            byte[] codeSource = request.include_item == 3 ? [0xFF] : Encoding.UTF8.GetBytes("FIXTURE_DENIED");
+            byte[] messageSource = Encoding.UTF8.GetBytes("fixture rejected request");
+            byte[] serviceSource = Encoding.UTF8.GetBytes("LeaseFixture");
+            byte[] operationSource = Encoding.UTF8.GetBytes("ReadItems");
+            byte[] sourceSource = Encoding.UTF8.GetBytes("fixture");
+            byte* code = (byte*)NativeMemory.Alloc((nuint)codeSource.Length);
+            byte* message = (byte*)NativeMemory.Alloc((nuint)messageSource.Length);
+            byte* service = (byte*)NativeMemory.Alloc((nuint)serviceSource.Length);
+            byte* operation = (byte*)NativeMemory.Alloc((nuint)operationSource.Length);
+            byte* source = (byte*)NativeMemory.Alloc((nuint)sourceSource.Length);
+            NativeEngineDiagnostic* diagnostics = (NativeEngineDiagnostic*)NativeMemory.Alloc((nuint)sizeof(NativeEngineDiagnostic));
+            codeSource.CopyTo(new Span<byte>(code, codeSource.Length));
+            messageSource.CopyTo(new Span<byte>(message, messageSource.Length));
+            serviceSource.CopyTo(new Span<byte>(service, serviceSource.Length));
+            operationSource.CopyTo(new Span<byte>(operation, operationSource.Length));
+            sourceSource.CopyTo(new Span<byte>(source, sourceSource.Length));
+            *diagnostics = new NativeEngineDiagnostic { code = new NativeUtf8Slice { bytes = code, len = (nuint)codeSource.Length }, message = new NativeUtf8Slice { bytes = message, len = (nuint)messageSource.Length }, source = new NativeUtf8Slice { bytes = source, len = (nuint)sourceSource.Length } };
+            ulong diagnosticHandle = _nextLease++;
+            DiagnosticLeases.Add(diagnosticHandle, ((nint)diagnostics, (nint)code, (nint)message, (nint)source, (nint)service, (nint)operation));
+            *error = new NativeOperationErrorReceipt { service = new NativeUtf8Slice { bytes = service, len = (nuint)serviceSource.Length }, operation = new NativeUtf8Slice { bytes = operation, len = (nuint)operationSource.Length }, status = -7, diagnostics = new NativeEngineDiagnosticLease { handle = new NativeEngineDiagnosticLeaseHandle { value = diagnosticHandle }, diagnostics = diagnostics, diagnostics_len = 1 } };
+            return 0;
+        }
         ulong handle = _nextLease++;
         if (request.include_item == 0)
         {
@@ -80,6 +132,20 @@ internal static unsafe class Program
         if (lease.Label != 0) NativeMemory.Free((void*)lease.Label);
         if (lease.Payload != 0) NativeMemory.Free((void*)lease.Payload);
         _destroyed++;
+        return 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int DestroyOperationDiagnosticLease(void* _, NativeEngineDiagnosticLeaseHandle handle)
+    {
+        if (!DiagnosticLeases.Remove(handle.value, out (nint Diagnostics, nint Code, nint Message, nint Source, nint Service, nint Operation) lease)) return 0;
+        NativeMemory.Free((void*)lease.Diagnostics);
+        NativeMemory.Free((void*)lease.Code);
+        NativeMemory.Free((void*)lease.Message);
+        NativeMemory.Free((void*)lease.Source);
+        NativeMemory.Free((void*)lease.Service);
+        NativeMemory.Free((void*)lease.Operation);
+        _diagnosticDestroyed++;
         return 1;
     }
 

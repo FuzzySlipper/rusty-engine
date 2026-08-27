@@ -36,13 +36,38 @@ typedef struct NativeLeaseFixtureItemLease {
   size_t entries_len;
 } NativeLeaseFixtureItemLease;
 
-typedef int32_t (*NativeReadLeaseFixtureItems)(void *, NativeLeaseFixtureRequest, NativeLeaseFixtureItemLease *);
+typedef struct NativeEngineDiagnostic {
+  NativeUtf8Slice code;
+  NativeUtf8Slice message;
+  NativeUtf8Slice source;
+} NativeEngineDiagnostic;
+
+typedef struct NativeEngineDiagnosticLeaseHandle {
+  uint64_t value;
+} NativeEngineDiagnosticLeaseHandle;
+
+typedef struct NativeEngineDiagnosticLease {
+  NativeEngineDiagnosticLeaseHandle handle;
+  const NativeEngineDiagnostic *diagnostics;
+  size_t diagnostics_len;
+} NativeEngineDiagnosticLease;
+
+typedef struct NativeOperationErrorReceipt {
+  NativeUtf8Slice service;
+  NativeUtf8Slice operation;
+  int32_t status;
+  NativeEngineDiagnosticLease diagnostics;
+} NativeOperationErrorReceipt;
+
+typedef int32_t (*NativeReadLeaseFixtureItems)(void *, NativeLeaseFixtureRequest, NativeLeaseFixtureItemLease *, NativeOperationErrorReceipt *);
 typedef int32_t (*NativeDestroyLeaseFixtureItemLease)(void *, NativeLeaseFixtureItemLeaseHandle);
+typedef int32_t (*NativeDestroyLeaseFixtureOperationDiagnosticLease)(void *, NativeEngineDiagnosticLeaseHandle);
 
 typedef struct NativeLeaseFixtureApi {
   void *context;
   NativeReadLeaseFixtureItems read_items;
   NativeDestroyLeaseFixtureItemLease destroy_item_lease;
+  NativeDestroyLeaseFixtureOperationDiagnosticLease destroy_operation_diagnostic_lease;
 } NativeLeaseFixtureApi;
 
 typedef struct NativeEngineApi {

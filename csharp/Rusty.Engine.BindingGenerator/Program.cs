@@ -62,6 +62,11 @@ internal sealed class BindingModel
         string signature = $"{callback.ReturnType} ({string.Join(", ", callback.Parameters)})";
         if (callback.ReturnType is not "int" and not "int32_t" || callback.Parameters[0] != "void *") Fail(family, method, signature, "expected context-first int32 status call");
         string[] parameters = callback.Parameters.Skip(1).ToArray();
+        if (HasOperationErrorReceipt(parameters))
+        {
+            ValidateOperationErrorReceipt(family, method, signature, structs, enums);
+            parameters = parameters[..^1];
+        }
         if (parameters.Length == 0) Fail(family, method, signature, "service calls require one supported input or out receipt");
         if (parameters[^1].Contains('*', StringComparison.Ordinal) && !IsExactBorrowedPointer(parameters[^1]) && !IsExactOutPointer(parameters[^1])) Fail(family, method, signature, $"final pointer {parameters[^1]} must be exactly const T * input or T * out receipt");
         bool hasReceipt = IsExactOutPointer(parameters[^1]);
@@ -105,6 +110,21 @@ internal sealed class BindingModel
         ValidateFixedType(family, method, signature, bare, structs, enums, new HashSet<string>(StringComparer.Ordinal), "direct input");
     }
 
+    private static void ValidateOperationErrorReceipt(string family, string method, string signature, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
+    {
+        if (!structs.TryGetValue("NativeOperationErrorReceipt", out Struct? value) || value is null) { Fail(family, method, signature, "operation error receipt was not emitted"); return; }
+        if (value.Fields.Count != 4
+            || value.Fields[0].Name != "service" || Bare(value.Fields[0].Type) != "NativeUtf8Slice"
+            || value.Fields[1].Name != "operation" || Bare(value.Fields[1].Type) != "NativeUtf8Slice"
+            || value.Fields[2].Name != "status" || Bare(value.Fields[2].Type) is not ("int" or "int32_t")
+            || value.Fields[3].Name != "diagnostics" || Bare(value.Fields[3].Type) != "NativeEngineDiagnosticLease")
+        {
+            Fail(family, method, signature, "NativeOperationErrorReceipt must preserve service/operation/status plus NativeEngineDiagnosticLease");
+            return;
+        }
+        ValidateLeaseResult(family, method, signature, "NativeEngineDiagnosticLease", structs, enums);
+    }
+
     private static void ValidateFixedType(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen, string role)
     {
         if (IsScalar(type) || enums.ContainsKey(type)) return;
@@ -125,6 +145,9 @@ internal sealed class BindingModel
         structs.TryGetValue(type, out Struct? value)
         && value.Name.EndsWith("Lease", StringComparison.Ordinal)
         && value.Fields.Any(field => field.Name == "handle" && Bare(field.Type).EndsWith("LeaseHandle", StringComparison.Ordinal));
+
+    internal static bool IsOperationErrorReceipt(string type) => type == "NativeOperationErrorReceipt";
+    internal static bool HasOperationErrorReceipt(IReadOnlyList<string> parameters) => parameters.Count > 0 && IsExactOutPointer(parameters[^1]) && IsOperationErrorReceipt(Bare(parameters[^1]));
 
     private static void ValidateLeaseResult(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
     {
@@ -228,8 +251,9 @@ internal static class Emit
             output.AppendLine("}").AppendLine();
         }
         output.AppendLine("public sealed class EngineCallException : Exception").AppendLine("{");
-        output.AppendLine("    public EngineCallException(string service, string operation, int status) : base($\"Rusty Engine {service}.{operation} returned status {status}.\") => Status = status;");
-        output.AppendLine("    public int Status { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("    public EngineCallException(string service, string operation, int status) : this(service, operation, status, ReadOnlyMemory<EngineDiagnostic>.Empty) { }");
+        output.AppendLine("    public EngineCallException(string service, string operation, int status, ReadOnlyMemory<EngineDiagnostic> diagnostics) : base($\"Rusty Engine {service}.{operation} returned status {status}.\") { Service = service; Operation = operation; Status = status; Diagnostics = diagnostics; }");
+        output.AppendLine("    public string Service { get; }").AppendLine("    public string Operation { get; }").AppendLine("    public int Status { get; }").AppendLine("    public ReadOnlyMemory<EngineDiagnostic> Diagnostics { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public readonly ref struct ProductUpdate").AppendLine("{");
         output.AppendLine("    public ProductUpdate(ProductUpdateFacts facts, ReadOnlySpan<ProductInputEvent> input) { Facts = facts; Input = input; }");
         output.AppendLine("    public ProductUpdateFacts Facts { get; }");
@@ -327,8 +351,9 @@ internal static class Emit
         StringBuilder output = Header("internal NativeProduct service implementation input");
         output.AppendLine("using System.Buffers;").AppendLine("using System.Linq;").AppendLine("using System.Text;").AppendLine("using Rusty.Engine;").AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
         output.AppendLine("// Injected into the NativeProduct compilation. Public Rusty.Engine has contracts and values only.");
-        output.AppendLine("internal static class NativeCall").AppendLine("{");
+        output.AppendLine("internal static unsafe class NativeCall").AppendLine("{");
         output.AppendLine("    internal static void Require(string service, string operation, int status) { if (status != 1) throw new EngineCallException(service, operation, status); }");
+        output.AppendLine("    internal static void Require(string service, string operation, int status, NativeOperationErrorReceipt error, void* context, delegate* unmanaged[Cdecl]<void*, NativeEngineDiagnosticLeaseHandle, int> destroy) { if (status == 1) return; ReadOnlyMemory<EngineDiagnostic> diagnostics = ReadOnlyMemory<EngineDiagnostic>.Empty; string receiptService = service; string receiptOperation = operation; int receiptStatus = error.status == 0 ? status : error.status; try { if (error.diagnostics.handle.value != 0) diagnostics = NativeConversions.CopyLease(error.diagnostics); if (error.service.len != 0) receiptService = NativeConversions.CopyUtf8(error.service); if (error.operation.len != 0) receiptOperation = NativeConversions.CopyUtf8(error.operation); } finally { if (error.diagnostics.handle.value != 0) { int disposeStatus = destroy(context, error.diagnostics.handle); Require(service, \"DestroyOperationDiagnosticLease\", disposeStatus); } } throw new EngineCallException(receiptService, receiptOperation, receiptStatus, diagnostics); }");
         output.AppendLine("}").AppendLine();
         EmitConversions(output, model);
         foreach (Service service in model.Services)
@@ -352,7 +377,7 @@ internal static class Emit
         output.AppendLine("    private const nuint MaxOwnedLeaseBytes = 256u * 1024u * 1024u;");
         output.AppendLine("    private const nuint MaxOwnedLeaseItems = 1_000_000u;");
         output.AppendLine("    private static readonly UTF8Encoding StrictUtf8 = new(false, true);");
-        output.AppendLine("    private static string CopyUtf8(NativeUtf8Slice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native UTF-8 lease exceeded the supported copy bound.\"); if (value.len == 0) return string.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native UTF-8 lease had length without bytes.\"); return StrictUtf8.GetString(new ReadOnlySpan<byte>(value.bytes, checked((int)value.len))); }");
+        output.AppendLine("    internal static string CopyUtf8(NativeUtf8Slice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native UTF-8 lease exceeded the supported copy bound.\"); if (value.len == 0) return string.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native UTF-8 lease had length without bytes.\"); return StrictUtf8.GetString(new ReadOnlySpan<byte>(value.bytes, checked((int)value.len))); }");
         output.AppendLine("    private static ReadOnlyMemory<byte> CopyBytes(NativeByteSlice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native byte lease exceeded the supported copy bound.\"); if (value.len == 0) return ReadOnlyMemory<byte>.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native byte lease had length without bytes.\"); byte[] copy = new byte[checked((int)value.len)]; new ReadOnlySpan<byte>(value.bytes, copy.Length).CopyTo(copy); return copy; }");
         output.AppendLine("    internal static NativeVec2 ToNative(Vector2 value) => new() { x = value.X, y = value.Y };");
         output.AppendLine("    internal static Vector2 FromNative(NativeVec2 value) => new(value.x, value.y);");
@@ -434,7 +459,7 @@ internal static class Emit
         string signature = SafeParameters(model, callback);
         string[] input = Inputs(callback);
         string result = ResultParameter(callback) ?? string.Empty;
-        if (IsSpanCall(input)) return EmitSpanMethod(service, operation, callback, returnType, signature);
+        if (IsSpanCall(input)) return EmitSpanMethod(model, service, operation, callback, returnType, signature);
         if (input.Length >= 1 && input[^1].StartsWith("const ", StringComparison.Ordinal) && input[^1].Contains('*', StringComparison.Ordinal)) return EmitBorrowedRequestMethod(model, service, operation, callback, returnType, signature, BindingModel.Bare(input[^1]), result, input[..^1]);
         return EmitDirectMethod(model, service, operation, callback, returnType, signature, input, result);
     }
@@ -445,9 +470,11 @@ internal static class Emit
         output.AppendLine($"    public {returnType} {Pascal(operation)}({signature})").AppendLine("    {");
         for (int index = 0; index < input.Length; index++) output.AppendLine($"        {RawType(input[index])} raw{index} = NativeConversions.ToNative(arg{index});");
         if (!string.IsNullOrEmpty(result)) output.AppendLine($"        {RawType(result)} rawResult = default;");
-        string invocation = string.Join(", ", new[] { "_native.context" }.Concat(input.Select((_, index) => $"raw{index}")).Concat(string.IsNullOrEmpty(result) ? [] : ["&rawResult"]));
+        bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
+        if (hasErrorReadout) output.AppendLine("        NativeOperationErrorReceipt rawError = default;");
+        string invocation = string.Join(", ", new[] { "_native.context" }.Concat(input.Select((_, index) => $"raw{index}")).Concat(string.IsNullOrEmpty(result) ? [] : ["&rawResult"]).Concat(hasErrorReadout ? ["&rawError"] : []));
         output.AppendLine($"        int status = _native.{operation}.Pointer({invocation});");
-        output.AppendLine($"        NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(operation)}\", status);");
+        EmitRequire(output, model, service, operation, hasErrorReadout, "        ");
         if (string.IsNullOrEmpty(result)) output.AppendLine("        return;");
         else if (BindingModel.IsLeaseResult(BindingModel.Bare(result), model.Structs))
         {
@@ -467,15 +494,17 @@ internal static class Emit
         return output.ToString();
     }
 
-    private static string EmitSpanMethod(Service service, string operation, Callback callback, string returnType, string signature)
+    private static string EmitSpanMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature)
     {
         string item = BindingModel.Bare(Inputs(callback)[0]);
         StringBuilder output = new();
         output.AppendLine($"    public {returnType} {Pascal(operation)}({signature})").AppendLine("    {");
         output.AppendLine($"        {RawType(item)}[] rawValues = values.ToArray().Select(NativeConversions.ToNative).ToArray();");
         output.AppendLine($"        fixed ({RawType(item)}* pointer = rawValues)").AppendLine("        {");
-        output.AppendLine($"            int status = _native.{operation}.Pointer(_native.context, rawValues.Length == 0 ? null : pointer, (nuint)rawValues.Length);");
-        output.AppendLine($"            NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(operation)}\", status);");
+        bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
+        if (hasErrorReadout) output.AppendLine("            NativeOperationErrorReceipt rawError = default;");
+        output.AppendLine($"            int status = _native.{operation}.Pointer(_native.context, rawValues.Length == 0 ? null : pointer, (nuint)rawValues.Length{(hasErrorReadout ? ", &rawError" : string.Empty)});");
+        EmitRequire(output, model, service, operation, hasErrorReadout, "            ");
         output.AppendLine("        }").AppendLine("    }").AppendLine();
         return output.ToString();
     }
@@ -537,10 +566,12 @@ internal static class Emit
         }
         output.AppendLine("        };");
         if (!string.IsNullOrEmpty(result)) output.AppendLine($"        {RawType(result)} rawResult = default;");
+        bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
+        if (hasErrorReadout) output.AppendLine("        NativeOperationErrorReceipt rawError = default;");
         string leadingInvocation = string.Join(", ", leading.Select((_, index) => $"raw{index}"));
         string invocation = string.IsNullOrEmpty(result) ? $"_native.context{(leadingInvocation.Length == 0 ? string.Empty : ", " + leadingInvocation)}, &raw" : $"_native.context{(leadingInvocation.Length == 0 ? string.Empty : ", " + leadingInvocation)}, &raw, &rawResult";
-        output.AppendLine($"        int status = _native.{operation}.Pointer({invocation});");
-        output.AppendLine($"        NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(operation)}\", status);");
+        output.AppendLine($"        int status = _native.{operation}.Pointer({invocation}{(hasErrorReadout ? ", &rawError" : string.Empty)});");
+        EmitRequire(output, model, service, operation, hasErrorReadout, "        ");
         if (string.IsNullOrEmpty(result)) output.AppendLine("        return;");
         else if (BindingModel.IsLeaseResult(BindingModel.Bare(result), model.Structs))
         {
@@ -559,6 +590,19 @@ internal static class Emit
         for (int index = closers.Count - 1; index >= 0; index--) output.AppendLine(closers[index]);
         output.AppendLine("    }").AppendLine();
         return output.ToString();
+    }
+
+    private static void EmitRequire(StringBuilder output, BindingModel model, Service service, string operation, bool hasErrorReadout, string indent)
+    {
+        string safeService = SafeServiceName(service.Name);
+        string safeOperation = Pascal(operation);
+        if (!hasErrorReadout)
+        {
+            output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", status);");
+            return;
+        }
+        (_, string destroyOperation) = DestroyLeaseFor(model, service, "NativeEngineDiagnosticLease");
+        output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", status, rawError, _native.context, _native.{destroyOperation}.Pointer);");
     }
 
     private static string BorrowedFieldExpression(Field field, string requestArgument)
@@ -585,14 +629,20 @@ internal static class Emit
 
     private static string[] Inputs(Callback callback)
     {
-        string[] args = callback.Parameters.Skip(1).ToArray();
+        string[] args = ServiceParameters(callback);
         if (args.Length > 0 && !args[^1].StartsWith("const ", StringComparison.Ordinal) && args[^1].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[^1]) != "void") return args[..^1];
         return args;
     }
     private static string? ResultParameter(Callback callback)
     {
-        string last = callback.Parameters.Last();
+        string[] args = ServiceParameters(callback);
+        string last = args.Last();
         return !last.StartsWith("const ", StringComparison.Ordinal) && last.Contains('*', StringComparison.Ordinal) && BindingModel.Bare(last) != "void" ? BindingModel.Bare(last) : null;
+    }
+    private static string[] ServiceParameters(Callback callback)
+    {
+        string[] args = callback.Parameters.Skip(1).ToArray();
+        return BindingModel.HasOperationErrorReceipt(args) ? args[..^1] : args;
     }
     private static bool IsSpanCall(string[] input) => input.Length == 2 && input[0].StartsWith("const ", StringComparison.Ordinal) && input[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(input[1]) == "size_t";
     private static bool HasBorrowedFields(Struct value) => value.Fields.Any(field => field.Type.Contains('*', StringComparison.Ordinal) || BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue");
@@ -609,7 +659,7 @@ internal static class Emit
         return (service.Name, operation.Name);
     }
 
-    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
+    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
     private static IReadOnlyList<(Field Field, string Type)> SafeFields(Struct value, BindingModel model)
     {
         List<(Field, string)> fields = [];
@@ -631,7 +681,7 @@ internal static class Emit
     }
     private static string SafeReturn(BindingModel model, Callback callback)
     {
-        string last = callback.Parameters.Last();
+        string last = ServiceParameters(callback).Last();
         if (last.StartsWith("const ", StringComparison.Ordinal) || !last.Contains('*', StringComparison.Ordinal) || BindingModel.Bare(last) == "void") return "void";
         string handle = BindingModel.Bare(last);
         if (BindingModel.IsLeaseResult(handle, model.Structs))
@@ -645,7 +695,7 @@ internal static class Emit
     }
     private static string SafeParameters(BindingModel model, Callback callback)
     {
-        string[] args = callback.Parameters.Skip(1).ToArray();
+        string[] args = ServiceParameters(callback);
         if (args.Length > 0 && !args[^1].StartsWith("const ", StringComparison.Ordinal) && args[^1].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[^1]) != "void") args = args[..^1];
         if (args.Length == 2 && args[0].StartsWith("const ", StringComparison.Ordinal) && args[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[1]) == "size_t") return $"ReadOnlySpan<{SafeType(model, BindingModel.Bare(args[0]))}> values";
         return string.Join(", ", args.Select((type, index) => $"{SafeType(model, BindingModel.Bare(type))} arg{index}"));

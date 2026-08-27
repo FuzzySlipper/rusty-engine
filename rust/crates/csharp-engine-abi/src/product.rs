@@ -409,8 +409,13 @@ pub type NativeOpenUiStream = unsafe extern "C" fn(
     *const NativeUiStreamRequest,
     *mut NativeUiStreamHandle,
 ) -> i32;
-pub type NativePublishUiProjection =
-    unsafe extern "C" fn(*mut c_void, *const NativeUiProjection) -> i32;
+pub type NativePublishUiProjection = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeUiProjection,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyUiOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeDrawKeyedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKeyedRngRequest,
@@ -610,6 +615,7 @@ pub struct NativeUiApi {
     pub context: *mut c_void,
     pub open_stream: NativeOpenUiStream,
     pub publish_projection: NativePublishUiProjection,
+    pub destroy_operation_diagnostic_lease: NativeDestroyUiOperationDiagnosticLease,
 }
 
 #[repr(C)]
