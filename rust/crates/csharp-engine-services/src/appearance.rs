@@ -446,6 +446,36 @@ impl RuntimeAppearanceBridge {
         self.content_resources.clear();
     }
 
+    /// Resolves one live C# material into an Engine-owned descriptor for a
+    /// separate retained presentation family. The caller copies the returned
+    /// value; it never retains this Appearance handle or any product pointer.
+    pub(crate) fn voxel_material_descriptor(
+        &mut self,
+        material: NativeMaterialHandle,
+    ) -> Result<RenderMaterialDescriptor, CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let id = staged.state.materials.get(&material.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_MATERIAL",
+                "voxel-object material handle is not live",
+            )
+        })?;
+        staged
+            .state
+            .projector
+            .resources_mut()
+            .materials
+            .iter()
+            .find(|candidate| candidate.id == *id)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_PRESENTATION_MATERIAL",
+                    "voxel-object material descriptor is not retained",
+                )
+            })
+    }
+
     fn staged_mut(&mut self) -> Result<&mut RuntimeAppearanceCall, CsharpEngineServicesError> {
         self.staged.as_mut().ok_or_else(|| {
             CsharpEngineServicesError::new(

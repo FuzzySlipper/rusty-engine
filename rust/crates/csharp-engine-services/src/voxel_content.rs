@@ -4,9 +4,15 @@
 //! existing voxel artifact owners. It does not feed their contents into the
 //! canonical Spatial scene, collision, renderer, or a product-side store.
 
-use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::c_void,
+    sync::Arc,
+};
 
 use csharp_engine_abi::*;
+use render_model::{RenderFrameDiff, RenderMaterialDescriptor, RenderMetadata, Transform};
+use render_projection::{VoxelObjectProjectionInstance, VoxelObjectRenderProjector};
 use voxel_annotation::{
     decode_annotation_layer, query_annotation_layer, validate_annotation_layer,
     VoxelAnnotationBounds, VoxelAnnotationEditCommand, VoxelAnnotationEditService,
@@ -22,7 +28,8 @@ use voxel_object_runtime::{
 };
 
 use crate::{
-    composition::{borrowed_utf8, ABI_OK},
+    appearance::RuntimeAppearanceBridge,
+    composition::{borrowed_slice, borrowed_utf8, ABI_OK},
     CsharpEngineServicesError,
 };
 
@@ -48,6 +55,28 @@ struct RetainedVoxelObject {
 struct RetainedVoxelObjectPlayer {
     object: Arc<AdmittedVoxelObject>,
     player: VoxelObjectPlayer,
+}
+
+#[derive(Debug, Clone)]
+struct RetainedVoxelObjectPresentation {
+    object: Arc<AdmittedVoxelObject>,
+    runtime_frame: u32,
+    transform: Transform,
+    visible: bool,
+    materials: BTreeMap<String, RenderMaterialDescriptor>,
+}
+
+#[derive(Debug, Clone)]
+struct VoxelObjectPresentationState {
+    projector: VoxelObjectRenderProjector,
+    presentations: BTreeMap<u64, RetainedVoxelObjectPresentation>,
+    next_presentation: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct RuntimeVoxelContentCall {
+    state: VoxelObjectPresentationState,
+    pub(crate) frames: Vec<RenderFrameDiff>,
 }
 
 #[derive(Debug)]
@@ -94,6 +123,9 @@ pub(crate) struct RuntimeVoxelContentBridge {
     next_annotation: u64,
     next_annotation_region_lease: u64,
     next_annotation_edit_lease: u64,
+    presentation: VoxelObjectPresentationState,
+    staged_presentation: Option<RuntimeVoxelContentCall>,
+    appearance: Option<*mut RuntimeAppearanceBridge>,
 }
 
 impl RuntimeVoxelContentBridge {
@@ -111,6 +143,13 @@ impl RuntimeVoxelContentBridge {
             next_annotation: 1,
             next_annotation_region_lease: 1,
             next_annotation_edit_lease: 1,
+            presentation: VoxelObjectPresentationState {
+                projector: VoxelObjectRenderProjector::new(),
+                presentations: BTreeMap::new(),
+                next_presentation: 1,
+            },
+            staged_presentation: None,
+            appearance: None,
         }
     }
 
@@ -520,9 +559,341 @@ impl RuntimeVoxelContentBridge {
             )
         })
     }
+
+    pub(crate) fn bind_appearance(&mut self, appearance: &mut RuntimeAppearanceBridge) {
+        // This raw pointer is only used synchronously by a generated callback
+        // while `EngineServiceSet` retains both bridges. It is refreshed every
+        // time the Engine table is assembled rather than stored by C#.
+        self.appearance = Some(appearance as *mut RuntimeAppearanceBridge);
+    }
+
+    pub(crate) fn begin_call(&mut self) {
+        self.staged_presentation = Some(RuntimeVoxelContentCall {
+            state: self.presentation.clone(),
+            frames: Vec::new(),
+        });
+    }
+
+    pub(crate) fn discard_call(&mut self) {
+        self.staged_presentation = None;
+    }
+
+    pub(crate) fn take_staged_call(
+        &mut self,
+    ) -> Result<RuntimeVoxelContentCall, CsharpEngineServicesError> {
+        self.staged_presentation.take().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_CALL",
+                "voxel presentation was read outside a product call",
+            )
+        })
+    }
+
+    pub(crate) fn commit_call(&mut self, call: RuntimeVoxelContentCall) {
+        self.presentation = call.state;
+    }
+
+    fn staged_presentation_mut(
+        &mut self,
+    ) -> Result<&mut RuntimeVoxelContentCall, CsharpEngineServicesError> {
+        self.staged_presentation.as_mut().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_CALL",
+                "voxel presentation was called outside a product call",
+            )
+        })
+    }
+
+    fn appearance_mut(
+        &mut self,
+    ) -> Result<&mut RuntimeAppearanceBridge, CsharpEngineServicesError> {
+        let appearance = self.appearance.ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_APPEARANCE",
+                "voxel presentation has no Engine appearance owner",
+            )
+        })?;
+        // SAFETY: `bind_appearance` receives the sibling bridge retained by
+        // `EngineServiceSet`; callbacks are synchronous and never retain it.
+        Ok(unsafe { &mut *appearance })
+    }
+
+    fn project_object(
+        &mut self,
+        request: NativeProjectVoxelObjectRequest,
+    ) -> Result<NativeVoxelObjectPresentationHandle, CsharpEngineServicesError> {
+        let object = Arc::clone(&self.object(request.object)?.object);
+        let presentation = RetainedVoxelObjectPresentation {
+            object,
+            runtime_frame: request.runtime_frame,
+            transform: presentation_transform(request.transform)?,
+            visible: request.visible,
+            materials: self.presentation_materials(
+                request.materials,
+                request.materials_len,
+                request.object,
+            )?,
+        };
+        let next = self
+            .staged_presentation
+            .as_ref()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_PRESENTATION_CALL",
+                    "voxel presentation was called outside a product call",
+                )
+            })?
+            .state
+            .next_presentation;
+        let next_after = next.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_HANDLE",
+                "voxel presentation handle space overflowed",
+            )
+        })?;
+        let mut candidate = self.staged_presentation_state()?.clone();
+        candidate.next_presentation = next_after;
+        candidate.presentations.insert(next, presentation);
+        let frame = project_presentation_state(&mut candidate)?;
+        self.commit_presentation_operation(candidate, frame)?;
+        Ok(NativeVoxelObjectPresentationHandle { value: next })
+    }
+
+    fn update_object_presentation(
+        &mut self,
+        request: NativeUpdateVoxelObjectPresentationRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let materials = self.presentation_materials_for_object(
+            request.materials,
+            request.materials_len,
+            request.presentation,
+        )?;
+        let transform = presentation_transform(request.transform)?;
+        let mut candidate = self.staged_presentation_state()?.clone();
+        let presentation = candidate
+            .presentations
+            .get_mut(&request.presentation.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_PRESENTATION_HANDLE",
+                    "voxel presentation handle is not retained",
+                )
+            })?;
+        if presentation.object.frame(request.runtime_frame).is_none() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_FRAME",
+                "voxel presentation frame is not admitted by its retained object",
+            ));
+        }
+        presentation.runtime_frame = request.runtime_frame;
+        presentation.transform = transform;
+        presentation.visible = request.visible;
+        presentation.materials = materials;
+        let frame = project_presentation_state(&mut candidate)?;
+        self.commit_presentation_operation(candidate, frame)
+    }
+
+    fn destroy_object_presentation(
+        &mut self,
+        handle: NativeVoxelObjectPresentationHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let mut candidate = self.staged_presentation_state()?.clone();
+        let removed = candidate.presentations.remove(&handle.value);
+        if removed.is_none() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_HANDLE",
+                "voxel presentation handle is not retained",
+            ));
+        }
+        let frame = project_presentation_state(&mut candidate)?;
+        self.commit_presentation_operation(candidate, frame)
+    }
+
+    fn presentation_materials(
+        &mut self,
+        pointer: *const NativeVoxelObjectMaterialBinding,
+        len: usize,
+        object: NativeVoxelObjectHandle,
+    ) -> Result<BTreeMap<String, RenderMaterialDescriptor>, CsharpEngineServicesError> {
+        let object = Arc::clone(&self.object(object)?.object);
+        self.presentation_materials_for(&object, pointer, len)
+    }
+
+    fn presentation_materials_for_object(
+        &mut self,
+        pointer: *const NativeVoxelObjectMaterialBinding,
+        len: usize,
+        presentation: NativeVoxelObjectPresentationHandle,
+    ) -> Result<BTreeMap<String, RenderMaterialDescriptor>, CsharpEngineServicesError> {
+        let object = Arc::clone(
+            &self
+                .staged_presentation
+                .as_ref()
+                .and_then(|call| call.state.presentations.get(&presentation.value))
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_PRESENTATION_HANDLE",
+                        "voxel presentation handle is not retained",
+                    )
+                })?
+                .object,
+        );
+        self.presentation_materials_for(&object, pointer, len)
+    }
+
+    fn presentation_materials_for(
+        &mut self,
+        object: &AdmittedVoxelObject,
+        pointer: *const NativeVoxelObjectMaterialBinding,
+        len: usize,
+    ) -> Result<BTreeMap<String, RenderMaterialDescriptor>, CsharpEngineServicesError> {
+        // SAFETY: generated C# pins this bounded typed array for the direct
+        // callback. Every descriptor below is copied before return.
+        let bindings = unsafe { borrowed_slice(pointer, len, "voxel-object material bindings")? };
+        let expected = object
+            .source()
+            .material_palette
+            .iter()
+            .map(|binding| binding.material_slot)
+            .collect::<BTreeSet<_>>();
+        let actual = bindings
+            .iter()
+            .map(|binding| u16::try_from(binding.material_slot))
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_PRESENTATION_MATERIALS",
+                    "voxel presentation material slot exceeded the admitted object slot range",
+                )
+            })?;
+        if actual.len() != bindings.len() || actual != expected {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_MATERIALS",
+                "voxel presentation requires exactly one live material binding for every object palette slot",
+            ));
+        }
+        let by_slot = bindings
+            .iter()
+            .map(|binding| {
+                u16::try_from(binding.material_slot)
+                    .map(|slot| (slot, binding.material))
+                    .map_err(|_| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_VOXEL_PRESENTATION_MATERIALS",
+                            "voxel presentation material slot exceeded the admitted object slot range",
+                        )
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let appearance = self.appearance_mut()?;
+        object
+            .source()
+            .material_palette
+            .iter()
+            .map(|palette| {
+                let material = by_slot[&palette.material_slot];
+                let mut descriptor = appearance.voxel_material_descriptor(material)?;
+                descriptor.id = palette.material_asset_id.clone();
+                Ok((descriptor.id.clone(), descriptor))
+            })
+            .collect()
+    }
+
+    fn staged_presentation_state(
+        &self,
+    ) -> Result<&VoxelObjectPresentationState, CsharpEngineServicesError> {
+        self.staged_presentation
+            .as_ref()
+            .map(|call| &call.state)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_PRESENTATION_CALL",
+                    "voxel presentation was called outside a product call",
+                )
+            })
+    }
+
+    fn commit_presentation_operation(
+        &mut self,
+        state: VoxelObjectPresentationState,
+        frame: RenderFrameDiff,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_presentation_mut()?;
+        staged.state = state;
+        staged.frames.push(frame);
+        Ok(())
+    }
 }
 
-pub(crate) fn api(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentApi {
+fn project_presentation_state(
+    state: &mut VoxelObjectPresentationState,
+) -> Result<RenderFrameDiff, CsharpEngineServicesError> {
+    let instances = state
+        .presentations
+        .iter()
+        .map(|(handle, presentation)| VoxelObjectProjectionInstance {
+            instance_id: format!("csharp-voxel-presentation-{handle}"),
+            object: presentation.object.as_ref(),
+            frame: presentation.runtime_frame,
+            transform: presentation.transform,
+            visible: presentation.visible,
+            material_overrides: Vec::new(),
+            metadata: RenderMetadata {
+                source_entity: None,
+                source_scene_node: None,
+                tags: vec!["csharp-voxel-object".to_owned()],
+                label: Some(format!("Voxel object presentation {handle}")),
+            },
+        })
+        .collect::<Vec<_>>();
+    let mut materials = BTreeMap::new();
+    for presentation in state.presentations.values() {
+        for (id, descriptor) in &presentation.materials {
+            if let Some(existing) = materials.insert(id.clone(), descriptor.clone()) {
+                if existing != *descriptor {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_PRESENTATION_MATERIALS",
+                        "one retained voxel material identity resolved to conflicting descriptors",
+                    ));
+                }
+            }
+        }
+    }
+    let result = state
+        .projector
+        .project(&instances, &materials)
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_VOXEL_PRESENTATION", format!("{error:?}"))
+        })?;
+    Ok(result.frame)
+}
+
+fn presentation_transform(value: NativeTransform) -> Result<Transform, CsharpEngineServicesError> {
+    let transform = Transform {
+        translation: [
+            value.translation.x,
+            value.translation.y,
+            value.translation.z,
+        ],
+        rotation: [
+            value.rotation.x,
+            value.rotation.y,
+            value.rotation.z,
+            value.rotation.w,
+        ],
+        scale: [value.scale.x, value.scale.y, value.scale.z],
+    };
+    transform.validate().map_err(|error| {
+        CsharpEngineServicesError::new("CSHARP_VOXEL_PRESENTATION_TRANSFORM", format!("{error:?}"))
+    })?;
+    Ok(transform)
+}
+
+pub(crate) fn api(
+    bridge: &mut RuntimeVoxelContentBridge,
+    appearance: &mut RuntimeAppearanceBridge,
+) -> NativeVoxelContentApi {
+    bridge.bind_appearance(appearance);
     NativeVoxelContentApi {
         context: (bridge as *mut RuntimeVoxelContentBridge).cast(),
         admit_asset,
@@ -543,6 +914,9 @@ pub(crate) fn api(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentA
         stop_object_player,
         read_object_player,
         sample_object_player,
+        project_object,
+        update_object_presentation,
+        destroy_object_presentation,
         admit_annotation,
         destroy_annotation,
         query_annotation,
@@ -1298,6 +1672,57 @@ unsafe extern "C" fn sample_object_player(
     }
 }
 
+unsafe extern "C" fn project_object(
+    context: *mut c_void,
+    request: *const NativeProjectVoxelObjectRequest,
+    output: *mut NativeVoxelObjectPresentationHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.project_object(unsafe { *request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn update_object_presentation(
+    context: *mut c_void,
+    request: *const NativeUpdateVoxelObjectPresentationRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    if bridge
+        .update_object_presentation(unsafe { *request })
+        .is_ok()
+    {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
+unsafe extern "C" fn destroy_object_presentation(
+    context: *mut c_void,
+    handle: NativeVoxelObjectPresentationHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    if bridge.destroy_object_presentation(handle).is_ok() {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
 unsafe fn borrowed_json<'a>(value: NativeByteSlice) -> Result<&'a str, ()> {
     if value.len > 0 && value.bytes.is_null() {
         return Err(());
@@ -1568,7 +1993,10 @@ fn narrow(value: usize) -> Result<u32, CsharpEngineServicesError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spatial::RuntimeSpatialBridge;
+    use crate::{appearance::RuntimeAppearanceBridge, spatial::RuntimeSpatialBridge};
+    use render_model::RenderDiff;
+    use render_projection::RuntimeAppearanceCatalog;
+    use std::collections::BTreeMap;
     use voxel_annotation::{
         encode_annotation_layer, finalize_annotation_draft, VoxelAnnotationLayerDraft,
         VoxelAnnotationRegion, VoxelAnnotationSelection, VoxelAnnotationSparseRun,
@@ -1582,6 +2010,273 @@ mod tests {
         VoxelObjectProvenanceKind, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
         VOXEL_ASSET_SCHEMA_VERSION, VOXEL_OBJECT_SCHEMA_VERSION,
     };
+
+    #[test]
+    fn projects_retained_voxel_objects_through_staged_renderer_frames_and_releases_them() {
+        let mut bridge = RuntimeVoxelContentBridge::new();
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+
+        let body = encode_voxel_object(&object())
+            .expect("canonical object")
+            .into_bytes();
+        let mut object_handle = NativeVoxelObjectHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.admit_object)(
+                    api.context,
+                    &NativeAdmitVoxelObjectRequest {
+                        bytes: NativeByteSlice {
+                            bytes: body.as_ptr(),
+                            len: body.len(),
+                        },
+                    },
+                    &mut object_handle,
+                )
+            },
+            ABI_OK
+        );
+
+        let mut material = NativeMaterialHandle::default();
+        assert_eq!(
+            unsafe {
+                crate::appearance::create_material(
+                    (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
+                    NativeMaterialRequest {
+                        color: NativeColor {
+                            r: 0.25,
+                            g: 0.5,
+                            b: 0.75,
+                            a: 1.0,
+                        },
+                        texture: NativeRenderResourceHandle::default(),
+                        roughness: 1.0,
+                        texture_tint: NativeColor {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                        emission_color: NativeVec3::default(),
+                        emission_intensity: 0.0,
+                        double_sided: false,
+                    },
+                    &mut material,
+                )
+            },
+            ABI_OK
+        );
+        let bindings = [NativeVoxelObjectMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        let mut presentation = NativeVoxelObjectPresentationHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.project_object)(
+                    api.context,
+                    &NativeProjectVoxelObjectRequest {
+                        object: object_handle,
+                        runtime_frame: 0,
+                        transform: NativeTransform {
+                            translation: NativeVec3::default(),
+                            rotation: NativeQuat {
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                w: 1.0,
+                            },
+                            scale: NativeVec3 {
+                                x: 1.0,
+                                y: 1.0,
+                                z: 1.0,
+                            },
+                        },
+                        visible: true,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                    &mut presentation,
+                )
+            },
+            ABI_OK
+        );
+        let staged = bridge.take_staged_call().expect("staged projection");
+        assert!(staged.frames.iter().any(|frame| {
+            frame
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, RenderDiff::DefineVoxelObject { .. }))
+                && frame.ops.iter().any(|operation| {
+                    matches!(operation, RenderDiff::CreateVoxelObjectInstance { .. })
+                })
+        }));
+        bridge.commit_call(staged);
+        let staged_appearance = appearance.take_staged_call().expect("staged material");
+        appearance.commit(staged_appearance);
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        let mut conflicting_material = NativeMaterialHandle::default();
+        assert_eq!(
+            unsafe {
+                crate::appearance::create_material(
+                    (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
+                    NativeMaterialRequest {
+                        color: NativeColor {
+                            r: 0.75,
+                            g: 0.25,
+                            b: 0.5,
+                            a: 1.0,
+                        },
+                        texture: NativeRenderResourceHandle::default(),
+                        roughness: 1.0,
+                        texture_tint: NativeColor {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                        emission_color: NativeVec3::default(),
+                        emission_intensity: 0.0,
+                        double_sided: false,
+                    },
+                    &mut conflicting_material,
+                )
+            },
+            ABI_OK
+        );
+        let conflicting_bindings = [NativeVoxelObjectMaterialBinding {
+            material_slot: 1,
+            material: conflicting_material,
+        }];
+        let mut rejected = NativeVoxelObjectPresentationHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.project_object)(
+                    api.context,
+                    &NativeProjectVoxelObjectRequest {
+                        object: object_handle,
+                        runtime_frame: 0,
+                        transform: NativeTransform {
+                            translation: NativeVec3::default(),
+                            rotation: NativeQuat {
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                w: 1.0,
+                            },
+                            scale: NativeVec3 {
+                                x: 1.0,
+                                y: 1.0,
+                                z: 1.0,
+                            },
+                        },
+                        visible: true,
+                        materials: conflicting_bindings.as_ptr(),
+                        materials_len: conflicting_bindings.len(),
+                    },
+                    &mut rejected,
+                )
+            },
+            0,
+            "a conflicting retained material identity rejects atomically"
+        );
+        let rejected_call = bridge.take_staged_call().expect("rejected projection call");
+        assert!(
+            rejected_call.frames.is_empty(),
+            "rejected projection emits no frame"
+        );
+        assert_eq!(
+            rejected_call.state.presentations.len(),
+            1,
+            "rejected projection does not retain a second presentation"
+        );
+        bridge.commit_call(rejected_call);
+        let staged_appearance = appearance
+            .take_staged_call()
+            .expect("staged conflicting material");
+        appearance.commit(staged_appearance);
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        assert_eq!(
+            unsafe {
+                (api.update_object_presentation)(
+                    api.context,
+                    &NativeUpdateVoxelObjectPresentationRequest {
+                        presentation,
+                        runtime_frame: 1,
+                        transform: NativeTransform {
+                            translation: NativeVec3 {
+                                x: 2.0,
+                                y: 0.0,
+                                z: 0.0,
+                            },
+                            rotation: NativeQuat {
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                w: 1.0,
+                            },
+                            scale: NativeVec3 {
+                                x: 1.0,
+                                y: 1.0,
+                                z: 1.0,
+                            },
+                        },
+                        visible: false,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let staged = bridge.take_staged_call().expect("staged frame update");
+        assert!(staged.frames.iter().any(|frame| {
+            frame.ops.iter().any(|operation| {
+                matches!(operation, RenderDiff::SetVoxelObjectFrame { frame: 1, .. })
+            }) && frame
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, RenderDiff::Update { .. }))
+        }));
+        bridge.commit_call(staged);
+        let staged_appearance = appearance
+            .take_staged_call()
+            .expect("staged update material");
+        appearance.commit(staged_appearance);
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        assert_eq!(
+            unsafe { (api.destroy_object_presentation)(api.context, presentation) },
+            ABI_OK
+        );
+        let staged = bridge.take_staged_call().expect("staged release");
+        assert!(staged.frames.iter().any(|frame| {
+            frame
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, RenderDiff::Destroy { .. }))
+                && frame
+                    .ops
+                    .iter()
+                    .any(|operation| matches!(operation, RenderDiff::ReleaseVoxelObject { .. }))
+        }));
+        assert_eq!(
+            unsafe { (api.destroy_object_presentation)(api.context, presentation) },
+            0,
+            "each retained presentation has one exact release"
+        );
+    }
 
     #[test]
     fn admits_owned_typed_artifacts_selects_a_local_frame_and_leaves_spatial_unchanged() {
@@ -1616,7 +2311,9 @@ mod tests {
         );
 
         let mut bridge = RuntimeVoxelContentBridge::new();
-        let api = super::api(&mut bridge);
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let api = super::api(&mut bridge, &mut appearance);
         let mut asset_body = encode_voxel_asset(&asset())
             .expect("canonical asset")
             .into_bytes();
@@ -1735,7 +2432,9 @@ mod tests {
     #[test]
     fn retains_explicit_time_object_players_after_object_release_and_rejects_bad_times() {
         let mut bridge = RuntimeVoxelContentBridge::new();
-        let api = super::api(&mut bridge);
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let api = super::api(&mut bridge, &mut appearance);
         let object_body = encode_voxel_object(&object())
             .expect("canonical object")
             .into_bytes();
@@ -1966,7 +2665,9 @@ mod tests {
     #[test]
     fn retains_target_bound_annotations_queries_bounded_leases_and_keeps_metadata_edits_atomic() {
         let mut bridge = RuntimeVoxelContentBridge::new();
-        let api = super::api(&mut bridge);
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let api = super::api(&mut bridge, &mut appearance);
         let asset = annotation_asset();
         let asset_body = encode_voxel_asset(&asset)
             .expect("canonical asset")

@@ -29,6 +29,15 @@ pub struct NativeVoxelObjectPlayerHandle {
     pub value: u64,
 }
 
+/// Opaque Engine-owned retained presentation identity for one admitted voxel
+/// object. The product never receives a renderer handle, mesh, or resource
+/// through this owner.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelObjectPresentationHandle {
+    pub value: u64,
+}
+
 /// Opaque retained annotation layer. It owns an admitted annotation layer and
 /// retains its admitted voxel-asset target independently of the asset's direct
 /// product handle.
@@ -323,6 +332,44 @@ pub struct NativeVoxelObjectFrameReadout {
     pub voxel_data_hash: NativeVoxelContentHash,
 }
 
+/// One exact material choice for an admitted object palette slot. The slice is
+/// borrowed only for the named project/update callback; Engine resolves and
+/// copies the material descriptor before that callback returns.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelObjectMaterialBinding {
+    pub material_slot: u32,
+    pub material: crate::NativeMaterialHandle,
+}
+
+/// Creates one retained renderer-neutral projection from an admitted object
+/// and an explicitly selected runtime frame. All palette slots must be bound
+/// by `materials`; no mesh or backend payload is accepted from C#.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeProjectVoxelObjectRequest {
+    pub object: NativeVoxelObjectHandle,
+    pub runtime_frame: u32,
+    pub transform: crate::NativeTransform,
+    pub visible: bool,
+    pub materials: *const NativeVoxelObjectMaterialBinding,
+    pub materials_len: usize,
+}
+
+/// Reprojects an existing retained voxel object. The complete current palette
+/// binding list is supplied again so the Engine can retain an independent
+/// material snapshot without product pointers or renderer handles.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUpdateVoxelObjectPresentationRequest {
+    pub presentation: NativeVoxelObjectPresentationHandle,
+    pub runtime_frame: u32,
+    pub transform: crate::NativeTransform,
+    pub visible: bool,
+    pub materials: *const NativeVoxelObjectMaterialBinding,
+    pub materials_len: usize,
+}
+
 /// One explicit product-directed start. `now_micros` is supplied by the
 /// caller; the Engine neither stores nor advances a host clock.
 #[repr(C)]
@@ -485,6 +532,15 @@ pub type NativeSampleVoxelObjectPlayer = unsafe extern "C" fn(
     NativeVoxelObjectPlayerTimeRequest,
     *mut NativeVoxelObjectPlayerSampleReadout,
 ) -> i32;
+pub type NativeProjectVoxelObject = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeProjectVoxelObjectRequest,
+    *mut NativeVoxelObjectPresentationHandle,
+) -> i32;
+pub type NativeUpdateVoxelObjectPresentation =
+    unsafe extern "C" fn(*mut c_void, *const NativeUpdateVoxelObjectPresentationRequest) -> i32;
+pub type NativeDestroyVoxelObjectPresentation =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPresentationHandle) -> i32;
 
 /// Direct typed voxel-artifact services. This is intentionally separate from
 /// `NativeVoxelApi`, whose owner is the canonical mutable Spatial scene.
@@ -510,6 +566,9 @@ pub struct NativeVoxelContentApi {
     pub stop_object_player: NativeStopVoxelObjectPlayer,
     pub read_object_player: NativeReadVoxelObjectPlayer,
     pub sample_object_player: NativeSampleVoxelObjectPlayer,
+    pub project_object: NativeProjectVoxelObject,
+    pub update_object_presentation: NativeUpdateVoxelObjectPresentation,
+    pub destroy_object_presentation: NativeDestroyVoxelObjectPresentation,
     pub admit_annotation: NativeAdmitVoxelAnnotation,
     pub destroy_annotation: NativeDestroyVoxelAnnotation,
     pub query_annotation: NativeQueryVoxelAnnotation,

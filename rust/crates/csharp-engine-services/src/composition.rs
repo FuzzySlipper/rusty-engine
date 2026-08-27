@@ -51,7 +51,7 @@ fn engine_api(
         dynamics: crate::dynamics::api(dynamics_bridge),
         spatial: crate::spatial::api(spatial_bridge),
         voxel: crate::voxel::api(spatial_bridge),
-        voxel_content: crate::voxel_content::api(voxel_content_bridge),
+        voxel_content: crate::voxel_content::api(voxel_content_bridge, appearance_bridge),
         appearance: NativeAppearanceApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
@@ -181,6 +181,7 @@ pub struct CsharpEngineCall {
     camera_view: crate::camera_view::RuntimeCameraViewCall,
     sky_frame: Option<render_model::RenderFrameDiff>,
     ui: RuntimeUiCall,
+    voxel_content: crate::voxel_content::RuntimeVoxelContentCall,
 }
 
 /// Staged Engine observations from one successful product call.
@@ -237,6 +238,7 @@ impl EngineServiceSet {
         self.audio.begin_call();
         self.camera_view.begin_call();
         self.ui.begin_call();
+        self.voxel_content.begin_call();
     }
 
     pub fn discard_call(&mut self) {
@@ -244,6 +246,7 @@ impl EngineServiceSet {
         self.audio.discard_call();
         self.camera_view.discard_call();
         self.ui.discard_call();
+        self.voxel_content.discard_call();
     }
 
     pub fn take_call(&mut self) -> Result<CsharpEngineCall, CsharpEngineServicesError> {
@@ -256,12 +259,14 @@ impl EngineServiceSet {
         let sky_frame =
             crate::camera_view::sky_frame(camera_view.sky_texture, appearance.as_ref())?;
         let ui = self.ui.take_staged_call()?;
+        let voxel_content = self.voxel_content.take_staged_call()?;
         Ok(CsharpEngineCall {
             appearance,
             audio,
             camera_view,
             sky_frame,
             ui,
+            voxel_content,
         })
     }
 
@@ -270,6 +275,7 @@ impl EngineServiceSet {
         self.audio.commit(call.audio);
         self.camera_view.commit(call.camera_view);
         self.ui.commit(call.ui);
+        self.voxel_content.commit_call(call.voxel_content);
     }
 
     pub fn seal_resource_selection(&mut self) {
@@ -302,6 +308,7 @@ impl EngineServiceSet {
         if let Some(frame) = call.sky_frame.clone() {
             frames.push(frame);
         }
+        frames.extend(call.voxel_content.frames.clone());
         CsharpEngineCallOutput {
             frames,
             view_composition: call.camera_view.composition.clone(),
