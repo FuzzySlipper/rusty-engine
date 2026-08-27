@@ -48,6 +48,7 @@ fn engine_api(
         look: crate::look::api(),
         dynamics: crate::dynamics::api(dynamics_bridge),
         spatial: crate::spatial::api(spatial_bridge),
+        voxel: crate::voxel::api(spatial_bridge),
         appearance: NativeAppearanceApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,

@@ -11,6 +11,7 @@ mod persistence;
 mod rng;
 mod spatial;
 mod ui;
+mod voxel;
 
 pub use appearance::{CsharpRenderResource, CsharpRenderResourceKind};
 pub use composition::{

@@ -165,6 +165,10 @@ impl ResidentVoxelChunk {
 pub struct VoxelChunkLeaseId(u64);
 
 impl VoxelChunkLeaseId {
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
     pub const fn raw(self) -> u64 {
         self.0
     }
@@ -206,6 +210,13 @@ pub struct VoxelChunkLeaseRegistry {
 }
 
 impl VoxelChunkLeaseRegistry {
+    pub fn evidence_for_lease(
+        &self,
+        lease_id: VoxelChunkLeaseId,
+    ) -> Option<VoxelChunkLeaseEvidence> {
+        self.leases.get(&lease_id).copied()
+    }
+
     pub fn acquire(
         &mut self,
         scene: &VoxelCollisionScene,

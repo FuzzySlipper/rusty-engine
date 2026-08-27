@@ -19,6 +19,7 @@ mod product;
 mod rng;
 mod spatial;
 mod ui;
+mod voxel;
 
 pub use animation::*;
 pub use appearance::*;
@@ -34,3 +35,4 @@ pub use product::*;
 pub use rng::*;
 pub use spatial::*;
 pub use ui::*;
+pub use voxel::*;

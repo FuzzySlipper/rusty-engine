@@ -11,6 +11,7 @@ public sealed class Product : IEngineProduct
     private readonly Rng _rng;
     private readonly Rng _forkedRng;
     private readonly SpatialSession _spatial;
+    private readonly VoxelChunkLease _voxelLease;
     private readonly UiStreamHandle _uiStream;
     private readonly Appearance _appearance;
     private readonly Material _material;
@@ -133,6 +134,62 @@ public sealed class Product : IEngineProduct
         _lastRandom = _engine.Random.NextU64(_forkedRng).Value;
         _uiStream = _engine.Ui.OpenStream(new UiStreamRequest("nativeaot-trial", "nativeaot.trial.hud"));
         _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1.0, 16, 0));
+        VoxelSceneReadout initialVoxelScene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(_spatial));
+        Require(initialVoxelScene.Present && initialVoxelScene.ChunkSize == 16 && initialVoxelScene.SourceRevision == 0,
+            "voxel scene facts did not reach C#");
+        VoxelAddress exercisedVoxel = new(4, 0, 4);
+        VoxelEditReceipt voxelEdit = _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+            _spatial,
+            initialVoxelScene.SourceRevision,
+            new[] { new VoxelEdit(VoxelEditKind.Set, exercisedVoxel, 3) }));
+        Require(voxelEdit.AcceptedRevision == 1 && voxelEdit.ChangedVoxels == 1 && voxelEdit.CollisionRevision == 1
+            && voxelEdit.NavigationRevision == 1 && voxelEdit.MeshRevision == 1,
+            "voxel edit did not publish coherent projection revisions");
+        VoxelReadout exercisedReadout = _engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel));
+        Require(exercisedReadout.Present && exercisedReadout.MaterialSlot == 3,
+            "voxel material readout did not preserve the accepted edit");
+        SpatialProjectionReadout sharedVoxelProjection = _engine.Spatial.ReadProjection(
+            new SpatialProjectionReadRequest(_spatial));
+        Require(sharedVoxelProjection.SourceRevision == voxelEdit.AcceptedRevision
+            && sharedVoxelProjection.AuthorityHash == voxelEdit.AuthorityHash,
+            "spatial projection did not observe the canonical voxel authority");
+        ExpectEngineFailure(() => _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+            _spatial,
+            initialVoxelScene.SourceRevision,
+            new[] { new VoxelEdit(VoxelEditKind.Clear, exercisedVoxel, 0) })));
+        Require(_engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel)).MaterialSlot == 3,
+            "rejected stale voxel edit changed canonical state");
+        VoxelHistoryCursorReadout voxelCursor = _engine.Voxel.ReadHistoryCursor(
+            new VoxelHistoryCursorReadRequest(_spatial));
+        Require(voxelCursor.EntryCount == 1 && voxelCursor.UndoDepth == 1,
+            "voxel history cursor did not retain the accepted transaction");
+        VoxelHistoryEntryReadout voxelEntry = _engine.Voxel.ReadHistoryEntryAt(
+            new VoxelHistoryEntryAtRequest(_spatial, 0));
+        VoxelHistoryDeltaReadout voxelDelta = _engine.Voxel.ReadHistoryDeltaAt(
+            new VoxelHistoryDeltaAtRequest(_spatial, 0, 0));
+        Require(voxelEntry.Present && voxelEntry.DeltaCount == 1 && voxelDelta.Present
+            && voxelDelta.Address == exercisedVoxel && !voxelDelta.BeforeMaterialPresent
+            && voxelDelta.AfterMaterialPresent && voxelDelta.AfterMaterial == 3,
+            "bounded voxel history readouts did not describe the accepted delta");
+        VoxelHistoryReceipt voxelUndo = _engine.Voxel.Undo(new VoxelHistoryActionRequest(_spatial));
+        Require(voxelUndo.Applied && !_engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel)).Present,
+            "voxel undo did not restore the prior authority");
+        VoxelHistoryReceipt voxelRedo = _engine.Voxel.Redo(new VoxelHistoryActionRequest(_spatial));
+        Require(voxelRedo.Applied && _engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel)).MaterialSlot == 3,
+            "voxel redo did not restore the accepted authority");
+        VoxelChunkReadout exercisedChunk = _engine.Voxel.ReadChunk(new VoxelChunkReadRequest(
+            _spatial,
+            new VoxelChunkIdentity(0, 0, 0)));
+        Require(exercisedChunk.Present && exercisedChunk.SolidVoxelCount == 1,
+            "voxel chunk readout did not describe the edited resident chunk");
+        _voxelLease = _engine.Voxel.AcquireChunkLease(new VoxelChunkLeaseRequest(
+            _spatial,
+            exercisedChunk.Chunk));
+        VoxelChunkLeaseReadout leaseReadout = _engine.Voxel.ReadChunkLease(
+            new VoxelChunkLeaseReadRequest(_voxelLease));
+        Require(leaseReadout.Present && leaseReadout.Chunk == exercisedChunk.Chunk
+            && leaseReadout.AcquiredContentHash == exercisedChunk.ContentHash,
+            "voxel chunk lease did not retain exact owner evidence");
         NavigationReplaceReceipt hostNavigation = _engine.Spatial.ReplaceNavigation(new NavigationReplaceRequest(
             _spatial,
             new PlanarNavConfig(1, 1.0, 16, 0),
@@ -293,6 +350,7 @@ public sealed class Product : IEngineProduct
         _camera.Dispose();
         _appearance.Dispose();
         _material.Dispose();
+        _voxelLease.Dispose();
         _spatial.Dispose();
         _mechanicsEntity.Dispose();
         _mechanicsCatalog.Dispose();

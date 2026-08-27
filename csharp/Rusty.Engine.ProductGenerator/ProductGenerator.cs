@@ -76,6 +76,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Audio = new AudioServiceImplementation(native.audio);
                     Dynamics = new DynamicsServiceImplementation(native.dynamics);
                     Spatial = new SpatialServiceImplementation(native.spatial);
+                    Voxel = new VoxelServiceImplementation(native.voxel);
                     Appearance = new AppearanceServiceImplementation(native.appearance);
                     Animation = new AnimationServiceImplementation(native.animation);
                     CameraView = new CameraViewServiceImplementation(native.camera_view);
@@ -89,6 +90,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IAudioService Audio { get; }
                 public IDynamicsService Dynamics { get; }
                 public ISpatialService Spatial { get; }
+                public IVoxelService Voxel { get; }
                 public IAppearanceService Appearance { get; }
                 public IAnimationService Animation { get; }
                 public ICameraViewService CameraView { get; }

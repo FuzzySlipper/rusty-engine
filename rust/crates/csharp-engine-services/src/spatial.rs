@@ -42,8 +42,11 @@ pub(crate) struct RuntimeSpatialBridge {
     next_session: u64,
 }
 
-struct SpatialSession {
-    scene: Arc<VoxelCollisionScene>,
+pub(crate) struct SpatialSession {
+    pub(crate) scene: Arc<VoxelCollisionScene>,
+    pub(crate) voxel_history: engine_spatial::VoxelEditHistory,
+    pub(crate) voxel_leases: engine_spatial::VoxelChunkLeaseRegistry,
+    pub(crate) last_voxel_dirty_chunks: Vec<[i64; 3]>,
     navigation: Option<NavigationState>,
     navigation_revision: u64,
     controller: CharacterControllerService,
@@ -118,6 +121,14 @@ impl SpatialCollisionSource {
                 )
             })
     }
+
+    pub(crate) fn publish_scene(
+        &self,
+        handle: NativeSpatialSessionHandle,
+        scene: Arc<VoxelCollisionScene>,
+    ) {
+        self.scenes.borrow_mut().insert(handle.value, scene);
+    }
 }
 
 impl RuntimeSpatialBridge {
@@ -133,7 +144,15 @@ impl RuntimeSpatialBridge {
         self.collision_source.clone()
     }
 
-    fn session_mut(
+    pub(crate) fn publish_scene(
+        &self,
+        handle: NativeSpatialSessionHandle,
+        scene: Arc<VoxelCollisionScene>,
+    ) {
+        self.collision_source.publish_scene(handle, scene);
+    }
+
+    pub(crate) fn session_mut(
         &mut self,
         handle: NativeSpatialSessionHandle,
     ) -> Result<&mut SpatialSession, CsharpEngineServicesError> {
@@ -168,6 +187,9 @@ impl RuntimeSpatialBridge {
         self.sessions.insert(
             value,
             SpatialSession {
+                voxel_history: engine_spatial::VoxelEditHistory::new(&scene),
+                voxel_leases: engine_spatial::VoxelChunkLeaseRegistry::default(),
+                last_voxel_dirty_chunks: Vec::new(),
                 scene: Arc::clone(&scene),
                 navigation: None,
                 navigation_revision: 0,
