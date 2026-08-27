@@ -36,6 +36,16 @@ internal static unsafe class Program
 
         try
         {
+            service.ReadItems(new LeaseFixtureRequest(4));
+            throw new InvalidOperationException("success with an operation diagnostic lease did not fail");
+        }
+        catch (InvalidOperationException error) when (error.Message.Contains("success with an operation diagnostic lease", StringComparison.Ordinal))
+        {
+        }
+        Require(_diagnosticDestroyed == 1 && DiagnosticLeases.Count == 0 && Leases.Count == 0, "success-path diagnostic lease was not released exactly once");
+
+        try
+        {
             service.ReadItems(new LeaseFixtureRequest(2));
             throw new InvalidOperationException("rich diagnostic failure did not throw");
         }
@@ -46,7 +56,7 @@ internal static unsafe class Program
             EngineDiagnostic diagnostic = error.Diagnostics.Span[0];
             Require(diagnostic.Code == "FIXTURE_DENIED" && diagnostic.Message == "fixture rejected request" && diagnostic.Source == "fixture", "owner diagnostic fields were not copied");
         }
-        Require(_diagnosticDestroyed == 1 && DiagnosticLeases.Count == 0, "rich diagnostic lease was not released exactly once");
+        Require(_diagnosticDestroyed == 2 && DiagnosticLeases.Count == 0, "rich diagnostic lease was not released exactly once");
 
         try
         {
@@ -56,7 +66,7 @@ internal static unsafe class Program
         catch (DecoderFallbackException)
         {
         }
-        Require(_diagnosticDestroyed == 2 && DiagnosticLeases.Count == 0, "diagnostic lease was not released after managed UTF-8 copying failed");
+        Require(_diagnosticDestroyed == 3 && DiagnosticLeases.Count == 0, "diagnostic lease was not released after managed UTF-8 copying failed");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -64,7 +74,7 @@ internal static unsafe class Program
     {
         if (result is null || error is null) return 0;
         *error = default;
-        if (request.include_item is 2 or 3)
+        if (request.include_item is 2 or 3 or 4)
         {
             byte[] codeSource = request.include_item == 3 ? [0xFF] : Encoding.UTF8.GetBytes("FIXTURE_DENIED");
             byte[] messageSource = Encoding.UTF8.GetBytes("fixture rejected request");
@@ -85,7 +95,8 @@ internal static unsafe class Program
             *diagnostics = new NativeEngineDiagnostic { code = new NativeUtf8Slice { bytes = code, len = (nuint)codeSource.Length }, message = new NativeUtf8Slice { bytes = message, len = (nuint)messageSource.Length }, source = new NativeUtf8Slice { bytes = source, len = (nuint)sourceSource.Length } };
             ulong diagnosticHandle = _nextLease++;
             DiagnosticLeases.Add(diagnosticHandle, ((nint)diagnostics, (nint)code, (nint)message, (nint)source, (nint)service, (nint)operation));
-            *error = new NativeOperationErrorReceipt { service = new NativeUtf8Slice { bytes = service, len = (nuint)serviceSource.Length }, operation = new NativeUtf8Slice { bytes = operation, len = (nuint)operationSource.Length }, status = -7, diagnostics = new NativeEngineDiagnosticLease { handle = new NativeEngineDiagnosticLeaseHandle { value = diagnosticHandle }, diagnostics = diagnostics, diagnostics_len = 1 } };
+            *error = new NativeOperationErrorReceipt { service = new NativeUtf8Slice { bytes = service, len = (nuint)serviceSource.Length }, operation = new NativeUtf8Slice { bytes = operation, len = (nuint)operationSource.Length }, status = request.include_item == 4 ? 1 : -7, diagnostics = new NativeEngineDiagnosticLease { handle = new NativeEngineDiagnosticLeaseHandle { value = diagnosticHandle }, diagnostics = diagnostics, diagnostics_len = 1 } };
+            if (request.include_item == 4) return 1;
             return 0;
         }
         ulong handle = _nextLease++;
