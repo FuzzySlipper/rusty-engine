@@ -15,6 +15,14 @@ public enum EntityLifecycle
 
 public readonly record struct EntityRevision(EntityId Entity, ulong Revision);
 
+/// <summary>The result of one canonical containment mutation.</summary>
+public readonly record struct ContainmentReceipt(
+    ulong RevisionBefore,
+    ulong RevisionAfter,
+    EntityId Child,
+    EntityId? Container,
+    bool Changed);
+
 public readonly record struct ComponentRevision(EntityId Entity, ComponentTypeKey Component, ulong Revision);
 
 public readonly record struct EntityComponent<T>(EntityId Entity, T Value) where T : struct;

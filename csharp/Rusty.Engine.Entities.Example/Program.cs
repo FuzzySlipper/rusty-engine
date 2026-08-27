@@ -8,6 +8,17 @@ var armor = ComponentType<Armor>.Create(ProductComponentKeys.Create(ArmorLocalCo
 using var world = new EntityWorld([EngineComponentTypes.Transform, EngineComponentTypes.CharacterMotion, health, armor]);
 
 EntityId actor = world.Create();
+EntityId pack = world.Create();
+EntityId pouch = world.Create(EntityLifecycle.Disabled);
+ContainmentReceipt contained = world.SetContainment(pouch, pack, world.Revision);
+Require(contained.Changed && world.TryGetContainedIn(pouch, out EntityId container) && container == pack,
+    "canonical containment did not preserve its parent");
+Require(world.ContainedEntities(pack).SequenceEqual([pouch]), "reverse containment was not deterministic");
+Throws(() => world.SetContainment(pack, pouch), "containment cycle was not rejected");
+EntityWorldSnapshot relationshipSnapshot = world.Snapshot();
+world.ClearContainment(pouch);
+world.Restore(relationshipSnapshot);
+Require(world.TryGetContainedIn(pouch, out container) && container == pack, "snapshot restore lost containment");
 world.Set(actor, health, new Health(10));
 Throws(() => world.Set(actor, health, new Health(-1)), "typed component validator did not reject invalid state");
 world.Set(actor, armor, new Armor(3));

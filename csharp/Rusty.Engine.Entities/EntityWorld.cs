@@ -136,9 +136,92 @@ public sealed class EntityWorld : IDisposable
         {
             table.Remove(entity);
         }
+        RemoveContainmentForDestroy(entity);
         record.Lifecycle = EntityLifecycle.Tombstoned;
         record.Revision++;
         Mutated();
+    }
+
+    /// <summary>
+    /// Places one live entity in one live container. Reparenting is atomic and a relation that
+    /// already has the requested container is an idempotent no-op.
+    /// </summary>
+    public ContainmentReceipt SetContainment(EntityId child, EntityId container, ulong? expectedRevision = null)
+    {
+        ThrowIfDisposed();
+        EnsureWorldRevision(expectedRevision);
+        RequireAlive(child);
+        RequireAlive(container);
+        if (child == container)
+        {
+            throw new InvalidOperationException($"Entity {child.Value} cannot contain itself.");
+        }
+        for (EntityId ancestor = container; _state.Containment.TryGetValue(ancestor.Value, out ulong next); ancestor = new EntityId(next))
+        {
+            if (next == child.Value)
+            {
+                throw new InvalidOperationException($"Containing entity {child.Value} in {container.Value} would create a cycle.");
+            }
+        }
+
+        ulong revisionBefore = _state.Revision;
+        if (_state.Containment.TryGetValue(child.Value, out ulong existing) && existing == container.Value)
+        {
+            return new ContainmentReceipt(revisionBefore, revisionBefore, child, container, false);
+        }
+
+        if (existing != 0)
+        {
+            RemoveReverse(existing, child.Value);
+            TouchEntity(new EntityId(existing));
+        }
+        _state.Containment[child.Value] = container.Value;
+        GetContainedChildren(container.Value).Add(child.Value);
+        TouchEntity(child);
+        TouchEntity(container);
+        Mutated();
+        return new ContainmentReceipt(revisionBefore, _state.Revision, child, container, true);
+    }
+
+    /// <summary>Clears one live entity's container, if present.</summary>
+    public ContainmentReceipt ClearContainment(EntityId child, ulong? expectedRevision = null)
+    {
+        ThrowIfDisposed();
+        EnsureWorldRevision(expectedRevision);
+        RequireAlive(child);
+        ulong revisionBefore = _state.Revision;
+        if (!_state.Containment.Remove(child.Value, out ulong container))
+        {
+            return new ContainmentReceipt(revisionBefore, revisionBefore, child, null, false);
+        }
+        RemoveReverse(container, child.Value);
+        TouchEntity(child);
+        TouchEntity(new EntityId(container));
+        Mutated();
+        return new ContainmentReceipt(revisionBefore, _state.Revision, child, null, true);
+    }
+
+    public bool TryGetContainedIn(EntityId child, out EntityId container)
+    {
+        ThrowIfDisposed();
+        RequireEntity(child);
+        if (_state.Containment.TryGetValue(child.Value, out ulong value))
+        {
+            container = new EntityId(value);
+            return true;
+        }
+        container = default;
+        return false;
+    }
+
+    /// <summary>Returns direct children in stable entity-id order.</summary>
+    public IReadOnlyList<EntityId> ContainedEntities(EntityId container)
+    {
+        ThrowIfDisposed();
+        RequireEntity(container);
+        return _state.ContainedChildren.TryGetValue(container.Value, out SortedSet<ulong>? children)
+            ? children.Select(value => new EntityId(value)).ToArray()
+            : [];
     }
 
     public bool Has<T>(EntityId entity, ComponentType<T> componentType) where T : struct
@@ -277,6 +360,7 @@ public sealed class EntityWorld : IDisposable
         ulong revisionBefore = _state.Revision;
         WorldState restored = snapshot.State.Clone(forSnapshot: true);
         restored.ValidateComponents();
+        restored.ValidateContainment();
         restored.InvalidateRevisions();
         _state = restored;
         if (!_staging)
@@ -323,6 +407,8 @@ public sealed class EntityWorld : IDisposable
         }
         _state.Tables.Clear();
         _state.Entities.Clear();
+        _state.Containment.Clear();
+        _state.ContainedChildren.Clear();
         _isDisposed = true;
     }
 
@@ -356,6 +442,53 @@ public sealed class EntityWorld : IDisposable
         if (RequireEntity(entity).Lifecycle == EntityLifecycle.Tombstoned)
         {
             throw new InvalidOperationException($"Entity {entity.Value} has been tombstoned.");
+        }
+    }
+
+    private void EnsureWorldRevision(ulong? expectedRevision)
+    {
+        if (expectedRevision is ulong expected && expected != _state.Revision)
+        {
+            throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
+        }
+    }
+
+    private SortedSet<ulong> GetContainedChildren(ulong container)
+    {
+        if (!_state.ContainedChildren.TryGetValue(container, out SortedSet<ulong>? children))
+        {
+            children = [];
+            _state.ContainedChildren.Add(container, children);
+        }
+        return children;
+    }
+
+    private void RemoveReverse(ulong container, ulong child)
+    {
+        if (_state.ContainedChildren.TryGetValue(container, out SortedSet<ulong>? children))
+        {
+            children.Remove(child);
+            if (children.Count == 0)
+            {
+                _state.ContainedChildren.Remove(container);
+            }
+        }
+    }
+
+    private void RemoveContainmentForDestroy(EntityId entity)
+    {
+        if (_state.Containment.Remove(entity.Value, out ulong container))
+        {
+            RemoveReverse(container, entity.Value);
+            TouchEntity(new EntityId(container));
+        }
+        if (_state.ContainedChildren.Remove(entity.Value, out SortedSet<ulong>? children))
+        {
+            foreach (ulong child in children)
+            {
+                _state.Containment.Remove(child);
+                TouchEntity(new EntityId(child));
+            }
         }
     }
 
@@ -408,6 +541,8 @@ public sealed class EntityWorld : IDisposable
         internal ulong NextEntityValue = 1;
         internal SortedDictionary<ulong, EntityRecord> Entities { get; } = [];
         internal SortedDictionary<ComponentTypeKey, ComponentTable> Tables { get; } = [];
+        internal SortedDictionary<ulong, ulong> Containment { get; } = [];
+        internal SortedDictionary<ulong, SortedSet<ulong>> ContainedChildren { get; } = [];
 
         internal WorldState Clone(bool forSnapshot)
         {
@@ -419,6 +554,14 @@ public sealed class EntityWorld : IDisposable
             foreach ((ComponentTypeKey key, ComponentTable table) in Tables)
             {
                 result.Tables.Add(key, table.Clone(forSnapshot));
+            }
+            foreach ((ulong child, ulong container) in Containment)
+            {
+                result.Containment.Add(child, container);
+            }
+            foreach ((ulong container, SortedSet<ulong> children) in ContainedChildren)
+            {
+                result.ContainedChildren.Add(container, [.. children]);
             }
             return result;
         }
@@ -442,6 +585,39 @@ public sealed class EntityWorld : IDisposable
                 table.ValidateValues();
             }
         }
+
+
+        internal void ValidateContainment()
+        {
+            foreach ((ulong child, ulong container) in Containment)
+            {
+                if (child == container || !IsAlive(child) || !IsAlive(container)
+                    || !ContainedChildren.TryGetValue(container, out SortedSet<ulong>? children)
+                    || !children.Contains(child))
+                {
+                    throw new InvalidOperationException("Snapshot containment is inconsistent.");
+                }
+                var visited = new HashSet<ulong> { child };
+                for (ulong current = container; Containment.TryGetValue(current, out ulong next); current = next)
+                {
+                    if (!visited.Add(current) || next == child)
+                    {
+                        throw new InvalidOperationException("Snapshot containment contains a cycle.");
+                    }
+                }
+            }
+            foreach ((ulong container, SortedSet<ulong> children) in ContainedChildren)
+            {
+                if (!IsAlive(container) || children.Any(child => !IsAlive(child)
+                    || !Containment.TryGetValue(child, out ulong owner) || owner != container))
+                {
+                    throw new InvalidOperationException("Snapshot containment reverse index is inconsistent.");
+                }
+            }
+        }
+
+        private bool IsAlive(ulong entity) => Entities.TryGetValue(entity, out EntityRecord? record)
+            && record.Lifecycle != EntityLifecycle.Tombstoned;
     }
 
     internal sealed class EntityRecord(EntityLifecycle lifecycle, ulong revision)
