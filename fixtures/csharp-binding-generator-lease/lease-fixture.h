@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -30,10 +31,21 @@ typedef struct NativeLeaseFixtureItem {
   uint32_t ordinal;
 } NativeLeaseFixtureItem;
 
+typedef enum NativeLeaseFixtureCompleteness {
+  NativeLeaseFixtureCompleteness_Complete = 0,
+  NativeLeaseFixtureCompleteness_Truncated = 1,
+} NativeLeaseFixtureCompleteness;
+
 typedef struct NativeLeaseFixtureItemLease {
   NativeLeaseFixtureItemLeaseHandle handle;
   const NativeLeaseFixtureItem *entries;
   size_t entries_len;
+  uint32_t total;
+  bool truncated;
+  NativeLeaseFixtureCompleteness completeness;
+  uint64_t revision;
+  uint64_t content_hash;
+  NativeVec2 anchor;
 } NativeLeaseFixtureItemLease;
 
 typedef struct NativeEngineDiagnostic {

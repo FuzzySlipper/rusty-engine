@@ -158,6 +158,11 @@ internal sealed class BindingModel
                 Fail(family, method, signature, "NativeByteLease must contain its typed handle plus bytes/len");
             return;
         }
+        if (value.Fields.Count(field => field.Name == "handle") != 1 || !value.Fields.Any(field => field.Name == "handle" && Bare(field.Type).EndsWith("LeaseHandle", StringComparison.Ordinal)))
+        {
+            Fail(family, method, signature, $"lease result {type} must contain exactly one typed handle");
+            return;
+        }
         Field[] pointerFields = value.Fields.Where(field => field.Type.Contains('*', StringComparison.Ordinal)).ToArray();
         if (pointerFields.Length != 1) { Fail(family, method, signature, $"lease result {type} must contain exactly one bounded collection pointer"); return; }
         Field pointer = pointerFields[0];
@@ -174,6 +179,33 @@ internal sealed class BindingModel
             return;
         }
         ValidateLeaseElement(family, method, signature, elementValue, structs, enums, new HashSet<string>(StringComparer.Ordinal));
+        foreach (Field metadata in value.Fields.Where(field => field.Name != "handle" && field.Name != pointer.Name && field.Name != $"{pointer.Name}_len"))
+        {
+            ValidateLeaseMetadata(family, method, signature, metadata, structs, enums, new HashSet<string>(StringComparer.Ordinal));
+        }
+    }
+
+    private static void ValidateLeaseMetadata(string family, string method, string signature, Field field, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen)
+    {
+        string type = Bare(field.Type);
+        if (field.Type.Contains('*', StringComparison.Ordinal) || type.EndsWith("Handle", StringComparison.Ordinal))
+        {
+            Fail(family, method, signature, $"lease metadata {field.Name} ({field.Type}) must be a copied fixed value, not borrowed memory or a retained handle");
+            return;
+        }
+        if (IsScalar(type) || enums.ContainsKey(type)) return;
+        if (!structs.TryGetValue(type, out Struct? value) || value is null)
+        {
+            Fail(family, method, signature, $"lease metadata {field.Name} ({field.Type}) is not a supported fixed value");
+            return;
+        }
+        if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs" or "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue")
+        {
+            Fail(family, method, signature, $"lease metadata {field.Name} ({field.Type}) is not a supported fixed value");
+            return;
+        }
+        if (!seen.Add(type)) return;
+        foreach (Field nested in value.Fields) ValidateLeaseMetadata(family, method, signature, nested, structs, enums, seen);
     }
 
     private static void ValidateLeaseElement(string family, string method, string signature, Struct value, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen)
@@ -312,6 +344,15 @@ internal static class Emit
                 output.Append($"public readonly record struct {safeName}(").Append(string.Join(", ", fields.Select(field => $"{field.Type} {Pascal(field.Field.Name)}"))).AppendLine(");").AppendLine();
             }
         }
+        foreach (Struct lease in model.Structs.Values.Where(lease => HasLeaseMetadata(model, lease)).OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            Field pointer = LeasePointer(lease);
+            string itemType = SafeType(model, BindingModel.Bare(pointer.Type));
+            string metadata = string.Join(", ", LeaseMetadataFields(lease).Select(field => $"{SafeType(model, BindingModel.Bare(field.Type))} {Pascal(field.Name)}"));
+            output.Append($"public readonly record struct {LeaseReceiptType(lease)}(ReadOnlyMemory<{itemType}> {Pascal(pointer.Name)}");
+            if (metadata.Length > 0) output.Append(", ").Append(metadata);
+            output.AppendLine(");").AppendLine();
+        }
         foreach (string handle in DisposableHandleTypes(model))
         {
             string owner = SafeType(handle).Replace("Handle", "", StringComparison.Ordinal);
@@ -431,6 +472,13 @@ internal static class Emit
             output.AppendLine("        return copy;").AppendLine("    }");
             string arguments = string.Join(", ", elementValue.Fields.Select(field => LeaseElementFromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
             output.AppendLine($"    private static {safeElement} CopyLeaseElement({element} value) => new({arguments});");
+            if (HasLeaseMetadata(model, lease))
+            {
+                string metadata = string.Join(", ", LeaseMetadataFields(lease).Select(field => FromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
+                output.Append($"    internal static {LeaseReceiptType(lease)} CopyLeaseReceipt({lease.Name} value) => new(CopyLease(value)");
+                if (metadata.Length > 0) output.Append(", ").Append(metadata);
+                output.AppendLine(");");
+            }
         }
         output.AppendLine("    internal static byte ToNativeBool(bool value) => value ? (byte)1 : (byte)0;");
         output.AppendLine("    internal static int ToNative(int value) => value;");
@@ -480,7 +528,7 @@ internal static class Emit
         {
             (_, string destroyOperation) = DestroyLeaseFor(model, service, BindingModel.Bare(result));
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
-            output.AppendLine("        try { return NativeConversions.CopyLease(ownedResult); }");
+            output.AppendLine($"        try {{ return NativeConversions.{(HasLeaseMetadata(model, model.Structs[BindingModel.Bare(result)]) ? "CopyLeaseReceipt" : "CopyLease")}(ownedResult); }}");
             output.AppendLine($"        finally {{ int disposeStatus = _native.{destroyOperation}.Pointer(_native.context, ownedResult.handle); NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(destroyOperation)}\", disposeStatus); }}");
         }
         else if (returnType != SafeType(BindingModel.Bare(result)))
@@ -577,7 +625,7 @@ internal static class Emit
         {
             (_, string destroyOperation) = DestroyLeaseFor(model, service, BindingModel.Bare(result));
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
-            output.AppendLine("        try { return NativeConversions.CopyLease(ownedResult); }");
+            output.AppendLine($"        try {{ return NativeConversions.{(HasLeaseMetadata(model, model.Structs[BindingModel.Bare(result)]) ? "CopyLeaseReceipt" : "CopyLease")}(ownedResult); }}");
             output.AppendLine($"        finally {{ int disposeStatus = _native.{destroyOperation}.Pointer(_native.context, ownedResult.handle); NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(destroyOperation)}\", disposeStatus); }}");
         }
         else if (returnType != SafeType(BindingModel.Bare(result)))
@@ -688,6 +736,7 @@ internal static class Emit
         {
             if (handle == "NativeByteLease") return "ReadOnlyMemory<byte>";
             Struct lease = model.Structs[handle];
+            if (HasLeaseMetadata(model, lease)) return LeaseReceiptType(lease);
             Field pointer = lease.Fields.First(field => field.Type.Contains('*', StringComparison.Ordinal));
             return $"ReadOnlyMemory<{SafeType(model, BindingModel.Bare(pointer.Type))}>";
         }
@@ -727,5 +776,13 @@ internal static class Emit
     private static IEnumerable<string> DisposableHandleTypes(BindingModel model) => model.Services.SelectMany(service => service.Operations.Select(operation => model.Callbacks[operation.Callback])).Where(IsDestroy).Select(callback => BindingModel.Bare(callback.Parameters[1])).Where(handle => !LeaseHandleTypes(model).Contains(handle, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal);
     private static bool IsDisposableHandle(BindingModel model, string handle) => DisposableHandleTypes(model).Contains(handle, StringComparer.Ordinal);
     private static string OwnerType(string handle) => SafeType(handle).Replace("Handle", "", StringComparison.Ordinal);
+    private static Field LeasePointer(Struct lease) => lease.Fields.Single(field => field.Type.Contains('*', StringComparison.Ordinal));
+    private static IEnumerable<Field> LeaseMetadataFields(Struct lease)
+    {
+        Field pointer = LeasePointer(lease);
+        return lease.Fields.Where(field => field.Name != "handle" && field.Name != pointer.Name && field.Name != $"{pointer.Name}_len");
+    }
+    private static bool HasLeaseMetadata(BindingModel model, Struct lease) => lease.Name != "NativeByteLease" && BindingModel.IsLeaseResult(lease.Name, model.Structs) && LeaseMetadataFields(lease).Any();
+    private static string LeaseReceiptType(Struct lease) => $"{SafeType(lease.Name)}Receipt";
     private static StringBuilder Header(string purpose) => new($"// <auto-generated />{Environment.NewLine}// Generated from csharp-engine-abi through the ClangSharp AST: {purpose}.{Environment.NewLine}// Do not edit.{Environment.NewLine}#nullable enable{Environment.NewLine}using System;{Environment.NewLine}using System.Numerics;{Environment.NewLine}{Environment.NewLine}");
 }
