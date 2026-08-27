@@ -778,6 +778,26 @@ pub struct NativeMechanicsInitialEquipmentAssignment {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialContainmentRequest {
+    pub owner: NativeMechanicsEntityHandle,
+    pub child_entity_id: u64,
+    pub expected_state_revision: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsContainmentReadRequest {
+    pub entity: NativeMechanicsEntityHandle,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsContainmentReceipt {
+    pub child_entity_id: u64,
+    pub present: bool,
+    pub container_entity_id: u64,
+    pub state_revision: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeMechanicsInitialComponentsRequest {
     pub entity: NativeMechanicsEntityHandle,
     pub has_stats: bool,
@@ -806,6 +826,8 @@ pub struct NativeMechanicsInitialComponentsRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMechanicsEntityReceipt {
+    pub state_revision_before: u64,
+    pub state_revision_after: u64,
     pub stats_revision: NativeMechanicsStatsRevision,
     pub tracks_revision: NativeMechanicsTracksRevision,
     pub lifecycle: NativeMechanicsLifecycleReceipt,

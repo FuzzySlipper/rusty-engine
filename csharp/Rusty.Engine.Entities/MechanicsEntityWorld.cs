@@ -96,6 +96,36 @@ public sealed class MechanicsEntityWorld : IDisposable
     }
 
     /// <summary>
+    /// Stages the canonical managed child-to-owner relation in the same native candidate that will
+    /// admit the owner. This is the ordering required for initial non-empty Equipment validation.
+    /// </summary>
+    public void StageInitialContainment(EntityId owner, EntityId child)
+    {
+        ThrowIfDisposed();
+        Binding ownerBinding = RequireUncommitted(owner);
+        Binding childBinding = RequireBinding(child);
+        if (!childBinding.IsCommitted)
+        {
+            throw new InvalidOperationException($"Contained entity {child.Value} must commit before owner {owner.Value}.");
+        }
+        if (!_entities.TryGetContainedIn(child, out EntityId container) || container != owner)
+        {
+            throw new InvalidOperationException($"Managed containment does not place entity {child.Value} in owner {owner.Value}.");
+        }
+
+        MechanicsContainmentReceipt observed = _mechanics.ReadContainment(
+            new MechanicsContainmentReadRequest(childBinding.Native));
+        if (observed.ChildEntityId != child.Value)
+        {
+            throw new InvalidOperationException("Mechanics containment readback returned the wrong canonical entity.");
+        }
+        _mechanics.StageInitialContainment(new MechanicsInitialContainmentRequest(
+            ownerBinding.Native,
+            child.Value,
+            observed.StateRevision));
+    }
+
+    /// <summary>
     /// Atomically admits the currently staged typed Mechanics facts. The native bridge validates a
     /// complete candidate before making it visible; this method never uses <see cref="EntityBatch"/>.
     /// </summary>

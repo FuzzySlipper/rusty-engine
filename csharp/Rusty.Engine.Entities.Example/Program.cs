@@ -163,11 +163,15 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public void SetInitialTrack(MechanicsInitialTrackRequest arg0) => throw new NotSupportedException();
     public void BindIntrinsicSource(MechanicsIntrinsicSourceRequest arg0) => throw new NotSupportedException();
     public void SetInitialComponents(MechanicsInitialComponentsRequest arg0) => throw new NotSupportedException();
+    public void StageInitialContainment(MechanicsInitialContainmentRequest arg0) => throw new NotSupportedException();
+    public MechanicsContainmentReceipt ReadContainment(MechanicsContainmentReadRequest arg0) => throw new NotSupportedException();
     public MechanicsEntityReceipt CommitEntity(MechanicsEntity arg0)
     {
         MechanicsComponentRevision Slot(MechanicsRevisionComponent component, bool present)
             => new(1, 1, component, present);
         return new MechanicsEntityReceipt(
+            0,
+            1,
             new MechanicsStatsRevision(1, 1, MechanicsRevisionComponent.Stats),
             new MechanicsTracksRevision(1, 1, MechanicsRevisionComponent.Tracks),
             new MechanicsLifecycleReceipt(1, MechanicsEntityLifecycle.Active, InitialLifecycleStamp),

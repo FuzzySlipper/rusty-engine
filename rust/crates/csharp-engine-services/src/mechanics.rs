@@ -2,7 +2,9 @@ use std::{collections::BTreeMap, ffi::c_void};
 
 use core_ids::EntityId;
 use csharp_engine_abi::*;
-use entity_state::{ComponentRevision, EntityAuthoringService, EntityDefinition, EntityState};
+use entity_state::{
+    ComponentRevision, EntityAuthoringService, EntityDefinition, EntityState, RelationshipCommand,
+};
 use gameplay_mechanics::{
     gameplay_component_registry, validate_state_against_catalog, ActiveEffectInstance,
     ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion, DamageKindDefinition,
@@ -204,6 +206,8 @@ struct EntityBinding {
     inventory: Option<(Vec<ItemStack>, Vec<InventoryCapacityLimit>)>,
     item: Option<gameplay_mechanics::ItemDefinitionId>,
     equipment: Option<Vec<EquipmentAssignment>>,
+    initial_containment: Vec<EntityId>,
+    expected_state_revision: Option<u64>,
     initial_components_set: bool,
     committed: bool,
 }
@@ -335,6 +339,8 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         set_initial_track,
         bind_intrinsic_source,
         set_initial_components,
+        stage_initial_containment,
+        read_containment,
         commit_entity,
         set_entity_lifecycle,
         destroy_entity,
@@ -1842,6 +1848,8 @@ unsafe extern "C" fn bind_entity(
             inventory: None,
             item: None,
             equipment: None,
+            initial_containment: Vec::new(),
+            expected_state_revision: None,
             initial_components_set: false,
             committed: false,
         },
@@ -1897,6 +1905,8 @@ unsafe extern "C" fn rebind_entity(
             inventory: None,
             item: None,
             equipment: None,
+            initial_containment: Vec::new(),
+            expected_state_revision: None,
             initial_components_set: true,
             committed: true,
         },
@@ -2112,6 +2122,75 @@ unsafe extern "C" fn set_initial_components(
     ABI_OK
 }
 
+/// Stages one canonical child -> owner relationship for the same cloned commit that admits the
+/// owner and validates its initial Equipment component. The destination revision is captured once
+/// and rechecked when commit begins; staging itself never mutates Engine state.
+unsafe extern "C" fn stage_initial_containment(
+    context: *mut c_void,
+    request: *const NativeMechanicsInitialContainmentRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let child = EntityId::new(request.child_entity_id);
+    let Some(owner) = bridge.entities.get(&request.owner.value).cloned() else {
+        return 0;
+    };
+    if owner.committed
+        || child == owner.entity
+        || bridge.canonical_entities.get(&child) != Some(&owner.catalog)
+        || !bridge
+            .catalogs
+            .get(&owner.catalog)
+            .is_some_and(|slot| slot.world.state.is_alive(child))
+    {
+        return 0;
+    }
+    let Some(binding) = bridge.entities.get_mut(&request.owner.value) else {
+        return 0;
+    };
+    if binding
+        .expected_state_revision
+        .is_some_and(|expected| expected != request.expected_state_revision)
+        || binding.initial_containment.contains(&child)
+    {
+        return 0;
+    }
+    binding.expected_state_revision = Some(request.expected_state_revision);
+    binding.initial_containment.push(child);
+    ABI_OK
+}
+
+unsafe extern "C" fn read_containment(
+    context: *mut c_void,
+    request: *const NativeMechanicsContainmentReadRequest,
+    result: *mut NativeMechanicsContainmentReceipt,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let Some(binding) = bridge
+        .binding(request.entity)
+        .filter(|binding| binding.committed)
+    else {
+        return 0;
+    };
+    let Some(slot) = bridge.catalogs.get(&binding.catalog) else {
+        return 0;
+    };
+    if !slot.world.state.is_alive(binding.entity) {
+        return 0;
+    }
+    let container = slot.world.state.contained_in(binding.entity);
+    *result = NativeMechanicsContainmentReceipt {
+        child_entity_id: binding.entity.raw(),
+        present: container.is_some(),
+        container_entity_id: container.map_or(0, EntityId::raw),
+        state_revision: slot.world.state.revision(),
+    };
+    ABI_OK
+}
+
 unsafe extern "C" fn commit_entity(
     context: *mut c_void,
     handle: NativeMechanicsEntityHandle,
@@ -2137,6 +2216,12 @@ unsafe extern "C" fn commit_entity(
     };
     let mut candidate = slot.world.state.clone();
     let state_revision = candidate.revision();
+    if binding
+        .expected_state_revision
+        .is_some_and(|expected| expected != state_revision)
+    {
+        return 0;
+    }
     if EntityAuthoringService
         .admit(
             &mut candidate,
@@ -2149,6 +2234,21 @@ unsafe extern "C" fn commit_entity(
         .is_err()
     {
         return 0;
+    }
+    for child in &binding.initial_containment {
+        let expected = candidate.revision();
+        if candidate
+            .apply_relationship(
+                expected,
+                RelationshipCommand::SetContainment {
+                    child: *child,
+                    container: binding.entity,
+                },
+            )
+            .is_err()
+        {
+            return 0;
+        }
     }
     if let Some(stats) = binding.stats {
         if attach(
@@ -2246,6 +2346,7 @@ unsafe extern "C" fn commit_entity(
     if slot.world.next_stamp == u64::MAX {
         return 0;
     }
+    let state_revision_after = candidate.revision();
     slot.world.state = candidate;
     let Some(lifecycle) = slot.world.admit(binding.entity) else {
         return 0;
@@ -2255,6 +2356,8 @@ unsafe extern "C" fn commit_entity(
     }
     unsafe {
         *result = NativeMechanicsEntityReceipt {
+            state_revision_before: state_revision,
+            state_revision_after,
             stats_revision,
             tracks_revision,
             lifecycle,
@@ -4045,5 +4148,218 @@ mod tests {
         assert!(receipt.inventory_revision.present);
         assert!(!receipt.item_revision.present);
         assert!(receipt.equipment_revision.present);
+    }
+
+    #[test]
+    fn staged_containment_precedes_non_empty_equipment_validation() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("containment"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        let classifications = [NativeMechanicsText {
+            value: utf8("weapon"),
+        }];
+        assert_eq!(
+            unsafe {
+                define_item(
+                    context,
+                    &NativeMechanicsItemDefinitionRequest {
+                        catalog,
+                        id: utf8("sword"),
+                        kind: NativeMechanicsItemKind::Unique,
+                        maximum_quantity: 1,
+                        classifications: classifications.as_ptr(),
+                        classifications_len: classifications.len(),
+                        capacity_costs: std::ptr::null(),
+                        capacity_costs_len: 0,
+                        has_equipment: true,
+                        required_slots: 1,
+                        exclusive_group: utf8(""),
+                        sources: std::ptr::null(),
+                        sources_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                define_equipment_slot(
+                    context,
+                    &NativeMechanicsEquipmentSlotDefinitionRequest {
+                        catalog,
+                        id: utf8("hand"),
+                        allowed_classifications: classifications.as_ptr(),
+                        allowed_classifications_len: classifications.len(),
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
+
+        let mut item = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 2,
+                        identity: utf8("sword-instance"),
+                    },
+                    &mut item,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        entity: item,
+                        has_stats: false,
+                        stats: std::ptr::null(),
+                        stats_len: 0,
+                        has_tracks: false,
+                        tracks: std::ptr::null(),
+                        tracks_len: 0,
+                        has_intrinsic_sources: false,
+                        intrinsic_sources: std::ptr::null(),
+                        intrinsic_sources_len: 0,
+                        has_active_effects: false,
+                        active_effects: std::ptr::null(),
+                        active_effects_len: 0,
+                        has_inventory: false,
+                        inventory_stacks: std::ptr::null(),
+                        inventory_stacks_len: 0,
+                        inventory_capacity_limits: std::ptr::null(),
+                        inventory_capacity_limits_len: 0,
+                        has_item: true,
+                        item_definition: utf8("sword"),
+                        has_equipment: false,
+                        equipment_assignments: std::ptr::null(),
+                        equipment_assignments_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut item_receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, item, &mut item_receipt) },
+            ABI_OK
+        );
+        let mut before = NativeMechanicsContainmentReceipt::default();
+        assert_eq!(
+            unsafe {
+                read_containment(
+                    context,
+                    &NativeMechanicsContainmentReadRequest { entity: item },
+                    &mut before,
+                )
+            },
+            ABI_OK
+        );
+        assert!(!before.present);
+
+        let mut owner = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 1,
+                        identity: utf8("owner"),
+                    },
+                    &mut owner,
+                )
+            },
+            ABI_OK
+        );
+        let assignments = [NativeMechanicsInitialEquipmentAssignment {
+            slot: utf8("hand"),
+            item_entity_id: 2,
+        }];
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        entity: owner,
+                        has_stats: false,
+                        stats: std::ptr::null(),
+                        stats_len: 0,
+                        has_tracks: false,
+                        tracks: std::ptr::null(),
+                        tracks_len: 0,
+                        has_intrinsic_sources: false,
+                        intrinsic_sources: std::ptr::null(),
+                        intrinsic_sources_len: 0,
+                        has_active_effects: false,
+                        active_effects: std::ptr::null(),
+                        active_effects_len: 0,
+                        has_inventory: false,
+                        inventory_stacks: std::ptr::null(),
+                        inventory_stacks_len: 0,
+                        inventory_capacity_limits: std::ptr::null(),
+                        inventory_capacity_limits_len: 0,
+                        has_item: false,
+                        item_definition: utf8(""),
+                        has_equipment: true,
+                        equipment_assignments: assignments.as_ptr(),
+                        equipment_assignments_len: assignments.len(),
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                stage_initial_containment(
+                    context,
+                    &NativeMechanicsInitialContainmentRequest {
+                        owner,
+                        child_entity_id: 2,
+                        expected_state_revision: before.state_revision,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut owner_receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, owner, &mut owner_receipt) },
+            ABI_OK
+        );
+        assert_eq!(owner_receipt.state_revision_before, before.state_revision);
+        assert!(owner_receipt.state_revision_after > owner_receipt.state_revision_before);
+        let mut after = NativeMechanicsContainmentReceipt::default();
+        assert_eq!(
+            unsafe {
+                read_containment(
+                    context,
+                    &NativeMechanicsContainmentReadRequest { entity: item },
+                    &mut after,
+                )
+            },
+            ABI_OK
+        );
+        assert!(after.present);
+        assert_eq!(after.container_entity_id, 1);
+        assert_eq!(after.state_revision, owner_receipt.state_revision_after);
     }
 }
