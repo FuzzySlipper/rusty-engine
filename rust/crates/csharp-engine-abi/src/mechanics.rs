@@ -46,6 +46,14 @@ pub enum NativeMechanicsRevisionGuard {
     Exact = 1,
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default)]
+pub enum NativeMechanicsRevisionComponent {
+    #[default]
+    Stats = 0,
+    Tracks = 1,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMechanicsCatalogHandle {
@@ -55,6 +63,20 @@ pub struct NativeMechanicsCatalogHandle {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMechanicsEntityHandle {
     pub value: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsStatsRevision {
+    pub entity_id: u64,
+    pub revision: u64,
+    pub component: NativeMechanicsRevisionComponent,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsTracksRevision {
+    pub entity_id: u64,
+    pub revision: u64,
+    pub component: NativeMechanicsRevisionComponent,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -124,8 +146,8 @@ pub struct NativeMechanicsIntrinsicSourceRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMechanicsEntityReceipt {
-    pub stats_revision: u64,
-    pub tracks_revision: u64,
+    pub stats_revision: NativeMechanicsStatsRevision,
+    pub tracks_revision: NativeMechanicsTracksRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -137,7 +159,7 @@ pub struct NativeMechanicsStatReadRequest {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMechanicsStatReadReceipt {
     pub base: i64,
-    pub revision: u64,
+    pub revision: NativeMechanicsStatsRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -152,7 +174,7 @@ pub struct NativeMechanicsTrackReadReceipt {
     pub current: i64,
     pub minimum: i64,
     pub maximum: i64,
-    pub revision: u64,
+    pub revision: NativeMechanicsTracksRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -168,7 +190,7 @@ pub struct NativeMechanicsStatEvaluationReceipt {
     pub value: i64,
     pub minimum: i64,
     pub maximum: i64,
-    pub stats_revision: u64,
+    pub stats_revision: NativeMechanicsStatsRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -179,7 +201,7 @@ pub struct NativeMechanicsStatBaseMutationRequest {
     pub stat: NativeUtf8Slice,
     pub base: i64,
     pub revision_guard: NativeMechanicsRevisionGuard,
-    pub expected_revision: u64,
+    pub expected_revision: NativeMechanicsStatsRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -188,8 +210,8 @@ pub struct NativeMechanicsStatMutationReceipt {
     pub after: i64,
     pub minimum: i64,
     pub maximum: i64,
-    pub observed_revision: u64,
-    pub committed_revision: u64,
+    pub observed_revision: NativeMechanicsStatsRevision,
+    pub committed_revision: NativeMechanicsStatsRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -201,7 +223,7 @@ pub struct NativeMechanicsTrackSetRequest {
     pub value: i64,
     pub policy: NativeMechanicsTrackSetPolicy,
     pub revision_guard: NativeMechanicsRevisionGuard,
-    pub expected_revision: u64,
+    pub expected_revision: NativeMechanicsTracksRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -212,7 +234,7 @@ pub struct NativeMechanicsTrackMutationRequest {
     pub track: NativeUtf8Slice,
     pub amount: i64,
     pub revision_guard: NativeMechanicsRevisionGuard,
-    pub expected_revision: u64,
+    pub expected_revision: NativeMechanicsTracksRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -223,8 +245,8 @@ pub struct NativeMechanicsTrackMutationReceipt {
     pub after: i64,
     pub minimum: i64,
     pub maximum: i64,
-    pub observed_revision: u64,
-    pub committed_revision: u64,
+    pub observed_revision: NativeMechanicsTracksRevision,
+    pub committed_revision: NativeMechanicsTracksRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -234,8 +256,8 @@ pub struct NativeMechanicsTrackSetReceipt {
     pub after: i64,
     pub minimum: i64,
     pub maximum: i64,
-    pub observed_revision: u64,
-    pub committed_revision: u64,
+    pub observed_revision: NativeMechanicsTracksRevision,
+    pub committed_revision: NativeMechanicsTracksRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -247,7 +269,7 @@ pub struct NativeMechanicsTrackReconciliationRequest {
     pub prospective_maximum: i64,
     pub policy: NativeMechanicsTrackReconciliationPolicy,
     pub revision_guard: NativeMechanicsRevisionGuard,
-    pub expected_revision: u64,
+    pub expected_revision: NativeMechanicsTracksRevision,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -257,6 +279,6 @@ pub struct NativeMechanicsTrackReconciliationReceipt {
     pub minimum: i64,
     pub current_maximum: i64,
     pub prospective_maximum: i64,
-    pub observed_revision: u64,
-    pub committed_revision: u64,
+    pub observed_revision: NativeMechanicsTracksRevision,
+    pub committed_revision: NativeMechanicsTracksRevision,
 }

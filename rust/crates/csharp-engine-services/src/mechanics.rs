@@ -560,11 +560,11 @@ unsafe extern "C" fn commit_entity(
     }
     let stats_revision = candidate
         .component_revision::<StatsComponent>(binding.entity)
-        .map(|revision| revision.revision())
+        .map(|revision| stats_revision(binding.entity, revision.revision()))
         .unwrap_or_default();
     let tracks_revision = candidate
         .component_revision::<TracksComponent>(binding.entity)
-        .map(|revision| revision.revision())
+        .map(|revision| tracks_revision(binding.entity, revision.revision()))
         .unwrap_or_default();
     slot.state = candidate;
     if let Some(entry) = bridge.entities.get_mut(&handle.value) {
@@ -635,7 +635,7 @@ unsafe extern "C" fn read_stat(
     };
     *result = NativeMechanicsStatReadReceipt {
         base: base.get(),
-        revision: revision.revision(),
+        revision: stats_revision(entity, revision.revision()),
     };
     ABI_OK
 }
@@ -669,7 +669,7 @@ unsafe extern "C" fn evaluate_stat(
         value: value.value.get(),
         minimum: value.minimum.get(),
         maximum: value.maximum.get(),
-        stats_revision: revision.revision(),
+        stats_revision: stats_revision(entity, revision.revision()),
     };
     ABI_OK
 }
@@ -722,7 +722,7 @@ unsafe extern "C" fn read_track(
         current: current.get(),
         minimum: definition.minimum.get(),
         maximum: maximum.get(),
-        revision: revision.revision(),
+        revision: tracks_revision(entity, revision.revision()),
     };
     ABI_OK
 }
@@ -751,9 +751,15 @@ unsafe extern "C" fn set_stat_base(
     let Ok(actual) = state.component_revision::<StatsComponent>(entity) else {
         return 0;
     };
-    let Some(expected_revision) =
-        guarded_revision(request.revision_guard, request.expected_revision, actual)
-    else {
+    let Some(expected_revision) = guarded_revision(
+        request.revision_guard,
+        request.expected_revision.entity_id,
+        request.expected_revision.revision,
+        request.expected_revision.component,
+        entity,
+        actual,
+        NativeMechanicsRevisionComponent::Stats,
+    ) else {
         return 0;
     };
     let request_source = gameplay_mechanics::SourceInstanceIdentity::Request {
@@ -779,8 +785,8 @@ unsafe extern "C" fn set_stat_base(
         after: receipt.after.get(),
         minimum: receipt.minimum.get(),
         maximum: receipt.maximum.get(),
-        observed_revision: receipt.observed_stats_revision,
-        committed_revision: receipt.committed_stats_revision,
+        observed_revision: stats_revision(entity, receipt.observed_stats_revision),
+        committed_revision: stats_revision(entity, receipt.committed_stats_revision),
     };
     ABI_OK
 }
@@ -814,9 +820,15 @@ unsafe extern "C" fn set_track(
     let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
         return 0;
     };
-    let Some(expected_revision) =
-        guarded_revision(request.revision_guard, request.expected_revision, actual)
-    else {
+    let Some(expected_revision) = guarded_revision(
+        request.revision_guard,
+        request.expected_revision.entity_id,
+        request.expected_revision.revision,
+        request.expected_revision.component,
+        entity,
+        actual,
+        NativeMechanicsRevisionComponent::Tracks,
+    ) else {
         return 0;
     };
     let request_source = gameplay_mechanics::SourceInstanceIdentity::Request {
@@ -844,8 +856,8 @@ unsafe extern "C" fn set_track(
         after: receipt.after.get(),
         minimum: receipt.minimum.get(),
         maximum: receipt.maximum.get(),
-        observed_revision: receipt.observed_tracks_revision,
-        committed_revision: receipt.committed_tracks_revision,
+        observed_revision: tracks_revision(entity, receipt.observed_tracks_revision),
+        committed_revision: tracks_revision(entity, receipt.committed_tracks_revision),
     };
     ABI_OK
 }
@@ -892,9 +904,15 @@ unsafe fn mutate_track(
     let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
         return 0;
     };
-    let Some(expected_revision) =
-        guarded_revision(request.revision_guard, request.expected_revision, actual)
-    else {
+    let Some(expected_revision) = guarded_revision(
+        request.revision_guard,
+        request.expected_revision.entity_id,
+        request.expected_revision.revision,
+        request.expected_revision.component,
+        entity,
+        actual,
+        NativeMechanicsRevisionComponent::Tracks,
+    ) else {
         return 0;
     };
     let request = TrackMutationRequest {
@@ -917,6 +935,7 @@ unsafe fn mutate_track(
         return 0;
     };
     *result = track_mutation_receipt(
+        entity,
         receipt.requested_amount.get(),
         receipt.applied_amount.get(),
         receipt.before.get(),
@@ -962,9 +981,15 @@ unsafe extern "C" fn reconcile_track(
     let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
         return 0;
     };
-    let Some(expected_revision) =
-        guarded_revision(request.revision_guard, request.expected_revision, actual)
-    else {
+    let Some(expected_revision) = guarded_revision(
+        request.revision_guard,
+        request.expected_revision.entity_id,
+        request.expected_revision.revision,
+        request.expected_revision.component,
+        entity,
+        actual,
+        NativeMechanicsRevisionComponent::Tracks,
+    ) else {
         return 0;
     };
     let request_source = gameplay_mechanics::SourceInstanceIdentity::Request {
@@ -992,8 +1017,8 @@ unsafe extern "C" fn reconcile_track(
         minimum: receipt.minimum.get(),
         current_maximum: receipt.current_maximum.get(),
         prospective_maximum: receipt.prospective_maximum.get(),
-        observed_revision: receipt.observed_tracks_revision,
-        committed_revision: receipt.committed_tracks_revision,
+        observed_revision: tracks_revision(entity, receipt.observed_tracks_revision),
+        committed_revision: tracks_revision(entity, receipt.committed_tracks_revision),
     };
     ABI_OK
 }
@@ -1040,13 +1065,59 @@ fn ratio(numerator: u32, denominator: u32) -> Result<ExactRatio, ()> {
 }
 fn guarded_revision(
     guard: NativeMechanicsRevisionGuard,
-    expected: u64,
+    expected_entity: u64,
+    expected_revision: u64,
+    expected_component: NativeMechanicsRevisionComponent,
+    entity: EntityId,
     actual: ComponentRevision,
+    component: NativeMechanicsRevisionComponent,
 ) -> Option<Option<ComponentRevision>> {
+    if !revision_guard_matches(
+        guard,
+        expected_entity,
+        expected_revision,
+        expected_component,
+        entity,
+        actual.revision(),
+        component,
+    ) {
+        return None;
+    }
     match guard {
         NativeMechanicsRevisionGuard::Unchecked => Some(None),
-        NativeMechanicsRevisionGuard::Exact if expected == actual.revision() => Some(Some(actual)),
-        NativeMechanicsRevisionGuard::Exact => None,
+        NativeMechanicsRevisionGuard::Exact => Some(Some(actual)),
+    }
+}
+fn revision_guard_matches(
+    guard: NativeMechanicsRevisionGuard,
+    expected_entity: u64,
+    expected_revision: u64,
+    expected_component: NativeMechanicsRevisionComponent,
+    entity: EntityId,
+    actual_revision: u64,
+    component: NativeMechanicsRevisionComponent,
+) -> bool {
+    match guard {
+        NativeMechanicsRevisionGuard::Unchecked => true,
+        NativeMechanicsRevisionGuard::Exact => {
+            expected_entity == entity.raw()
+                && expected_revision == actual_revision
+                && expected_component as u32 == component as u32
+        }
+    }
+}
+fn stats_revision(entity: EntityId, revision: u64) -> NativeMechanicsStatsRevision {
+    NativeMechanicsStatsRevision {
+        entity_id: entity.raw(),
+        revision,
+        component: NativeMechanicsRevisionComponent::Stats,
+    }
+}
+fn tracks_revision(entity: EntityId, revision: u64) -> NativeMechanicsTracksRevision {
+    NativeMechanicsTracksRevision {
+        entity_id: entity.raw(),
+        revision,
+        component: NativeMechanicsRevisionComponent::Tracks,
     }
 }
 unsafe fn text<'a>(value: NativeUtf8Slice, field: &'static str) -> Result<&'a str, ()> {
@@ -1075,6 +1146,7 @@ unsafe fn bridge_request_result<'a, T, R>(
     }
 }
 fn track_mutation_receipt(
+    entity: EntityId,
     requested_amount: i64,
     applied_amount: i64,
     before: i64,
@@ -1091,8 +1163,8 @@ fn track_mutation_receipt(
         after,
         minimum,
         maximum,
-        observed_revision,
-        committed_revision,
+        observed_revision: tracks_revision(entity, observed_revision),
+        committed_revision: tracks_revision(entity, committed_revision),
     }
 }
 
@@ -1199,6 +1271,89 @@ mod tests {
             unsafe { commit_entity(context, entity, &mut entity_receipt) },
             ABI_OK
         );
+        let second_entity_request = NativeMechanicsEntityBindRequest {
+            catalog,
+            entity_id: 78,
+            identity: utf8("second_actor"),
+        };
+        let mut second_entity = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe { bind_entity(context, &second_entity_request, &mut second_entity) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                set_initial_stat(
+                    context,
+                    &NativeMechanicsInitialStatRequest {
+                        entity: second_entity,
+                        stat: utf8("strength"),
+                        base: 10,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                set_initial_track(
+                    context,
+                    &NativeMechanicsInitialTrackRequest {
+                        entity: second_entity,
+                        track: utf8("stamina"),
+                        current: 10,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut second_receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, second_entity, &mut second_receipt) },
+            ABI_OK
+        );
+        assert_eq!(
+            entity_receipt.tracks_revision.revision,
+            second_receipt.tracks_revision.revision
+        );
+        let cross_entity_request = NativeMechanicsTrackMutationRequest {
+            entity: second_entity,
+            operation: utf8("foreign_spend"),
+            source: utf8("foreign_source"),
+            track: utf8("stamina"),
+            amount: 1,
+            revision_guard: NativeMechanicsRevisionGuard::Exact,
+            expected_revision: entity_receipt.tracks_revision,
+        };
+        let mut rejected_cross_entity = NativeMechanicsTrackMutationReceipt::default();
+        assert_eq!(
+            unsafe { spend_track(context, &cross_entity_request, &mut rejected_cross_entity) },
+            0
+        );
+        let cross_component_request = NativeMechanicsStatBaseMutationRequest {
+            entity,
+            operation: utf8("cross_component"),
+            source: utf8("cross_component_source"),
+            stat: utf8("strength"),
+            base: 11,
+            revision_guard: NativeMechanicsRevisionGuard::Exact,
+            expected_revision: NativeMechanicsStatsRevision {
+                entity_id: entity_receipt.stats_revision.entity_id,
+                revision: entity_receipt.stats_revision.revision,
+                component: NativeMechanicsRevisionComponent::Tracks,
+            },
+        };
+        let mut rejected_cross_component = NativeMechanicsStatMutationReceipt::default();
+        assert_eq!(
+            unsafe {
+                set_stat_base(
+                    context,
+                    &cross_component_request,
+                    &mut rejected_cross_component,
+                )
+            },
+            0
+        );
 
         let evaluation_request = NativeMechanicsStatOperationRequest {
             entity,
@@ -1250,6 +1405,8 @@ mod tests {
         let state_entity = bridge.entities[&entity.value].entity;
         assert_eq!(unsafe { destroy_entity(context, entity) }, ABI_OK);
         assert!(!bridge.catalogs[&catalog.value].state.is_alive(state_entity));
+        assert_eq!(unsafe { destroy_catalog(context, catalog) }, 0);
+        assert_eq!(unsafe { destroy_entity(context, second_entity) }, ABI_OK);
         assert_eq!(unsafe { destroy_catalog(context, catalog) }, ABI_OK);
         let mut after_release = NativeMechanicsStatReadReceipt::default();
         assert_eq!(
@@ -1265,5 +1422,45 @@ mod tests {
             },
             0
         );
+    }
+
+    #[test]
+    fn revision_guards_accept_zero_only_when_the_scope_also_matches() {
+        assert!(revision_guard_matches(
+            NativeMechanicsRevisionGuard::Exact,
+            77,
+            0,
+            NativeMechanicsRevisionComponent::Stats,
+            EntityId::new(77),
+            0,
+            NativeMechanicsRevisionComponent::Stats,
+        ));
+        assert!(!revision_guard_matches(
+            NativeMechanicsRevisionGuard::Exact,
+            78,
+            0,
+            NativeMechanicsRevisionComponent::Stats,
+            EntityId::new(77),
+            0,
+            NativeMechanicsRevisionComponent::Stats,
+        ));
+        assert!(!revision_guard_matches(
+            NativeMechanicsRevisionGuard::Exact,
+            77,
+            0,
+            NativeMechanicsRevisionComponent::Tracks,
+            EntityId::new(77),
+            0,
+            NativeMechanicsRevisionComponent::Stats,
+        ));
+        assert!(revision_guard_matches(
+            NativeMechanicsRevisionGuard::Unchecked,
+            0,
+            0,
+            NativeMechanicsRevisionComponent::Stats,
+            EntityId::new(77),
+            12,
+            NativeMechanicsRevisionComponent::Tracks,
+        ));
     }
 }
