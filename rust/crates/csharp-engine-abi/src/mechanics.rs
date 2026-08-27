@@ -8,8 +8,9 @@ pub enum NativeMechanicsTrackMaximumKind {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum NativeMechanicsContributionKind {
+    #[default]
     Add = 0,
     Scale = 1,
     Minimum = 2,
@@ -17,8 +18,9 @@ pub enum NativeMechanicsContributionKind {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum NativeMechanicsStackingPolicy {
+    #[default]
     Sum = 0,
     Highest = 1,
     Lowest = 2,
@@ -96,6 +98,15 @@ pub enum NativeMechanicsActiveEffectProvenanceKind {
     Request = 3,
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsDecisionOutcome {
+    Applied = 0,
+    Suppressed = 1,
+    #[default]
+    Inapplicable = 2,
+}
+
 /// The mechanics mirror intentionally follows the product's EntityWorld lifecycle.
 /// It is not a second source of product identity.
 #[repr(u32)]
@@ -134,6 +145,15 @@ pub struct NativeMechanicsCatalogLeaseHandle {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeMechanicsComponentLeaseHandle {
+    pub value: u64,
+}
+
+/// A typed owner for exact Mechanics operation receipts containing one or more
+/// bounded collections. All borrowed rows and text remain valid until the
+/// matching operation lease is destroyed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsOperationLeaseHandle {
     pub value: u64,
 }
 
@@ -880,15 +900,96 @@ pub struct NativeMechanicsStatOperationRequest {
     pub entity: NativeMechanicsEntityHandle,
     pub stat: NativeUtf8Slice,
     pub operation: NativeUtf8Slice,
+    pub request_sources: *const NativeMechanicsRequestSource,
+    pub request_sources_len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsRequestSource {
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeMechanicsStatEvaluationReceipt {
+pub struct NativeMechanicsU128 {
+    pub low: u64,
+    pub high: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsSourceIdentity {
+    pub kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub intrinsic_entity_id: u64,
+    pub intrinsic_instance: NativeUtf8Slice,
+    pub effect_entity_id: u64,
+    pub effect_instance: NativeUtf8Slice,
+    pub effect_stack: u16,
+    pub effect_source: NativeUtf8Slice,
+    pub equipped_owner_entity_id: u64,
+    pub equipped_item_entity_id: u64,
+    pub equipped_source: NativeUtf8Slice,
+    pub request_operation: NativeUtf8Slice,
+    pub request_instance: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsSourceCollectionCost {
+    pub intrinsic_entries_visited: u64,
+    pub effect_entries_visited: u64,
+    pub effect_source_activations_visited: u64,
+    pub equipment_entries_visited: u64,
+    pub item_components_read: u64,
+    pub request_entries_visited: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsObservedComponentRevisionRow {
+    pub entity_id: u64,
+    pub component: NativeMechanicsRevisionComponent,
+    pub revision: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsStatDecisionRow {
+    pub source: NativeMechanicsSourceIdentity,
+    pub source_definition: NativeUtf8Slice,
+    pub has_contribution_index: bool,
+    pub contribution_index: u16,
+    pub outcome: NativeMechanicsDecisionOutcome,
+    pub has_stacking_group: bool,
+    pub stacking_group: NativeUtf8Slice,
+    pub has_stacking: bool,
+    pub stacking: NativeMechanicsStackingPolicy,
+    pub has_contribution: bool,
+    pub contribution_kind: NativeMechanicsContributionKind,
+    pub contribution_amount: i64,
+    pub contribution_ratio_numerator: u32,
+    pub contribution_ratio_denominator: u32,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsStatEvaluationLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub decisions: *const NativeMechanicsStatDecisionRow,
+    pub decisions_len: usize,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub entity_id: u64,
+    pub stat: NativeUtf8Slice,
     pub base: i64,
+    pub after_additions: i64,
+    pub combined_scale_numerator: NativeMechanicsU128,
+    pub combined_scale_denominator: NativeMechanicsU128,
+    pub after_scaling: i64,
+    pub unconstrained: i64,
     pub value: i64,
     pub minimum: i64,
     pub maximum: i64,
     pub stats_revision: NativeMechanicsStatsRevision,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -903,13 +1004,24 @@ pub struct NativeMechanicsStatBaseMutationRequest {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeMechanicsStatMutationReceipt {
+pub struct NativeMechanicsStatMutationLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub entity_id: u64,
+    pub stat: NativeUtf8Slice,
     pub before: i64,
     pub after: i64,
     pub minimum: i64,
     pub maximum: i64,
     pub observed_revision: NativeMechanicsStatsRevision,
     pub committed_revision: NativeMechanicsStatsRevision,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

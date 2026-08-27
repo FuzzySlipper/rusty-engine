@@ -225,7 +225,14 @@ internal sealed class BindingModel
             string nested = Bare(field.Type);
             if (nested is "NativeUtf8Slice" or "NativeByteSlice") continue;
             if (field.Type.Contains('*', StringComparison.Ordinal)) { Fail(family, method, signature, $"lease element {value.Name}.{field.Name} has unsupported pointer {field.Type}"); continue; }
-            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"lease element {value.Name}.{field.Name}");
+            if (structs.TryGetValue(nested, out Struct? nestedValue) && nestedValue is not null)
+            {
+                ValidateLeaseElement(family, method, signature, nestedValue, structs, enums, seen);
+            }
+            else
+            {
+                ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"lease element {value.Name}.{field.Name}");
+            }
         }
     }
 
@@ -500,6 +507,7 @@ internal static class Emit
             string arguments = string.Join(", ", value.Fields.Select(field => LeaseMetadataFromNativeExpression(model, field, $"value.{RawIdentifier(field.Name)}")));
             output.AppendLine($"    private static {safe} CopyLeaseMetadata({value.Name} value) => new({arguments});");
         }
+        HashSet<string> emittedLeaseElements = new(StringComparer.Ordinal);
         foreach (Struct lease in model.Structs.Values.Where(value => BindingModel.IsLeaseResult(value.Name, model.Structs)).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             if (lease.Name == "NativeByteLease")
@@ -522,8 +530,11 @@ internal static class Emit
                 output.AppendLine($"        {safeElement}[] copy = new {safeElement}[count];");
                 output.AppendLine($"        for (int index = 0; index < count; index++) copy[index] = CopyLeaseElement(value.{RawIdentifier(pointer.Name)}[index]);");
                 output.AppendLine("        return copy;").AppendLine("    }");
-                string arguments = string.Join(", ", elementValue.Fields.Select(field => LeaseElementFromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
-                output.AppendLine($"    private static {safeElement} CopyLeaseElement({element} value) => new({arguments});");
+                if (emittedLeaseElements.Add(element))
+                {
+                    string arguments = string.Join(", ", elementValue.Fields.Select(field => LeaseElementFromNativeExpression(model, field, $"value.{RawIdentifier(field.Name)}")));
+                    output.AppendLine($"    private static {safeElement} CopyLeaseElement({element} value) => new({arguments});");
+                }
             }
             if (UsesLeaseReceipt(model, lease))
             {
@@ -804,10 +815,11 @@ internal static class Emit
 
     private static string ToNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) is "bool" or "_Bool" ? $"ToNativeBool({value})" : $"ToNative({value})";
     private static string FromNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) is "bool" or "_Bool" ? $"FromNativeBool({value})" : $"FromNative({value})";
-    private static string LeaseElementFromNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) switch
+    private static string LeaseElementFromNativeExpression(BindingModel model, Field field, string value) => BindingModel.Bare(field.Type) switch
     {
         "NativeUtf8Slice" => $"CopyUtf8({value})",
         "NativeByteSlice" => $"CopyBytes({value})",
+        string type when model.Structs.ContainsKey(type) => $"CopyLeaseMetadata({value})",
         _ => FromNativeExpression(field, value),
     };
     private static string LeaseMetadataFromNativeExpression(BindingModel model, Field field, string value) => BindingModel.Bare(field.Type) switch
@@ -828,12 +840,22 @@ internal static class Emit
         void Include(Field field)
         {
             string type = BindingModel.Bare(field.Type);
-            if (type == "NativeUtf8Slice" || !model.Structs.TryGetValue(type, out Struct? value) || !names.Add(type)) return;
+            if (type is "NativeUtf8Slice" or "NativeByteSlice" || !model.Structs.TryGetValue(type, out Struct? value) || !names.Add(type)) return;
             foreach (Field nested in value.Fields) Include(nested);
         }
         foreach (Struct lease in model.Structs.Values.Where(lease => HasLeaseMetadata(model, lease)))
         {
             foreach (Field field in LeaseMetadataFields(lease)) Include(field);
+        }
+        foreach (Struct lease in model.Structs.Values.Where(lease => BindingModel.IsLeaseResult(lease.Name, model.Structs)))
+        {
+            foreach (Field pointer in LeasePointers(lease))
+            {
+                if (model.Structs.TryGetValue(BindingModel.Bare(pointer.Type), out Struct? element))
+                {
+                    foreach (Field field in element.Fields) Include(field);
+                }
+            }
         }
         return names.OrderBy(name => name, StringComparer.Ordinal).Select(name => model.Structs[name]);
     }

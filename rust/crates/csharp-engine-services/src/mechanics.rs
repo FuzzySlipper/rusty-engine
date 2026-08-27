@@ -8,16 +8,18 @@ use entity_state::{
 use gameplay_mechanics::{
     gameplay_component_registry, validate_state_against_catalog, ActiveEffectInstance,
     ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion, DamageKindDefinition,
-    DamageKindSelector, DamageResponseDefinition, EffectDefinition, EffectStackingPolicy,
-    EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition, ExactRatio,
-    IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit, InventoryComponent,
-    ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack,
-    MechanicsCatalog, MechanicsCatalogDefinition, MechanicsScalar, OperationId, SourceDefinition,
-    SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
-    StatBaseMutationRequest, StatContribution, StatContributionDefinition, StatDefinition, StatId,
-    StatService, StatValue, StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackMaximum,
-    TrackMutationRequest, TrackReconciliationPolicy, TrackReconciliationRequest, TrackService,
-    TrackSetPolicy, TrackSetRequest, TrackValue, TracksComponent,
+    DamageKindSelector, DamageResponseDefinition, DecisionOutcome, EffectDefinition,
+    EffectStackingPolicy, EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition,
+    ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit,
+    InventoryComponent, ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy,
+    ItemKind, ItemStack, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
+    MechanicsScalar, ObservedComponentRevision, OperationId, RequestSource, SourceCollectionCost,
+    SourceDefinition, SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity,
+    StackingGroupId, StackingPolicy, StatBaseMutationRequest, StatContribution,
+    StatContributionDefinition, StatDecision, StatDefinition, StatId, StatService, StatValue,
+    StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackMaximum, TrackMutationRequest,
+    TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
+    TrackSetRequest, TrackValue, TracksComponent,
 };
 
 use crate::composition::{borrowed_utf8, ABI_OK};
@@ -84,6 +86,24 @@ enum ComponentLeaseRows {
     InventoryCapacityLimits(Vec<NativeMechanicsInventoryCapacityLimitComponentRow>),
     Items(Vec<NativeMechanicsItemComponentRow>),
     EquipmentAssignments(Vec<NativeMechanicsEquipmentAssignmentComponentRow>),
+}
+
+/// Exact runtime-operation rows and their borrowed text share one owner. This
+/// is distinct from catalog/component inspection because operation receipts
+/// may contain several semantically different collections.
+struct OperationLeaseBacking {
+    _text: Vec<String>,
+    rows: OperationLeaseRows,
+}
+
+enum OperationLeaseRows {
+    StatEvaluation {
+        decisions: Vec<NativeMechanicsStatDecisionRow>,
+        observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
+    },
+    StatMutation {
+        observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
+    },
 }
 
 #[derive(Default)]
@@ -219,10 +239,12 @@ pub(crate) struct RuntimeMechanicsBridge {
     canonical_entities: BTreeMap<EntityId, u64>,
     catalog_leases: BTreeMap<u64, Box<CatalogLeaseBacking>>,
     component_leases: BTreeMap<u64, Box<ComponentLeaseBacking>>,
+    operation_leases: BTreeMap<u64, Box<OperationLeaseBacking>>,
     next_catalog: u64,
     next_entity: u64,
     next_catalog_lease: u64,
     next_component_lease: u64,
+    next_operation_lease: u64,
 }
 
 impl RuntimeMechanicsBridge {
@@ -233,10 +255,12 @@ impl RuntimeMechanicsBridge {
             canonical_entities: BTreeMap::new(),
             catalog_leases: BTreeMap::new(),
             component_leases: BTreeMap::new(),
+            operation_leases: BTreeMap::new(),
             next_catalog: 1,
             next_entity: 1,
             next_catalog_lease: 1,
             next_component_lease: 1,
+            next_operation_lease: 1,
         }
     }
 
@@ -287,6 +311,16 @@ impl RuntimeMechanicsBridge {
         self.next_component_lease = value.checked_add(1)?;
         self.component_leases.insert(value, Box::new(backing));
         Some(NativeMechanicsComponentLeaseHandle { value })
+    }
+
+    fn insert_operation_lease(
+        &mut self,
+        backing: OperationLeaseBacking,
+    ) -> Option<NativeMechanicsOperationLeaseHandle> {
+        let value = self.next_operation_lease;
+        self.next_operation_lease = value.checked_add(1)?;
+        self.operation_leases.insert(value, Box::new(backing));
+        Some(NativeMechanicsOperationLeaseHandle { value })
     }
 }
 
@@ -348,6 +382,7 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         evaluate_stat,
         read_track,
         set_stat_base,
+        destroy_operation_lease,
         set_track,
         spend_track,
         restore_track,
@@ -2485,33 +2520,106 @@ unsafe extern "C" fn read_stat(
 unsafe extern "C" fn evaluate_stat(
     context: *mut c_void,
     request: *const NativeMechanicsStatOperationRequest,
-    result: *mut NativeMechanicsStatEvaluationReceipt,
+    result: *mut NativeMechanicsStatEvaluationLease,
 ) -> i32 {
     let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
         return 0;
     };
-    let (Ok(stat), Ok(operation)) = (
+    let (Ok(stat), Ok(operation), Ok(request_sources)) = (
         unsafe { text(request.stat, "mechanics evaluation stat") }.and_then(parse::<StatId>),
         unsafe { text(request.operation, "mechanics evaluation operation") }
             .and_then(parse::<OperationId>),
+        unsafe {
+            borrowed_slice(
+                request.request_sources,
+                request.request_sources_len,
+                "mechanics evaluation request sources",
+            )
+        }
+        .and_then(parse_request_sources),
     ) else {
         return 0;
     };
-    let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+    let Some(catalog_id) = bridge
+        .binding(request.entity)
+        .map(|binding| binding.catalog)
+    else {
         return 0;
     };
-    let Ok(value) = StatService::evaluate(state, catalog, entity, &stat, &operation, &[]) else {
-        return 0;
+    let (value, revision) = {
+        let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+            return 0;
+        };
+        let Ok(value) =
+            StatService::evaluate(state, catalog, entity, &stat, &operation, &request_sources)
+        else {
+            return 0;
+        };
+        let Ok(revision) = state.component_revision::<StatsComponent>(entity) else {
+            return 0;
+        };
+        (value, revision.revision())
     };
-    let Ok(revision) = state.component_revision::<StatsComponent>(entity) else {
-        return 0;
-    };
-    *result = NativeMechanicsStatEvaluationReceipt {
+    let mut lease_text = CatalogLeaseText::default();
+    let decisions = value
+        .decisions
+        .iter()
+        .map(|decision| native_stat_decision(decision, &mut lease_text))
+        .collect::<Vec<_>>();
+    let observed_revisions = value
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsStatEvaluationLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        decisions: std::ptr::null(),
+        decisions_len: decisions.len(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(value.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&value.catalog_fingerprint),
+        entity_id: value.entity.raw(),
+        stat: lease_text.copy(value.stat.as_str()),
         base: value.base.get(),
+        after_additions: value.after_additions.get(),
+        combined_scale_numerator: native_u128(value.combined_scale_numerator),
+        combined_scale_denominator: native_u128(value.combined_scale_denominator),
+        after_scaling: value.after_scaling.get(),
+        unconstrained: value.unconstrained.get(),
         value: value.value.get(),
         minimum: value.minimum.get(),
         maximum: value.maximum.get(),
-        stats_revision: stats_revision(entity, revision.revision()),
+        stats_revision: stats_revision(value.entity, revision),
+        source_cost: native_source_cost(value.source_cost),
+    };
+    let backing = OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::StatEvaluation {
+            decisions,
+            observed_revisions,
+        },
+    };
+    let Some(handle) = bridge.insert_operation_lease(backing) else {
+        return 0;
+    };
+    let OperationLeaseRows::StatEvaluation {
+        decisions,
+        observed_revisions,
+    } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted stat evaluation lease")
+        .rows
+    else {
+        unreachable!("stat evaluation lease row kind matches its reader")
+    };
+    *result = NativeMechanicsStatEvaluationLease {
+        handle,
+        decisions: decisions.as_ptr(),
+        observed_revisions: observed_revisions.as_ptr(),
+        ..metadata
     };
     ABI_OK
 }
@@ -2572,7 +2680,7 @@ unsafe extern "C" fn read_track(
 unsafe extern "C" fn set_stat_base(
     context: *mut c_void,
     request: *const NativeMechanicsStatBaseMutationRequest,
-    result: *mut NativeMechanicsStatMutationReceipt,
+    result: *mut NativeMechanicsStatMutationLease,
 ) -> i32 {
     let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
         return 0;
@@ -2587,50 +2695,107 @@ unsafe extern "C" fn set_stat_base(
     ) else {
         return 0;
     };
-    let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
-        return 0;
-    };
-    let Ok(actual) = state.component_revision::<StatsComponent>(entity) else {
-        return 0;
-    };
-    let Some(expected_revision) = guarded_revision(
-        request.revision_guard,
-        request.expected_revision.entity_id,
-        request.expected_revision.revision,
-        request.expected_revision.component,
-        entity,
-        actual,
-        NativeMechanicsRevisionComponent::Stats,
-    ) else {
+    let Some(catalog_id) = bridge
+        .binding(request.entity)
+        .map(|binding| binding.catalog)
+    else {
         return 0;
     };
     let request_source = gameplay_mechanics::SourceInstanceIdentity::Request {
         operation: operation.clone(),
         instance: source,
     };
-    let Ok(receipt) = StatService::set_base(
-        state,
-        catalog,
-        StatBaseMutationRequest {
-            operation,
-            source: request_source,
+    let receipt = {
+        let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<StatsComponent>(entity) else {
+            return 0;
+        };
+        let Some(expected_revision) = guarded_revision(
+            request.revision_guard,
+            request.expected_revision.entity_id,
+            request.expected_revision.revision,
+            request.expected_revision.component,
             entity,
-            stat,
-            base,
-            expected_revision,
-        },
-    ) else {
-        return 0;
+            actual,
+            NativeMechanicsRevisionComponent::Stats,
+        ) else {
+            return 0;
+        };
+        let Ok(receipt) = StatService::set_base(
+            state,
+            catalog,
+            StatBaseMutationRequest {
+                operation,
+                source: request_source,
+                entity,
+                stat,
+                base,
+                expected_revision,
+            },
+        ) else {
+            return 0;
+        };
+        receipt
     };
-    *result = NativeMechanicsStatMutationReceipt {
+    let mut lease_text = CatalogLeaseText::default();
+    let observed_revisions = receipt
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsStatMutationLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        entity_id: receipt.entity.raw(),
+        stat: lease_text.copy(receipt.stat.as_str()),
         before: receipt.before.get(),
         after: receipt.after.get(),
         minimum: receipt.minimum.get(),
         maximum: receipt.maximum.get(),
-        observed_revision: stats_revision(entity, receipt.observed_stats_revision),
-        committed_revision: stats_revision(entity, receipt.committed_stats_revision),
+        observed_revision: stats_revision(receipt.entity, receipt.observed_stats_revision),
+        committed_revision: stats_revision(receipt.entity, receipt.committed_stats_revision),
+        source_cost: native_source_cost(receipt.source_cost),
+    };
+    let backing = OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::StatMutation { observed_revisions },
+    };
+    let Some(handle) = bridge.insert_operation_lease(backing) else {
+        return 0;
+    };
+    let OperationLeaseRows::StatMutation { observed_revisions } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted stat mutation lease")
+        .rows
+    else {
+        unreachable!("stat mutation lease row kind matches its reader")
+    };
+    *result = NativeMechanicsStatMutationLease {
+        handle,
+        observed_revisions: observed_revisions.as_ptr(),
+        ..metadata
     };
     ABI_OK
+}
+
+unsafe extern "C" fn destroy_operation_lease(
+    context: *mut c_void,
+    handle: NativeMechanicsOperationLeaseHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    i32::from(bridge.operation_leases.remove(&handle.value).is_some())
 }
 
 unsafe extern "C" fn set_track(
@@ -2930,6 +3095,23 @@ fn parse_capacity_costs(
         })
         .collect()
 }
+fn parse_request_sources(
+    values: &[NativeMechanicsRequestSource],
+) -> Result<Vec<RequestSource>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            Ok(RequestSource {
+                instance: unsafe { text(value.instance, "mechanics request source instance") }
+                    .and_then(parse::<SourceInstanceId>)?,
+                definition: unsafe {
+                    text(value.definition, "mechanics request source definition")
+                }
+                .and_then(parse::<SourceDefinitionId>)?,
+            })
+        })
+        .collect()
+}
 fn parse_initial_stats(values: &[NativeMechanicsInitialStatValue]) -> Result<Vec<StatValue>, ()> {
     values
         .iter()
@@ -3121,6 +3303,167 @@ fn scalar(value: i64) -> Result<MechanicsScalar, ()> {
 }
 fn ratio(numerator: u32, denominator: u32) -> Result<ExactRatio, ()> {
     ExactRatio::new(numerator, denominator).map_err(|_| ())
+}
+fn native_u128(value: u128) -> NativeMechanicsU128 {
+    NativeMechanicsU128 {
+        low: value as u64,
+        high: (value >> 64) as u64,
+    }
+}
+fn native_source_cost(value: SourceCollectionCost) -> NativeMechanicsSourceCollectionCost {
+    NativeMechanicsSourceCollectionCost {
+        intrinsic_entries_visited: value.intrinsic_entries_visited as u64,
+        effect_entries_visited: value.effect_entries_visited as u64,
+        effect_source_activations_visited: value.effect_source_activations_visited as u64,
+        equipment_entries_visited: value.equipment_entries_visited as u64,
+        item_components_read: value.item_components_read as u64,
+        request_entries_visited: value.request_entries_visited as u64,
+    }
+}
+fn native_observed_revision(
+    value: &ObservedComponentRevision,
+) -> NativeMechanicsObservedComponentRevisionRow {
+    NativeMechanicsObservedComponentRevisionRow {
+        entity_id: value.entity.raw(),
+        component: match value.component {
+            MechanicsComponentKind::Stats => NativeMechanicsRevisionComponent::Stats,
+            MechanicsComponentKind::Tracks => NativeMechanicsRevisionComponent::Tracks,
+            MechanicsComponentKind::IntrinsicSources => {
+                NativeMechanicsRevisionComponent::IntrinsicSources
+            }
+            MechanicsComponentKind::ActiveEffects => {
+                NativeMechanicsRevisionComponent::ActiveEffects
+            }
+            MechanicsComponentKind::Inventory => NativeMechanicsRevisionComponent::Inventory,
+            MechanicsComponentKind::Item => NativeMechanicsRevisionComponent::Item,
+            MechanicsComponentKind::Equipment => NativeMechanicsRevisionComponent::Equipment,
+        },
+        revision: value.revision,
+    }
+}
+fn native_source_identity(
+    value: &SourceInstanceIdentity,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsSourceIdentity {
+    let mut native = NativeMechanicsSourceIdentity {
+        intrinsic_instance: text.copy(""),
+        effect_instance: text.copy(""),
+        effect_source: text.copy(""),
+        equipped_source: text.copy(""),
+        request_operation: text.copy(""),
+        request_instance: text.copy(""),
+        ..NativeMechanicsSourceIdentity::default()
+    };
+    match value {
+        SourceInstanceIdentity::Intrinsic { entity, instance } => {
+            native.kind = NativeMechanicsActiveEffectProvenanceKind::Intrinsic;
+            native.intrinsic_entity_id = entity.raw();
+            native.intrinsic_instance = text.copy(instance.as_str());
+        }
+        SourceInstanceIdentity::Effect {
+            entity,
+            effect,
+            stack,
+            source,
+        } => {
+            native.kind = NativeMechanicsActiveEffectProvenanceKind::Effect;
+            native.effect_entity_id = entity.raw();
+            native.effect_instance = text.copy(effect.as_str());
+            native.effect_stack = *stack;
+            native.effect_source = text.copy(source.as_str());
+        }
+        SourceInstanceIdentity::EquippedItem {
+            owner,
+            item,
+            source,
+        } => {
+            native.kind = NativeMechanicsActiveEffectProvenanceKind::EquippedItem;
+            native.equipped_owner_entity_id = owner.raw();
+            native.equipped_item_entity_id = item.raw();
+            native.equipped_source = text.copy(source.as_str());
+        }
+        SourceInstanceIdentity::Request {
+            operation,
+            instance,
+        } => {
+            native.kind = NativeMechanicsActiveEffectProvenanceKind::Request;
+            native.request_operation = text.copy(operation.as_str());
+            native.request_instance = text.copy(instance.as_str());
+        }
+    }
+    native
+}
+fn native_stat_decision(
+    value: &StatDecision,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsStatDecisionRow {
+    let (
+        has_contribution,
+        contribution_kind,
+        contribution_amount,
+        ratio_numerator,
+        ratio_denominator,
+    ) = match &value.contribution {
+        Some(StatContribution::Add { amount }) => (
+            true,
+            NativeMechanicsContributionKind::Add,
+            amount.get(),
+            0,
+            0,
+        ),
+        Some(StatContribution::Scale { ratio }) => (
+            true,
+            NativeMechanicsContributionKind::Scale,
+            0,
+            ratio.numerator(),
+            ratio.denominator(),
+        ),
+        Some(StatContribution::Minimum { value }) => (
+            true,
+            NativeMechanicsContributionKind::Minimum,
+            value.get(),
+            0,
+            0,
+        ),
+        Some(StatContribution::Maximum { value }) => (
+            true,
+            NativeMechanicsContributionKind::Maximum,
+            value.get(),
+            0,
+            0,
+        ),
+        None => (false, NativeMechanicsContributionKind::Add, 0, 0, 0),
+    };
+    NativeMechanicsStatDecisionRow {
+        source: native_source_identity(&value.source, text),
+        source_definition: text.copy(value.source_definition.as_str()),
+        has_contribution_index: value.contribution_index.is_some(),
+        contribution_index: value.contribution_index.unwrap_or_default(),
+        outcome: match value.outcome {
+            DecisionOutcome::Applied => NativeMechanicsDecisionOutcome::Applied,
+            DecisionOutcome::Suppressed => NativeMechanicsDecisionOutcome::Suppressed,
+            DecisionOutcome::Inapplicable => NativeMechanicsDecisionOutcome::Inapplicable,
+        },
+        has_stacking_group: value.stacking_group.is_some(),
+        stacking_group: text.copy(
+            value
+                .stacking_group
+                .as_ref()
+                .map_or("", |group| group.as_str()),
+        ),
+        has_stacking: value.stacking.is_some(),
+        stacking: match value.stacking.unwrap_or(StackingPolicy::Sum) {
+            StackingPolicy::Sum => NativeMechanicsStackingPolicy::Sum,
+            StackingPolicy::Highest => NativeMechanicsStackingPolicy::Highest,
+            StackingPolicy::Lowest => NativeMechanicsStackingPolicy::Lowest,
+            StackingPolicy::UniqueBySource => NativeMechanicsStackingPolicy::UniqueBySource,
+        },
+        has_contribution,
+        contribution_kind,
+        contribution_amount,
+        contribution_ratio_numerator: ratio_numerator,
+        contribution_ratio_denominator: ratio_denominator,
+    }
 }
 fn guarded_revision(
     guard: NativeMechanicsRevisionGuard,
@@ -3566,7 +3909,7 @@ mod tests {
                 component: NativeMechanicsRevisionComponent::Tracks,
             },
         };
-        let mut rejected_cross_component = NativeMechanicsStatMutationReceipt::default();
+        let mut rejected_cross_component = NativeMechanicsStatMutationLease::default();
         assert_eq!(
             unsafe {
                 set_stat_base(
@@ -3578,17 +3921,35 @@ mod tests {
             0
         );
 
+        let request_sources = [NativeMechanicsRequestSource {
+            instance: utf8("request_bonus"),
+            definition: utf8("bonus"),
+        }];
         let evaluation_request = NativeMechanicsStatOperationRequest {
             entity,
             stat: utf8("strength"),
             operation: utf8("evaluate"),
+            request_sources: request_sources.as_ptr(),
+            request_sources_len: request_sources.len(),
         };
-        let mut evaluation = NativeMechanicsStatEvaluationReceipt::default();
+        let mut evaluation = NativeMechanicsStatEvaluationLease::default();
         assert_eq!(
             unsafe { evaluate_stat(context, &evaluation_request, &mut evaluation) },
             ABI_OK
         );
-        assert_eq!(evaluation.value, 12);
+        assert_eq!(evaluation.value, 14);
+        assert_eq!(evaluation.decisions_len, 2);
+        assert!(evaluation.observed_revisions_len >= 2);
+        assert_eq!(evaluation.source_cost.request_entries_visited, 1);
+        let decisions =
+            unsafe { std::slice::from_raw_parts(evaluation.decisions, evaluation.decisions_len) };
+        assert!(decisions.iter().any(|decision| {
+            decision.source.kind == NativeMechanicsActiveEffectProvenanceKind::Request
+        }));
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, evaluation.handle) },
+            ABI_OK
+        );
 
         let spend_request = NativeMechanicsTrackMutationRequest {
             entity,
@@ -3624,6 +3985,36 @@ mod tests {
         );
         assert_eq!(set.target, 9);
         assert_eq!(set.after, 9);
+        let mut stat_mutation = NativeMechanicsStatMutationLease::default();
+        assert_eq!(
+            unsafe {
+                set_stat_base(
+                    context,
+                    &NativeMechanicsStatBaseMutationRequest {
+                        entity,
+                        operation: utf8("set_base"),
+                        source: utf8("set_base_source"),
+                        stat: utf8("strength"),
+                        base: 13,
+                        revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_revision: entity_receipt.stats_revision,
+                    },
+                    &mut stat_mutation,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(stat_mutation.before, 10);
+        assert_eq!(stat_mutation.after, 13);
+        assert!(stat_mutation.observed_revisions_len >= 1);
+        assert_eq!(
+            stat_mutation.source.kind,
+            NativeMechanicsActiveEffectProvenanceKind::Request
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, stat_mutation.handle) },
+            ABI_OK
+        );
         assert_eq!(unsafe { destroy_catalog(context, catalog) }, 0);
         let state_entity = bridge.entities[&entity.value].entity;
         let released_entity = entity;

@@ -88,7 +88,11 @@ public sealed class Product : IEngineProduct
         _engine.Mechanics.SetInitialTrack(new MechanicsInitialTrackRequest(_mechanicsEntity, "focus", 10));
         _engine.Mechanics.BindIntrinsicSource(new MechanicsIntrinsicSourceRequest(_mechanicsEntity, "trial_bonus_instance", "trial_bonus"));
         MechanicsEntityReceipt mechanicsReceipt = _engine.Mechanics.CommitEntity(_mechanicsEntity);
-        MechanicsStatEvaluationReceipt strength = _engine.Mechanics.EvaluateStat(new MechanicsStatOperationRequest(_mechanicsEntity, "strength", "trial_evaluate"));
+        MechanicsStatEvaluationLeaseReceipt strength = _engine.Mechanics.EvaluateStat(new MechanicsStatOperationRequest(
+            _mechanicsEntity,
+            "strength",
+            "trial_evaluate",
+            ReadOnlyMemory<MechanicsRequestSource>.Empty));
         if (strength.Value != 12)
         {
             throw new InvalidOperationException("exact mechanics contribution did not apply");

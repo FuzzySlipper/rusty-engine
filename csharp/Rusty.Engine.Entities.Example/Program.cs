@@ -192,9 +192,9 @@ sealed class MechanicsAdapterFake : IMechanicsService
         return new MechanicsLifecycleReceipt(1, arg0.Lifecycle, InitialLifecycleStamp + 1);
     }
     public MechanicsStatReadReceipt ReadStat(MechanicsStatReadRequest arg0) => throw new NotSupportedException();
-    public MechanicsStatEvaluationReceipt EvaluateStat(MechanicsStatOperationRequest arg0) => throw new NotSupportedException();
+    public MechanicsStatEvaluationLeaseReceipt EvaluateStat(MechanicsStatOperationRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackReadReceipt ReadTrack(MechanicsTrackReadRequest arg0) => throw new NotSupportedException();
-    public MechanicsStatMutationReceipt SetStatBase(MechanicsStatBaseMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsStatMutationLeaseReceipt SetStatBase(MechanicsStatBaseMutationRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackSetReceipt SetTrack(MechanicsTrackSetRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackMutationReceipt SpendTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackMutationReceipt RestoreTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();

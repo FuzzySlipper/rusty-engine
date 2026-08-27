@@ -7,7 +7,7 @@ pub struct NativeUiStreamHandle {
 /// One borrowed UTF-8 identity. It is valid only for the immediate direct
 /// service call that accepts it.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NativeUtf8Slice {
     pub bytes: *const u8,
     pub len: usize,
