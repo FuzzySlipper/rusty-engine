@@ -21,6 +21,7 @@ mod rng;
 mod spatial;
 mod ui;
 mod voxel;
+mod voxel_content;
 
 pub use animation::*;
 pub use appearance::*;
@@ -38,3 +39,4 @@ pub use rng::*;
 pub use spatial::*;
 pub use ui::*;
 pub use voxel::*;
+pub use voxel_content::*;

@@ -12,6 +12,7 @@ mod rng;
 mod spatial;
 mod ui;
 mod voxel;
+mod voxel_content;
 
 pub use appearance::{CsharpRenderResource, CsharpRenderResourceKind};
 pub use composition::{

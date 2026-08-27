@@ -77,6 +77,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Dynamics = new DynamicsServiceImplementation(native.dynamics);
                     Spatial = new SpatialServiceImplementation(native.spatial);
                     Voxel = new VoxelServiceImplementation(native.voxel);
+                    VoxelContent = new VoxelContentServiceImplementation(native.voxel_content);
                     Appearance = new AppearanceServiceImplementation(native.appearance);
                     Animation = new AnimationServiceImplementation(native.animation);
                     CameraView = new CameraViewServiceImplementation(native.camera_view);
@@ -91,6 +92,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IDynamicsService Dynamics { get; }
                 public ISpatialService Spatial { get; }
                 public IVoxelService Voxel { get; }
+                public IVoxelContentService VoxelContent { get; }
                 public IAppearanceService Appearance { get; }
                 public IAnimationService Animation { get; }
                 public ICameraViewService CameraView { get; }

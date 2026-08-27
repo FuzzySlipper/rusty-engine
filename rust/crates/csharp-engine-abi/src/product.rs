@@ -759,6 +759,7 @@ pub struct NativeEngineApi {
     pub dynamics: NativeDynamicsApi,
     pub spatial: NativeSpatialApi,
     pub voxel: NativeVoxelApi,
+    pub voxel_content: NativeVoxelContentApi,
     pub appearance: NativeAppearanceApi,
     pub animation: NativeAnimationApi,
     pub audio: NativeAudioApi,

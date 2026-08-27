@@ -23,6 +23,8 @@ svc-pathfinding.workspace = true
 svc-spatial.workspace = true
 svc-rng.workspace = true
 sha2.workspace = true
+voxel-asset.workspace = true
+voxel-object-runtime.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

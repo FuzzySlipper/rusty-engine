@@ -554,6 +554,8 @@ dependencies = [
  "svc-rng",
  "svc-spatial",
  "tempfile",
+ "voxel-asset",
+ "voxel-object-runtime",
 ]
 
 [[package]]

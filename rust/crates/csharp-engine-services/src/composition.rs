@@ -18,6 +18,7 @@ use crate::{
     rng::RuntimeRngBridge,
     spatial::RuntimeSpatialBridge,
     ui::{RuntimeUiBridge, RuntimeUiCall},
+    voxel_content::RuntimeVoxelContentBridge,
 };
 use render_projection::RuntimeAppearanceCatalog;
 use runtime_ui::RuntimeUiProjectionEnvelope;
@@ -39,6 +40,7 @@ fn engine_api(
     camera_view_bridge: &mut RuntimeCameraViewBridge,
     dynamics_bridge: &mut RuntimeDynamicsBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
+    voxel_content_bridge: &mut RuntimeVoxelContentBridge,
     rng_bridge: &mut RuntimeRngBridge,
     mechanics_bridge: &mut RuntimeMechanicsBridge,
     persistence_bridge: &mut RuntimePersistenceBridge,
@@ -49,6 +51,7 @@ fn engine_api(
         dynamics: crate::dynamics::api(dynamics_bridge),
         spatial: crate::spatial::api(spatial_bridge),
         voxel: crate::voxel::api(spatial_bridge),
+        voxel_content: crate::voxel_content::api(voxel_content_bridge),
         appearance: NativeAppearanceApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
@@ -165,6 +168,7 @@ pub struct EngineServiceSet {
     camera_view: RuntimeCameraViewBridge,
     dynamics: RuntimeDynamicsBridge,
     spatial: RuntimeSpatialBridge,
+    voxel_content: RuntimeVoxelContentBridge,
     rng: RuntimeRngBridge,
     mechanics: RuntimeMechanicsBridge,
     persistence: RuntimePersistenceBridge,
@@ -205,6 +209,7 @@ impl EngineServiceSet {
             camera_view: RuntimeCameraViewBridge::new(),
             dynamics,
             spatial,
+            voxel_content: RuntimeVoxelContentBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
             mechanics: crate::mechanics::RuntimeMechanicsBridge::new(),
             persistence: crate::persistence::RuntimePersistenceBridge::new(),
@@ -219,6 +224,7 @@ impl EngineServiceSet {
             &mut self.camera_view,
             &mut self.dynamics,
             &mut self.spatial,
+            &mut self.voxel_content,
             &mut self.rng,
             &mut self.mechanics,
             &mut self.persistence,
