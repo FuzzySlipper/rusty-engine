@@ -105,7 +105,31 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public void DefineStat(MechanicsStatDefinitionRequest arg0) => throw new NotSupportedException();
     public void DefineTrack(MechanicsTrackDefinitionRequest arg0) => throw new NotSupportedException();
     public void DefineContribution(MechanicsContributionDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineSource(MechanicsSourceDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineDamageKind(MechanicsDamageKindDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineDamageResponse(MechanicsDamageResponseDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineEffect(MechanicsEffectDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineCapacityMetric(MechanicsCapacityMetricDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineItem(MechanicsItemDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineEquipmentSlot(MechanicsEquipmentSlotDefinitionRequest arg0) => throw new NotSupportedException();
     public void AdmitCatalog(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsCatalogIdentityLeaseReceipt ReadCatalogIdentity(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsStatCatalogLeaseReceipt ReadCatalogStats(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsTrackCatalogLeaseReceipt ReadCatalogTracks(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsSourceCatalogLeaseReceipt ReadCatalogSources(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsStatContributionCatalogLeaseReceipt ReadCatalogStatContributions(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsDamageKindCatalogLeaseReceipt ReadCatalogDamageKinds(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsDamageResponseCatalogLeaseReceipt ReadCatalogDamageResponses(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsEffectCatalogLeaseReceipt ReadCatalogEffects(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsEffectSourceCatalogLeaseReceipt ReadCatalogEffectSources(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsCapacityMetricCatalogLeaseReceipt ReadCatalogCapacityMetrics(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsItemCatalogLeaseReceipt ReadCatalogItems(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsItemClassificationCatalogLeaseReceipt ReadCatalogItemClassifications(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsItemCapacityCostCatalogLeaseReceipt ReadCatalogItemCapacityCosts(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsItemEquipmentPolicyCatalogLeaseReceipt ReadCatalogItemEquipmentPolicies(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsItemSourceCatalogLeaseReceipt ReadCatalogItemSources(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsEquipmentSlotCatalogLeaseReceipt ReadCatalogEquipmentSlots(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsSlotClassificationCatalogLeaseReceipt ReadCatalogSlotClassifications(MechanicsCatalog arg0) => throw new NotSupportedException();
     public MechanicsEntity BindEntity(MechanicsEntityBindRequest arg0) => Lease();
     public MechanicsEntity RebindEntity(MechanicsEntityRebindRequest arg0)
     {
@@ -119,6 +143,7 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public void SetInitialStat(MechanicsInitialStatRequest arg0) { }
     public void SetInitialTrack(MechanicsInitialTrackRequest arg0) => throw new NotSupportedException();
     public void BindIntrinsicSource(MechanicsIntrinsicSourceRequest arg0) => throw new NotSupportedException();
+    public void SetInitialComponents(MechanicsInitialComponentsRequest arg0) => throw new NotSupportedException();
     public MechanicsEntityReceipt CommitEntity(MechanicsEntity arg0)
     {
         MechanicsComponentRevision Slot(MechanicsRevisionComponent component, bool present)

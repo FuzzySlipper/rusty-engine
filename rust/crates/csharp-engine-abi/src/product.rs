@@ -465,6 +465,93 @@ pub type NativeAdmitMechanicsCatalog =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogHandle) -> i32;
 pub type NativeDestroyMechanicsCatalog =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogHandle) -> i32;
+pub type NativeReadMechanicsCatalogIdentity = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsCatalogIdentityLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogStats = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsStatCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogTracks = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsTrackCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogSources = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsSourceCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogStatContributions = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsStatContributionCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogDamageKinds = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsDamageKindCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogDamageResponses = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsDamageResponseCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogEffects = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsEffectCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogEffectSources = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsEffectSourceCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogCapacityMetrics = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsCapacityMetricCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogItems = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsItemCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogItemClassifications = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsItemClassificationCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogItemCapacityCosts = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsItemCapacityCostCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogItemEquipmentPolicies = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsItemEquipmentPolicyCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogItemSources = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsItemSourceCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogEquipmentSlots = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsEquipmentSlotCatalogLease,
+) -> i32;
+pub type NativeReadMechanicsCatalogSlotClassifications = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsSlotClassificationCatalogLease,
+) -> i32;
+pub type NativeDestroyMechanicsCatalogLease =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogLeaseHandle) -> i32;
 pub type NativeBindMechanicsEntity = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEntityBindRequest,
@@ -753,6 +840,24 @@ pub struct NativeMechanicsApi {
     pub define_equipment_slot: NativeDefineMechanicsEquipmentSlot,
     pub admit_catalog: NativeAdmitMechanicsCatalog,
     pub destroy_catalog: NativeDestroyMechanicsCatalog,
+    pub read_catalog_identity: NativeReadMechanicsCatalogIdentity,
+    pub read_catalog_stats: NativeReadMechanicsCatalogStats,
+    pub read_catalog_tracks: NativeReadMechanicsCatalogTracks,
+    pub read_catalog_sources: NativeReadMechanicsCatalogSources,
+    pub read_catalog_stat_contributions: NativeReadMechanicsCatalogStatContributions,
+    pub read_catalog_damage_kinds: NativeReadMechanicsCatalogDamageKinds,
+    pub read_catalog_damage_responses: NativeReadMechanicsCatalogDamageResponses,
+    pub read_catalog_effects: NativeReadMechanicsCatalogEffects,
+    pub read_catalog_effect_sources: NativeReadMechanicsCatalogEffectSources,
+    pub read_catalog_capacity_metrics: NativeReadMechanicsCatalogCapacityMetrics,
+    pub read_catalog_items: NativeReadMechanicsCatalogItems,
+    pub read_catalog_item_classifications: NativeReadMechanicsCatalogItemClassifications,
+    pub read_catalog_item_capacity_costs: NativeReadMechanicsCatalogItemCapacityCosts,
+    pub read_catalog_item_equipment_policies: NativeReadMechanicsCatalogItemEquipmentPolicies,
+    pub read_catalog_item_sources: NativeReadMechanicsCatalogItemSources,
+    pub read_catalog_equipment_slots: NativeReadMechanicsCatalogEquipmentSlots,
+    pub read_catalog_slot_classifications: NativeReadMechanicsCatalogSlotClassifications,
+    pub destroy_catalog_lease: NativeDestroyMechanicsCatalogLease,
     pub bind_entity: NativeBindMechanicsEntity,
     pub rebind_entity: NativeRebindMechanicsEntity,
     pub set_initial_stat: NativeSetMechanicsInitialStat,

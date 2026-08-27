@@ -39,6 +39,52 @@ struct CatalogSlot {
     world: MechanicsWorld,
 }
 
+/// The rows and every UTF-8 allocation returned from catalog inspection live in one
+/// service-owned box until the matching catalog lease is explicitly destroyed.
+struct CatalogLeaseBacking {
+    _text: Vec<String>,
+    rows: CatalogLeaseRows,
+}
+
+enum CatalogLeaseRows {
+    Identity(Vec<NativeMechanicsCatalogIdentityRow>),
+    Stats(Vec<NativeMechanicsStatCatalogRow>),
+    Tracks(Vec<NativeMechanicsTrackCatalogRow>),
+    Sources(Vec<NativeMechanicsSourceCatalogRow>),
+    StatContributions(Vec<NativeMechanicsStatContributionCatalogRow>),
+    DamageKinds(Vec<NativeMechanicsDamageKindCatalogRow>),
+    DamageResponses(Vec<NativeMechanicsDamageResponseCatalogRow>),
+    Effects(Vec<NativeMechanicsEffectCatalogRow>),
+    EffectSources(Vec<NativeMechanicsEffectSourceCatalogRow>),
+    CapacityMetrics(Vec<NativeMechanicsCapacityMetricCatalogRow>),
+    Items(Vec<NativeMechanicsItemCatalogRow>),
+    ItemClassifications(Vec<NativeMechanicsItemClassificationCatalogRow>),
+    ItemCapacityCosts(Vec<NativeMechanicsItemCapacityCostCatalogRow>),
+    ItemEquipmentPolicies(Vec<NativeMechanicsItemEquipmentPolicyCatalogRow>),
+    ItemSources(Vec<NativeMechanicsItemSourceCatalogRow>),
+    EquipmentSlots(Vec<NativeMechanicsEquipmentSlotCatalogRow>),
+    SlotClassifications(Vec<NativeMechanicsSlotClassificationCatalogRow>),
+}
+
+#[derive(Default)]
+struct CatalogLeaseText {
+    values: Vec<String>,
+}
+
+impl CatalogLeaseText {
+    fn copy(&mut self, value: impl AsRef<str>) -> NativeUtf8Slice {
+        self.values.push(value.as_ref().to_owned());
+        let value = self
+            .values
+            .last()
+            .expect("just inserted catalog lease text");
+        NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        }
+    }
+}
+
 /// Catalog-scoped mechanism storage keyed by the product's canonical EntityWorld identity.
 /// The bridge never allocates product entity identifiers: it only mirrors supplied ones.
 struct MechanicsWorld {
@@ -149,8 +195,10 @@ pub(crate) struct RuntimeMechanicsBridge {
     entities: BTreeMap<u64, EntityBinding>,
     /// A product canonical entity is admitted into at most one mechanics catalog world.
     canonical_entities: BTreeMap<EntityId, u64>,
+    catalog_leases: BTreeMap<u64, Box<CatalogLeaseBacking>>,
     next_catalog: u64,
     next_entity: u64,
+    next_catalog_lease: u64,
 }
 
 impl RuntimeMechanicsBridge {
@@ -159,8 +207,10 @@ impl RuntimeMechanicsBridge {
             catalogs: BTreeMap::new(),
             entities: BTreeMap::new(),
             canonical_entities: BTreeMap::new(),
+            catalog_leases: BTreeMap::new(),
             next_catalog: 1,
             next_entity: 1,
+            next_catalog_lease: 1,
         }
     }
 
@@ -192,6 +242,16 @@ impl RuntimeMechanicsBridge {
             binding.entity,
         ))
     }
+
+    fn insert_catalog_lease(
+        &mut self,
+        backing: CatalogLeaseBacking,
+    ) -> Option<NativeMechanicsCatalogLeaseHandle> {
+        let value = self.next_catalog_lease;
+        self.next_catalog_lease = value.checked_add(1)?;
+        self.catalog_leases.insert(value, Box::new(backing));
+        Some(NativeMechanicsCatalogLeaseHandle { value })
+    }
 }
 
 pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
@@ -210,6 +270,24 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         define_equipment_slot,
         admit_catalog,
         destroy_catalog,
+        read_catalog_identity,
+        read_catalog_stats,
+        read_catalog_tracks,
+        read_catalog_sources,
+        read_catalog_stat_contributions,
+        read_catalog_damage_kinds,
+        read_catalog_damage_responses,
+        read_catalog_effects,
+        read_catalog_effect_sources,
+        read_catalog_capacity_metrics,
+        read_catalog_items,
+        read_catalog_item_classifications,
+        read_catalog_item_capacity_costs,
+        read_catalog_item_equipment_policies,
+        read_catalog_item_sources,
+        read_catalog_equipment_slots,
+        read_catalog_slot_classifications,
+        destroy_catalog_lease,
         bind_entity,
         rebind_entity,
         set_initial_stat,
@@ -827,6 +905,557 @@ unsafe extern "C" fn destroy_catalog(
         .retain(|_, catalog| *catalog != handle.value);
     bridge.catalogs.remove(&handle.value);
     ABI_OK
+}
+
+fn build_catalog_lease<F>(
+    bridge: &RuntimeMechanicsBridge,
+    handle: NativeMechanicsCatalogHandle,
+    build: F,
+) -> Option<CatalogLeaseBacking>
+where
+    F: FnOnce(&MechanicsCatalog, &mut CatalogLeaseText) -> CatalogLeaseRows,
+{
+    let catalog = bridge.catalogs.get(&handle.value)?.catalog.as_ref()?;
+    let mut text = CatalogLeaseText::default();
+    let rows = build(catalog, &mut text);
+    Some(CatalogLeaseBacking {
+        _text: text.values,
+        rows,
+    })
+}
+
+macro_rules! read_catalog_rows {
+    ($function:ident, $lease:ident, $variant:ident, $row:ident, $build:expr) => {
+        unsafe extern "C" fn $function(
+            context: *mut c_void,
+            catalog: NativeMechanicsCatalogHandle,
+            result: *mut $lease,
+        ) -> i32 {
+            if context.is_null() || result.is_null() {
+                return 0;
+            }
+            let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+            let Some(backing) = build_catalog_lease(bridge, catalog, $build) else {
+                return 0;
+            };
+            let Some(handle) = bridge.insert_catalog_lease(backing) else {
+                return 0;
+            };
+            let entries = match &bridge
+                .catalog_leases
+                .get(&handle.value)
+                .expect("just inserted catalog lease")
+                .rows
+            {
+                CatalogLeaseRows::$variant(entries) => entries,
+                _ => unreachable!("catalog lease row kind matches its reader"),
+            };
+            unsafe {
+                *result = $lease {
+                    handle,
+                    entries: entries.as_ptr(),
+                    entries_len: entries.len(),
+                    catalog_id: catalog.value,
+                };
+            }
+            ABI_OK
+        }
+    };
+}
+
+read_catalog_rows!(
+    read_catalog_identity,
+    NativeMechanicsCatalogIdentityLease,
+    Identity,
+    NativeMechanicsCatalogIdentityRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| {
+        CatalogLeaseRows::Identity(vec![NativeMechanicsCatalogIdentityRow {
+            version: text.copy(catalog.version().as_str()),
+            fingerprint: text.copy(catalog.fingerprint()),
+        }])
+    }
+);
+read_catalog_rows!(
+    read_catalog_stats,
+    NativeMechanicsStatCatalogLease,
+    Stats,
+    NativeMechanicsStatCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| {
+        CatalogLeaseRows::Stats(
+            catalog
+                .view()
+                .stats()
+                .iter()
+                .map(|stat| NativeMechanicsStatCatalogRow {
+                    id: text.copy(stat.id.as_str()),
+                    minimum: stat.minimum.get(),
+                    maximum: stat.maximum.get(),
+                })
+                .collect(),
+        )
+    }
+);
+read_catalog_rows!(
+    read_catalog_tracks,
+    NativeMechanicsTrackCatalogLease,
+    Tracks,
+    NativeMechanicsTrackCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| {
+        CatalogLeaseRows::Tracks(
+            catalog
+                .view()
+                .tracks()
+                .iter()
+                .map(|track| {
+                    let (maximum_kind, fixed_maximum, maximum_stat) = match &track.maximum {
+                        TrackMaximum::Fixed { value } => (
+                            NativeMechanicsTrackMaximumKind::Fixed,
+                            value.get(),
+                            text.copy(""),
+                        ),
+                        TrackMaximum::Stat { stat } => (
+                            NativeMechanicsTrackMaximumKind::Stat,
+                            0,
+                            text.copy(stat.as_str()),
+                        ),
+                    };
+                    NativeMechanicsTrackCatalogRow {
+                        id: text.copy(track.id.as_str()),
+                        minimum: track.minimum.get(),
+                        maximum_kind,
+                        fixed_maximum,
+                        maximum_stat,
+                    }
+                })
+                .collect(),
+        )
+    }
+);
+read_catalog_rows!(
+    read_catalog_sources,
+    NativeMechanicsSourceCatalogLease,
+    Sources,
+    NativeMechanicsSourceCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| {
+        CatalogLeaseRows::Sources(
+            catalog
+                .view()
+                .sources()
+                .iter()
+                .map(|source| NativeMechanicsSourceCatalogRow {
+                    id: text.copy(source.id.as_str()),
+                    priority: source.priority,
+                })
+                .collect(),
+        )
+    }
+);
+read_catalog_rows!(
+    read_catalog_stat_contributions,
+    NativeMechanicsStatContributionCatalogLease,
+    StatContributions,
+    NativeMechanicsStatContributionCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| {
+        CatalogLeaseRows::StatContributions(
+            catalog
+                .view()
+                .sources()
+                .iter()
+                .flat_map(|source| {
+                    source
+                        .stat_contributions
+                        .iter()
+                        .map(move |entry| (source, entry))
+                })
+                .map(|(source, entry)| {
+                    let (kind, amount, ratio_numerator, ratio_denominator) =
+                        match entry.contribution {
+                            StatContribution::Add { amount } => {
+                                (NativeMechanicsContributionKind::Add, amount.get(), 0, 0)
+                            }
+                            StatContribution::Scale { ratio } => (
+                                NativeMechanicsContributionKind::Scale,
+                                0,
+                                ratio.numerator(),
+                                ratio.denominator(),
+                            ),
+                            StatContribution::Minimum { value } => {
+                                (NativeMechanicsContributionKind::Minimum, value.get(), 0, 0)
+                            }
+                            StatContribution::Maximum { value } => {
+                                (NativeMechanicsContributionKind::Maximum, value.get(), 0, 0)
+                            }
+                        };
+                    NativeMechanicsStatContributionCatalogRow {
+                        source: text.copy(source.id.as_str()),
+                        stat: text.copy(entry.stat.as_str()),
+                        kind,
+                        amount,
+                        ratio_numerator,
+                        ratio_denominator,
+                        stacking_group: text.copy(entry.stacking_group.as_str()),
+                        stacking: native_stacking(entry.stacking),
+                    }
+                })
+                .collect(),
+        )
+    }
+);
+read_catalog_rows!(
+    read_catalog_damage_kinds,
+    NativeMechanicsDamageKindCatalogLease,
+    DamageKinds,
+    NativeMechanicsDamageKindCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::DamageKinds(
+        catalog
+            .view()
+            .damage_kinds()
+            .iter()
+            .map(|kind| NativeMechanicsDamageKindCatalogRow {
+                id: text.copy(kind.id.as_str())
+            })
+            .collect()
+    )
+);
+read_catalog_rows!(
+    read_catalog_damage_responses,
+    NativeMechanicsDamageResponseCatalogLease,
+    DamageResponses,
+    NativeMechanicsDamageResponseCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| {
+        CatalogLeaseRows::DamageResponses(
+            catalog
+                .view()
+                .sources()
+                .iter()
+                .flat_map(|source| {
+                    source
+                        .damage_responses
+                        .iter()
+                        .map(move |entry| (source, entry))
+                })
+                .map(|(source, entry)| {
+                    let (selector_is_exact, selector_damage_kind) = match entry.selector() {
+                        DamageKindSelector::Any => (false, text.copy("")),
+                        DamageKindSelector::Exact { damage_kind } => {
+                            (true, text.copy(damage_kind.as_str()))
+                        }
+                    };
+                    let (
+                        kind,
+                        amount,
+                        ratio_numerator,
+                        ratio_denominator,
+                        stacking_group,
+                        stacking,
+                        absorb_track,
+                    ) = match entry {
+                        DamageResponseDefinition::Prevent {
+                            stacking_group,
+                            stacking,
+                            ..
+                        } => (
+                            NativeMechanicsDamageResponseKind::Prevent,
+                            0,
+                            0,
+                            0,
+                            text.copy(stacking_group.as_str()),
+                            native_stacking(*stacking),
+                            text.copy(""),
+                        ),
+                        DamageResponseDefinition::FlatReduction {
+                            amount,
+                            stacking_group,
+                            stacking,
+                            ..
+                        } => (
+                            NativeMechanicsDamageResponseKind::FlatReduction,
+                            amount.get(),
+                            0,
+                            0,
+                            text.copy(stacking_group.as_str()),
+                            native_stacking(*stacking),
+                            text.copy(""),
+                        ),
+                        DamageResponseDefinition::Scale {
+                            ratio,
+                            stacking_group,
+                            stacking,
+                            ..
+                        } => (
+                            NativeMechanicsDamageResponseKind::Scale,
+                            0,
+                            ratio.numerator(),
+                            ratio.denominator(),
+                            text.copy(stacking_group.as_str()),
+                            native_stacking(*stacking),
+                            text.copy(""),
+                        ),
+                        DamageResponseDefinition::Absorb { track, .. } => (
+                            NativeMechanicsDamageResponseKind::Absorb,
+                            0,
+                            0,
+                            0,
+                            text.copy(""),
+                            NativeMechanicsStackingPolicy::Sum,
+                            text.copy(track.as_str()),
+                        ),
+                    };
+                    NativeMechanicsDamageResponseCatalogRow {
+                        source: text.copy(source.id.as_str()),
+                        kind,
+                        selector_is_exact,
+                        selector_damage_kind,
+                        amount,
+                        ratio_numerator,
+                        ratio_denominator,
+                        stacking_group,
+                        stacking,
+                        absorb_track,
+                    }
+                })
+                .collect(),
+        )
+    }
+);
+read_catalog_rows!(
+    read_catalog_effects,
+    NativeMechanicsEffectCatalogLease,
+    Effects,
+    NativeMechanicsEffectCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| {
+        CatalogLeaseRows::Effects(
+            catalog
+                .view()
+                .effects()
+                .iter()
+                .map(|effect| {
+                    let (stacking, maximum_instances) = match effect.stacking {
+                        EffectStackingPolicy::IndependentByProvenance { maximum_instances } => (
+                            NativeMechanicsEffectStackingKind::IndependentByProvenance,
+                            maximum_instances,
+                        ),
+                        EffectStackingPolicy::Refresh => {
+                            (NativeMechanicsEffectStackingKind::Refresh, 0)
+                        }
+                        EffectStackingPolicy::Replace => {
+                            (NativeMechanicsEffectStackingKind::Replace, 0)
+                        }
+                    };
+                    NativeMechanicsEffectCatalogRow {
+                        id: text.copy(effect.id.as_str()),
+                        stacking_group: text.copy(effect.stacking_group.as_str()),
+                        stacking,
+                        maximum_instances,
+                        maximum_stacks: effect.maximum_stacks,
+                    }
+                })
+                .collect(),
+        )
+    }
+);
+read_catalog_rows!(
+    read_catalog_effect_sources,
+    NativeMechanicsEffectSourceCatalogLease,
+    EffectSources,
+    NativeMechanicsEffectSourceCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::EffectSources(
+        catalog
+            .view()
+            .effects()
+            .iter()
+            .flat_map(|effect| effect.sources.iter().map(move |source| (effect, source)))
+            .map(|(effect, source)| NativeMechanicsEffectSourceCatalogRow {
+                effect: text.copy(effect.id.as_str()),
+                source: text.copy(source.as_str())
+            })
+            .collect()
+    )
+);
+read_catalog_rows!(
+    read_catalog_capacity_metrics,
+    NativeMechanicsCapacityMetricCatalogLease,
+    CapacityMetrics,
+    NativeMechanicsCapacityMetricCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::CapacityMetrics(
+        catalog
+            .view()
+            .capacity_metrics()
+            .iter()
+            .map(|metric| NativeMechanicsCapacityMetricCatalogRow {
+                id: text.copy(metric.id.as_str())
+            })
+            .collect()
+    )
+);
+read_catalog_rows!(
+    read_catalog_items,
+    NativeMechanicsItemCatalogLease,
+    Items,
+    NativeMechanicsItemCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::Items(
+        catalog
+            .view()
+            .items()
+            .iter()
+            .map(|item| NativeMechanicsItemCatalogRow {
+                id: text.copy(item.id.as_str()),
+                kind: match item.kind {
+                    ItemKind::Fungible => NativeMechanicsItemKind::Fungible,
+                    ItemKind::Unique => NativeMechanicsItemKind::Unique,
+                },
+                maximum_quantity: item.maximum_quantity
+            })
+            .collect()
+    )
+);
+read_catalog_rows!(
+    read_catalog_item_classifications,
+    NativeMechanicsItemClassificationCatalogLease,
+    ItemClassifications,
+    NativeMechanicsItemClassificationCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::ItemClassifications(
+        catalog
+            .view()
+            .items()
+            .iter()
+            .flat_map(|item| item
+                .classifications
+                .iter()
+                .map(move |classification| (item, classification)))
+            .map(
+                |(item, classification)| NativeMechanicsItemClassificationCatalogRow {
+                    item: text.copy(item.id.as_str()),
+                    classification: text.copy(classification.as_str())
+                }
+            )
+            .collect()
+    )
+);
+read_catalog_rows!(
+    read_catalog_item_capacity_costs,
+    NativeMechanicsItemCapacityCostCatalogLease,
+    ItemCapacityCosts,
+    NativeMechanicsItemCapacityCostCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::ItemCapacityCosts(
+        catalog
+            .view()
+            .items()
+            .iter()
+            .flat_map(|item| item.capacity_costs.iter().map(move |cost| (item, cost)))
+            .map(|(item, cost)| NativeMechanicsItemCapacityCostCatalogRow {
+                item: text.copy(item.id.as_str()),
+                metric: text.copy(cost.metric.as_str()),
+                units: cost.units
+            })
+            .collect()
+    )
+);
+read_catalog_rows!(
+    read_catalog_item_equipment_policies,
+    NativeMechanicsItemEquipmentPolicyCatalogLease,
+    ItemEquipmentPolicies,
+    NativeMechanicsItemEquipmentPolicyCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| {
+        CatalogLeaseRows::ItemEquipmentPolicies(
+            catalog
+                .view()
+                .items()
+                .iter()
+                .filter_map(|item| item.equipment.as_ref().map(|equipment| (item, equipment)))
+                .map(
+                    |(item, equipment)| NativeMechanicsItemEquipmentPolicyCatalogRow {
+                        item: text.copy(item.id.as_str()),
+                        required_slots: equipment.required_slots,
+                        has_exclusive_group: equipment.exclusive_group.is_some(),
+                        exclusive_group: text.copy(
+                            equipment
+                                .exclusive_group
+                                .as_ref()
+                                .map_or("", |value| value.as_str()),
+                        ),
+                    },
+                )
+                .collect(),
+        )
+    }
+);
+read_catalog_rows!(
+    read_catalog_item_sources,
+    NativeMechanicsItemSourceCatalogLease,
+    ItemSources,
+    NativeMechanicsItemSourceCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::ItemSources(
+        catalog
+            .view()
+            .items()
+            .iter()
+            .flat_map(|item| item.sources.iter().map(move |source| (item, source)))
+            .map(|(item, source)| NativeMechanicsItemSourceCatalogRow {
+                item: text.copy(item.id.as_str()),
+                source: text.copy(source.as_str())
+            })
+            .collect()
+    )
+);
+read_catalog_rows!(
+    read_catalog_equipment_slots,
+    NativeMechanicsEquipmentSlotCatalogLease,
+    EquipmentSlots,
+    NativeMechanicsEquipmentSlotCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::EquipmentSlots(
+        catalog
+            .view()
+            .equipment_slots()
+            .iter()
+            .map(|slot| NativeMechanicsEquipmentSlotCatalogRow {
+                id: text.copy(slot.id.as_str())
+            })
+            .collect()
+    )
+);
+read_catalog_rows!(
+    read_catalog_slot_classifications,
+    NativeMechanicsSlotClassificationCatalogLease,
+    SlotClassifications,
+    NativeMechanicsSlotClassificationCatalogRow,
+    |catalog: &MechanicsCatalog, text: &mut CatalogLeaseText| CatalogLeaseRows::SlotClassifications(
+        catalog
+            .view()
+            .equipment_slots()
+            .iter()
+            .flat_map(|slot| slot
+                .allowed_classifications
+                .iter()
+                .map(move |classification| (slot, classification)))
+            .map(
+                |(slot, classification)| NativeMechanicsSlotClassificationCatalogRow {
+                    slot: text.copy(slot.id.as_str()),
+                    classification: text.copy(classification.as_str())
+                }
+            )
+            .collect()
+    )
+);
+
+unsafe extern "C" fn destroy_catalog_lease(
+    context: *mut c_void,
+    handle: NativeMechanicsCatalogLeaseHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    i32::from(bridge.catalog_leases.remove(&handle.value).is_some())
+}
+
+fn native_stacking(value: StackingPolicy) -> NativeMechanicsStackingPolicy {
+    match value {
+        StackingPolicy::Sum => NativeMechanicsStackingPolicy::Sum,
+        StackingPolicy::Highest => NativeMechanicsStackingPolicy::Highest,
+        StackingPolicy::Lowest => NativeMechanicsStackingPolicy::Lowest,
+        StackingPolicy::UniqueBySource => NativeMechanicsStackingPolicy::UniqueBySource,
+    }
 }
 
 unsafe extern "C" fn bind_entity(
@@ -2621,6 +3250,91 @@ mod tests {
             },
             0
         );
+    }
+
+    #[test]
+    fn catalog_stat_lease_is_copied_from_service_owned_storage_and_released_once() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("catalog_lease"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                define_stat(
+                    context,
+                    &NativeMechanicsStatDefinitionRequest {
+                        catalog,
+                        id: utf8("strength"),
+                        minimum: -2,
+                        maximum: 9,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
+
+        let mut identity = std::mem::MaybeUninit::<NativeMechanicsCatalogIdentityLease>::uninit();
+        assert_eq!(
+            unsafe { read_catalog_identity(context, catalog, identity.as_mut_ptr()) },
+            ABI_OK
+        );
+        let identity = unsafe { identity.assume_init() };
+        assert_eq!(identity.entries_len, 1);
+        let identity_row = unsafe { &*identity.entries };
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    identity_row.version.bytes,
+                    identity_row.version.len,
+                ))
+            },
+            "catalog_lease"
+        );
+        assert!(unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                identity_row.fingerprint.bytes,
+                identity_row.fingerprint.len,
+            ))
+        }
+        .starts_with("sha256:"));
+        assert_eq!(
+            unsafe { destroy_catalog_lease(context, identity.handle) },
+            ABI_OK
+        );
+
+        let mut lease = std::mem::MaybeUninit::<NativeMechanicsStatCatalogLease>::uninit();
+        assert_eq!(
+            unsafe { read_catalog_stats(context, catalog, lease.as_mut_ptr()) },
+            ABI_OK
+        );
+        let lease = unsafe { lease.assume_init() };
+        assert_eq!(lease.catalog_id, catalog.value);
+        assert_eq!(lease.entries_len, 1);
+        let row = unsafe { &*lease.entries };
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(row.id.bytes, row.id.len))
+            },
+            "strength"
+        );
+        assert_eq!((row.minimum, row.maximum), (-2, 9));
+        assert_eq!(
+            unsafe { destroy_catalog_lease(context, lease.handle) },
+            ABI_OK
+        );
+        assert_eq!(unsafe { destroy_catalog_lease(context, lease.handle) }, 0);
     }
 
     #[test]

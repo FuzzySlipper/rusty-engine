@@ -120,6 +120,275 @@ pub enum NativeMechanicsLifecycleGuard {
 pub struct NativeMechanicsCatalogHandle {
     pub value: u64,
 }
+/// A typed owner for one exact, bounded catalog inspection result. Every
+/// returned catalog row pointer remains valid only until `destroy_catalog_lease`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsCatalogLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsCatalogIdentityRow {
+    pub version: NativeUtf8Slice,
+    pub fingerprint: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsStatCatalogRow {
+    pub id: NativeUtf8Slice,
+    pub minimum: i64,
+    pub maximum: i64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsTrackCatalogRow {
+    pub id: NativeUtf8Slice,
+    pub minimum: i64,
+    pub maximum_kind: NativeMechanicsTrackMaximumKind,
+    pub fixed_maximum: i64,
+    pub maximum_stat: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsSourceCatalogRow {
+    pub id: NativeUtf8Slice,
+    pub priority: i16,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsStatContributionCatalogRow {
+    pub source: NativeUtf8Slice,
+    pub stat: NativeUtf8Slice,
+    pub kind: NativeMechanicsContributionKind,
+    pub amount: i64,
+    pub ratio_numerator: u32,
+    pub ratio_denominator: u32,
+    pub stacking_group: NativeUtf8Slice,
+    pub stacking: NativeMechanicsStackingPolicy,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsDamageKindCatalogRow {
+    pub id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsDamageResponseCatalogRow {
+    pub source: NativeUtf8Slice,
+    pub kind: NativeMechanicsDamageResponseKind,
+    pub selector_is_exact: bool,
+    pub selector_damage_kind: NativeUtf8Slice,
+    pub amount: i64,
+    pub ratio_numerator: u32,
+    pub ratio_denominator: u32,
+    pub stacking_group: NativeUtf8Slice,
+    pub stacking: NativeMechanicsStackingPolicy,
+    pub absorb_track: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEffectCatalogRow {
+    pub id: NativeUtf8Slice,
+    pub stacking_group: NativeUtf8Slice,
+    pub stacking: NativeMechanicsEffectStackingKind,
+    pub maximum_instances: u16,
+    pub maximum_stacks: u16,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEffectSourceCatalogRow {
+    pub effect: NativeUtf8Slice,
+    pub source: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsCapacityMetricCatalogRow {
+    pub id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemCatalogRow {
+    pub id: NativeUtf8Slice,
+    pub kind: NativeMechanicsItemKind,
+    pub maximum_quantity: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemClassificationCatalogRow {
+    pub item: NativeUtf8Slice,
+    pub classification: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemCapacityCostCatalogRow {
+    pub item: NativeUtf8Slice,
+    pub metric: NativeUtf8Slice,
+    pub units: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemEquipmentPolicyCatalogRow {
+    pub item: NativeUtf8Slice,
+    pub required_slots: u16,
+    pub has_exclusive_group: bool,
+    pub exclusive_group: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemSourceCatalogRow {
+    pub item: NativeUtf8Slice,
+    pub source: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEquipmentSlotCatalogRow {
+    pub id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsSlotClassificationCatalogRow {
+    pub slot: NativeUtf8Slice,
+    pub classification: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsCatalogIdentityLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsCatalogIdentityRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsStatCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsStatCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsTrackCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsTrackCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsSourceCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsSourceCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsStatContributionCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsStatContributionCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsDamageKindCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsDamageKindCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsDamageResponseCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsDamageResponseCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEffectCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsEffectCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEffectSourceCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsEffectSourceCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsCapacityMetricCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsCapacityMetricCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsItemCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemClassificationCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsItemClassificationCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemCapacityCostCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsItemCapacityCostCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemEquipmentPolicyCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsItemEquipmentPolicyCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemSourceCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsItemSourceCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEquipmentSlotCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsEquipmentSlotCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsSlotClassificationCatalogLease {
+    pub handle: NativeMechanicsCatalogLeaseHandle,
+    pub entries: *const NativeMechanicsSlotClassificationCatalogRow,
+    pub entries_len: usize,
+    pub catalog_id: u64,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMechanicsEntityHandle {
