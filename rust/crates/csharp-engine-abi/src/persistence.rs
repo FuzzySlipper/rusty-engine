@@ -1,4 +1,5 @@
 use crate::*;
+use std::ffi::c_void;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -70,3 +71,8 @@ pub struct NativePersistenceCopyBlobRequest {
     /// Must exactly match the blob's payload length.
     pub destination: NativeWritableByteSlice,
 }
+
+pub type NativeReadPersistenceBlobBytes =
+    unsafe extern "C" fn(*mut c_void, NativePersistenceBlobHandle, *mut NativeByteLease) -> i32;
+pub type NativeDestroyPersistenceByteLease =
+    unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;

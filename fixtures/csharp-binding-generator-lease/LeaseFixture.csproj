@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="ProductStubs.cs" />
+    <Compile Include="obj/Generated/EngineContracts.g.cs" />
+    <Compile Include="obj/Generated/EngineValues.g.cs" />
+    <Compile Include="obj/Generated/GeneratedInputs/Interop.g.cs" />
+    <Compile Include="obj/Generated/GeneratedInputs/EngineServiceImplementations.g.cs" />
+  </ItemGroup>
+</Project>

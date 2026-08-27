@@ -66,7 +66,12 @@ internal sealed class BindingModel
         if (parameters[^1].Contains('*', StringComparison.Ordinal) && !IsExactBorrowedPointer(parameters[^1]) && !IsExactOutPointer(parameters[^1])) Fail(family, method, signature, $"final pointer {parameters[^1]} must be exactly const T * input or T * out receipt");
         bool hasReceipt = IsExactOutPointer(parameters[^1]);
         int inputs = hasReceipt ? parameters.Length - 1 : parameters.Length;
-        if (hasReceipt) ValidateFixedType(family, method, signature, Bare(parameters[^1]), structs, enums, new HashSet<string>(StringComparer.Ordinal), "out receipt");
+        if (hasReceipt)
+        {
+            string receipt = Bare(parameters[^1]);
+            if (IsLeaseResult(receipt, structs)) ValidateLeaseResult(family, method, signature, receipt, structs, enums);
+            else ValidateFixedType(family, method, signature, receipt, structs, enums, new HashSet<string>(StringComparer.Ordinal), "out receipt");
+        }
         if (inputs == 0 && hasReceipt) return;
         if (inputs == 2 && IsExactBorrowedPointer(parameters[0]) && Bare(parameters[1]) == "size_t")
         {
@@ -113,6 +118,50 @@ internal sealed class BindingModel
             string nested = Bare(field.Type);
             if (nested is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) requires request-only marshalling");
             ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"{role} field {type}.{field.Name}");
+        }
+    }
+
+    internal static bool IsLeaseResult(string type, IReadOnlyDictionary<string, Struct> structs) =>
+        structs.TryGetValue(type, out Struct? value)
+        && value.Name.EndsWith("Lease", StringComparison.Ordinal)
+        && value.Fields.Any(field => field.Name == "handle" && Bare(field.Type).EndsWith("LeaseHandle", StringComparison.Ordinal));
+
+    private static void ValidateLeaseResult(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
+    {
+        Struct value = structs[type];
+        if (type == "NativeByteLease")
+        {
+            if (value.Fields.Count != 3 || Bare(value.Fields[0].Type) != "NativeByteLeaseHandle" || value.Fields[1].Name != "bytes" || !value.Fields[1].Type.Contains('*', StringComparison.Ordinal) || value.Fields[2].Name != "len" || Bare(value.Fields[2].Type) != "size_t")
+                Fail(family, method, signature, "NativeByteLease must contain its typed handle plus bytes/len");
+            return;
+        }
+        Field[] pointerFields = value.Fields.Where(field => field.Type.Contains('*', StringComparison.Ordinal)).ToArray();
+        if (pointerFields.Length != 1) { Fail(family, method, signature, $"lease result {type} must contain exactly one bounded collection pointer"); return; }
+        Field pointer = pointerFields[0];
+        int pointerIndex = value.Fields.ToList().IndexOf(pointer);
+        if (pointerIndex + 1 >= value.Fields.Count || value.Fields[pointerIndex + 1].Name != $"{pointer.Name}_len" || Bare(value.Fields[pointerIndex + 1].Type) != "size_t")
+        {
+            Fail(family, method, signature, $"lease result {type}.{pointer.Name} requires adjacent _len");
+            return;
+        }
+        string element = Bare(pointer.Type);
+        if (!structs.TryGetValue(element, out Struct? elementValue) || elementValue is null)
+        {
+            Fail(family, method, signature, $"lease result {type}.{pointer.Name} element {element} is not an emitted struct");
+            return;
+        }
+        ValidateLeaseElement(family, method, signature, elementValue, structs, enums, new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    private static void ValidateLeaseElement(string family, string method, string signature, Struct value, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen)
+    {
+        if (!seen.Add(value.Name)) return;
+        foreach (Field field in value.Fields)
+        {
+            string nested = Bare(field.Type);
+            if (nested is "NativeUtf8Slice" or "NativeByteSlice") continue;
+            if (field.Type.Contains('*', StringComparison.Ordinal)) { Fail(family, method, signature, $"lease element {value.Name}.{field.Name} has unsupported pointer {field.Type}"); continue; }
+            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"lease element {value.Name}.{field.Name}");
         }
     }
 
@@ -226,7 +275,7 @@ internal static class Emit
             foreach (EnumMember member in value.Members) output.AppendLine($"    {SafeEnumMember(value.Name, member.Name)} = {member.Value},");
             output.AppendLine("}").AppendLine();
         }
-        foreach (Struct value in model.Structs.Values.Where(IsSafeValue).OrderBy(value => value.Name, StringComparer.Ordinal))
+        foreach (Struct value in model.Structs.Values.Where(value => IsSafeValue(value, model)).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             string safeName = SafeType(value.Name);
             IReadOnlyList<(Field Field, string Type)> fields = SafeFields(value, model);
@@ -300,6 +349,11 @@ internal static class Emit
     private static void EmitConversions(StringBuilder output, BindingModel model)
     {
         output.AppendLine("internal static unsafe class NativeConversions").AppendLine("{");
+        output.AppendLine("    private const nuint MaxOwnedLeaseBytes = 256u * 1024u * 1024u;");
+        output.AppendLine("    private const nuint MaxOwnedLeaseItems = 1_000_000u;");
+        output.AppendLine("    private static readonly UTF8Encoding StrictUtf8 = new(false, true);");
+        output.AppendLine("    private static string CopyUtf8(NativeUtf8Slice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native UTF-8 lease exceeded the supported copy bound.\"); if (value.len == 0) return string.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native UTF-8 lease had length without bytes.\"); return StrictUtf8.GetString(new ReadOnlySpan<byte>(value.bytes, checked((int)value.len))); }");
+        output.AppendLine("    private static ReadOnlyMemory<byte> CopyBytes(NativeByteSlice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native byte lease exceeded the supported copy bound.\"); if (value.len == 0) return ReadOnlyMemory<byte>.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native byte lease had length without bytes.\"); byte[] copy = new byte[checked((int)value.len)]; new ReadOnlySpan<byte>(value.bytes, copy.Length).CopyTo(copy); return copy; }");
         output.AppendLine("    internal static NativeVec2 ToNative(Vector2 value) => new() { x = value.X, y = value.Y };");
         output.AppendLine("    internal static Vector2 FromNative(NativeVec2 value) => new(value.x, value.y);");
         output.AppendLine("    internal static NativeVec3 ToNative(Vector3 value) => new() { x = value.X, y = value.Y, z = value.Z };");
@@ -312,7 +366,7 @@ internal static class Emit
             output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => ({value.Name})(uint)value;");
             output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => ({safe})(uint)value;");
         }
-        foreach (Struct value in model.Structs.Values.Where(IsSafeValue).OrderBy(value => value.Name, StringComparer.Ordinal))
+        foreach (Struct value in model.Structs.Values.Where(value => IsSafeValue(value, model)).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             string safe = SafeType(value.Name);
             if (value.Name.EndsWith("Handle", StringComparison.Ordinal))
@@ -330,6 +384,28 @@ internal static class Emit
             string arguments = string.Join(", ", value.Fields.Select(field => FromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
             output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => new() {{ {assignments} }};");
             if (!HasDisposableHandleField(model, value)) output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => new({arguments});");
+        }
+        foreach (Struct lease in model.Structs.Values.Where(value => BindingModel.IsLeaseResult(value.Name, model.Structs)).OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            if (lease.Name == "NativeByteLease")
+            {
+                output.AppendLine("    internal static ReadOnlyMemory<byte> CopyLease(NativeByteLease value) => CopyBytes(new NativeByteSlice { bytes = value.bytes, len = value.len });");
+                continue;
+            }
+            Field pointer = lease.Fields.First(field => field.Type.Contains('*', StringComparison.Ordinal));
+            string element = BindingModel.Bare(pointer.Type);
+            Struct elementValue = model.Structs[element];
+            string safeElement = SafeType(model, element);
+            output.AppendLine($"    internal static ReadOnlyMemory<{safeElement}> CopyLease({lease.Name} value)").AppendLine("    {");
+            output.AppendLine($"        if (value.{RawIdentifier(pointer.Name)}_len > MaxOwnedLeaseItems) throw new InvalidOperationException(\"Native collection lease exceeded the supported item bound.\");");
+            output.AppendLine($"        if (value.{RawIdentifier(pointer.Name)}_len == 0) return ReadOnlyMemory<{safeElement}>.Empty;");
+            output.AppendLine($"        if (value.{RawIdentifier(pointer.Name)} is null) throw new InvalidOperationException(\"Native collection lease had count without elements.\");");
+            output.AppendLine($"        int count = checked((int)value.{RawIdentifier(pointer.Name)}_len);");
+            output.AppendLine($"        {safeElement}[] copy = new {safeElement}[count];");
+            output.AppendLine($"        for (int index = 0; index < count; index++) copy[index] = CopyLeaseElement(value.{RawIdentifier(pointer.Name)}[index]);");
+            output.AppendLine("        return copy;").AppendLine("    }");
+            string arguments = string.Join(", ", elementValue.Fields.Select(field => LeaseElementFromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
+            output.AppendLine($"    private static {safeElement} CopyLeaseElement({element} value) => new({arguments});");
         }
         output.AppendLine("    internal static byte ToNativeBool(bool value) => value ? (byte)1 : (byte)0;");
         output.AppendLine("    internal static int ToNative(int value) => value;");
@@ -373,6 +449,13 @@ internal static class Emit
         output.AppendLine($"        int status = _native.{operation}.Pointer({invocation});");
         output.AppendLine($"        NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(operation)}\", status);");
         if (string.IsNullOrEmpty(result)) output.AppendLine("        return;");
+        else if (BindingModel.IsLeaseResult(BindingModel.Bare(result), model.Structs))
+        {
+            (_, string destroyOperation) = DestroyLeaseFor(model, service, BindingModel.Bare(result));
+            output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
+            output.AppendLine("        try { return NativeConversions.CopyLease(ownedResult); }");
+            output.AppendLine($"        finally {{ int disposeStatus = _native.{destroyOperation}.Pointer(_native.context, ownedResult.handle); NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(destroyOperation)}\", disposeStatus); }}");
+        }
         else if (returnType != SafeType(BindingModel.Bare(result)))
         {
             (_, string destroyOperation) = DestroyFor(model, BindingModel.Bare(result));
@@ -459,6 +542,13 @@ internal static class Emit
         output.AppendLine($"        int status = _native.{operation}.Pointer({invocation});");
         output.AppendLine($"        NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(operation)}\", status);");
         if (string.IsNullOrEmpty(result)) output.AppendLine("        return;");
+        else if (BindingModel.IsLeaseResult(BindingModel.Bare(result), model.Structs))
+        {
+            (_, string destroyOperation) = DestroyLeaseFor(model, service, BindingModel.Bare(result));
+            output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
+            output.AppendLine("        try { return NativeConversions.CopyLease(ownedResult); }");
+            output.AppendLine($"        finally {{ int disposeStatus = _native.{destroyOperation}.Pointer(_native.context, ownedResult.handle); NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(destroyOperation)}\", disposeStatus); }}");
+        }
         else if (returnType != SafeType(BindingModel.Bare(result)))
         {
             (_, string destroyOperation) = DestroyFor(model, BindingModel.Bare(result));
@@ -486,6 +576,12 @@ internal static class Emit
 
     private static string ToNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) is "bool" or "_Bool" ? $"ToNativeBool({value})" : $"ToNative({value})";
     private static string FromNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) is "bool" or "_Bool" ? $"FromNativeBool({value})" : $"FromNative({value})";
+    private static string LeaseElementFromNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) switch
+    {
+        "NativeUtf8Slice" => $"CopyUtf8({value})",
+        "NativeByteSlice" => $"CopyBytes({value})",
+        _ => FromNativeExpression(field, value),
+    };
 
     private static string[] Inputs(Callback callback)
     {
@@ -502,8 +598,18 @@ internal static class Emit
     private static bool HasBorrowedFields(Struct value) => value.Fields.Any(field => field.Type.Contains('*', StringComparison.Ordinal) || BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue");
     private static bool HasDisposableHandleField(BindingModel model, Struct value) => value.Fields.Any(field => IsDisposableHandle(model, BindingModel.Bare(field.Type)));
     private static (string Service, string Operation) DestroyFor(BindingModel model, string handle) => model.Services.SelectMany(service => service.Operations.Select(operation => (service, operation))).First(pair => IsDestroy(model.Callbacks[pair.operation.Callback]) && BindingModel.Bare(model.Callbacks[pair.operation.Callback].Parameters[1]) == handle) is var found ? (found.service.Name, found.operation.Name) : throw new InvalidOperationException($"no destroy operation found for {handle}");
+    private static (string Service, string Operation) DestroyLeaseFor(BindingModel model, Service service, string lease)
+    {
+        Struct value = model.Structs[lease];
+        Field handle = value.Fields.Single(field => field.Name == "handle");
+        string handleType = BindingModel.Bare(handle.Type);
+        (string Name, string Callback) operation = service.Operations.First(operation =>
+            IsDestroy(model.Callbacks[operation.Callback])
+            && BindingModel.Bare(model.Callbacks[operation.Callback].Parameters[1]) == handleType);
+        return (service.Name, operation.Name);
+    }
 
-    private static bool IsSafeValue(Struct value) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal);
+    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
     private static IReadOnlyList<(Field Field, string Type)> SafeFields(Struct value, BindingModel model)
     {
         List<(Field, string)> fields = [];
@@ -528,6 +634,13 @@ internal static class Emit
         string last = callback.Parameters.Last();
         if (last.StartsWith("const ", StringComparison.Ordinal) || !last.Contains('*', StringComparison.Ordinal) || BindingModel.Bare(last) == "void") return "void";
         string handle = BindingModel.Bare(last);
+        if (BindingModel.IsLeaseResult(handle, model.Structs))
+        {
+            if (handle == "NativeByteLease") return "ReadOnlyMemory<byte>";
+            Struct lease = model.Structs[handle];
+            Field pointer = lease.Fields.First(field => field.Type.Contains('*', StringComparison.Ordinal));
+            return $"ReadOnlyMemory<{SafeType(model, BindingModel.Bare(pointer.Type))}>";
+        }
         return IsDisposableHandle(model, handle) ? OwnerType(handle) : SafeType(handle);
     }
     private static string SafeParameters(BindingModel model, Callback callback)
@@ -560,7 +673,8 @@ internal static class Emit
     private static string RawIdentifier(string value) => value is "base" ? "@base" : value;
     private static string SafeServiceName(string service) => service == "Rng" ? "Random" : service;
     private static bool IsDestroy(Callback callback) => callback.Parameters.Count == 2 && BindingModel.Bare(callback.Parameters[1]).EndsWith("Handle", StringComparison.Ordinal) && callback.Name.Contains("Destroy", StringComparison.Ordinal);
-    private static IEnumerable<string> DisposableHandleTypes(BindingModel model) => model.Services.SelectMany(service => service.Operations.Select(operation => model.Callbacks[operation.Callback])).Where(IsDestroy).Select(callback => BindingModel.Bare(callback.Parameters[1])).Distinct(StringComparer.Ordinal);
+    private static IEnumerable<string> LeaseHandleTypes(BindingModel model) => model.Structs.Values.Where(value => BindingModel.IsLeaseResult(value.Name, model.Structs)).Select(value => BindingModel.Bare(value.Fields.Single(field => field.Name == "handle").Type)).Distinct(StringComparer.Ordinal);
+    private static IEnumerable<string> DisposableHandleTypes(BindingModel model) => model.Services.SelectMany(service => service.Operations.Select(operation => model.Callbacks[operation.Callback])).Where(IsDestroy).Select(callback => BindingModel.Bare(callback.Parameters[1])).Where(handle => !LeaseHandleTypes(model).Contains(handle, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal);
     private static bool IsDisposableHandle(BindingModel model, string handle) => DisposableHandleTypes(model).Contains(handle, StringComparer.Ordinal);
     private static string OwnerType(string handle) => SafeType(handle).Replace("Handle", "", StringComparison.Ordinal);
     private static StringBuilder Header(string purpose) => new($"// <auto-generated />{Environment.NewLine}// Generated from csharp-engine-abi through the ClangSharp AST: {purpose}.{Environment.NewLine}// Do not edit.{Environment.NewLine}#nullable enable{Environment.NewLine}using System;{Environment.NewLine}using System.Numerics;{Environment.NewLine}{Environment.NewLine}");

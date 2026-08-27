@@ -741,6 +741,8 @@ pub struct NativePersistenceApi {
     pub destroy_blob: NativeDestroyPersistenceBlob,
     pub describe_blob: NativeDescribePersistenceBlob,
     pub copy_blob: NativeCopyPersistenceBlob,
+    pub read_blob_bytes: NativeReadPersistenceBlobBytes,
+    pub destroy_byte_lease: NativeDestroyPersistenceByteLease,
 }
 
 /// Direct named Engine service families available to trusted NativeAOT code.

@@ -18,6 +18,7 @@ public sealed class Product : IEngineProduct
     private readonly Camera _camera;
     private readonly MechanicsCatalog _mechanicsCatalog;
     private readonly MechanicsEntity _mechanicsEntity;
+    private readonly PersistenceStore _persistenceStore;
     private int _turns;
     private float _x;
     private bool _started;
@@ -96,6 +97,22 @@ public sealed class Product : IEngineProduct
         if (staminaSpend.After != 10)
         {
             throw new InvalidOperationException("exact mechanics spend did not preserve the track bound");
+        }
+        _persistenceStore = _engine.Persistence.OpenStore(new PersistenceOpenRequest(
+            Path.Combine(Path.GetTempPath(), "rusty-engine-nativeaot-lease-fixture")));
+        const string leaseKey = "fixtures/café";
+        byte[] leasePayload = [0x00, 0xC3, 0xA9, 0xFF];
+        _engine.Persistence.Save(new PersistenceSaveRequest(
+            _persistenceStore,
+            leaseKey,
+            1,
+            PersistenceRevisionGuard.Any,
+            0,
+            leasePayload));
+        using (PersistenceBlob loaded = _engine.Persistence.Load(new PersistenceLoadRequest(_persistenceStore, leaseKey)))
+        {
+            Require(_engine.Persistence.ReadBlobBytes(loaded).Span.SequenceEqual(leasePayload),
+                "native byte lease did not copy and release its payload");
         }
         _appearance = _engine.Appearance.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
         Material createdMaterial = _engine.Appearance.CreateMaterial(new MaterialRequest(
@@ -376,6 +393,7 @@ public sealed class Product : IEngineProduct
         _spatial.Dispose();
         _mechanicsEntity.Dispose();
         _mechanicsCatalog.Dispose();
+        _persistenceStore.Dispose();
     }
 
     private static LookConfig LookConfig() => new(0.01f, 0.01f, -1.4f, 1.4f, 1.0f, false, false, true);

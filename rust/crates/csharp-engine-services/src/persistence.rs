@@ -10,6 +10,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 
 use csharp_engine_abi::*;
@@ -36,8 +37,10 @@ struct PersistenceBlob {
 pub(crate) struct RuntimePersistenceBridge {
     stores: BTreeMap<u64, DurableStore>,
     blobs: BTreeMap<u64, PersistenceBlob>,
+    byte_leases: BTreeMap<u64, Arc<[u8]>>,
     next_store: u64,
     next_blob: u64,
+    next_byte_lease: u64,
 }
 
 impl RuntimePersistenceBridge {
@@ -45,8 +48,10 @@ impl RuntimePersistenceBridge {
         Self {
             stores: BTreeMap::new(),
             blobs: BTreeMap::new(),
+            byte_leases: BTreeMap::new(),
             next_store: 1,
             next_blob: 1,
+            next_byte_lease: 1,
         }
     }
 
@@ -63,6 +68,18 @@ impl RuntimePersistenceBridge {
         self.blobs.insert(value, blob);
         Some(NativePersistenceBlobHandle { value })
     }
+
+    fn insert_byte_lease(&mut self, bytes: Arc<[u8]>) -> Option<NativeByteLease> {
+        let value = self.next_byte_lease;
+        self.next_byte_lease = value.checked_add(1)?;
+        let lease = NativeByteLease {
+            handle: NativeByteLeaseHandle { value },
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        };
+        self.byte_leases.insert(value, bytes);
+        Some(lease)
+    }
 }
 
 pub(crate) fn api(bridge: &mut RuntimePersistenceBridge) -> NativePersistenceApi {
@@ -75,6 +92,8 @@ pub(crate) fn api(bridge: &mut RuntimePersistenceBridge) -> NativePersistenceApi
         destroy_blob,
         describe_blob,
         copy_blob,
+        read_blob_bytes,
+        destroy_byte_lease,
     }
 }
 
@@ -224,6 +243,38 @@ unsafe extern "C" fn load(
     }
 }
 
+unsafe extern "C" fn read_blob_bytes(
+    context: *mut c_void,
+    blob: NativePersistenceBlobHandle,
+    result: *mut NativeByteLease,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
+    let Some(blob) = bridge.blobs.get(&blob.value) else {
+        return 0;
+    };
+    let bytes: Arc<[u8]> = Arc::from(blob.payload.clone());
+    let Some(lease) = bridge.insert_byte_lease(bytes) else {
+        return 0;
+    };
+    unsafe { *result = lease };
+    ABI_OK
+}
+
+unsafe extern "C" fn destroy_byte_lease(context: *mut c_void, lease: NativeByteLeaseHandle) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
+    if bridge.byte_leases.remove(&lease.value).is_some() {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
 unsafe extern "C" fn destroy_blob(context: *mut c_void, blob: NativePersistenceBlobHandle) -> i32 {
     if context.is_null() {
         return 0;
@@ -277,8 +328,8 @@ unsafe extern "C" fn copy_blob(
         return 0;
     }
     if !blob.payload.is_empty() {
-        // SAFETY: the C# facade pins exactly `destination.len` writable bytes
-        // for this immediate call; this bridge retains neither pointer.
+        // SAFETY: this legacy direct copy retains neither caller pointer nor
+        // storage. New generated output APIs use an immutable byte lease.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 blob.payload.as_ptr(),
@@ -479,6 +530,23 @@ mod tests {
         };
         assert_eq!(unsafe { copy_blob(context, &copy) }, ABI_OK);
         assert_eq!(copied, first_payload);
+        let mut byte_lease = NativeByteLease {
+            handle: NativeByteLeaseHandle::default(),
+            bytes: std::ptr::null(),
+            len: 0,
+        };
+        assert_eq!(
+            unsafe { read_blob_bytes(context, blob, &mut byte_lease) },
+            ABI_OK
+        );
+        let leased_bytes = unsafe { std::slice::from_raw_parts(byte_lease.bytes, byte_lease.len) };
+        assert_eq!(leased_bytes, first_payload);
+        assert_eq!(
+            unsafe { destroy_byte_lease(context, byte_lease.handle) },
+            ABI_OK
+        );
+        assert_eq!(unsafe { destroy_byte_lease(context, byte_lease.handle) }, 0);
+
         assert_eq!(unsafe { destroy_blob(context, blob) }, ABI_OK);
         assert_eq!(unsafe { destroy_store(context, store) }, ABI_OK);
     }
