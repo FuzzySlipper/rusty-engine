@@ -666,6 +666,21 @@ pub type NativeTransferMechanicsInventory = unsafe extern "C" fn(
     *const NativeMechanicsInventoryTransferRequest,
     *mut NativeMechanicsInventoryTransferLease,
 ) -> i32;
+pub type NativeEquipMechanicsEquipment = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEquipmentEquipRequest,
+    *mut NativeMechanicsEquipmentMutationLease,
+) -> i32;
+pub type NativeUnequipMechanicsEquipment = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEquipmentUnequipRequest,
+    *mut NativeMechanicsEquipmentMutationLease,
+) -> i32;
+pub type NativeSwapMechanicsEquipment = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEquipmentSwapRequest,
+    *mut NativeMechanicsEquipmentMutationLease,
+) -> i32;
 pub type NativeSetMechanicsStatBase = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsStatBaseMutationRequest,
@@ -991,6 +1006,9 @@ pub struct NativeMechanicsApi {
     pub grant_inventory: NativeGrantMechanicsInventory,
     pub consume_inventory: NativeConsumeMechanicsInventory,
     pub transfer_inventory: NativeTransferMechanicsInventory,
+    pub equip_equipment: NativeEquipMechanicsEquipment,
+    pub unequip_equipment: NativeUnequipMechanicsEquipment,
+    pub swap_equipment: NativeSwapMechanicsEquipment,
     pub set_stat_base: NativeSetMechanicsStatBase,
     pub destroy_operation_lease: NativeDestroyMechanicsOperationLease,
     pub set_track: NativeSetMechanicsTrack,

@@ -1126,6 +1126,141 @@ pub struct NativeMechanicsInventoryTransferLease {
     pub committed_to_inventory_revision: NativeMechanicsComponentRevision,
     pub read_cost: NativeMechanicsInventoryReadCost,
 }
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsEquipmentMutationKind {
+    #[default]
+    Equip = 0,
+    Unequip = 1,
+    Swap = 2,
+}
+
+/// One exact slot delta published by `EquipmentService`. `before` and `after`
+/// are independently optional because equipping and unequipping do not have
+/// symmetric item values.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsEquipmentSlotChangeRow {
+    pub slot: NativeUtf8Slice,
+    pub has_before_item: bool,
+    pub before_item_entity_id: u64,
+    pub has_after_item: bool,
+    pub after_item_entity_id: u64,
+}
+
+/// A borrowed equip request. `slots` is bounded by the catalog's per-item
+/// equipment-slot maximum before Rust reads the span. The flattened source
+/// fields retain every `SourceInstanceIdentity` variant for generated C#.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEquipmentEquipRequest {
+    pub owner: NativeMechanicsEntityHandle,
+    pub item: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub source_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub source_intrinsic_entity_id: u64,
+    pub source_intrinsic_instance: NativeUtf8Slice,
+    pub source_effect_entity_id: u64,
+    pub source_effect_instance: NativeUtf8Slice,
+    pub source_effect_stack: u16,
+    pub source_effect_source: NativeUtf8Slice,
+    pub source_equipped_owner_entity_id: u64,
+    pub source_equipped_item_entity_id: u64,
+    pub source_equipped_source: NativeUtf8Slice,
+    pub source_request_operation: NativeUtf8Slice,
+    pub source_request_instance: NativeUtf8Slice,
+    pub slots: *const NativeMechanicsText,
+    pub slots_len: usize,
+    pub equipment_revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_equipment_revision: NativeMechanicsComponentRevision,
+    pub expected_state_revision: u64,
+}
+
+/// A borrowed unequip request. The Equipment component guard is optional;
+/// `expected_state_revision` remains exact because it guards the relationship
+/// state observed by `EquipmentService`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEquipmentUnequipRequest {
+    pub owner: NativeMechanicsEntityHandle,
+    pub item: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub source_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub source_intrinsic_entity_id: u64,
+    pub source_intrinsic_instance: NativeUtf8Slice,
+    pub source_effect_entity_id: u64,
+    pub source_effect_instance: NativeUtf8Slice,
+    pub source_effect_stack: u16,
+    pub source_effect_source: NativeUtf8Slice,
+    pub source_equipped_owner_entity_id: u64,
+    pub source_equipped_item_entity_id: u64,
+    pub source_equipped_source: NativeUtf8Slice,
+    pub source_request_operation: NativeUtf8Slice,
+    pub source_request_instance: NativeUtf8Slice,
+    pub equipment_revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_equipment_revision: NativeMechanicsComponentRevision,
+    pub expected_state_revision: u64,
+}
+
+/// A borrowed atomic swap request. `incoming_slots` is bounded before the
+/// foreign span is read and identifies only the incoming item's assignment.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEquipmentSwapRequest {
+    pub owner: NativeMechanicsEntityHandle,
+    pub outgoing_item: NativeMechanicsEntityHandle,
+    pub incoming_item: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub source_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub source_intrinsic_entity_id: u64,
+    pub source_intrinsic_instance: NativeUtf8Slice,
+    pub source_effect_entity_id: u64,
+    pub source_effect_instance: NativeUtf8Slice,
+    pub source_effect_stack: u16,
+    pub source_effect_source: NativeUtf8Slice,
+    pub source_equipped_owner_entity_id: u64,
+    pub source_equipped_item_entity_id: u64,
+    pub source_equipped_source: NativeUtf8Slice,
+    pub source_request_operation: NativeUtf8Slice,
+    pub source_request_instance: NativeUtf8Slice,
+    pub incoming_slots: *const NativeMechanicsText,
+    pub incoming_slots_len: usize,
+    pub equipment_revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_equipment_revision: NativeMechanicsComponentRevision,
+    pub expected_state_revision: u64,
+}
+
+/// A typed owner for one exact EquipmentService mutation receipt. Every row
+/// span and UTF-8 slice stays valid until `destroy_operation_lease` releases
+/// `handle`; the three row collections are deliberately distinct.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsEquipmentMutationLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub changes: *const NativeMechanicsEquipmentSlotChangeRow,
+    pub changes_len: usize,
+    pub observed_item_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_item_revisions_len: usize,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub kind: NativeMechanicsEquipmentMutationKind,
+    pub owner_entity_id: u64,
+    pub item_entity_id: u64,
+    pub has_replaced_item: bool,
+    pub replaced_item_entity_id: u64,
+    pub observed_state_revision: u64,
+    pub committed_state_revision: u64,
+    pub observed_equipment_revision: NativeMechanicsComponentRevision,
+    pub committed_equipment_revision: NativeMechanicsComponentRevision,
+    pub source_activations: u64,
+    pub tracks_validated: u64,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMechanicsStatOperationRequest {

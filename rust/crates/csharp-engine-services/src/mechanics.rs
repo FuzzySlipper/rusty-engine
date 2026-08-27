@@ -12,17 +12,19 @@ use gameplay_mechanics::{
     DamageRequest, DamageResponseDefinition, DamageService, DecisionOutcome, EffectApplyRequest,
     EffectDefinition, EffectMutationKind, EffectRefreshRequest, EffectRemovalRequest,
     EffectReplaceRequest, EffectService, EffectSourceActivation, EffectStackingPolicy,
-    EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition, ExactRatio,
-    IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit, InventoryComponent,
-    InventoryMutationKind, InventoryMutationRequest, InventoryReadCost, InventoryService,
-    InventoryTransferRequest, ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy,
-    ItemKind, ItemStack, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
-    MechanicsScalar, ObservedComponentRevision, OperationId, RequestSource, ResponseDecision,
-    ResponseDecisionKind, RoundingPolicy, SourceCollectionCost, SourceDefinition,
-    SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
-    StatBaseMutationRequest, StatContribution, StatContributionDefinition, StatDecision,
-    StatDefinition, StatId, StatService, StatValue, StatsComponent, TrackAdjustmentKind,
-    TrackDamageChange, TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
+    EquipmentAssignment, EquipmentComponent, EquipmentEquipRequest, EquipmentMutationKind,
+    EquipmentService, EquipmentSlotChange, EquipmentSlotDefinition, EquipmentSwapRequest,
+    EquipmentUnequipRequest, ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent,
+    InventoryCapacityLimit, InventoryComponent, InventoryMutationKind, InventoryMutationRequest,
+    InventoryReadCost, InventoryService, InventoryTransferRequest, ItemCapacityCost, ItemComponent,
+    ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack, MechanicsCatalog,
+    MechanicsCatalogDefinition, MechanicsComponentKind, MechanicsScalar, ObservedComponentRevision,
+    OperationId, RequestSource, ResponseDecision, ResponseDecisionKind, RoundingPolicy,
+    SourceCollectionCost, SourceDefinition, SourceDefinitionId, SourceInstanceId,
+    SourceInstanceIdentity, StackingGroupId, StackingPolicy, StatBaseMutationRequest,
+    StatContribution, StatContributionDefinition, StatDecision, StatDefinition, StatId,
+    StatService, StatValue, StatsComponent, TrackAdjustmentKind, TrackDamageChange,
+    TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
     TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
     TrackSetRequest, TrackValue, TracksComponent,
 };
@@ -126,6 +128,11 @@ enum OperationLeaseRows {
         from_capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
         to_capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
         to_capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+    },
+    EquipmentMutation {
+        changes: Vec<NativeMechanicsEquipmentSlotChangeRow>,
+        observed_item_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
+        observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
     },
     Effect {
         removed: Vec<NativeMechanicsActiveEffectComponentRow>,
@@ -421,6 +428,9 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         grant_inventory,
         consume_inventory,
         transfer_inventory,
+        equip_equipment,
+        unequip_equipment,
+        swap_equipment,
         set_stat_base,
         destroy_operation_lease,
         set_track,
@@ -3136,6 +3146,310 @@ unsafe extern "C" fn transfer_inventory(
     ABI_OK
 }
 
+/// Delegates the named generated C# equip capability directly to
+/// `EquipmentService::equip`. The only ABI policy is bounded foreign-span
+/// validation and canonical binding identity; all item, slot, exclusivity,
+/// catalog, and source behavior remains the upstream service's behavior.
+unsafe extern "C" fn equip_equipment(
+    context: *mut c_void,
+    request: *const NativeMechanicsEquipmentEquipRequest,
+    result: *mut NativeMechanicsEquipmentMutationLease,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    if request.slots_len > usize::from(gameplay_mechanics::MAX_EQUIPMENT_SLOTS_PER_ITEM) {
+        return 0;
+    }
+    let (Ok(operation), Ok(source), Ok(slots)) = (
+        unsafe { text(request.operation, "equipment equip operation") }
+            .and_then(parse::<OperationId>),
+        parse_equipment_equip_source_identity(request),
+        unsafe { borrowed_slice(request.slots, request.slots_len, "equipment equip slots") }
+            .and_then(parse_equipment_slots),
+    ) else {
+        return 0;
+    };
+    let (Some(owner_binding), Some(item_binding)) = (
+        bridge.binding(request.owner).cloned(),
+        bridge.binding(request.item).cloned(),
+    ) else {
+        return 0;
+    };
+    if owner_binding.catalog != item_binding.catalog {
+        return 0;
+    }
+    let catalog_id = owner_binding.catalog;
+    let receipt = {
+        let Some((state, catalog, owner)) = bridge.state_and_catalog_mut(request.owner) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<EquipmentComponent>(owner) else {
+            return 0;
+        };
+        let Some(expected_equipment_revision) = guarded_revision(
+            request.equipment_revision_guard,
+            request.expected_equipment_revision.entity_id,
+            request.expected_equipment_revision.revision,
+            request.expected_equipment_revision.component,
+            owner,
+            actual,
+            NativeMechanicsRevisionComponent::Equipment,
+        ) else {
+            return 0;
+        };
+        EquipmentService::equip(
+            state,
+            catalog,
+            EquipmentEquipRequest {
+                operation,
+                source,
+                owner,
+                item: item_binding.entity,
+                slots,
+                expected_equipment_revision,
+                expected_state_revision: request.expected_state_revision,
+            },
+        )
+    };
+    publish_equipment_mutation(bridge, result, catalog_id, receipt)
+}
+
+/// Delegates the named generated C# unequip capability directly to
+/// `EquipmentService::unequip` while retaining the exact typed receipt.
+unsafe extern "C" fn unequip_equipment(
+    context: *mut c_void,
+    request: *const NativeMechanicsEquipmentUnequipRequest,
+    result: *mut NativeMechanicsEquipmentMutationLease,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let (Ok(operation), Ok(source)) = (
+        unsafe { text(request.operation, "equipment unequip operation") }
+            .and_then(parse::<OperationId>),
+        parse_equipment_unequip_source_identity(request),
+    ) else {
+        return 0;
+    };
+    let (Some(owner_binding), Some(item_binding)) = (
+        bridge.binding(request.owner).cloned(),
+        bridge.binding(request.item).cloned(),
+    ) else {
+        return 0;
+    };
+    if owner_binding.catalog != item_binding.catalog {
+        return 0;
+    }
+    let catalog_id = owner_binding.catalog;
+    let receipt = {
+        let Some((state, catalog, owner)) = bridge.state_and_catalog_mut(request.owner) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<EquipmentComponent>(owner) else {
+            return 0;
+        };
+        let Some(expected_equipment_revision) = guarded_revision(
+            request.equipment_revision_guard,
+            request.expected_equipment_revision.entity_id,
+            request.expected_equipment_revision.revision,
+            request.expected_equipment_revision.component,
+            owner,
+            actual,
+            NativeMechanicsRevisionComponent::Equipment,
+        ) else {
+            return 0;
+        };
+        EquipmentService::unequip(
+            state,
+            catalog,
+            EquipmentUnequipRequest {
+                operation,
+                source,
+                owner,
+                item: item_binding.entity,
+                expected_equipment_revision,
+                expected_state_revision: request.expected_state_revision,
+            },
+        )
+    };
+    publish_equipment_mutation(bridge, result, catalog_id, receipt)
+}
+
+/// Delegates the named generated C# swap capability directly to
+/// `EquipmentService::swap`. The service keeps atomicity and validates the
+/// outgoing assignment before the incoming assignment replaces it.
+unsafe extern "C" fn swap_equipment(
+    context: *mut c_void,
+    request: *const NativeMechanicsEquipmentSwapRequest,
+    result: *mut NativeMechanicsEquipmentMutationLease,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    if request.incoming_slots_len > usize::from(gameplay_mechanics::MAX_EQUIPMENT_SLOTS_PER_ITEM) {
+        return 0;
+    }
+    let (Ok(operation), Ok(source), Ok(incoming_slots)) = (
+        unsafe { text(request.operation, "equipment swap operation") }
+            .and_then(parse::<OperationId>),
+        parse_equipment_swap_source_identity(request),
+        unsafe {
+            borrowed_slice(
+                request.incoming_slots,
+                request.incoming_slots_len,
+                "equipment swap incoming slots",
+            )
+        }
+        .and_then(parse_equipment_slots),
+    ) else {
+        return 0;
+    };
+    let (Some(owner_binding), Some(outgoing_binding), Some(incoming_binding)) = (
+        bridge.binding(request.owner).cloned(),
+        bridge.binding(request.outgoing_item).cloned(),
+        bridge.binding(request.incoming_item).cloned(),
+    ) else {
+        return 0;
+    };
+    if owner_binding.catalog != outgoing_binding.catalog
+        || owner_binding.catalog != incoming_binding.catalog
+    {
+        return 0;
+    }
+    let catalog_id = owner_binding.catalog;
+    let receipt = {
+        let Some((state, catalog, owner)) = bridge.state_and_catalog_mut(request.owner) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<EquipmentComponent>(owner) else {
+            return 0;
+        };
+        let Some(expected_equipment_revision) = guarded_revision(
+            request.equipment_revision_guard,
+            request.expected_equipment_revision.entity_id,
+            request.expected_equipment_revision.revision,
+            request.expected_equipment_revision.component,
+            owner,
+            actual,
+            NativeMechanicsRevisionComponent::Equipment,
+        ) else {
+            return 0;
+        };
+        EquipmentService::swap(
+            state,
+            catalog,
+            EquipmentSwapRequest {
+                operation,
+                source,
+                owner,
+                outgoing_item: outgoing_binding.entity,
+                incoming_item: incoming_binding.entity,
+                incoming_slots,
+                expected_equipment_revision,
+                expected_state_revision: request.expected_state_revision,
+            },
+        )
+    };
+    publish_equipment_mutation(bridge, result, catalog_id, receipt)
+}
+
+fn publish_equipment_mutation(
+    bridge: &mut RuntimeMechanicsBridge,
+    result: &mut NativeMechanicsEquipmentMutationLease,
+    catalog_id: u64,
+    receipt: Result<
+        gameplay_mechanics::EquipmentMutationReceipt,
+        gameplay_mechanics::MechanicsError,
+    >,
+) -> i32 {
+    let Ok(receipt) = receipt else {
+        return 0;
+    };
+    let mut lease_text = CatalogLeaseText::default();
+    let changes = receipt
+        .changes
+        .iter()
+        .map(|change| native_equipment_slot_change(change, &mut lease_text))
+        .collect::<Vec<_>>();
+    let observed_item_revisions = receipt
+        .observed_item_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let observed_revisions = receipt
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsEquipmentMutationLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        changes: std::ptr::null(),
+        changes_len: changes.len(),
+        observed_item_revisions: std::ptr::null(),
+        observed_item_revisions_len: observed_item_revisions.len(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        kind: match receipt.kind {
+            EquipmentMutationKind::Equip => NativeMechanicsEquipmentMutationKind::Equip,
+            EquipmentMutationKind::Unequip => NativeMechanicsEquipmentMutationKind::Unequip,
+            EquipmentMutationKind::Swap => NativeMechanicsEquipmentMutationKind::Swap,
+        },
+        owner_entity_id: receipt.owner.raw(),
+        item_entity_id: receipt.item.raw(),
+        has_replaced_item: receipt.replaced_item.is_some(),
+        replaced_item_entity_id: receipt.replaced_item.map(EntityId::raw).unwrap_or_default(),
+        observed_state_revision: receipt.observed_state_revision,
+        committed_state_revision: receipt.committed_state_revision,
+        observed_equipment_revision: equipment_revision(
+            receipt.owner,
+            receipt.observed_equipment_revision,
+        ),
+        committed_equipment_revision: equipment_revision(
+            receipt.owner,
+            receipt.committed_equipment_revision,
+        ),
+        source_activations: receipt.source_activations as u64,
+        tracks_validated: receipt.tracks_validated as u64,
+        source_cost: native_source_cost(receipt.source_cost),
+    };
+    let Some(handle) = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::EquipmentMutation {
+            changes,
+            observed_item_revisions,
+            observed_revisions,
+        },
+    }) else {
+        return 0;
+    };
+    let OperationLeaseRows::EquipmentMutation {
+        changes,
+        observed_item_revisions,
+        observed_revisions,
+    } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted equipment mutation lease")
+        .rows
+    else {
+        unreachable!("equipment mutation operation lease row kind matches its reader")
+    };
+    *result = NativeMechanicsEquipmentMutationLease {
+        handle,
+        changes: changes.as_ptr(),
+        observed_item_revisions: observed_item_revisions.as_ptr(),
+        observed_revisions: observed_revisions.as_ptr(),
+        ..metadata
+    };
+    ABI_OK
+}
+
 unsafe extern "C" fn set_stat_base(
     context: *mut c_void,
     request: *const NativeMechanicsStatBaseMutationRequest,
@@ -4173,6 +4487,71 @@ fn parse_inventory_transfer_request_source_identity(
         request_instance: request.source_request_instance,
     })
 }
+fn parse_equipment_equip_source_identity(
+    request: &NativeMechanicsEquipmentEquipRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    parse_source_identity(&NativeMechanicsSourceIdentity {
+        kind: request.source_kind,
+        intrinsic_entity_id: request.source_intrinsic_entity_id,
+        intrinsic_instance: request.source_intrinsic_instance,
+        effect_entity_id: request.source_effect_entity_id,
+        effect_instance: request.source_effect_instance,
+        effect_stack: request.source_effect_stack,
+        effect_source: request.source_effect_source,
+        equipped_owner_entity_id: request.source_equipped_owner_entity_id,
+        equipped_item_entity_id: request.source_equipped_item_entity_id,
+        equipped_source: request.source_equipped_source,
+        request_operation: request.source_request_operation,
+        request_instance: request.source_request_instance,
+    })
+}
+fn parse_equipment_unequip_source_identity(
+    request: &NativeMechanicsEquipmentUnequipRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    parse_source_identity(&NativeMechanicsSourceIdentity {
+        kind: request.source_kind,
+        intrinsic_entity_id: request.source_intrinsic_entity_id,
+        intrinsic_instance: request.source_intrinsic_instance,
+        effect_entity_id: request.source_effect_entity_id,
+        effect_instance: request.source_effect_instance,
+        effect_stack: request.source_effect_stack,
+        effect_source: request.source_effect_source,
+        equipped_owner_entity_id: request.source_equipped_owner_entity_id,
+        equipped_item_entity_id: request.source_equipped_item_entity_id,
+        equipped_source: request.source_equipped_source,
+        request_operation: request.source_request_operation,
+        request_instance: request.source_request_instance,
+    })
+}
+fn parse_equipment_swap_source_identity(
+    request: &NativeMechanicsEquipmentSwapRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    parse_source_identity(&NativeMechanicsSourceIdentity {
+        kind: request.source_kind,
+        intrinsic_entity_id: request.source_intrinsic_entity_id,
+        intrinsic_instance: request.source_intrinsic_instance,
+        effect_entity_id: request.source_effect_entity_id,
+        effect_instance: request.source_effect_instance,
+        effect_stack: request.source_effect_stack,
+        effect_source: request.source_effect_source,
+        equipped_owner_entity_id: request.source_equipped_owner_entity_id,
+        equipped_item_entity_id: request.source_equipped_item_entity_id,
+        equipped_source: request.source_equipped_source,
+        request_operation: request.source_request_operation,
+        request_instance: request.source_request_instance,
+    })
+}
+fn parse_equipment_slots(
+    values: &[NativeMechanicsText],
+) -> Result<Vec<gameplay_mechanics::EquipmentSlotId>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            unsafe { text(value.value, "equipment requested slot") }
+                .and_then(parse::<gameplay_mechanics::EquipmentSlotId>)
+        })
+        .collect()
+}
 
 fn parse_damage_source_identity(
     request: &NativeMechanicsDamageRequest,
@@ -4765,6 +5144,26 @@ fn inventory_revision(entity: EntityId, revision: u64) -> NativeMechanicsCompone
         revision,
         component: NativeMechanicsRevisionComponent::Inventory,
         present: true,
+    }
+}
+fn equipment_revision(entity: EntityId, revision: u64) -> NativeMechanicsComponentRevision {
+    NativeMechanicsComponentRevision {
+        entity_id: entity.raw(),
+        revision,
+        component: NativeMechanicsRevisionComponent::Equipment,
+        present: true,
+    }
+}
+fn native_equipment_slot_change(
+    value: &EquipmentSlotChange,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsEquipmentSlotChangeRow {
+    NativeMechanicsEquipmentSlotChangeRow {
+        slot: text.copy(value.slot.as_str()),
+        has_before_item: value.before.is_some(),
+        before_item_entity_id: value.before.map(EntityId::raw).unwrap_or_default(),
+        has_after_item: value.after.is_some(),
+        after_item_entity_id: value.after.map(EntityId::raw).unwrap_or_default(),
     }
 }
 fn native_observed_revision(
@@ -7446,5 +7845,340 @@ mod tests {
             unsafe { destroy_operation_lease(context, transfer.handle) },
             ABI_OK
         );
+    }
+
+    #[test]
+    fn equipment_callbacks_delegate_atomically_and_retain_typed_receipt_rows() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("equipment-callbacks"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        let weapon = [NativeMechanicsText {
+            value: utf8("weapon"),
+        }];
+        for item in ["pistol", "rifle"] {
+            assert_eq!(
+                unsafe {
+                    define_item(
+                        context,
+                        &NativeMechanicsItemDefinitionRequest {
+                            catalog,
+                            id: utf8(item),
+                            kind: NativeMechanicsItemKind::Unique,
+                            maximum_quantity: 1,
+                            classifications: weapon.as_ptr(),
+                            classifications_len: weapon.len(),
+                            capacity_costs: std::ptr::null(),
+                            capacity_costs_len: 0,
+                            has_equipment: true,
+                            required_slots: 1,
+                            exclusive_group: utf8(""),
+                            sources: std::ptr::null(),
+                            sources_len: 0,
+                        },
+                    )
+                },
+                ABI_OK
+            );
+        }
+        for slot in ["hand_left", "hand_right"] {
+            assert_eq!(
+                unsafe {
+                    define_equipment_slot(
+                        context,
+                        &NativeMechanicsEquipmentSlotDefinitionRequest {
+                            catalog,
+                            id: utf8(slot),
+                            allowed_classifications: std::ptr::null(),
+                            allowed_classifications_len: 0,
+                        },
+                    )
+                },
+                ABI_OK
+            );
+        }
+        assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
+
+        let bind = |entity_id, identity| {
+            let mut entity = NativeMechanicsEntityHandle::default();
+            assert_eq!(
+                unsafe {
+                    bind_entity(
+                        context,
+                        &NativeMechanicsEntityBindRequest {
+                            catalog,
+                            entity_id,
+                            identity: utf8(identity),
+                        },
+                        &mut entity,
+                    )
+                },
+                ABI_OK
+            );
+            entity
+        };
+        let pistol = bind(2, "pistol-instance");
+        let rifle = bind(3, "rifle-instance");
+        for (entity, definition) in [(pistol, "pistol"), (rifle, "rifle")] {
+            assert_eq!(
+                unsafe {
+                    set_initial_components(
+                        context,
+                        &NativeMechanicsInitialComponentsRequest {
+                            has_item: true,
+                            item_definition: utf8(definition),
+                            ..empty_initial_components(entity)
+                        },
+                    )
+                },
+                ABI_OK
+            );
+            let mut receipt = NativeMechanicsEntityReceipt::default();
+            assert_eq!(
+                unsafe { commit_entity(context, entity, &mut receipt) },
+                ABI_OK
+            );
+        }
+        let owner = bind(1, "owner");
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        has_equipment: true,
+                        equipment_assignments: std::ptr::null(),
+                        equipment_assignments_len: 0,
+                        ..empty_initial_components(owner)
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let containment_state_revision = bridge
+            .catalog_slot_mut(catalog)
+            .expect("admitted catalog remains available")
+            .world
+            .state
+            .revision();
+        for child in [2, 3] {
+            assert_eq!(
+                unsafe {
+                    stage_initial_containment(
+                        context,
+                        &NativeMechanicsInitialContainmentRequest {
+                            owner,
+                            child_entity_id: child,
+                            expected_state_revision: containment_state_revision,
+                        },
+                    )
+                },
+                ABI_OK
+            );
+        }
+        let mut owner_receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, owner, &mut owner_receipt) },
+            ABI_OK
+        );
+
+        let left = [NativeMechanicsText {
+            value: utf8("hand_left"),
+        }];
+        let mut equipped = NativeMechanicsEquipmentMutationLease::default();
+        assert_eq!(
+            unsafe {
+                equip_equipment(
+                    context,
+                    &NativeMechanicsEquipmentEquipRequest {
+                        owner,
+                        item: pistol,
+                        operation: utf8("equip-pistol"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("equipment-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        slots: left.as_ptr(),
+                        slots_len: left.len(),
+                        equipment_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_equipment_revision: owner_receipt.equipment_revision,
+                        expected_state_revision: owner_receipt.state_revision_after,
+                    },
+                    &mut equipped,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(equipped.kind, NativeMechanicsEquipmentMutationKind::Equip);
+        assert_eq!(equipped.changes_len, 1);
+        assert_eq!(equipped.observed_item_revisions_len, 1);
+        assert_eq!(equipped.owner_entity_id, 1);
+        assert_eq!(equipped.item_entity_id, 2);
+        assert!(equipped.observed_equipment_revision.present);
+
+        let right = [NativeMechanicsText {
+            value: utf8("hand_right"),
+        }];
+        let mut swapped = NativeMechanicsEquipmentMutationLease::default();
+        assert_eq!(
+            unsafe {
+                swap_equipment(
+                    context,
+                    &NativeMechanicsEquipmentSwapRequest {
+                        owner,
+                        outgoing_item: pistol,
+                        incoming_item: rifle,
+                        operation: utf8("swap-pistol-rifle"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("equipment-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        incoming_slots: right.as_ptr(),
+                        incoming_slots_len: right.len(),
+                        equipment_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_equipment_revision: equipped.committed_equipment_revision,
+                        expected_state_revision: equipped.committed_state_revision,
+                    },
+                    &mut swapped,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(swapped.kind, NativeMechanicsEquipmentMutationKind::Swap);
+        assert!(swapped.has_replaced_item);
+        assert_eq!(swapped.replaced_item_entity_id, 2);
+        assert_eq!(swapped.changes_len, 2);
+
+        let mut unequipped = NativeMechanicsEquipmentMutationLease::default();
+        assert_eq!(
+            unsafe {
+                unequip_equipment(
+                    context,
+                    &NativeMechanicsEquipmentUnequipRequest {
+                        owner,
+                        item: rifle,
+                        operation: utf8("unequip-rifle"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("equipment-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        equipment_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_equipment_revision: swapped.committed_equipment_revision,
+                        expected_state_revision: swapped.committed_state_revision,
+                    },
+                    &mut unequipped,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unequipped.kind,
+            NativeMechanicsEquipmentMutationKind::Unequip
+        );
+        assert_eq!(unequipped.changes_len, 1);
+
+        let mut rejected = NativeMechanicsEquipmentMutationLease::default();
+        assert_eq!(
+            unsafe {
+                equip_equipment(
+                    context,
+                    &NativeMechanicsEquipmentEquipRequest {
+                        owner,
+                        item: pistol,
+                        operation: utf8("stale-equip-pistol"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("equipment-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        slots: left.as_ptr(),
+                        slots_len: left.len(),
+                        equipment_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_equipment_revision: unequipped.committed_equipment_revision,
+                        expected_state_revision: swapped.committed_state_revision,
+                    },
+                    &mut rejected,
+                )
+            },
+            0
+        );
+        let mut equipment = NativeMechanicsEquipmentAssignmentComponentLease {
+            handle: NativeMechanicsComponentLeaseHandle::default(),
+            entries: std::ptr::null(),
+            entries_len: 0,
+            metadata: NativeMechanicsComponentReadMetadata {
+                entity_id: 0,
+                component: NativeMechanicsRevisionComponent::Equipment,
+                revision: 0,
+                present: false,
+                catalog_id: 0,
+                catalog_version: utf8(""),
+                catalog_fingerprint: utf8(""),
+            },
+        };
+        assert_eq!(
+            unsafe { read_equipment_assignment_component(context, owner, &mut equipment) },
+            ABI_OK
+        );
+        assert_eq!(equipment.entries_len, 0);
+        assert_eq!(
+            equipment.metadata.revision,
+            unequipped.committed_equipment_revision.revision
+        );
+        assert_eq!(
+            unsafe { destroy_component_lease(context, equipment.handle) },
+            ABI_OK
+        );
+        for receipt in [equipped, swapped, unequipped] {
+            assert_eq!(
+                unsafe { destroy_operation_lease(context, receipt.handle) },
+                ABI_OK
+            );
+            assert_eq!(
+                unsafe { destroy_operation_lease(context, receipt.handle) },
+                0
+            );
+        }
     }
 }
