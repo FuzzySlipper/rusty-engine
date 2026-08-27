@@ -2368,7 +2368,8 @@ fn continuous_quota_matrix_accepts_each_limit_and_rejects_one_over() {
     let bundle = gameplay_standard::ContinuousInputBundle::new(vec![
         (a, continuous(1.0)),
         (b, continuous(2.0)),
-    ]);
+    ])
+    .unwrap();
     let aggregate = ContinuousExpr::Max(vec![literal.clone(), literal.clone()]);
     let mut limits = ContinuousExprLimits {
         maximum_depth: 2,
@@ -2379,7 +2380,7 @@ fn continuous_quota_matrix_accepts_each_limit_and_rejects_one_over() {
     };
     assert!(ContinuousEvaluator::evaluate(
         &nested,
-        &gameplay_standard::ContinuousInputBundle::new(vec![]),
+        &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
         limits
     )
     .is_ok());
@@ -2387,7 +2388,7 @@ fn continuous_quota_matrix_accepts_each_limit_and_rejects_one_over() {
     assert!(matches!(
         ContinuousEvaluator::evaluate(
             &nested,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             limits
         ),
         Err(gameplay_standard::ContinuousEvaluationError::DepthExceeded { .. })
@@ -2397,7 +2398,7 @@ fn continuous_quota_matrix_accepts_each_limit_and_rejects_one_over() {
     assert!(matches!(
         ContinuousEvaluator::evaluate(
             &nested,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             limits
         ),
         Err(gameplay_standard::ContinuousEvaluationError::NodeQuotaExceeded { .. })
@@ -2413,7 +2414,7 @@ fn continuous_quota_matrix_accepts_each_limit_and_rejects_one_over() {
     assert!(matches!(
         ContinuousEvaluator::evaluate(
             &aggregate,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             limits
         ),
         Err(gameplay_standard::ContinuousEvaluationError::ArityExceeded { .. })
@@ -2423,11 +2424,43 @@ fn continuous_quota_matrix_accepts_each_limit_and_rejects_one_over() {
     assert!(matches!(
         ContinuousEvaluator::evaluate(
             &nested,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             limits
         ),
         Err(gameplay_standard::ContinuousEvaluationError::WorkQuotaExceeded { .. })
     ));
+}
+
+#[test]
+fn continuous_input_bundles_reject_identical_and_conflicting_duplicates() {
+    let input = gameplay_standard::ContinuousInputReference::Parameter {
+        role: role("continuous"),
+        id: InputId::parse("rate").unwrap(),
+    };
+    let expected = gameplay_standard::ContinuousInputBundleError::DuplicateInput {
+        input: input.clone(),
+    };
+
+    for observations in [
+        vec![
+            (input.clone(), continuous(1.0)),
+            (input.clone(), continuous(2.0)),
+        ],
+        vec![
+            (input.clone(), continuous(1.0)),
+            (input.clone(), continuous(1.0)),
+        ],
+    ] {
+        assert_eq!(
+            gameplay_standard::ContinuousInputBundle::new(observations).unwrap_err(),
+            expected
+        );
+    }
+
+    let bundle =
+        gameplay_standard::ContinuousInputBundle::new(vec![(input.clone(), continuous(3.0))])
+            .expect("one continuous observation is valid");
+    assert_eq!(bundle.get(&input), Some(continuous(3.0)));
 }
 
 #[test]
@@ -2497,7 +2530,7 @@ fn continuous_predicates_use_one_aggregate_budget_for_both_operands() {
     };
     assert!(ContinuousEvaluator::evaluate(
         &operand,
-        &gameplay_standard::ContinuousInputBundle::new(vec![]),
+        &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
         each
     )
     .is_ok());
@@ -2511,7 +2544,7 @@ fn continuous_predicates_use_one_aggregate_budget_for_both_operands() {
     assert!(matches!(
         ContinuousEvaluator::evaluate_predicate(
             &predicate,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             node_limited
         ),
         Err(gameplay_standard::ContinuousEvaluationError::NodeQuotaExceeded { .. })
@@ -2526,7 +2559,7 @@ fn continuous_predicates_use_one_aggregate_budget_for_both_operands() {
     assert!(matches!(
         ContinuousEvaluator::evaluate_predicate(
             &predicate,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             work_limited
         ),
         Err(gameplay_standard::ContinuousEvaluationError::WorkQuotaExceeded { .. })
@@ -2540,7 +2573,7 @@ fn continuous_predicates_use_one_aggregate_budget_for_both_operands() {
     };
     assert!(ContinuousEvaluator::evaluate_predicate(
         &predicate,
-        &gameplay_standard::ContinuousInputBundle::new(vec![]),
+        &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
         accepted
     )
     .unwrap());
@@ -2579,7 +2612,7 @@ fn continuous_evaluation_preserves_order_and_typed_failures() {
     assert_eq!(
         ContinuousEvaluator::evaluate(
             &underflow,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             ContinuousExprLimits::default()
         )
         .unwrap()
@@ -2593,7 +2626,7 @@ fn continuous_evaluation_preserves_order_and_typed_failures() {
     assert!(matches!(
         ContinuousEvaluator::evaluate(
             &divide_by_zero,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             ContinuousExprLimits::default()
         ),
         Err(ContinuousEvaluationError::Value(
@@ -2608,7 +2641,7 @@ fn continuous_evaluation_preserves_order_and_typed_failures() {
     assert_eq!(
         ContinuousEvaluator::evaluate(
             &min,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             ContinuousExprLimits::default()
         )
         .unwrap(),
@@ -2631,7 +2664,7 @@ fn continuous_evaluation_preserves_order_and_typed_failures() {
     assert_eq!(
         ContinuousEvaluator::evaluate(
             &left_grouped,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             ContinuousExprLimits::default()
         )
         .unwrap(),
@@ -2640,7 +2673,7 @@ fn continuous_evaluation_preserves_order_and_typed_failures() {
     assert_eq!(
         ContinuousEvaluator::evaluate(
             &right_grouped,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             ContinuousExprLimits::default()
         )
         .unwrap(),
@@ -2656,7 +2689,7 @@ fn continuous_evaluation_preserves_order_and_typed_failures() {
     assert!(matches!(
         ContinuousEvaluator::evaluate(
             &overflow_before_later_subtraction,
-            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            &gameplay_standard::ContinuousInputBundle::new(vec![]).unwrap(),
             ContinuousExprLimits::default()
         ),
         Err(ContinuousEvaluationError::Value(

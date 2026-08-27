@@ -120,15 +120,36 @@ pub struct ContinuousInputBundle {
     values: BTreeMap<ContinuousInputReference, ContinuousValue>,
 }
 impl ContinuousInputBundle {
-    pub fn new(values: Vec<(ContinuousInputReference, ContinuousValue)>) -> Self {
-        Self {
-            values: values.into_iter().collect(),
+    /// Builds a continuous input bundle without silently overwriting duplicate
+    /// observations. Each input reference has one unambiguous value, so both
+    /// identical and conflicting duplicate observations are rejected.
+    pub fn new(
+        values: Vec<(ContinuousInputReference, ContinuousValue)>,
+    ) -> Result<Self, ContinuousInputBundleError> {
+        let mut accepted = BTreeMap::new();
+        for (input, value) in values {
+            if accepted.contains_key(&input) {
+                return Err(ContinuousInputBundleError::DuplicateInput { input });
+            }
+            accepted.insert(input, value);
         }
+        Ok(Self { values: accepted })
     }
     pub fn get(&self, input: &ContinuousInputReference) -> Option<ContinuousValue> {
         self.values.get(input).copied()
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContinuousInputBundleError {
+    DuplicateInput { input: ContinuousInputReference },
+}
+impl fmt::Display for ContinuousInputBundleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "continuous input bundle rejected: {self:?}")
+    }
+}
+impl std::error::Error for ContinuousInputBundleError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContinuousExpr {

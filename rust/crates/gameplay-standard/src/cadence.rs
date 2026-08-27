@@ -923,7 +923,7 @@ mod tests {
         };
         ContinuousEvaluator::evaluate(
             &ContinuousExpr::Input(input.clone()),
-            &ContinuousInputBundle::new(vec![(input, value(7.0))]),
+            &ContinuousInputBundle::new(vec![(input, value(7.0))]).unwrap(),
             ContinuousExprLimits::default(),
         )
         .unwrap()

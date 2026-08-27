@@ -52,8 +52,9 @@ pub use composed::{
 pub use continuous::{
     compile_continuous_expr, CompileContinuousExpr, ContinuousComparison, ContinuousCompileError,
     ContinuousEvaluationError, ContinuousEvaluator, ContinuousExpr, ContinuousExprLimits,
-    ContinuousExprRequirements, ContinuousInputBundle, ContinuousInputReference, ContinuousValue,
-    ContinuousValueError, CONTINUOUS_EVALUATOR_SEMANTICS_VERSION,
+    ContinuousExprRequirements, ContinuousInputBundle, ContinuousInputBundleError,
+    ContinuousInputReference, ContinuousValue, ContinuousValueError,
+    CONTINUOUS_EVALUATOR_SEMANTICS_VERSION,
 };
 pub use contract::encode_standard_contract_descriptor;
 pub use exact::{
