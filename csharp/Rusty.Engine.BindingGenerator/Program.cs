@@ -165,7 +165,6 @@ internal sealed class BindingModel
             return;
         }
         Field[] pointerFields = value.Fields.Where(field => field.Type.Contains('*', StringComparison.Ordinal)).ToArray();
-        if (pointerFields.Length == 0) { Fail(family, method, signature, $"lease result {type} must contain at least one bounded collection pointer"); return; }
         foreach (Field pointer in pointerFields)
         {
             int pointerIndex = value.Fields.ToList().IndexOf(pointer);
@@ -185,7 +184,13 @@ internal sealed class BindingModel
         HashSet<string> collectionFields = pointerFields
             .SelectMany(pointer => new[] { pointer.Name, $"{pointer.Name}_len" })
             .ToHashSet(StringComparer.Ordinal);
-        foreach (Field metadata in value.Fields.Where(field => field.Name != "handle" && !collectionFields.Contains(field.Name)))
+        Field[] metadataFields = value.Fields.Where(field => field.Name != "handle" && !collectionFields.Contains(field.Name)).ToArray();
+        if (pointerFields.Length == 0 && metadataFields.Length == 0)
+        {
+            Fail(family, method, signature, $"lease result {type} must contain a bounded collection or copied metadata");
+            return;
+        }
+        foreach (Field metadata in metadataFields)
         {
             ValidateLeaseMetadata(family, method, signature, metadata, structs, enums, new HashSet<string>(StringComparer.Ordinal));
         }
@@ -397,11 +402,12 @@ internal static class Emit
         }
         foreach (Struct lease in model.Structs.Values.Where(lease => UsesLeaseReceipt(model, lease)).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
-            string collections = string.Join(", ", LeasePointers(lease).Select(pointer => $"ReadOnlyMemory<{SafeType(model, BindingModel.Bare(pointer.Type))}> {Pascal(pointer.Name)}"));
-            string metadata = string.Join(", ", LeaseMetadataFields(lease).Select(field => $"{SafeLeaseMetadataType(model, field)} {Pascal(field.Name)}"));
-            output.Append($"public readonly record struct {LeaseReceiptType(lease)}(").Append(collections);
-            if (metadata.Length > 0) output.Append(", ").Append(metadata);
-            output.AppendLine(");").AppendLine();
+            IEnumerable<string> collections = LeasePointers(lease).Select(pointer => $"ReadOnlyMemory<{SafeType(model, BindingModel.Bare(pointer.Type))}> {Pascal(pointer.Name)}");
+            IEnumerable<string> metadata = LeaseMetadataFields(lease).Select(field => $"{SafeLeaseMetadataType(model, field)} {Pascal(field.Name)}");
+            output.Append($"public readonly record struct {LeaseReceiptType(lease)}(")
+                .Append(string.Join(", ", collections.Concat(metadata)))
+                .AppendLine(");")
+                .AppendLine();
         }
         foreach (string handle in DisposableHandleTypes(model))
         {
@@ -538,11 +544,11 @@ internal static class Emit
             }
             if (UsesLeaseReceipt(model, lease))
             {
-                string collections = string.Join(", ", pointers.Select(pointer => $"{(pointers.Length == 1 ? "CopyLease" : $"CopyLease{Pascal(pointer.Name)}")}(value)"));
-                string metadata = string.Join(", ", LeaseMetadataFields(lease).Select(field => LeaseMetadataFromNativeExpression(model, field, $"value.{RawIdentifier(field.Name)}")));
-                output.Append($"    internal static {LeaseReceiptType(lease)} CopyLeaseReceipt({lease.Name} value) => new(").Append(collections);
-                if (metadata.Length > 0) output.Append(", ").Append(metadata);
-                output.AppendLine(");");
+                IEnumerable<string> collections = pointers.Select(pointer => $"{(pointers.Length == 1 ? "CopyLease" : $"CopyLease{Pascal(pointer.Name)}")}(value)");
+                IEnumerable<string> metadata = LeaseMetadataFields(lease).Select(field => LeaseMetadataFromNativeExpression(model, field, $"value.{RawIdentifier(field.Name)}"));
+                output.Append($"    internal static {LeaseReceiptType(lease)} CopyLeaseReceipt({lease.Name} value) => new(")
+                    .Append(string.Join(", ", collections.Concat(metadata)))
+                    .AppendLine(");");
             }
         }
         output.AppendLine("    internal static byte ToNativeBool(bool value) => value ? (byte)1 : (byte)0;");

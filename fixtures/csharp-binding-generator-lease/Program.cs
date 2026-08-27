@@ -8,11 +8,13 @@ namespace Rusty.Engine.NativeProduct;
 internal static unsafe class Program
 {
     private static readonly Dictionary<ulong, (nint Entries, nint Observations, nint Label, nint Payload)> Leases = [];
+    private static readonly Dictionary<ulong, nint> SummaryLeases = [];
     private static readonly Dictionary<ulong, (nint Diagnostics, nint Code, nint Message, nint Source, nint Service, nint Operation)> DiagnosticLeases = [];
     private static readonly List<(string Value, byte[] Payload)> ReplacedTags = [];
     private static ulong _nextLease = 1;
     private static int _destroyed;
     private static int _diagnosticDestroyed;
+    private static int _summaryDestroyed;
 
     private static void Main()
     {
@@ -20,11 +22,17 @@ internal static unsafe class Program
         {
             context = null,
             read_items = new NativeReadLeaseFixtureItems { Pointer = &ReadItems },
+            read_summary = new NativeReadLeaseFixtureSummary { Pointer = &ReadSummary },
             replace_tags = new NativeReplaceLeaseFixtureTags { Pointer = &ReplaceTags },
             destroy_item_lease = new NativeDestroyLeaseFixtureItemLease { Pointer = &DestroyItemLease },
+            destroy_summary_lease = new NativeDestroyLeaseFixtureSummaryLease { Pointer = &DestroySummaryLease },
             destroy_operation_diagnostic_lease = new NativeDestroyLeaseFixtureOperationDiagnosticLease { Pointer = &DestroyOperationDiagnosticLease },
         };
         LeaseFixtureServiceImplementation service = new(api);
+
+        LeaseFixtureSummaryLeaseReceipt summary = service.ReadSummary();
+        Require(summary.Label == "owned summary" && summary.Revision == 55, "metadata-only lease was not copied");
+        Require(_summaryDestroyed == 1 && SummaryLeases.Count == 0, "metadata-only lease was not released exactly once");
 
         byte[] payload = [0x00, 0xC3, 0xA9, 0xFF];
         service.ReplaceTags(new ReplaceLeaseFixtureTagsRequest(new LeaseFixtureTag[] {
@@ -85,6 +93,24 @@ internal static unsafe class Program
         {
         }
         Require(_diagnosticDestroyed == 3 && DiagnosticLeases.Count == 0, "diagnostic lease was not released after managed UTF-8 copying failed");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ReadSummary(void* _, NativeLeaseFixtureSummaryLease* result)
+    {
+        if (result is null) return 0;
+        byte[] labelSource = Encoding.UTF8.GetBytes("owned summary");
+        byte* label = (byte*)NativeMemory.Alloc((nuint)labelSource.Length);
+        labelSource.CopyTo(new Span<byte>(label, labelSource.Length));
+        ulong handle = _nextLease++;
+        SummaryLeases.Add(handle, (nint)label);
+        *result = new NativeLeaseFixtureSummaryLease
+        {
+            handle = new NativeLeaseFixtureSummaryLeaseHandle { value = handle },
+            label = new NativeUtf8Slice { bytes = label, len = (nuint)labelSource.Length },
+            revision = 55,
+        };
+        return 1;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -195,6 +221,15 @@ internal static unsafe class Program
         if (lease.Label != 0) NativeMemory.Free((void*)lease.Label);
         if (lease.Payload != 0) NativeMemory.Free((void*)lease.Payload);
         _destroyed++;
+        return 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int DestroySummaryLease(void* _, NativeLeaseFixtureSummaryLeaseHandle handle)
+    {
+        if (!SummaryLeases.Remove(handle.value, out nint label)) return 0;
+        NativeMemory.Free((void*)label);
+        _summaryDestroyed++;
         return 1;
     }
 
