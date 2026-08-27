@@ -224,6 +224,26 @@ pub struct NativeSetVoxelAnnotationBoundsRequest {
     pub bounds: NativeVoxelAnnotationBounds,
 }
 
+/// One replacement tag borrowed only for a single named annotation edit.
+/// The bridge copies the UTF-8 text before the callback returns.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelAnnotationTag {
+    pub value: NativeUtf8Slice,
+}
+
+/// Atomically replace one region's tags at an expected owner hash. `tags` is
+/// a synchronous, bounded borrowed array with no retained product pointers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSetVoxelAnnotationTagsRequest {
+    pub annotation: NativeVoxelAnnotationHandle,
+    pub expected_layer_hash: NativeVoxelContentHash,
+    pub region_id: NativeUtf8Slice,
+    pub tags: *const NativeVoxelAnnotationTag,
+    pub tags_len: usize,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVoxelAnnotationAffectedId {
@@ -409,6 +429,11 @@ pub type NativeSetVoxelAnnotationBounds = unsafe extern "C" fn(
     *const NativeSetVoxelAnnotationBoundsRequest,
     *mut NativeVoxelAnnotationEditLease,
 ) -> i32;
+pub type NativeSetVoxelAnnotationTags = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSetVoxelAnnotationTagsRequest,
+    *mut NativeVoxelAnnotationEditLease,
+) -> i32;
 pub type NativeDestroyVoxelAnnotationEditLease =
     unsafe extern "C" fn(*mut c_void, NativeVoxelAnnotationEditLeaseHandle) -> i32;
 pub type NativeDestroyVoxelObject =
@@ -493,5 +518,6 @@ pub struct NativeVoxelContentApi {
     pub set_annotation_kind: NativeSetVoxelAnnotationKind,
     pub set_annotation_parent: NativeSetVoxelAnnotationParent,
     pub set_annotation_bounds: NativeSetVoxelAnnotationBounds,
+    pub set_annotation_tags: NativeSetVoxelAnnotationTags,
     pub destroy_annotation_edit_lease: NativeDestroyVoxelAnnotationEditLease,
 }

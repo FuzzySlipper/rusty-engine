@@ -11,7 +11,8 @@ use voxel_annotation::{
     decode_annotation_layer, query_annotation_layer, validate_annotation_layer,
     VoxelAnnotationBounds, VoxelAnnotationEditCommand, VoxelAnnotationEditService,
     VoxelAnnotationEditTransaction, VoxelAnnotationKind, VoxelAnnotationLayer,
-    VoxelAnnotationQuery, VoxelAnnotationQueryMode, VoxelAnnotationRegionReadout,
+    VoxelAnnotationLimits, VoxelAnnotationQuery, VoxelAnnotationQueryMode,
+    VoxelAnnotationRegionReadout,
 };
 use voxel_asset::{decode_voxel_asset, represented_voxel_count, VoxelAsset, VoxelFrame};
 use voxel_object_runtime::{
@@ -550,6 +551,7 @@ pub(crate) fn api(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentA
         set_annotation_kind,
         set_annotation_parent,
         set_annotation_bounds,
+        set_annotation_tags,
         destroy_annotation_edit_lease,
     }
 }
@@ -932,6 +934,44 @@ unsafe extern "C" fn set_annotation_bounds(
     }
 }
 
+unsafe extern "C" fn set_annotation_tags(
+    context: *mut c_void,
+    request: *const NativeSetVoxelAnnotationTagsRequest,
+    output: *mut NativeVoxelAnnotationEditLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let expected = hash_string(request.expected_layer_hash);
+    let region_id = match unsafe {
+        borrowed_utf8(
+            request.region_id.bytes,
+            request.region_id.len,
+            "annotation region id",
+        )
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return 0,
+    };
+    let tags = match unsafe { borrowed_annotation_tags(request.tags, request.tags_len) } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.apply_annotation_edit(
+        request.annotation,
+        expected,
+        VoxelAnnotationEditCommand::SetTags { region_id, tags },
+    ) {
+        Ok(lease) => {
+            unsafe { *output = lease };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 unsafe extern "C" fn destroy_annotation_edit_lease(
     context: *mut c_void,
     handle: NativeVoxelAnnotationEditLeaseHandle,
@@ -1268,6 +1308,32 @@ unsafe fn borrowed_json<'a>(value: NativeByteSlice) -> Result<&'a str, ()> {
         unsafe { std::slice::from_raw_parts(value.bytes, value.len) }
     };
     std::str::from_utf8(bytes).map_err(|_| ())
+}
+
+/// Copies a bounded, synchronous tag input before an edit can reach the
+/// retained annotation owner. No product pointer is preserved after return.
+unsafe fn borrowed_annotation_tags(
+    tags: *const NativeVoxelAnnotationTag,
+    tags_len: usize,
+) -> Result<Vec<String>, ()> {
+    let limits = VoxelAnnotationLimits::default();
+    if tags_len > limits.max_tags_per_region {
+        return Err(());
+    }
+    if tags_len == 0 {
+        return Ok(Vec::new());
+    }
+    if tags.is_null() {
+        return Err(());
+    }
+    unsafe { std::slice::from_raw_parts(tags, tags_len) }
+        .iter()
+        .map(|tag| {
+            unsafe { borrowed_utf8(tag.value.bytes, tag.value.len, "annotation tag") }
+                .map(str::to_owned)
+                .map_err(|_| ())
+        })
+        .collect()
 }
 
 fn native_utf8(value: &str) -> NativeUtf8Slice {
@@ -2169,9 +2235,108 @@ mod tests {
             ABI_OK
         );
         assert_eq!(bounds_edit.revision, 4);
+        let bounds_hash = bounds_edit.layer_hash_after;
         assert_eq!(
             unsafe { (api.destroy_annotation_edit_lease)(api.context, bounds_edit.handle) },
             ABI_OK
+        );
+
+        let mut tag_one = "café".as_bytes().to_vec();
+        let mut tag_two = b"combat".to_vec();
+        let tags = [
+            NativeVoxelAnnotationTag {
+                value: NativeUtf8Slice {
+                    bytes: tag_one.as_ptr(),
+                    len: tag_one.len(),
+                },
+            },
+            NativeVoxelAnnotationTag {
+                value: NativeUtf8Slice {
+                    bytes: tag_two.as_ptr(),
+                    len: tag_two.len(),
+                },
+            },
+        ];
+        let mut tags_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_tags)(
+                    api.context,
+                    &NativeSetVoxelAnnotationTagsRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: bounds_hash,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        tags: tags.as_ptr(),
+                        tags_len: tags.len(),
+                    },
+                    &mut tags_edit,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(tags_edit.revision, 5);
+        assert_eq!(
+            unsafe { (api.destroy_annotation_edit_lease)(api.context, tags_edit.handle) },
+            ABI_OK
+        );
+        tag_one.fill(b'x');
+        tag_two.fill(b'y');
+        let copied_tags = &bridge
+            .annotation(annotation_handle)
+            .expect("retained annotation")
+            .layer
+            .regions
+            .iter()
+            .find(|region| region.region_id == "region/bridge-a")
+            .expect("retained region")
+            .tags;
+        assert_eq!(
+            copied_tags,
+            &["café", "combat"],
+            "tag input is copied before the callback returns"
+        );
+
+        let stale_tags = [NativeVoxelAnnotationTag {
+            value: NativeUtf8Slice {
+                bytes: b"stale".as_ptr(),
+                len: b"stale".len(),
+            },
+        }];
+        let mut stale_tags_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_tags)(
+                    api.context,
+                    &NativeSetVoxelAnnotationTagsRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: bounds_hash,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        tags: stale_tags.as_ptr(),
+                        tags_len: stale_tags.len(),
+                    },
+                    &mut stale_tags_edit,
+                )
+            },
+            0,
+            "a stale expected hash does not commit tag replacement"
+        );
+        assert_eq!(
+            bridge
+                .annotation(annotation_handle)
+                .expect("retained annotation")
+                .layer
+                .regions
+                .iter()
+                .find(|region| region.region_id == "region/bridge-a")
+                .expect("retained region")
+                .tags,
+            vec!["café", "combat"]
         );
 
         let mut after = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionLease>() };
@@ -2199,7 +2364,7 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!(after.revision, 4);
+        assert_eq!(after.revision, 5);
         assert_eq!(
             unsafe { (*after.regions).kind },
             NativeVoxelAnnotationKind::Room

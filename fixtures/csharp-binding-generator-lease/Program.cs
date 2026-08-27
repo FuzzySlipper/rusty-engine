@@ -9,6 +9,7 @@ internal static unsafe class Program
 {
     private static readonly Dictionary<ulong, (nint Entries, nint Label, nint Payload)> Leases = [];
     private static readonly Dictionary<ulong, (nint Diagnostics, nint Code, nint Message, nint Source, nint Service, nint Operation)> DiagnosticLeases = [];
+    private static readonly List<(string Value, byte[] Payload)> ReplacedTags = [];
     private static ulong _nextLease = 1;
     private static int _destroyed;
     private static int _diagnosticDestroyed;
@@ -19,10 +20,21 @@ internal static unsafe class Program
         {
             context = null,
             read_items = new NativeReadLeaseFixtureItems { Pointer = &ReadItems },
+            replace_tags = new NativeReplaceLeaseFixtureTags { Pointer = &ReplaceTags },
             destroy_item_lease = new NativeDestroyLeaseFixtureItemLease { Pointer = &DestroyItemLease },
             destroy_operation_diagnostic_lease = new NativeDestroyLeaseFixtureOperationDiagnosticLease { Pointer = &DestroyOperationDiagnosticLease },
         };
         LeaseFixtureServiceImplementation service = new(api);
+
+        byte[] payload = [0x00, 0xC3, 0xA9, 0xFF];
+        service.ReplaceTags(new ReplaceLeaseFixtureTagsRequest(new LeaseFixtureTag[] {
+            new LeaseFixtureTag("café", payload),
+            new LeaseFixtureTag(string.Empty, ReadOnlyMemory<byte>.Empty),
+        }));
+        payload[0] = 0x7F;
+        Require(ReplacedTags.Count == 2, "borrowed tag input count was not delivered");
+        Require(ReplacedTags[0].Value == "café" && ReplacedTags[0].Payload.SequenceEqual(new byte[] { 0x00, 0xC3, 0xA9, 0xFF }), "non-ASCII UTF-8 and byte input were not copied synchronously");
+        Require(ReplacedTags[1].Value == string.Empty && ReplacedTags[1].Payload.Length == 0, "empty borrowed UTF-8 and bytes were not delivered");
 
         LeaseFixtureItemLeaseReceipt empty = service.ReadItems(new LeaseFixtureRequest(0));
         Require(empty.Entries.IsEmpty, "empty lease did not become an empty managed collection");
@@ -70,6 +82,22 @@ internal static unsafe class Program
         {
         }
         Require(_diagnosticDestroyed == 3 && DiagnosticLeases.Count == 0, "diagnostic lease was not released after managed UTF-8 copying failed");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ReplaceTags(void* _, NativeReplaceLeaseFixtureTagsRequest* request)
+    {
+        if (request is null || request->tags_len != 2 || request->tags is null) return 0;
+        ReplacedTags.Clear();
+        for (int index = 0; index < checked((int)request->tags_len); index++)
+        {
+            NativeLeaseFixtureTag tag = request->tags[index];
+            if ((tag.value.len != 0 && tag.value.bytes is null) || (tag.payload.len != 0 && tag.payload.bytes is null)) return 0;
+            string value = tag.value.len == 0 ? string.Empty : new UTF8Encoding(false, true).GetString(new ReadOnlySpan<byte>(tag.value.bytes, checked((int)tag.value.len)));
+            byte[] payload = tag.payload.len == 0 ? [] : new ReadOnlySpan<byte>(tag.payload.bytes, checked((int)tag.payload.len)).ToArray();
+            ReplacedTags.Add((value, payload));
+        }
+        return 1;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

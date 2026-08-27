@@ -230,10 +230,9 @@ internal sealed class BindingModel
             if (field.Type.Contains('*', StringComparison.Ordinal))
             {
                 string pointed = Bare(field.Type);
-                if (pointed is "NativeUtf8Slice" or "NativeStructuredValue") Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) cannot point to special immediate value {pointed}");
                 if (!IsExactBorrowedPointer(field.Type)) Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) must be exactly const T *");
                 if (index + 1 >= request.Fields.Count || (request.Fields[index + 1].Name != $"{field.Name}_len" && request.Fields[index + 1].Name != $"{field.Name}_count") || Bare(request.Fields[index + 1].Type) != "size_t") Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) lacks an adjacent size_t _len/_count field");
-                ValidateFixedType(family, method, signature, pointed, structs, enums, new HashSet<string>(StringComparer.Ordinal), $"borrowed span element {request.Name}.{field.Name}");
+                ValidateBorrowedSpanElement(family, method, signature, pointed, structs, enums);
                 index++;
                 continue;
             }
@@ -241,6 +240,42 @@ internal sealed class BindingModel
             if (nested is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice") continue;
             if (nested == "NativeStructuredValue") continue;
             ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"borrowed request field {request.Name}.{field.Name}");
+        }
+    }
+
+    /// A borrowed request span is synchronous input only. Its element may be a
+    /// normal fixed value, or one shallow fixed struct with direct UTF-8/byte
+    /// slices. The latter is marshalled by the generated call body into
+    /// temporary backing storage; recursive graphs and further pointers stay
+    /// outside the ABI grammar.
+    private static void ValidateBorrowedSpanElement(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
+    {
+        if (IsScalar(type) || enums.ContainsKey(type)) return;
+        if (!structs.TryGetValue(type, out Struct? value) || value is null)
+        {
+            Fail(family, method, signature, $"borrowed span element {type} is not a supported scalar or emitted native struct");
+            return;
+        }
+        if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs" or "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue")
+        {
+            Fail(family, method, signature, $"borrowed span element {type} must be a fixed value or a shallow emitted struct");
+            return;
+        }
+        foreach (Field field in value.Fields)
+        {
+            if (field.Type.Contains('*', StringComparison.Ordinal))
+            {
+                Fail(family, method, signature, $"borrowed span element {type}.{field.Name} ({field.Type}) cannot contain a pointer");
+                continue;
+            }
+            string nested = Bare(field.Type);
+            if (nested is "NativeUtf8Slice" or "NativeByteSlice") continue;
+            if (nested is "NativeWritableByteSlice" or "NativeStructuredValue")
+            {
+                Fail(family, method, signature, $"borrowed span element {type}.{field.Name} ({field.Type}) is not a supported immediate field");
+                continue;
+            }
+            ValidateFixedType(family, method, signature, nested, structs, enums, new HashSet<string>(StringComparer.Ordinal), $"borrowed span element {type}.{field.Name}");
         }
     }
 
@@ -566,6 +601,14 @@ internal static class Emit
         int requestIndex = leading.Length;
         string requestArgument = $"arg{requestIndex}";
         List<string> closers = [];
+        Field[] specialSpanFields = request.Fields.Where(field => field.Type.Contains('*', StringComparison.Ordinal) && BorrowedSpanElementHasImmediateFields(model, BindingModel.Bare(field.Type))).ToArray();
+        List<string> temporaryPinArrays = specialSpanFields.SelectMany(field => BorrowedSpanElementPinNames(model, field)).ToList();
+        bool hasSpecialSpanElements = temporaryPinArrays.Count > 0;
+        if (hasSpecialSpanElements)
+        {
+            foreach (string pins in temporaryPinArrays) output.AppendLine($"        MemoryHandle[] {pins} = [];");
+            output.AppendLine("        try").AppendLine("        {");
+        }
         foreach (Field field in request.Fields)
         {
             if (BindingModel.Bare(field.Type) == "NativeUtf8Slice")
@@ -589,7 +632,11 @@ internal static class Emit
             {
                 string rawElement = RawType(BindingModel.Bare(field.Type));
                 string property = Pascal(field.Name);
-                output.AppendLine($"        {rawElement}[] {field.Name}Raw = {requestArgument}.{property}.ToArray().Select(NativeConversions.ToNative).ToArray();");
+                if (BorrowedSpanElementHasImmediateFields(model, BindingModel.Bare(field.Type)))
+                {
+                    EmitBorrowedSpanElementMarshalling(output, model, requestArgument, field);
+                }
+                else output.AppendLine($"        {rawElement}[] {field.Name}Raw = {requestArgument}.{property}.ToArray().Select(NativeConversions.ToNative).ToArray();");
                 output.AppendLine($"        fixed ({rawElement}* {field.Name}Pointer = {field.Name}Raw)").AppendLine("        {");
                 closers.Add("        }");
             }
@@ -636,8 +683,74 @@ internal static class Emit
         }
         else output.AppendLine("        return NativeConversions.FromNative(rawResult);");
         for (int index = closers.Count - 1; index >= 0; index--) output.AppendLine(closers[index]);
+        if (hasSpecialSpanElements)
+        {
+            output.AppendLine("        }").AppendLine("        finally").AppendLine("        {");
+            foreach (string pins in temporaryPinArrays) output.AppendLine($"            foreach (MemoryHandle pin in {pins}) pin.Dispose();");
+            output.AppendLine("        }");
+        }
         output.AppendLine("    }").AppendLine();
         return output.ToString();
+    }
+
+    private static bool BorrowedSpanElementHasImmediateFields(BindingModel model, string element) =>
+        model.Structs.TryGetValue(element, out Struct? value)
+        && value.Fields.Any(field => BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeByteSlice");
+
+    private static IEnumerable<string> BorrowedSpanElementPinNames(BindingModel model, Field spanField)
+    {
+        Struct value = model.Structs[BindingModel.Bare(spanField.Type)];
+        return value.Fields
+            .Where(field => BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeByteSlice")
+            .Select(field => $"{spanField.Name}{Pascal(field.Name)}Pins");
+    }
+
+    private static void EmitBorrowedSpanElementMarshalling(StringBuilder output, BindingModel model, string requestArgument, Field spanField)
+    {
+        string element = BindingModel.Bare(spanField.Type);
+        Struct value = model.Structs[element];
+        string property = Pascal(spanField.Name);
+        string values = $"{spanField.Name}Values";
+        output.AppendLine($"        {SafeType(model, element)}[] {values} = {requestArgument}.{property}.ToArray();");
+        foreach (Field field in value.Fields.Where(field => BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeByteSlice"))
+        {
+            string fieldProperty = Pascal(field.Name);
+            string prefix = $"{spanField.Name}{fieldProperty}";
+            if (BindingModel.Bare(field.Type) == "NativeUtf8Slice")
+            {
+                string bytes = $"{prefix}Bytes";
+                string pins = $"{prefix}Pins";
+                output.AppendLine($"        byte[][] {bytes} = {values}.Select(value => Encoding.UTF8.GetBytes(value.{fieldProperty} ?? throw new ArgumentNullException(nameof({requestArgument})))).ToArray();");
+                output.AppendLine($"        {pins} = new MemoryHandle[{bytes}.Length];");
+                output.AppendLine($"        for (int index = 0; index < {bytes}.Length; index++) {pins}[index] = {bytes}[index].AsMemory().Pin();");
+            }
+            else
+            {
+                string pins = $"{prefix}Pins";
+                output.AppendLine($"        {pins} = new MemoryHandle[{values}.Length];");
+                output.AppendLine($"        for (int index = 0; index < {values}.Length; index++) {pins}[index] = {values}[index].{fieldProperty}.Pin();");
+            }
+        }
+        output.AppendLine($"        {element}[] {spanField.Name}Raw = new {element}[{values}.Length];");
+        output.AppendLine($"        for (int index = 0; index < {values}.Length; index++)").AppendLine("        {");
+        output.AppendLine($"            {spanField.Name}Raw[index] = new {element}").AppendLine("            {");
+        foreach (Field field in value.Fields)
+        {
+            string expression = BorrowedSpanElementFieldExpression(field, values, spanField.Name);
+            output.AppendLine($"                {RawIdentifier(field.Name)} = {expression},");
+        }
+        output.AppendLine("            };").AppendLine("        }");
+    }
+
+    private static string BorrowedSpanElementFieldExpression(Field field, string values, string spanName)
+    {
+        string bare = BindingModel.Bare(field.Type);
+        string property = Pascal(field.Name);
+        string prefix = $"{spanName}{property}";
+        if (bare == "NativeUtf8Slice") return $"new NativeUtf8Slice {{ bytes = {prefix}Bytes[index].Length == 0 ? null : (byte*){prefix}Pins[index].Pointer, len = (nuint){prefix}Bytes[index].Length }}";
+        if (bare == "NativeByteSlice") return $"new NativeByteSlice {{ bytes = {values}[index].{property}.Length == 0 ? null : (byte*){prefix}Pins[index].Pointer, len = (nuint){values}[index].{property}.Length }}";
+        if (bare is "bool" or "_Bool") return $"NativeConversions.ToNativeBool({values}[index].{property})";
+        return $"NativeConversions.ToNative({values}[index].{property})";
     }
 
     private static void EmitRequire(StringBuilder output, BindingModel model, Service service, string operation, bool hasErrorReadout, string indent)
