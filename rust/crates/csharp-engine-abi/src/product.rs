@@ -671,6 +671,16 @@ pub type NativeTransferMechanicsUniqueItem = unsafe extern "C" fn(
     *const NativeMechanicsUniqueItemTransferRequest,
     *mut NativeMechanicsUniqueItemTransferLease,
 ) -> i32;
+pub type NativeMaterializeMechanicsUniqueItem = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsUniqueItemMaterializationRequest,
+    *mut NativeMechanicsUniqueItemMaterializationLease,
+) -> i32;
+pub type NativeDestroyMechanicsUniqueItem = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsUniqueItemDestroyRequest,
+    *mut NativeMechanicsUniqueItemDestroyLease,
+) -> i32;
 pub type NativeEquipMechanicsEquipment = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEquipmentEquipRequest,
@@ -1012,6 +1022,8 @@ pub struct NativeMechanicsApi {
     pub consume_inventory: NativeConsumeMechanicsInventory,
     pub transfer_inventory: NativeTransferMechanicsInventory,
     pub transfer_unique_item: NativeTransferMechanicsUniqueItem,
+    pub materialize_unique_item: NativeMaterializeMechanicsUniqueItem,
+    pub destroy_unique_item: NativeDestroyMechanicsUniqueItem,
     pub equip_equipment: NativeEquipMechanicsEquipment,
     pub unequip_equipment: NativeUnequipMechanicsEquipment,
     pub swap_equipment: NativeSwapMechanicsEquipment,

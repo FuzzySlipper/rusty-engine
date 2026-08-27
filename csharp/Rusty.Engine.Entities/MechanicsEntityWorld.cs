@@ -250,6 +250,113 @@ public sealed class MechanicsEntityWorld : IDisposable
         return receipt;
     }
 
+    /// <summary>
+    /// Materializes a unique item using a product-created, already-active canonical identity.
+    /// The native binding is intentionally temporary until the owner accepts its candidate; a
+    /// rejected materialization releases only that uncommitted binding and never creates or rolls
+    /// back a product entity.
+    /// </summary>
+    public MechanicsUniqueItemMaterializationLeaseReceipt MaterializeUniqueItem(
+        EntityId item,
+        string identity,
+        EntityId container,
+        string definition,
+        ulong expectedNativeStateRevision,
+        ulong? expectedManagedRevision = null)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrWhiteSpace(identity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(definition);
+        RequireActive(item);
+        if (_bindings.ContainsKey(item))
+        {
+            throw new InvalidOperationException($"Entity {item.Value} is already bound to this Mechanics world.");
+        }
+        Binding containerBinding = RequireCommitted(container);
+        ulong observedManagedRevision = _entities.Revision;
+        if (expectedManagedRevision is ulong expected && observedManagedRevision != expected)
+        {
+            throw new InvalidOperationException("The managed materialization revision is stale.");
+        }
+        if (item == container || _entities.TryGetContainedIn(item, out _))
+        {
+            throw new InvalidOperationException($"Materialized item {item.Value} must be a distinct uncontained canonical entity.");
+        }
+
+        MechanicsEntity native = _mechanics.BindEntity(new MechanicsEntityBindRequest(_catalog, item.Value, identity));
+        try
+        {
+            MechanicsUniqueItemMaterializationLeaseReceipt receipt = _mechanics.MaterializeUniqueItem(
+                new MechanicsUniqueItemMaterializationRequest(
+                    native,
+                    containerBinding.Native,
+                    definition,
+                    expectedNativeStateRevision));
+
+            // The native owner has admitted the same caller-owned identity. All managed failure
+            // conditions for this exact synchronous mirror were preflighted before that commit.
+            _entities.SetContainment(item, container, observedManagedRevision);
+            _bindings.Add(item, new Binding(native)
+            {
+                IsCommitted = true,
+                LifecycleStamp = receipt.Lifecycle.Stamp,
+            });
+            return receipt;
+        }
+        catch
+        {
+            native.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Destroys one committed unique item through the Engine owner, then tombstones the canonical
+    /// managed entity and releases its native lease. The native callback publishes the terminal
+    /// lifecycle record, so this deliberately does not route through <see cref="SetLifecycle"/>.
+    /// </summary>
+    public MechanicsUniqueItemDestroyLeaseReceipt DestroyUniqueItem(
+        EntityId item,
+        MechanicsUniqueItemDestroyOperation operation,
+        ulong expectedNativeStateRevision,
+        ulong? expectedManagedRevision = null)
+    {
+        ThrowIfDisposed();
+        Binding binding = RequireCommitted(item);
+        ulong observedManagedRevision = _entities.Revision;
+        if (expectedManagedRevision is ulong expected && observedManagedRevision != expected)
+        {
+            throw new InvalidOperationException("The managed destruction revision is stale.");
+        }
+        EntityRevision entityRevision = _entities.GetEntityRevision(item);
+
+        MechanicsUniqueItemDestroyLeaseReceipt receipt = _mechanics.DestroyUniqueItem(
+            new MechanicsUniqueItemDestroyRequest(
+                binding.Native,
+                operation.Operation,
+                operation.Source.Kind,
+                operation.Source.IntrinsicEntityId,
+                operation.Source.IntrinsicInstance,
+                operation.Source.EffectEntityId,
+                operation.Source.EffectInstance,
+                operation.Source.EffectStack,
+                operation.Source.EffectSource,
+                operation.Source.EquippedOwnerEntityId,
+                operation.Source.EquippedItemEntityId,
+                operation.Source.EquippedSource,
+                operation.Source.RequestOperation,
+                operation.Source.RequestInstance,
+                expectedNativeStateRevision));
+
+        // EntityWorld's direct destroy has no remaining failure after the exact revision and
+        // liveness preflight above. It mirrors the owner result while avoiding a second native
+        // lifecycle mutation.
+        _entities.Destroy(item, entityRevision);
+        binding.Native.Dispose();
+        _bindings.Remove(item);
+        return receipt;
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -358,3 +465,8 @@ public readonly record struct MechanicsUniqueItemTransferOperation(
     MechanicsComponentRevision ExpectedFromRevision,
     MechanicsRevisionGuard ToRevisionGuard,
     MechanicsComponentRevision ExpectedToRevision);
+
+/// <summary>Product-supplied operation/source facts for an exact unique-item destruction.</summary>
+public readonly record struct MechanicsUniqueItemDestroyOperation(
+    string Operation,
+    MechanicsSourceIdentity Source);

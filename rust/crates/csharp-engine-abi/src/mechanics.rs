@@ -1185,6 +1185,87 @@ pub struct NativeMechanicsUniqueItemTransferLease {
     pub observed_to_inventory_revision: NativeMechanicsComponentRevision,
     pub read_cost: NativeMechanicsInventoryReadCost,
 }
+
+/// Materializes one caller-identified unique item under a committed canonical
+/// container. The item binding is intentionally uncommitted on entry; the
+/// operation admits that same identity only after `ItemService` accepts its
+/// candidate state.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsUniqueItemMaterializationRequest {
+    pub item: NativeMechanicsEntityHandle,
+    pub container: NativeMechanicsEntityHandle,
+    pub definition: NativeUtf8Slice,
+    pub expected_state_revision: u64,
+}
+
+/// An exact `ItemService::materialize_unique` receipt with the newly admitted
+/// canonical lifecycle stamp. Text metadata is borrowed until the matching
+/// `destroy_operation_lease` call releases `handle`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsUniqueItemMaterializationLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub item_entity_id: u64,
+    pub item_definition: NativeUtf8Slice,
+    pub container_entity_id: u64,
+    pub observed_state_revision: u64,
+    pub admitted_state_revision: u64,
+    pub attached_state_revision: u64,
+    pub committed_state_revision: u64,
+    pub observed_item_revision: u64,
+    pub committed_item_revision: u64,
+    pub had_containment_before: bool,
+    pub containment_before_entity_id: u64,
+    pub has_containment_after: bool,
+    pub containment_after_entity_id: u64,
+    pub lifecycle: NativeMechanicsLifecycleReceipt,
+}
+
+/// Destroys one committed unique item using the exact gameplay operation and
+/// source identity supplied by the product.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsUniqueItemDestroyRequest {
+    pub item: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub source_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub source_intrinsic_entity_id: u64,
+    pub source_intrinsic_instance: NativeUtf8Slice,
+    pub source_effect_entity_id: u64,
+    pub source_effect_instance: NativeUtf8Slice,
+    pub source_effect_stack: u16,
+    pub source_effect_source: NativeUtf8Slice,
+    pub source_equipped_owner_entity_id: u64,
+    pub source_equipped_item_entity_id: u64,
+    pub source_equipped_source: NativeUtf8Slice,
+    pub source_request_operation: NativeUtf8Slice,
+    pub source_request_instance: NativeUtf8Slice,
+    pub expected_state_revision: u64,
+}
+
+/// An exact `ItemService::destroy_unique` receipt with the item's terminal
+/// canonical lifecycle stamp. Text metadata is borrowed until the matching
+/// `destroy_operation_lease` call releases `handle`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsUniqueItemDestroyLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub item_entity_id: u64,
+    pub has_former_owner: bool,
+    pub former_owner_entity_id: u64,
+    pub revision_before: u64,
+    pub revision_after: u64,
+    pub lifecycle: NativeMechanicsLifecycleReceipt,
+}
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeMechanicsEquipmentMutationKind {

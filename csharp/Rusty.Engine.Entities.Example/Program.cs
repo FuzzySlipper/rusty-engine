@@ -48,6 +48,7 @@ Require(world.Diagnostics().Components.Single(component => component.Key == heal
 
 ExerciseMechanicsLeaseRebind();
 ExerciseMechanicsUniqueItemTransfer();
+ExerciseMechanicsUniqueItemLifecycle();
 
 static void Require(bool condition, string message)
 {
@@ -151,6 +152,51 @@ static void ExerciseMechanicsUniqueItemTransfer()
         "rejected managed preflight changed native or managed containment");
 }
 
+static void ExerciseMechanicsUniqueItemLifecycle()
+{
+    using var world = new EntityWorld();
+    EntityId container = world.Create();
+    EntityId item = world.Create();
+    EntityId rejected = world.Create();
+    var service = new MechanicsAdapterFake();
+    using var mechanics = new MechanicsEntityWorld(world, service, service.Catalog);
+    mechanics.Bind(container, "container");
+    mechanics.Commit(container);
+
+    ulong managedRevision = world.Revision;
+    MechanicsUniqueItemMaterializationLeaseReceipt materialized = mechanics.MaterializeUniqueItem(
+        item, "item", container, "unique-blade", 41, managedRevision);
+    Require(materialized.ItemEntityId == item.Value && materialized.ContainerEntityId == container.Value
+        && materialized.Lifecycle.Lifecycle == MechanicsEntityLifecycle.Active,
+        "unique materialization did not retain canonical item/container/lifecycle facts");
+    Require(world.TryGetContainedIn(item, out EntityId owner) && owner == container,
+        "materialized item was not visible through canonical managed containment");
+    Require(service.Materializations == 1 && service.ActiveLeases == 2,
+        "materialization did not admit exactly one owned native binding");
+
+    int releasedBeforeFailure = service.ReleasedLeases;
+    Throws(
+        () => mechanics.MaterializeUniqueItem(rejected, "rejected", container, "reject", 42, world.Revision),
+        "rejected materialization did not propagate its owner failure");
+    Require(!world.TryGetContainedIn(rejected, out _) && service.Materializations == 1
+        && service.ReleasedLeases == releasedBeforeFailure + 1 && service.ActiveLeases == 2,
+        "rejected materialization changed canonical containment or left an uncommitted native binding");
+
+    var source = new MechanicsSourceIdentity(
+        MechanicsActiveEffectProvenanceKind.Request, 0, "", 0, "", 0, "", 0, 0, "", "example", "destroy");
+    MechanicsUniqueItemDestroyLeaseReceipt destroyed = mechanics.DestroyUniqueItem(
+        item, new MechanicsUniqueItemDestroyOperation("destroy-item", source), 43, world.Revision);
+    Require(destroyed.ItemEntityId == item.Value && destroyed.HasFormerOwner
+        && destroyed.FormerOwnerEntityId == container.Value
+        && destroyed.Lifecycle.Lifecycle == MechanicsEntityLifecycle.Tombstoned,
+        "unique destruction did not retain exact former-owner/lifecycle facts");
+    Require(world.GetLifecycle(item) == EntityLifecycle.Tombstoned && service.UniqueDestroys == 1
+        && service.ActiveLeases == 1,
+        "unique destruction did not tombstone the canonical entity and release its native binding");
+    Throws(() => mechanics.Rebind(item, destroyed.Lifecycle.Stamp),
+        "destroyed item retained a dangling Mechanics binding");
+}
+
 readonly record struct Health(int Current);
 
 readonly record struct Armor(int Current);
@@ -160,9 +206,13 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public const ulong InitialLifecycleStamp = 11;
     private ulong _nextHandle = 1;
     private readonly Dictionary<ulong, ulong> _entityIds = [];
+    private readonly HashSet<ulong> _materialized = [];
     public int ReleasedLeases { get; private set; }
     public int Rebinds { get; private set; }
     public int UniqueTransfers { get; private set; }
+    public int Materializations { get; private set; }
+    public int UniqueDestroys { get; private set; }
+    public int ActiveLeases => _entityIds.Count;
     public (ulong Item, ulong FromOwner, ulong ToOwner) LastUniqueTransfer { get; private set; }
     public MechanicsCatalog Catalog { get; } = new(new MechanicsCatalogHandle(1), static () => { });
 
@@ -278,6 +328,39 @@ sealed class MechanicsAdapterFake : IMechanicsService
             default,
             default);
     }
+    public MechanicsUniqueItemMaterializationLeaseReceipt MaterializeUniqueItem(MechanicsUniqueItemMaterializationRequest arg0)
+    {
+        if (arg0.Definition == "reject")
+        {
+            throw new InvalidOperationException("owner rejected item definition");
+        }
+        ulong item = EntityId(arg0.Item);
+        ulong container = EntityId(arg0.Container);
+        _materialized.Add(item);
+        Materializations++;
+        return new MechanicsUniqueItemMaterializationLeaseReceipt(
+            Catalog.Handle.Value, "example", "example", item, arg0.Definition, container,
+            arg0.ExpectedStateRevision, arg0.ExpectedStateRevision + 1, arg0.ExpectedStateRevision + 2,
+            arg0.ExpectedStateRevision + 3, 0, 1, false, 0, true, container,
+            new MechanicsLifecycleReceipt(item, MechanicsEntityLifecycle.Active, 17));
+    }
+    public MechanicsUniqueItemDestroyLeaseReceipt DestroyUniqueItem(MechanicsUniqueItemDestroyRequest arg0)
+    {
+        ulong item = EntityId(arg0.Item);
+        if (!_materialized.Remove(item))
+        {
+            throw new InvalidOperationException("owner does not have that materialized item");
+        }
+        UniqueDestroys++;
+        return new MechanicsUniqueItemDestroyLeaseReceipt(
+            Catalog.Handle.Value, "example", "example", arg0.Operation,
+            new MechanicsSourceIdentity(arg0.SourceKind, arg0.SourceIntrinsicEntityId, arg0.SourceIntrinsicInstance,
+                arg0.SourceEffectEntityId, arg0.SourceEffectInstance, arg0.SourceEffectStack, arg0.SourceEffectSource,
+                arg0.SourceEquippedOwnerEntityId, arg0.SourceEquippedItemEntityId, arg0.SourceEquippedSource,
+                arg0.SourceRequestOperation, arg0.SourceRequestInstance),
+            item, true, 1, arg0.ExpectedStateRevision, arg0.ExpectedStateRevision + 1,
+            new MechanicsLifecycleReceipt(item, MechanicsEntityLifecycle.Tombstoned, 18));
+    }
     public MechanicsEquipmentMutationLeaseReceipt EquipEquipment(MechanicsEquipmentEquipRequest arg0) => throw new NotSupportedException();
     public MechanicsEquipmentMutationLeaseReceipt UnequipEquipment(MechanicsEquipmentUnequipRequest arg0) => throw new NotSupportedException();
     public MechanicsEquipmentMutationLeaseReceipt SwapEquipment(MechanicsEquipmentSwapRequest arg0) => throw new NotSupportedException();
@@ -298,7 +381,11 @@ sealed class MechanicsAdapterFake : IMechanicsService
     {
         MechanicsEntityHandle handle = new(_nextHandle++);
         _entityIds.Add(handle.Value, entityId);
-        return new MechanicsEntity(handle, () => ReleasedLeases++);
+        return new MechanicsEntity(handle, () =>
+        {
+            _entityIds.Remove(handle.Value);
+            ReleasedLeases++;
+        });
     }
 
     private ulong EntityId(MechanicsEntity entity)

@@ -17,16 +17,16 @@ use gameplay_mechanics::{
     EquipmentUnequipRequest, ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent,
     InventoryCapacityLimit, InventoryComponent, InventoryMutationKind, InventoryMutationRequest,
     InventoryReadCost, InventoryService, InventoryTransferRequest, ItemCapacityCost, ItemComponent,
-    ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack, ItemTransferRequest,
-    MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind, MechanicsScalar,
-    ObservedComponentRevision, OperationId, RequestSource, ResponseDecision, ResponseDecisionKind,
-    RoundingPolicy, SourceCollectionCost, SourceDefinition, SourceDefinitionId, SourceInstanceId,
-    SourceInstanceIdentity, StackingGroupId, StackingPolicy, StatBaseMutationRequest,
-    StatContribution, StatContributionDefinition, StatDecision, StatDefinition, StatId,
-    StatService, StatValue, StatsComponent, TrackAdjustmentKind, TrackDamageChange,
-    TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
+    ItemDefinition, ItemDestroyRequest, ItemEquipmentPolicy, ItemKind, ItemService, ItemStack,
+    ItemTransferRequest, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
+    MechanicsScalar, ObservedComponentRevision, OperationId, RequestSource, ResponseDecision,
+    ResponseDecisionKind, RoundingPolicy, SourceCollectionCost, SourceDefinition,
+    SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
+    StatBaseMutationRequest, StatContribution, StatContributionDefinition, StatDecision,
+    StatDefinition, StatId, StatService, StatValue, StatsComponent, TrackAdjustmentKind,
+    TrackDamageChange, TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
     TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
-    TrackSetRequest, TrackValue, TracksComponent,
+    TrackSetRequest, TrackValue, TracksComponent, UniqueItemMaterializationRequest,
 };
 
 use crate::composition::{borrowed_utf8, ABI_OK};
@@ -135,6 +135,8 @@ enum OperationLeaseRows {
         to_capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
         to_capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
     },
+    UniqueItemMaterialization,
+    UniqueItemDestroy,
     EquipmentMutation {
         changes: Vec<NativeMechanicsEquipmentSlotChangeRow>,
         observed_item_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
@@ -435,6 +437,8 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         consume_inventory,
         transfer_inventory,
         transfer_unique_item,
+        materialize_unique_item,
+        destroy_unique_item,
         equip_equipment,
         unequip_equipment,
         swap_equipment,
@@ -3307,6 +3311,213 @@ unsafe extern "C" fn transfer_unique_item(
     ABI_OK
 }
 
+/// Delegates the named generated C# unique-item materialization capability to
+/// `ItemService::materialize_unique`. The product has already allocated the
+/// canonical active identity and supplied its name through `bind_entity`; this
+/// callback promotes that uncommitted binding only with the owner's accepted
+/// candidate state and lifecycle stamp.
+unsafe extern "C" fn materialize_unique_item(
+    context: *mut c_void,
+    request: *const NativeMechanicsUniqueItemMaterializationRequest,
+    result: *mut NativeMechanicsUniqueItemMaterializationLease,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let Ok(definition) = unsafe { text(request.definition, "unique item definition") }
+        .and_then(parse::<gameplay_mechanics::ItemDefinitionId>)
+    else {
+        return 0;
+    };
+    let (Some(item_binding), Some(container_binding)) = (
+        bridge.entities.get(&request.item.value).cloned(),
+        bridge.binding(request.container).cloned(),
+    ) else {
+        return 0;
+    };
+    if item_binding.committed
+        || item_binding.catalog != container_binding.catalog
+        || item_binding.entity == container_binding.entity
+        || bridge.next_operation_lease == u64::MAX
+    {
+        return 0;
+    }
+    let catalog_id = item_binding.catalog;
+    let (receipt, lifecycle) = {
+        let Some(slot) = bridge.catalogs.get_mut(&catalog_id) else {
+            return 0;
+        };
+        let Some(catalog) = slot.catalog.as_ref() else {
+            return 0;
+        };
+        if !slot.world.is_active(container_binding.entity) || slot.world.next_stamp == u64::MAX {
+            return 0;
+        }
+        let mut candidate = slot.world.state.clone();
+        let Ok(receipt) = ItemService::materialize_unique(
+            &mut candidate,
+            catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(item_binding.entity, &item_binding.identity),
+                item: definition,
+                container: container_binding.entity,
+                expected_state_revision: request.expected_state_revision,
+            },
+        ) else {
+            return 0;
+        };
+
+        // Both candidate publication and the lifecycle stamp have been fully
+        // preflighted. There is no fallible work after this point, so rejected
+        // owner operations leave state, lifecycle, and binding commitment intact.
+        let stamp = slot.world.next_stamp;
+        slot.world.next_stamp += 1;
+        slot.world.state = candidate;
+        let lifecycle = NativeMechanicsLifecycleReceipt {
+            entity_id: item_binding.entity.raw(),
+            lifecycle: NativeMechanicsEntityLifecycle::Active,
+            stamp,
+        };
+        slot.world.lifecycle.insert(
+            item_binding.entity,
+            LifecycleRecord {
+                lifecycle: NativeMechanicsEntityLifecycle::Active,
+                stamp,
+            },
+        );
+        (receipt, lifecycle)
+    };
+    bridge
+        .entities
+        .get_mut(&request.item.value)
+        .expect("materialized binding remains present")
+        .committed = true;
+
+    let mut lease_text = CatalogLeaseText::default();
+    let metadata = NativeMechanicsUniqueItemMaterializationLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        item_entity_id: receipt.entity.raw(),
+        item_definition: lease_text.copy(receipt.item.as_str()),
+        container_entity_id: receipt.container.raw(),
+        observed_state_revision: receipt.observed_state_revision,
+        admitted_state_revision: receipt.admitted_state_revision,
+        attached_state_revision: receipt.attached_state_revision,
+        committed_state_revision: receipt.committed_state_revision,
+        observed_item_revision: receipt.observed_item_revision,
+        committed_item_revision: receipt.committed_item_revision,
+        had_containment_before: receipt.containment_before.is_some(),
+        containment_before_entity_id: receipt.containment_before.map(EntityId::raw).unwrap_or(0),
+        has_containment_after: receipt.containment_after.is_some(),
+        containment_after_entity_id: receipt.containment_after.map(EntityId::raw).unwrap_or(0),
+        lifecycle,
+    };
+    let Some(handle) = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::UniqueItemMaterialization,
+    }) else {
+        unreachable!("operation lease counter was preflighted before publication")
+    };
+    *result = NativeMechanicsUniqueItemMaterializationLease { handle, ..metadata };
+    ABI_OK
+}
+
+/// Delegates the named generated C# unique-item destruction capability to
+/// `ItemService::destroy_unique`. Destruction is staged on a candidate so the
+/// gameplay mutation and native terminal lifecycle record publish together.
+/// The committed binding remains lease-owned until C# disposes it; release is
+/// deliberately not a second lifecycle transition.
+unsafe extern "C" fn destroy_unique_item(
+    context: *mut c_void,
+    request: *const NativeMechanicsUniqueItemDestroyRequest,
+    result: *mut NativeMechanicsUniqueItemDestroyLease,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let (Ok(operation), Ok(source)) = (
+        unsafe { text(request.operation, "unique item destroy operation") }
+            .and_then(parse::<OperationId>),
+        parse_unique_item_destroy_request_source_identity(request),
+    ) else {
+        return 0;
+    };
+    let Some(item_binding) = bridge.binding(request.item).cloned() else {
+        return 0;
+    };
+    if bridge.next_operation_lease == u64::MAX {
+        return 0;
+    }
+    let catalog_id = item_binding.catalog;
+    let (receipt, lifecycle) = {
+        let Some(slot) = bridge.catalogs.get_mut(&catalog_id) else {
+            return 0;
+        };
+        let Some(catalog) = slot.catalog.as_ref() else {
+            return 0;
+        };
+        if !slot.world.is_active(item_binding.entity) || slot.world.next_stamp == u64::MAX {
+            return 0;
+        }
+        let mut candidate = slot.world.state.clone();
+        let Ok(receipt) = ItemService::destroy_unique(
+            &mut candidate,
+            catalog,
+            ItemDestroyRequest {
+                operation,
+                source,
+                item: item_binding.entity,
+                expected_state_revision: request.expected_state_revision,
+            },
+        ) else {
+            return 0;
+        };
+
+        let stamp = slot.world.next_stamp;
+        slot.world.next_stamp += 1;
+        slot.world.state = candidate;
+        let lifecycle = NativeMechanicsLifecycleReceipt {
+            entity_id: item_binding.entity.raw(),
+            lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
+            stamp,
+        };
+        slot.world.lifecycle.insert(
+            item_binding.entity,
+            LifecycleRecord {
+                lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
+                stamp,
+            },
+        );
+        (receipt, lifecycle)
+    };
+
+    let mut lease_text = CatalogLeaseText::default();
+    let metadata = NativeMechanicsUniqueItemDestroyLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        item_entity_id: receipt.item.raw(),
+        has_former_owner: receipt.former_owner.is_some(),
+        former_owner_entity_id: receipt.former_owner.map(EntityId::raw).unwrap_or(0),
+        revision_before: receipt.revision_before,
+        revision_after: receipt.revision_after,
+        lifecycle,
+    };
+    let Some(handle) = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::UniqueItemDestroy,
+    }) else {
+        unreachable!("operation lease counter was preflighted before publication")
+    };
+    *result = NativeMechanicsUniqueItemDestroyLease { handle, ..metadata };
+    ABI_OK
+}
+
 /// Delegates the named generated C# equip capability directly to
 /// `EquipmentService::equip`. The only ABI policy is bounded foreign-span
 /// validation and canonical binding identity; all item, slot, exclusivity,
@@ -4650,6 +4861,24 @@ fn parse_inventory_transfer_request_source_identity(
 }
 fn parse_unique_item_transfer_request_source_identity(
     request: &NativeMechanicsUniqueItemTransferRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    parse_source_identity(&NativeMechanicsSourceIdentity {
+        kind: request.source_kind,
+        intrinsic_entity_id: request.source_intrinsic_entity_id,
+        intrinsic_instance: request.source_intrinsic_instance,
+        effect_entity_id: request.source_effect_entity_id,
+        effect_instance: request.source_effect_instance,
+        effect_stack: request.source_effect_stack,
+        effect_source: request.source_effect_source,
+        equipped_owner_entity_id: request.source_equipped_owner_entity_id,
+        equipped_item_entity_id: request.source_equipped_item_entity_id,
+        equipped_source: request.source_equipped_source,
+        request_operation: request.source_request_operation,
+        request_instance: request.source_request_instance,
+    })
+}
+fn parse_unique_item_destroy_request_source_identity(
+    request: &NativeMechanicsUniqueItemDestroyRequest,
 ) -> Result<SourceInstanceIdentity, ()> {
     parse_source_identity(&NativeMechanicsSourceIdentity {
         kind: request.source_kind,
@@ -8520,6 +8749,247 @@ mod tests {
                 unsafe { destroy_operation_lease(context, receipt.handle) },
                 0
             );
+        }
+    }
+
+    #[test]
+    fn unique_item_lifecycle_stages_owner_mutation_and_terminal_binding_lifecycle() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("unique-lifecycle"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                define_item(
+                    context,
+                    &NativeMechanicsItemDefinitionRequest {
+                        catalog,
+                        id: utf8("blade"),
+                        kind: NativeMechanicsItemKind::Unique,
+                        maximum_quantity: 1,
+                        classifications: std::ptr::null(),
+                        classifications_len: 0,
+                        capacity_costs: std::ptr::null(),
+                        capacity_costs_len: 0,
+                        has_equipment: false,
+                        required_slots: 0,
+                        exclusive_group: utf8(""),
+                        sources: std::ptr::null(),
+                        sources_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
+
+        let mut owner = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 1,
+                        identity: utf8("owner"),
+                    },
+                    &mut owner,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        has_inventory: true,
+                        inventory_stacks: std::ptr::null(),
+                        inventory_stacks_len: 0,
+                        inventory_capacity_limits: std::ptr::null(),
+                        inventory_capacity_limits_len: 0,
+                        ..empty_initial_components(owner)
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut owner_receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, owner, &mut owner_receipt) },
+            ABI_OK
+        );
+
+        let mut item = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 2,
+                        identity: utf8("caller-item-name"),
+                    },
+                    &mut item,
+                )
+            },
+            ABI_OK
+        );
+        let mut materialized = NativeMechanicsUniqueItemMaterializationLease::default();
+        assert_eq!(
+            unsafe {
+                materialize_unique_item(
+                    context,
+                    &NativeMechanicsUniqueItemMaterializationRequest {
+                        item,
+                        container: owner,
+                        definition: utf8("blade"),
+                        expected_state_revision: owner_receipt.state_revision_after,
+                    },
+                    &mut materialized,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(materialized.item_entity_id, 2);
+        assert_eq!(materialized.container_entity_id, 1);
+        assert_eq!(
+            materialized.lifecycle.lifecycle,
+            NativeMechanicsEntityLifecycle::Active
+        );
+        let mut containment = NativeMechanicsContainmentReceipt::default();
+        assert_eq!(
+            unsafe {
+                read_containment(
+                    context,
+                    &NativeMechanicsContainmentReadRequest { entity: item },
+                    &mut containment,
+                )
+            },
+            ABI_OK
+        );
+        assert!(containment.present);
+        assert_eq!(containment.container_entity_id, 1);
+        assert_eq!(
+            containment.state_revision,
+            materialized.committed_state_revision
+        );
+
+        let mut rejected = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 3,
+                        identity: utf8("rejected-item"),
+                    },
+                    &mut rejected,
+                )
+            },
+            ABI_OK
+        );
+        let before_failure = bridge.catalogs[&catalog.value].world.state.revision();
+        let mut failed = NativeMechanicsUniqueItemMaterializationLease::default();
+        assert_eq!(
+            unsafe {
+                materialize_unique_item(
+                    context,
+                    &NativeMechanicsUniqueItemMaterializationRequest {
+                        item: rejected,
+                        container: owner,
+                        definition: utf8("unknown-item"),
+                        expected_state_revision: before_failure,
+                    },
+                    &mut failed,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            bridge.catalogs[&catalog.value].world.state.revision(),
+            before_failure
+        );
+        assert_eq!(
+            bridge.catalogs[&catalog.value]
+                .world
+                .lifecycle_receipt(EntityId::new(3))
+                .lifecycle,
+            NativeMechanicsEntityLifecycle::Tombstoned
+        );
+        assert_eq!(unsafe { destroy_entity(context, rejected) }, ABI_OK);
+
+        let mut destroyed = NativeMechanicsUniqueItemDestroyLease::default();
+        assert_eq!(
+            unsafe {
+                destroy_unique_item(
+                    context,
+                    &NativeMechanicsUniqueItemDestroyRequest {
+                        item,
+                        operation: utf8("destroy-blade"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("fixture"),
+                        source_request_instance: utf8("destroy"),
+                        expected_state_revision: materialized.committed_state_revision,
+                    },
+                    &mut destroyed,
+                )
+            },
+            ABI_OK
+        );
+        assert!(destroyed.has_former_owner);
+        assert_eq!(destroyed.former_owner_entity_id, 1);
+        assert_eq!(
+            destroyed.lifecycle.lifecycle,
+            NativeMechanicsEntityLifecycle::Tombstoned
+        );
+        assert_eq!(
+            bridge.catalogs[&catalog.value]
+                .world
+                .lifecycle_receipt(EntityId::new(2))
+                .stamp,
+            destroyed.lifecycle.stamp
+        );
+        assert_eq!(unsafe { destroy_entity(context, item) }, ABI_OK);
+        let mut rebound = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                rebind_entity(
+                    context,
+                    &NativeMechanicsEntityRebindRequest {
+                        catalog,
+                        entity_id: 2,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: destroyed.lifecycle.stamp,
+                    },
+                    &mut rebound,
+                )
+            },
+            0
+        );
+        for lease in [materialized.handle, destroyed.handle] {
+            assert_eq!(unsafe { destroy_operation_lease(context, lease) }, ABI_OK);
         }
     }
 }
