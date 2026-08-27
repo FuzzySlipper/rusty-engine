@@ -20,6 +20,33 @@ pub struct NativeVoxelObjectHandle {
     pub value: u64,
 }
 
+/// Opaque Engine-owned explicit-time player identity. A player retains its
+/// admitted voxel-object owner, so it remains safe after the product releases
+/// the object's direct handle.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelObjectPlayerHandle {
+    pub value: u64,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelObjectLoopMode {
+    #[default]
+    Once = 1,
+    Repeat = 2,
+    PingPong = 3,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelObjectPlaybackStatus {
+    #[default]
+    Stopped = 1,
+    Playing = 2,
+    Paused = 3,
+}
+
 /// A fixed SHA-256 fact. The words are big-endian groups from the canonical
 /// hexadecimal digest; no borrowed identity text escapes the direct call.
 #[repr(C)]
@@ -100,6 +127,65 @@ pub struct NativeVoxelObjectFrameReadout {
     pub voxel_data_hash: NativeVoxelContentHash,
 }
 
+/// One explicit product-directed start. `now_micros` is supplied by the
+/// caller; the Engine neither stores nor advances a host clock.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePlayVoxelObjectPlayerRequest {
+    pub player_handle: NativeVoxelObjectPlayerHandle,
+    pub clip: NativeUtf8Slice,
+    pub loop_mode: NativeVoxelObjectLoopMode,
+    pub rate_numerator: u32,
+    pub rate_denominator: u32,
+    pub now_micros: u64,
+}
+
+/// One exact paused clip-frame selection. The product chooses clip and frame;
+/// the Engine derives its admitted elapsed-time posture.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeScrubVoxelObjectPlayerRequest {
+    pub player_handle: NativeVoxelObjectPlayerHandle,
+    pub clip: NativeUtf8Slice,
+    pub clip_frame: u32,
+    pub loop_mode: NativeVoxelObjectLoopMode,
+}
+
+/// Explicit caller time used for pause, resume, read, and sample operations.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelObjectPlayerTimeRequest {
+    pub player_handle: NativeVoxelObjectPlayerHandle,
+    pub now_micros: u64,
+}
+
+/// Fixed posture facts with no borrowed clip identity or renderer state.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelObjectPlayerReadout {
+    pub status: NativeVoxelObjectPlaybackStatus,
+    pub loop_mode: NativeVoxelObjectLoopMode,
+    pub rate_numerator: u32,
+    pub rate_denominator: u32,
+    pub elapsed_micros: u64,
+}
+
+/// A fixed sampled runtime-frame fact. `has_clip_frame` is false for the
+/// stopped/default posture and `clip_frame` is then zero.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelObjectPlayerSampleReadout {
+    pub status: NativeVoxelObjectPlaybackStatus,
+    pub loop_mode: NativeVoxelObjectLoopMode,
+    pub rate_numerator: u32,
+    pub rate_denominator: u32,
+    pub elapsed_micros: u64,
+    pub runtime_frame: u32,
+    pub has_clip_frame: bool,
+    pub clip_frame: u32,
+    pub ended: bool,
+}
+
 pub type NativeAdmitVoxelAsset = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAdmitVoxelAssetRequest,
@@ -135,6 +221,33 @@ pub type NativeReadSelectedVoxelObjectFrame = unsafe extern "C" fn(
     NativeVoxelObjectHandle,
     *mut NativeVoxelObjectFrameReadout,
 ) -> i32;
+pub type NativeCreateVoxelObjectPlayer = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelObjectHandle,
+    *mut NativeVoxelObjectPlayerHandle,
+) -> i32;
+pub type NativeDestroyVoxelObjectPlayer =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPlayerHandle) -> i32;
+pub type NativePlayVoxelObjectPlayer =
+    unsafe extern "C" fn(*mut c_void, *const NativePlayVoxelObjectPlayerRequest) -> i32;
+pub type NativeScrubVoxelObjectPlayer =
+    unsafe extern "C" fn(*mut c_void, *const NativeScrubVoxelObjectPlayerRequest) -> i32;
+pub type NativePauseVoxelObjectPlayer =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPlayerTimeRequest) -> i32;
+pub type NativeResumeVoxelObjectPlayer =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPlayerTimeRequest) -> i32;
+pub type NativeStopVoxelObjectPlayer =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelObjectPlayerHandle) -> i32;
+pub type NativeReadVoxelObjectPlayer = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelObjectPlayerTimeRequest,
+    *mut NativeVoxelObjectPlayerReadout,
+) -> i32;
+pub type NativeSampleVoxelObjectPlayer = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelObjectPlayerTimeRequest,
+    *mut NativeVoxelObjectPlayerSampleReadout,
+) -> i32;
 
 /// Direct typed voxel-artifact services. This is intentionally separate from
 /// `NativeVoxelApi`, whose owner is the canonical mutable Spatial scene.
@@ -151,4 +264,13 @@ pub struct NativeVoxelContentApi {
     pub select_default_object_frame: NativeSelectDefaultVoxelObjectFrame,
     pub select_object_clip_frame: NativeSelectVoxelObjectClipFrame,
     pub read_selected_object_frame: NativeReadSelectedVoxelObjectFrame,
+    pub create_object_player: NativeCreateVoxelObjectPlayer,
+    pub destroy_object_player: NativeDestroyVoxelObjectPlayer,
+    pub play_object_player: NativePlayVoxelObjectPlayer,
+    pub scrub_object_player: NativeScrubVoxelObjectPlayer,
+    pub pause_object_player: NativePauseVoxelObjectPlayer,
+    pub resume_object_player: NativeResumeVoxelObjectPlayer,
+    pub stop_object_player: NativeStopVoxelObjectPlayer,
+    pub read_object_player: NativeReadVoxelObjectPlayer,
+    pub sample_object_player: NativeSampleVoxelObjectPlayer,
 }

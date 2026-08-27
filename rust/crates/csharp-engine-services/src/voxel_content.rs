@@ -4,11 +4,15 @@
 //! existing voxel artifact owners. It does not feed their contents into the
 //! canonical Spatial scene, collision, renderer, or a product-side store.
 
-use std::{collections::BTreeMap, ffi::c_void};
+use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
 
 use csharp_engine_abi::*;
 use voxel_asset::{decode_voxel_asset, represented_voxel_count, VoxelAsset, VoxelFrame};
-use voxel_object_runtime::{admit_voxel_object_json, AdmittedVoxelObject};
+use voxel_object_runtime::{
+    admit_voxel_object_json, AdmittedVoxelObject, VoxelObjectLoopMode, VoxelObjectPlaybackPosture,
+    VoxelObjectPlaybackRate, VoxelObjectPlaybackReadout, VoxelObjectPlaybackStatus,
+    VoxelObjectPlayer,
+};
 
 use crate::{
     composition::{borrowed_utf8, ABI_OK},
@@ -25,16 +29,27 @@ struct ObjectFrameSelection {
 
 #[derive(Debug)]
 struct RetainedVoxelObject {
-    object: AdmittedVoxelObject,
+    object: Arc<AdmittedVoxelObject>,
     selected: ObjectFrameSelection,
     selection_revision: u64,
+}
+
+/// The player owns an Arc to the admitted object. Destroying the object's
+/// product handle only removes direct object access; it cannot invalidate a
+/// still-retained player.
+#[derive(Debug)]
+struct RetainedVoxelObjectPlayer {
+    object: Arc<AdmittedVoxelObject>,
+    player: VoxelObjectPlayer,
 }
 
 pub(crate) struct RuntimeVoxelContentBridge {
     assets: BTreeMap<u64, VoxelAsset>,
     objects: BTreeMap<u64, RetainedVoxelObject>,
+    players: BTreeMap<u64, RetainedVoxelObjectPlayer>,
     next_asset: u64,
     next_object: u64,
+    next_player: u64,
 }
 
 impl RuntimeVoxelContentBridge {
@@ -42,8 +57,10 @@ impl RuntimeVoxelContentBridge {
         Self {
             assets: BTreeMap::new(),
             objects: BTreeMap::new(),
+            players: BTreeMap::new(),
             next_asset: 1,
             next_object: 1,
+            next_player: 1,
         }
     }
 
@@ -60,7 +77,7 @@ impl RuntimeVoxelContentBridge {
         self.objects.insert(
             value,
             RetainedVoxelObject {
-                object,
+                object: Arc::new(object),
                 selected: ObjectFrameSelection {
                     runtime_frame: 0,
                     clip_index: u32::MAX,
@@ -71,6 +88,35 @@ impl RuntimeVoxelContentBridge {
             },
         );
         Some(NativeVoxelObjectHandle { value })
+    }
+
+    fn insert_player(
+        &mut self,
+        object: Arc<AdmittedVoxelObject>,
+    ) -> Option<NativeVoxelObjectPlayerHandle> {
+        let value = self.next_player;
+        self.next_player = value.checked_add(1)?;
+        self.players.insert(
+            value,
+            RetainedVoxelObjectPlayer {
+                object,
+                player: VoxelObjectPlayer::new(),
+            },
+        );
+        Some(NativeVoxelObjectPlayerHandle { value })
+    }
+
+    fn create_player(
+        &mut self,
+        object_handle: NativeVoxelObjectHandle,
+    ) -> Result<NativeVoxelObjectPlayerHandle, CsharpEngineServicesError> {
+        let object = Arc::clone(&self.object(object_handle)?.object);
+        self.insert_player(object).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_CONTENT_PLAYER",
+                "voxel object player handle space overflowed",
+            )
+        })
     }
 
     /// Internal retained-owner resolution for the later annotation bridge.
@@ -176,6 +222,30 @@ impl RuntimeVoxelContentBridge {
             )
         })
     }
+
+    fn player(
+        &self,
+        handle: NativeVoxelObjectPlayerHandle,
+    ) -> Result<&RetainedVoxelObjectPlayer, CsharpEngineServicesError> {
+        self.players.get(&handle.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_CONTENT_PLAYER",
+                "voxel object player handle is not retained",
+            )
+        })
+    }
+
+    fn player_mut(
+        &mut self,
+        handle: NativeVoxelObjectPlayerHandle,
+    ) -> Result<&mut RetainedVoxelObjectPlayer, CsharpEngineServicesError> {
+        self.players.get_mut(&handle.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_CONTENT_PLAYER",
+                "voxel object player handle is not retained",
+            )
+        })
+    }
 }
 
 pub(crate) fn api(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentApi {
@@ -190,6 +260,15 @@ pub(crate) fn api(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentA
         select_default_object_frame,
         select_object_clip_frame,
         read_selected_object_frame,
+        create_object_player,
+        destroy_object_player,
+        play_object_player,
+        scrub_object_player,
+        pause_object_player,
+        resume_object_player,
+        stop_object_player,
+        read_object_player,
+        sample_object_player,
     }
 }
 
@@ -379,6 +458,218 @@ unsafe extern "C" fn read_selected_object_frame(
     }
 }
 
+unsafe extern "C" fn create_object_player(
+    context: *mut c_void,
+    object_handle: NativeVoxelObjectHandle,
+    output: *mut NativeVoxelObjectPlayerHandle,
+) -> i32 {
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.create_player(object_handle) {
+        Ok(handle) => {
+            unsafe { *output = handle };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn destroy_object_player(
+    context: *mut c_void,
+    handle: NativeVoxelObjectPlayerHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    if bridge.players.remove(&handle.value).is_some() {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
+unsafe extern "C" fn play_object_player(
+    context: *mut c_void,
+    request: *const NativePlayVoxelObjectPlayerRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let clip = match unsafe {
+        borrowed_utf8(
+            request.clip.bytes,
+            request.clip.len,
+            "voxel object player clip",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let loop_mode = loop_mode(request.loop_mode);
+    let rate = match VoxelObjectPlaybackRate::new(request.rate_numerator, request.rate_denominator)
+    {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let retained = match bridge.player_mut(request.player_handle) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    if retained
+        .player
+        .play(&retained.object, clip, loop_mode, rate, request.now_micros)
+        .is_ok()
+    {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
+unsafe extern "C" fn scrub_object_player(
+    context: *mut c_void,
+    request: *const NativeScrubVoxelObjectPlayerRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let clip = match unsafe {
+        borrowed_utf8(
+            request.clip.bytes,
+            request.clip.len,
+            "voxel object player clip",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let loop_mode = loop_mode(request.loop_mode);
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let retained = match bridge.player_mut(request.player_handle) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    if retained
+        .player
+        .scrub(&retained.object, clip, request.clip_frame, loop_mode)
+        .is_ok()
+    {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
+unsafe extern "C" fn pause_object_player(
+    context: *mut c_void,
+    request: NativeVoxelObjectPlayerTimeRequest,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.player_mut(request.player_handle) {
+        Ok(retained) => {
+            if retained.player.pause(request.now_micros).is_ok() {
+                ABI_OK
+            } else {
+                0
+            }
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn resume_object_player(
+    context: *mut c_void,
+    request: NativeVoxelObjectPlayerTimeRequest,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.player_mut(request.player_handle) {
+        Ok(retained) => {
+            if retained.player.resume(request.now_micros).is_ok() {
+                ABI_OK
+            } else {
+                0
+            }
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn stop_object_player(
+    context: *mut c_void,
+    handle: NativeVoxelObjectPlayerHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.player_mut(handle) {
+        Ok(retained) => {
+            retained.player.stop();
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn read_object_player(
+    context: *mut c_void,
+    request: NativeVoxelObjectPlayerTimeRequest,
+    output: *mut NativeVoxelObjectPlayerReadout,
+) -> i32 {
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let retained = match bridge.player(request.player_handle) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    match retained.player.posture_at(request.now_micros) {
+        Ok(posture) => {
+            unsafe { *output = native_player_readout(&posture) };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn sample_object_player(
+    context: *mut c_void,
+    request: NativeVoxelObjectPlayerTimeRequest,
+    output: *mut NativeVoxelObjectPlayerSampleReadout,
+) -> i32 {
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let retained = match bridge.player(request.player_handle) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    match retained
+        .player
+        .sample_at(&retained.object, request.now_micros)
+    {
+        Ok(sample) => {
+            unsafe { *output = native_player_sample_readout(sample) };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 unsafe fn borrowed_json<'a>(value: NativeByteSlice) -> Result<&'a str, ()> {
     if value.len > 0 && value.bytes.is_null() {
         return Err(());
@@ -441,6 +732,56 @@ fn native_frame_readout(
         has_collision: frame.collision.is_some(),
         voxel_data_hash: hash(&frame.voxel_data_hash)?,
     })
+}
+
+fn loop_mode(value: NativeVoxelObjectLoopMode) -> VoxelObjectLoopMode {
+    match value {
+        NativeVoxelObjectLoopMode::Once => VoxelObjectLoopMode::Once,
+        NativeVoxelObjectLoopMode::Repeat => VoxelObjectLoopMode::Repeat,
+        NativeVoxelObjectLoopMode::PingPong => VoxelObjectLoopMode::PingPong,
+    }
+}
+
+fn native_loop_mode(value: VoxelObjectLoopMode) -> NativeVoxelObjectLoopMode {
+    match value {
+        VoxelObjectLoopMode::Once => NativeVoxelObjectLoopMode::Once,
+        VoxelObjectLoopMode::Repeat => NativeVoxelObjectLoopMode::Repeat,
+        VoxelObjectLoopMode::PingPong => NativeVoxelObjectLoopMode::PingPong,
+    }
+}
+
+fn native_status(value: VoxelObjectPlaybackStatus) -> NativeVoxelObjectPlaybackStatus {
+    match value {
+        VoxelObjectPlaybackStatus::Stopped => NativeVoxelObjectPlaybackStatus::Stopped,
+        VoxelObjectPlaybackStatus::Playing => NativeVoxelObjectPlaybackStatus::Playing,
+        VoxelObjectPlaybackStatus::Paused => NativeVoxelObjectPlaybackStatus::Paused,
+    }
+}
+
+fn native_player_readout(posture: &VoxelObjectPlaybackPosture) -> NativeVoxelObjectPlayerReadout {
+    NativeVoxelObjectPlayerReadout {
+        status: native_status(posture.status),
+        loop_mode: native_loop_mode(posture.loop_mode),
+        rate_numerator: posture.rate.numerator,
+        rate_denominator: posture.rate.denominator,
+        elapsed_micros: posture.elapsed_micros,
+    }
+}
+
+fn native_player_sample_readout(
+    sample: VoxelObjectPlaybackReadout<'_>,
+) -> NativeVoxelObjectPlayerSampleReadout {
+    NativeVoxelObjectPlayerSampleReadout {
+        status: native_status(sample.status),
+        loop_mode: native_loop_mode(sample.loop_mode),
+        rate_numerator: sample.rate.numerator,
+        rate_denominator: sample.rate.denominator,
+        elapsed_micros: sample.elapsed_micros,
+        runtime_frame: sample.frame,
+        has_clip_frame: sample.clip_frame.is_some(),
+        clip_frame: sample.clip_frame.unwrap_or(0),
+        ended: sample.ended,
+    }
 }
 
 fn hash(value: &str) -> Result<NativeVoxelContentHash, CsharpEngineServicesError> {
@@ -637,6 +978,237 @@ mod tests {
             unsafe { (api.read_object)(api.context, object_handle, &mut object_readout) },
             0
         );
+    }
+
+    #[test]
+    fn retains_explicit_time_object_players_after_object_release_and_rejects_bad_times() {
+        let mut bridge = RuntimeVoxelContentBridge::new();
+        let api = super::api(&mut bridge);
+        let object_body = encode_voxel_object(&object())
+            .expect("canonical object")
+            .into_bytes();
+        let request = NativeAdmitVoxelObjectRequest {
+            bytes: NativeByteSlice {
+                bytes: object_body.as_ptr(),
+                len: object_body.len(),
+            },
+        };
+        let mut object_handle = NativeVoxelObjectHandle::default();
+        assert_eq!(
+            unsafe { (api.admit_object)(api.context, &request, &mut object_handle) },
+            ABI_OK
+        );
+
+        let mut player = NativeVoxelObjectPlayerHandle::default();
+        let mut overflow_player = NativeVoxelObjectPlayerHandle::default();
+        assert_eq!(
+            unsafe { (api.create_object_player)(api.context, object_handle, &mut player) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.create_object_player)(api.context, object_handle, &mut overflow_player) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_object)(api.context, object_handle) },
+            ABI_OK
+        );
+        let mut object_readout = NativeVoxelObjectReadout::default();
+        assert_eq!(
+            unsafe { (api.read_object)(api.context, object_handle, &mut object_readout) },
+            0
+        );
+
+        let clip = b"walk";
+        let play = NativePlayVoxelObjectPlayerRequest {
+            player_handle: player,
+            clip: NativeUtf8Slice {
+                bytes: clip.as_ptr(),
+                len: clip.len(),
+            },
+            loop_mode: NativeVoxelObjectLoopMode::Once,
+            rate_numerator: 1,
+            rate_denominator: 1,
+            now_micros: 10,
+        };
+        assert_eq!(
+            unsafe { (api.play_object_player)(api.context, &play) },
+            ABI_OK
+        );
+
+        let mut sample = NativeVoxelObjectPlayerSampleReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.sample_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: player,
+                        now_micros: 10,
+                    },
+                    &mut sample,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(sample.status, NativeVoxelObjectPlaybackStatus::Playing);
+        assert_eq!(sample.runtime_frame, 1);
+        assert!(sample.has_clip_frame);
+        assert_eq!(sample.clip_frame, 0);
+        assert!(!sample.ended);
+
+        assert_eq!(
+            unsafe {
+                (api.sample_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: player,
+                        now_micros: 9,
+                    },
+                    &mut sample,
+                )
+            },
+            0,
+            "backward explicit time must fail deterministically"
+        );
+        assert_eq!(
+            unsafe {
+                (api.pause_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: player,
+                        now_micros: 50,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut readout = NativeVoxelObjectPlayerReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.read_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: player,
+                        now_micros: 500,
+                    },
+                    &mut readout,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(readout.status, NativeVoxelObjectPlaybackStatus::Paused);
+        assert_eq!(readout.elapsed_micros, 40);
+        assert_eq!(
+            unsafe {
+                (api.resume_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: player,
+                        now_micros: 100,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.sample_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: player,
+                        now_micros: 83_393,
+                    },
+                    &mut sample,
+                )
+            },
+            ABI_OK
+        );
+        assert!(sample.ended);
+
+        let scrub = NativeScrubVoxelObjectPlayerRequest {
+            player_handle: player,
+            clip: NativeUtf8Slice {
+                bytes: clip.as_ptr(),
+                len: clip.len(),
+            },
+            clip_frame: 0,
+            loop_mode: NativeVoxelObjectLoopMode::Repeat,
+        };
+        assert_eq!(
+            unsafe { (api.scrub_object_player)(api.context, &scrub) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.stop_object_player)(api.context, player) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.sample_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: player,
+                        now_micros: 0,
+                    },
+                    &mut sample,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(sample.status, NativeVoxelObjectPlaybackStatus::Stopped);
+        assert_eq!(sample.runtime_frame, 0);
+        assert!(!sample.has_clip_frame);
+
+        let overflow_play = NativePlayVoxelObjectPlayerRequest {
+            player_handle: overflow_player,
+            clip: NativeUtf8Slice {
+                bytes: clip.as_ptr(),
+                len: clip.len(),
+            },
+            loop_mode: NativeVoxelObjectLoopMode::Once,
+            rate_numerator: 2,
+            rate_denominator: 1,
+            now_micros: 0,
+        };
+        assert_eq!(
+            unsafe { (api.play_object_player)(api.context, &overflow_play) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.pause_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: overflow_player,
+                        now_micros: u64::MAX,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.sample_object_player)(
+                    api.context,
+                    NativeVoxelObjectPlayerTimeRequest {
+                        player_handle: overflow_player,
+                        now_micros: u64::MAX,
+                    },
+                    &mut sample,
+                )
+            },
+            0,
+            "rate scaling overflow must fail deterministically"
+        );
+        assert_eq!(
+            unsafe { (api.destroy_object_player)(api.context, player) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_object_player)(api.context, overflow_player) },
+            ABI_OK
+        );
+        assert_eq!(unsafe { (api.stop_object_player)(api.context, player) }, 0);
     }
 
     fn asset() -> VoxelAsset {
