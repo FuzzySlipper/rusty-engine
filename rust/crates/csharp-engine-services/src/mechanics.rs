@@ -6,25 +6,27 @@ use entity_state::{
     ComponentRevision, EntityAuthoringService, EntityDefinition, EntityState, RelationshipCommand,
 };
 use gameplay_mechanics::{
-    gameplay_component_registry, validate_state_against_catalog, ActiveEffectInstance,
-    ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion, DamageKindDefinition,
-    DamageKindSelector, DamageResponseDefinition, DecisionOutcome, EffectApplyRequest,
-    EffectDefinition, EffectMutationKind, EffectRefreshRequest, EffectRemovalRequest,
-    EffectReplaceRequest, EffectService, EffectSourceActivation, EffectStackingPolicy,
-    EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition, ExactRatio,
-    IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit, InventoryComponent,
-    ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack,
-    MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind, MechanicsScalar,
-    ObservedComponentRevision, OperationId, RequestSource, SourceCollectionCost, SourceDefinition,
+    ActiveEffectInstance, ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion,
+    DamageFact, DamageKindDefinition, DamageKindSelector, DamagePart, DamagePartReceipt,
+    DamageReceipt, DamageRequest, DamageResponseDefinition, DamageService, DecisionOutcome,
+    EffectApplyRequest, EffectDefinition, EffectMutationKind, EffectRefreshRequest,
+    EffectRemovalRequest, EffectReplaceRequest, EffectService, EffectSourceActivation,
+    EffectStackingPolicy, EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition,
+    ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit,
+    InventoryComponent, ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy,
+    ItemKind, ItemStack, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
+    MechanicsScalar, ObservedComponentRevision, OperationId, RequestSource, ResponseDecision,
+    ResponseDecisionKind, RoundingPolicy, SourceCollectionCost, SourceDefinition,
     SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
     StatBaseMutationRequest, StatContribution, StatContributionDefinition, StatDecision,
     StatDefinition, StatId, StatService, StatValue, StatsComponent, TrackAdjustmentKind,
-    TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
+    TrackDamageChange, TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
     TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
-    TrackSetRequest, TrackValue, TracksComponent,
+    TrackSetRequest, TrackValue, TracksComponent, gameplay_component_registry,
+    validate_state_against_catalog,
 };
 
-use crate::composition::{borrowed_utf8, ABI_OK};
+use crate::composition::{ABI_OK, borrowed_utf8};
 
 #[derive(Clone)]
 struct CatalogBuilder {
@@ -112,6 +114,14 @@ enum OperationLeaseRows {
     Effect {
         removed: Vec<NativeMechanicsActiveEffectComponentRow>,
         activated_sources: Vec<NativeMechanicsEffectSourceActivationRow>,
+        observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
+    },
+    Damage {
+        parts: Vec<NativeMechanicsDamagePartReceiptRow>,
+        decisions: Vec<NativeMechanicsDamageDecisionRow>,
+        track_changes: Vec<NativeMechanicsTrackDamageChangeRow>,
+        protection_track_depletions: Vec<NativeMechanicsTrackDepletionRow>,
+        target_track_depletions: Vec<NativeMechanicsTrackDepletionRow>,
         observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
     },
 }
@@ -402,6 +412,8 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         replace_effect,
         remove_effect,
         expire_effect,
+        preview_damage,
+        apply_damage,
     }
 }
 
@@ -3535,6 +3547,397 @@ fn write_effect_operation_lease(
     ABI_OK
 }
 
+unsafe extern "C" fn preview_damage(
+    context: *mut c_void,
+    request: *const NativeMechanicsDamageRequest,
+    result: *mut NativeMechanicsDamageLease,
+) -> i32 {
+    damage_operation(context, request, result, false)
+}
+
+unsafe extern "C" fn apply_damage(
+    context: *mut c_void,
+    request: *const NativeMechanicsDamageRequest,
+    result: *mut NativeMechanicsDamageLease,
+) -> i32 {
+    damage_operation(context, request, result, true)
+}
+
+unsafe fn damage_operation(
+    context: *mut c_void,
+    request: *const NativeMechanicsDamageRequest,
+    result: *mut NativeMechanicsDamageLease,
+    apply: bool,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    if request.parts_len > gameplay_mechanics::MAX_DAMAGE_PARTS
+        || request.request_sources_len > gameplay_mechanics::MAX_DAMAGE_REQUEST_SOURCES
+    {
+        return 0;
+    }
+    let (Ok(operation), Ok(source), Ok(target_track), Ok(parts), Ok(request_sources)) = (
+        unsafe { text(request.operation, "mechanics damage operation") }
+            .and_then(parse::<OperationId>),
+        parse_damage_source_identity(request),
+        unsafe { text(request.target_track, "mechanics damage target track") }
+            .and_then(parse::<gameplay_mechanics::TrackId>),
+        unsafe { parse_damage_parts(request.parts, request.parts_len) },
+        unsafe {
+            borrowed_slice(
+                request.request_sources,
+                request.request_sources_len,
+                "mechanics damage request sources",
+            )
+        }
+        .and_then(parse_request_sources),
+    ) else {
+        return 0;
+    };
+    let Some(catalog_id) = bridge
+        .binding(request.target)
+        .map(|binding| binding.catalog)
+    else {
+        return 0;
+    };
+    let receipt = {
+        let Some((state, catalog, target)) = bridge.state_and_catalog_mut(request.target) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<TracksComponent>(target) else {
+            return 0;
+        };
+        let expected_tracks_revision = if request.has_expected_tracks_revision {
+            if !revision_guard_matches(
+                NativeMechanicsRevisionGuard::Exact,
+                request.expected_tracks_revision.entity_id,
+                request.expected_tracks_revision.revision,
+                request.expected_tracks_revision.component,
+                target,
+                actual.revision(),
+                NativeMechanicsRevisionComponent::Tracks,
+            ) {
+                return 0;
+            }
+            Some(actual)
+        } else {
+            None
+        };
+        let damage_request = DamageRequest {
+            operation,
+            source,
+            actor: request
+                .has_actor
+                .then(|| EntityId::new(request.actor_entity_id)),
+            target,
+            target_track,
+            parts,
+            request_sources,
+            expected_tracks_revision,
+        };
+        let receipt = if apply {
+            DamageService::apply(state, catalog, damage_request)
+        } else {
+            DamageService::preview(state, catalog, &damage_request)
+                .map(|preview| preview.receipt().clone())
+        };
+        let Ok(receipt) = receipt else {
+            return 0;
+        };
+        receipt
+    };
+    write_damage_lease(bridge, catalog_id, receipt, result)
+}
+
+unsafe fn parse_damage_parts(
+    values: *const NativeMechanicsDamagePart,
+    len: usize,
+) -> Result<Vec<DamagePart>, ()> {
+    unsafe { borrowed_slice(values, len, "mechanics damage parts") }?
+        .iter()
+        .map(|value| {
+            Ok(DamagePart {
+                kind: unsafe { text(value.kind, "mechanics damage part kind") }
+                    .and_then(parse::<gameplay_mechanics::DamageKindId>)?,
+                amount: scalar(value.amount)?,
+            })
+        })
+        .collect()
+}
+
+fn parse_damage_source_identity(
+    request: &NativeMechanicsDamageRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    match request.source_kind {
+        NativeMechanicsActiveEffectProvenanceKind::Intrinsic => {
+            Ok(SourceInstanceIdentity::Intrinsic {
+                entity: EntityId::new(request.source_intrinsic_entity_id),
+                instance: unsafe {
+                    text(
+                        request.source_intrinsic_instance,
+                        "mechanics damage intrinsic source instance",
+                    )
+                }
+                .and_then(parse::<SourceInstanceId>)?,
+            })
+        }
+        NativeMechanicsActiveEffectProvenanceKind::Effect => Ok(SourceInstanceIdentity::Effect {
+            entity: EntityId::new(request.source_effect_entity_id),
+            effect: unsafe {
+                text(
+                    request.source_effect_instance,
+                    "mechanics damage effect source instance",
+                )
+            }
+            .and_then(parse::<gameplay_mechanics::EffectInstanceId>)?,
+            stack: request.source_effect_stack,
+            source: unsafe {
+                text(
+                    request.source_effect_source,
+                    "mechanics damage effect source definition",
+                )
+            }
+            .and_then(parse::<SourceDefinitionId>)?,
+        }),
+        NativeMechanicsActiveEffectProvenanceKind::EquippedItem => {
+            Ok(SourceInstanceIdentity::EquippedItem {
+                owner: EntityId::new(request.source_equipped_owner_entity_id),
+                item: EntityId::new(request.source_equipped_item_entity_id),
+                source: unsafe {
+                    text(
+                        request.source_equipped_source,
+                        "mechanics damage equipped source definition",
+                    )
+                }
+                .and_then(parse::<SourceDefinitionId>)?,
+            })
+        }
+        NativeMechanicsActiveEffectProvenanceKind::Request => Ok(SourceInstanceIdentity::Request {
+            operation: unsafe {
+                text(
+                    request.source_request_operation,
+                    "mechanics damage request source operation",
+                )
+            }
+            .and_then(parse::<OperationId>)?,
+            instance: unsafe {
+                text(
+                    request.source_request_instance,
+                    "mechanics damage request source instance",
+                )
+            }
+            .and_then(parse::<SourceInstanceId>)?,
+        }),
+    }
+}
+
+fn native_damage_part_receipt(
+    value: &DamagePartReceipt,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsDamagePartReceiptRow {
+    NativeMechanicsDamagePartReceiptRow {
+        index: value.index,
+        kind: text.copy(value.kind.as_str()),
+        original: value.original.get(),
+        prevented: value.prevented,
+        after_flat: value.after_flat.get(),
+        combined_scale_numerator: native_u128(value.combined_scale_numerator),
+        combined_scale_denominator: native_u128(value.combined_scale_denominator),
+        rounding: match value.rounding {
+            RoundingPolicy::TowardZero => NativeMechanicsRoundingPolicy::TowardZero,
+        },
+        after_scale: value.after_scale.get(),
+        absorbed: value.absorbed.get(),
+        applied: value.applied.get(),
+        unapplied: value.unapplied.get(),
+    }
+}
+
+fn native_damage_decision(
+    value: &ResponseDecision,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsDamageDecisionRow {
+    let mut row = NativeMechanicsDamageDecisionRow {
+        part_index: value.part_index,
+        source: native_source_identity(&value.source, text),
+        source_definition: text.copy(value.source_definition.as_str()),
+        has_response_index: value.response_index.is_some(),
+        response_index: value.response_index.unwrap_or_default(),
+        kind: NativeMechanicsDamageDecisionKind::NoDamageResponse,
+        amount: 0,
+        ratio_numerator: 0,
+        ratio_denominator: 0,
+        absorb_track: text.copy(""),
+        outcome: match value.outcome {
+            DecisionOutcome::Applied => NativeMechanicsDecisionOutcome::Applied,
+            DecisionOutcome::Suppressed => NativeMechanicsDecisionOutcome::Suppressed,
+            DecisionOutcome::Inapplicable => NativeMechanicsDecisionOutcome::Inapplicable,
+        },
+    };
+    match &value.kind {
+        ResponseDecisionKind::NoDamageResponse => {}
+        ResponseDecisionKind::Prevent => row.kind = NativeMechanicsDamageDecisionKind::Prevent,
+        ResponseDecisionKind::FlatReduction { amount } => {
+            row.kind = NativeMechanicsDamageDecisionKind::FlatReduction;
+            row.amount = amount.get();
+        }
+        ResponseDecisionKind::Scale { ratio } => {
+            row.kind = NativeMechanicsDamageDecisionKind::Scale;
+            row.ratio_numerator = ratio.numerator();
+            row.ratio_denominator = ratio.denominator();
+        }
+        ResponseDecisionKind::Absorb { track } => {
+            row.kind = NativeMechanicsDamageDecisionKind::Absorb;
+            row.absorb_track = text.copy(track.as_str());
+        }
+    }
+    row
+}
+
+fn native_track_damage_change(
+    value: &TrackDamageChange,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsTrackDamageChangeRow {
+    NativeMechanicsTrackDamageChangeRow {
+        track: text.copy(value.track.as_str()),
+        before: value.before.get(),
+        after: value.after.get(),
+    }
+}
+
+fn native_track_depletion(
+    track: &gameplay_mechanics::TrackId,
+    part_index: u16,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsTrackDepletionRow {
+    NativeMechanicsTrackDepletionRow {
+        track: text.copy(track.as_str()),
+        part_index,
+    }
+}
+
+fn write_damage_lease(
+    bridge: &mut RuntimeMechanicsBridge,
+    catalog_id: u64,
+    receipt: DamageReceipt,
+    result: &mut NativeMechanicsDamageLease,
+) -> i32 {
+    let mut lease_text = CatalogLeaseText::default();
+    let parts = receipt
+        .parts
+        .iter()
+        .map(|value| native_damage_part_receipt(value, &mut lease_text))
+        .collect::<Vec<_>>();
+    let decisions = receipt
+        .decisions
+        .iter()
+        .map(|value| native_damage_decision(value, &mut lease_text))
+        .collect::<Vec<_>>();
+    let track_changes = receipt
+        .track_changes
+        .iter()
+        .map(|value| native_track_damage_change(value, &mut lease_text))
+        .collect::<Vec<_>>();
+    let mut protection_track_depletions = Vec::new();
+    let mut target_track_depletions = Vec::new();
+    for fact in &receipt.facts {
+        match fact {
+            DamageFact::ProtectionTrackDepleted { track, part_index } => {
+                protection_track_depletions.push(native_track_depletion(
+                    track,
+                    *part_index,
+                    &mut lease_text,
+                ));
+            }
+            DamageFact::TargetTrackDepleted { track, part_index } => {
+                target_track_depletions.push(native_track_depletion(
+                    track,
+                    *part_index,
+                    &mut lease_text,
+                ));
+            }
+        }
+    }
+    let observed_revisions = receipt
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let (has_committed_tracks_revision, committed_tracks_revision) =
+        match receipt.committed_tracks_revision {
+            Some(revision) => (true, tracks_revision(receipt.target, revision)),
+            None => (false, NativeMechanicsTracksRevision::default()),
+        };
+    let metadata = NativeMechanicsDamageLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        parts: std::ptr::null(),
+        parts_len: parts.len(),
+        decisions: std::ptr::null(),
+        decisions_len: decisions.len(),
+        track_changes: std::ptr::null(),
+        track_changes_len: track_changes.len(),
+        protection_track_depletions: std::ptr::null(),
+        protection_track_depletions_len: protection_track_depletions.len(),
+        target_track_depletions: std::ptr::null(),
+        target_track_depletions_len: target_track_depletions.len(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        has_actor: receipt.actor.is_some(),
+        actor_entity_id: receipt.actor.map_or(0, EntityId::raw),
+        target_entity_id: receipt.target.raw(),
+        target_track: lease_text.copy(receipt.target_track.as_str()),
+        observed_tracks_revision: tracks_revision(receipt.target, receipt.observed_tracks_revision),
+        has_committed_tracks_revision,
+        committed_tracks_revision,
+        source_cost: native_source_cost(receipt.source_cost),
+    };
+    let Some(handle) = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::Damage {
+            parts,
+            decisions,
+            track_changes,
+            protection_track_depletions,
+            target_track_depletions,
+            observed_revisions,
+        },
+    }) else {
+        return 0;
+    };
+    let OperationLeaseRows::Damage {
+        parts,
+        decisions,
+        track_changes,
+        protection_track_depletions,
+        target_track_depletions,
+        observed_revisions,
+    } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted damage operation lease")
+        .rows
+    else {
+        unreachable!("damage operation lease row kind matches its reader")
+    };
+    *result = NativeMechanicsDamageLease {
+        handle,
+        parts: parts.as_ptr(),
+        decisions: decisions.as_ptr(),
+        track_changes: track_changes.as_ptr(),
+        protection_track_depletions: protection_track_depletions.as_ptr(),
+        target_track_depletions: target_track_depletions.as_ptr(),
+        observed_revisions: observed_revisions.as_ptr(),
+        ..metadata
+    };
+    ABI_OK
+}
+
 fn attach<T: entity_state::EntityComponent>(
     state: &mut EntityState,
     entity: EntityId,
@@ -4358,6 +4761,22 @@ mod tests {
             maximum_stat: utf8("strength"),
         };
         assert_eq!(unsafe { define_track(context, &track) }, ABI_OK);
+        assert_eq!(
+            unsafe {
+                define_track(
+                    context,
+                    &NativeMechanicsTrackDefinitionRequest {
+                        catalog,
+                        id: utf8("shield"),
+                        minimum: 0,
+                        maximum_kind: NativeMechanicsTrackMaximumKind::Fixed,
+                        fixed_maximum: 3,
+                        maximum_stat: utf8(""),
+                    },
+                )
+            },
+            ABI_OK
+        );
         let contribution = NativeMechanicsContributionDefinitionRequest {
             catalog,
             source: utf8("bonus"),
@@ -4374,6 +4793,100 @@ mod tests {
             unsafe { define_contribution(context, &contribution) },
             ABI_OK
         );
+        for source in [
+            "prevent_source",
+            "flat_source",
+            "scale_source",
+            "absorb_source",
+        ] {
+            assert_eq!(
+                unsafe {
+                    define_source(
+                        context,
+                        &NativeMechanicsSourceDefinitionRequest {
+                            catalog,
+                            id: utf8(source),
+                            priority: 0,
+                        },
+                    )
+                },
+                ABI_OK
+            );
+        }
+        for kind in ["physical", "prevented"] {
+            assert_eq!(
+                unsafe {
+                    define_damage_kind(
+                        context,
+                        &NativeMechanicsDamageKindDefinitionRequest {
+                            catalog,
+                            id: utf8(kind),
+                        },
+                    )
+                },
+                ABI_OK
+            );
+        }
+        for (source, kind, selector, amount, numerator, denominator, absorb_track) in [
+            (
+                "prevent_source",
+                NativeMechanicsDamageResponseKind::Prevent,
+                "prevented",
+                0,
+                0,
+                0,
+                "",
+            ),
+            (
+                "flat_source",
+                NativeMechanicsDamageResponseKind::FlatReduction,
+                "",
+                2,
+                0,
+                0,
+                "",
+            ),
+            (
+                "scale_source",
+                NativeMechanicsDamageResponseKind::Scale,
+                "",
+                0,
+                1,
+                2,
+                "",
+            ),
+            (
+                "absorb_source",
+                NativeMechanicsDamageResponseKind::Absorb,
+                "",
+                0,
+                0,
+                0,
+                "shield",
+            ),
+        ] {
+            assert_eq!(
+                unsafe {
+                    define_damage_response(
+                        context,
+                        &NativeMechanicsDamageResponseDefinitionRequest {
+                            catalog,
+                            source: utf8(source),
+                            kind,
+                            selector_is_exact: !selector.is_empty(),
+                            selector_damage_kind: utf8(selector),
+                            amount,
+                            ratio_numerator: numerator,
+                            ratio_denominator: denominator,
+                            stacking_group: utf8(source),
+                            stacking: NativeMechanicsStackingPolicy::Sum,
+                            absorb_track: utf8(absorb_track),
+                        },
+                    )
+                },
+                ABI_OK
+            );
+        }
         let effect_sources = [NativeMechanicsText {
             value: utf8("bonus"),
         }];
@@ -4510,6 +5023,19 @@ mod tests {
             unsafe { set_initial_track(context, &initial_track) },
             ABI_OK
         );
+        assert_eq!(
+            unsafe {
+                set_initial_track(
+                    context,
+                    &NativeMechanicsInitialTrackRequest {
+                        entity,
+                        track: utf8("shield"),
+                        current: 3,
+                    },
+                )
+            },
+            ABI_OK
+        );
         let intrinsic = NativeMechanicsIntrinsicSourceRequest {
             entity,
             instance: utf8("bonus_instance"),
@@ -4519,6 +5045,26 @@ mod tests {
             unsafe { bind_intrinsic_source(context, &intrinsic) },
             ABI_OK
         );
+        for (instance, definition) in [
+            ("prevent_instance", "prevent_source"),
+            ("flat_instance", "flat_source"),
+            ("scale_instance", "scale_source"),
+            ("absorb_instance", "absorb_source"),
+        ] {
+            assert_eq!(
+                unsafe {
+                    bind_intrinsic_source(
+                        context,
+                        &NativeMechanicsIntrinsicSourceRequest {
+                            entity,
+                            instance: utf8(instance),
+                            definition: utf8(definition),
+                        },
+                    )
+                },
+                ABI_OK
+            );
+        }
         let mut entity_receipt = NativeMechanicsEntityReceipt::default();
         assert_eq!(
             unsafe { commit_entity(context, entity, &mut entity_receipt) },
@@ -4660,7 +5206,7 @@ mod tests {
             ABI_OK
         );
         assert_eq!(evaluation.value, 14);
-        assert_eq!(evaluation.decisions_len, 2);
+        assert_eq!(evaluation.decisions_len, 6);
         assert!(evaluation.observed_revisions_len >= 2);
         assert_eq!(evaluation.source_cost.request_entries_visited, 1);
         let decisions =
@@ -4790,6 +5336,119 @@ mod tests {
         );
         assert_eq!(
             unsafe { destroy_operation_lease(context, reconciliation.handle) },
+            ABI_OK
+        );
+        let damage_parts = [
+            NativeMechanicsDamagePart {
+                kind: utf8("physical"),
+                amount: 28,
+            },
+            NativeMechanicsDamagePart {
+                kind: utf8("prevented"),
+                amount: 10,
+            },
+        ];
+        let damage_request = |expected_tracks_revision| NativeMechanicsDamageRequest {
+            operation: utf8("damage_operation"),
+            source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+            source_intrinsic_entity_id: 0,
+            source_intrinsic_instance: utf8(""),
+            source_effect_entity_id: 0,
+            source_effect_instance: utf8(""),
+            source_effect_stack: 0,
+            source_effect_source: utf8(""),
+            source_equipped_owner_entity_id: 0,
+            source_equipped_item_entity_id: 0,
+            source_equipped_source: utf8(""),
+            source_request_operation: utf8("damage_source_operation"),
+            source_request_instance: utf8("damage_source_instance"),
+            has_actor: true,
+            actor_entity_id: 78,
+            target: entity,
+            target_track: utf8("stamina"),
+            parts: damage_parts.as_ptr(),
+            parts_len: damage_parts.len(),
+            request_sources: request_sources.as_ptr(),
+            request_sources_len: request_sources.len(),
+            has_expected_tracks_revision: true,
+            expected_tracks_revision,
+        };
+        let mut damage_preview = NativeMechanicsDamageLease::default();
+        assert_eq!(
+            unsafe {
+                preview_damage(
+                    context,
+                    &damage_request(reconciliation.committed_revision),
+                    &mut damage_preview,
+                )
+            },
+            ABI_OK
+        );
+        assert!(!damage_preview.has_committed_tracks_revision);
+        assert_eq!(damage_preview.catalog_id, catalog.value);
+        assert_eq!(damage_preview.parts_len, 2);
+        assert!(damage_preview.decisions_len >= 10);
+        assert_eq!(damage_preview.track_changes_len, 2);
+        assert_eq!(damage_preview.protection_track_depletions_len, 1);
+        assert_eq!(damage_preview.target_track_depletions_len, 1);
+        assert!(damage_preview.observed_revisions_len >= 2);
+        assert_eq!(damage_preview.source_cost.request_entries_visited, 1);
+        assert!(damage_preview.has_actor);
+        assert_eq!(damage_preview.actor_entity_id, 78);
+        let preview_parts =
+            unsafe { std::slice::from_raw_parts(damage_preview.parts, damage_preview.parts_len) };
+        assert_eq!(preview_parts[0].combined_scale_numerator.low, 1);
+        assert_eq!(preview_parts[0].combined_scale_numerator.high, 0);
+        assert_eq!(preview_parts[0].combined_scale_denominator.low, 2);
+        assert_eq!(preview_parts[0].combined_scale_denominator.high, 0);
+        let preview_decisions = unsafe {
+            std::slice::from_raw_parts(damage_preview.decisions, damage_preview.decisions_len)
+        };
+        assert!(
+            preview_decisions
+                .iter()
+                .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::NoDamageResponse })
+        );
+        assert!(
+            preview_decisions
+                .iter()
+                .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::Prevent })
+        );
+        assert!(preview_decisions.iter().any(|value| {
+            value.kind == NativeMechanicsDamageDecisionKind::FlatReduction && value.amount == 2
+        }));
+        assert!(preview_decisions.iter().any(|value| {
+            value.kind == NativeMechanicsDamageDecisionKind::Scale
+                && value.ratio_numerator == 1
+                && value.ratio_denominator == 2
+        }));
+        assert!(
+            preview_decisions
+                .iter()
+                .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::Absorb })
+        );
+        let mut damage_applied = NativeMechanicsDamageLease::default();
+        assert_eq!(
+            unsafe {
+                apply_damage(
+                    context,
+                    &damage_request(damage_preview.observed_tracks_revision),
+                    &mut damage_applied,
+                )
+            },
+            ABI_OK
+        );
+        assert!(damage_applied.has_committed_tracks_revision);
+        assert_eq!(
+            damage_applied.committed_tracks_revision.component,
+            NativeMechanicsRevisionComponent::Tracks
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, damage_preview.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, damage_applied.handle) },
             ABI_OK
         );
         let mut stat_mutation = NativeMechanicsStatMutationLease::default();

@@ -81,6 +81,28 @@ pub enum NativeMechanicsDamageResponseKind {
     Absorb = 3,
 }
 
+/// The exact response outcome selected by DamageService for one part/source
+/// candidate. This is deliberately distinct from the catalog response kind:
+/// `NoDamageResponse` is a real evaluated decision when an active source has
+/// no configured response.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsDamageDecisionKind {
+    #[default]
+    NoDamageResponse = 0,
+    Prevent = 1,
+    FlatReduction = 2,
+    Scale = 3,
+    Absorb = 4,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsRoundingPolicy {
+    #[default]
+    TowardZero = 0,
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeMechanicsEffectStackingKind {
@@ -1251,5 +1273,127 @@ pub struct NativeMechanicsEffectOperationLease {
     pub observed_revision: NativeMechanicsComponentRevision,
     pub committed_revision: NativeMechanicsComponentRevision,
     pub tracks_validated: u64,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
+}
+
+/// One borrowed part of a DamageService request. `kind` is borrowed only for
+/// the duration of the preview/apply callback.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsDamagePart {
+    pub kind: NativeUtf8Slice,
+    pub amount: i64,
+}
+
+/// A flattened borrowed DamageService request. The source fields retain the
+/// exact `SourceInstanceIdentity` shape; `parts` and `request_sources` are
+/// bounded by the upstream DamageService quotas.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsDamageRequest {
+    pub operation: NativeUtf8Slice,
+    pub source_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub source_intrinsic_entity_id: u64,
+    pub source_intrinsic_instance: NativeUtf8Slice,
+    pub source_effect_entity_id: u64,
+    pub source_effect_instance: NativeUtf8Slice,
+    pub source_effect_stack: u16,
+    pub source_effect_source: NativeUtf8Slice,
+    pub source_equipped_owner_entity_id: u64,
+    pub source_equipped_item_entity_id: u64,
+    pub source_equipped_source: NativeUtf8Slice,
+    pub source_request_operation: NativeUtf8Slice,
+    pub source_request_instance: NativeUtf8Slice,
+    pub has_actor: bool,
+    pub actor_entity_id: u64,
+    pub target: NativeMechanicsEntityHandle,
+    pub target_track: NativeUtf8Slice,
+    pub parts: *const NativeMechanicsDamagePart,
+    pub parts_len: usize,
+    pub request_sources: *const NativeMechanicsRequestSource,
+    pub request_sources_len: usize,
+    pub has_expected_tracks_revision: bool,
+    pub expected_tracks_revision: NativeMechanicsTracksRevision,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsDamagePartReceiptRow {
+    pub index: u16,
+    pub kind: NativeUtf8Slice,
+    pub original: i64,
+    pub prevented: bool,
+    pub after_flat: i64,
+    pub combined_scale_numerator: NativeMechanicsU128,
+    pub combined_scale_denominator: NativeMechanicsU128,
+    pub rounding: NativeMechanicsRoundingPolicy,
+    pub after_scale: i64,
+    pub absorbed: i64,
+    pub applied: i64,
+    pub unapplied: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsDamageDecisionRow {
+    pub part_index: u16,
+    pub source: NativeMechanicsSourceIdentity,
+    pub source_definition: NativeUtf8Slice,
+    pub has_response_index: bool,
+    pub response_index: u16,
+    pub kind: NativeMechanicsDamageDecisionKind,
+    pub amount: i64,
+    pub ratio_numerator: u32,
+    pub ratio_denominator: u32,
+    pub absorb_track: NativeUtf8Slice,
+    pub outcome: NativeMechanicsDecisionOutcome,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsTrackDamageChangeRow {
+    pub track: NativeUtf8Slice,
+    pub before: i64,
+    pub after: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsTrackDepletionRow {
+    pub track: NativeUtf8Slice,
+    pub part_index: u16,
+}
+
+/// One exact DamageService preview or apply receipt. Every collection has a
+/// separate backing vector and is retained, with all text, until
+/// `destroy_operation_lease` releases `handle`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsDamageLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub parts: *const NativeMechanicsDamagePartReceiptRow,
+    pub parts_len: usize,
+    pub decisions: *const NativeMechanicsDamageDecisionRow,
+    pub decisions_len: usize,
+    pub track_changes: *const NativeMechanicsTrackDamageChangeRow,
+    pub track_changes_len: usize,
+    pub protection_track_depletions: *const NativeMechanicsTrackDepletionRow,
+    pub protection_track_depletions_len: usize,
+    pub target_track_depletions: *const NativeMechanicsTrackDepletionRow,
+    pub target_track_depletions_len: usize,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub has_actor: bool,
+    pub actor_entity_id: u64,
+    pub target_entity_id: u64,
+    pub target_track: NativeUtf8Slice,
+    pub observed_tracks_revision: NativeMechanicsTracksRevision,
+    pub has_committed_tracks_revision: bool,
+    pub committed_tracks_revision: NativeMechanicsTracksRevision,
     pub source_cost: NativeMechanicsSourceCollectionCost,
 }

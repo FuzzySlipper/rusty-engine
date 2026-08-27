@@ -698,6 +698,16 @@ pub type NativeExpireMechanicsEffect = unsafe extern "C" fn(
     *const NativeMechanicsEffectRemovalRequest,
     *mut NativeMechanicsEffectOperationLease,
 ) -> i32;
+pub type NativePreviewMechanicsDamage = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsDamageRequest,
+    *mut NativeMechanicsDamageLease,
+) -> i32;
+pub type NativeApplyMechanicsDamage = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsDamageRequest,
+    *mut NativeMechanicsDamageLease,
+) -> i32;
 
 pub type NativeOpenPersistenceStore = unsafe extern "C" fn(
     *mut c_void,
@@ -968,6 +978,8 @@ pub struct NativeMechanicsApi {
     pub replace_effect: NativeReplaceMechanicsEffect,
     pub remove_effect: NativeRemoveMechanicsEffect,
     pub expire_effect: NativeExpireMechanicsEffect,
+    pub preview_damage: NativePreviewMechanicsDamage,
+    pub apply_damage: NativeApplyMechanicsDamage,
 }
 
 #[repr(C)]
