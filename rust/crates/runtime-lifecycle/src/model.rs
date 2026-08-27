@@ -1,8 +1,12 @@
 use std::fmt;
 
-use product_model::{LifecycleMode, ProductManifest, MAX_REALTIME_CATCH_UP_STEPS, MAX_REALTIME_HZ};
-
 pub(crate) const SCALED_NANOSECONDS_PER_SECOND: u128 = 1_000_000_000;
+
+/// Highest fixed-step rate accepted by the reusable runtime lifecycle.
+/// Product manifests may choose to apply a stricter policy at their own edge.
+pub const MAX_REALTIME_HZ: u32 = 240;
+/// Highest bounded realtime catch-up batch accepted by the reusable lifecycle.
+pub const MAX_REALTIME_CATCH_UP_STEPS: u32 = 16;
 
 /// A caller-provided reading from one host-owned monotonic clock.
 ///
@@ -118,13 +122,13 @@ impl RealtimeLifecycleConfig {
             return Err(RuntimeLifecycleConfigError::ZeroFixedStepHz);
         }
         if fixed_step_hz > MAX_REALTIME_HZ {
-            return Err(RuntimeLifecycleConfigError::FixedStepHzExceedsManifestMaximum);
+            return Err(RuntimeLifecycleConfigError::FixedStepHzExceedsMaximum);
         }
         if max_catch_up_steps == 0 {
             return Err(RuntimeLifecycleConfigError::ZeroCatchUpSteps);
         }
         if max_catch_up_steps > MAX_REALTIME_CATCH_UP_STEPS {
-            return Err(RuntimeLifecycleConfigError::CatchUpStepsExceedManifestMaximum);
+            return Err(RuntimeLifecycleConfigError::CatchUpStepsExceedMaximum);
         }
         Ok(Self {
             fixed_step_hz,
@@ -150,28 +154,6 @@ pub enum RuntimeLifecycleConfig {
 }
 
 impl RuntimeLifecycleConfig {
-    /// Selects this lifecycle from an already validated Product Manifest.
-    ///
-    /// This is the only Product Model linkage. The lifecycle neither loads a
-    /// manifest nor interprets any other product field.
-    pub fn from_product_manifest(
-        manifest: &ProductManifest,
-    ) -> Result<Self, RuntimeLifecycleConfigError> {
-        Ok(match manifest.lifecycle() {
-            LifecycleMode::Realtime => {
-                let realtime = manifest
-                    .realtime()
-                    .ok_or(RuntimeLifecycleConfigError::MissingManifestRealtimeSettings)?;
-                Self::Realtime(RealtimeLifecycleConfig {
-                    fixed_step_hz: realtime.fixed_step_hz(),
-                    max_catch_up_steps: realtime.max_catch_up_steps(),
-                })
-            }
-            LifecycleMode::Demand => Self::Demand,
-            LifecycleMode::External => Self::External,
-        })
-    }
-
     pub const fn mode(self) -> RuntimeMode {
         match self {
             Self::Realtime(_) => RuntimeMode::Realtime,
@@ -184,11 +166,10 @@ impl RuntimeLifecycleConfig {
 /// Configuration rejected before a lifecycle owner exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeLifecycleConfigError {
-    MissingManifestRealtimeSettings,
     ZeroFixedStepHz,
-    FixedStepHzExceedsManifestMaximum,
+    FixedStepHzExceedsMaximum,
     ZeroCatchUpSteps,
-    CatchUpStepsExceedManifestMaximum,
+    CatchUpStepsExceedMaximum,
 }
 
 impl fmt::Display for RuntimeLifecycleConfigError {

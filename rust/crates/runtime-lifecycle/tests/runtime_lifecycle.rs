@@ -4,8 +4,6 @@ use runtime_lifecycle::{
     RuntimePhase, RuntimeState,
 };
 
-const MANIFEST: &str = include_str!("../../../../fixtures/product-model/minimum.rusty.toml");
-
 fn realtime(hz: u32, catch_up: u32) -> RuntimeLifecycle {
     RuntimeLifecycle::new(
         RuntimeInstanceId::new(1),
@@ -291,14 +289,14 @@ fn presentation_is_never_implicitly_admitted_by_realtime_advance() {
 }
 
 #[test]
-fn realtime_configuration_shares_product_manifest_bounds() {
+fn realtime_configuration_enforces_runtime_bounds() {
     assert_eq!(
         RealtimeLifecycleConfig::new(0, 1),
         Err(RuntimeLifecycleConfigError::ZeroFixedStepHz)
     );
     assert_eq!(
         RealtimeLifecycleConfig::new(241, 1),
-        Err(RuntimeLifecycleConfigError::FixedStepHzExceedsManifestMaximum)
+        Err(RuntimeLifecycleConfigError::FixedStepHzExceedsMaximum)
     );
     assert_eq!(
         RealtimeLifecycleConfig::new(1, 0),
@@ -306,7 +304,7 @@ fn realtime_configuration_shares_product_manifest_bounds() {
     );
     assert_eq!(
         RealtimeLifecycleConfig::new(1, 17),
-        Err(RuntimeLifecycleConfigError::CatchUpStepsExceedManifestMaximum)
+        Err(RuntimeLifecycleConfigError::CatchUpStepsExceedMaximum)
     );
     assert_eq!(
         RealtimeLifecycleConfig::new(240, 16)
@@ -317,23 +315,16 @@ fn realtime_configuration_shares_product_manifest_bounds() {
 }
 
 #[test]
-fn product_manifest_selects_each_runtime_lifecycle_mode() {
-    let demand_manifest = MANIFEST
-        .replace("mode = \"realtime\"", "mode = \"demand\"")
-        .replace(
-            "[lifecycle.realtime]\nfixed_step_hz = 60\nmax_catch_up_steps = 4\n\n",
-            "",
-        );
-    let external_manifest = demand_manifest.replace("mode = \"demand\"", "mode = \"external\"");
-
-    for (manifest_source, expected_mode) in [
-        (MANIFEST, RuntimeMode::Realtime),
-        (demand_manifest.as_str(), RuntimeMode::Demand),
-        (external_manifest.as_str(), RuntimeMode::External),
+fn explicit_runtime_configuration_selects_each_lifecycle_mode() {
+    for (config, expected_mode) in [
+        (
+            RuntimeLifecycleConfig::Realtime(RealtimeLifecycleConfig::new(60, 4).unwrap()),
+            RuntimeMode::Realtime,
+        ),
+        (RuntimeLifecycleConfig::Demand, RuntimeMode::Demand),
+        (RuntimeLifecycleConfig::External, RuntimeMode::External),
     ] {
-        let manifest = product_model::decode_product_manifest(manifest_source).unwrap();
-        let lifecycle =
-            RuntimeLifecycle::from_product_manifest(RuntimeInstanceId::new(9), &manifest).unwrap();
+        let lifecycle = RuntimeLifecycle::new(RuntimeInstanceId::new(9), config);
         assert_eq!(lifecycle.mode(), expected_mode);
         assert_eq!(lifecycle.readout().instance_id(), RuntimeInstanceId::new(9));
     }

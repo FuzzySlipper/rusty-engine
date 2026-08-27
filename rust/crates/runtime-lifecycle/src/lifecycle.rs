@@ -5,8 +5,6 @@ use crate::model::{
     RuntimeLifecycleError, RuntimeLifecycleReadout, RuntimeMode, RuntimePhaseToken, RuntimeState,
     SimulationAdmission, SimulationStep, SimulationToken, SCALED_NANOSECONDS_PER_SECOND,
 };
-use product_model::ProductManifest;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RealtimeState {
     last_observed_time: Option<HostMonotonicTime>,
@@ -27,7 +25,7 @@ impl RealtimeState {
     }
 }
 
-/// One instance-owned runtime lifecycle selected by a Product Manifest.
+/// One instance-owned runtime lifecycle selected by an explicit configuration.
 ///
 /// The lifecycle admits work but never performs it. A downstream product reads
 /// an admission plan, gathers input, invokes named schedule/timeline/mutation
@@ -69,17 +67,6 @@ impl RuntimeLifecycle {
             realtime,
             fault: None,
         }
-    }
-
-    /// Creates a stopped lifecycle from the manifest's validated selection.
-    pub fn from_product_manifest(
-        instance_id: RuntimeInstanceId,
-        manifest: &ProductManifest,
-    ) -> Result<Self, crate::RuntimeLifecycleConfigError> {
-        Ok(Self::new(
-            instance_id,
-            RuntimeLifecycleConfig::from_product_manifest(manifest)?,
-        ))
     }
 
     pub const fn instance_id(&self) -> RuntimeInstanceId {

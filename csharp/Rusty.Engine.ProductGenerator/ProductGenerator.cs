@@ -155,7 +155,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     try
                     {
                         if (args is null || (args->event_count != 0 && args->events is null)) return 2;
-                        Get(handle).Product.Update(new ProductUpdate(NativeConversions.FromNative(args->kind), CopyInput(args->events, args->event_count), args->observed_time_or_step));
+                        Get(handle).Product.Update(new ProductUpdate(NativeConversions.FromNative(args->facts), CopyInput(args->events, args->event_count)));
                         return 1;
                     }
                     catch { return 99; }

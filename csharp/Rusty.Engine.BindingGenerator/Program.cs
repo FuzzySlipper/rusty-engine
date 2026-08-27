@@ -182,9 +182,9 @@ internal static class Emit
         output.AppendLine("    public EngineCallException(string service, string operation, int status) : base($\"Rusty Engine {service}.{operation} returned status {status}.\") => Status = status;");
         output.AppendLine("    public int Status { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public readonly ref struct ProductUpdate").AppendLine("{");
-        output.AppendLine("    public ProductUpdate(ProductTurnKind kind, ReadOnlySpan<ProductInputEvent> input, ulong observation) { Kind = kind; Input = input; Observation = observation; }");
-        output.AppendLine("    public ProductTurnKind Kind { get; }");
-        output.AppendLine("    public ReadOnlySpan<ProductInputEvent> Input { get; }").AppendLine("    public ulong Observation { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("    public ProductUpdate(ProductUpdateFacts facts, ReadOnlySpan<ProductInputEvent> input) { Facts = facts; Input = input; }");
+        output.AppendLine("    public ProductUpdateFacts Facts { get; }");
+        output.AppendLine("    public ReadOnlySpan<ProductInputEvent> Input { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public sealed class ProductCreateContext").AppendLine("{");
         output.AppendLine("    public ProductCreateContext(IEngineContext engine, ProductContent content, ProductInputConfiguration input) { Engine = engine ?? throw new ArgumentNullException(nameof(engine)); Content = content ?? throw new ArgumentNullException(nameof(content)); Input = input ?? throw new ArgumentNullException(nameof(input)); }");
         output.AppendLine("    public IEngineContext Engine { get; }").AppendLine("    public ProductContent Content { get; }").AppendLine("    public ProductInputConfiguration Input { get; }").AppendLine("}").AppendLine();

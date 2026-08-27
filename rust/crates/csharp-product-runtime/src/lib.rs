@@ -487,6 +487,52 @@ impl CsharpProductRuntime {
         self.exercise_physical_mapping(released_binding)?;
         self.exercise_direct_intent(released_binding)?;
         self.exercise_selected_mode()?;
+        self.exercise_pause_resume()?;
+        Ok(())
+    }
+
+    fn exercise_pause_resume(&mut self) -> Result<(), CsharpProductRuntimeError> {
+        let running_binding = self.binding();
+        self.lifecycle_with_binding(ProductDevLifecycleOperation::Pause, Some(running_binding))
+            .map_err(exercise_runtime_error)?;
+        if self.lifecycle.state() != RuntimeState::Paused {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_PAUSE",
+                "pause did not leave the Rust lifecycle paused",
+            ));
+        }
+        let paused_binding = self.binding();
+        let paused_operation = self.advance_realtime(CanonicalU64::new(0));
+        if paused_operation.is_ok() {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_PAUSE",
+                "a paused lifecycle admitted realtime work",
+            ));
+        }
+        self.lifecycle_with_binding(ProductDevLifecycleOperation::Resume, Some(paused_binding))
+            .map_err(exercise_runtime_error)?;
+        if self.lifecycle.state() != RuntimeState::Running {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_RESUME",
+                "resume did not leave the Rust lifecycle running",
+            ));
+        }
+        match self.lifecycle.mode() {
+            RuntimeMode::Realtime => {
+                self.advance_realtime(CanonicalU64::new(0))
+                    .map_err(exercise_runtime_error)?;
+                self.advance_realtime(CanonicalU64::new(STANDARD_REALTIME_EXERCISE_ADMISSION_NS))
+                    .map_err(exercise_runtime_error)?;
+            }
+            RuntimeMode::Demand => {
+                self.admit_demand_step().map_err(exercise_runtime_error)?;
+            }
+            RuntimeMode::External => {
+                let step = self.lifecycle.readout().admitted_simulation_steps();
+                self.admit_external_step(CanonicalU64::new(step))
+                    .map_err(exercise_runtime_error)?;
+            }
+        }
         Ok(())
     }
 
@@ -776,8 +822,7 @@ impl CsharpProductRuntime {
 
     fn turn(
         &mut self,
-        kind: NativeProductTurnKind,
-        observed_time_or_step: u64,
+        facts: NativeProductUpdateFacts,
     ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
         let events: Vec<NativeInputEvent> = self
             .pending_inputs
@@ -789,9 +834,7 @@ impl CsharpProductRuntime {
             &self.api,
             self.handle,
             NativeTurnArgs {
-                kind,
-                reserved: 0,
-                observed_time_or_step,
+                facts,
                 events: events.as_ptr(),
                 event_count: events.len(),
             },
@@ -820,8 +863,9 @@ impl CsharpProductRuntime {
     fn turn_admitted(
         &mut self,
         kind: NativeProductTurnKind,
-        observed_time_or_step: u64,
+        observed_host_time_nanoseconds: Option<u64>,
         admission: runtime_lifecycle::SimulationAdmission,
+        dropped_step_count: u128,
     ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
         // Realtime catch-up remains one Product.Game turn per host
         // observation. Correlate that turn with the last lifecycle-admitted
@@ -850,7 +894,14 @@ impl CsharpProductRuntime {
             .map(|envelope| native_intent_event(envelope, &context))
             .collect::<Vec<_>>();
         self.pending_inputs.extend(mapped);
-        self.turn(kind, observed_time_or_step)
+        let facts = update_facts(
+            &self.lifecycle,
+            kind,
+            observed_host_time_nanoseconds,
+            admission,
+            dropped_step_count,
+        )?;
+        self.turn(facts)
     }
 
     fn action(
@@ -1101,8 +1152,13 @@ impl ProductDevRuntime for CsharpProductRuntime {
             // Input snapshots once with the last admitted phase token; the
             // product receives one turn per accepted host observation while
             // retaining the host observation as its realtime timing value.
-            Some(admission) => self
-                .turn_admitted(REALTIME_TURN_KIND, observed_time_ns.get(), admission)
+            Some(simulation) => self
+                .turn_admitted(
+                    REALTIME_TURN_KIND,
+                    Some(observed_time_ns.get()),
+                    simulation,
+                    admission.dropped_steps(),
+                )
                 .map_err(|error| self.runtime_error(error))?,
             None => Vec::new(),
         };
@@ -1117,7 +1173,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .admit_demand_step()
             .map_err(lifecycle_runtime_error)?;
         let outputs = self
-            .turn_admitted(DEMAND_TURN_KIND, admission.first_step().value(), admission)
+            .turn_admitted(DEMAND_TURN_KIND, None, admission, 0)
             .map_err(|error| self.runtime_error(error))?;
         self.receipt(ProductDevOperationKind::AdmitDemandStep, outputs)
     }
@@ -1131,11 +1187,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .admit_external_step(ExternalStep::new(step.get()))
             .map_err(lifecycle_runtime_error)?;
         let outputs = self
-            .turn_admitted(
-                EXTERNAL_TURN_KIND,
-                admission.first_step().value(),
-                admission,
-            )
+            .turn_admitted(EXTERNAL_TURN_KIND, None, admission, 0)
             .map_err(|error| self.runtime_error(error))?;
         self.receipt(ProductDevOperationKind::AdmitExternalStep, outputs)
     }
@@ -1338,6 +1390,53 @@ fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductDevRuntimeReadout {
                 .last_observed_time()
                 .map(|value| value.nanoseconds()),
         )
+}
+
+fn update_facts(
+    lifecycle: &RuntimeLifecycle,
+    mode: NativeProductTurnKind,
+    observed_host_time_nanoseconds: Option<u64>,
+    admission: runtime_lifecycle::SimulationAdmission,
+    dropped_step_count: u128,
+) -> Result<NativeProductUpdateFacts, CsharpProductRuntimeError> {
+    let readout = lifecycle.readout();
+    let (observed_host_time_nanoseconds, fixed_step_hz, fixed_delta_seconds) =
+        match lifecycle.configuration() {
+            RuntimeLifecycleConfig::Realtime(config) => (
+                observed_host_time_nanoseconds.unwrap_or_default(),
+                config.fixed_step_hz(),
+                1.0 / f64::from(config.fixed_step_hz()),
+            ),
+            RuntimeLifecycleConfig::Demand | RuntimeLifecycleConfig::External => (0, 0, 0.0),
+        };
+    let dropped_step_count = u64::try_from(dropped_step_count).map_err(|_| {
+        CsharpProductRuntimeError::new(
+            "CSHARP_LIFECYCLE_FACTS",
+            "realtime dropped-step facts exceed the NativeAOT wire range",
+        )
+    })?;
+    Ok(NativeProductUpdateFacts {
+        mode,
+        lifecycle_state: native_lifecycle_state(readout.state()),
+        generation: readout.generation().value(),
+        control_revision: readout.control_revision().value(),
+        observed_host_time_nanoseconds,
+        simulation_step: admission.first_step().value(),
+        fixed_step_hz,
+        admitted_step_count: admission.step_count(),
+        dropped_step_count,
+        fixed_delta_seconds,
+    })
+}
+
+fn native_lifecycle_state(state: RuntimeState) -> NativeProductLifecycleState {
+    match state {
+        RuntimeState::Created => NativeProductLifecycleState::Created,
+        RuntimeState::Running => NativeProductLifecycleState::Running,
+        RuntimeState::Paused => NativeProductLifecycleState::Paused,
+        RuntimeState::Faulted => NativeProductLifecycleState::Faulted,
+        RuntimeState::Shutdown => NativeProductLifecycleState::Shutdown,
+    }
 }
 
 fn clear_input_owned(binding: RuntimeInputBinding, reason: InputClearReason) -> NativeInputOwned {

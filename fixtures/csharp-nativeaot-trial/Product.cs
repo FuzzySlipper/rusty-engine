@@ -31,6 +31,9 @@ public sealed class Product : IEngineProduct
     private int _mappedHeldTurns;
     private bool _mappingReleasePending;
     private bool _mappingReleaseVerified;
+    private bool _updateFactsSeen;
+    private ulong _lastUpdateGeneration;
+    private ulong _lastUpdateControlRevision;
 
     public Product(ProductCreateContext context)
     {
@@ -258,6 +261,23 @@ public sealed class Product : IEngineProduct
         {
             throw new InvalidOperationException("the product is not accepting updates");
         }
+        ProductUpdateFacts facts = update.Facts;
+        Require(facts.LifecycleState == ProductLifecycleState.Running, "lifecycle facts did not identify a running update");
+        Require(facts.Generation != 0 && facts.ControlRevision != 0, "lifecycle facts did not carry the current identity");
+        Require(facts.AdmittedStepCount != 0, "update facts did not carry admitted simulation steps");
+        Require(facts.SimulationStep + facts.AdmittedStepCount >= facts.SimulationStep, "simulation step facts overflowed");
+        if (facts.Mode == ProductTurnKind.Realtime)
+        {
+            Require(facts.ObservedHostTimeNanoseconds != 0, "realtime update facts did not carry host observation");
+            Require(facts.FixedStepHz != 0 && facts.FixedDeltaSeconds > 0, "realtime update facts did not carry fixed-step timing");
+        }
+        else
+        {
+            Require(facts.ObservedHostTimeNanoseconds == 0 && facts.FixedStepHz == 0 && facts.FixedDeltaSeconds == 0, "non-realtime update facts carried realtime-only timing");
+        }
+        _updateFactsSeen = true;
+        _lastUpdateGeneration = facts.Generation;
+        _lastUpdateControlRevision = facts.ControlRevision;
         bool releaseObservedThisTurn = false;
         bool mappedHeldThisTurn = false;
         foreach (ProductInputEvent input in update.Input)
@@ -332,6 +352,8 @@ public sealed class Product : IEngineProduct
     public void Resume() => _paused = false;
     public void Shutdown()
     {
+        Require(_updateFactsSeen, "typed lifecycle update facts never reached Product.Game");
+        Require(_lastUpdateGeneration != 0 && _lastUpdateControlRevision != 0, "typed lifecycle update identity was not retained");
         if (_physicalMappingConfigured)
         {
             Require(_mappedHeldTurns >= 2, "physical mapping exercise did not reach two admitted Held turns");

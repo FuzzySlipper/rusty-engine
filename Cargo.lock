@@ -2971,9 +2971,6 @@ dependencies = [
 [[package]]
 name = "runtime-lifecycle"
 version = "0.1.0"
-dependencies = [
- "product-model",
-]
 
 [[package]]
 name = "runtime-mutation"

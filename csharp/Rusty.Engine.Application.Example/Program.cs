@@ -10,7 +10,7 @@ Register(defaultPipeline, UpdatePhase.Update, "update-one", defaultOrder, engine
 Register(defaultPipeline, UpdatePhase.Update, "update-two", defaultOrder, engine);
 Register(defaultPipeline, UpdatePhase.LateUpdate, "late-update", defaultOrder, engine);
 Register(defaultPipeline, UpdatePhase.Presentation, "presentation", defaultOrder, engine);
-defaultPipeline.Run(new ProductUpdate(ProductTurnKind.Realtime, ReadOnlySpan<ProductInputEvent>.Empty, 0));
+defaultPipeline.Run(new ProductUpdate(new ProductUpdateFacts(ProductTurnKind.Realtime, ProductLifecycleState.Running, 1, 1, 0, 0, 60, 0, 0, 1.0 / 60.0), ReadOnlySpan<ProductInputEvent>.Empty));
 
 Require(string.Join(',', defaultOrder) == "input,update-one,update-two,late-update,presentation", "the default pass order is not deterministic");
 
@@ -18,7 +18,7 @@ var customOrder = new List<string>();
 var customPipeline = new UpdatePipeline(engine, [UpdatePhase.Presentation, UpdatePhase.Input]);
 Register(customPipeline, UpdatePhase.Input, "input", customOrder, engine);
 Register(customPipeline, UpdatePhase.Presentation, "presentation", customOrder, engine);
-customPipeline.Run(new ProductUpdate(ProductTurnKind.Realtime, ReadOnlySpan<ProductInputEvent>.Empty, 0));
+customPipeline.Run(new ProductUpdate(new ProductUpdateFacts(ProductTurnKind.Realtime, ProductLifecycleState.Running, 1, 1, 0, 0, 60, 0, 0, 1.0 / 60.0), ReadOnlySpan<ProductInputEvent>.Empty));
 
 Require(string.Join(',', customOrder) == "presentation,input", "the supplied phase order was not used");
 

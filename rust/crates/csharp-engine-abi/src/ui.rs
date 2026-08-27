@@ -1,5 +1,3 @@
-use crate::NativeInputEvent;
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeUiStreamHandle {
@@ -25,25 +23,6 @@ pub struct NativeContentFile {
     pub bytes_len: usize,
 }
 
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeProductTurnKind {
-    Realtime = 1,
-    Demand = 2,
-    External = 3,
-}
-
-/// Explicit turn timing and its borrowed input slice.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct NativeTurnArgs {
-    /// The lifecycle mode that admitted this product turn.
-    pub kind: NativeProductTurnKind,
-    pub reserved: u32,
-    pub observed_time_or_step: u64,
-    pub events: *const NativeInputEvent,
-    pub event_count: usize,
-}
 /// Tags for one borrowed node in a fixed-layout UI value arena.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

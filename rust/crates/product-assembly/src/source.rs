@@ -1854,6 +1854,26 @@ fn initialization_facts() -> Result<serde_json::Value, String> {
     }))
 }
 
+fn runtime_lifecycle_config(
+    manifest: &product_model::ProductManifest,
+) -> Result<runtime_lifecycle::RuntimeLifecycleConfig, String> {
+    match manifest.lifecycle() {
+        product_model::LifecycleMode::Realtime => {
+            let realtime = manifest
+                .realtime()
+                .ok_or_else(|| "manifest realtime settings are missing".to_owned())?;
+            runtime_lifecycle::RealtimeLifecycleConfig::new(
+                realtime.fixed_step_hz(),
+                realtime.max_catch_up_steps(),
+            )
+            .map(runtime_lifecycle::RuntimeLifecycleConfig::Realtime)
+            .map_err(|error| format!("lifecycle configuration: {error}"))
+        }
+        product_model::LifecycleMode::Demand => Ok(runtime_lifecycle::RuntimeLifecycleConfig::Demand),
+        product_model::LifecycleMode::External => Ok(runtime_lifecycle::RuntimeLifecycleConfig::External),
+    }
+}
+
 impl GeneratedProductDevRuntime {
     pub fn new() -> Result<Self, String> {
         let manifest = product_model::decode_product_manifest(include_str!("../source/rusty.toml"))
@@ -1866,8 +1886,7 @@ impl GeneratedProductDevRuntime {
             .map_err(|error| format!("composition linkage: {error}"))?;
         let mappings = runtime_input::CompiledInputMappings::compile(&linked)
             .map_err(|error| format!("input compilation: {error}"))?;
-        let config = runtime_lifecycle::RuntimeLifecycleConfig::from_product_manifest(&manifest)
-            .map_err(|error| format!("lifecycle configuration: {error}"))?;
+        let config = runtime_lifecycle_config(&manifest)?;
         Ok(Self {
             lifecycle: runtime_lifecycle::RuntimeLifecycle::new(
                 runtime_lifecycle::RuntimeInstanceId::new(1),
@@ -2409,6 +2428,26 @@ __RUNTIME_RESOURCE_DECLARATION__
 const ADMITTED_COMPILED_COMPOSITION: &[u8] =
     include_bytes!("../artifacts/compiled-composition.json");
 
+fn runtime_lifecycle_config(
+    manifest: &product_model::ProductManifest,
+) -> Result<runtime_lifecycle::RuntimeLifecycleConfig, String> {
+    match manifest.lifecycle() {
+        product_model::LifecycleMode::Realtime => {
+            let realtime = manifest
+                .realtime()
+                .ok_or_else(|| "manifest realtime settings are missing".to_owned())?;
+            runtime_lifecycle::RealtimeLifecycleConfig::new(
+                realtime.fixed_step_hz(),
+                realtime.max_catch_up_steps(),
+            )
+            .map(runtime_lifecycle::RuntimeLifecycleConfig::Realtime)
+            .map_err(|error| format!("lifecycle configuration: {error}"))
+        }
+        product_model::LifecycleMode::Demand => Ok(runtime_lifecycle::RuntimeLifecycleConfig::Demand),
+        product_model::LifecycleMode::External => Ok(runtime_lifecycle::RuntimeLifecycleConfig::External),
+    }
+}
+
 __EMPTY_ADAPTER_START__
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2556,8 +2595,7 @@ __STANDARD_CAPABILITIES__
             runtime_input::InputContext::new("gameplay.default")
                 .map_err(|error| format!("input context: {error}"))?,
         );
-        let config = runtime_lifecycle::RuntimeLifecycleConfig::from_product_manifest(&manifest)
-            .map_err(|error| format!("lifecycle configuration: {error}"))?;
+        let config = runtime_lifecycle_config(&manifest)?;
 __ADAPTER_CONSTRUCTION__
         Ok(Self {
             composition: RuntimeComposition::new(
