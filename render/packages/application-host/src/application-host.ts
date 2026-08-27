@@ -1,4 +1,4 @@
-import type { PresentationFrameDiff, RenderFrameDiff } from '@rusty-engine/render-contracts';
+import type { PresentationFrameDiff, RenderFrameDiff, RendererViewComposition } from '@rusty-engine/render-contracts';
 import {
   RendererAudioHost,
   RendererBillboardHost,
@@ -56,6 +56,8 @@ export type RustyApplicationInteractionMode =
 export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
 /** A Rust-projected typed presentation diff. Strict decoding remains Engine-owned. */
 export type RustyApplicationPresentationFrame = Readonly<Record<string, unknown>>;
+/** Typed Engine view composition, realized by the Engine renderer against its current surface. */
+export type RustyApplicationViewComposition = RendererViewComposition;
 
 export interface RustyApplicationCameraPose {
   readonly position: readonly [number, number, number];
@@ -475,6 +477,9 @@ export interface RustyApplicationRendererPort {
   readonly applyPresentation: (
     frame: RustyApplicationPresentationFrame,
   ) => Promise<RustyApplicationPresentationReceipt>;
+  readonly configureViews: (
+    composition: RustyApplicationViewComposition,
+  ) => ReturnType<RendererSurface['configureViews']>;
   /** Replace product content with the Engine-owned empty/default retained frame. */
   readonly clear: () => Promise<void>;
   /** Create an experimental depth-enhanced sprite attachment on the current renderer surface. */
@@ -877,12 +882,27 @@ async function mountRustyApplicationWithEnvironment(
       let candidateBillboardUrls = new Set<string>();
       try {
         const candidateContent = candidate();
+        const priorViewComposition = oldSurface.viewCompositionReadout();
         const mounted = await mountSurface(candidateCanvas, candidateContent);
         candidateSurface = mounted.surface;
         candidateAudio = mounted.audio;
         candidateBillboard = mounted.billboard;
         candidateParticle = mounted.particle;
         candidateBillboardUrls = mounted.billboardUrls;
+        const viewReceipt = candidateSurface.configureViews({
+          schemaVersion: priorViewComposition.schemaVersion,
+          cameras: priorViewComposition.cameras,
+          targets: priorViewComposition.targets.map(({ lastRefreshedSubmission, status, ...target }) => target),
+          views: priorViewComposition.views,
+          presentations: priorViewComposition.presentations,
+        });
+        if (!viewReceipt.applied) {
+          throw new RustyApplicationHostError(
+            'mount_failed',
+            viewReceipt.diagnostics.map((diagnostic) => diagnostic.message).join('; ')
+              || 'renderer view composition was rejected during surface replacement',
+          );
+        }
         candidateSurface.setCameraPose(oldSurface.cameraPose());
         candidateSurface.renderOnce();
         oldCanvas.replaceWith(candidateCanvas);
@@ -1121,6 +1141,7 @@ async function mountRustyApplicationWithEnvironment(
       });
     },
     setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
+    configureViews: (composition: RustyApplicationViewComposition) => requireActive().configureViews(composition),
   });
   const ui: RustyApplicationUiPort = Object.freeze({
     active: () => !closing && !disposed,

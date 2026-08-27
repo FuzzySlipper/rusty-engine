@@ -29,3 +29,22 @@ pub struct NativeTransform {
     pub rotation: NativeQuat,
     pub scale: NativeVec3,
 }
+
+/// Borrowed bytes valid only for the direct service call accepting them.
+/// Rust copies these bytes before retaining or committing them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeByteSlice {
+    pub bytes: *const u8,
+    pub len: usize,
+}
+
+/// Product-owned writable storage borrowed only for the direct service call.
+/// Engine never retains this pointer. It is used for an explicit copy from an
+/// Engine-owned persistence blob into ordinary managed memory.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeWritableByteSlice {
+    pub bytes: *mut u8,
+    pub len: usize,
+}

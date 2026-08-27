@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="Product.cs" />
+    <Compile Remove="Product.cs;obj/**/*.cs" />
     <ProjectReference Include="../../csharp/Rusty.Engine/Rusty.Engine.csproj" />
     <ProjectReference Include="CsharpNativeAotTrial.Game.csproj" />
     <ProjectReference Include="../../csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"

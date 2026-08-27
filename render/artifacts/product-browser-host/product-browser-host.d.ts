@@ -1,4 +1,4 @@
-import { type RustyApplicationFrame, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds } from '@rusty-engine/application-host';
+import { type RustyApplicationFrame, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export declare const PRODUCT_BROWSER_HOST_ARTIFACT: "rusty.product.browser-host";
 export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
@@ -96,6 +96,9 @@ export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
 } | {
     readonly kind: 'frame';
     readonly frame: RustyApplicationFrame;
+} | {
+    readonly kind: 'view-composition';
+    readonly composition: RustyApplicationViewComposition;
 } | {
     readonly kind: 'presentation';
     readonly frame: RustyApplicationPresentationFrame;

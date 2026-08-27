@@ -209,6 +209,7 @@ impl RuntimeInputIngress {
 pub struct RuntimeProductPayload {
     contract: String,
     data: serde_json::Value,
+    bytes: Vec<u8>,
 }
 
 impl RuntimeProductPayload {
@@ -220,8 +221,12 @@ impl RuntimeProductPayload {
         if !is_identity(&contract) {
             return Err(RuntimeInputError::InvalidProductPayloadContract);
         }
-        validate_product_payload_json(&data)?;
-        Ok(Self { contract, data })
+        let bytes = validate_product_payload_json(&data)?;
+        Ok(Self {
+            contract,
+            data,
+            bytes,
+        })
     }
 
     pub fn contract(&self) -> &str {
@@ -229,6 +234,12 @@ impl RuntimeProductPayload {
     }
     pub fn data(&self) -> &serde_json::Value {
         &self.data
+    }
+
+    /// Canonical bounded payload bytes retained at direct-claim admission.
+    /// Product adapters copy this opaque data; they do not reinterpret it.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 }
 
@@ -520,6 +531,10 @@ pub enum RuntimeInputError {
     BindingMismatch,
     InvalidRebindClear,
     PendingIngressOverflow,
+    DuplicateIntent,
+    InvalidMapping,
+    DuplicateMapping,
+    DirectIntentPayloadUnsupported,
     UnknownIntent,
     IntentValueKindMismatch,
     Disposed,
@@ -528,7 +543,7 @@ pub enum RuntimeInputError {
     SnapshotOutOfOrder,
 }
 
-fn validate_product_payload_json(value: &serde_json::Value) -> Result<(), RuntimeInputError> {
+fn validate_product_payload_json(value: &serde_json::Value) -> Result<Vec<u8>, RuntimeInputError> {
     let bytes = serde_json::to_vec(value).map_err(|_| RuntimeInputError::WireMalformed)?;
     if bytes.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES {
         return Err(RuntimeInputError::ProductPayloadTooLarge {
@@ -537,7 +552,8 @@ fn validate_product_payload_json(value: &serde_json::Value) -> Result<(), Runtim
         });
     }
     let mut nodes = 0usize;
-    validate_product_payload_value(value, 1, &mut nodes)
+    validate_product_payload_value(value, 1, &mut nodes)?;
+    Ok(bytes)
 }
 
 fn validate_product_payload_value(

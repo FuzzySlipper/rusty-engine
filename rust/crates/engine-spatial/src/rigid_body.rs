@@ -14,6 +14,50 @@ use svc_collision::{
 
 use crate::VoxelCollisionScene;
 
+/// Purpose-neutral mass facts for an admitted dynamic primitive. The native C#
+/// bridge reports these values so product control code can use Engine's shape
+/// and mass policy without copying an inertia formula downstream.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RigidBodyMassProperties {
+    pub mass: f32,
+    pub principal_inertia: Vec3,
+}
+
+pub fn rigid_body_mass_properties(
+    shape: RigidBodyShape,
+    mass: f32,
+) -> Option<RigidBodyMassProperties> {
+    let body = RigidBodyComponent::dynamic(shape, mass);
+    entity_state::validate_rigid_body(&body).ok()?;
+    let principal_inertia = match shape {
+        // Ixx = m / 12 * ((2hy)^2 + (2hz)^2), and cyclic permutations.
+        RigidBodyShape::Cuboid { half_extents } => {
+            let scale = mass / 3.0;
+            Vec3::new(
+                scale * (half_extents.y * half_extents.y + half_extents.z * half_extents.z),
+                scale * (half_extents.x * half_extents.x + half_extents.z * half_extents.z),
+                scale * (half_extents.x * half_extents.x + half_extents.y * half_extents.y),
+            )
+        }
+        RigidBodyShape::Sphere { radius } => {
+            let inertia = 0.4 * mass * radius * radius;
+            Vec3::new(inertia, inertia, inertia)
+        }
+        // Capsule admission is intentionally not part of the generated C#
+        // Dynamics family yet, so it has no readout policy in this slice.
+        RigidBodyShape::CapsuleY { .. } => return None,
+    };
+    Some(RigidBodyMassProperties {
+        mass,
+        principal_inertia,
+    })
+}
+
+/// Compatibility helper for existing cuboid callers.
+pub fn cuboid_mass_properties(half_extents: Vec3, mass: f32) -> Option<RigidBodyMassProperties> {
+    rigid_body_mass_properties(RigidBodyShape::Cuboid { half_extents }, mass)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RigidBodyAction {
     pub entity: EntityId,

@@ -10,6 +10,11 @@ use csharp_engine_abi::*;
 use entity_state::Quat;
 
 use crate::{
+    audio::{RuntimeAudioBridge, RuntimeAudioCall},
+    camera_view::RuntimeCameraViewBridge,
+    dynamics::RuntimeDynamicsBridge,
+    mechanics::RuntimeMechanicsBridge,
+    persistence::RuntimePersistenceBridge,
     rng::RuntimeRngBridge,
     spatial::RuntimeSpatialBridge,
     ui::{RuntimeUiBridge, RuntimeUiCall},
@@ -19,30 +24,66 @@ use runtime_ui::RuntimeUiProjectionEnvelope;
 
 pub(crate) const ABI_OK: i32 = 1;
 use crate::appearance::{
-    create_primitive_appearance, create_sprite_appearance, create_static_mesh_appearance,
-    create_static_mesh_from_content_appearance, open_render_resource, publish_appearance_snapshot,
-    CsharpRenderResource, RuntimeAppearanceBridge, RuntimeAppearanceCall,
+    create_material, create_primitive_appearance, create_sprite_appearance,
+    create_static_mesh_appearance, create_static_mesh_from_content_appearance, destroy_appearance,
+    destroy_material, open_render_resource, publish_appearance_snapshot, read_presentation,
+    replace_material, replace_primitive_appearance, replace_sprite_appearance,
+    replace_static_mesh_appearance, replace_static_mesh_from_content_appearance, update_material,
+    update_static_mesh_materials, CsharpRenderResource, RuntimeAppearanceBridge,
+    RuntimeAppearanceCall,
 };
 
 fn engine_api(
     appearance_bridge: &mut RuntimeAppearanceBridge,
+    audio_bridge: &mut RuntimeAudioBridge,
+    camera_view_bridge: &mut RuntimeCameraViewBridge,
+    dynamics_bridge: &mut RuntimeDynamicsBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
     rng_bridge: &mut RuntimeRngBridge,
+    mechanics_bridge: &mut RuntimeMechanicsBridge,
+    persistence_bridge: &mut RuntimePersistenceBridge,
     ui_bridge: &mut RuntimeUiBridge,
 ) -> NativeEngineApi {
     NativeEngineApi {
         look: crate::look::api(),
+        dynamics: crate::dynamics::api(dynamics_bridge),
         spatial: crate::spatial::api(spatial_bridge),
         appearance: NativeAppearanceApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
+            create_material,
+            update_material,
+            replace_material,
+            destroy_material,
             create_primitive: create_primitive_appearance,
+            replace_primitive: replace_primitive_appearance,
             create_static_mesh: create_static_mesh_appearance,
             create_static_mesh_from_content: create_static_mesh_from_content_appearance,
+            replace_static_mesh: replace_static_mesh_appearance,
+            replace_static_mesh_from_content: replace_static_mesh_from_content_appearance,
+            update_static_mesh_materials,
             create_sprite: create_sprite_appearance,
+            replace_sprite: replace_sprite_appearance,
+            destroy_appearance,
             publish_snapshot: publish_appearance_snapshot,
+            read_presentation,
+        },
+        animation: crate::appearance::animation_api(appearance_bridge),
+        audio: crate::audio::api(audio_bridge),
+        camera_view: NativeCameraViewApi {
+            context: (camera_view_bridge as *mut RuntimeCameraViewBridge).cast(),
+            create_camera: crate::camera_view::create_camera,
+            update_camera: crate::camera_view::update_camera,
+            replace_camera: crate::camera_view::replace_camera,
+            destroy_camera: crate::camera_view::destroy_camera,
+            set_active_camera: crate::camera_view::set_active_camera,
+            clear_active_camera: crate::camera_view::clear_active_camera,
+            set_sky_background: crate::camera_view::set_sky_background,
+            clear_sky_background: crate::camera_view::clear_sky_background,
         },
         rng: crate::rng::api(rng_bridge),
+        mechanics: crate::mechanics::api(mechanics_bridge),
+        persistence: crate::persistence::api(persistence_bridge),
         ui: crate::ui::api(ui_bridge),
     }
 }
@@ -119,20 +160,30 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 /// Engine-facing effects created through the generated function tables.
 pub struct EngineServiceSet {
     appearance: RuntimeAppearanceBridge,
+    audio: RuntimeAudioBridge,
+    camera_view: RuntimeCameraViewBridge,
+    dynamics: RuntimeDynamicsBridge,
     spatial: RuntimeSpatialBridge,
     rng: RuntimeRngBridge,
+    mechanics: RuntimeMechanicsBridge,
+    persistence: RuntimePersistenceBridge,
     ui: RuntimeUiBridge,
 }
 
 pub struct CsharpEngineCall {
     appearance: Option<RuntimeAppearanceCall>,
+    audio: RuntimeAudioCall,
+    camera_view: crate::camera_view::RuntimeCameraViewCall,
+    sky_frame: Option<render_model::RenderFrameDiff>,
     ui: RuntimeUiCall,
 }
 
 /// Staged Engine observations from one successful product call.
 pub struct CsharpEngineCallOutput {
-    pub frame: Option<render_model::RenderFrameDiff>,
+    pub frames: Vec<render_model::RenderFrameDiff>,
+    pub view_composition: Option<render_host_contracts::RendererViewComposition>,
     pub ui: Vec<RuntimeUiProjectionEnvelope>,
+    pub presentation: Vec<render_presentation::PresentationFrameDiff>,
 }
 
 /// Parsed optional appearance catalog retained with admitted product content.
@@ -145,10 +196,17 @@ impl EngineServiceSet {
         catalog: CsharpAppearanceCatalog,
         content_resources: BTreeMap<String, Arc<[u8]>>,
     ) -> Self {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let dynamics = crate::dynamics::RuntimeDynamicsBridge::new(spatial.collision_source());
         Self {
-            appearance: crate::appearance::create(catalog.0, content_resources),
-            spatial: crate::spatial::RuntimeSpatialBridge::new(),
+            appearance: crate::appearance::create(catalog.0, content_resources.clone()),
+            audio: RuntimeAudioBridge::new(content_resources),
+            camera_view: RuntimeCameraViewBridge::new(),
+            dynamics,
+            spatial,
             rng: crate::rng::RuntimeRngBridge::new(),
+            mechanics: crate::mechanics::RuntimeMechanicsBridge::new(),
+            persistence: crate::persistence::RuntimePersistenceBridge::new(),
             ui: crate::ui::RuntimeUiBridge::new(),
         }
     }
@@ -156,45 +214,99 @@ impl EngineServiceSet {
     pub fn api(&mut self) -> NativeEngineApi {
         engine_api(
             &mut self.appearance,
+            &mut self.audio,
+            &mut self.camera_view,
+            &mut self.dynamics,
             &mut self.spatial,
             &mut self.rng,
+            &mut self.mechanics,
+            &mut self.persistence,
             &mut self.ui,
         )
     }
 
     pub fn begin_call(&mut self) {
         self.appearance.begin_call();
+        self.audio.begin_call();
+        self.camera_view.begin_call();
         self.ui.begin_call();
     }
 
     pub fn discard_call(&mut self) {
         self.appearance.discard_call();
+        self.audio.discard_call();
+        self.camera_view.discard_call();
         self.ui.discard_call();
     }
 
     pub fn take_call(&mut self) -> Result<CsharpEngineCall, CsharpEngineServicesError> {
         let appearance = self.appearance.take_staged_call()?;
+        let audio = self.audio.take_staged_call()?;
+        let camera_view = self.camera_view.take_staged_call()?;
+        // Sky resources are owned and admitted by Appearance. Resolve the
+        // cross-family handle while both staged states are available, before
+        // either state can be committed or turned into host output.
+        let sky_frame =
+            crate::camera_view::sky_frame(camera_view.sky_texture, appearance.as_ref())?;
         let ui = self.ui.take_staged_call()?;
-        Ok(CsharpEngineCall { appearance, ui })
+        Ok(CsharpEngineCall {
+            appearance,
+            audio,
+            camera_view,
+            sky_frame,
+            ui,
+        })
     }
 
     pub fn commit_call(&mut self, call: CsharpEngineCall) {
         self.appearance.commit(call.appearance);
+        self.audio.commit(call.audio);
+        self.camera_view.commit(call.camera_view);
         self.ui.commit(call.ui);
     }
 
     pub fn seal_resource_selection(&mut self) {
         self.appearance.seal_resource_selection();
+        self.audio.seal_resource_selection();
     }
 
-    pub fn render_resources(&self) -> &[CsharpRenderResource] {
-        &self.appearance.state.render_resources
+    pub fn render_resources(&self) -> Vec<CsharpRenderResource> {
+        self.appearance
+            .state
+            .render_resources
+            .iter()
+            .cloned()
+            .chain(self.audio.render_resources().cloned())
+            .collect()
     }
 
     pub fn outputs(&self, call: &CsharpEngineCall) -> CsharpEngineCallOutput {
+        let mut frames = call
+            .appearance
+            .as_ref()
+            .map(|call| {
+                call.frame
+                    .clone()
+                    .into_iter()
+                    .chain(call.extra_frames.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if let Some(frame) = call.sky_frame.clone() {
+            frames.push(frame);
+        }
         CsharpEngineCallOutput {
-            frame: call.appearance.as_ref().and_then(|call| call.frame.clone()),
+            frames,
+            view_composition: call.camera_view.composition.clone(),
             ui: call.ui.projections.clone(),
+            presentation: call
+                .appearance
+                .as_ref()
+                .map(|call| call.presentation.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .chain(call.audio.frame.clone())
+                .collect(),
         }
     }
 }

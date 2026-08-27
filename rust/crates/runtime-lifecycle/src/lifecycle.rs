@@ -1,9 +1,9 @@
 use crate::model::{
     ExternalStep, HostMonotonicTime, LifecycleOperation, LifecycleReceipt, PresentationAdmission,
-    PresentationToken, RealtimeAdvance, RuntimeControlRevision, RuntimeFault, RuntimeGeneration,
-    RuntimeInstanceId, RuntimeLifecycleConfig, RuntimeLifecycleError, RuntimeLifecycleReadout,
-    RuntimeMode, RuntimePhaseToken, RuntimeState, SimulationAdmission, SimulationStep,
-    SimulationToken, SCALED_NANOSECONDS_PER_SECOND,
+    PresentationToken, RealtimeAdvance, RuntimeControlOperation, RuntimeControlRevision,
+    RuntimeFault, RuntimeGeneration, RuntimeInstanceId, RuntimeLifecycleConfig,
+    RuntimeLifecycleError, RuntimeLifecycleReadout, RuntimeMode, RuntimePhaseToken, RuntimeState,
+    SimulationAdmission, SimulationStep, SimulationToken, SCALED_NANOSECONDS_PER_SECOND,
 };
 use product_model::ProductManifest;
 
@@ -178,6 +178,23 @@ impl RuntimeLifecycle {
         self.fault = Some(fault);
         self.reset_realtime_progress();
         Ok(self.receipt(LifecycleOperation::ReportFault))
+    }
+
+    /// Replaces or releases the current control binding without pausing,
+    /// restarting, or otherwise changing simulation/product state. Callers
+    /// rebind their named input owner to the returned revision before later
+    /// product input is admitted.
+    pub fn change_control(
+        &mut self,
+        operation: RuntimeControlOperation,
+    ) -> Result<LifecycleReceipt, RuntimeLifecycleError> {
+        let lifecycle_operation = operation.lifecycle_operation();
+        self.require_state(
+            lifecycle_operation,
+            &[RuntimeState::Running, RuntimeState::Paused],
+        )?;
+        self.advance_control_revision()?;
+        Ok(self.receipt(lifecycle_operation))
     }
 
     /// Admits due fixed simulation steps from a caller-supplied monotonic time.

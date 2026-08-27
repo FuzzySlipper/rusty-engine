@@ -221,12 +221,32 @@ pub enum LifecycleOperation {
     Restart,
     Shutdown,
     ReportFault,
+    ReplaceControl,
+    ReleaseControl,
     AdvanceRealtime,
     AdmitDemandStep,
     AdmitExternalStep,
     AdmitPresentation,
     ValidateSimulationToken,
     ValidatePresentationToken,
+}
+
+/// One transport-neutral change to the controller currently admitted to a
+/// runtime. It advances only the control revision: simulation generation,
+/// lifecycle state, and product state remain intact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeControlOperation {
+    Replace,
+    Release,
+}
+
+impl RuntimeControlOperation {
+    pub const fn lifecycle_operation(self) -> LifecycleOperation {
+        match self {
+            Self::Replace => LifecycleOperation::ReplaceControl,
+            Self::Release => LifecycleOperation::ReleaseControl,
+        }
+    }
 }
 
 /// A lifecycle transition receipt. It is data only; no owner is invoked.

@@ -13,6 +13,7 @@ mod wire;
 
 pub use compile::{
     CompiledInputCapabilityLink, CompiledInputIntent, CompiledInputMapping, CompiledInputMappings,
+    DirectInputIntentDescriptor, RuntimeInputMapping, RuntimeInputTrigger,
 };
 pub use lane::RuntimeInputLane;
 pub use model::{

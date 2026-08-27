@@ -14,12 +14,15 @@ File.WriteAllText(Path.Combine(args[3], "EngineServiceImplementations.g.cs"), Em
 
 internal sealed record Field(string Name, string Type);
 internal sealed record Struct(string Name, IReadOnlyList<Field> Fields);
+internal sealed record EnumMember(string Name, long Value);
+internal sealed record Enum(string Name, IReadOnlyList<EnumMember> Members);
 internal sealed record Callback(string Name, string ReturnType, IReadOnlyList<string> Parameters);
 internal sealed record Service(string Name, IReadOnlyList<(string Name, string Callback)> Operations);
 
 internal sealed class BindingModel
 {
     public required IReadOnlyDictionary<string, Struct> Structs { get; init; }
+    public required IReadOnlyDictionary<string, Enum> Enums { get; init; }
     public required IReadOnlyDictionary<string, Callback> Callbacks { get; init; }
     public required IReadOnlyList<Service> Services { get; init; }
 
@@ -32,6 +35,9 @@ internal sealed class BindingModel
         Dictionary<string, Struct> structs = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_StructDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
             .Select(cursor => new Struct(cursor.Spelling.ToString(), Children(cursor).Where(field => field.Kind == CXCursorKind.CXCursor_FieldDecl).Select(field => new Field(field.Spelling.ToString(), field.Type.Spelling.ToString())).ToArray()))
             .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        Dictionary<string, Enum> enums = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_EnumDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
+            .Select(cursor => new Enum(cursor.Spelling.ToString(), Children(cursor).Where(member => member.Kind == CXCursorKind.CXCursor_EnumConstantDecl).Select(member => new EnumMember(member.Spelling.ToString(), member.EnumConstantDeclValue)).ToArray()))
+            .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, Callback> callbacks = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_TypedefDecl && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
             .Select(cursor => new Callback(cursor.Spelling.ToString(), cursor.Type.CanonicalType.Spelling.ToString().Split(" (*)", StringSplitOptions.None)[0], Children(cursor).Where(parameter => parameter.Kind == CXCursorKind.CXCursor_ParmDecl).Select(parameter => parameter.Type.Spelling.ToString()).ToArray()))
             .Where(callback => callback.Parameters.Count > 0).GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
@@ -43,15 +49,15 @@ internal sealed class BindingModel
             var operations = tableStruct.Fields.Where(operation => operation.Name != "context").Select(operation =>
             {
                 if (!callbacks.TryGetValue(Bare(operation.Type), out Callback? callback)) throw new InvalidOperationException($"{table}.{operation.Name} references non-callback type {operation.Type}.");
-                Validate(table, operation.Name, callback, structs);
+                Validate(table, operation.Name, callback, structs, enums);
                 return (operation.Name, callback.Name);
             }).ToArray();
             return new Service(table["Native".Length..^"Api".Length], operations);
         }).ToArray();
-        return new BindingModel { Structs = structs, Callbacks = callbacks, Services = services };
+        return new BindingModel { Structs = structs, Enums = enums, Callbacks = callbacks, Services = services };
     }
 
-    private static void Validate(string family, string method, Callback callback, IReadOnlyDictionary<string, Struct> structs)
+    private static void Validate(string family, string method, Callback callback, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
     {
         string signature = $"{callback.ReturnType} ({string.Join(", ", callback.Parameters)})";
         if (callback.ReturnType is not "int" and not "int32_t" || callback.Parameters[0] != "void *") Fail(family, method, signature, "expected context-first int32 status call");
@@ -60,10 +66,25 @@ internal sealed class BindingModel
         if (parameters[^1].Contains('*', StringComparison.Ordinal) && !IsExactBorrowedPointer(parameters[^1]) && !IsExactOutPointer(parameters[^1])) Fail(family, method, signature, $"final pointer {parameters[^1]} must be exactly const T * input or T * out receipt");
         bool hasReceipt = IsExactOutPointer(parameters[^1]);
         int inputs = hasReceipt ? parameters.Length - 1 : parameters.Length;
-        if (hasReceipt) ValidateFixedType(family, method, signature, Bare(parameters[^1]), structs, new HashSet<string>(StringComparer.Ordinal), "out receipt");
+        if (hasReceipt) ValidateFixedType(family, method, signature, Bare(parameters[^1]), structs, enums, new HashSet<string>(StringComparer.Ordinal), "out receipt");
+        if (inputs == 0 && hasReceipt) return;
         if (inputs == 2 && IsExactBorrowedPointer(parameters[0]) && Bare(parameters[1]) == "size_t")
         {
-            ValidateFixedType(family, method, signature, Bare(parameters[0]), structs, new HashSet<string>(StringComparer.Ordinal), "pointer/count span element");
+            ValidateFixedType(family, method, signature, Bare(parameters[0]), structs, enums, new HashSet<string>(StringComparer.Ordinal), "pointer/count span element");
+            return;
+        }
+        if (inputs > 1 && IsExactBorrowedPointer(parameters[inputs - 1]))
+        {
+            for (int index = 0; index < inputs - 1; index++)
+            {
+                string leading = parameters[index];
+                if (leading.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"unsupported leading pointer input {leading}");
+                ValidateFixedType(family, method, signature, Bare(leading), structs, enums, new HashSet<string>(StringComparer.Ordinal), "leading direct input");
+            }
+            string borrowed = parameters[inputs - 1];
+            string borrowedBare = Bare(borrowed);
+            if (!structs.TryGetValue(borrowedBare, out Struct? request) || request is null) { Fail(family, method, signature, $"borrowed input {borrowed} does not name an emitted struct"); return; }
+            ValidateBorrowedRequest(family, method, signature, request, structs, enums, new HashSet<string>(StringComparer.Ordinal));
             return;
         }
         if (inputs != 1) Fail(family, method, signature, "expected one input (or one pointer/count span) plus optional out receipt");
@@ -72,30 +93,30 @@ internal sealed class BindingModel
         if (IsExactBorrowedPointer(input))
         {
             if (!structs.TryGetValue(bare, out Struct? request) || request is null) { Fail(family, method, signature, $"borrowed input {input} does not name an emitted struct"); return; }
-            ValidateBorrowedRequest(family, method, signature, request, structs, new HashSet<string>(StringComparer.Ordinal));
+            ValidateBorrowedRequest(family, method, signature, request, structs, enums, new HashSet<string>(StringComparer.Ordinal));
             return;
         }
         if (input.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"unsupported pointer input {input}");
-        ValidateFixedType(family, method, signature, bare, structs, new HashSet<string>(StringComparer.Ordinal), "direct input");
+        ValidateFixedType(family, method, signature, bare, structs, enums, new HashSet<string>(StringComparer.Ordinal), "direct input");
     }
 
-    private static void ValidateFixedType(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, HashSet<string> seen, string role)
+    private static void ValidateFixedType(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen, string role)
     {
-        if (IsScalar(type)) return;
+        if (IsScalar(type) || enums.ContainsKey(type)) return;
         if (!structs.TryGetValue(type, out Struct? value) || value is null) { Fail(family, method, signature, $"{role} {type} is not a supported scalar or emitted native struct"); return; }
         if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs") Fail(family, method, signature, $"{role} {type} is an API/product table rather than a fixed value");
-        if (type is "NativeUtf8Slice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type} is only supported as a specially marshalled request field");
+        if (type is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type} is only supported as a specially marshalled request field");
         if (!seen.Add(type)) return;
         foreach (Field field in value.Fields)
         {
             if (field.Type.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) is borrowed and cannot be emitted by-value");
             string nested = Bare(field.Type);
-            if (nested is "NativeUtf8Slice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) requires request-only marshalling");
-            ValidateFixedType(family, method, signature, nested, structs, seen, $"{role} field {type}.{field.Name}");
+            if (nested is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) requires request-only marshalling");
+            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"{role} field {type}.{field.Name}");
         }
     }
 
-    private static void ValidateBorrowedRequest(string family, string method, string signature, Struct request, IReadOnlyDictionary<string, Struct> structs, HashSet<string> seen)
+    private static void ValidateBorrowedRequest(string family, string method, string signature, Struct request, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen)
     {
         if (request.Name.EndsWith("Api", StringComparison.Ordinal) || request.Name is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs") Fail(family, method, signature, $"borrowed request {request.Name} is an API/product table");
         if (!seen.Add(request.Name)) return;
@@ -108,14 +129,14 @@ internal sealed class BindingModel
                 if (pointed is "NativeUtf8Slice" or "NativeStructuredValue") Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) cannot point to special immediate value {pointed}");
                 if (!IsExactBorrowedPointer(field.Type)) Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) must be exactly const T *");
                 if (index + 1 >= request.Fields.Count || (request.Fields[index + 1].Name != $"{field.Name}_len" && request.Fields[index + 1].Name != $"{field.Name}_count") || Bare(request.Fields[index + 1].Type) != "size_t") Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) lacks an adjacent size_t _len/_count field");
-                ValidateFixedType(family, method, signature, pointed, structs, new HashSet<string>(StringComparer.Ordinal), $"borrowed span element {request.Name}.{field.Name}");
+                ValidateFixedType(family, method, signature, pointed, structs, enums, new HashSet<string>(StringComparer.Ordinal), $"borrowed span element {request.Name}.{field.Name}");
                 index++;
                 continue;
             }
             string nested = Bare(field.Type);
-            if (nested == "NativeUtf8Slice") continue;
+            if (nested is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice") continue;
             if (nested == "NativeStructuredValue") continue;
-            ValidateFixedType(family, method, signature, nested, structs, seen, $"borrowed request field {request.Name}.{field.Name}");
+            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"borrowed request field {request.Name}.{field.Name}");
         }
     }
 
@@ -133,8 +154,8 @@ internal sealed class BindingModel
     private static List<CXCursor> sChildren = [];
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe CXChildVisitResult CollectChild(CXCursor cursor, CXCursor parent, void* clientData) { sChildren.Add(cursor); return CXChildVisitResult.CXChildVisit_Continue; }
-    public static string Bare(string type) => type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Replace(" *", "", StringComparison.Ordinal).Trim();
-    public static bool IsScalar(string type) => type is "void" or "int" or "int32_t" or "int64_t" or "uint32_t" or "uint64_t" or "size_t" or "float" or "double" or "uint8_t";
+    public static string Bare(string type) => type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Replace("enum ", "", StringComparison.Ordinal).Replace(" *", "", StringComparison.Ordinal).Trim();
+    public static bool IsScalar(string type) => type is "void" or "bool" or "_Bool" or "int" or "int32_t" or "int64_t" or "uint32_t" or "uint64_t" or "size_t" or "float" or "double" or "uint8_t";
 }
 
 internal static class Emit
@@ -161,17 +182,25 @@ internal static class Emit
         output.AppendLine("    public EngineCallException(string service, string operation, int status) : base($\"Rusty Engine {service}.{operation} returned status {status}.\") => Status = status;");
         output.AppendLine("    public int Status { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public readonly ref struct ProductUpdate").AppendLine("{");
-        output.AppendLine("    public ProductUpdate(uint kind, ReadOnlySpan<ProductInputEvent> input, ulong observation) { Kind = kind; Input = input; Observation = observation; }");
-        output.AppendLine("    public uint Kind { get; }");
+        output.AppendLine("    public ProductUpdate(ProductTurnKind kind, ReadOnlySpan<ProductInputEvent> input, ulong observation) { Kind = kind; Input = input; Observation = observation; }");
+        output.AppendLine("    public ProductTurnKind Kind { get; }");
         output.AppendLine("    public ReadOnlySpan<ProductInputEvent> Input { get; }").AppendLine("    public ulong Observation { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public sealed class ProductCreateContext").AppendLine("{");
-        output.AppendLine("    public ProductCreateContext(IEngineContext engine, ProductContent content) { Engine = engine ?? throw new ArgumentNullException(nameof(engine)); Content = content ?? throw new ArgumentNullException(nameof(content)); }");
-        output.AppendLine("    public IEngineContext Engine { get; }").AppendLine("    public ProductContent Content { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("    public ProductCreateContext(IEngineContext engine, ProductContent content, ProductInputConfiguration input) { Engine = engine ?? throw new ArgumentNullException(nameof(engine)); Content = content ?? throw new ArgumentNullException(nameof(content)); Input = input ?? throw new ArgumentNullException(nameof(input)); }");
+        output.AppendLine("    public IEngineContext Engine { get; }").AppendLine("    public ProductContent Content { get; }").AppendLine("    public ProductInputConfiguration Input { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public sealed class ProductContent").AppendLine("{");
         output.AppendLine("    public ProductContent(ReadOnlyMemory<ProductContentFile> files) => Files = files;");
         output.AppendLine("    public ReadOnlyMemory<ProductContentFile> Files { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public readonly record struct ProductContentFile(ReadOnlyMemory<byte> Path, ReadOnlyMemory<byte> Bytes);");
-        output.AppendLine("public readonly record struct ProductInputEvent(uint Kind, uint Edge, ulong Sequence, float X, float Y, ReadOnlyMemory<byte> Label);");
+        output.AppendLine("public readonly record struct InputBinding(ulong InstanceId, ulong Generation, ulong ControlRevision);");
+        output.AppendLine("public readonly record struct InputContext(ReadOnlyMemory<byte> Value);");
+        output.AppendLine("public readonly record struct InputSequence(ulong Value);");
+        output.AppendLine("public readonly record struct ProductInputDescriptor(ReadOnlyMemory<byte> Id, InputValueKind ValueKind, ReadOnlyMemory<byte> PayloadContract);");
+        output.AppendLine("public readonly record struct ProductInputMapping(ReadOnlyMemory<byte> Id, ReadOnlyMemory<byte> Intent, InputTriggerKind TriggerKind, InputEdge Edge, InputAxis Axis, KeyboardControl Keyboard, PointerButton PointerButton, ControllerButton ControllerButton, ControllerAxis ControllerAxis, ReadOnlyMemory<KeyboardControl> Chord, InputContext Context);");
+        output.AppendLine("public sealed class ProductInputConfiguration").AppendLine("{");
+        output.AppendLine("    public ProductInputConfiguration(InputBinding binding, InputContext context, ReadOnlyMemory<ProductInputDescriptor> directIntents, ReadOnlyMemory<ProductInputMapping> physicalMappings) { Binding = binding; Context = context; DirectIntents = directIntents; PhysicalMappings = physicalMappings; }");
+        output.AppendLine("    public InputBinding Binding { get; }").AppendLine("    public InputContext Context { get; }").AppendLine("    public ReadOnlyMemory<ProductInputDescriptor> DirectIntents { get; }").AppendLine("    public ReadOnlyMemory<ProductInputMapping> PhysicalMappings { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("public readonly record struct ProductInputEvent(InputEventKind Kind, InputEdge Edge, InputDevice Device, InputChannel Channel, InputAxis Axis, KeyboardControl Keyboard, PointerButton PointerButton, ControllerButton ControllerButton, ControllerAxis ControllerAxis, InputClearReason ClearReason, InputValueKind ValueKind, InputPhase Phase, InputProvenance Provenance, InputBinding Binding, InputSequence Sequence, InputContext Context, float X, float Y, ReadOnlyMemory<byte> Label, ReadOnlyMemory<byte> MappingId, ReadOnlyMemory<byte> Intent, ReadOnlyMemory<byte> PayloadContract, ReadOnlyMemory<byte> PayloadData);");
         output.AppendLine();
         output.AppendLine("[AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]");
         output.AppendLine("public sealed class EngineProductAttribute : Attribute").AppendLine("{");
@@ -191,6 +220,12 @@ internal static class Emit
     {
         StringBuilder output = Header("safe values");
         output.AppendLine("namespace Rusty.Engine;").AppendLine();
+        foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            output.AppendLine($"public enum {SafeType(value.Name)} : uint").AppendLine("{");
+            foreach (EnumMember member in value.Members) output.AppendLine($"    {SafeEnumMember(value.Name, member.Name)} = {member.Value},");
+            output.AppendLine("}").AppendLine();
+        }
         foreach (Struct value in model.Structs.Values.Where(IsSafeValue).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             string safeName = SafeType(value.Name);
@@ -210,7 +245,7 @@ internal static class Emit
             output.AppendLine($"public sealed class {owner} : IDisposable").AppendLine("{");
             string handleType = SafeType(handle);
             output.AppendLine($"    public {owner}({handleType} handle, Action dispose) {{ Handle = handle; _dispose = dispose ?? throw new ArgumentNullException(nameof(dispose)); }}");
-            output.AppendLine($"    public {handleType} Handle {{ get; }}").AppendLine("    private Action? _dispose;").AppendLine("    public void Dispose() => System.Threading.Interlocked.Exchange(ref _dispose, null)?.Invoke();").AppendLine("}").AppendLine();
+            output.AppendLine($"    public {handleType} Handle {{ get; }}").AppendLine("    private readonly object _disposeGate = new();").AppendLine("    private Action? _dispose;").AppendLine("    public void Dispose() { lock (_disposeGate) { Action? dispose = _dispose; if (dispose is null) return; dispose(); _dispose = null; } }").AppendLine("}").AppendLine();
         }
         output.AppendLine("public sealed class UiValue").AppendLine("{");
         output.AppendLine("    public UiValue(ReadOnlyMemory<StructuredValueNode> nodes, ReadOnlyMemory<uint> edges, uint root, ReadOnlyMemory<byte> utf8) { Nodes = nodes; Edges = edges; Root = root; Utf8 = utf8; }");
@@ -222,6 +257,12 @@ internal static class Emit
     {
         StringBuilder output = Header("internal NativeProduct ABI input");
         output.AppendLine("using System.Runtime.InteropServices;").AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
+        foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            output.AppendLine($"internal enum {value.Name} : uint").AppendLine("{");
+            foreach (EnumMember member in value.Members) output.AppendLine($"    {member.Name} = {member.Value},");
+            output.AppendLine("}").AppendLine();
+        }
         foreach (Struct value in model.Structs.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             output.AppendLine("[StructLayout(LayoutKind.Sequential)]").AppendLine($"internal unsafe struct {value.Name}").AppendLine("{");
@@ -265,6 +306,12 @@ internal static class Emit
         output.AppendLine("    internal static Vector3 FromNative(NativeVec3 value) => new(value.x, value.y, value.z);");
         output.AppendLine("    internal static NativeQuat ToNative(Quaternion value) => new() { x = value.X, y = value.Y, z = value.Z, w = value.W };");
         output.AppendLine("    internal static Quaternion FromNative(NativeQuat value) => new(value.x, value.y, value.z, value.w);");
+        foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            string safe = SafeType(value.Name);
+            output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => ({value.Name})(uint)value;");
+            output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => ({safe})(uint)value;");
+        }
         foreach (Struct value in model.Structs.Values.Where(IsSafeValue).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             string safe = SafeType(value.Name);
@@ -279,11 +326,12 @@ internal static class Emit
                 continue;
             }
             if (HasBorrowedFields(value)) continue;
-            string assignments = string.Join(", ", value.Fields.Select(field => $"{field.Name} = ToNative(value.{Pascal(field.Name)})"));
-            string arguments = string.Join(", ", value.Fields.Select(field => $"FromNative(value.{field.Name})"));
+            string assignments = string.Join(", ", value.Fields.Select(field => $"{RawIdentifier(field.Name)} = {ToNativeExpression(field, $"value.{Pascal(field.Name)}")}"));
+            string arguments = string.Join(", ", value.Fields.Select(field => FromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
             output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => new() {{ {assignments} }};");
             if (!HasDisposableHandleField(model, value)) output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => new({arguments});");
         }
+        output.AppendLine("    internal static byte ToNativeBool(bool value) => value ? (byte)1 : (byte)0;");
         output.AppendLine("    internal static int ToNative(int value) => value;");
         output.AppendLine("    internal static long ToNative(long value) => value;");
         output.AppendLine("    internal static uint ToNative(uint value) => value;");
@@ -292,6 +340,7 @@ internal static class Emit
         output.AppendLine("    internal static float ToNative(float value) => value;");
         output.AppendLine("    internal static double ToNative(double value) => value;");
         output.AppendLine("    internal static byte ToNative(byte value) => value;");
+        output.AppendLine("    internal static bool FromNativeBool(byte value) => value != 0;");
         output.AppendLine("    internal static int FromNative(int value) => value;");
         output.AppendLine("    internal static long FromNative(long value) => value;");
         output.AppendLine("    internal static uint FromNative(uint value) => value;");
@@ -310,7 +359,7 @@ internal static class Emit
         string[] input = Inputs(callback);
         string result = ResultParameter(callback) ?? string.Empty;
         if (IsSpanCall(input)) return EmitSpanMethod(service, operation, callback, returnType, signature);
-        if (input.Length == 1 && input[0].StartsWith("const ", StringComparison.Ordinal) && input[0].Contains('*', StringComparison.Ordinal)) return EmitBorrowedRequestMethod(model, service, operation, callback, returnType, signature, BindingModel.Bare(input[0]), result);
+        if (input.Length >= 1 && input[^1].StartsWith("const ", StringComparison.Ordinal) && input[^1].Contains('*', StringComparison.Ordinal)) return EmitBorrowedRequestMethod(model, service, operation, callback, returnType, signature, BindingModel.Bare(input[^1]), result, input[..^1]);
         return EmitDirectMethod(model, service, operation, callback, returnType, signature, input, result);
     }
 
@@ -348,20 +397,28 @@ internal static class Emit
         return output.ToString();
     }
 
-    private static string EmitBorrowedRequestMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature, string requestName, string result)
+    private static string EmitBorrowedRequestMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature, string requestName, string result, string[] leading)
     {
         Struct request = model.Structs[requestName];
         StringBuilder output = new();
         output.AppendLine($"    public {returnType} {Pascal(operation)}({signature})").AppendLine("    {");
+        for (int index = 0; index < leading.Length; index++) output.AppendLine($"        {RawType(leading[index])} raw{index} = NativeConversions.ToNative(arg{index});");
+        int requestIndex = leading.Length;
+        string requestArgument = $"arg{requestIndex}";
         List<string> closers = [];
         foreach (Field field in request.Fields)
         {
             if (BindingModel.Bare(field.Type) == "NativeUtf8Slice")
             {
                 string property = Pascal(field.Name);
-                output.AppendLine($"        byte[] {field.Name}Bytes = Encoding.UTF8.GetBytes(arg0.{property} ?? throw new ArgumentNullException(nameof(arg0))); ");
+                output.AppendLine($"        byte[] {field.Name}Bytes = Encoding.UTF8.GetBytes({requestArgument}.{property} ?? throw new ArgumentNullException(nameof({requestArgument}))); ");
                 output.AppendLine($"        fixed (byte* {field.Name}Pointer = {field.Name}Bytes)").AppendLine("        {");
                 closers.Add("        }");
+            }
+            if (BindingModel.Bare(field.Type) is "NativeByteSlice" or "NativeWritableByteSlice")
+            {
+                string property = Pascal(field.Name);
+                output.AppendLine($"        using MemoryHandle {field.Name}Pin = {requestArgument}.{property}.Pin();");
             }
         }
         for (int index = 0; index < request.Fields.Count; index++)
@@ -370,15 +427,19 @@ internal static class Emit
             if (!field.Type.Contains('*', StringComparison.Ordinal)) continue;
             if (index + 1 < request.Fields.Count && (request.Fields[index + 1].Name == $"{field.Name}_len" || request.Fields[index + 1].Name == $"{field.Name}_count"))
             {
-                output.AppendLine($"        using MemoryHandle {field.Name}Pin = arg0.{Pascal(field.Name)}.Pin();");
+                string rawElement = RawType(BindingModel.Bare(field.Type));
+                string property = Pascal(field.Name);
+                output.AppendLine($"        {rawElement}[] {field.Name}Raw = {requestArgument}.{property}.ToArray().Select(NativeConversions.ToNative).ToArray();");
+                output.AppendLine($"        fixed ({rawElement}* {field.Name}Pointer = {field.Name}Raw)").AppendLine("        {");
+                closers.Add("        }");
             }
         }
         foreach (Field field in request.Fields.Where(field => BindingModel.Bare(field.Type) == "NativeStructuredValue"))
         {
             string property = Pascal(field.Name);
-            output.AppendLine($"        using MemoryHandle {field.Name}NodesPin = arg0.{property}.Nodes.Pin();");
-            output.AppendLine($"        using MemoryHandle {field.Name}EdgesPin = arg0.{property}.Edges.Pin();");
-            output.AppendLine($"        using MemoryHandle {field.Name}Utf8Pin = arg0.{property}.Utf8.Pin();");
+            output.AppendLine($"        using MemoryHandle {field.Name}NodesPin = {requestArgument}.{property}.Nodes.Pin();");
+            output.AppendLine($"        using MemoryHandle {field.Name}EdgesPin = {requestArgument}.{property}.Edges.Pin();");
+            output.AppendLine($"        using MemoryHandle {field.Name}Utf8Pin = {requestArgument}.{property}.Utf8.Pin();");
         }
         output.AppendLine($"        {requestName} raw = new() {{");
         for (int index = 0; index < request.Fields.Count; index++)
@@ -386,14 +447,15 @@ internal static class Emit
             Field field = request.Fields[index];
             if (index > 0 && request.Fields[index - 1].Type.Contains('*', StringComparison.Ordinal) && (field.Name == $"{request.Fields[index - 1].Name}_len" || field.Name == $"{request.Fields[index - 1].Name}_count"))
             {
-                output.AppendLine($"            {field.Name} = (nuint)arg0.{Pascal(request.Fields[index - 1].Name)}.Length,"); continue;
+                output.AppendLine($"            {RawIdentifier(field.Name)} = (nuint){requestArgument}.{Pascal(request.Fields[index - 1].Name)}.Length,"); continue;
             }
-            string expression = BorrowedFieldExpression(field);
-            output.AppendLine($"            {field.Name} = {expression},");
+            string expression = BorrowedFieldExpression(field, requestArgument);
+            output.AppendLine($"            {RawIdentifier(field.Name)} = {expression},");
         }
         output.AppendLine("        };");
         if (!string.IsNullOrEmpty(result)) output.AppendLine($"        {RawType(result)} rawResult = default;");
-        string invocation = string.IsNullOrEmpty(result) ? "_native.context, &raw" : "_native.context, &raw, &rawResult";
+        string leadingInvocation = string.Join(", ", leading.Select((_, index) => $"raw{index}"));
+        string invocation = string.IsNullOrEmpty(result) ? $"_native.context{(leadingInvocation.Length == 0 ? string.Empty : ", " + leadingInvocation)}, &raw" : $"_native.context{(leadingInvocation.Length == 0 ? string.Empty : ", " + leadingInvocation)}, &raw, &rawResult";
         output.AppendLine($"        int status = _native.{operation}.Pointer({invocation});");
         output.AppendLine($"        NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(operation)}\", status);");
         if (string.IsNullOrEmpty(result)) output.AppendLine("        return;");
@@ -409,15 +471,21 @@ internal static class Emit
         return output.ToString();
     }
 
-    private static string BorrowedFieldExpression(Field field)
+    private static string BorrowedFieldExpression(Field field, string requestArgument)
     {
         string bare = BindingModel.Bare(field.Type);
         string property = Pascal(field.Name);
         if (bare == "NativeUtf8Slice") return $"new NativeUtf8Slice {{ bytes = {field.Name}Bytes.Length == 0 ? null : {field.Name}Pointer, len = (nuint){field.Name}Bytes.Length }}";
-        if (bare == "NativeStructuredValue") return $"new NativeStructuredValue {{ nodes = arg0.{property}.Nodes.Length == 0 ? null : (NativeStructuredValueNode*){field.Name}NodesPin.Pointer, node_count = (nuint)arg0.{property}.Nodes.Length, edges = arg0.{property}.Edges.Length == 0 ? null : (uint*){field.Name}EdgesPin.Pointer, edge_count = (nuint)arg0.{property}.Edges.Length, root = arg0.{property}.Root, utf8 = arg0.{property}.Utf8.Length == 0 ? null : (byte*){field.Name}Utf8Pin.Pointer, utf8_len = (nuint)arg0.{property}.Utf8.Length }}";
-        if (field.Type.Contains('*', StringComparison.Ordinal)) return $"arg0.{property}.Length == 0 ? null : ({RawType(bare)}*){field.Name}Pin.Pointer";
-        return $"NativeConversions.ToNative(arg0.{property})";
+        if (bare == "NativeByteSlice") return $"new NativeByteSlice {{ bytes = {requestArgument}.{property}.Length == 0 ? null : (byte*){field.Name}Pin.Pointer, len = (nuint){requestArgument}.{property}.Length }}";
+        if (bare == "NativeWritableByteSlice") return $"new NativeWritableByteSlice {{ bytes = {requestArgument}.{property}.Length == 0 ? null : (byte*){field.Name}Pin.Pointer, len = (nuint){requestArgument}.{property}.Length }}";
+        if (bare == "NativeStructuredValue") return $"new NativeStructuredValue {{ nodes = {requestArgument}.{property}.Nodes.Length == 0 ? null : (NativeStructuredValueNode*){field.Name}NodesPin.Pointer, node_count = (nuint){requestArgument}.{property}.Nodes.Length, edges = {requestArgument}.{property}.Edges.Length == 0 ? null : (uint*){field.Name}EdgesPin.Pointer, edge_count = (nuint){requestArgument}.{property}.Edges.Length, root = {requestArgument}.{property}.Root, utf8 = {requestArgument}.{property}.Utf8.Length == 0 ? null : (byte*){field.Name}Utf8Pin.Pointer, utf8_len = (nuint){requestArgument}.{property}.Utf8.Length }}";
+        if (field.Type.Contains('*', StringComparison.Ordinal)) return $"{requestArgument}.{property}.Length == 0 ? null : {field.Name}Pointer";
+        if (bare is "bool" or "_Bool") return $"NativeConversions.ToNativeBool({requestArgument}.{property})";
+        return $"NativeConversions.ToNative({requestArgument}.{property})";
     }
+
+    private static string ToNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) is "bool" or "_Bool" ? $"ToNativeBool({value})" : $"ToNative({value})";
+    private static string FromNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) is "bool" or "_Bool" ? $"FromNativeBool({value})" : $"FromNative({value})";
 
     private static string[] Inputs(Callback callback)
     {
@@ -431,11 +499,11 @@ internal static class Emit
         return !last.StartsWith("const ", StringComparison.Ordinal) && last.Contains('*', StringComparison.Ordinal) && BindingModel.Bare(last) != "void" ? BindingModel.Bare(last) : null;
     }
     private static bool IsSpanCall(string[] input) => input.Length == 2 && input[0].StartsWith("const ", StringComparison.Ordinal) && input[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(input[1]) == "size_t";
-    private static bool HasBorrowedFields(Struct value) => value.Fields.Any(field => field.Type.Contains('*', StringComparison.Ordinal) || BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeStructuredValue");
+    private static bool HasBorrowedFields(Struct value) => value.Fields.Any(field => field.Type.Contains('*', StringComparison.Ordinal) || BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue");
     private static bool HasDisposableHandleField(BindingModel model, Struct value) => value.Fields.Any(field => IsDisposableHandle(model, BindingModel.Bare(field.Type)));
     private static (string Service, string Operation) DestroyFor(BindingModel model, string handle) => model.Services.SelectMany(service => service.Operations.Select(operation => (service, operation))).First(pair => IsDestroy(model.Callbacks[pair.operation.Callback]) && BindingModel.Bare(model.Callbacks[pair.operation.Callback].Parameters[1]) == handle) is var found ? (found.service.Name, found.operation.Name) : throw new InvalidOperationException($"no destroy operation found for {handle}");
 
-    private static bool IsSafeValue(Struct value) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeStructuredValue" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal);
+    private static bool IsSafeValue(Struct value) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal);
     private static IReadOnlyList<(Field Field, string Type)> SafeFields(Struct value, BindingModel model)
     {
         List<(Field, string)> fields = [];
@@ -443,6 +511,8 @@ internal static class Emit
         {
             Field field = value.Fields[index];
             if (BindingModel.Bare(field.Type) == "NativeUtf8Slice") { fields.Add((field, "string")); continue; }
+            if (BindingModel.Bare(field.Type) == "NativeByteSlice") { fields.Add((field, "ReadOnlyMemory<byte>")); continue; }
+            if (BindingModel.Bare(field.Type) == "NativeWritableByteSlice") { fields.Add((field, "Memory<byte>")); continue; }
             if (BindingModel.Bare(field.Type) == "NativeStructuredValue") { fields.Add((field, "UiValue")); continue; }
             if (field.Type.Contains('*', StringComparison.Ordinal))
             {
@@ -467,25 +537,27 @@ internal static class Emit
         if (args.Length == 2 && args[0].StartsWith("const ", StringComparison.Ordinal) && args[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[1]) == "size_t") return $"ReadOnlySpan<{SafeType(model, BindingModel.Bare(args[0]))}> values";
         return string.Join(", ", args.Select((type, index) => $"{SafeType(model, BindingModel.Bare(type))} arg{index}"));
     }
-    private static string SafeType(string native) => native switch { "int" or "int32_t" => "int", "int64_t" => "long", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
+    private static string SafeType(string native) => native switch { "bool" or "_Bool" => "bool", "int" or "int32_t" => "int", "int64_t" => "long", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
+    private static string SafeEnumMember(string enumName, string member) => member.StartsWith($"{enumName}_", StringComparison.Ordinal) ? member[(enumName.Length + 1)..] : member;
     private static string SafeType(BindingModel model, string native) => IsDisposableHandle(model, native) ? OwnerType(native) : SafeType(native);
     private static string RawType(string type)
     {
-        string value = type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Trim(); int pointers = value.Count(character => character == '*'); value = value.TrimEnd('*').Trim();
-        string mapped = value switch { "void" => "void", "int32_t" or "int" => "int", "int64_t" => "long", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", _ => value };
+        string value = type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Replace("enum ", "", StringComparison.Ordinal).Trim(); int pointers = value.Count(character => character == '*'); value = value.TrimEnd('*').Trim();
+        string mapped = value switch { "void" => "void", "bool" or "_Bool" => "byte", "int32_t" or "int" => "int", "int64_t" => "long", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", _ => value };
         return mapped + new string('*', pointers);
     }
     private static string RawFieldDeclaration(Field field)
     {
         const string marker = " (*)(";
-        if (!field.Type.Contains(marker, StringComparison.Ordinal)) return $"internal {RawType(field.Type)} {field.Name};";
+        if (!field.Type.Contains(marker, StringComparison.Ordinal)) return $"internal {RawType(field.Type)} {RawIdentifier(field.Name)};";
         int markerIndex = field.Type.IndexOf(marker, StringComparison.Ordinal);
         string returnType = field.Type[..markerIndex];
         string parameters = field.Type[(markerIndex + marker.Length)..^1];
         string[] rawParameters = parameters == "void" ? [] : parameters.Split(", ", StringSplitOptions.TrimEntries);
-        return $"internal delegate* unmanaged[Cdecl]<{string.Join(", ", rawParameters.Select(RawType).Append(RawType(returnType)))}> {field.Name};";
+        return $"internal delegate* unmanaged[Cdecl]<{string.Join(", ", rawParameters.Select(RawType).Append(RawType(returnType)))}> {RawIdentifier(field.Name)};";
     }
     private static string Pascal(string value) => string.Concat(value.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
+    private static string RawIdentifier(string value) => value is "base" ? "@base" : value;
     private static string SafeServiceName(string service) => service == "Rng" ? "Random" : service;
     private static bool IsDestroy(Callback callback) => callback.Parameters.Count == 2 && BindingModel.Bare(callback.Parameters[1]).EndsWith("Handle", StringComparison.Ordinal) && callback.Name.Contains("Destroy", StringComparison.Ordinal);
     private static IEnumerable<string> DisposableHandleTypes(BindingModel model) => model.Services.SelectMany(service => service.Operations.Select(operation => model.Callbacks[operation.Callback])).Where(IsDestroy).Select(callback => BindingModel.Bare(callback.Parameters[1])).Distinct(StringComparer.Ordinal);

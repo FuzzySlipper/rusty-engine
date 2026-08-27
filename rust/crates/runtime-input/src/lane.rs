@@ -1,6 +1,6 @@
 use product_model::{
-    ControllerAxis, ControllerButton, InputAxis, InputEdge, InputTrigger, IntentValueKind,
-    KeyboardControl, PointerButton,
+    ControllerAxis, ControllerButton, InputAxis, InputEdge, IntentValueKind, KeyboardControl,
+    PointerButton,
 };
 use runtime_lifecycle::{RuntimeLifecycle, RuntimePhase, RuntimePhaseToken, SimulationStep};
 
@@ -9,7 +9,7 @@ use crate::{
     AxisValue, ButtonSnapshot, CompiledInputMappings, InputClearReason, InputContext, InputFrame,
     IntentPhase, IntentProvenance, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding,
     RuntimeInputError, RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress,
-    RuntimeIntentEnvelope, RuntimeIntentValue, MAX_PENDING_INGRESS,
+    RuntimeInputTrigger, RuntimeIntentEnvelope, RuntimeIntentValue, MAX_PENDING_INGRESS,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -375,16 +375,16 @@ impl RuntimeInputLane {
         for (index, mapping) in self.mappings.mappings().iter().enumerate() {
             if !matches!(
                 mapping.trigger(),
-                InputTrigger::Key {
+                RuntimeInputTrigger::Key {
                     edge: InputEdge::Held,
                     ..
-                } | InputTrigger::PointerButton {
+                } | RuntimeInputTrigger::PointerButton {
                     edge: InputEdge::Held,
                     ..
-                } | InputTrigger::ControllerButton {
+                } | RuntimeInputTrigger::ControllerButton {
                     edge: InputEdge::Held,
                     ..
-                } | InputTrigger::ControllerAxis { .. }
+                } | RuntimeInputTrigger::ControllerAxis { .. }
             ) {
                 continue;
             }
@@ -549,13 +549,13 @@ fn snapshot_buttons<T: Copy + Ord>(entries: &[(T, ButtonState)]) -> Vec<ButtonSn
 }
 
 fn trigger_value(
-    trigger: &InputTrigger,
+    trigger: &RuntimeInputTrigger,
     frame: &InputFrame,
 ) -> Result<Option<(RuntimeIntentValue, IntentPhase)>, RuntimeInputError> {
     let context_matches =
-        |context: Option<&String>| context.is_none_or(|value| value == frame.context().as_str());
+        |context: Option<&InputContext>| context.is_none_or(|value| value == frame.context());
     match trigger {
-        InputTrigger::Key {
+        RuntimeInputTrigger::Key {
             code,
             edge,
             chord,
@@ -570,7 +570,7 @@ fn trigger_value(
             }
             Ok(digital_trigger(keyboard_state(frame, *code), *edge))
         }
-        InputTrigger::PointerButton {
+        RuntimeInputTrigger::PointerButton {
             button,
             edge,
             context,
@@ -580,7 +580,7 @@ fn trigger_value(
             }
             Ok(digital_trigger(pointer_state(frame, *button), *edge))
         }
-        InputTrigger::ControllerButton {
+        RuntimeInputTrigger::ControllerButton {
             button,
             edge,
             context,
@@ -590,7 +590,7 @@ fn trigger_value(
             }
             Ok(digital_trigger(controller_state(frame, *button), *edge))
         }
-        InputTrigger::PointerAxis { axis, context } => {
+        RuntimeInputTrigger::PointerAxis { axis, context } => {
             if !context_matches(context.as_ref()) {
                 return Ok(None);
             }
@@ -599,7 +599,7 @@ fn trigger_value(
                 InputAxis::Y => frame.pointer().1,
             })
         }
-        InputTrigger::Wheel { axis, context } => {
+        RuntimeInputTrigger::Wheel { axis, context } => {
             if !context_matches(context.as_ref()) {
                 return Ok(None);
             }
@@ -608,7 +608,7 @@ fn trigger_value(
                 InputAxis::Y => frame.wheel().1,
             })
         }
-        InputTrigger::ControllerAxis { axis, context } => {
+        RuntimeInputTrigger::ControllerAxis { axis, context } => {
             if !context_matches(context.as_ref()) {
                 return Ok(None);
             }
@@ -620,15 +620,15 @@ fn trigger_value(
 }
 
 fn physical_trigger_value(
-    trigger: &InputTrigger,
+    trigger: &RuntimeInputTrigger,
     fact: &RuntimeInputFact,
     lane: &RuntimeInputLane,
     was_active: &mut bool,
 ) -> Result<Option<(RuntimeIntentValue, IntentPhase)>, RuntimeInputError> {
     let context_matches =
-        |context: Option<&String>| context.is_none_or(|value| value == lane.context.as_str());
+        |context: Option<&InputContext>| context.is_none_or(|value| value == &lane.context);
     match trigger {
-        InputTrigger::Key {
+        RuntimeInputTrigger::Key {
             code,
             edge,
             chord,
@@ -638,7 +638,7 @@ fn physical_trigger_value(
                 held_key(lane, *code) && chord.iter().all(|control| held_key(lane, *control));
             transition_value(*edge, was_active, active)
         }
-        InputTrigger::PointerButton {
+        RuntimeInputTrigger::PointerButton {
             button,
             edge,
             context,
@@ -648,7 +648,7 @@ fn physical_trigger_value(
             let active = held_pointer(lane, *button);
             transition_value(*edge, was_active, active)
         }
-        InputTrigger::ControllerButton {
+        RuntimeInputTrigger::ControllerButton {
             button,
             edge,
             context,
@@ -658,7 +658,7 @@ fn physical_trigger_value(
             let active = held_controller(lane, *button);
             transition_value(*edge, was_active, active)
         }
-        InputTrigger::PointerAxis { axis, context }
+        RuntimeInputTrigger::PointerAxis { axis, context }
             if let RuntimeInputFact::PointerDelta { x, y } = fact
                 && context_matches(context.as_ref()) =>
         {
@@ -667,7 +667,7 @@ fn physical_trigger_value(
                 InputAxis::Y => *y,
             })
         }
-        InputTrigger::Wheel { axis, context }
+        RuntimeInputTrigger::Wheel { axis, context }
             if let RuntimeInputFact::Wheel { x, y } = fact
                 && context_matches(context.as_ref()) =>
         {
@@ -678,7 +678,7 @@ fn physical_trigger_value(
         }
         // Controller axes are persistent state. A snapshot emits every
         // observed value (including zero), avoiding a duplicate on ingress.
-        InputTrigger::ControllerAxis { .. }
+        RuntimeInputTrigger::ControllerAxis { .. }
             if matches!(fact, RuntimeInputFact::ControllerAxis { .. }) =>
         {
             Ok(None)

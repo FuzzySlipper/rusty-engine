@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use render_model::{RenderFrameDiff, RenderMetadata, Transform, JSON_SAFE_U64_MAX};
+use render_model::{RenderFrameDiff, RenderLayer, RenderMetadata, Transform, JSON_SAFE_U64_MAX};
 use serde::Deserialize;
 
 use crate::{
@@ -47,6 +47,7 @@ pub struct RuntimeAppearanceFact {
     pub appearance: String,
     pub transform: Transform,
     pub visible: bool,
+    pub layer: RenderLayer,
 }
 
 /// Engine-owned resolver and retained projection state for one product runtime.
@@ -71,6 +72,19 @@ impl RuntimeAppearanceProjector {
         appearance: Appearance,
     ) -> Option<Appearance> {
         self.catalog.insert_appearance(identity, appearance)
+    }
+
+    /// Removes one admitted runtime appearance. Existing projected objects are
+    /// still removed through the next complete product snapshot; callers may
+    /// not retain or operate renderer handles directly.
+    pub fn remove_appearance(&mut self, identity: &str) -> Option<Appearance> {
+        self.catalog.appearances.remove(identity)
+    }
+
+    /// Mutates an already admitted appearance definition. The next complete
+    /// snapshot remains the only path that changes retained renderer objects.
+    pub fn appearance_mut(&mut self, identity: &str) -> Option<&mut Appearance> {
+        self.catalog.appearances.get_mut(identity)
     }
 
     /// Mutable resource access for direct trusted product admission.
@@ -110,6 +124,7 @@ impl RuntimeAppearanceProjector {
                 parent: None,
                 transform: fact.transform,
                 visible: fact.visible,
+                layer: fact.layer,
                 metadata: RenderMetadata {
                     source_entity: Some(fact.object_id),
                     source_scene_node: None,
@@ -179,6 +194,7 @@ mod tests {
             appearance: "appearance/trial".to_owned(),
             transform: Transform::IDENTITY,
             visible: true,
+            layer: RenderLayer::Scene,
         }
     }
 

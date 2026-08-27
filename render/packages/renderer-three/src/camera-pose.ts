@@ -6,6 +6,12 @@ export interface RendererThreeCameraPose {
   readonly yawDegrees: number;
 }
 
+export interface RendererThreeCameraBasis {
+  readonly forward: readonly [number, number, number];
+  readonly right: readonly [number, number, number];
+  readonly up: readonly [number, number, number];
+}
+
 const DEGREES_TO_RADIANS = Math.PI / 180;
 
 /**
@@ -25,4 +31,14 @@ export function applyRendererThreeCameraPose(
   camera.rotation.x = pose.pitchDegrees * DEGREES_TO_RADIANS;
   camera.rotation.y = -pose.yawDegrees * DEGREES_TO_RADIANS;
   camera.rotation.z = 0;
+}
+
+/** Applies an explicit Engine camera basis without exposing Three to products. */
+export function applyRendererThreeCameraBasis(
+  camera: THREE.Camera,
+  basis: RendererThreeCameraBasis,
+): void {
+  camera.up.set(...basis.up).normalize();
+  const forward = camera.position.clone().set(...basis.forward).normalize();
+  camera.lookAt(camera.position.clone().add(forward));
 }

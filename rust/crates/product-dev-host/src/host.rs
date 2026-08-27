@@ -16,9 +16,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    CanonicalU64, ProductDevBundle, ProductDevHostError, ProductDevInputBatch,
-    ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevOperationResult,
-    ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
+    CanonicalU64, ProductDevBundle, ProductDevControlOperation, ProductDevHostError,
+    ProductDevInputBatch, ProductDevLifecycleOperation, ProductDevOperationKind,
+    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevTimelineCompletion, MAX_CONNECTIONS, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
     MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
     PRODUCT_DEV_RUNTIME_BASE_PATH,
@@ -28,18 +28,30 @@ const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const SSE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-/// Configuration for the fixed loopback development host.
+/// Configuration for the fixed development host.
 #[derive(Debug, Clone)]
 pub struct ProductDevHostConfig {
-    /// `0` asks the operating system for a free loopback port. No address
-    /// option exists: this host never binds a non-loopback interface.
+    /// `0` asks the operating system for a free port.
     pub port: u16,
     pub bundle: ProductDevBundle,
+    bind_host: Ipv4Addr,
 }
 
 impl ProductDevHostConfig {
     pub fn new(port: u16, bundle: ProductDevBundle) -> Self {
-        Self { port, bundle }
+        Self {
+            port,
+            bundle,
+            bind_host: Ipv4Addr::LOCALHOST,
+        }
+    }
+
+    /// Selects an explicit trusted development-network listener. Loopback is
+    /// the default; `0.0.0.0` is intended for a foreground owner such as
+    /// den-serve that publishes the resulting LAN origin.
+    pub fn with_bind_host(mut self, bind_host: Ipv4Addr) -> Self {
+        self.bind_host = bind_host;
+        self
     }
 }
 
@@ -51,7 +63,7 @@ impl ProductDevHost {
         runtime: R,
         config: ProductDevHostConfig,
     ) -> Result<RunningProductDevHost, ProductDevHostError> {
-        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, config.port)))
+        let listener = TcpListener::bind(SocketAddr::from((config.bind_host, config.port)))
             .map_err(|error| ProductDevHostError::io("DEV_HOST_BIND", error))?;
         listener
             .set_nonblocking(true)
@@ -65,7 +77,8 @@ impl ProductDevHost {
             runtime: Mutex::new(runtime),
             outputs: Mutex::new(OutputBus::default()),
             shutdown: Arc::clone(&shutdown),
-            expected_host: address.to_string(),
+            bind_host: config.bind_host,
+            expected_port: address.port(),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
         });
@@ -142,7 +155,8 @@ struct HostState<R> {
     runtime: Mutex<R>,
     outputs: Mutex<OutputBus>,
     shutdown: Arc<AtomicBool>,
-    expected_host: String,
+    bind_host: Ipv4Addr,
+    expected_port: u16,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
 }
@@ -205,13 +219,13 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
             return;
         }
     };
-    if !has_exact_loopback_origin(&request, &state.expected_host) {
+    if !has_admitted_origin(&request, state.bind_host, state.expected_port) {
         let _ = write_response(
             &mut stream,
             HttpResponse::error(
                 400,
                 "DEV_HOST_ORIGIN",
-                "Host or Origin is not this loopback development origin",
+                "Host or Origin is not this development host origin",
             ),
         );
         return;
@@ -273,6 +287,12 @@ fn dispatch_request<R: ProductDevRuntime>(
             &request.body,
             ProductDevLifecycleOperation::ReportFault,
         ),
+        "/__rusty/product/runtime/control/replace" => {
+            invoke_control(state, &request.body, ProductDevControlOperation::Replace)
+        }
+        "/__rusty/product/runtime/control/release" => {
+            invoke_control(state, &request.body, ProductDevControlOperation::Release)
+        }
         "/__rusty/product/runtime/input" => invoke_input(state, &request.body),
         "/__rusty/product/runtime/advance-realtime" => invoke_realtime(state, &request.body),
         "/__rusty/product/runtime/admit-demand-step" => invoke_demand(state, &request.body),
@@ -287,16 +307,34 @@ fn invoke_lifecycle<R: ProductDevRuntime>(
     body: &[u8],
     operation: ProductDevLifecycleOperation,
 ) -> HttpResponse {
-    if decode_empty(body).is_err() {
-        return HttpResponse::error(
-            400,
-            "DEV_HOST_REQUEST_BODY",
-            "lifecycle route requires exactly {} JSON",
-        );
-    }
+    let request: LifecycleRequest = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     call_runtime(
         state,
-        |runtime| runtime.lifecycle(operation),
+        |runtime| runtime.lifecycle_with_binding(operation, request.runtime),
+        |error| {
+            ProductDevOperationResult::rejected(
+                operation.operation_kind(),
+                format!("{}: {}", error.code(), error.diagnostic()),
+            )
+        },
+    )
+}
+
+fn invoke_control<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    body: &[u8],
+    operation: ProductDevControlOperation,
+) -> HttpResponse {
+    let request: ControlRequest = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    call_runtime(
+        state,
+        |runtime| runtime.control(operation, request.runtime),
         |error| {
             ProductDevOperationResult::rejected(
                 operation.operation_kind(),
@@ -550,6 +588,13 @@ struct OutputBus {
     next_id: u64,
     events: VecDeque<OutputEvent>,
     floor_cursor: u64,
+    active_binding: Option<crate::ProductDevRuntimeBinding>,
+    pending_baseline: Option<PendingBaseline>,
+}
+
+struct PendingBaseline {
+    binding: crate::ProductDevRuntimeBinding,
+    outputs: Vec<ProductDevRuntimeOutput>,
 }
 
 struct OutputEvent {
@@ -590,15 +635,71 @@ fn push_outputs(
         ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
     })?;
     for output in outputs {
-        let encoded = serde_json::to_string(&output).map_err(|error| {
-            ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string())
-        })?;
-        if encoded.len() > MAX_OUTPUT_EVENT_BYTES {
+        if let Some(binding) = output.binding_marker() {
+            if bus.pending_baseline.is_some() {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_BASELINE",
+                    "a new binding arrived before the previous baseline completed",
+                ));
+            }
+            bus.pending_baseline = Some(PendingBaseline {
+                binding,
+                outputs: vec![output],
+            });
+            continue;
+        }
+        if let Some(binding) = output.complete_baseline_marker() {
+            let Some(pending) = bus.pending_baseline.take() else {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_BASELINE",
+                    "a baseline completion arrived without its binding",
+                ));
+            };
+            if pending.binding != binding {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_BASELINE",
+                    "a baseline completion does not match its binding",
+                ));
+            }
+            append_output_events(&mut bus, pending.outputs)?;
+            bus.active_binding = Some(binding);
+            continue;
+        }
+        if let Some(pending) = &mut bus.pending_baseline {
+            pending.outputs.push(output);
+            continue;
+        }
+        if bus.active_binding.is_none() {
             return Err(ProductDevHostError::new(
-                "DEV_HOST_OUTPUT_BOUNDS",
-                "output event exceeds host bound",
+                "DEV_HOST_OUTPUT_BASELINE",
+                "incremental output arrived before a complete binding baseline",
             ));
         }
+        append_output_events(&mut bus, vec![output])?;
+    }
+    Ok(())
+}
+
+fn append_output_events(
+    bus: &mut OutputBus,
+    outputs: Vec<ProductDevRuntimeOutput>,
+) -> Result<(), ProductDevHostError> {
+    let encoded = outputs
+        .into_iter()
+        .map(|output| {
+            let encoded = serde_json::to_string(&output).map_err(|error| {
+                ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string())
+            })?;
+            if encoded.len() > MAX_OUTPUT_EVENT_BYTES {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_BOUNDS",
+                    "output event exceeds host bound",
+                ));
+            }
+            Ok(encoded)
+        })
+        .collect::<Result<Vec<_>, ProductDevHostError>>()?;
+    for json in encoded {
         let id = bus.next_id.checked_add(1).ok_or_else(|| {
             ProductDevHostError::new("DEV_HOST_OUTPUT_ID", "output sequence exhausted")
         })?;
@@ -608,7 +709,7 @@ fn push_outputs(
                 bus.floor_cursor = evicted.id;
             }
         }
-        bus.events.push_back(OutputEvent { id, json: encoded });
+        bus.events.push_back(OutputEvent { id, json });
     }
     Ok(())
 }
@@ -741,10 +842,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
         let value = value.trim().to_owned();
         if name.is_empty()
             || headers.insert(name.clone(), value).is_some()
-            || matches!(
-                name.as_str(),
-                "cookie" | "authorization" | "transfer-encoding"
-            )
+            || name == "transfer-encoding"
         {
             return Err(HttpResponse::error(
                 400,
@@ -833,15 +931,22 @@ fn valid_request_path(path: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'-' | b'_'))
 }
 
-fn has_exact_loopback_origin(request: &HttpRequest, expected_host: &str) -> bool {
-    request
-        .headers
-        .get("host")
-        .is_some_and(|host| host == expected_host)
+fn has_admitted_origin(request: &HttpRequest, bind_host: Ipv4Addr, expected_port: u16) -> bool {
+    let Some(host) = request.headers.get("host") else {
+        return false;
+    };
+    let host_admitted = if bind_host.is_loopback() {
+        host == &format!("{bind_host}:{expected_port}")
+    } else {
+        host.rsplit_once(':').is_some_and(|(name, port)| {
+            !name.is_empty() && port.parse::<u16>() == Ok(expected_port)
+        })
+    };
+    host_admitted
         && request
             .headers
             .get("origin")
-            .is_none_or(|origin| origin == &format!("http://{expected_host}"))
+            .is_none_or(|origin| origin == &format!("http://{host}"))
 }
 
 struct HttpResponse {
@@ -907,6 +1012,19 @@ fn write_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EmptyRequest {}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LifecycleRequest {
+    #[serde(default)]
+    runtime: Option<crate::ProductDevRuntimeBinding>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ControlRequest {
+    runtime: crate::ProductDevRuntimeBinding,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

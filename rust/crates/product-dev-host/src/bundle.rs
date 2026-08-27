@@ -31,6 +31,8 @@ pub struct ProductDevRendererResource {
 pub enum ProductDevRendererResourceKind {
     Texture,
     Mesh,
+    Audio,
+    AnimatedMesh,
 }
 
 impl ProductDevRendererResource {
@@ -103,6 +105,70 @@ impl ProductDevRendererResource {
         })
     }
 
+    pub fn admit_audio(
+        path: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Result<Self, ProductDevHostError> {
+        use sha2::{Digest, Sha256};
+
+        let path = renderer_path(path.into(), ".wav")?;
+        if bytes.len() < 44 || bytes.get(..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE")
+        {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RENDERER_AUDIO",
+                "audio resource is not an admitted RIFF/WAVE body",
+            ));
+        }
+        ProductDevBundleEntry::new(path.clone(), "audio/wav", bytes.clone())?;
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let identity = format!(
+            "audio-resource/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: ProductDevRendererResourceKind::Audio,
+            identity,
+            content_hash,
+            path,
+            bytes,
+        })
+    }
+
+    /// The C# animation bridge has already admitted and inspected this exact
+    /// immutable GLB. The dev host retains it as a separately typed preload so
+    /// the browser can only realize it through the Engine animated-mesh host.
+    pub fn admit_animated_mesh(
+        path: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Result<Self, ProductDevHostError> {
+        use sha2::{Digest, Sha256};
+
+        let path = renderer_path(path.into(), ".glb")?;
+        if bytes.len() < 20 || bytes.get(..4) != Some(b"glTF") {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RENDERER_ANIMATED_MESH",
+                "animated mesh preload is not a binary GLB resource",
+            ));
+        }
+        ProductDevBundleEntry::new(path.clone(), "model/gltf-binary", bytes.clone())?;
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let identity = format!(
+            "animated-mesh-resource/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: ProductDevRendererResourceKind::AnimatedMesh,
+            identity,
+            content_hash,
+            path,
+            bytes,
+        })
+    }
+
     pub const fn kind(&self) -> ProductDevRendererResourceKind {
         self.kind
     }
@@ -127,6 +193,8 @@ impl ProductDevRendererResource {
         match self.kind {
             ProductDevRendererResourceKind::Texture => "image/png",
             ProductDevRendererResourceKind::Mesh => "application/octet-stream",
+            ProductDevRendererResourceKind::Audio => "audio/wav",
+            ProductDevRendererResourceKind::AnimatedMesh => "model/gltf-binary",
         }
     }
 
@@ -349,6 +417,7 @@ fn is_allowed_content_type(value: &str) -> bool {
             | "image/png"
             | "image/jpeg"
             | "audio/wav"
+            | "model/gltf-binary"
             | "application/octet-stream"
             | "application/wasm"
     )

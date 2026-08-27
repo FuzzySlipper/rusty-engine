@@ -45,7 +45,9 @@ architecture decision.
 
 ## Generated native API
 
-- `rust/crates/csharp-product-runtime/src/native_api.rs` is the sole ABI source.
+- `rust/crates/csharp-engine-abi` is the sole ABI declaration source;
+  `rust/crates/csharp-engine-services` owns the concrete Engine bridges, while
+  `csharp-product-runtime` owns product binding and lifetimes.
 - `scripts/generate-csharp-native-bindings.sh` runs pinned cbindgen and
   ClangSharp and emits the C header plus raw/idiomatic C# API into a product's
   ignored `obj/Generated` directory.

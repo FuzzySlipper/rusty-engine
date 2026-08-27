@@ -12,6 +12,7 @@ import type {
   RustyApplicationRuntimeIntentValue,
   RustyApplicationUiProjectionEnvelope,
 } from '@rusty-engine/application-host';
+import { validateRendererViewComposition, type RendererViewComposition } from '@rusty-engine/render-contracts';
 import type {
   ProductBrowserLifecycleOperation,
   ProductBrowserRuntimeAdapter,
@@ -115,6 +116,7 @@ interface ProductBrowserWireRecord {
   readonly detail?: unknown;
   readonly runtime?: unknown;
   readonly frame?: unknown;
+  readonly composition?: unknown;
   readonly envelope?: unknown;
   readonly artifact?: unknown;
   readonly sequence?: unknown;
@@ -1111,6 +1113,9 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
     case 'frame':
       requireKnownFields(record, ['kind', 'frame'], 'frame output');
       return { kind: 'frame', frame: decodeFrame(record.frame, 'frame') };
+    case 'view-composition':
+      requireKnownFields(record, ['kind', 'composition'], 'view composition output');
+      return { kind: 'view-composition', composition: decodeViewComposition(record.composition) };
     case 'presentation':
       requireKnownFields(record, ['kind', 'frame'], 'presentation output');
       return { kind: 'presentation', frame: decodeFrame(record.frame, 'presentation') };
@@ -1123,6 +1128,10 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
     default:
       throw new TypeError('runtime output kind is not admitted');
   }
+}
+
+function decodeViewComposition(value: unknown): RendererViewComposition {
+  return validateRendererViewComposition(value as RendererViewComposition);
 }
 
 function decodeFrame(value: unknown, name: string): RustyApplicationFrame | RustyApplicationPresentationFrame {

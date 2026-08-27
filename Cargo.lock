@@ -534,19 +534,26 @@ version = "0.1.0"
 name = "csharp-engine-services"
 version = "0.1.0"
 dependencies = [
+ "asset-import",
  "core-ids",
  "core-math",
  "core-space",
  "csharp-engine-abi",
  "engine-spatial",
  "entity-state",
+ "gameplay-mechanics",
+ "render-host-contracts",
  "render-model",
+ "render-presentation",
  "render-projection",
  "runtime-lifecycle",
  "runtime-ui",
  "serde_json",
+ "sha2",
  "svc-pathfinding",
  "svc-rng",
+ "svc-spatial",
+ "tempfile",
 ]
 
 [[package]]
@@ -557,8 +564,10 @@ dependencies = [
  "csharp-engine-services",
  "libloading",
  "product-dev-host",
+ "product-model",
  "runtime-input",
  "runtime-lifecycle",
+ "serde_json",
 ]
 
 [[package]]
@@ -2645,6 +2654,7 @@ dependencies = [
 name = "product-dev-host"
 version = "0.1.0"
 dependencies = [
+ "render-host-contracts",
  "render-model",
  "render-presentation",
  "runtime-input",
@@ -2653,6 +2663,7 @@ dependencies = [
  "runtime-ui",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

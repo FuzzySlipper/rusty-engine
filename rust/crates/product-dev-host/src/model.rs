@@ -91,6 +91,31 @@ pub enum ProductDevLifecycleOperation {
     ReportFault,
 }
 
+/// Closed host control vocabulary. These operations change only which current
+/// controller binding may submit later input; product simulation meaning stays
+/// with the downstream product.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductDevControlOperation {
+    Replace,
+    Release,
+}
+
+impl ProductDevControlOperation {
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Release => "release",
+        }
+    }
+
+    pub const fn operation_kind(self) -> ProductDevOperationKind {
+        match self {
+            Self::Replace => ProductDevOperationKind::ReplaceControl,
+            Self::Release => ProductDevOperationKind::ReleaseControl,
+        }
+    }
+}
+
 impl ProductDevLifecycleOperation {
     pub const fn as_wire(self) -> &'static str {
         match self {
@@ -125,6 +150,8 @@ pub enum ProductDevOperationKind {
     Restart,
     Shutdown,
     ReportFault,
+    ReplaceControl,
+    ReleaseControl,
     AdvanceRealtime,
     AdmitDemandStep,
     AdmitExternalStep,
@@ -199,6 +226,11 @@ impl ProductDevRuntimeReadout {
 
     pub const fn runtime(&self) -> ProductDevRuntimeBinding {
         self.runtime
+    }
+
+    /// Lifecycle mode selected by the standard runtime configuration.
+    pub const fn mode(&self) -> ProductDevRuntimeMode {
+        self.mode
     }
 }
 
@@ -550,7 +582,9 @@ pub struct ProductDevRuntimeOutput {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ProductDevRuntimeOutputWire {
     Binding { runtime: ProductDevRuntimeBinding },
+    CompleteBaseline { runtime: ProductDevRuntimeBinding },
     Frame { frame: Value },
+    ViewComposition { composition: Value },
     Presentation { frame: Value },
     UiProjection { envelope: Value },
     RuntimeReadout { readout: ProductDevRuntimeReadout },
@@ -568,6 +602,25 @@ impl ProductDevRuntimeOutput {
         })?)?;
         Ok(Self {
             wire: ProductDevRuntimeOutputWire::Frame { frame },
+        })
+    }
+    /// Carries one Engine-owned camera/view composition to the existing
+    /// renderer host. Products publish typed facts; browser realization and
+    /// resize observation remain behind this fixed Engine output lane.
+    pub fn view_composition(
+        composition: &render_host_contracts::RendererViewComposition,
+    ) -> Result<Self, ProductDevHostError> {
+        composition.validate().map_err(|_| {
+            ProductDevHostError::new("DEV_HOST_VIEW_COMPOSITION", "view composition is invalid")
+        })?;
+        let composition = serde_json::to_value(composition).map_err(|_| {
+            ProductDevHostError::new(
+                "DEV_HOST_VIEW_COMPOSITION",
+                "view composition could not be encoded",
+            )
+        })?;
+        Ok(Self {
+            wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
         })
     }
     pub fn presentation(
@@ -605,6 +658,28 @@ impl ProductDevRuntimeOutput {
     pub fn runtime_readout(readout: ProductDevRuntimeReadout) -> Self {
         Self {
             wire: ProductDevRuntimeOutputWire::RuntimeReadout { readout },
+        }
+    }
+    /// Marks the end of one complete current-binding projection. The host
+    /// buffers its preceding binding-tagged facts and exposes them together;
+    /// later facts for that binding are incremental.
+    pub fn complete_baseline(runtime: ProductDevRuntimeBinding) -> Self {
+        Self {
+            wire: ProductDevRuntimeOutputWire::CompleteBaseline { runtime },
+        }
+    }
+
+    pub(crate) const fn binding_marker(&self) -> Option<ProductDevRuntimeBinding> {
+        match &self.wire {
+            ProductDevRuntimeOutputWire::Binding { runtime } => Some(*runtime),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn complete_baseline_marker(&self) -> Option<ProductDevRuntimeBinding> {
+        match &self.wire {
+            ProductDevRuntimeOutputWire::CompleteBaseline { runtime } => Some(*runtime),
+            _ => None,
         }
     }
 }
@@ -708,6 +783,35 @@ pub trait ProductDevRuntime: Send + 'static {
         &mut self,
         operation: ProductDevLifecycleOperation,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError>;
+
+    /// The standard host supplies the caller's observed control binding when
+    /// it has one. Legacy runtime owners retain their existing lifecycle
+    /// implementation; binding-aware owners can reject stale control actions
+    /// without teaching the host any product/session policy.
+    fn lifecycle_with_binding(
+        &mut self,
+        operation: ProductDevLifecycleOperation,
+        _binding: Option<ProductDevRuntimeBinding>,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.lifecycle(operation)
+    }
+
+    /// Binding-aware runtimes use this narrow path for controller replacement
+    /// and release. The default keeps older runtime owners source-compatible.
+    fn control(
+        &mut self,
+        operation: ProductDevControlOperation,
+        _binding: ProductDevRuntimeBinding,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        Err(ProductDevRuntimeError::new(
+            "DEV_HOST_CONTROL_UNSUPPORTED",
+            format!(
+                "{} control is not supported by this runtime",
+                operation.as_wire()
+            ),
+        )
+        .expect("fixed control diagnostic"))
+    }
 
     fn input(
         &mut self,

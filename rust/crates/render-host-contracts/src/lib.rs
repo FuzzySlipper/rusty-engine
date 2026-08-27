@@ -55,6 +55,8 @@ pub enum RendererCameraProjection {
 pub struct RendererCompositionCamera {
     pub id: String,
     pub pose: RendererCameraPose,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<RendererCameraBasis>,
     pub projection: RendererCameraProjection,
 }
 
@@ -169,6 +171,9 @@ impl RendererViewComposition {
         for camera in &self.cameras {
             validate_identifier(&camera.id)?;
             validate_pose(camera.pose)?;
+            if let Some(basis) = camera.basis {
+                validate_basis(basis)?;
+            }
             validate_projection(camera.projection)?;
         }
         let mut target_pixels = 0_u64;
@@ -338,6 +343,23 @@ fn validate_pose(pose: RendererCameraPose) -> Result<(), RendererHostContractErr
     if pose.position.into_iter().all(f64::is_finite)
         && pose.pitch_degrees.is_finite()
         && pose.yaw_degrees.is_finite()
+    {
+        Ok(())
+    } else {
+        Err(RendererHostContractError::InvalidNumber)
+    }
+}
+
+fn validate_basis(basis: RendererCameraBasis) -> Result<(), RendererHostContractError> {
+    let values = basis.forward.into_iter().chain(basis.right).chain(basis.up);
+    if values.clone().all(f64::is_finite)
+        && basis
+            .forward
+            .into_iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            > f64::EPSILON
+        && basis.up.into_iter().map(|value| value * value).sum::<f64>() > f64::EPSILON
     {
         Ok(())
     } else {

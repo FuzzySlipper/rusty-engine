@@ -40,7 +40,10 @@ impl FixtureRuntime {
         ProductDevRuntimeReceipt::new(
             ProductDevOperationResult::accepted(operation, Self::binding(), Self::readout())
                 .unwrap(),
-            vec![ProductDevRuntimeOutput::binding(Self::binding())],
+            vec![
+                ProductDevRuntimeOutput::binding(Self::binding()),
+                ProductDevRuntimeOutput::complete_baseline(Self::binding()),
+            ],
         )
         .unwrap()
     }

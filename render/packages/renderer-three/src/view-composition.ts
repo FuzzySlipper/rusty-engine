@@ -8,7 +8,7 @@ import {
 } from '@rusty-engine/render-contracts';
 
 import type { RendererVisibilityReadout, ThreeRenderer } from './three-renderer.js';
-import { applyRendererThreeCameraPose } from './camera-pose.js';
+import { applyRendererThreeCameraBasis, applyRendererThreeCameraPose } from './camera-pose.js';
 
 export type RendererViewCompositionDiagnosticCode =
   | 'invalid_view_composition'
@@ -100,6 +100,7 @@ const EMPTY_COMPOSITION: RendererViewComposition = Object.freeze({
 export class RendererViewCompositionBackend {
   readonly #highestTargetRevision = new Map<string, number>();
   readonly #projection: ThreeRenderer;
+  readonly #viewmodelCamera: THREE.PerspectiveCamera;
   readonly #webgl: THREE.WebGLRenderer;
   #cameras: ReadonlyMap<string, THREE.Camera> = new Map();
   #composition = EMPTY_COMPOSITION;
@@ -108,9 +109,14 @@ export class RendererViewCompositionBackend {
   #revision = 0;
   #targets: ReadonlyMap<string, TargetResource> = new Map();
 
-  constructor(webgl: THREE.WebGLRenderer, projection: ThreeRenderer) {
+  constructor(
+    webgl: THREE.WebGLRenderer,
+    projection: ThreeRenderer,
+    viewmodelCamera = new THREE.PerspectiveCamera(),
+  ) {
     this.#webgl = webgl;
     this.#projection = projection;
+    this.#viewmodelCamera = viewmodelCamera;
   }
 
   configure(input: RendererViewComposition): RendererViewCompositionReceipt {
@@ -345,11 +351,35 @@ export class RendererViewCompositionBackend {
     if (camera === undefined) return;
     const area = pixelViewport(view.viewport, primaryWidth, primaryHeight);
     updateCameraAspect(camera, area.width / area.height);
+    this.#syncViewmodelCamera(camera, area.width / area.height);
     setPhysicalViewport(this.#webgl, area);
     this.#webgl.clear(true, true, true);
     this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
     this.#projection.prepareStaticInstanceBatches(camera);
     this.#webgl.render(this.#projection.scene, camera);
+    // Camera-relative retained content belongs to the Engine-owned viewmodel
+    // pass. Reapply its depth break after each configured primary view so the
+    // primary clear cannot erase it.
+    this.#webgl.clearDepth();
+    this.#projection.prepareSpritesForCamera(
+      this.#viewmodelCamera,
+      this.#projection.viewmodelScene,
+    );
+    this.#webgl.render(this.#projection.viewmodelScene, this.#viewmodelCamera);
+  }
+
+  #syncViewmodelCamera(camera: THREE.Camera, aspect: number): void {
+    this.#viewmodelCamera.position.copy(camera.position);
+    this.#viewmodelCamera.quaternion.copy(camera.quaternion);
+    this.#viewmodelCamera.up.copy(camera.up);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      this.#viewmodelCamera.fov = camera.fov;
+      this.#viewmodelCamera.near = camera.near;
+      this.#viewmodelCamera.far = camera.far;
+    }
+    this.#viewmodelCamera.aspect = aspect;
+    this.#viewmodelCamera.updateProjectionMatrix();
+    this.#viewmodelCamera.updateMatrixWorld(true);
   }
 
   #validateTargetRevisions(composition: RendererViewComposition): void {
@@ -408,6 +438,7 @@ function createCamera(descriptor: RendererCompositionCamera): THREE.Camera {
       );
   camera.name = descriptor.id;
   applyRendererThreeCameraPose(camera, descriptor.pose);
+  if (descriptor.basis !== undefined) applyRendererThreeCameraBasis(camera, descriptor.basis);
   camera.updateMatrixWorld(true);
   return camera;
 }

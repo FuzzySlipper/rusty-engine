@@ -73,16 +73,28 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 internal EngineContext(NativeEngineApi native)
                 {
                     Look = new LookServiceImplementation(native.look);
+                    Audio = new AudioServiceImplementation(native.audio);
+                    Dynamics = new DynamicsServiceImplementation(native.dynamics);
                     Spatial = new SpatialServiceImplementation(native.spatial);
                     Appearance = new AppearanceServiceImplementation(native.appearance);
+                    Animation = new AnimationServiceImplementation(native.animation);
+                    CameraView = new CameraViewServiceImplementation(native.camera_view);
                     Random = new RngServiceImplementation(native.rng);
+                    Mechanics = new MechanicsServiceImplementation(native.mechanics);
+                    Persistence = new PersistenceServiceImplementation(native.persistence);
                     Ui = new UiServiceImplementation(native.ui);
                 }
 
                 public ILookService Look { get; }
+                public IAudioService Audio { get; }
+                public IDynamicsService Dynamics { get; }
                 public ISpatialService Spatial { get; }
                 public IAppearanceService Appearance { get; }
+                public IAnimationService Animation { get; }
+                public ICameraViewService CameraView { get; }
                 public IRandomService Random { get; }
+                public IMechanicsService Mechanics { get; }
+                public IPersistenceService Persistence { get; }
                 public IUiService Ui { get; }
             }
 
@@ -116,9 +128,10 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     ProductLifetime? lifetime = null;
                     try
                     {
-                        if (args is null || handle is null || (args->content_len != 0 && args->content is null)) return 2;
+                        if (args is null || handle is null || (args->content_len != 0 && args->content is null) || (args->input.context_len != 0 && args->input.context is null) || (args->input.direct_intents_len != 0 && args->input.direct_intents is null) || (args->input.physical_mappings_len != 0 && args->input.physical_mappings is null)) return 2;
                         ProductContent content = new(CopyContent(args->content, args->content_len));
-                        IEngineProduct product = new {{type}}(new ProductCreateContext(new EngineContext(args->engine), content));
+                        ProductInputConfiguration input = CopyInputConfiguration(args->input);
+                        IEngineProduct product = new {{type}}(new ProductCreateContext(new EngineContext(args->engine), content, input));
                         lifetime = new ProductLifetime(product);
                         *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(lifetime));
                         return 1;
@@ -140,7 +153,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     try
                     {
                         if (args is null || (args->event_count != 0 && args->events is null)) return 2;
-                        Get(handle).Product.Update(new ProductUpdate(args->kind, CopyInput(args->events, args->event_count), args->observed_time_or_step));
+                        Get(handle).Product.Update(new ProductUpdate(NativeConversions.FromNative(args->kind), CopyInput(args->events, args->event_count), args->observed_time_or_step));
                         return 1;
                     }
                     catch { return 99; }
@@ -201,9 +214,75 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     for (nuint index = 0; index < count; index++)
                     {
                         NativeInputEvent input = source[index];
-                        events[checked((int)index)] = new ProductInputEvent(input.kind, input.edge, input.sequence, input.x, input.y, CopyBytes(input.label, input.label_len));
+                        events[checked((int)index)] = new ProductInputEvent(
+                            NativeConversions.FromNative(input.kind),
+                            NativeConversions.FromNative(input.edge),
+                            NativeConversions.FromNative(input.device),
+                            NativeConversions.FromNative(input.channel),
+                            NativeConversions.FromNative(input.axis),
+                            NativeConversions.FromNative(input.keyboard),
+                            NativeConversions.FromNative(input.pointer_button),
+                            NativeConversions.FromNative(input.controller_button),
+                            NativeConversions.FromNative(input.controller_axis),
+                            NativeConversions.FromNative(input.clear_reason),
+                            NativeConversions.FromNative(input.value_kind),
+                            NativeConversions.FromNative(input.phase),
+                            NativeConversions.FromNative(input.provenance),
+                            new InputBinding(input.binding.instance_id, input.binding.generation, input.binding.control_revision),
+                            new InputSequence(input.sequence.value),
+                            new InputContext(CopyBytes(input.context, input.context_len)),
+                            input.x,
+                            input.y,
+                            CopyBytes(input.label, input.label_len),
+                            CopyBytes(input.mapping_id, input.mapping_id_len),
+                            CopyBytes(input.intent, input.intent_len),
+                            CopyBytes(input.payload_contract, input.payload_contract_len),
+                            CopyBytes(input.payload_data, input.payload_data_len));
                     }
                     return events;
+                }
+
+                private static ProductInputConfiguration CopyInputConfiguration(NativeInputConfiguration input)
+                {
+                    ProductInputDescriptor[] descriptors = new ProductInputDescriptor[checked((int)input.direct_intents_len)];
+                    for (nuint index = 0; index < input.direct_intents_len; index++)
+                    {
+                        NativeInputDescriptor descriptor = input.direct_intents[index];
+                        descriptors[checked((int)index)] = new ProductInputDescriptor(
+                            CopyBytes(descriptor.id, descriptor.id_len),
+                            NativeConversions.FromNative(descriptor.value_kind),
+                            CopyBytes(descriptor.payload_contract, descriptor.payload_contract_len));
+                    }
+                    ProductInputMapping[] mappings = new ProductInputMapping[checked((int)input.physical_mappings_len)];
+                    for (nuint index = 0; index < input.physical_mappings_len; index++)
+                    {
+                        NativeInputMapping mapping = input.physical_mappings[index];
+                        mappings[checked((int)index)] = new ProductInputMapping(
+                            CopyBytes(mapping.id, mapping.id_len),
+                            CopyBytes(mapping.intent, mapping.intent_len),
+                            NativeConversions.FromNative(mapping.trigger_kind),
+                            NativeConversions.FromNative(mapping.edge),
+                            NativeConversions.FromNative(mapping.axis),
+                            NativeConversions.FromNative(mapping.keyboard),
+                            NativeConversions.FromNative(mapping.pointer_button),
+                            NativeConversions.FromNative(mapping.controller_button),
+                            NativeConversions.FromNative(mapping.controller_axis),
+                            CopyKeyboardControls(mapping.chord, mapping.chord_len),
+                            new InputContext(CopyBytes(mapping.context, mapping.context_len)));
+                    }
+                    return new ProductInputConfiguration(
+                        new InputBinding(input.binding.instance_id, input.binding.generation, input.binding.control_revision),
+                        new InputContext(CopyBytes(input.context, input.context_len)),
+                        descriptors,
+                        mappings);
+                }
+
+                private static ReadOnlyMemory<KeyboardControl> CopyKeyboardControls(NativeKeyboardControl* source, nuint count)
+                {
+                    if (count != 0 && source is null) throw new ArgumentException("nonempty native keyboard chord has no storage");
+                    KeyboardControl[] controls = new KeyboardControl[checked((int)count)];
+                    for (nuint index = 0; index < count; index++) controls[checked((int)index)] = NativeConversions.FromNative(source[index]);
+                    return controls;
                 }
 
                 private static ReadOnlyMemory<byte> CopyBytes(byte* source, nuint length)

@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@rusty-engine/application-host": "workspace:*",
+    "@rusty-engine/render-contracts": "workspace:*",
     "@types/node": "^24.0.0"
   }
 }

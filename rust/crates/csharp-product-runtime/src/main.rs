@@ -1,30 +1,39 @@
 use std::{
     env, fs,
     io::{Read, Write},
-    net::TcpStream,
+    net::{Ipv4Addr, TcpStream},
     path::{Path, PathBuf},
 };
 
-use csharp_product_runtime::{CsharpProductContent, CsharpProductRuntime};
+use csharp_product_runtime::{
+    CsharpProductContent, CsharpProductRuntime, CsharpProductRuntimeConfig,
+};
 use product_dev_host::{
     product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
     ProductDevHostConfig, ProductDevRendererResource,
 };
+use product_model::IntentValueKind;
+use runtime_input::{DirectInputIntentDescriptor, RuntimeInputMapping, RuntimeInputTrigger};
+use runtime_lifecycle::RuntimeLifecycleConfig;
 
 fn main() -> Result<(), String> {
     let args = Arguments::parse()?;
     let content =
         CsharpProductContent::admit(&args.content_dir).map_err(|error| error.to_string())?;
-    let mut runtime = CsharpProductRuntime::load_admitted(&args.library, content)
-        .map_err(|error| error.to_string())?;
+    let mut runtime =
+        CsharpProductRuntime::load_admitted(&args.library, content, args.runtime_config())
+            .map_err(|error| error.to_string())?;
     let bundle = load_bundle(&args.bundle_dir, runtime.render_resources())?;
     if args.exercise {
         runtime
             .exercise_turns()
             .map_err(|error| error.to_string())?;
     }
-    let host = ProductDevHost::start(runtime, ProductDevHostConfig::new(args.port, bundle))
-        .map_err(|error| error.to_string())?;
+    let host = ProductDevHost::start(
+        runtime,
+        ProductDevHostConfig::new(args.port, bundle).with_bind_host(args.bind_host),
+    )
+    .map_err(|error| error.to_string())?;
     if args.exercise {
         let mut stream = TcpStream::connect(host.address()).map_err(|error| error.to_string())?;
         let request = format!(
@@ -48,14 +57,19 @@ fn main() -> Result<(), String> {
         host.shutdown().map_err(|error| error.to_string())?;
     } else {
         println!("C# NativeAOT product host listening at {}", host.origin());
-        println!("Press Enter to stop.");
-        let mut line = String::new();
-        std::io::stdin()
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?;
-        host.shutdown().map_err(|error| error.to_string())?;
+        println!("Press Ctrl+C to stop.");
+        wait_for_process_termination();
     }
     Ok(())
+}
+
+/// The standard host is owned by its foreground process supervisor. In
+/// particular, service launchers commonly provide a closed stdin, so EOF must
+/// not be interpreted as a request to shut the host down.
+fn wait_for_process_termination() -> ! {
+    loop {
+        std::thread::park();
+    }
 }
 
 struct Arguments {
@@ -63,14 +77,78 @@ struct Arguments {
     bundle_dir: PathBuf,
     content_dir: PathBuf,
     port: u16,
+    bind_host: Ipv4Addr,
+    mode: RuntimeMode,
+    direct_intents: Vec<DirectInputIntentDescriptor>,
     exercise: bool,
 }
+
+#[derive(Clone, Copy)]
+enum RuntimeMode {
+    Realtime,
+    Demand,
+    External,
+}
+
+impl RuntimeMode {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "realtime" => Ok(Self::Realtime),
+            "demand" => Ok(Self::Demand),
+            "external" => Ok(Self::External),
+            _ => Err("--mode must be realtime, demand, or external".to_owned()),
+        }
+    }
+
+    fn lifecycle_config(self) -> RuntimeLifecycleConfig {
+        match self {
+            Self::Realtime => CsharpProductRuntime::standard_realtime_config(),
+            Self::Demand => RuntimeLifecycleConfig::Demand,
+            Self::External => RuntimeLifecycleConfig::External,
+        }
+    }
+}
+
 impl Arguments {
+    fn runtime_config(&self) -> CsharpProductRuntimeConfig {
+        let mut direct_intents = self.direct_intents.clone();
+        if self.exercise
+            && !direct_intents
+                .iter()
+                .any(|descriptor| descriptor.id() == "runtime.exercise.move")
+        {
+            direct_intents.push(
+                DirectInputIntentDescriptor::new("runtime.exercise.move", IntentValueKind::Digital)
+                    .expect("fixed exercise mapping intent"),
+            );
+        }
+        let physical_mappings = if self.exercise {
+            vec![RuntimeInputMapping::new(
+                "runtime.exercise.move",
+                "runtime.exercise.move",
+                RuntimeInputTrigger::Key {
+                    code: product_model::KeyboardControl::KeyW,
+                    edge: product_model::InputEdge::Held,
+                    chord: Vec::new(),
+                    context: None,
+                },
+            )
+            .expect("fixed exercise physical mapping")]
+        } else {
+            Vec::new()
+        };
+        CsharpProductRuntimeConfig::new(self.mode.lifecycle_config(), direct_intents)
+            .with_physical_mappings(physical_mappings)
+    }
+
     fn parse() -> Result<Self, String> {
         let mut library = None;
         let mut bundle_dir = None;
         let mut content_dir = None;
         let mut port = 0;
+        let mut bind_host = Ipv4Addr::LOCALHOST;
+        let mut mode = None;
+        let mut direct_intents = Vec::new();
         let mut exercise = false;
         let mut values = env::args().skip(1);
         while let Some(arg) = values.next() {
@@ -79,8 +157,13 @@ impl Arguments {
                 "--bundle-dir" => bundle_dir = values.next().map(PathBuf::from),
                 "--content-dir" => content_dir = values.next().map(PathBuf::from),
                 "--port" => port = values.next().ok_or("--port requires a value")?.parse().map_err(|_| "--port must be a u16")?,
+                "--bind-host" => bind_host = values.next().ok_or("--bind-host requires an IPv4 address")?.parse().map_err(|_| "--bind-host must be an IPv4 address")?,
+                "--mode" => mode = Some(RuntimeMode::parse(&values.next().ok_or("--mode requires a value")?)?),
+                "--direct-intent" => direct_intents.push(parse_direct_intent(
+                    &values.next().ok_or("--direct-intent requires id=digital, id=axis, or id=payload:contract")?,
+                )?),
                 "--exercise" => exercise = true,
-                "--help" => return Err("usage: csharp-product-runtime --library <product.so> --bundle-dir <browser-bundle> --content-dir <content> [--port <u16>] [--exercise]".to_owned()),
+                "--help" => return Err("usage: csharp-product-runtime --library <product.so> --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--direct-intent <id=digital|axis|payload:contract>] [--bind-host <ipv4>] [--port <u16>] [--exercise]".to_owned()),
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
         }
@@ -89,9 +172,28 @@ impl Arguments {
             bundle_dir: bundle_dir.ok_or("--bundle-dir is required")?,
             content_dir: content_dir.ok_or("--content-dir is required")?,
             port,
+            bind_host,
+            mode: mode.ok_or("--mode is required")?,
+            direct_intents,
             exercise,
         })
     }
+}
+
+fn parse_direct_intent(value: &str) -> Result<DirectInputIntentDescriptor, String> {
+    let (id, value_kind) = value
+        .split_once('=')
+        .ok_or("--direct-intent requires id=digital, id=axis, or id=payload:contract")?;
+    if let Some(contract) = value_kind.strip_prefix("payload:") {
+        return DirectInputIntentDescriptor::product_payload(id, contract)
+            .map_err(|error| error.to_string());
+    }
+    let value_kind = match value_kind {
+        "digital" => IntentValueKind::Digital,
+        "axis" => IntentValueKind::Axis,
+        _ => return Err("--direct-intent value kind must be digital or axis".to_owned()),
+    };
+    DirectInputIntentDescriptor::new(id, value_kind).map_err(|error| error.to_string())
 }
 
 fn load_bundle(

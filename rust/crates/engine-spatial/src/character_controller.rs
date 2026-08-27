@@ -1848,6 +1848,27 @@ pub enum FirstPersonLookError {
     DeltaLimitExceeded,
 }
 
+/// A stable, product-readable classification of a rejected look request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstPersonLookDiagnostic {
+    Accepted,
+    InvalidConfig,
+    InvalidState,
+    InvalidCommand,
+    DeltaLimitExceeded,
+}
+
+impl From<FirstPersonLookError> for FirstPersonLookDiagnostic {
+    fn from(value: FirstPersonLookError) -> Self {
+        match value {
+            FirstPersonLookError::InvalidConfig => Self::InvalidConfig,
+            FirstPersonLookError::InvalidState => Self::InvalidState,
+            FirstPersonLookError::InvalidCommand => Self::InvalidCommand,
+            FirstPersonLookError::DeltaLimitExceeded => Self::DeltaLimitExceeded,
+        }
+    }
+}
+
 impl std::fmt::Display for FirstPersonLookError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "first-person look rejected: {self:?}")
@@ -1867,12 +1888,8 @@ impl FirstPersonLookService {
         command: FirstPersonLookCommand,
     ) -> Result<FirstPersonLookReceipt, FirstPersonLookError> {
         validate_look_config(config)?;
-        if !state.yaw_radians.is_finite() || !state.pitch_radians.is_finite() {
-            return Err(FirstPersonLookError::InvalidState);
-        }
-        if !command.delta.x.is_finite() || !command.delta.y.is_finite() {
-            return Err(FirstPersonLookError::InvalidCommand);
-        }
+        validate_look_state(state)?;
+        validate_look_command(command)?;
         let yaw_delta = command.delta.x
             * config.horizontal_radians_per_unit
             * if config.invert_horizontal { -1.0 } else { 1.0 };
@@ -1884,31 +1901,102 @@ impl FirstPersonLookService {
         {
             return Err(FirstPersonLookError::DeltaLimitExceeded);
         }
-        let mut yaw = state.yaw_radians + yaw_delta;
-        if config.wrap_yaw {
-            yaw = wrap_radians(yaw);
-        }
-        let pitch = (state.pitch_radians + pitch_delta)
-            .clamp(config.minimum_pitch_radians, config.maximum_pitch_radians);
-        let (sin_yaw, cos_yaw) = yaw.sin_cos();
-        let (sin_pitch, cos_pitch) = pitch.sin_cos();
-        let forward = Vec3::new(sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch);
-        let right = Vec3::new(cos_yaw, 0.0, sin_yaw);
-        let up = right.cross(forward);
-        let (sy, cy) = (yaw * 0.5).sin_cos();
-        let (sp, cp) = (pitch * 0.5).sin_cos();
-        Ok(FirstPersonLookReceipt {
-            before: state,
-            after: FirstPersonLookState {
-                yaw_radians: yaw,
-                pitch_radians: pitch,
-            },
-            orientation: Quat::new(-sp * sy, sp * cy, cp * sy, cp * cy),
-            forward,
-            right,
-            up,
-        })
+        Ok(look_receipt(
+            state,
+            normalize_look_state(
+                config,
+                FirstPersonLookState {
+                    yaw_radians: state.yaw_radians + yaw_delta,
+                    pitch_radians: state.pitch_radians + pitch_delta,
+                },
+            ),
+        ))
     }
+
+    /// Resets product-held look state to the Engine's neutral orientation.
+    ///
+    /// Reset deliberately accepts a previous state without validating it so a
+    /// product can recover from a corrupted local accumulator.
+    pub fn reset(self, state: FirstPersonLookState) -> FirstPersonLookReceipt {
+        look_receipt(state, FirstPersonLookState::default())
+    }
+
+    /// Replaces product-held look state while preserving Engine yaw wrapping,
+    /// pitch clamping, and basis construction semantics.
+    pub fn rebase(
+        self,
+        config: &FirstPersonLookConfig,
+        state: FirstPersonLookState,
+        target: FirstPersonLookState,
+    ) -> Result<FirstPersonLookReceipt, FirstPersonLookError> {
+        validate_look_config(config)?;
+        validate_look_state(state)?;
+        validate_look_state(target)?;
+        Ok(look_receipt(state, normalize_look_state(config, target)))
+    }
+
+    /// Classifies a request without making a product-held state transition.
+    pub fn diagnose(
+        self,
+        config: &FirstPersonLookConfig,
+        state: FirstPersonLookState,
+        command: FirstPersonLookCommand,
+    ) -> FirstPersonLookDiagnostic {
+        self.integrate(config, state, command)
+            .map(|_| FirstPersonLookDiagnostic::Accepted)
+            .unwrap_or_else(FirstPersonLookDiagnostic::from)
+    }
+}
+
+fn look_receipt(
+    before: FirstPersonLookState,
+    after: FirstPersonLookState,
+) -> FirstPersonLookReceipt {
+    let yaw = after.yaw_radians;
+    let pitch = after.pitch_radians;
+    let (sin_yaw, cos_yaw) = yaw.sin_cos();
+    let (sin_pitch, cos_pitch) = pitch.sin_cos();
+    let forward = Vec3::new(sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch);
+    let right = Vec3::new(cos_yaw, 0.0, sin_yaw);
+    let up = right.cross(forward);
+    let (sy, cy) = (yaw * 0.5).sin_cos();
+    let (sp, cp) = (pitch * 0.5).sin_cos();
+    FirstPersonLookReceipt {
+        before,
+        after,
+        orientation: Quat::new(-sp * sy, sp * cy, cp * sy, cp * cy),
+        forward,
+        right,
+        up,
+    }
+}
+
+fn normalize_look_state(
+    config: &FirstPersonLookConfig,
+    state: FirstPersonLookState,
+) -> FirstPersonLookState {
+    FirstPersonLookState {
+        yaw_radians: if config.wrap_yaw {
+            wrap_radians(state.yaw_radians)
+        } else {
+            state.yaw_radians
+        },
+        pitch_radians: state
+            .pitch_radians
+            .clamp(config.minimum_pitch_radians, config.maximum_pitch_radians),
+    }
+}
+
+fn validate_look_state(state: FirstPersonLookState) -> Result<(), FirstPersonLookError> {
+    (state.yaw_radians.is_finite() && state.pitch_radians.is_finite())
+        .then_some(())
+        .ok_or(FirstPersonLookError::InvalidState)
+}
+
+fn validate_look_command(command: FirstPersonLookCommand) -> Result<(), FirstPersonLookError> {
+    (command.delta.x.is_finite() && command.delta.y.is_finite())
+        .then_some(())
+        .ok_or(FirstPersonLookError::InvalidCommand)
 }
 
 fn validate_look_config(config: &FirstPersonLookConfig) -> Result<(), FirstPersonLookError> {
@@ -2026,6 +2114,53 @@ mod tests {
                 },
             ),
             Err(FirstPersonLookError::DeltaLimitExceeded)
+        );
+    }
+
+    #[test]
+    fn look_rebase_and_reset_preserve_explicit_product_state_semantics() {
+        let config = FirstPersonLookConfig {
+            minimum_pitch_radians: -0.5,
+            maximum_pitch_radians: 0.5,
+            ..FirstPersonLookConfig::default()
+        };
+        let state = FirstPersonLookState {
+            yaw_radians: 0.25,
+            pitch_radians: -0.25,
+        };
+        let receipt = FirstPersonLookService
+            .rebase(
+                &config,
+                state,
+                FirstPersonLookState {
+                    yaw_radians: std::f32::consts::TAU + 0.5,
+                    pitch_radians: 2.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(receipt.before, state);
+        assert!((receipt.after.yaw_radians - 0.5).abs() < 1.0e-5);
+        assert_eq!(receipt.after.pitch_radians, config.maximum_pitch_radians);
+        assert!((receipt.forward.length() - 1.0).abs() < 1.0e-5);
+        assert!((receipt.right.length() - 1.0).abs() < 1.0e-5);
+        assert!((receipt.up.length() - 1.0).abs() < 1.0e-5);
+
+        let reset = FirstPersonLookService.reset(receipt.after);
+        assert_eq!(reset.before, receipt.after);
+        assert_eq!(reset.after, FirstPersonLookState::default());
+    }
+
+    #[test]
+    fn look_diagnostic_retains_rejection_cause() {
+        assert_eq!(
+            FirstPersonLookService.diagnose(
+                &FirstPersonLookConfig::default(),
+                FirstPersonLookState::default(),
+                FirstPersonLookCommand {
+                    delta: Vec2::new(4.0, 0.0),
+                },
+            ),
+            FirstPersonLookDiagnostic::DeltaLimitExceeded
         );
     }
 }

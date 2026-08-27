@@ -10,6 +10,21 @@ use crate::{CollisionRayHit, VoxelCollisionScene};
 pub const MAX_OCCLUSION_QUERY_ENTITIES: usize = 4_096;
 /// Maximum number of caller-owned endpoint or source identities omitted by one query.
 pub const MAX_OCCLUSION_IGNORED_ENTITIES: usize = 8;
+/// Maximum number of caller-owned world-space hitboxes that one combined
+/// query may override. The list is deliberately bounded like the ignored set;
+/// ownership of hitbox policy remains with the product while hit testing and
+/// ordering remain Engine-owned.
+pub const MAX_OCCLUSION_HITBOX_OVERRIDES: usize = MAX_OCCLUSION_QUERY_ENTITIES;
+
+/// A caller-owned world-space AABB used for one occlusion query. The entity
+/// must also be an active collider in the supplied [`EntityState`]; this value
+/// only replaces that entity's ordinary bounds for this call.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpatialOcclusionHitboxOverride {
+    pub entity: EntityId,
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+}
 
 /// One bounded ray against canonical voxel geometry and current active entity
 /// colliders. Callers normally ignore the source and intended target identities.
@@ -55,6 +70,8 @@ pub enum SpatialOcclusionError {
     InvalidMaxDistance,
     TooManyIgnoredEntities { actual: usize, limit: usize },
     TooManyEntities { actual: usize, limit: usize },
+    TooManyHitboxOverrides { actual: usize, limit: usize },
+    InvalidHitboxOverride { entity: EntityId },
 }
 
 impl std::fmt::Display for SpatialOcclusionError {
@@ -79,7 +96,7 @@ impl SpatialOcclusionService {
         entities: &EntityState,
         query: SpatialOcclusionQuery<'_>,
     ) -> Result<Option<SpatialOcclusionHit>, SpatialOcclusionError> {
-        let direction = validate_and_normalize(query)?;
+        let _direction = validate_and_normalize(query)?;
         if query.ignored_entities.len() > MAX_OCCLUSION_IGNORED_ENTITIES {
             return Err(SpatialOcclusionError::TooManyIgnoredEntities {
                 actual: query.ignored_entities.len(),
@@ -94,6 +111,49 @@ impl SpatialOcclusionService {
             });
         }
 
+        Self::cast_ray_with_overrides(scene, entities, query, &[])
+    }
+
+    /// Variant of [`Self::cast_ray`] that replaces the active bounds for named
+    /// entities with bounded caller-owned world-space boxes. This is the
+    /// Engine implementation for product hitboxes: target eligibility and the
+    /// box dimensions stay product-owned, while normalization, filtering,
+    /// nearest ordering, and voxel/entity ties remain one shared service.
+    pub fn cast_ray_with_overrides(
+        scene: &VoxelCollisionScene,
+        entities: &EntityState,
+        query: SpatialOcclusionQuery<'_>,
+        overrides: &[SpatialOcclusionHitboxOverride],
+    ) -> Result<Option<SpatialOcclusionHit>, SpatialOcclusionError> {
+        let direction = validate_and_normalize(query)?;
+        if query.ignored_entities.len() > MAX_OCCLUSION_IGNORED_ENTITIES {
+            return Err(SpatialOcclusionError::TooManyIgnoredEntities {
+                actual: query.ignored_entities.len(),
+                limit: MAX_OCCLUSION_IGNORED_ENTITIES,
+            });
+        }
+        let entity_count = entities.total_count();
+        if entity_count > MAX_OCCLUSION_QUERY_ENTITIES {
+            return Err(SpatialOcclusionError::TooManyEntities {
+                actual: entity_count,
+                limit: MAX_OCCLUSION_QUERY_ENTITIES,
+            });
+        }
+        if overrides.len() > MAX_OCCLUSION_HITBOX_OVERRIDES {
+            return Err(SpatialOcclusionError::TooManyHitboxOverrides {
+                actual: overrides.len(),
+                limit: MAX_OCCLUSION_HITBOX_OVERRIDES,
+            });
+        }
+        for value in overrides {
+            if !value.min.into_iter().chain(value.max).all(f64::is_finite)
+                || value.min.iter().zip(value.max).any(|(min, max)| min > &max)
+            {
+                return Err(SpatialOcclusionError::InvalidHitboxOverride {
+                    entity: value.entity,
+                });
+            }
+        }
         let mut nearest = scene
             .raycast(query.origin, direction, query.max_distance)
             .map(SpatialOcclusionHit::Voxel);
@@ -101,7 +161,11 @@ impl SpatialOcclusionService {
             if query.ignored_entities.contains(&collider.entity) {
                 continue;
             }
-            let bounds = bounds_as_f64(collider.bounds);
+            let bounds = overrides
+                .iter()
+                .find(|value| value.entity == collider.entity)
+                .map(|value| (value.min, value.max))
+                .unwrap_or_else(|| bounds_as_f64(collider.bounds));
             let Some(distance) = ray_aabb_distance(
                 query.origin,
                 direction,

@@ -1,5 +1,5 @@
 import type { RustyApplicationFrame } from './application-host.js';
-export type RustyApplicationResourceKind = 'audio' | 'mesh' | 'clipPack' | 'texture';
+export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture';
 export declare const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES: number;
 export declare const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT = 64;
 export declare const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES: number;

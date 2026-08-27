@@ -12,6 +12,7 @@ import {
   type RustyApplicationUiProjectionEnvelope,
   type RustyApplicationUiProjectionOptions,
   type RustyApplicationPresentationAspectBounds,
+  type RustyApplicationViewComposition,
 } from '@rusty-engine/application-host';
 import { createProductBrowserCadence, type ProductBrowserCadence } from './realtime-cadence.js';
 
@@ -114,6 +115,7 @@ export type ProductBrowserRuntimeOutput =
   /** Fixed host evidence that one Rust-owned realtime advance was accepted. */
   | { readonly kind: 'runtime-progress'; readonly owner: 'rust-host' }
   | { readonly kind: 'frame'; readonly frame: RustyApplicationFrame }
+  | { readonly kind: 'view-composition'; readonly composition: RustyApplicationViewComposition }
   | {
       readonly kind: 'presentation';
       readonly frame: RustyApplicationPresentationFrame;
@@ -472,6 +474,16 @@ export async function mountProductBrowserHost(
             throw new ProductBrowserHostError(
               'output_failed',
               receipt.diagnostics.map((item) => item.message).join('; ') || 'retained frame was rejected',
+            );
+          }
+          return;
+        }
+        case 'view-composition': {
+          const receipt = host.renderer.configureViews(output.composition);
+          if (!receipt.applied) {
+            throw new ProductBrowserHostError(
+              'output_failed',
+              receipt.diagnostics.map((item) => item.message).join('; ') || 'view composition was rejected',
             );
           }
           return;
@@ -1014,17 +1026,17 @@ export function productBrowserBundleAssets(
         "    if (resource === null || typeof resource !== 'object' || typeof resource.identity !== 'string' || typeof resource.contentHash !== 'string' || typeof resource.mediaType !== 'string' || typeof resource.path !== 'string' || !Number.isSafeInteger(resource.byteLength)) {",
         "      throw new Error(`generated renderer preload resource ${String(index)} is invalid`);",
         '    }',
-        "    const match = /^(texture|audio|mesh)-resource\\/([0-9a-f]{64})$/u.exec(resource.identity);",
+        "    const match = /^(animated-mesh|texture|audio|mesh)-resource\\/([0-9a-f]{64})$/u.exec(resource.identity);",
         "    if (match === null || resource.contentHash !== `sha256:${match[2]}` || !isSafeProductRendererPath(resource.path) || resource.byteLength < 0 || identities.has(resource.identity) || paths.has(resource.path)) {",
         "      throw new Error(`generated renderer preload resource ${String(index)} is inadmissible`);",
         '    }',
         '    identities.add(resource.identity); paths.add(resource.path);',
-        "    if ((match[1] === 'texture' && (resource.mediaType !== 'image/png' || !resource.path.endsWith('.png'))) || (match[1] === 'audio' && (resource.mediaType !== 'audio/wav' || !resource.path.endsWith('.wav'))) || (match[1] === 'mesh' && (resource.mediaType !== 'application/octet-stream' || !resource.path.endsWith('.rmesh')))) {",
+        "    if ((match[1] === 'texture' && (resource.mediaType !== 'image/png' || !resource.path.endsWith('.png'))) || (match[1] === 'audio' && (resource.mediaType !== 'audio/wav' || !resource.path.endsWith('.wav'))) || (match[1] === 'mesh' && (resource.mediaType !== 'application/octet-stream' || !resource.path.endsWith('.rmesh'))) || (match[1] === 'animated-mesh' && (resource.mediaType !== 'model/gltf-binary' || !resource.path.endsWith('.glb')))) {",
         "      throw new Error(`generated renderer preload resource ${String(index)} media is invalid`);",
         '    }',
         "    if (match[1] === 'texture') { textureCount += 1; textureBytes += resource.byteLength; if (textureCount > PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_COUNT || resource.byteLength === 0 || resource.byteLength > PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_BYTES || textureBytes > PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_TOTAL_BYTES) throw new Error(`generated renderer preload texture ${String(index)} exceeds application-host bounds`); }",
         "    else if (match[1] === 'audio') { audioCount += 1; audioBytes += resource.byteLength; if (audioCount > PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_COUNT || resource.byteLength < 44 || resource.byteLength > PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_BYTES || audioBytes > PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_TOTAL_BYTES) throw new Error(`generated renderer preload audio ${String(index)} exceeds application-host bounds`); }",
-        "    else { meshCount += 1; meshBytes += resource.byteLength; if (meshCount > PRODUCT_RENDERER_PRELOAD_MESH_MAX_COUNT || resource.byteLength < 16 || resource.byteLength > PRODUCT_RENDERER_PRELOAD_MESH_MAX_BYTES || meshBytes > PRODUCT_RENDERER_PRELOAD_MESH_MAX_TOTAL_BYTES) throw new Error(`generated renderer preload mesh ${String(index)} exceeds application-host bounds`); }",
+        "    else { meshCount += 1; meshBytes += resource.byteLength; if (meshCount > PRODUCT_RENDERER_PRELOAD_MESH_MAX_COUNT || resource.byteLength < (match[1] === 'animated-mesh' ? 20 : 16) || resource.byteLength > PRODUCT_RENDERER_PRELOAD_MESH_MAX_BYTES || meshBytes > PRODUCT_RENDERER_PRELOAD_MESH_MAX_TOTAL_BYTES) throw new Error(`generated renderer preload mesh ${String(index)} exceeds application-host bounds`); }",
         '    return Object.freeze({ identity: resource.identity, contentHash: resource.contentHash, mediaType: resource.mediaType, path: resource.path, byteLength: resource.byteLength });',
         '  })) });',
         '}',
@@ -1040,7 +1052,7 @@ export function productBrowserBundleAssets(
         "  if (!response.ok) throw new Error(`generated renderer resource ${resource.identity} is unavailable`);",
         '  const bytes = new Uint8Array(await response.arrayBuffer());',
         "  if (bytes.byteLength !== resource.byteLength) throw new Error(`generated renderer resource ${resource.identity} length mismatch`);",
-        "  if (bytes.byteLength === 0 || (resource.mediaType === 'image/png' && !hasPngSignature(bytes)) || (resource.mediaType === 'audio/wav' && !hasWavSignature(bytes)) || (resource.mediaType === 'application/octet-stream' && !hasMeshResourceHeader(bytes))) throw new Error(`generated renderer resource ${resource.identity} media mismatch`);",
+        "  if (bytes.byteLength === 0 || (resource.mediaType === 'image/png' && !hasPngSignature(bytes)) || (resource.mediaType === 'audio/wav' && !hasWavSignature(bytes)) || (resource.mediaType === 'application/octet-stream' && !hasMeshResourceHeader(bytes)) || (resource.mediaType === 'model/gltf-binary' && !hasGlbHeader(bytes))) throw new Error(`generated renderer resource ${resource.identity} media mismatch`);",
         "  if (typeof crypto === 'undefined' || crypto.subtle === undefined) throw new Error('Web Crypto SHA-256 is required for generated renderer preload');",
         "  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).map((byte) => byte.toString(16).padStart(2, '0')).join('');",
         "  if (resource.contentHash !== `sha256:${digest}`) throw new Error(`generated renderer resource ${resource.identity} hash mismatch`);",
@@ -1062,6 +1074,10 @@ export function productBrowserBundleAssets(
         '  if ((version !== 49 && version !== 50 && version !== 51) || magic.some((byte, index) => bytes[index] !== byte)) return false;',
         '  const header = new DataView(bytes.buffer, bytes.byteOffset, 16);',
         '  return header.getUint32(8, true) === bytes.byteLength && header.getUint32(12, true) !== 0;',
+        '}',
+        '',
+        'function hasGlbHeader(bytes) {',
+        '  return bytes.byteLength >= 20 && bytes[0] === 103 && bytes[1] === 108 && bytes[2] === 84 && bytes[3] === 70;',
         '}',
         '',
       ].join('\n'),

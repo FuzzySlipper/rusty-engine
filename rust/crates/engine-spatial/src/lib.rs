@@ -34,8 +34,9 @@ pub use character_controller::{
     CharacterGroundFact, CharacterJumpConfig, CharacterPlatformConfig, CharacterPlatformFact,
     CharacterRecoveryConfig, CharacterShapeConfig, CharacterSolverConfig, CharacterStanceFact,
     CharacterStepFact, CharacterSurfaceConfig, CharacterVerticalConfig, DynamicImpulseProposal,
-    FirstPersonLookCommand, FirstPersonLookConfig, FirstPersonLookError, FirstPersonLookReceipt,
-    FirstPersonLookService, FirstPersonLookState, PreparedCharacterControllerStep,
+    FirstPersonLookCommand, FirstPersonLookConfig, FirstPersonLookDiagnostic, FirstPersonLookError,
+    FirstPersonLookReceipt, FirstPersonLookService, FirstPersonLookState,
+    PreparedCharacterControllerStep,
 };
 pub use core_space::{GlobalPosition, WorldOrigin};
 pub use entity_motion::{
@@ -45,7 +46,8 @@ pub use entity_motion::{
     FirstPersonMotionReceipt, FirstPersonMotionService, FirstPersonPose,
 };
 pub use occlusion::{
-    SpatialOcclusionError, SpatialOcclusionHit, SpatialOcclusionQuery, SpatialOcclusionService,
+    SpatialOcclusionError, SpatialOcclusionHit, SpatialOcclusionHitboxOverride,
+    SpatialOcclusionQuery, SpatialOcclusionService, MAX_OCCLUSION_HITBOX_OVERRIDES,
     MAX_OCCLUSION_IGNORED_ENTITIES, MAX_OCCLUSION_QUERY_ENTITIES,
 };
 pub use physics::{
@@ -54,9 +56,9 @@ pub use physics::{
     PhysicsStep, PhysicsWorld,
 };
 pub use rigid_body::{
-    PreparedRigidBodyStep, RigidBodyAction, RigidBodyContactReadout, RigidBodyMotionFact,
-    RigidBodyService, RigidBodyStepError, RigidBodyStepReceipt, RigidBodyStepRequest,
-    RigidBodyWorldReadout,
+    cuboid_mass_properties, rigid_body_mass_properties, PreparedRigidBodyStep, RigidBodyAction,
+    RigidBodyContactReadout, RigidBodyMassProperties, RigidBodyMotionFact, RigidBodyService,
+    RigidBodyStepError, RigidBodyStepReceipt, RigidBodyStepRequest, RigidBodyWorldReadout,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,
@@ -811,6 +813,14 @@ impl VoxelCollisionScene {
         self.navigation.projection_hash()
     }
 
+    /// The retained voxel authority that owns this scene's collision and
+    /// navigation derivations. Consumers may derive another named Engine
+    /// projection from it, but do not receive mutable voxel storage through
+    /// this read-only access.
+    pub fn voxel_world(&self) -> &VoxelWorld {
+        &self.voxel_world
+    }
+
     pub fn navigation_step(
         &self,
         from: Vec3,
@@ -958,6 +968,18 @@ impl VoxelCollisionScene {
         self.projection.static_mesh_revision()
     }
 
+    /// Number of caller-owned static collision assets currently admitted into
+    /// the derived projection.
+    pub fn projection_static_mesh_asset_count(&self) -> usize {
+        self.projection.static_mesh_asset_count()
+    }
+
+    /// Number of caller-owned static collision instances currently admitted
+    /// into the derived projection.
+    pub fn projection_static_mesh_instance_count(&self) -> usize {
+        self.projection.static_mesh_instance_count()
+    }
+
     pub fn replace_static_mesh_colliders(
         &mut self,
         expected_revision: u64,
@@ -979,12 +1001,36 @@ impl VoxelCollisionScene {
         )
     }
 
-    fn axis_sweep_overlaps(&self, min: [f64; 3], max: [f64; 3], translation: [f64; 3]) -> bool {
+    /// Query the coherent voxel/static-mesh projection for an axis-aligned
+    /// swept box. Foreign callers cannot reconstruct collision geometry from
+    /// source facts; they ask this Engine-owned projection instead.
+    pub fn axis_sweep_overlaps(&self, min: [f64; 3], max: [f64; 3], translation: [f64; 3]) -> bool {
         self.projection.axis_swept_aabb_overlaps_solid(
             WorldPos::new(min[0], min[1], min[2]),
             WorldPos::new(max[0], max[1], max[2]),
             WorldVec::new(translation[0], translation[1], translation[2]),
         )
+    }
+
+    /// Cast the Engine-owned capsule representation through the current
+    /// voxel/static-mesh projection.
+    pub fn cast_character_capsule(
+        &self,
+        capsule: CharacterCapsule,
+        translation: WorldVec,
+        contact_skin: f64,
+    ) -> Result<Option<CharacterCapsuleCastHit>, CharacterCollisionQueryError> {
+        self.projection
+            .cast_character_capsule(capsule, translation, contact_skin)
+    }
+
+    /// Read the deepest Engine-owned capsule overlap in the current
+    /// voxel/static-mesh projection.
+    pub fn character_capsule_overlap(
+        &self,
+        capsule: CharacterCapsule,
+    ) -> Result<Option<CharacterCapsuleOverlap>, CharacterCollisionQueryError> {
+        self.projection.character_capsule_overlap(capsule)
     }
 }
 

@@ -1,3 +1,5 @@
+import type { RendererViewComposition } from '@rusty-engine/render-contracts';
+import { type RendererSurface } from '@rusty-engine/renderer-host';
 import { type RustyApplicationContent } from './application-content.js';
 import { type RustyDeveloperCommandShellOptions } from './developer-command-shell.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
@@ -9,6 +11,8 @@ export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal'
 export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
 /** A Rust-projected typed presentation diff. Strict decoding remains Engine-owned. */
 export type RustyApplicationPresentationFrame = Readonly<Record<string, unknown>>;
+/** Typed Engine view composition, realized by the Engine renderer against its current surface. */
+export type RustyApplicationViewComposition = RendererViewComposition;
 export interface RustyApplicationCameraPose {
     readonly position: readonly [number, number, number];
     readonly pitchDegrees: number;
@@ -367,6 +371,7 @@ export interface RustyApplicationAudioResumeReceipt {
 export interface RustyApplicationRendererPort {
     readonly applyFrame: (frame: RustyApplicationFrame) => RustyApplicationFrameReceipt;
     readonly applyPresentation: (frame: RustyApplicationPresentationFrame) => Promise<RustyApplicationPresentationReceipt>;
+    readonly configureViews: (composition: RustyApplicationViewComposition) => ReturnType<RendererSurface['configureViews']>;
     /** Replace product content with the Engine-owned empty/default retained frame. */
     readonly clear: () => Promise<void>;
     /** Create an experimental depth-enhanced sprite attachment on the current renderer surface. */

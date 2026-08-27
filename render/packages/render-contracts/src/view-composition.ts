@@ -16,6 +16,13 @@ export interface RendererCompositionCameraPose {
   readonly yawDegrees: number;
 }
 
+/** Optional explicit product basis; omission preserves the canonical yaw/pitch pose basis. */
+export interface RendererCompositionCameraBasis {
+  readonly forward: readonly [number, number, number];
+  readonly right: readonly [number, number, number];
+  readonly up: readonly [number, number, number];
+}
+
 export type RendererCompositionProjection =
   | ({ readonly kind: 'perspective' } & PerspectiveProjection)
   | {
@@ -28,6 +35,7 @@ export type RendererCompositionProjection =
 export interface RendererCompositionCamera {
   readonly id: RendererCompositionIdentifier;
   readonly pose: RendererCompositionCameraPose;
+  readonly basis?: RendererCompositionCameraBasis;
   readonly projection: RendererCompositionProjection;
 }
 
@@ -119,6 +127,15 @@ export function validateRendererViewComposition(
     finiteVec3(camera.pose.position, `${path}.pose.position`);
     finite(camera.pose.pitchDegrees, `${path}.pose.pitchDegrees`);
     finite(camera.pose.yawDegrees, `${path}.pose.yawDegrees`);
+    if (camera.basis !== undefined) {
+      finiteVec3(camera.basis.forward, `${path}.basis.forward`);
+      finiteVec3(camera.basis.right, `${path}.basis.right`);
+      finiteVec3(camera.basis.up, `${path}.basis.up`);
+      if (lengthSquared(camera.basis.forward) <= Number.EPSILON
+        || lengthSquared(camera.basis.up) <= Number.EPSILON) {
+        fail(`${path}.basis`, 'forward and up must be non-zero');
+      }
+    }
     projection(camera.projection, `${path}.projection`);
     cameras.set(camera.id, camera);
   }
@@ -201,6 +218,10 @@ export function validateRendererViewComposition(
     integer(presentation.order, `${path}.order`, 0, 65_535);
   }
   return input;
+}
+
+function lengthSquared(value: readonly [number, number, number]): number {
+  return value[0] * value[0] + value[1] * value[1] + value[2] * value[2];
 }
 
 function projection(value: RendererCompositionProjection, path: string): void {

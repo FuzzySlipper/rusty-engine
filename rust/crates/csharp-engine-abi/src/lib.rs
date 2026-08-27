@@ -5,17 +5,31 @@
 //! intentionally has no generic invocation, target strings, capability
 //! catalogue, or JSON command protocol.
 
+mod animation;
 mod appearance;
+mod audio;
+mod camera_view;
 mod core;
+mod dynamics;
+mod input;
 mod look;
+mod mechanics;
+mod persistence;
 mod product;
 mod rng;
 mod spatial;
 mod ui;
 
+pub use animation::*;
 pub use appearance::*;
+pub use audio::*;
+pub use camera_view::*;
 pub use core::*;
+pub use dynamics::*;
+pub use input::*;
 pub use look::*;
+pub use mechanics::*;
+pub use persistence::*;
 pub use product::*;
 pub use rng::*;
 pub use spatial::*;

@@ -68,6 +68,9 @@ importers:
       '@rusty-engine/application-host':
         specifier: workspace:*
         version: link:../application-host
+      '@rusty-engine/render-contracts':
+        specifier: workspace:*
+        version: link:../render-contracts
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3

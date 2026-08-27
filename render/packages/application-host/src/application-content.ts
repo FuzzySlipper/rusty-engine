@@ -18,7 +18,7 @@ import {
 
 import type { RustyApplicationFrame } from './application-host.js';
 
-export type RustyApplicationResourceKind = 'audio' | 'mesh' | 'clipPack' | 'texture';
+export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture';
 
 export const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES = 8 * 1024 * 1024;
 export const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT = 64;
@@ -81,7 +81,7 @@ export interface RustyApplicationSurfaceResourceOptions {
   ) => Promise<ArrayBuffer>;
 }
 
-const SHA256_IDENTITY = /^(audio|mesh|clip-pack|texture)-resource\/([0-9a-f]{64})$/u;
+const SHA256_IDENTITY = /^(animated-mesh|audio|mesh|clip-pack|texture)-resource\/([0-9a-f]{64})$/u;
 
 export function prepareRustyApplicationContent(
   content: RustyApplicationContent,
@@ -130,7 +130,9 @@ export function prepareRustyApplicationContent(
       );
     }
     identities.add(resource.identity);
-    const kind = match[1] === 'clip-pack' ? 'clipPack' : match[1] as RustyApplicationResourceKind;
+    const kind = match[1] === 'clip-pack' ? 'clipPack'
+      : match[1] === 'animated-mesh' ? 'animatedMesh'
+        : match[1] as RustyApplicationResourceKind;
     if (kind === 'audio') {
       if (resource.mediaType !== 'audio/wav') {
         throw contentError(
@@ -169,6 +171,30 @@ export function prepareRustyApplicationContent(
           'resource_limit_exceeded',
           resource.identity,
           'texture resource count or byte length exceeds the application-host bound',
+        );
+      }
+    } else if (kind === 'animatedMesh') {
+      if (resource.mediaType !== 'model/gltf-binary') {
+        throw contentError(
+          'resource_media_type_unsupported',
+          resource.identity,
+          'animated mesh resources must use model/gltf-binary',
+        );
+      }
+      meshCount += 1;
+      meshBytes += resource.bytes.byteLength;
+      if (meshCount > RUSTY_RENDERER_MESH_RESOURCE_MAX_COUNT
+        || resource.bytes.byteLength < 20
+        || resource.bytes[0] !== 0x67
+        || resource.bytes[1] !== 0x6c
+        || resource.bytes[2] !== 0x54
+        || resource.bytes[3] !== 0x46
+        || resource.bytes.byteLength > RUSTY_RENDERER_MESH_RESOURCE_MAX_BYTES
+        || meshBytes > RUSTY_RENDERER_MESH_RESOURCE_MAX_TOTAL_BYTES) {
+        throw contentError(
+          'resource_limit_exceeded',
+          resource.identity,
+          'animated mesh resource count or byte length exceeds the application-host bound',
         );
       }
     } else {
@@ -231,9 +257,11 @@ export function rustyApplicationSurfaceResourceOptions(
   content: PreparedRustyApplicationContent,
 ): RustyApplicationSurfaceResourceOptions {
   const entries = new Map(content.resources.map((resource) => [resource.identity, resource]));
+  const animationEntriesByHash = new Map(content.resources
+    .filter((resource) => resource.kind === 'animatedMesh' || resource.kind === 'clipPack')
+    .map((resource) => [resource.contentHash, resource]));
   const animated = animatedMeshDescriptors(content.frame);
   const clipPacks = animationClipPacks(content.frame);
-  const clipPackAssets = new Set(clipPacks.map((pack) => pack.asset));
   const mesh = content.resources.filter((resource) => resource.kind === 'mesh');
   const textures = content.resources.filter((resource) => resource.kind === 'texture');
   return Object.freeze({
@@ -244,7 +272,7 @@ export function rustyApplicationSurfaceResourceOptions(
         ...(clipPacks.length === 0 ? {} : { clipPacks: Object.freeze(clipPacks) }),
       },
       resolveAnimatedMeshResource: (descriptor: RendererAnimatedMeshResourceDescriptor) =>
-        resolveResource(entries, `${clipPackAssets.has(descriptor.asset) ? 'clip-pack' : 'mesh'}-resource/${descriptor.contentHash.slice('sha256:'.length)}`),
+        resolveResourceByHash(animationEntriesByHash, descriptor.contentHash),
     }),
     ...(mesh.length === 0 ? {} : {
       meshResourceManifest: {
@@ -346,6 +374,16 @@ function resolveResource(
   const entry = entries.get(identity);
   if (entry === undefined) return Promise.reject(new Error(`resource ${identity} is unavailable`));
   return Promise.resolve(entry.bytes.slice(0));
+}
+
+function resolveResourceByHash(
+  entries: ReadonlyMap<string, PreparedRustyApplicationResource>,
+  contentHash: string,
+): Promise<ArrayBuffer> {
+  const resource = entries.get(contentHash);
+  return resource === undefined
+    ? Promise.reject(new Error(`application resource ${contentHash} is unavailable`))
+    : Promise.resolve(resource.bytes.slice(0));
 }
 
 function contentError(

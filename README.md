@@ -26,7 +26,7 @@ Engine-owned host/backend implementation.
 The sole ABI source is:
 
 ```text
-rust/crates/csharp-product-runtime/src/native_api.rs
+rust/crates/csharp-engine-abi
 ```
 
 Generate a product's C header and C# bindings with:
@@ -45,10 +45,13 @@ cargo run -p csharp-product-runtime --locked -- \
   --library /tmp/rusty-nativeaot-trial/CsharpNativeAotTrial.so \
   --bundle-dir fixtures/csharp-nativeaot-trial/browser \
   --content-dir fixtures/csharp-nativeaot-trial/content \
-  --port 0 --exercise
+  --mode demand --direct-intent runtime.exercise=payload:runtime.exercise.payload --port 0 --exercise
 ```
 
 Generated sources belong under `obj/Generated` and are not committed.
+
+`csharp-engine-services` owns the concrete Engine bridges; the product runtime
+owns loaded-product binding and lifetime management.
 
 ## Trial rules
 

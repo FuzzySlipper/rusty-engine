@@ -4,16 +4,25 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+asset-import.workspace = true
 csharp-engine-abi.workspace = true
 core-ids.workspace = true
 core-math.workspace = true
 core-space.workspace = true
 engine-spatial.workspace = true
 entity-state.workspace = true
+gameplay-mechanics.workspace = true
 render-model.workspace = true
+render-presentation.workspace = true
+render-host-contracts.workspace = true
 render-projection.workspace = true
 runtime-ui.workspace = true
 runtime-lifecycle.workspace = true
 serde_json.workspace = true
 svc-pathfinding.workspace = true
+svc-spatial.workspace = true
 svc-rng.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

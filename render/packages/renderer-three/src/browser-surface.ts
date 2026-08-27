@@ -438,7 +438,7 @@ export function mountRendererBrowserSurface(
   let submissionSequence = 0;
   let disposed = false;
   const voxelSpriteScenes = new Set<RendererThreeVoxelSpriteScene>();
-  const viewComposition = new RendererViewCompositionBackend(webgl, renderer);
+  const viewComposition = new RendererViewCompositionBackend(webgl, renderer, viewmodelCamera);
   if (options.viewComposition !== undefined) {
     const receipt = viewComposition.configure(options.viewComposition);
     if (!receipt.applied) {

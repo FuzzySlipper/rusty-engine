@@ -74,6 +74,8 @@ pub struct AppearanceNode {
     pub parent: Option<u64>,
     pub transform: Transform,
     pub visible: bool,
+    #[serde(default)]
+    pub layer: render_model::RenderLayer,
     pub metadata: RenderMetadata,
     pub availability: ProjectionAvailability,
     pub appearance: Appearance,
@@ -116,6 +118,7 @@ struct ProjectedNode {
     parent: Option<u64>,
     transform: Transform,
     visible: bool,
+    layer: render_model::RenderLayer,
     metadata: RenderMetadata,
     appearance: Appearance,
 }
@@ -385,6 +388,7 @@ fn validate_scene(
                 parent: node.parent,
                 transform: node.transform,
                 visible: node.visible,
+                layer: node.layer,
                 metadata: node.metadata.clone(),
                 appearance,
             },
@@ -582,7 +586,7 @@ fn validate_appearance(
             material: *material,
             transform: node.transform,
             visible: node.visible,
-            layer: render_model::RenderLayer::Scene,
+            layer: node.layer,
             metadata: node.metadata.clone(),
         }
         .validate()
@@ -820,7 +824,7 @@ fn create_node(
                 material: *material,
                 transform: node.transform,
                 visible: node.visible,
-                layer: render_model::RenderLayer::Scene,
+                layer: node.layer,
                 metadata: node.metadata.clone(),
             },
         },
