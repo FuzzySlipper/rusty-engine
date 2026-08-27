@@ -8,18 +8,20 @@ use entity_state::{
 use gameplay_mechanics::{
     gameplay_component_registry, validate_state_against_catalog, ActiveEffectInstance,
     ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion, DamageKindDefinition,
-    DamageKindSelector, DamageResponseDefinition, DecisionOutcome, EffectDefinition,
-    EffectStackingPolicy, EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition,
-    ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit,
-    InventoryComponent, ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy,
-    ItemKind, ItemStack, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
-    MechanicsScalar, ObservedComponentRevision, OperationId, RequestSource, SourceCollectionCost,
-    SourceDefinition, SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity,
-    StackingGroupId, StackingPolicy, StatBaseMutationRequest, StatContribution,
-    StatContributionDefinition, StatDecision, StatDefinition, StatId, StatService, StatValue,
-    StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackMaximum, TrackMutationRequest,
-    TrackReadReceipt, TrackReconciliationPolicy, TrackReconciliationRequest, TrackService,
-    TrackSetPolicy, TrackSetRequest, TrackValue, TracksComponent,
+    DamageKindSelector, DamageResponseDefinition, DecisionOutcome, EffectApplyRequest,
+    EffectDefinition, EffectMutationKind, EffectRefreshRequest, EffectRemovalRequest,
+    EffectReplaceRequest, EffectService, EffectSourceActivation, EffectStackingPolicy,
+    EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition, ExactRatio,
+    IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit, InventoryComponent,
+    ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack,
+    MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind, MechanicsScalar,
+    ObservedComponentRevision, OperationId, RequestSource, SourceCollectionCost, SourceDefinition,
+    SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
+    StatBaseMutationRequest, StatContribution, StatContributionDefinition, StatDecision,
+    StatDefinition, StatId, StatService, StatValue, StatsComponent, TrackAdjustmentKind,
+    TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
+    TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
+    TrackSetRequest, TrackValue, TracksComponent,
 };
 
 use crate::composition::{borrowed_utf8, ABI_OK};
@@ -105,6 +107,11 @@ enum OperationLeaseRows {
         observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
     },
     Track {
+        observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
+    },
+    Effect {
+        removed: Vec<NativeMechanicsActiveEffectComponentRow>,
+        activated_sources: Vec<NativeMechanicsEffectSourceActivationRow>,
         observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
     },
 }
@@ -390,6 +397,11 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         spend_track,
         restore_track,
         reconcile_track,
+        apply_effect,
+        refresh_effect,
+        replace_effect,
+        remove_effect,
+        expire_effect,
     }
 }
 
@@ -3169,6 +3181,360 @@ unsafe extern "C" fn reconcile_track(
     ABI_OK
 }
 
+unsafe extern "C" fn apply_effect(
+    context: *mut c_void,
+    request: *const NativeMechanicsEffectMutationRequest,
+    result: *mut NativeMechanicsEffectOperationLease,
+) -> i32 {
+    mutate_effect(
+        context,
+        request,
+        result,
+        NativeMechanicsEffectMutationKind::Apply,
+    )
+}
+
+unsafe extern "C" fn refresh_effect(
+    context: *mut c_void,
+    request: *const NativeMechanicsEffectRefreshRequest,
+    result: *mut NativeMechanicsEffectOperationLease,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let normalized = NativeMechanicsEffectMutationRequest {
+        entity: request.entity,
+        operation: request.operation,
+        instance: request.instance,
+        definition: NativeUtf8Slice::default(),
+        provenance_kind: request.provenance_kind,
+        intrinsic_entity_id: request.intrinsic_entity_id,
+        intrinsic_instance: request.intrinsic_instance,
+        effect_entity_id: request.effect_entity_id,
+        effect_instance: request.effect_instance,
+        effect_stack: request.effect_stack,
+        effect_source: request.effect_source,
+        equipped_owner_entity_id: request.equipped_owner_entity_id,
+        equipped_item_entity_id: request.equipped_item_entity_id,
+        equipped_source: request.equipped_source,
+        request_operation: request.request_operation,
+        request_instance: request.request_instance,
+        stacks: request.stacks,
+        revision_guard: request.revision_guard,
+        expected_revision: request.expected_revision,
+    };
+    mutate_effect(
+        context,
+        &normalized,
+        result,
+        NativeMechanicsEffectMutationKind::Refresh,
+    )
+}
+
+unsafe extern "C" fn replace_effect(
+    context: *mut c_void,
+    request: *const NativeMechanicsEffectMutationRequest,
+    result: *mut NativeMechanicsEffectOperationLease,
+) -> i32 {
+    mutate_effect(
+        context,
+        request,
+        result,
+        NativeMechanicsEffectMutationKind::Replace,
+    )
+}
+
+unsafe fn mutate_effect(
+    context: *mut c_void,
+    request: *const NativeMechanicsEffectMutationRequest,
+    result: *mut NativeMechanicsEffectOperationLease,
+    kind: NativeMechanicsEffectMutationKind,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let (Ok(operation), Ok(instance), Ok(provenance)) = (
+        unsafe { text(request.operation, "mechanics effect operation") }
+            .and_then(parse::<OperationId>),
+        unsafe { text(request.instance, "mechanics effect instance") }
+            .and_then(parse::<gameplay_mechanics::EffectInstanceId>),
+        parse_effect_provenance(request),
+    ) else {
+        return 0;
+    };
+    let Some(catalog_id) = bridge
+        .binding(request.entity)
+        .map(|binding| binding.catalog)
+    else {
+        return 0;
+    };
+    let receipt = {
+        let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<ActiveEffectsComponent>(entity) else {
+            return 0;
+        };
+        let Some(expected_revision) = guarded_revision(
+            request.revision_guard,
+            request.expected_revision.entity_id,
+            request.expected_revision.revision,
+            request.expected_revision.component,
+            entity,
+            actual,
+            NativeMechanicsRevisionComponent::ActiveEffects,
+        ) else {
+            return 0;
+        };
+        let receipt = match kind {
+            NativeMechanicsEffectMutationKind::Apply => {
+                let Ok(definition) =
+                    unsafe { text(request.definition, "mechanics effect definition") }
+                        .and_then(parse::<gameplay_mechanics::EffectDefinitionId>)
+                else {
+                    return 0;
+                };
+                EffectService::apply(
+                    state,
+                    catalog,
+                    EffectApplyRequest {
+                        operation,
+                        entity,
+                        instance,
+                        definition,
+                        provenance,
+                        stacks: request.stacks,
+                        expected_revision,
+                    },
+                )
+            }
+            NativeMechanicsEffectMutationKind::Refresh => EffectService::refresh(
+                state,
+                catalog,
+                EffectRefreshRequest {
+                    operation,
+                    entity,
+                    instance,
+                    provenance,
+                    stacks: request.stacks,
+                    expected_revision,
+                },
+            ),
+            NativeMechanicsEffectMutationKind::Replace => {
+                let Ok(definition) =
+                    unsafe { text(request.definition, "mechanics effect definition") }
+                        .and_then(parse::<gameplay_mechanics::EffectDefinitionId>)
+                else {
+                    return 0;
+                };
+                EffectService::replace(
+                    state,
+                    catalog,
+                    EffectReplaceRequest {
+                        operation,
+                        entity,
+                        instance,
+                        definition,
+                        provenance,
+                        stacks: request.stacks,
+                        expected_revision,
+                    },
+                )
+            }
+            NativeMechanicsEffectMutationKind::Remove
+            | NativeMechanicsEffectMutationKind::Expire => {
+                unreachable!("mutation callback excludes removal kinds")
+            }
+        };
+        let Ok(receipt) = receipt else {
+            return 0;
+        };
+        receipt
+    };
+    write_effect_operation_lease(bridge, catalog_id, receipt, result)
+}
+
+unsafe extern "C" fn remove_effect(
+    context: *mut c_void,
+    request: *const NativeMechanicsEffectRemovalRequest,
+    result: *mut NativeMechanicsEffectOperationLease,
+) -> i32 {
+    remove_effect_with_kind(
+        context,
+        request,
+        result,
+        NativeMechanicsEffectMutationKind::Remove,
+    )
+}
+
+unsafe extern "C" fn expire_effect(
+    context: *mut c_void,
+    request: *const NativeMechanicsEffectRemovalRequest,
+    result: *mut NativeMechanicsEffectOperationLease,
+) -> i32 {
+    remove_effect_with_kind(
+        context,
+        request,
+        result,
+        NativeMechanicsEffectMutationKind::Expire,
+    )
+}
+
+unsafe fn remove_effect_with_kind(
+    context: *mut c_void,
+    request: *const NativeMechanicsEffectRemovalRequest,
+    result: *mut NativeMechanicsEffectOperationLease,
+    kind: NativeMechanicsEffectMutationKind,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let (Ok(operation), Ok(instance)) = (
+        unsafe { text(request.operation, "mechanics effect operation") }
+            .and_then(parse::<OperationId>),
+        unsafe { text(request.instance, "mechanics effect instance") }
+            .and_then(parse::<gameplay_mechanics::EffectInstanceId>),
+    ) else {
+        return 0;
+    };
+    let Some(catalog_id) = bridge
+        .binding(request.entity)
+        .map(|binding| binding.catalog)
+    else {
+        return 0;
+    };
+    let receipt = {
+        let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<ActiveEffectsComponent>(entity) else {
+            return 0;
+        };
+        let Some(expected_revision) = guarded_revision(
+            request.revision_guard,
+            request.expected_revision.entity_id,
+            request.expected_revision.revision,
+            request.expected_revision.component,
+            entity,
+            actual,
+            NativeMechanicsRevisionComponent::ActiveEffects,
+        ) else {
+            return 0;
+        };
+        let request = EffectRemovalRequest {
+            operation,
+            entity,
+            instance,
+            expected_revision,
+        };
+        let receipt = match kind {
+            NativeMechanicsEffectMutationKind::Remove => {
+                EffectService::remove(state, catalog, request)
+            }
+            NativeMechanicsEffectMutationKind::Expire => {
+                EffectService::expire(state, catalog, request)
+            }
+            NativeMechanicsEffectMutationKind::Apply
+            | NativeMechanicsEffectMutationKind::Refresh
+            | NativeMechanicsEffectMutationKind::Replace => {
+                unreachable!("removal callback only accepts removal kinds")
+            }
+        };
+        let Ok(receipt) = receipt else {
+            return 0;
+        };
+        receipt
+    };
+    write_effect_operation_lease(bridge, catalog_id, receipt, result)
+}
+
+fn write_effect_operation_lease(
+    bridge: &mut RuntimeMechanicsBridge,
+    catalog_id: u64,
+    receipt: gameplay_mechanics::EffectMutationReceipt,
+    result: &mut NativeMechanicsEffectOperationLease,
+) -> i32 {
+    let mut lease_text = CatalogLeaseText::default();
+    let removed = receipt
+        .removed
+        .iter()
+        .map(|effect| native_active_effect_row(effect, &mut lease_text))
+        .collect::<Vec<_>>();
+    let activated_sources = receipt
+        .activated_sources
+        .iter()
+        .map(|activation| native_effect_source_activation(activation, &mut lease_text))
+        .collect::<Vec<_>>();
+    let observed_revisions = receipt
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsEffectOperationLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        removed: std::ptr::null(),
+        removed_len: removed.len(),
+        activated_sources: std::ptr::null(),
+        activated_sources_len: activated_sources.len(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        entity_id: receipt.entity.raw(),
+        kind: native_effect_mutation_kind(receipt.kind),
+        has_current: receipt.current.is_some(),
+        current: receipt
+            .current
+            .as_ref()
+            .map(|effect| native_active_effect_row(effect, &mut lease_text))
+            .unwrap_or_default(),
+        observed_revision: active_effects_revision(
+            receipt.entity,
+            receipt.observed_effects_revision,
+        ),
+        committed_revision: active_effects_revision(
+            receipt.entity,
+            receipt.committed_effects_revision,
+        ),
+        tracks_validated: receipt.tracks_validated as u64,
+        source_cost: native_source_cost(receipt.source_cost),
+    };
+    let handle = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::Effect {
+            removed,
+            activated_sources,
+            observed_revisions,
+        },
+    });
+    let Some(handle) = handle else {
+        return 0;
+    };
+    let OperationLeaseRows::Effect {
+        removed,
+        activated_sources,
+        observed_revisions,
+    } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted effect operation lease")
+        .rows
+    else {
+        unreachable!("effect operation lease row kind matches its reader")
+    };
+    *result = NativeMechanicsEffectOperationLease {
+        handle,
+        removed: removed.as_ptr(),
+        activated_sources: activated_sources.as_ptr(),
+        observed_revisions: observed_revisions.as_ptr(),
+        ..metadata
+    };
+    ABI_OK
+}
+
 fn attach<T: entity_state::EntityComponent>(
     state: &mut EntityState,
     entity: EntityId,
@@ -3532,6 +3898,152 @@ fn native_source_identity(
     }
     native
 }
+fn parse_effect_provenance(
+    request: &NativeMechanicsEffectMutationRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    match request.provenance_kind {
+        NativeMechanicsActiveEffectProvenanceKind::Intrinsic => {
+            Ok(SourceInstanceIdentity::Intrinsic {
+                entity: EntityId::new(request.intrinsic_entity_id),
+                instance: unsafe {
+                    text(
+                        request.intrinsic_instance,
+                        "mechanics effect intrinsic provenance",
+                    )
+                }
+                .and_then(parse::<SourceInstanceId>)?,
+            })
+        }
+        NativeMechanicsActiveEffectProvenanceKind::Effect => Ok(SourceInstanceIdentity::Effect {
+            entity: EntityId::new(request.effect_entity_id),
+            effect: unsafe {
+                text(
+                    request.effect_instance,
+                    "mechanics effect provenance effect",
+                )
+            }
+            .and_then(parse::<gameplay_mechanics::EffectInstanceId>)?,
+            stack: request.effect_stack,
+            source: unsafe { text(request.effect_source, "mechanics effect provenance source") }
+                .and_then(parse::<SourceDefinitionId>)?,
+        }),
+        NativeMechanicsActiveEffectProvenanceKind::EquippedItem => {
+            Ok(SourceInstanceIdentity::EquippedItem {
+                owner: EntityId::new(request.equipped_owner_entity_id),
+                item: EntityId::new(request.equipped_item_entity_id),
+                source: unsafe {
+                    text(
+                        request.equipped_source,
+                        "mechanics effect equipment provenance",
+                    )
+                }
+                .and_then(parse::<SourceDefinitionId>)?,
+            })
+        }
+        NativeMechanicsActiveEffectProvenanceKind::Request => Ok(SourceInstanceIdentity::Request {
+            operation: unsafe {
+                text(
+                    request.request_operation,
+                    "mechanics effect request provenance operation",
+                )
+            }
+            .and_then(parse::<OperationId>)?,
+            instance: unsafe {
+                text(
+                    request.request_instance,
+                    "mechanics effect request provenance instance",
+                )
+            }
+            .and_then(parse::<SourceInstanceId>)?,
+        }),
+    }
+}
+fn native_active_effect_row(
+    effect: &ActiveEffectInstance,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsActiveEffectComponentRow {
+    let mut row = NativeMechanicsActiveEffectComponentRow {
+        instance: text.copy(effect.instance().as_str()),
+        definition: text.copy(effect.definition().as_str()),
+        stacks: effect.stacks(),
+        provenance_kind: NativeMechanicsActiveEffectProvenanceKind::Intrinsic,
+        intrinsic_entity_id: 0,
+        intrinsic_instance: text.copy(""),
+        effect_entity_id: 0,
+        effect_instance: text.copy(""),
+        effect_stack: 0,
+        effect_source: text.copy(""),
+        equipped_owner_entity_id: 0,
+        equipped_item_entity_id: 0,
+        equipped_source: text.copy(""),
+        request_operation: text.copy(""),
+        request_instance: text.copy(""),
+    };
+    match effect.provenance() {
+        SourceInstanceIdentity::Intrinsic { entity, instance } => {
+            row.provenance_kind = NativeMechanicsActiveEffectProvenanceKind::Intrinsic;
+            row.intrinsic_entity_id = entity.raw();
+            row.intrinsic_instance = text.copy(instance.as_str());
+        }
+        SourceInstanceIdentity::Effect {
+            entity,
+            effect,
+            stack,
+            source,
+        } => {
+            row.provenance_kind = NativeMechanicsActiveEffectProvenanceKind::Effect;
+            row.effect_entity_id = entity.raw();
+            row.effect_instance = text.copy(effect.as_str());
+            row.effect_stack = *stack;
+            row.effect_source = text.copy(source.as_str());
+        }
+        SourceInstanceIdentity::EquippedItem {
+            owner,
+            item,
+            source,
+        } => {
+            row.provenance_kind = NativeMechanicsActiveEffectProvenanceKind::EquippedItem;
+            row.equipped_owner_entity_id = owner.raw();
+            row.equipped_item_entity_id = item.raw();
+            row.equipped_source = text.copy(source.as_str());
+        }
+        SourceInstanceIdentity::Request {
+            operation,
+            instance,
+        } => {
+            row.provenance_kind = NativeMechanicsActiveEffectProvenanceKind::Request;
+            row.request_operation = text.copy(operation.as_str());
+            row.request_instance = text.copy(instance.as_str());
+        }
+    }
+    row
+}
+fn native_effect_source_activation(
+    value: &EffectSourceActivation,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsEffectSourceActivationRow {
+    NativeMechanicsEffectSourceActivationRow {
+        identity: native_source_identity(&value.identity, text),
+        definition: text.copy(value.definition.as_str()),
+    }
+}
+fn native_effect_mutation_kind(value: EffectMutationKind) -> NativeMechanicsEffectMutationKind {
+    match value {
+        EffectMutationKind::Apply => NativeMechanicsEffectMutationKind::Apply,
+        EffectMutationKind::Refresh => NativeMechanicsEffectMutationKind::Refresh,
+        EffectMutationKind::Replace => NativeMechanicsEffectMutationKind::Replace,
+        EffectMutationKind::Remove => NativeMechanicsEffectMutationKind::Remove,
+        EffectMutationKind::Expire => NativeMechanicsEffectMutationKind::Expire,
+    }
+}
+fn active_effects_revision(entity: EntityId, revision: u64) -> NativeMechanicsComponentRevision {
+    NativeMechanicsComponentRevision {
+        entity_id: entity.raw(),
+        revision,
+        component: NativeMechanicsRevisionComponent::ActiveEffects,
+        present: true,
+    }
+}
 fn native_stat_decision(
     value: &StatDecision,
     text: &mut CatalogLeaseText,
@@ -3862,6 +4374,45 @@ mod tests {
             unsafe { define_contribution(context, &contribution) },
             ABI_OK
         );
+        let effect_sources = [NativeMechanicsText {
+            value: utf8("bonus"),
+        }];
+        for (id, stacking_group, stacking) in [
+            (
+                "applied",
+                "applied_group",
+                NativeMechanicsEffectStackingKind::IndependentByProvenance,
+            ),
+            (
+                "refreshing",
+                "refreshing_group",
+                NativeMechanicsEffectStackingKind::Refresh,
+            ),
+            (
+                "replacing",
+                "replacing_group",
+                NativeMechanicsEffectStackingKind::Replace,
+            ),
+        ] {
+            assert_eq!(
+                unsafe {
+                    define_effect(
+                        context,
+                        &NativeMechanicsEffectDefinitionRequest {
+                            catalog,
+                            id: utf8(id),
+                            stacking_group: utf8(stacking_group),
+                            stacking,
+                            maximum_instances: 3,
+                            maximum_stacks: 3,
+                            sources: effect_sources.as_ptr(),
+                            sources_len: effect_sources.len(),
+                        },
+                    )
+                },
+                ABI_OK
+            );
+        }
         assert!(ratio(3, 2).is_ok());
         assert!(ratio(u32::MAX, 1).is_err());
         assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
@@ -3911,6 +4462,39 @@ mod tests {
             unsafe { bind_entity(context, &entity_request, &mut duplicate_entity) },
             0
         );
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        entity,
+                        has_stats: false,
+                        stats: std::ptr::null(),
+                        stats_len: 0,
+                        has_tracks: false,
+                        tracks: std::ptr::null(),
+                        tracks_len: 0,
+                        has_intrinsic_sources: false,
+                        intrinsic_sources: std::ptr::null(),
+                        intrinsic_sources_len: 0,
+                        has_active_effects: true,
+                        active_effects: std::ptr::null(),
+                        active_effects_len: 0,
+                        has_inventory: false,
+                        inventory_stacks: std::ptr::null(),
+                        inventory_stacks_len: 0,
+                        inventory_capacity_limits: std::ptr::null(),
+                        inventory_capacity_limits_len: 0,
+                        has_item: false,
+                        item_definition: utf8(""),
+                        has_equipment: false,
+                        equipment_assignments: std::ptr::null(),
+                        equipment_assignments_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
         let initial_stat = NativeMechanicsInitialStatRequest {
             entity,
             stat: utf8("strength"),
@@ -3959,7 +4543,7 @@ mod tests {
             entity_receipt.active_effects_revision.component,
             NativeMechanicsRevisionComponent::ActiveEffects
         );
-        assert!(!entity_receipt.active_effects_revision.present);
+        assert!(entity_receipt.active_effects_revision.present);
         assert_eq!(
             entity_receipt.inventory_revision.component,
             NativeMechanicsRevisionComponent::Inventory
@@ -4238,6 +4822,174 @@ mod tests {
             unsafe { destroy_operation_lease(context, stat_mutation.handle) },
             ABI_OK
         );
+        let effect_request = |operation, instance, definition, expected_revision| {
+            NativeMechanicsEffectMutationRequest {
+                entity,
+                operation: utf8(operation),
+                instance: utf8(instance),
+                definition: utf8(definition),
+                provenance_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                intrinsic_entity_id: 0,
+                intrinsic_instance: utf8(""),
+                effect_entity_id: 0,
+                effect_instance: utf8(""),
+                effect_stack: 0,
+                effect_source: utf8(""),
+                equipped_owner_entity_id: 0,
+                equipped_item_entity_id: 0,
+                equipped_source: utf8(""),
+                request_operation: utf8("effect_provenance"),
+                request_instance: utf8("effect_request"),
+                stacks: 1,
+                revision_guard: NativeMechanicsRevisionGuard::Exact,
+                expected_revision,
+            }
+        };
+        let mut applied = NativeMechanicsEffectOperationLease::default();
+        assert_eq!(
+            unsafe {
+                apply_effect(
+                    context,
+                    &effect_request(
+                        "apply_effect",
+                        "applied_instance",
+                        "applied",
+                        entity_receipt.active_effects_revision,
+                    ),
+                    &mut applied,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(applied.kind, NativeMechanicsEffectMutationKind::Apply);
+        assert!(applied.has_current);
+        assert_eq!(applied.activated_sources_len, 1);
+        assert!(applied.observed_revisions_len >= 2);
+        assert_eq!(
+            unsafe { (*applied.activated_sources).identity.kind },
+            NativeMechanicsActiveEffectProvenanceKind::Effect
+        );
+        let mut refreshing = NativeMechanicsEffectOperationLease::default();
+        assert_eq!(
+            unsafe {
+                apply_effect(
+                    context,
+                    &effect_request(
+                        "apply_refreshing",
+                        "refreshing_instance",
+                        "refreshing",
+                        applied.committed_revision,
+                    ),
+                    &mut refreshing,
+                )
+            },
+            ABI_OK
+        );
+        let mut refreshed = NativeMechanicsEffectOperationLease::default();
+        let refresh_request = NativeMechanicsEffectRefreshRequest {
+            entity,
+            operation: utf8("refresh_effect"),
+            instance: utf8("refreshing_instance"),
+            provenance_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+            intrinsic_entity_id: 0,
+            intrinsic_instance: utf8(""),
+            effect_entity_id: 0,
+            effect_instance: utf8(""),
+            effect_stack: 0,
+            effect_source: utf8(""),
+            equipped_owner_entity_id: 0,
+            equipped_item_entity_id: 0,
+            equipped_source: utf8(""),
+            request_operation: utf8("effect_provenance"),
+            request_instance: utf8("effect_request"),
+            stacks: 1,
+            revision_guard: NativeMechanicsRevisionGuard::Exact,
+            expected_revision: refreshing.committed_revision,
+        };
+        assert_eq!(
+            unsafe { refresh_effect(context, &refresh_request, &mut refreshed) },
+            ABI_OK
+        );
+        assert_eq!(refreshed.kind, NativeMechanicsEffectMutationKind::Refresh);
+        assert_eq!(refreshed.removed_len, 1);
+        assert_eq!(refreshed.activated_sources_len, 1);
+        let mut replacing = NativeMechanicsEffectOperationLease::default();
+        assert_eq!(
+            unsafe {
+                apply_effect(
+                    context,
+                    &effect_request(
+                        "apply_replacing",
+                        "replacing_old",
+                        "replacing",
+                        refreshed.committed_revision,
+                    ),
+                    &mut replacing,
+                )
+            },
+            ABI_OK
+        );
+        let mut replaced = NativeMechanicsEffectOperationLease::default();
+        assert_eq!(
+            unsafe {
+                replace_effect(
+                    context,
+                    &effect_request(
+                        "replace_effect",
+                        "replacing_new",
+                        "replacing",
+                        replacing.committed_revision,
+                    ),
+                    &mut replaced,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(replaced.kind, NativeMechanicsEffectMutationKind::Replace);
+        assert_eq!(replaced.removed_len, 1);
+        assert_eq!(replaced.activated_sources_len, 1);
+        let remove_request = NativeMechanicsEffectRemovalRequest {
+            entity,
+            operation: utf8("remove_effect"),
+            instance: utf8("applied_instance"),
+            revision_guard: NativeMechanicsRevisionGuard::Exact,
+            expected_revision: replaced.committed_revision,
+        };
+        let mut removed = NativeMechanicsEffectOperationLease::default();
+        assert_eq!(
+            unsafe { remove_effect(context, &remove_request, &mut removed) },
+            ABI_OK
+        );
+        assert_eq!(removed.kind, NativeMechanicsEffectMutationKind::Remove);
+        assert!(!removed.has_current);
+        assert_eq!(removed.removed_len, 1);
+        assert_eq!(removed.activated_sources_len, 0);
+        let expire_request = NativeMechanicsEffectRemovalRequest {
+            entity,
+            operation: utf8("expire_effect"),
+            instance: utf8("refreshing_instance"),
+            revision_guard: NativeMechanicsRevisionGuard::Exact,
+            expected_revision: removed.committed_revision,
+        };
+        let mut expired = NativeMechanicsEffectOperationLease::default();
+        assert_eq!(
+            unsafe { expire_effect(context, &expire_request, &mut expired) },
+            ABI_OK
+        );
+        assert_eq!(expired.kind, NativeMechanicsEffectMutationKind::Expire);
+        assert_eq!(expired.removed_len, 1);
+        assert_eq!(expired.activated_sources_len, 0);
+        for handle in [
+            applied.handle,
+            refreshing.handle,
+            refreshed.handle,
+            replacing.handle,
+            replaced.handle,
+            removed.handle,
+            expired.handle,
+        ] {
+            assert_eq!(unsafe { destroy_operation_lease(context, handle) }, ABI_OK);
+        }
         assert_eq!(unsafe { destroy_catalog(context, catalog) }, 0);
         let state_entity = bridge.entities[&entity.value].entity;
         let released_entity = entity;

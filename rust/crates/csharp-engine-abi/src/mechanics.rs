@@ -92,6 +92,17 @@ pub enum NativeMechanicsEffectStackingKind {
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsEffectMutationKind {
+    #[default]
+    Apply = 0,
+    Refresh = 1,
+    Replace = 2,
+    Remove = 3,
+    Expire = 4,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeMechanicsItemKind {
     #[default]
     Fungible = 0,
@@ -460,7 +471,7 @@ pub struct NativeMechanicsIntrinsicSourceComponentRow {
     pub definition: NativeUtf8Slice,
 }
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMechanicsActiveEffectComponentRow {
     pub instance: NativeUtf8Slice,
     pub definition: NativeUtf8Slice,
@@ -1146,5 +1157,99 @@ pub struct NativeMechanicsTrackReconciliationLease {
     pub prospective_maximum: i64,
     pub observed_revision: NativeMechanicsTracksRevision,
     pub committed_revision: NativeMechanicsTracksRevision,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
+}
+
+/// A flattened borrowed provenance input for an EffectService operation. The
+/// relevant fields are selected by `provenance_kind`; all supplied text is
+/// borrowed only for the callback duration.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEffectMutationRequest {
+    pub entity: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+    pub provenance_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub intrinsic_entity_id: u64,
+    pub intrinsic_instance: NativeUtf8Slice,
+    pub effect_entity_id: u64,
+    pub effect_instance: NativeUtf8Slice,
+    pub effect_stack: u16,
+    pub effect_source: NativeUtf8Slice,
+    pub equipped_owner_entity_id: u64,
+    pub equipped_item_entity_id: u64,
+    pub equipped_source: NativeUtf8Slice,
+    pub request_operation: NativeUtf8Slice,
+    pub request_instance: NativeUtf8Slice,
+    pub stacks: u16,
+    pub revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_revision: NativeMechanicsComponentRevision,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEffectRefreshRequest {
+    pub entity: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub instance: NativeUtf8Slice,
+    pub provenance_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub intrinsic_entity_id: u64,
+    pub intrinsic_instance: NativeUtf8Slice,
+    pub effect_entity_id: u64,
+    pub effect_instance: NativeUtf8Slice,
+    pub effect_stack: u16,
+    pub effect_source: NativeUtf8Slice,
+    pub equipped_owner_entity_id: u64,
+    pub equipped_item_entity_id: u64,
+    pub equipped_source: NativeUtf8Slice,
+    pub request_operation: NativeUtf8Slice,
+    pub request_instance: NativeUtf8Slice,
+    pub stacks: u16,
+    pub revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_revision: NativeMechanicsComponentRevision,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEffectRemovalRequest {
+    pub entity: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub instance: NativeUtf8Slice,
+    pub revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_revision: NativeMechanicsComponentRevision,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsEffectSourceActivationRow {
+    pub identity: NativeMechanicsSourceIdentity,
+    pub definition: NativeUtf8Slice,
+}
+
+/// One exact EffectService mutation receipt. `removed`, `activated_sources`,
+/// and `observed_revisions` have distinct backing collections, all retained by
+/// `handle` until `destroy_operation_lease`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsEffectOperationLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub removed: *const NativeMechanicsActiveEffectComponentRow,
+    pub removed_len: usize,
+    pub activated_sources: *const NativeMechanicsEffectSourceActivationRow,
+    pub activated_sources_len: usize,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub entity_id: u64,
+    pub kind: NativeMechanicsEffectMutationKind,
+    pub has_current: bool,
+    pub current: NativeMechanicsActiveEffectComponentRow,
+    pub observed_revision: NativeMechanicsComponentRevision,
+    pub committed_revision: NativeMechanicsComponentRevision,
+    pub tracks_validated: u64,
     pub source_cost: NativeMechanicsSourceCollectionCost,
 }

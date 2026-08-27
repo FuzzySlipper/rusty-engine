@@ -673,6 +673,31 @@ pub type NativeReconcileMechanicsTrack = unsafe extern "C" fn(
     *const NativeMechanicsTrackReconciliationRequest,
     *mut NativeMechanicsTrackReconciliationLease,
 ) -> i32;
+pub type NativeApplyMechanicsEffect = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEffectMutationRequest,
+    *mut NativeMechanicsEffectOperationLease,
+) -> i32;
+pub type NativeRefreshMechanicsEffect = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEffectRefreshRequest,
+    *mut NativeMechanicsEffectOperationLease,
+) -> i32;
+pub type NativeReplaceMechanicsEffect = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEffectMutationRequest,
+    *mut NativeMechanicsEffectOperationLease,
+) -> i32;
+pub type NativeRemoveMechanicsEffect = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEffectRemovalRequest,
+    *mut NativeMechanicsEffectOperationLease,
+) -> i32;
+pub type NativeExpireMechanicsEffect = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEffectRemovalRequest,
+    *mut NativeMechanicsEffectOperationLease,
+) -> i32;
 
 pub type NativeOpenPersistenceStore = unsafe extern "C" fn(
     *mut c_void,
@@ -938,6 +963,11 @@ pub struct NativeMechanicsApi {
     pub spend_track: NativeSpendMechanicsTrack,
     pub restore_track: NativeRestoreMechanicsTrack,
     pub reconcile_track: NativeReconcileMechanicsTrack,
+    pub apply_effect: NativeApplyMechanicsEffect,
+    pub refresh_effect: NativeRefreshMechanicsEffect,
+    pub replace_effect: NativeReplaceMechanicsEffect,
+    pub remove_effect: NativeRemoveMechanicsEffect,
+    pub expire_effect: NativeExpireMechanicsEffect,
 }
 
 #[repr(C)]
