@@ -456,6 +456,11 @@ pub type NativeBindMechanicsEntity = unsafe extern "C" fn(
     *const NativeMechanicsEntityBindRequest,
     *mut NativeMechanicsEntityHandle,
 ) -> i32;
+pub type NativeRebindMechanicsEntity = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEntityRebindRequest,
+    *mut NativeMechanicsEntityHandle,
+) -> i32;
 pub type NativeSetMechanicsInitialStat =
     unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialStatRequest) -> i32;
 pub type NativeSetMechanicsInitialTrack =
@@ -469,6 +474,11 @@ pub type NativeCommitMechanicsEntity = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyMechanicsEntity =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsEntityHandle) -> i32;
+pub type NativeSetMechanicsEntityLifecycle = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsLifecycleRequest,
+    *mut NativeMechanicsLifecycleReceipt,
+) -> i32;
 pub type NativeReadMechanicsStat = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsStatReadRequest,
@@ -721,10 +731,12 @@ pub struct NativeMechanicsApi {
     pub admit_catalog: NativeAdmitMechanicsCatalog,
     pub destroy_catalog: NativeDestroyMechanicsCatalog,
     pub bind_entity: NativeBindMechanicsEntity,
+    pub rebind_entity: NativeRebindMechanicsEntity,
     pub set_initial_stat: NativeSetMechanicsInitialStat,
     pub set_initial_track: NativeSetMechanicsInitialTrack,
     pub bind_intrinsic_source: NativeBindMechanicsIntrinsicSource,
     pub commit_entity: NativeCommitMechanicsEntity,
+    pub set_entity_lifecycle: NativeSetMechanicsEntityLifecycle,
     pub destroy_entity: NativeDestroyMechanicsEntity,
     pub read_stat: NativeReadMechanicsStat,
     pub evaluate_stat: NativeEvaluateMechanicsStat,

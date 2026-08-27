@@ -47,11 +47,35 @@ pub enum NativeMechanicsRevisionGuard {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeMechanicsRevisionComponent {
     #[default]
     Stats = 0,
     Tracks = 1,
+    IntrinsicSources = 2,
+    ActiveEffects = 3,
+    Inventory = 4,
+    Item = 5,
+    Equipment = 6,
+}
+
+/// The mechanics mirror intentionally follows the product's EntityWorld lifecycle.
+/// It is not a second source of product identity.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsEntityLifecycle {
+    #[default]
+    Active = 0,
+    Disabled = 1,
+    Tombstoned = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default)]
+pub enum NativeMechanicsLifecycleGuard {
+    #[default]
+    Unchecked = 0,
+    Exact = 1,
 }
 
 #[repr(C)]
@@ -77,6 +101,21 @@ pub struct NativeMechanicsTracksRevision {
     pub entity_id: u64,
     pub revision: u64,
     pub component: NativeMechanicsRevisionComponent,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsComponentRevision {
+    pub entity_id: u64,
+    pub revision: u64,
+    pub component: NativeMechanicsRevisionComponent,
+    pub present: bool,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsLifecycleReceipt {
+    pub entity_id: u64,
+    pub lifecycle: NativeMechanicsEntityLifecycle,
+    pub stamp: u64,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -124,6 +163,14 @@ pub struct NativeMechanicsEntityBindRequest {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEntityRebindRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub entity_id: u64,
+    pub guard: NativeMechanicsLifecycleGuard,
+    pub expected_stamp: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeMechanicsInitialStatRequest {
     pub entity: NativeMechanicsEntityHandle,
     pub stat: NativeUtf8Slice,
@@ -148,6 +195,22 @@ pub struct NativeMechanicsIntrinsicSourceRequest {
 pub struct NativeMechanicsEntityReceipt {
     pub stats_revision: NativeMechanicsStatsRevision,
     pub tracks_revision: NativeMechanicsTracksRevision,
+    pub lifecycle: NativeMechanicsLifecycleReceipt,
+    pub stats_slot: NativeMechanicsComponentRevision,
+    pub tracks_slot: NativeMechanicsComponentRevision,
+    pub intrinsic_sources_revision: NativeMechanicsComponentRevision,
+    pub active_effects_revision: NativeMechanicsComponentRevision,
+    pub inventory_revision: NativeMechanicsComponentRevision,
+    pub item_revision: NativeMechanicsComponentRevision,
+    pub equipment_revision: NativeMechanicsComponentRevision,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsLifecycleRequest {
+    pub entity: NativeMechanicsEntityHandle,
+    pub lifecycle: NativeMechanicsEntityLifecycle,
+    pub guard: NativeMechanicsLifecycleGuard,
+    pub expected_stamp: u64,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

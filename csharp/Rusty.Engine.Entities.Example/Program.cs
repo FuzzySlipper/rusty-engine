@@ -1,3 +1,4 @@
+using Rusty.Engine;
 using Rusty.Engine.Entities;
 
 const uint HealthLocalComponentId = 1;
@@ -34,6 +35,8 @@ Require(world.Get(actor, health).Current == 10, "in-memory snapshot restore did 
 Throws(() => world.Set(actor, health, new Health(9), healthRevision), "snapshot restore must invalidate old component guards");
 Require(world.Diagnostics().Components.Single(component => component.Key == health.Key).ValueCount == 1, "diagnostics lost the component table");
 
+ExerciseMechanicsLeaseRebind();
+
 static void Require(bool condition, string message)
 {
     if (!condition)
@@ -63,6 +66,95 @@ static void ValidateHealth(in Health health)
     }
 }
 
+static void ExerciseMechanicsLeaseRebind()
+{
+    using var world = new EntityWorld();
+    EntityId actor = world.Create();
+    var service = new MechanicsAdapterFake();
+    using (var mechanics = new MechanicsEntityWorld(world, service, service.Catalog))
+    {
+        mechanics.Bind(actor, "actor");
+        mechanics.SetInitialStat(actor, "strength", 10);
+        MechanicsEntityReceipt receipt = mechanics.Commit(actor);
+        Require(receipt.StatsSlot.Present && !receipt.InventoryRevision.Present, "fixed mechanics family slots were not preserved");
+        Require(receipt.Lifecycle.Stamp == MechanicsAdapterFake.InitialLifecycleStamp, "initial lifecycle stamp was not retained");
+    }
+    Require(service.ReleasedLeases == 1, "disposing an adapter must release its committed native lease");
+    using (var mechanics = new MechanicsEntityWorld(world, service, service.Catalog))
+    {
+        mechanics.Rebind(actor, MechanicsAdapterFake.InitialLifecycleStamp, world.GetEntityRevision(actor));
+        mechanics.SetLifecycle(actor, EntityLifecycle.Tombstoned, world.GetEntityRevision(actor));
+    }
+    Require(service.Rebinds == 1 && service.ReleasedLeases == 2, "released canonical mechanics state was not rebindable");
+    Require(world.GetLifecycle(actor) == EntityLifecycle.Tombstoned, "explicit adapter lifecycle transition did not preserve product ownership");
+}
+
 readonly record struct Health(int Current);
 
 readonly record struct Armor(int Current);
+
+sealed class MechanicsAdapterFake : IMechanicsService
+{
+    public const ulong InitialLifecycleStamp = 11;
+    private ulong _nextHandle = 1;
+    public int ReleasedLeases { get; private set; }
+    public int Rebinds { get; private set; }
+    public MechanicsCatalog Catalog { get; } = new(new MechanicsCatalogHandle(1), static () => { });
+
+    public MechanicsCatalog CreateCatalog(MechanicsCatalogCreateRequest arg0) => Catalog;
+    public void DefineStat(MechanicsStatDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineTrack(MechanicsTrackDefinitionRequest arg0) => throw new NotSupportedException();
+    public void DefineContribution(MechanicsContributionDefinitionRequest arg0) => throw new NotSupportedException();
+    public void AdmitCatalog(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsEntity BindEntity(MechanicsEntityBindRequest arg0) => Lease();
+    public MechanicsEntity RebindEntity(MechanicsEntityRebindRequest arg0)
+    {
+        if (arg0.Guard != MechanicsLifecycleGuard.Exact || arg0.ExpectedStamp != InitialLifecycleStamp)
+        {
+            throw new InvalidOperationException("rebind must retain the exact lifecycle stamp");
+        }
+        Rebinds++;
+        return Lease();
+    }
+    public void SetInitialStat(MechanicsInitialStatRequest arg0) { }
+    public void SetInitialTrack(MechanicsInitialTrackRequest arg0) => throw new NotSupportedException();
+    public void BindIntrinsicSource(MechanicsIntrinsicSourceRequest arg0) => throw new NotSupportedException();
+    public MechanicsEntityReceipt CommitEntity(MechanicsEntity arg0)
+    {
+        MechanicsComponentRevision Slot(MechanicsRevisionComponent component, bool present)
+            => new(1, 1, component, present);
+        return new MechanicsEntityReceipt(
+            new MechanicsStatsRevision(1, 1, MechanicsRevisionComponent.Stats),
+            new MechanicsTracksRevision(1, 1, MechanicsRevisionComponent.Tracks),
+            new MechanicsLifecycleReceipt(1, MechanicsEntityLifecycle.Active, InitialLifecycleStamp),
+            Slot(MechanicsRevisionComponent.Stats, true),
+            Slot(MechanicsRevisionComponent.Tracks, true),
+            Slot(MechanicsRevisionComponent.IntrinsicSources, false),
+            Slot(MechanicsRevisionComponent.ActiveEffects, false),
+            Slot(MechanicsRevisionComponent.Inventory, false),
+            Slot(MechanicsRevisionComponent.Item, false),
+            Slot(MechanicsRevisionComponent.Equipment, false));
+    }
+    public MechanicsLifecycleReceipt SetEntityLifecycle(MechanicsLifecycleRequest arg0)
+    {
+        if (arg0.Guard != MechanicsLifecycleGuard.Exact || arg0.ExpectedStamp != InitialLifecycleStamp)
+        {
+            throw new InvalidOperationException("lifecycle transition must retain the exact native stamp");
+        }
+        return new MechanicsLifecycleReceipt(1, arg0.Lifecycle, InitialLifecycleStamp + 1);
+    }
+    public MechanicsStatReadReceipt ReadStat(MechanicsStatReadRequest arg0) => throw new NotSupportedException();
+    public MechanicsStatEvaluationReceipt EvaluateStat(MechanicsStatOperationRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackReadReceipt ReadTrack(MechanicsTrackReadRequest arg0) => throw new NotSupportedException();
+    public MechanicsStatMutationReceipt SetStatBase(MechanicsStatBaseMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackSetReceipt SetTrack(MechanicsTrackSetRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackMutationReceipt SpendTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackMutationReceipt RestoreTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackReconciliationReceipt ReconcileTrack(MechanicsTrackReconciliationRequest arg0) => throw new NotSupportedException();
+
+    private MechanicsEntity Lease()
+    {
+        MechanicsEntityHandle handle = new(_nextHandle++);
+        return new MechanicsEntity(handle, () => ReleasedLeases++);
+    }
+}

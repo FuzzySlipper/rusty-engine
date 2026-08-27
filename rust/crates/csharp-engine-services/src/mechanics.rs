@@ -4,8 +4,9 @@ use core_ids::EntityId;
 use csharp_engine_abi::*;
 use entity_state::{ComponentRevision, EntityAuthoringService, EntityDefinition, EntityState};
 use gameplay_mechanics::{
-    gameplay_component_registry, validate_state_against_catalog, CatalogVersion, ExactRatio,
-    IntrinsicSourceBinding, IntrinsicSourcesComponent, MechanicsCatalog,
+    gameplay_component_registry, validate_state_against_catalog, ActiveEffectsComponent,
+    CatalogVersion, EquipmentComponent, ExactRatio, IntrinsicSourceBinding,
+    IntrinsicSourcesComponent, InventoryComponent, ItemComponent, MechanicsCatalog,
     MechanicsCatalogDefinition, MechanicsScalar, OperationId, SourceDefinition, SourceDefinitionId,
     SourceInstanceId, StackingGroupId, StackingPolicy, StatBaseMutationRequest, StatContribution,
     StatContributionDefinition, StatDefinition, StatId, StatService, StatValue, StatsComponent,
@@ -27,7 +28,96 @@ struct CatalogBuilder {
 struct CatalogSlot {
     builder: Option<CatalogBuilder>,
     catalog: Option<MechanicsCatalog>,
+    world: MechanicsWorld,
+}
+
+/// Catalog-scoped mechanism storage keyed by the product's canonical EntityWorld identity.
+/// The bridge never allocates product entity identifiers: it only mirrors supplied ones.
+struct MechanicsWorld {
     state: EntityState,
+    lifecycle: BTreeMap<EntityId, LifecycleRecord>,
+    next_stamp: u64,
+}
+
+#[derive(Clone, Copy)]
+struct LifecycleRecord {
+    lifecycle: NativeMechanicsEntityLifecycle,
+    stamp: u64,
+}
+
+impl MechanicsWorld {
+    fn new(state: EntityState) -> Self {
+        Self {
+            state,
+            lifecycle: BTreeMap::new(),
+            next_stamp: 1,
+        }
+    }
+
+    fn admit(&mut self, entity: EntityId) -> Option<NativeMechanicsLifecycleReceipt> {
+        let stamp = self.next_stamp;
+        self.next_stamp = self.next_stamp.checked_add(1)?;
+        self.lifecycle.insert(
+            entity,
+            LifecycleRecord {
+                lifecycle: NativeMechanicsEntityLifecycle::Active,
+                stamp,
+            },
+        );
+        Some(self.lifecycle_receipt(entity))
+    }
+
+    fn lifecycle_receipt(&self, entity: EntityId) -> NativeMechanicsLifecycleReceipt {
+        let record = self
+            .lifecycle
+            .get(&entity)
+            .copied()
+            .unwrap_or(LifecycleRecord {
+                lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
+                stamp: 0,
+            });
+        NativeMechanicsLifecycleReceipt {
+            entity_id: entity.raw(),
+            lifecycle: record.lifecycle,
+            stamp: record.stamp,
+        }
+    }
+
+    fn is_active(&self, entity: EntityId) -> bool {
+        self.lifecycle
+            .get(&entity)
+            .is_some_and(|record| record.lifecycle == NativeMechanicsEntityLifecycle::Active)
+    }
+
+    fn set_lifecycle(
+        &mut self,
+        entity: EntityId,
+        lifecycle: NativeMechanicsEntityLifecycle,
+    ) -> Option<NativeMechanicsLifecycleReceipt> {
+        let before = self.lifecycle.get(&entity).copied()?;
+        if before.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned {
+            return None;
+        }
+        let next_stamp = self.next_stamp.checked_add(1)?;
+        let state_revision = self.state.revision();
+        let changed = match lifecycle {
+            NativeMechanicsEntityLifecycle::Active => {
+                EntityAuthoringService.enable(&mut self.state, state_revision, entity)
+            }
+            NativeMechanicsEntityLifecycle::Disabled => {
+                EntityAuthoringService.disable(&mut self.state, state_revision, entity)
+            }
+            NativeMechanicsEntityLifecycle::Tombstoned => {
+                EntityAuthoringService.destroy(&mut self.state, state_revision, entity)
+            }
+        };
+        changed.ok()?;
+        let stamp = self.next_stamp;
+        self.next_stamp = next_stamp;
+        self.lifecycle
+            .insert(entity, LifecycleRecord { lifecycle, stamp });
+        Some(self.lifecycle_receipt(entity))
+    }
 }
 
 #[derive(Clone)]
@@ -44,6 +134,8 @@ struct EntityBinding {
 pub(crate) struct RuntimeMechanicsBridge {
     catalogs: BTreeMap<u64, CatalogSlot>,
     entities: BTreeMap<u64, EntityBinding>,
+    /// A product canonical entity is admitted into at most one mechanics catalog world.
+    canonical_entities: BTreeMap<EntityId, u64>,
     next_catalog: u64,
     next_entity: u64,
 }
@@ -53,6 +145,7 @@ impl RuntimeMechanicsBridge {
         Self {
             catalogs: BTreeMap::new(),
             entities: BTreeMap::new(),
+            canonical_entities: BTreeMap::new(),
             next_catalog: 1,
             next_entity: 1,
         }
@@ -77,7 +170,14 @@ impl RuntimeMechanicsBridge {
     ) -> Option<(&mut EntityState, &MechanicsCatalog, EntityId)> {
         let binding = self.binding(handle)?.clone();
         let slot = self.catalogs.get_mut(&binding.catalog)?;
-        Some((&mut slot.state, slot.catalog.as_ref()?, binding.entity))
+        if !slot.world.is_active(binding.entity) {
+            return None;
+        }
+        Some((
+            &mut slot.world.state,
+            slot.catalog.as_ref()?,
+            binding.entity,
+        ))
     }
 }
 
@@ -91,10 +191,12 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         admit_catalog,
         destroy_catalog,
         bind_entity,
+        rebind_entity,
         set_initial_stat,
         set_initial_track,
         bind_intrinsic_source,
         commit_entity,
+        set_entity_lifecycle,
         destroy_entity,
         read_stat,
         evaluate_stat,
@@ -141,7 +243,7 @@ unsafe extern "C" fn create_catalog(
                 sources: BTreeMap::new(),
             }),
             catalog: None,
-            state,
+            world: MechanicsWorld::new(state),
         },
     );
     *result = NativeMechanicsCatalogHandle { value: handle };
@@ -347,11 +449,22 @@ unsafe extern "C" fn destroy_catalog(
     {
         return 0;
     }
-    if bridge.catalogs.remove(&handle.value).is_some() {
-        ABI_OK
-    } else {
-        0
+    let Some(slot) = bridge.catalogs.get(&handle.value) else {
+        return 0;
+    };
+    if bridge.canonical_entities.iter().any(|(entity, catalog)| {
+        *catalog == handle.value
+            && slot.world.lifecycle.get(entity).is_some_and(|record| {
+                record.lifecycle != NativeMechanicsEntityLifecycle::Tombstoned
+            })
+    }) {
+        return 0;
     }
+    bridge
+        .canonical_entities
+        .retain(|_, catalog| *catalog != handle.value);
+    bridge.catalogs.remove(&handle.value);
+    ABI_OK
 }
 
 unsafe extern "C" fn bind_entity(
@@ -382,14 +495,13 @@ unsafe extern "C" fn bind_entity(
         return 0;
     };
     let state_entity = EntityId::new(request.entity_id);
-    if bridge
-        .entities
-        .values()
-        .any(|binding| binding.catalog == request.catalog.value && binding.entity == state_entity)
-    {
+    if bridge.canonical_entities.contains_key(&state_entity) {
         return 0;
     }
     bridge.next_entity = next_handle;
+    bridge
+        .canonical_entities
+        .insert(state_entity, request.catalog.value);
     bridge.entities.insert(
         handle,
         EntityBinding {
@@ -400,6 +512,56 @@ unsafe extern "C" fn bind_entity(
             tracks: Vec::new(),
             intrinsic_sources: Vec::new(),
             committed: false,
+        },
+    );
+    *result = NativeMechanicsEntityHandle { value: handle };
+    ABI_OK
+}
+
+/// Acquires a new lease for a live canonical mechanics entity after a prior lease was released.
+/// It never recreates product identity or changes the catalog-scoped component state.
+unsafe extern "C" fn rebind_entity(
+    context: *mut c_void,
+    request: *const NativeMechanicsEntityRebindRequest,
+    result: *mut NativeMechanicsEntityHandle,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let entity = EntityId::new(request.entity_id);
+    if bridge.canonical_entities.get(&entity) != Some(&request.catalog.value)
+        || bridge
+            .entities
+            .values()
+            .any(|binding| binding.catalog == request.catalog.value && binding.entity == entity)
+    {
+        return 0;
+    }
+    let Some(slot) = bridge.catalogs.get(&request.catalog.value) else {
+        return 0;
+    };
+    let lifecycle = slot.world.lifecycle_receipt(entity);
+    if lifecycle.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned
+        || matches!(request.guard, NativeMechanicsLifecycleGuard::Exact)
+            && lifecycle.stamp != request.expected_stamp
+    {
+        return 0;
+    }
+    let handle = bridge.next_entity;
+    let Some(next_handle) = handle.checked_add(1) else {
+        return 0;
+    };
+    bridge.next_entity = next_handle;
+    bridge.entities.insert(
+        handle,
+        EntityBinding {
+            catalog: request.catalog.value,
+            entity,
+            identity: String::new(),
+            stats: Vec::new(),
+            tracks: Vec::new(),
+            intrinsic_sources: Vec::new(),
+            committed: true,
         },
     );
     *result = NativeMechanicsEntityHandle { value: handle };
@@ -511,7 +673,7 @@ unsafe extern "C" fn commit_entity(
     let Some(catalog) = slot.catalog.as_ref() else {
         return 0;
     };
-    let mut candidate = slot.state.clone();
+    let mut candidate = slot.world.state.clone();
     let state_revision = candidate.revision();
     if EntityAuthoringService
         .admit(
@@ -566,7 +728,13 @@ unsafe extern "C" fn commit_entity(
         .component_revision::<TracksComponent>(binding.entity)
         .map(|revision| tracks_revision(binding.entity, revision.revision()))
         .unwrap_or_default();
-    slot.state = candidate;
+    if slot.world.next_stamp == u64::MAX {
+        return 0;
+    }
+    slot.world.state = candidate;
+    let Some(lifecycle) = slot.world.admit(binding.entity) else {
+        return 0;
+    };
     if let Some(entry) = bridge.entities.get_mut(&handle.value) {
         entry.committed = true;
     }
@@ -574,6 +742,42 @@ unsafe extern "C" fn commit_entity(
         *result = NativeMechanicsEntityReceipt {
             stats_revision,
             tracks_revision,
+            lifecycle,
+            stats_slot: component_revision::<StatsComponent>(
+                &slot.world.state,
+                binding.entity,
+                NativeMechanicsRevisionComponent::Stats,
+            ),
+            tracks_slot: component_revision::<TracksComponent>(
+                &slot.world.state,
+                binding.entity,
+                NativeMechanicsRevisionComponent::Tracks,
+            ),
+            intrinsic_sources_revision: component_revision::<IntrinsicSourcesComponent>(
+                &slot.world.state,
+                binding.entity,
+                NativeMechanicsRevisionComponent::IntrinsicSources,
+            ),
+            active_effects_revision: component_revision::<ActiveEffectsComponent>(
+                &slot.world.state,
+                binding.entity,
+                NativeMechanicsRevisionComponent::ActiveEffects,
+            ),
+            inventory_revision: component_revision::<InventoryComponent>(
+                &slot.world.state,
+                binding.entity,
+                NativeMechanicsRevisionComponent::Inventory,
+            ),
+            item_revision: component_revision::<ItemComponent>(
+                &slot.world.state,
+                binding.entity,
+                NativeMechanicsRevisionComponent::Item,
+            ),
+            equipment_revision: component_revision::<EquipmentComponent>(
+                &slot.world.state,
+                binding.entity,
+                NativeMechanicsRevisionComponent::Equipment,
+            ),
         }
     };
     ABI_OK
@@ -590,19 +794,39 @@ unsafe extern "C" fn destroy_entity(
     let Some(binding) = bridge.entities.get(&handle.value).cloned() else {
         return 0;
     };
-    if binding.committed {
-        let Some(slot) = bridge.catalogs.get_mut(&binding.catalog) else {
-            return 0;
-        };
-        let state_revision = slot.state.revision();
-        if EntityAuthoringService
-            .destroy(&mut slot.state, state_revision, binding.entity)
-            .is_err()
-        {
-            return 0;
-        }
-    }
     bridge.entities.remove(&handle.value);
+    if !binding.committed {
+        bridge.canonical_entities.remove(&binding.entity);
+    }
+    ABI_OK
+}
+
+/// Mirrors a canonical managed EntityWorld transition. Releasing a handle does not call this;
+/// a lease and a product tombstone are deliberately different operations.
+unsafe extern "C" fn set_entity_lifecycle(
+    context: *mut c_void,
+    request: *const NativeMechanicsLifecycleRequest,
+    result: *mut NativeMechanicsLifecycleReceipt,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let Some(binding) = bridge.binding(request.entity).cloned() else {
+        return 0;
+    };
+    let Some(slot) = bridge.catalogs.get_mut(&binding.catalog) else {
+        return 0;
+    };
+    let current = slot.world.lifecycle_receipt(binding.entity);
+    if matches!(request.guard, NativeMechanicsLifecycleGuard::Exact)
+        && current.stamp != request.expected_stamp
+    {
+        return 0;
+    }
+    let Some(receipt) = slot.world.set_lifecycle(binding.entity, request.lifecycle) else {
+        return 0;
+    };
+    *result = receipt;
     ABI_OK
 }
 
@@ -1120,6 +1344,24 @@ fn tracks_revision(entity: EntityId, revision: u64) -> NativeMechanicsTracksRevi
         component: NativeMechanicsRevisionComponent::Tracks,
     }
 }
+
+fn component_revision<T: entity_state::EntityComponent>(
+    state: &EntityState,
+    entity: EntityId,
+    component: NativeMechanicsRevisionComponent,
+) -> NativeMechanicsComponentRevision {
+    let revision = state
+        .component_revision::<T>(entity)
+        .map(|value| value.revision())
+        .unwrap_or_default();
+    let present = state.component::<T>(entity).ok().flatten().is_some();
+    NativeMechanicsComponentRevision {
+        entity_id: entity.raw(),
+        revision,
+        component,
+        present,
+    }
+}
 unsafe fn text<'a>(value: NativeUtf8Slice, field: &'static str) -> Result<&'a str, ()> {
     unsafe { borrowed_utf8(value.bytes, value.len, field) }.map_err(|_| ())
 }
@@ -1237,6 +1479,36 @@ mod tests {
             unsafe { bind_entity(context, &entity_request, &mut entity) },
             ABI_OK
         );
+        let mut other_catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("other_bridge_test"),
+                    },
+                    &mut other_catalog,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(context, other_catalog) }, ABI_OK);
+        let mut cross_catalog_entity = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog: other_catalog,
+                        entity_id: 77,
+                        identity: utf8("same_product_entity"),
+                    },
+                    &mut cross_catalog_entity,
+                )
+            },
+            0
+        );
+        assert_eq!(unsafe { destroy_catalog(context, other_catalog) }, ABI_OK);
         let mut duplicate_entity = NativeMechanicsEntityHandle::default();
         assert_eq!(
             unsafe { bind_entity(context, &entity_request, &mut duplicate_entity) },
@@ -1271,6 +1543,41 @@ mod tests {
             unsafe { commit_entity(context, entity, &mut entity_receipt) },
             ABI_OK
         );
+        assert_eq!(
+            entity_receipt.stats_slot.component,
+            NativeMechanicsRevisionComponent::Stats
+        );
+        assert!(entity_receipt.stats_slot.present);
+        assert_eq!(
+            entity_receipt.tracks_slot.component,
+            NativeMechanicsRevisionComponent::Tracks
+        );
+        assert!(entity_receipt.tracks_slot.present);
+        assert_eq!(
+            entity_receipt.intrinsic_sources_revision.component,
+            NativeMechanicsRevisionComponent::IntrinsicSources
+        );
+        assert!(entity_receipt.intrinsic_sources_revision.present);
+        assert_eq!(
+            entity_receipt.active_effects_revision.component,
+            NativeMechanicsRevisionComponent::ActiveEffects
+        );
+        assert!(!entity_receipt.active_effects_revision.present);
+        assert_eq!(
+            entity_receipt.inventory_revision.component,
+            NativeMechanicsRevisionComponent::Inventory
+        );
+        assert!(!entity_receipt.inventory_revision.present);
+        assert_eq!(
+            entity_receipt.item_revision.component,
+            NativeMechanicsRevisionComponent::Item
+        );
+        assert!(!entity_receipt.item_revision.present);
+        assert_eq!(
+            entity_receipt.equipment_revision.component,
+            NativeMechanicsRevisionComponent::Equipment
+        );
+        assert!(!entity_receipt.equipment_revision.present);
         let second_entity_request = NativeMechanicsEntityBindRequest {
             catalog,
             entity_id: 78,
@@ -1403,9 +1710,134 @@ mod tests {
         assert_eq!(set.after, 9);
         assert_eq!(unsafe { destroy_catalog(context, catalog) }, 0);
         let state_entity = bridge.entities[&entity.value].entity;
+        let released_entity = entity;
+        assert_eq!(unsafe { destroy_entity(context, released_entity) }, ABI_OK);
+        assert!(bridge.catalogs[&catalog.value]
+            .world
+            .state
+            .is_alive(state_entity));
+        let mut rebound_entity = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                rebind_entity(
+                    context,
+                    &NativeMechanicsEntityRebindRequest {
+                        catalog,
+                        entity_id: 77,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: entity_receipt.lifecycle.stamp,
+                    },
+                    &mut rebound_entity,
+                )
+            },
+            ABI_OK
+        );
+        let mut rebound_stat = NativeMechanicsStatReadReceipt::default();
+        assert_eq!(
+            unsafe {
+                read_stat(
+                    context,
+                    &NativeMechanicsStatReadRequest {
+                        entity: rebound_entity,
+                        stat: utf8("strength"),
+                    },
+                    &mut rebound_stat,
+                )
+            },
+            ABI_OK
+        );
+        entity = rebound_entity;
+        let mut disabled = NativeMechanicsLifecycleReceipt::default();
+        assert_eq!(
+            unsafe {
+                set_entity_lifecycle(
+                    context,
+                    &NativeMechanicsLifecycleRequest {
+                        entity,
+                        lifecycle: NativeMechanicsEntityLifecycle::Disabled,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: entity_receipt.lifecycle.stamp,
+                    },
+                    &mut disabled,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(disabled.lifecycle, NativeMechanicsEntityLifecycle::Disabled);
+        let mut rejected_stale = NativeMechanicsLifecycleReceipt::default();
+        assert_eq!(
+            unsafe {
+                set_entity_lifecycle(
+                    context,
+                    &NativeMechanicsLifecycleRequest {
+                        entity,
+                        lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: entity_receipt.lifecycle.stamp,
+                    },
+                    &mut rejected_stale,
+                )
+            },
+            0
+        );
+        let mut enabled = NativeMechanicsLifecycleReceipt::default();
+        assert_eq!(
+            unsafe {
+                set_entity_lifecycle(
+                    context,
+                    &NativeMechanicsLifecycleRequest {
+                        entity,
+                        lifecycle: NativeMechanicsEntityLifecycle::Active,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: disabled.stamp,
+                    },
+                    &mut enabled,
+                )
+            },
+            ABI_OK
+        );
+        let mut tombstone = NativeMechanicsLifecycleReceipt::default();
+        assert_eq!(
+            unsafe {
+                set_entity_lifecycle(
+                    context,
+                    &NativeMechanicsLifecycleRequest {
+                        entity,
+                        lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: enabled.stamp,
+                    },
+                    &mut tombstone,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            tombstone.lifecycle,
+            NativeMechanicsEntityLifecycle::Tombstoned
+        );
         assert_eq!(unsafe { destroy_entity(context, entity) }, ABI_OK);
-        assert!(!bridge.catalogs[&catalog.value].state.is_alive(state_entity));
+        assert!(!bridge.catalogs[&catalog.value]
+            .world
+            .state
+            .is_alive(state_entity));
         assert_eq!(unsafe { destroy_catalog(context, catalog) }, 0);
+        let mut second_tombstone = NativeMechanicsLifecycleReceipt::default();
+        assert_eq!(
+            unsafe {
+                set_entity_lifecycle(
+                    context,
+                    &NativeMechanicsLifecycleRequest {
+                        entity: second_entity,
+                        lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: second_receipt.lifecycle.stamp,
+                    },
+                    &mut second_tombstone,
+                )
+            },
+            ABI_OK
+        );
         assert_eq!(unsafe { destroy_entity(context, second_entity) }, ABI_OK);
         assert_eq!(unsafe { destroy_catalog(context, catalog) }, ABI_OK);
         let mut after_release = NativeMechanicsStatReadReceipt::default();
