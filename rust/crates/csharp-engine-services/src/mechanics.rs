@@ -1039,6 +1039,21 @@ unsafe extern "C" fn set_initial_components(
     let Some((bridge, request)) = bridge_request(context, request) else {
         return 0;
     };
+    if (!request.has_stats && request.stats_len != 0)
+        || (!request.has_tracks && request.tracks_len != 0)
+        || (!request.has_intrinsic_sources && request.intrinsic_sources_len != 0)
+        || (!request.has_active_effects && request.active_effects_len != 0)
+        || (!request.has_inventory
+            && (request.inventory_stacks_len != 0 || request.inventory_capacity_limits_len != 0))
+        || (!request.has_equipment && request.equipment_assignments_len != 0)
+        || (!request.has_item
+            && !matches!(
+                unsafe { text(request.item_definition, "mechanics absent initial item") },
+                Ok("")
+            ))
+    {
+        return 0;
+    }
     let (
         Ok(stats),
         Ok(tracks),
