@@ -14,12 +14,14 @@ File.WriteAllText(Path.Combine(args[3], "EngineServiceImplementations.g.cs"), Em
 
 internal sealed record Field(string Name, string Type);
 internal sealed record Struct(string Name, IReadOnlyList<Field> Fields);
+internal sealed record Enum(string Name, IReadOnlyList<string> Members);
 internal sealed record Callback(string Name, string ReturnType, IReadOnlyList<string> Parameters);
 internal sealed record Service(string Name, IReadOnlyList<(string Name, string Callback)> Operations);
 
 internal sealed class BindingModel
 {
     public required IReadOnlyDictionary<string, Struct> Structs { get; init; }
+    public required IReadOnlyDictionary<string, Enum> Enums { get; init; }
     public required IReadOnlyDictionary<string, Callback> Callbacks { get; init; }
     public required IReadOnlyList<Service> Services { get; init; }
 
@@ -32,6 +34,9 @@ internal sealed class BindingModel
         Dictionary<string, Struct> structs = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_StructDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
             .Select(cursor => new Struct(cursor.Spelling.ToString(), Children(cursor).Where(field => field.Kind == CXCursorKind.CXCursor_FieldDecl).Select(field => new Field(field.Spelling.ToString(), field.Type.Spelling.ToString())).ToArray()))
             .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        Dictionary<string, Enum> enums = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_EnumDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
+            .Select(cursor => new Enum(cursor.Spelling.ToString(), Children(cursor).Where(member => member.Kind == CXCursorKind.CXCursor_EnumConstantDecl).Select(member => member.Spelling.ToString()).ToArray()))
+            .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, Callback> callbacks = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_TypedefDecl && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
             .Select(cursor => new Callback(cursor.Spelling.ToString(), cursor.Type.CanonicalType.Spelling.ToString().Split(" (*)", StringSplitOptions.None)[0], Children(cursor).Where(parameter => parameter.Kind == CXCursorKind.CXCursor_ParmDecl).Select(parameter => parameter.Type.Spelling.ToString()).ToArray()))
             .Where(callback => callback.Parameters.Count > 0).GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
@@ -43,15 +48,15 @@ internal sealed class BindingModel
             var operations = tableStruct.Fields.Where(operation => operation.Name != "context").Select(operation =>
             {
                 if (!callbacks.TryGetValue(Bare(operation.Type), out Callback? callback)) throw new InvalidOperationException($"{table}.{operation.Name} references non-callback type {operation.Type}.");
-                Validate(table, operation.Name, callback, structs);
+                Validate(table, operation.Name, callback, structs, enums);
                 return (operation.Name, callback.Name);
             }).ToArray();
             return new Service(table["Native".Length..^"Api".Length], operations);
         }).ToArray();
-        return new BindingModel { Structs = structs, Callbacks = callbacks, Services = services };
+        return new BindingModel { Structs = structs, Enums = enums, Callbacks = callbacks, Services = services };
     }
 
-    private static void Validate(string family, string method, Callback callback, IReadOnlyDictionary<string, Struct> structs)
+    private static void Validate(string family, string method, Callback callback, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
     {
         string signature = $"{callback.ReturnType} ({string.Join(", ", callback.Parameters)})";
         if (callback.ReturnType is not "int" and not "int32_t" || callback.Parameters[0] != "void *") Fail(family, method, signature, "expected context-first int32 status call");
@@ -60,10 +65,10 @@ internal sealed class BindingModel
         if (parameters[^1].Contains('*', StringComparison.Ordinal) && !IsExactBorrowedPointer(parameters[^1]) && !IsExactOutPointer(parameters[^1])) Fail(family, method, signature, $"final pointer {parameters[^1]} must be exactly const T * input or T * out receipt");
         bool hasReceipt = IsExactOutPointer(parameters[^1]);
         int inputs = hasReceipt ? parameters.Length - 1 : parameters.Length;
-        if (hasReceipt) ValidateFixedType(family, method, signature, Bare(parameters[^1]), structs, new HashSet<string>(StringComparer.Ordinal), "out receipt");
+        if (hasReceipt) ValidateFixedType(family, method, signature, Bare(parameters[^1]), structs, enums, new HashSet<string>(StringComparer.Ordinal), "out receipt");
         if (inputs == 2 && IsExactBorrowedPointer(parameters[0]) && Bare(parameters[1]) == "size_t")
         {
-            ValidateFixedType(family, method, signature, Bare(parameters[0]), structs, new HashSet<string>(StringComparer.Ordinal), "pointer/count span element");
+            ValidateFixedType(family, method, signature, Bare(parameters[0]), structs, enums, new HashSet<string>(StringComparer.Ordinal), "pointer/count span element");
             return;
         }
         if (inputs != 1) Fail(family, method, signature, "expected one input (or one pointer/count span) plus optional out receipt");
@@ -72,16 +77,16 @@ internal sealed class BindingModel
         if (IsExactBorrowedPointer(input))
         {
             if (!structs.TryGetValue(bare, out Struct? request) || request is null) { Fail(family, method, signature, $"borrowed input {input} does not name an emitted struct"); return; }
-            ValidateBorrowedRequest(family, method, signature, request, structs, new HashSet<string>(StringComparer.Ordinal));
+            ValidateBorrowedRequest(family, method, signature, request, structs, enums, new HashSet<string>(StringComparer.Ordinal));
             return;
         }
         if (input.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"unsupported pointer input {input}");
-        ValidateFixedType(family, method, signature, bare, structs, new HashSet<string>(StringComparer.Ordinal), "direct input");
+        ValidateFixedType(family, method, signature, bare, structs, enums, new HashSet<string>(StringComparer.Ordinal), "direct input");
     }
 
-    private static void ValidateFixedType(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, HashSet<string> seen, string role)
+    private static void ValidateFixedType(string family, string method, string signature, string type, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen, string role)
     {
-        if (IsScalar(type)) return;
+        if (IsScalar(type) || enums.ContainsKey(type)) return;
         if (!structs.TryGetValue(type, out Struct? value) || value is null) { Fail(family, method, signature, $"{role} {type} is not a supported scalar or emitted native struct"); return; }
         if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs") Fail(family, method, signature, $"{role} {type} is an API/product table rather than a fixed value");
         if (type is "NativeUtf8Slice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type} is only supported as a specially marshalled request field");
@@ -91,11 +96,11 @@ internal sealed class BindingModel
             if (field.Type.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) is borrowed and cannot be emitted by-value");
             string nested = Bare(field.Type);
             if (nested is "NativeUtf8Slice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) requires request-only marshalling");
-            ValidateFixedType(family, method, signature, nested, structs, seen, $"{role} field {type}.{field.Name}");
+            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"{role} field {type}.{field.Name}");
         }
     }
 
-    private static void ValidateBorrowedRequest(string family, string method, string signature, Struct request, IReadOnlyDictionary<string, Struct> structs, HashSet<string> seen)
+    private static void ValidateBorrowedRequest(string family, string method, string signature, Struct request, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen)
     {
         if (request.Name.EndsWith("Api", StringComparison.Ordinal) || request.Name is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs") Fail(family, method, signature, $"borrowed request {request.Name} is an API/product table");
         if (!seen.Add(request.Name)) return;
@@ -108,14 +113,14 @@ internal sealed class BindingModel
                 if (pointed is "NativeUtf8Slice" or "NativeStructuredValue") Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) cannot point to special immediate value {pointed}");
                 if (!IsExactBorrowedPointer(field.Type)) Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) must be exactly const T *");
                 if (index + 1 >= request.Fields.Count || (request.Fields[index + 1].Name != $"{field.Name}_len" && request.Fields[index + 1].Name != $"{field.Name}_count") || Bare(request.Fields[index + 1].Type) != "size_t") Fail(family, method, signature, $"borrowed request {request.Name}.{field.Name} ({field.Type}) lacks an adjacent size_t _len/_count field");
-                ValidateFixedType(family, method, signature, pointed, structs, new HashSet<string>(StringComparer.Ordinal), $"borrowed span element {request.Name}.{field.Name}");
+                ValidateFixedType(family, method, signature, pointed, structs, enums, new HashSet<string>(StringComparer.Ordinal), $"borrowed span element {request.Name}.{field.Name}");
                 index++;
                 continue;
             }
             string nested = Bare(field.Type);
             if (nested == "NativeUtf8Slice") continue;
             if (nested == "NativeStructuredValue") continue;
-            ValidateFixedType(family, method, signature, nested, structs, seen, $"borrowed request field {request.Name}.{field.Name}");
+            ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"borrowed request field {request.Name}.{field.Name}");
         }
     }
 
@@ -133,7 +138,7 @@ internal sealed class BindingModel
     private static List<CXCursor> sChildren = [];
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe CXChildVisitResult CollectChild(CXCursor cursor, CXCursor parent, void* clientData) { sChildren.Add(cursor); return CXChildVisitResult.CXChildVisit_Continue; }
-    public static string Bare(string type) => type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Replace(" *", "", StringComparison.Ordinal).Trim();
+    public static string Bare(string type) => type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Replace("enum ", "", StringComparison.Ordinal).Replace(" *", "", StringComparison.Ordinal).Trim();
     public static bool IsScalar(string type) => type is "void" or "int" or "int32_t" or "int64_t" or "uint32_t" or "uint64_t" or "size_t" or "float" or "double" or "uint8_t";
 }
 
@@ -191,6 +196,12 @@ internal static class Emit
     {
         StringBuilder output = Header("safe values");
         output.AppendLine("namespace Rusty.Engine;").AppendLine();
+        foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            output.AppendLine($"public enum {SafeType(value.Name)} : uint").AppendLine("{");
+            foreach (string member in value.Members) output.AppendLine($"    {SafeEnumMember(value.Name, member)},");
+            output.AppendLine("}").AppendLine();
+        }
         foreach (Struct value in model.Structs.Values.Where(IsSafeValue).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             string safeName = SafeType(value.Name);
@@ -210,7 +221,7 @@ internal static class Emit
             output.AppendLine($"public sealed class {owner} : IDisposable").AppendLine("{");
             string handleType = SafeType(handle);
             output.AppendLine($"    public {owner}({handleType} handle, Action dispose) {{ Handle = handle; _dispose = dispose ?? throw new ArgumentNullException(nameof(dispose)); }}");
-            output.AppendLine($"    public {handleType} Handle {{ get; }}").AppendLine("    private Action? _dispose;").AppendLine("    public void Dispose() => System.Threading.Interlocked.Exchange(ref _dispose, null)?.Invoke();").AppendLine("}").AppendLine();
+            output.AppendLine($"    public {handleType} Handle {{ get; }}").AppendLine("    private readonly object _disposeGate = new();").AppendLine("    private Action? _dispose;").AppendLine("    public void Dispose() { lock (_disposeGate) { Action? dispose = _dispose; if (dispose is null) return; dispose(); _dispose = null; } }").AppendLine("}").AppendLine();
         }
         output.AppendLine("public sealed class UiValue").AppendLine("{");
         output.AppendLine("    public UiValue(ReadOnlyMemory<StructuredValueNode> nodes, ReadOnlyMemory<uint> edges, uint root, ReadOnlyMemory<byte> utf8) { Nodes = nodes; Edges = edges; Root = root; Utf8 = utf8; }");
@@ -222,6 +233,12 @@ internal static class Emit
     {
         StringBuilder output = Header("internal NativeProduct ABI input");
         output.AppendLine("using System.Runtime.InteropServices;").AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
+        foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            output.AppendLine($"internal enum {value.Name} : uint").AppendLine("{");
+            foreach (string member in value.Members) output.AppendLine($"    {member},");
+            output.AppendLine("}").AppendLine();
+        }
         foreach (Struct value in model.Structs.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             output.AppendLine("[StructLayout(LayoutKind.Sequential)]").AppendLine($"internal unsafe struct {value.Name}").AppendLine("{");
@@ -265,6 +282,12 @@ internal static class Emit
         output.AppendLine("    internal static Vector3 FromNative(NativeVec3 value) => new(value.x, value.y, value.z);");
         output.AppendLine("    internal static NativeQuat ToNative(Quaternion value) => new() { x = value.X, y = value.Y, z = value.Z, w = value.W };");
         output.AppendLine("    internal static Quaternion FromNative(NativeQuat value) => new(value.x, value.y, value.z, value.w);");
+        foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            string safe = SafeType(value.Name);
+            output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => ({value.Name})(uint)value;");
+            output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => ({safe})(uint)value;");
+        }
         foreach (Struct value in model.Structs.Values.Where(IsSafeValue).OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             string safe = SafeType(value.Name);
@@ -279,8 +302,8 @@ internal static class Emit
                 continue;
             }
             if (HasBorrowedFields(value)) continue;
-            string assignments = string.Join(", ", value.Fields.Select(field => $"{field.Name} = ToNative(value.{Pascal(field.Name)})"));
-            string arguments = string.Join(", ", value.Fields.Select(field => $"FromNative(value.{field.Name})"));
+            string assignments = string.Join(", ", value.Fields.Select(field => $"{RawIdentifier(field.Name)} = ToNative(value.{Pascal(field.Name)})"));
+            string arguments = string.Join(", ", value.Fields.Select(field => $"FromNative(value.{RawIdentifier(field.Name)})"));
             output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => new() {{ {assignments} }};");
             if (!HasDisposableHandleField(model, value)) output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => new({arguments});");
         }
@@ -386,10 +409,10 @@ internal static class Emit
             Field field = request.Fields[index];
             if (index > 0 && request.Fields[index - 1].Type.Contains('*', StringComparison.Ordinal) && (field.Name == $"{request.Fields[index - 1].Name}_len" || field.Name == $"{request.Fields[index - 1].Name}_count"))
             {
-                output.AppendLine($"            {field.Name} = (nuint)arg0.{Pascal(request.Fields[index - 1].Name)}.Length,"); continue;
+                output.AppendLine($"            {RawIdentifier(field.Name)} = (nuint)arg0.{Pascal(request.Fields[index - 1].Name)}.Length,"); continue;
             }
             string expression = BorrowedFieldExpression(field);
-            output.AppendLine($"            {field.Name} = {expression},");
+            output.AppendLine($"            {RawIdentifier(field.Name)} = {expression},");
         }
         output.AppendLine("        };");
         if (!string.IsNullOrEmpty(result)) output.AppendLine($"        {RawType(result)} rawResult = default;");
@@ -468,24 +491,26 @@ internal static class Emit
         return string.Join(", ", args.Select((type, index) => $"{SafeType(model, BindingModel.Bare(type))} arg{index}"));
     }
     private static string SafeType(string native) => native switch { "int" or "int32_t" => "int", "int64_t" => "long", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
+    private static string SafeEnumMember(string enumName, string member) => member.StartsWith($"{enumName}_", StringComparison.Ordinal) ? member[(enumName.Length + 1)..] : member;
     private static string SafeType(BindingModel model, string native) => IsDisposableHandle(model, native) ? OwnerType(native) : SafeType(native);
     private static string RawType(string type)
     {
-        string value = type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Trim(); int pointers = value.Count(character => character == '*'); value = value.TrimEnd('*').Trim();
+        string value = type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Replace("enum ", "", StringComparison.Ordinal).Trim(); int pointers = value.Count(character => character == '*'); value = value.TrimEnd('*').Trim();
         string mapped = value switch { "void" => "void", "int32_t" or "int" => "int", "int64_t" => "long", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", _ => value };
         return mapped + new string('*', pointers);
     }
     private static string RawFieldDeclaration(Field field)
     {
         const string marker = " (*)(";
-        if (!field.Type.Contains(marker, StringComparison.Ordinal)) return $"internal {RawType(field.Type)} {field.Name};";
+        if (!field.Type.Contains(marker, StringComparison.Ordinal)) return $"internal {RawType(field.Type)} {RawIdentifier(field.Name)};";
         int markerIndex = field.Type.IndexOf(marker, StringComparison.Ordinal);
         string returnType = field.Type[..markerIndex];
         string parameters = field.Type[(markerIndex + marker.Length)..^1];
         string[] rawParameters = parameters == "void" ? [] : parameters.Split(", ", StringSplitOptions.TrimEntries);
-        return $"internal delegate* unmanaged[Cdecl]<{string.Join(", ", rawParameters.Select(RawType).Append(RawType(returnType)))}> {field.Name};";
+        return $"internal delegate* unmanaged[Cdecl]<{string.Join(", ", rawParameters.Select(RawType).Append(RawType(returnType)))}> {RawIdentifier(field.Name)};";
     }
     private static string Pascal(string value) => string.Concat(value.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
+    private static string RawIdentifier(string value) => value is "base" ? "@base" : value;
     private static string SafeServiceName(string service) => service == "Rng" ? "Random" : service;
     private static bool IsDestroy(Callback callback) => callback.Parameters.Count == 2 && BindingModel.Bare(callback.Parameters[1]).EndsWith("Handle", StringComparison.Ordinal) && callback.Name.Contains("Destroy", StringComparison.Ordinal);
     private static IEnumerable<string> DisposableHandleTypes(BindingModel model) => model.Services.SelectMany(service => service.Operations.Select(operation => model.Callbacks[operation.Callback])).Where(IsDestroy).Select(callback => BindingModel.Bare(callback.Parameters[1])).Distinct(StringComparer.Ordinal);

@@ -10,6 +10,7 @@ use csharp_engine_abi::*;
 use entity_state::Quat;
 
 use crate::{
+    mechanics::RuntimeMechanicsBridge,
     rng::RuntimeRngBridge,
     spatial::RuntimeSpatialBridge,
     ui::{RuntimeUiBridge, RuntimeUiCall},
@@ -28,6 +29,7 @@ fn engine_api(
     appearance_bridge: &mut RuntimeAppearanceBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
     rng_bridge: &mut RuntimeRngBridge,
+    mechanics_bridge: &mut RuntimeMechanicsBridge,
     ui_bridge: &mut RuntimeUiBridge,
 ) -> NativeEngineApi {
     NativeEngineApi {
@@ -43,6 +45,7 @@ fn engine_api(
             publish_snapshot: publish_appearance_snapshot,
         },
         rng: crate::rng::api(rng_bridge),
+        mechanics: crate::mechanics::api(mechanics_bridge),
         ui: crate::ui::api(ui_bridge),
     }
 }
@@ -121,6 +124,7 @@ pub struct EngineServiceSet {
     appearance: RuntimeAppearanceBridge,
     spatial: RuntimeSpatialBridge,
     rng: RuntimeRngBridge,
+    mechanics: RuntimeMechanicsBridge,
     ui: RuntimeUiBridge,
 }
 
@@ -149,6 +153,7 @@ impl EngineServiceSet {
             appearance: crate::appearance::create(catalog.0, content_resources),
             spatial: crate::spatial::RuntimeSpatialBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
+            mechanics: crate::mechanics::RuntimeMechanicsBridge::new(),
             ui: crate::ui::RuntimeUiBridge::new(),
         }
     }
@@ -158,6 +163,7 @@ impl EngineServiceSet {
             &mut self.appearance,
             &mut self.spatial,
             &mut self.rng,
+            &mut self.mechanics,
             &mut self.ui,
         )
     }

@@ -45,5 +45,6 @@ sealed class ExampleEngineContext : IEngineContext
     public ISpatialService Spatial => throw new NotSupportedException();
     public IAppearanceService Appearance => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
+    public IMechanicsService Mechanics => throw new NotSupportedException();
     public IUiService Ui => throw new NotSupportedException();
 }

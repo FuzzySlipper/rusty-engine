@@ -8,6 +8,7 @@
 mod appearance;
 mod core;
 mod look;
+mod mechanics;
 mod product;
 mod rng;
 mod spatial;
@@ -16,6 +17,7 @@ mod ui;
 pub use appearance::*;
 pub use core::*;
 pub use look::*;
+pub use mechanics::*;
 pub use product::*;
 pub use rng::*;
 pub use spatial::*;

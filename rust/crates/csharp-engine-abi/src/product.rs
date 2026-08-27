@@ -83,6 +83,79 @@ pub type NativeNextScopedRng =
     unsafe extern "C" fn(*mut c_void, NativeRngHandle, *mut NativeRngValue) -> i32;
 pub type NativeNextBoundedScopedRng =
     unsafe extern "C" fn(*mut c_void, NativeScopedRngBoundedRequest, *mut NativeRngValue) -> i32;
+pub type NativeCreateMechanicsCatalog = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsCatalogCreateRequest,
+    *mut NativeMechanicsCatalogHandle,
+) -> i32;
+pub type NativeDefineMechanicsStat =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsStatDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsTrack =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsTrackDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsContribution =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsContributionDefinitionRequest) -> i32;
+pub type NativeAdmitMechanicsCatalog =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogHandle) -> i32;
+pub type NativeDestroyMechanicsCatalog =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogHandle) -> i32;
+pub type NativeBindMechanicsEntity = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEntityBindRequest,
+    *mut NativeMechanicsEntityHandle,
+) -> i32;
+pub type NativeSetMechanicsInitialStat =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialStatRequest) -> i32;
+pub type NativeSetMechanicsInitialTrack =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialTrackRequest) -> i32;
+pub type NativeBindMechanicsIntrinsicSource =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsIntrinsicSourceRequest) -> i32;
+pub type NativeCommitMechanicsEntity = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsEntityReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsEntity =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsEntityHandle) -> i32;
+pub type NativeReadMechanicsStat = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsStatReadRequest,
+    *mut NativeMechanicsStatReadReceipt,
+) -> i32;
+pub type NativeEvaluateMechanicsStat = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsStatOperationRequest,
+    *mut NativeMechanicsStatEvaluationReceipt,
+) -> i32;
+pub type NativeReadMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsTrackReadRequest,
+    *mut NativeMechanicsTrackReadReceipt,
+) -> i32;
+pub type NativeSetMechanicsStatBase = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsStatBaseMutationRequest,
+    *mut NativeMechanicsStatMutationReceipt,
+) -> i32;
+pub type NativeSetMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsTrackSetRequest,
+    *mut NativeMechanicsTrackSetReceipt,
+) -> i32;
+pub type NativeSpendMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsTrackMutationRequest,
+    *mut NativeMechanicsTrackMutationReceipt,
+) -> i32;
+pub type NativeRestoreMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsTrackMutationRequest,
+    *mut NativeMechanicsTrackMutationReceipt,
+) -> i32;
+pub type NativeReconcileMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsTrackReconciliationRequest,
+    *mut NativeMechanicsTrackReconciliationReceipt,
+) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -136,6 +209,32 @@ pub struct NativeRngApi {
     pub next_bool: NativeNextScopedRng,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsApi {
+    pub context: *mut c_void,
+    pub create_catalog: NativeCreateMechanicsCatalog,
+    pub define_stat: NativeDefineMechanicsStat,
+    pub define_track: NativeDefineMechanicsTrack,
+    pub define_contribution: NativeDefineMechanicsContribution,
+    pub admit_catalog: NativeAdmitMechanicsCatalog,
+    pub destroy_catalog: NativeDestroyMechanicsCatalog,
+    pub bind_entity: NativeBindMechanicsEntity,
+    pub set_initial_stat: NativeSetMechanicsInitialStat,
+    pub set_initial_track: NativeSetMechanicsInitialTrack,
+    pub bind_intrinsic_source: NativeBindMechanicsIntrinsicSource,
+    pub commit_entity: NativeCommitMechanicsEntity,
+    pub destroy_entity: NativeDestroyMechanicsEntity,
+    pub read_stat: NativeReadMechanicsStat,
+    pub evaluate_stat: NativeEvaluateMechanicsStat,
+    pub read_track: NativeReadMechanicsTrack,
+    pub set_stat_base: NativeSetMechanicsStatBase,
+    pub set_track: NativeSetMechanicsTrack,
+    pub spend_track: NativeSpendMechanicsTrack,
+    pub restore_track: NativeRestoreMechanicsTrack,
+    pub reconcile_track: NativeReconcileMechanicsTrack,
+}
+
 /// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -144,6 +243,7 @@ pub struct NativeEngineApi {
     pub spatial: NativeSpatialApi,
     pub appearance: NativeAppearanceApi,
     pub rng: NativeRngApi,
+    pub mechanics: NativeMechanicsApi,
     pub ui: NativeUiApi,
 }
 

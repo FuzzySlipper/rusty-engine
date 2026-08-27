@@ -76,6 +76,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Spatial = new SpatialServiceImplementation(native.spatial);
                     Appearance = new AppearanceServiceImplementation(native.appearance);
                     Random = new RngServiceImplementation(native.rng);
+                    Mechanics = new MechanicsServiceImplementation(native.mechanics);
                     Ui = new UiServiceImplementation(native.ui);
                 }
 
@@ -83,6 +84,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public ISpatialService Spatial { get; }
                 public IAppearanceService Appearance { get; }
                 public IRandomService Random { get; }
+                public IMechanicsService Mechanics { get; }
                 public IUiService Ui { get; }
             }
 

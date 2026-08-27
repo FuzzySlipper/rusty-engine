@@ -13,6 +13,8 @@ public sealed class Product : IEngineProduct
     private readonly SpatialSession _spatial;
     private readonly UiStreamHandle _uiStream;
     private readonly AppearanceHandle _appearance;
+    private readonly MechanicsCatalog _mechanicsCatalog;
+    private readonly MechanicsEntity _mechanicsEntity;
     private int _turns;
     private float _x;
     private bool _started;
@@ -25,6 +27,28 @@ public sealed class Product : IEngineProduct
     public Product(ProductCreateContext context)
     {
         _engine = context.Engine;
+        _mechanicsCatalog = _engine.Mechanics.CreateCatalog(new MechanicsCatalogCreateRequest("nativeaot_trial"));
+        _engine.Mechanics.DefineStat(new MechanicsStatDefinitionRequest(_mechanicsCatalog, "strength", 0, 100));
+        _engine.Mechanics.DefineTrack(new MechanicsTrackDefinitionRequest(_mechanicsCatalog, "stamina", 0, MechanicsTrackMaximumKind.Stat, 0, "strength"));
+        _engine.Mechanics.DefineTrack(new MechanicsTrackDefinitionRequest(_mechanicsCatalog, "focus", 0, MechanicsTrackMaximumKind.Fixed, 10, string.Empty));
+        _engine.Mechanics.DefineContribution(new MechanicsContributionDefinitionRequest(_mechanicsCatalog, "trial_bonus", 0, "strength", MechanicsContributionKind.Add, 2, 0, 0, "trial_bonus", MechanicsStackingPolicy.Sum));
+        _engine.Mechanics.AdmitCatalog(_mechanicsCatalog);
+        _mechanicsEntity = _engine.Mechanics.BindEntity(new MechanicsEntityBindRequest(_mechanicsCatalog, 41, "trial_actor"));
+        _engine.Mechanics.SetInitialStat(new MechanicsInitialStatRequest(_mechanicsEntity, "strength", 10));
+        _engine.Mechanics.SetInitialTrack(new MechanicsInitialTrackRequest(_mechanicsEntity, "stamina", 12));
+        _engine.Mechanics.SetInitialTrack(new MechanicsInitialTrackRequest(_mechanicsEntity, "focus", 10));
+        _engine.Mechanics.BindIntrinsicSource(new MechanicsIntrinsicSourceRequest(_mechanicsEntity, "trial_bonus_instance", "trial_bonus"));
+        MechanicsEntityReceipt mechanicsReceipt = _engine.Mechanics.CommitEntity(_mechanicsEntity);
+        MechanicsStatEvaluationReceipt strength = _engine.Mechanics.EvaluateStat(new MechanicsStatOperationRequest(_mechanicsEntity, "strength", "trial_evaluate"));
+        if (strength.Value != 12)
+        {
+            throw new InvalidOperationException("exact mechanics contribution did not apply");
+        }
+        MechanicsTrackMutationReceipt staminaSpend = _engine.Mechanics.SpendTrack(new MechanicsTrackMutationRequest(_mechanicsEntity, "trial_spend", "trial_spend_source", "stamina", 2, MechanicsRevisionGuard.Exact, mechanicsReceipt.TracksRevision));
+        if (staminaSpend.After != 10)
+        {
+            throw new InvalidOperationException("exact mechanics spend did not preserve the track bound");
+        }
         _appearance = _engine.Appearance.CreatePrimitive(new PrimitiveAppearanceRequest(1, 0, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
         KeyedRngReceipt keyed = _engine.Random.DrawKeyed(new KeyedRngRequest(17, "nativeaot-trial", "create", -10, 10));
         if (keyed != _engine.Random.DrawKeyed(new KeyedRngRequest(17, "nativeaot-trial", "create", -10, 10)))
@@ -87,6 +111,8 @@ public sealed class Product : IEngineProduct
         _forkedRng.Dispose();
         _rng.Dispose();
         _spatial.Dispose();
+        _mechanicsEntity.Dispose();
+        _mechanicsCatalog.Dispose();
     }
 
     private static LookConfig LookConfig() => new(0.01f, 0.01f, -1.4f, 1.4f, 1.0f, 0, 0, 1, 0);

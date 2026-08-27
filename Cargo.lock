@@ -540,6 +540,7 @@ dependencies = [
  "csharp-engine-abi",
  "engine-spatial",
  "entity-state",
+ "gameplay-mechanics",
  "render-model",
  "render-projection",
  "runtime-lifecycle",

@@ -3,6 +3,7 @@
 mod appearance;
 mod composition;
 mod look;
+mod mechanics;
 mod rng;
 mod spatial;
 mod ui;
