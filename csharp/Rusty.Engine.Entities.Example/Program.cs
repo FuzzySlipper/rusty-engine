@@ -130,6 +130,14 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public MechanicsItemSourceCatalogLeaseReceipt ReadCatalogItemSources(MechanicsCatalog arg0) => throw new NotSupportedException();
     public MechanicsEquipmentSlotCatalogLeaseReceipt ReadCatalogEquipmentSlots(MechanicsCatalog arg0) => throw new NotSupportedException();
     public MechanicsSlotClassificationCatalogLeaseReceipt ReadCatalogSlotClassifications(MechanicsCatalog arg0) => throw new NotSupportedException();
+    public MechanicsStatComponentLeaseReceipt ReadStatComponent(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsTrackComponentLeaseReceipt ReadTrackComponent(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsIntrinsicSourceComponentLeaseReceipt ReadIntrinsicSourceComponent(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsActiveEffectComponentLeaseReceipt ReadActiveEffectComponent(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsInventoryStackComponentLeaseReceipt ReadInventoryStackComponent(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsInventoryCapacityLimitComponentLeaseReceipt ReadInventoryCapacityLimitComponent(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsItemComponentLeaseReceipt ReadItemComponent(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsEquipmentAssignmentComponentLeaseReceipt ReadEquipmentAssignmentComponent(MechanicsEntity arg0) => throw new NotSupportedException();
     public MechanicsEntity BindEntity(MechanicsEntityBindRequest arg0) => Lease();
     public MechanicsEntity RebindEntity(MechanicsEntityRebindRequest arg0)
     {

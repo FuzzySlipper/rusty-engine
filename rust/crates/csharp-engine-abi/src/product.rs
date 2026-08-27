@@ -552,6 +552,48 @@ pub type NativeReadMechanicsCatalogSlotClassifications = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyMechanicsCatalogLease =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogLeaseHandle) -> i32;
+pub type NativeReadMechanicsStatComponent = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsStatComponentLease,
+) -> i32;
+pub type NativeReadMechanicsTrackComponent = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsTrackComponentLease,
+) -> i32;
+pub type NativeReadMechanicsIntrinsicSourceComponent = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsIntrinsicSourceComponentLease,
+) -> i32;
+pub type NativeReadMechanicsActiveEffectComponent = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsActiveEffectComponentLease,
+) -> i32;
+pub type NativeReadMechanicsInventoryStackComponent = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsInventoryStackComponentLease,
+) -> i32;
+pub type NativeReadMechanicsInventoryCapacityLimitComponent = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsInventoryCapacityLimitComponentLease,
+) -> i32;
+pub type NativeReadMechanicsItemComponent = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsItemComponentLease,
+) -> i32;
+pub type NativeReadMechanicsEquipmentAssignmentComponent = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsEquipmentAssignmentComponentLease,
+) -> i32;
+pub type NativeDestroyMechanicsComponentLease =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsComponentLeaseHandle) -> i32;
 pub type NativeBindMechanicsEntity = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEntityBindRequest,
@@ -858,6 +900,15 @@ pub struct NativeMechanicsApi {
     pub read_catalog_equipment_slots: NativeReadMechanicsCatalogEquipmentSlots,
     pub read_catalog_slot_classifications: NativeReadMechanicsCatalogSlotClassifications,
     pub destroy_catalog_lease: NativeDestroyMechanicsCatalogLease,
+    pub read_stat_component: NativeReadMechanicsStatComponent,
+    pub read_track_component: NativeReadMechanicsTrackComponent,
+    pub read_intrinsic_source_component: NativeReadMechanicsIntrinsicSourceComponent,
+    pub read_active_effect_component: NativeReadMechanicsActiveEffectComponent,
+    pub read_inventory_stack_component: NativeReadMechanicsInventoryStackComponent,
+    pub read_inventory_capacity_limit_component: NativeReadMechanicsInventoryCapacityLimitComponent,
+    pub read_item_component: NativeReadMechanicsItemComponent,
+    pub read_equipment_assignment_component: NativeReadMechanicsEquipmentAssignmentComponent,
+    pub destroy_component_lease: NativeDestroyMechanicsComponentLease,
     pub bind_entity: NativeBindMechanicsEntity,
     pub rebind_entity: NativeRebindMechanicsEntity,
     pub set_initial_stat: NativeSetMechanicsInitialStat,

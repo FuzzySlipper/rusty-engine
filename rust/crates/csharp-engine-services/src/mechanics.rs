@@ -11,11 +11,11 @@ use gameplay_mechanics::{
     IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit, InventoryComponent,
     ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack,
     MechanicsCatalog, MechanicsCatalogDefinition, MechanicsScalar, OperationId, SourceDefinition,
-    SourceDefinitionId, SourceInstanceId, StackingGroupId, StackingPolicy, StatBaseMutationRequest,
-    StatContribution, StatContributionDefinition, StatDefinition, StatId, StatService, StatValue,
-    StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackMaximum, TrackMutationRequest,
-    TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
-    TrackSetRequest, TrackValue, TracksComponent,
+    SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
+    StatBaseMutationRequest, StatContribution, StatContributionDefinition, StatDefinition, StatId,
+    StatService, StatValue, StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackMaximum,
+    TrackMutationRequest, TrackReconciliationPolicy, TrackReconciliationRequest, TrackService,
+    TrackSetPolicy, TrackSetRequest, TrackValue, TracksComponent,
 };
 
 use crate::composition::{borrowed_utf8, ABI_OK};
@@ -64,6 +64,24 @@ enum CatalogLeaseRows {
     ItemSources(Vec<NativeMechanicsItemSourceCatalogRow>),
     EquipmentSlots(Vec<NativeMechanicsEquipmentSlotCatalogRow>),
     SlotClassifications(Vec<NativeMechanicsSlotClassificationCatalogRow>),
+}
+
+/// The rows and every UTF-8 allocation returned from component inspection live in one
+/// service-owned box until the matching component lease is explicitly destroyed.
+struct ComponentLeaseBacking {
+    _text: Vec<String>,
+    rows: ComponentLeaseRows,
+}
+
+enum ComponentLeaseRows {
+    Stats(Vec<NativeMechanicsStatComponentRow>),
+    Tracks(Vec<NativeMechanicsTrackComponentRow>),
+    IntrinsicSources(Vec<NativeMechanicsIntrinsicSourceComponentRow>),
+    ActiveEffects(Vec<NativeMechanicsActiveEffectComponentRow>),
+    InventoryStacks(Vec<NativeMechanicsInventoryStackComponentRow>),
+    InventoryCapacityLimits(Vec<NativeMechanicsInventoryCapacityLimitComponentRow>),
+    Items(Vec<NativeMechanicsItemComponentRow>),
+    EquipmentAssignments(Vec<NativeMechanicsEquipmentAssignmentComponentRow>),
 }
 
 #[derive(Default)]
@@ -196,9 +214,11 @@ pub(crate) struct RuntimeMechanicsBridge {
     /// A product canonical entity is admitted into at most one mechanics catalog world.
     canonical_entities: BTreeMap<EntityId, u64>,
     catalog_leases: BTreeMap<u64, Box<CatalogLeaseBacking>>,
+    component_leases: BTreeMap<u64, Box<ComponentLeaseBacking>>,
     next_catalog: u64,
     next_entity: u64,
     next_catalog_lease: u64,
+    next_component_lease: u64,
 }
 
 impl RuntimeMechanicsBridge {
@@ -208,9 +228,11 @@ impl RuntimeMechanicsBridge {
             entities: BTreeMap::new(),
             canonical_entities: BTreeMap::new(),
             catalog_leases: BTreeMap::new(),
+            component_leases: BTreeMap::new(),
             next_catalog: 1,
             next_entity: 1,
             next_catalog_lease: 1,
+            next_component_lease: 1,
         }
     }
 
@@ -252,6 +274,16 @@ impl RuntimeMechanicsBridge {
         self.catalog_leases.insert(value, Box::new(backing));
         Some(NativeMechanicsCatalogLeaseHandle { value })
     }
+
+    fn insert_component_lease(
+        &mut self,
+        backing: ComponentLeaseBacking,
+    ) -> Option<NativeMechanicsComponentLeaseHandle> {
+        let value = self.next_component_lease;
+        self.next_component_lease = value.checked_add(1)?;
+        self.component_leases.insert(value, Box::new(backing));
+        Some(NativeMechanicsComponentLeaseHandle { value })
+    }
 }
 
 pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
@@ -288,6 +320,15 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         read_catalog_equipment_slots,
         read_catalog_slot_classifications,
         destroy_catalog_lease,
+        read_stat_component,
+        read_track_component,
+        read_intrinsic_source_component,
+        read_active_effect_component,
+        read_inventory_stack_component,
+        read_inventory_capacity_limit_component,
+        read_item_component,
+        read_equipment_assignment_component,
+        destroy_component_lease,
         bind_entity,
         rebind_entity,
         set_initial_stat,
@@ -1447,6 +1488,301 @@ unsafe extern "C" fn destroy_catalog_lease(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
     i32::from(bridge.catalog_leases.remove(&handle.value).is_some())
+}
+
+fn build_component_lease<F>(
+    bridge: &RuntimeMechanicsBridge,
+    handle: NativeMechanicsEntityHandle,
+    component: NativeMechanicsRevisionComponent,
+    build: F,
+) -> Option<(ComponentLeaseBacking, NativeMechanicsComponentReadMetadata)>
+where
+    F: FnOnce(&EntityState, EntityId, &mut CatalogLeaseText) -> ComponentLeaseRows,
+{
+    let binding = bridge.binding(handle)?.clone();
+    let slot = bridge.catalogs.get(&binding.catalog)?;
+    let lifecycle = slot.world.lifecycle.get(&binding.entity)?.lifecycle;
+    if !matches!(
+        lifecycle,
+        NativeMechanicsEntityLifecycle::Active | NativeMechanicsEntityLifecycle::Disabled
+    ) {
+        return None;
+    }
+    let catalog = slot.catalog.as_ref()?;
+    let mut text = CatalogLeaseText::default();
+    let rows = build(&slot.world.state, binding.entity, &mut text);
+    let metadata = NativeMechanicsComponentReadMetadata {
+        entity_id: binding.entity.raw(),
+        component,
+        revision: component_read_revision(&slot.world.state, binding.entity, component),
+        present: component_is_present(&slot.world.state, binding.entity, component),
+        catalog_id: binding.catalog,
+        catalog_version: text.copy(catalog.version().as_str()),
+        catalog_fingerprint: text.copy(catalog.fingerprint()),
+    };
+    Some((
+        ComponentLeaseBacking {
+            _text: text.values,
+            rows,
+        },
+        metadata,
+    ))
+}
+
+macro_rules! read_component_rows {
+    ($function:ident, $lease:ident, $variant:ident, $row:ident, $component:ty, $kind:expr, $build:expr) => {
+        unsafe extern "C" fn $function(
+            context: *mut c_void,
+            entity: NativeMechanicsEntityHandle,
+            result: *mut $lease,
+        ) -> i32 {
+            if context.is_null() || result.is_null() {
+                return 0;
+            }
+            let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+            let Some((backing, metadata)) =
+                build_component_lease(bridge, entity, $kind, |state, entity_id, text| {
+                    let entries = state
+                        .component::<$component>(entity_id)
+                        .ok()
+                        .flatten()
+                        .map(|component| $build(component, text))
+                        .unwrap_or_default();
+                    ComponentLeaseRows::$variant(entries)
+                })
+            else {
+                return 0;
+            };
+            let Some(handle) = bridge.insert_component_lease(backing) else {
+                return 0;
+            };
+            let entries = match &bridge
+                .component_leases
+                .get(&handle.value)
+                .expect("just inserted component lease")
+                .rows
+            {
+                ComponentLeaseRows::$variant(entries) => entries,
+                _ => unreachable!("component lease row kind matches its reader"),
+            };
+            unsafe {
+                *result = $lease {
+                    handle,
+                    entries: entries.as_ptr(),
+                    entries_len: entries.len(),
+                    metadata,
+                };
+            }
+            ABI_OK
+        }
+    };
+}
+
+read_component_rows!(
+    read_stat_component,
+    NativeMechanicsStatComponentLease,
+    Stats,
+    NativeMechanicsStatComponentRow,
+    StatsComponent,
+    NativeMechanicsRevisionComponent::Stats,
+    |component: &StatsComponent, text: &mut CatalogLeaseText| {
+        component
+            .values()
+            .iter()
+            .map(|value| NativeMechanicsStatComponentRow {
+                stat: text.copy(value.stat().as_str()),
+                base: value.base().get(),
+            })
+            .collect()
+    }
+);
+read_component_rows!(
+    read_track_component,
+    NativeMechanicsTrackComponentLease,
+    Tracks,
+    NativeMechanicsTrackComponentRow,
+    TracksComponent,
+    NativeMechanicsRevisionComponent::Tracks,
+    |component: &TracksComponent, text: &mut CatalogLeaseText| {
+        component
+            .values()
+            .iter()
+            .map(|value| NativeMechanicsTrackComponentRow {
+                track: text.copy(value.track().as_str()),
+                current: value.current().get(),
+            })
+            .collect()
+    }
+);
+read_component_rows!(
+    read_intrinsic_source_component,
+    NativeMechanicsIntrinsicSourceComponentLease,
+    IntrinsicSources,
+    NativeMechanicsIntrinsicSourceComponentRow,
+    IntrinsicSourcesComponent,
+    NativeMechanicsRevisionComponent::IntrinsicSources,
+    |component: &IntrinsicSourcesComponent, text: &mut CatalogLeaseText| {
+        component
+            .bindings()
+            .iter()
+            .map(|binding| NativeMechanicsIntrinsicSourceComponentRow {
+                instance: text.copy(binding.instance().as_str()),
+                definition: text.copy(binding.definition().as_str()),
+            })
+            .collect()
+    }
+);
+read_component_rows!(
+    read_active_effect_component,
+    NativeMechanicsActiveEffectComponentLease,
+    ActiveEffects,
+    NativeMechanicsActiveEffectComponentRow,
+    ActiveEffectsComponent,
+    NativeMechanicsRevisionComponent::ActiveEffects,
+    |component: &ActiveEffectsComponent, text: &mut CatalogLeaseText| {
+        component
+            .effects()
+            .iter()
+            .map(|effect| {
+                let mut row = NativeMechanicsActiveEffectComponentRow {
+                    instance: text.copy(effect.instance().as_str()),
+                    definition: text.copy(effect.definition().as_str()),
+                    stacks: effect.stacks(),
+                    provenance_kind: NativeMechanicsActiveEffectProvenanceKind::Intrinsic,
+                    intrinsic_entity_id: 0,
+                    intrinsic_instance: text.copy(""),
+                    effect_entity_id: 0,
+                    effect_instance: text.copy(""),
+                    effect_stack: 0,
+                    effect_source: text.copy(""),
+                    equipped_owner_entity_id: 0,
+                    equipped_item_entity_id: 0,
+                    equipped_source: text.copy(""),
+                    request_operation: text.copy(""),
+                    request_instance: text.copy(""),
+                };
+                match effect.provenance() {
+                    SourceInstanceIdentity::Intrinsic { entity, instance } => {
+                        row.provenance_kind = NativeMechanicsActiveEffectProvenanceKind::Intrinsic;
+                        row.intrinsic_entity_id = entity.raw();
+                        row.intrinsic_instance = text.copy(instance.as_str());
+                    }
+                    SourceInstanceIdentity::Effect {
+                        entity,
+                        effect,
+                        stack,
+                        source,
+                    } => {
+                        row.provenance_kind = NativeMechanicsActiveEffectProvenanceKind::Effect;
+                        row.effect_entity_id = entity.raw();
+                        row.effect_instance = text.copy(effect.as_str());
+                        row.effect_stack = *stack;
+                        row.effect_source = text.copy(source.as_str());
+                    }
+                    SourceInstanceIdentity::EquippedItem {
+                        owner,
+                        item,
+                        source,
+                    } => {
+                        row.provenance_kind =
+                            NativeMechanicsActiveEffectProvenanceKind::EquippedItem;
+                        row.equipped_owner_entity_id = owner.raw();
+                        row.equipped_item_entity_id = item.raw();
+                        row.equipped_source = text.copy(source.as_str());
+                    }
+                    SourceInstanceIdentity::Request {
+                        operation,
+                        instance,
+                    } => {
+                        row.provenance_kind = NativeMechanicsActiveEffectProvenanceKind::Request;
+                        row.request_operation = text.copy(operation.as_str());
+                        row.request_instance = text.copy(instance.as_str());
+                    }
+                }
+                row
+            })
+            .collect()
+    }
+);
+read_component_rows!(
+    read_inventory_stack_component,
+    NativeMechanicsInventoryStackComponentLease,
+    InventoryStacks,
+    NativeMechanicsInventoryStackComponentRow,
+    InventoryComponent,
+    NativeMechanicsRevisionComponent::Inventory,
+    |component: &InventoryComponent, text: &mut CatalogLeaseText| {
+        component
+            .stacks()
+            .iter()
+            .map(|stack| NativeMechanicsInventoryStackComponentRow {
+                definition: text.copy(stack.definition.as_str()),
+                quantity: stack.quantity,
+            })
+            .collect()
+    }
+);
+read_component_rows!(
+    read_inventory_capacity_limit_component,
+    NativeMechanicsInventoryCapacityLimitComponentLease,
+    InventoryCapacityLimits,
+    NativeMechanicsInventoryCapacityLimitComponentRow,
+    InventoryComponent,
+    NativeMechanicsRevisionComponent::Inventory,
+    |component: &InventoryComponent, text: &mut CatalogLeaseText| {
+        component
+            .capacity_limits()
+            .iter()
+            .map(|limit| NativeMechanicsInventoryCapacityLimitComponentRow {
+                metric: text.copy(limit.metric().as_str()),
+                maximum: limit.maximum(),
+            })
+            .collect()
+    }
+);
+read_component_rows!(
+    read_item_component,
+    NativeMechanicsItemComponentLease,
+    Items,
+    NativeMechanicsItemComponentRow,
+    ItemComponent,
+    NativeMechanicsRevisionComponent::Item,
+    |component: &ItemComponent, text: &mut CatalogLeaseText| {
+        vec![NativeMechanicsItemComponentRow {
+            definition: text.copy(component.definition().as_str()),
+        }]
+    }
+);
+read_component_rows!(
+    read_equipment_assignment_component,
+    NativeMechanicsEquipmentAssignmentComponentLease,
+    EquipmentAssignments,
+    NativeMechanicsEquipmentAssignmentComponentRow,
+    EquipmentComponent,
+    NativeMechanicsRevisionComponent::Equipment,
+    |component: &EquipmentComponent, text: &mut CatalogLeaseText| {
+        component
+            .assignments()
+            .iter()
+            .map(
+                |assignment| NativeMechanicsEquipmentAssignmentComponentRow {
+                    slot: text.copy(assignment.slot.as_str()),
+                    item_entity_id: assignment.item.raw(),
+                },
+            )
+            .collect()
+    }
+);
+
+unsafe extern "C" fn destroy_component_lease(
+    context: *mut c_void,
+    handle: NativeMechanicsComponentLeaseHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    i32::from(bridge.component_leases.remove(&handle.value).is_some())
 }
 
 fn native_stacking(value: StackingPolicy) -> NativeMechanicsStackingPolicy {
@@ -2758,6 +3094,87 @@ fn component_revision<T: entity_state::EntityComponent>(
         present,
     }
 }
+
+fn component_read_revision(
+    state: &EntityState,
+    entity: EntityId,
+    component: NativeMechanicsRevisionComponent,
+) -> u64 {
+    match component {
+        NativeMechanicsRevisionComponent::Stats => state
+            .component_revision::<StatsComponent>(entity)
+            .map(|value| value.revision())
+            .unwrap_or_default(),
+        NativeMechanicsRevisionComponent::Tracks => state
+            .component_revision::<TracksComponent>(entity)
+            .map(|value| value.revision())
+            .unwrap_or_default(),
+        NativeMechanicsRevisionComponent::IntrinsicSources => state
+            .component_revision::<IntrinsicSourcesComponent>(entity)
+            .map(|value| value.revision())
+            .unwrap_or_default(),
+        NativeMechanicsRevisionComponent::ActiveEffects => state
+            .component_revision::<ActiveEffectsComponent>(entity)
+            .map(|value| value.revision())
+            .unwrap_or_default(),
+        NativeMechanicsRevisionComponent::Inventory => state
+            .component_revision::<InventoryComponent>(entity)
+            .map(|value| value.revision())
+            .unwrap_or_default(),
+        NativeMechanicsRevisionComponent::Item => state
+            .component_revision::<ItemComponent>(entity)
+            .map(|value| value.revision())
+            .unwrap_or_default(),
+        NativeMechanicsRevisionComponent::Equipment => state
+            .component_revision::<EquipmentComponent>(entity)
+            .map(|value| value.revision())
+            .unwrap_or_default(),
+    }
+}
+
+fn component_is_present(
+    state: &EntityState,
+    entity: EntityId,
+    component: NativeMechanicsRevisionComponent,
+) -> bool {
+    match component {
+        NativeMechanicsRevisionComponent::Stats => state
+            .component::<StatsComponent>(entity)
+            .ok()
+            .flatten()
+            .is_some(),
+        NativeMechanicsRevisionComponent::Tracks => state
+            .component::<TracksComponent>(entity)
+            .ok()
+            .flatten()
+            .is_some(),
+        NativeMechanicsRevisionComponent::IntrinsicSources => state
+            .component::<IntrinsicSourcesComponent>(entity)
+            .ok()
+            .flatten()
+            .is_some(),
+        NativeMechanicsRevisionComponent::ActiveEffects => state
+            .component::<ActiveEffectsComponent>(entity)
+            .ok()
+            .flatten()
+            .is_some(),
+        NativeMechanicsRevisionComponent::Inventory => state
+            .component::<InventoryComponent>(entity)
+            .ok()
+            .flatten()
+            .is_some(),
+        NativeMechanicsRevisionComponent::Item => state
+            .component::<ItemComponent>(entity)
+            .ok()
+            .flatten()
+            .is_some(),
+        NativeMechanicsRevisionComponent::Equipment => state
+            .component::<EquipmentComponent>(entity)
+            .ok()
+            .flatten()
+            .is_some(),
+    }
+}
 unsafe fn text<'a>(value: NativeUtf8Slice, field: &'static str) -> Result<&'a str, ()> {
     unsafe { borrowed_utf8(value.bytes, value.len, field) }.map_err(|_| ())
 }
@@ -3375,6 +3792,179 @@ mod tests {
             12,
             NativeMechanicsRevisionComponent::Tracks,
         ));
+    }
+
+    #[test]
+    fn component_leases_preserve_non_empty_empty_present_and_absent_components() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("component-lease"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                define_stat(
+                    context,
+                    &NativeMechanicsStatDefinitionRequest {
+                        catalog,
+                        id: utf8("strength"),
+                        minimum: 0,
+                        maximum: 20,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
+        let mut entity = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 99,
+                        identity: utf8("readback"),
+                    },
+                    &mut entity,
+                )
+            },
+            ABI_OK
+        );
+        let stats = [NativeMechanicsInitialStatValue {
+            stat: utf8("strength"),
+            base: 12,
+        }];
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        entity,
+                        has_stats: true,
+                        stats: stats.as_ptr(),
+                        stats_len: stats.len(),
+                        has_tracks: true,
+                        tracks: std::ptr::null(),
+                        tracks_len: 0,
+                        has_intrinsic_sources: false,
+                        intrinsic_sources: std::ptr::null(),
+                        intrinsic_sources_len: 0,
+                        has_active_effects: false,
+                        active_effects: std::ptr::null(),
+                        active_effects_len: 0,
+                        has_inventory: false,
+                        inventory_stacks: std::ptr::null(),
+                        inventory_stacks_len: 0,
+                        inventory_capacity_limits: std::ptr::null(),
+                        inventory_capacity_limits_len: 0,
+                        has_item: false,
+                        item_definition: utf8(""),
+                        has_equipment: false,
+                        equipment_assignments: std::ptr::null(),
+                        equipment_assignments_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, entity, &mut receipt) },
+            ABI_OK
+        );
+
+        let mut stats_lease = std::mem::MaybeUninit::<NativeMechanicsStatComponentLease>::uninit();
+        assert_eq!(
+            unsafe { read_stat_component(context, entity, stats_lease.as_mut_ptr()) },
+            ABI_OK
+        );
+        let stats_lease = unsafe { stats_lease.assume_init() };
+        assert!(stats_lease.metadata.present);
+        assert_eq!(stats_lease.metadata.entity_id, 99);
+        assert_eq!(
+            stats_lease.metadata.component,
+            NativeMechanicsRevisionComponent::Stats
+        );
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    stats_lease.metadata.catalog_version.bytes,
+                    stats_lease.metadata.catalog_version.len,
+                ))
+            },
+            "component-lease"
+        );
+        assert!(unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                stats_lease.metadata.catalog_fingerprint.bytes,
+                stats_lease.metadata.catalog_fingerprint.len,
+            ))
+        }
+        .starts_with("sha256:"));
+        assert_eq!(stats_lease.entries_len, 1);
+        assert_eq!(unsafe { (*stats_lease.entries).base }, 12);
+        assert_eq!(
+            unsafe { destroy_component_lease(context, stats_lease.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_component_lease(context, stats_lease.handle) },
+            0
+        );
+
+        let mut disabled = NativeMechanicsLifecycleReceipt::default();
+        assert_eq!(
+            unsafe {
+                set_entity_lifecycle(
+                    context,
+                    &NativeMechanicsLifecycleRequest {
+                        entity,
+                        lifecycle: NativeMechanicsEntityLifecycle::Disabled,
+                        guard: NativeMechanicsLifecycleGuard::Unchecked,
+                        expected_stamp: 0,
+                    },
+                    &mut disabled,
+                )
+            },
+            ABI_OK
+        );
+        let mut tracks_lease =
+            std::mem::MaybeUninit::<NativeMechanicsTrackComponentLease>::uninit();
+        assert_eq!(
+            unsafe { read_track_component(context, entity, tracks_lease.as_mut_ptr()) },
+            ABI_OK
+        );
+        let tracks_lease = unsafe { tracks_lease.assume_init() };
+        assert!(tracks_lease.metadata.present);
+        assert_eq!(tracks_lease.entries_len, 0);
+        assert_eq!(
+            unsafe { destroy_component_lease(context, tracks_lease.handle) },
+            ABI_OK
+        );
+
+        let mut item_lease = std::mem::MaybeUninit::<NativeMechanicsItemComponentLease>::uninit();
+        assert_eq!(
+            unsafe { read_item_component(context, entity, item_lease.as_mut_ptr()) },
+            ABI_OK
+        );
+        let item_lease = unsafe { item_lease.assume_init() };
+        assert!(!item_lease.metadata.present);
+        assert_eq!(item_lease.entries_len, 0);
+        assert_eq!(
+            unsafe { destroy_component_lease(context, item_lease.handle) },
+            ABI_OK
+        );
     }
 
     #[test]

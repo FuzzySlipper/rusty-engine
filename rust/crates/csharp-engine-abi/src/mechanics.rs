@@ -128,6 +128,27 @@ pub struct NativeMechanicsCatalogLeaseHandle {
     pub value: u64,
 }
 
+/// A typed owner for one exact, bounded Mechanics component inspection result.
+/// Its row pointer and metadata UTF-8 slices remain valid only until
+/// `destroy_component_lease`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsComponentLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsComponentReadMetadata {
+    pub entity_id: u64,
+    pub component: NativeMechanicsRevisionComponent,
+    pub revision: u64,
+    pub present: bool,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMechanicsCatalogIdentityRow {
@@ -388,6 +409,132 @@ pub struct NativeMechanicsSlotClassificationCatalogLease {
     pub entries: *const NativeMechanicsSlotClassificationCatalogRow,
     pub entries_len: usize,
     pub catalog_id: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsStatComponentRow {
+    pub stat: NativeUtf8Slice,
+    pub base: i64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsTrackComponentRow {
+    pub track: NativeUtf8Slice,
+    pub current: i64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsIntrinsicSourceComponentRow {
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsActiveEffectComponentRow {
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+    pub stacks: u16,
+    pub provenance_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub intrinsic_entity_id: u64,
+    pub intrinsic_instance: NativeUtf8Slice,
+    pub effect_entity_id: u64,
+    pub effect_instance: NativeUtf8Slice,
+    pub effect_stack: u16,
+    pub effect_source: NativeUtf8Slice,
+    pub equipped_owner_entity_id: u64,
+    pub equipped_item_entity_id: u64,
+    pub equipped_source: NativeUtf8Slice,
+    pub request_operation: NativeUtf8Slice,
+    pub request_instance: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInventoryStackComponentRow {
+    pub definition: NativeUtf8Slice,
+    pub quantity: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInventoryCapacityLimitComponentRow {
+    pub metric: NativeUtf8Slice,
+    pub maximum: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemComponentRow {
+    pub definition: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEquipmentAssignmentComponentRow {
+    pub slot: NativeUtf8Slice,
+    pub item_entity_id: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsStatComponentLease {
+    pub handle: NativeMechanicsComponentLeaseHandle,
+    pub entries: *const NativeMechanicsStatComponentRow,
+    pub entries_len: usize,
+    pub metadata: NativeMechanicsComponentReadMetadata,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsTrackComponentLease {
+    pub handle: NativeMechanicsComponentLeaseHandle,
+    pub entries: *const NativeMechanicsTrackComponentRow,
+    pub entries_len: usize,
+    pub metadata: NativeMechanicsComponentReadMetadata,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsIntrinsicSourceComponentLease {
+    pub handle: NativeMechanicsComponentLeaseHandle,
+    pub entries: *const NativeMechanicsIntrinsicSourceComponentRow,
+    pub entries_len: usize,
+    pub metadata: NativeMechanicsComponentReadMetadata,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsActiveEffectComponentLease {
+    pub handle: NativeMechanicsComponentLeaseHandle,
+    pub entries: *const NativeMechanicsActiveEffectComponentRow,
+    pub entries_len: usize,
+    pub metadata: NativeMechanicsComponentReadMetadata,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInventoryStackComponentLease {
+    pub handle: NativeMechanicsComponentLeaseHandle,
+    pub entries: *const NativeMechanicsInventoryStackComponentRow,
+    pub entries_len: usize,
+    pub metadata: NativeMechanicsComponentReadMetadata,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInventoryCapacityLimitComponentLease {
+    pub handle: NativeMechanicsComponentLeaseHandle,
+    pub entries: *const NativeMechanicsInventoryCapacityLimitComponentRow,
+    pub entries_len: usize,
+    pub metadata: NativeMechanicsComponentReadMetadata,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemComponentLease {
+    pub handle: NativeMechanicsComponentLeaseHandle,
+    pub entries: *const NativeMechanicsItemComponentRow,
+    pub entries_len: usize,
+    pub metadata: NativeMechanicsComponentReadMetadata,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEquipmentAssignmentComponentLease {
+    pub handle: NativeMechanicsComponentLeaseHandle,
+    pub entries: *const NativeMechanicsEquipmentAssignmentComponentRow,
+    pub entries_len: usize,
+    pub metadata: NativeMechanicsComponentReadMetadata,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
