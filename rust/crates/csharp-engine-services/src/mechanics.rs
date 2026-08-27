@@ -6,16 +6,17 @@ use entity_state::{
     ComponentRevision, EntityAuthoringService, EntityDefinition, EntityState, RelationshipCommand,
 };
 use gameplay_mechanics::{
-    ActiveEffectInstance, ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion,
-    DamageFact, DamageKindDefinition, DamageKindSelector, DamagePart, DamagePartReceipt,
-    DamageReceipt, DamageRequest, DamageResponseDefinition, DamageService, DecisionOutcome,
-    EffectApplyRequest, EffectDefinition, EffectMutationKind, EffectRefreshRequest,
-    EffectRemovalRequest, EffectReplaceRequest, EffectService, EffectSourceActivation,
-    EffectStackingPolicy, EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition,
-    ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit,
-    InventoryComponent, InventoryReadCost, InventoryService, ItemCapacityCost, ItemComponent,
-    ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack, MechanicsCatalog,
-    MechanicsCatalogDefinition, MechanicsComponentKind,
+    gameplay_component_registry, validate_state_against_catalog, ActiveEffectInstance,
+    ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion, DamageFact,
+    DamageKindDefinition, DamageKindSelector, DamagePart, DamagePartReceipt, DamageReceipt,
+    DamageRequest, DamageResponseDefinition, DamageService, DecisionOutcome, EffectApplyRequest,
+    EffectDefinition, EffectMutationKind, EffectRefreshRequest, EffectRemovalRequest,
+    EffectReplaceRequest, EffectService, EffectSourceActivation, EffectStackingPolicy,
+    EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition, ExactRatio,
+    IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit, InventoryComponent,
+    InventoryMutationKind, InventoryMutationRequest, InventoryReadCost, InventoryService,
+    InventoryTransferRequest, ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy,
+    ItemKind, ItemStack, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
     MechanicsScalar, ObservedComponentRevision, OperationId, RequestSource, ResponseDecision,
     ResponseDecisionKind, RoundingPolicy, SourceCollectionCost, SourceDefinition,
     SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
@@ -23,11 +24,10 @@ use gameplay_mechanics::{
     StatDefinition, StatId, StatService, StatValue, StatsComponent, TrackAdjustmentKind,
     TrackDamageChange, TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
     TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
-    TrackSetRequest, TrackValue, TracksComponent, gameplay_component_registry,
-    validate_state_against_catalog,
+    TrackSetRequest, TrackValue, TracksComponent,
 };
 
-use crate::composition::{ABI_OK, borrowed_utf8};
+use crate::composition::{borrowed_utf8, ABI_OK};
 
 #[derive(Clone)]
 struct CatalogBuilder {
@@ -116,6 +116,16 @@ enum OperationLeaseRows {
         stacks: Vec<NativeMechanicsInventoryViewStackRow>,
         unique_items: Vec<NativeMechanicsInventoryViewUniqueItemRow>,
         capacity: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+    },
+    InventoryMutation {
+        capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+        capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+    },
+    InventoryTransfer {
+        from_capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+        from_capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+        to_capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+        to_capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
     },
     Effect {
         removed: Vec<NativeMechanicsActiveEffectComponentRow>,
@@ -408,6 +418,9 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         evaluate_stat,
         read_track,
         read_inventory_view,
+        grant_inventory,
+        consume_inventory,
+        transfer_inventory,
         set_stat_base,
         destroy_operation_lease,
         set_track,
@@ -2830,6 +2843,299 @@ unsafe extern "C" fn read_inventory_view(
     ABI_OK
 }
 
+unsafe extern "C" fn grant_inventory(
+    context: *mut c_void,
+    request: *const NativeMechanicsInventoryMutationRequest,
+    result: *mut NativeMechanicsInventoryMutationLease,
+) -> i32 {
+    inventory_mutation(context, request, result, InventoryMutationKind::Grant)
+}
+
+unsafe extern "C" fn consume_inventory(
+    context: *mut c_void,
+    request: *const NativeMechanicsInventoryMutationRequest,
+    result: *mut NativeMechanicsInventoryMutationLease,
+) -> i32 {
+    inventory_mutation(context, request, result, InventoryMutationKind::Consume)
+}
+
+unsafe fn inventory_mutation(
+    context: *mut c_void,
+    request: *const NativeMechanicsInventoryMutationRequest,
+    result: *mut NativeMechanicsInventoryMutationLease,
+    kind: InventoryMutationKind,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let (Ok(operation), Ok(source), Ok(item)) = (
+        unsafe { text(request.operation, "inventory operation") }.and_then(parse::<OperationId>),
+        parse_inventory_request_source_identity(request),
+        unsafe { text(request.item, "inventory item") }
+            .and_then(parse::<gameplay_mechanics::ItemDefinitionId>),
+    ) else {
+        return 0;
+    };
+    let Some(catalog_id) = bridge.binding(request.owner).map(|binding| binding.catalog) else {
+        return 0;
+    };
+    let receipt = {
+        let Some((state, catalog, owner)) = bridge.state_and_catalog_mut(request.owner) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<InventoryComponent>(owner) else {
+            return 0;
+        };
+        let Some(expected_revision) = guarded_revision(
+            request.revision_guard,
+            request.expected_revision.entity_id,
+            request.expected_revision.revision,
+            request.expected_revision.component,
+            owner,
+            actual,
+            NativeMechanicsRevisionComponent::Inventory,
+        ) else {
+            return 0;
+        };
+        let request = InventoryMutationRequest {
+            operation,
+            source,
+            owner,
+            item,
+            quantity: request.quantity,
+            expected_revision,
+        };
+        match kind {
+            InventoryMutationKind::Grant => InventoryService::grant(state, catalog, request),
+            InventoryMutationKind::Consume => InventoryService::consume(state, catalog, request),
+        }
+    };
+    let Ok(receipt) = receipt else {
+        return 0;
+    };
+    let mut lease_text = CatalogLeaseText::default();
+    let capacity_before = native_capacity_usage(&receipt.capacity_before, &mut lease_text);
+    let capacity_after = native_capacity_usage(&receipt.capacity_after, &mut lease_text);
+    let metadata = NativeMechanicsInventoryMutationLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        capacity_before: std::ptr::null(),
+        capacity_before_len: capacity_before.len(),
+        capacity_after: std::ptr::null(),
+        capacity_after_len: capacity_after.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        kind: match receipt.kind {
+            InventoryMutationKind::Grant => NativeMechanicsInventoryMutationKind::Grant,
+            InventoryMutationKind::Consume => NativeMechanicsInventoryMutationKind::Consume,
+        },
+        owner_entity_id: receipt.owner.raw(),
+        item: lease_text.copy(receipt.item.as_str()),
+        requested_quantity: receipt.requested_quantity,
+        before_quantity: receipt.before_quantity,
+        after_quantity: receipt.after_quantity,
+        observed_inventory_revision: inventory_revision(
+            receipt.owner,
+            receipt.observed_inventory_revision,
+        ),
+        committed_inventory_revision: inventory_revision(
+            receipt.owner,
+            receipt.committed_inventory_revision,
+        ),
+        read_cost: native_inventory_read_cost(receipt.read_cost),
+    };
+    let Some(handle) = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::InventoryMutation {
+            capacity_before,
+            capacity_after,
+        },
+    }) else {
+        return 0;
+    };
+    let OperationLeaseRows::InventoryMutation {
+        capacity_before,
+        capacity_after,
+    } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted inventory mutation lease")
+        .rows
+    else {
+        unreachable!("inventory mutation lease row kind matches its reader")
+    };
+    *result = NativeMechanicsInventoryMutationLease {
+        handle,
+        capacity_before: capacity_before.as_ptr(),
+        capacity_after: capacity_after.as_ptr(),
+        ..metadata
+    };
+    ABI_OK
+}
+
+unsafe extern "C" fn transfer_inventory(
+    context: *mut c_void,
+    request: *const NativeMechanicsInventoryTransferRequest,
+    result: *mut NativeMechanicsInventoryTransferLease,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let (Ok(operation), Ok(source), Ok(item)) = (
+        unsafe { text(request.operation, "inventory transfer operation") }
+            .and_then(parse::<OperationId>),
+        parse_inventory_transfer_request_source_identity(request),
+        unsafe { text(request.item, "inventory transfer item") }
+            .and_then(parse::<gameplay_mechanics::ItemDefinitionId>),
+    ) else {
+        return 0;
+    };
+    let (Some(from_binding), Some(to_binding)) = (
+        bridge.binding(request.from_owner).cloned(),
+        bridge.binding(request.to_owner).cloned(),
+    ) else {
+        return 0;
+    };
+    if from_binding.catalog != to_binding.catalog {
+        return 0;
+    }
+    let catalog_id = from_binding.catalog;
+    let receipt = {
+        let Some((state, catalog, from_owner)) = bridge.state_and_catalog_mut(request.from_owner)
+        else {
+            return 0;
+        };
+        let to_owner = to_binding.entity;
+        let (Ok(from_actual), Ok(to_actual)) = (
+            state.component_revision::<InventoryComponent>(from_owner),
+            state.component_revision::<InventoryComponent>(to_owner),
+        ) else {
+            return 0;
+        };
+        let Some(expected_from_revision) = guarded_revision(
+            request.from_revision_guard,
+            request.expected_from_revision.entity_id,
+            request.expected_from_revision.revision,
+            request.expected_from_revision.component,
+            from_owner,
+            from_actual,
+            NativeMechanicsRevisionComponent::Inventory,
+        ) else {
+            return 0;
+        };
+        let Some(expected_to_revision) = guarded_revision(
+            request.to_revision_guard,
+            request.expected_to_revision.entity_id,
+            request.expected_to_revision.revision,
+            request.expected_to_revision.component,
+            to_owner,
+            to_actual,
+            NativeMechanicsRevisionComponent::Inventory,
+        ) else {
+            return 0;
+        };
+        InventoryService::transfer(
+            state,
+            catalog,
+            InventoryTransferRequest {
+                operation,
+                source,
+                from_owner,
+                to_owner,
+                item,
+                quantity: request.quantity,
+                expected_from_revision,
+                expected_to_revision,
+            },
+        )
+    };
+    let Ok(receipt) = receipt else {
+        return 0;
+    };
+    let mut lease_text = CatalogLeaseText::default();
+    let from_capacity_before =
+        native_capacity_usage(&receipt.from_capacity_before, &mut lease_text);
+    let from_capacity_after = native_capacity_usage(&receipt.from_capacity_after, &mut lease_text);
+    let to_capacity_before = native_capacity_usage(&receipt.to_capacity_before, &mut lease_text);
+    let to_capacity_after = native_capacity_usage(&receipt.to_capacity_after, &mut lease_text);
+    let metadata = NativeMechanicsInventoryTransferLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        from_capacity_before: std::ptr::null(),
+        from_capacity_before_len: from_capacity_before.len(),
+        from_capacity_after: std::ptr::null(),
+        from_capacity_after_len: from_capacity_after.len(),
+        to_capacity_before: std::ptr::null(),
+        to_capacity_before_len: to_capacity_before.len(),
+        to_capacity_after: std::ptr::null(),
+        to_capacity_after_len: to_capacity_after.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        from_owner_entity_id: receipt.from_owner.raw(),
+        to_owner_entity_id: receipt.to_owner.raw(),
+        item: lease_text.copy(receipt.item.as_str()),
+        quantity: receipt.quantity,
+        from_before_quantity: receipt.from_before,
+        from_after_quantity: receipt.from_after,
+        to_before_quantity: receipt.to_before,
+        to_after_quantity: receipt.to_after,
+        observed_from_inventory_revision: inventory_revision(
+            receipt.from_owner,
+            receipt.observed_from_revision,
+        ),
+        committed_from_inventory_revision: inventory_revision(
+            receipt.from_owner,
+            receipt.committed_from_revision,
+        ),
+        observed_to_inventory_revision: inventory_revision(
+            receipt.to_owner,
+            receipt.observed_to_revision,
+        ),
+        committed_to_inventory_revision: inventory_revision(
+            receipt.to_owner,
+            receipt.committed_to_revision,
+        ),
+        read_cost: native_inventory_read_cost(receipt.read_cost),
+    };
+    let Some(handle) = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::InventoryTransfer {
+            from_capacity_before,
+            from_capacity_after,
+            to_capacity_before,
+            to_capacity_after,
+        },
+    }) else {
+        return 0;
+    };
+    let OperationLeaseRows::InventoryTransfer {
+        from_capacity_before,
+        from_capacity_after,
+        to_capacity_before,
+        to_capacity_after,
+    } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted inventory transfer lease")
+        .rows
+    else {
+        unreachable!("inventory transfer lease row kind matches its reader")
+    };
+    *result = NativeMechanicsInventoryTransferLease {
+        handle,
+        from_capacity_before: from_capacity_before.as_ptr(),
+        from_capacity_after: from_capacity_after.as_ptr(),
+        to_capacity_before: to_capacity_before.as_ptr(),
+        to_capacity_after: to_capacity_after.as_ptr(),
+        ..metadata
+    };
+    ABI_OK
+}
+
 unsafe extern "C" fn set_stat_base(
     context: *mut c_void,
     request: *const NativeMechanicsStatBaseMutationRequest,
@@ -3779,6 +4085,95 @@ unsafe fn parse_damage_parts(
         .collect()
 }
 
+fn parse_source_identity(
+    source: &NativeMechanicsSourceIdentity,
+) -> Result<SourceInstanceIdentity, ()> {
+    match source.kind {
+        NativeMechanicsActiveEffectProvenanceKind::Intrinsic => {
+            Ok(SourceInstanceIdentity::Intrinsic {
+                entity: EntityId::new(source.intrinsic_entity_id),
+                instance: unsafe {
+                    text(
+                        source.intrinsic_instance,
+                        "inventory intrinsic source instance",
+                    )
+                }
+                .and_then(parse::<SourceInstanceId>)?,
+            })
+        }
+        NativeMechanicsActiveEffectProvenanceKind::Effect => Ok(SourceInstanceIdentity::Effect {
+            entity: EntityId::new(source.effect_entity_id),
+            effect: unsafe { text(source.effect_instance, "inventory effect source instance") }
+                .and_then(parse::<gameplay_mechanics::EffectInstanceId>)?,
+            stack: source.effect_stack,
+            source: unsafe { text(source.effect_source, "inventory effect source definition") }
+                .and_then(parse::<SourceDefinitionId>)?,
+        }),
+        NativeMechanicsActiveEffectProvenanceKind::EquippedItem => {
+            Ok(SourceInstanceIdentity::EquippedItem {
+                owner: EntityId::new(source.equipped_owner_entity_id),
+                item: EntityId::new(source.equipped_item_entity_id),
+                source: unsafe {
+                    text(
+                        source.equipped_source,
+                        "inventory equipped source definition",
+                    )
+                }
+                .and_then(parse::<SourceDefinitionId>)?,
+            })
+        }
+        NativeMechanicsActiveEffectProvenanceKind::Request => Ok(SourceInstanceIdentity::Request {
+            operation: unsafe {
+                text(
+                    source.request_operation,
+                    "inventory request source operation",
+                )
+            }
+            .and_then(parse::<OperationId>)?,
+            instance: unsafe { text(source.request_instance, "inventory request source instance") }
+                .and_then(parse::<SourceInstanceId>)?,
+        }),
+    }
+}
+
+fn parse_inventory_request_source_identity(
+    request: &NativeMechanicsInventoryMutationRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    parse_source_identity(&NativeMechanicsSourceIdentity {
+        kind: request.source_kind,
+        intrinsic_entity_id: request.source_intrinsic_entity_id,
+        intrinsic_instance: request.source_intrinsic_instance,
+        effect_entity_id: request.source_effect_entity_id,
+        effect_instance: request.source_effect_instance,
+        effect_stack: request.source_effect_stack,
+        effect_source: request.source_effect_source,
+        equipped_owner_entity_id: request.source_equipped_owner_entity_id,
+        equipped_item_entity_id: request.source_equipped_item_entity_id,
+        equipped_source: request.source_equipped_source,
+        request_operation: request.source_request_operation,
+        request_instance: request.source_request_instance,
+    })
+}
+
+fn parse_inventory_transfer_request_source_identity(
+    request: &NativeMechanicsInventoryTransferRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    parse_source_identity(&NativeMechanicsSourceIdentity {
+        kind: request.source_kind,
+        intrinsic_entity_id: request.source_intrinsic_entity_id,
+        intrinsic_instance: request.source_intrinsic_instance,
+        effect_entity_id: request.source_effect_entity_id,
+        effect_instance: request.source_effect_instance,
+        effect_stack: request.source_effect_stack,
+        effect_source: request.source_effect_source,
+        equipped_owner_entity_id: request.source_equipped_owner_entity_id,
+        equipped_item_entity_id: request.source_equipped_item_entity_id,
+        equipped_source: request.source_equipped_source,
+        request_operation: request.source_request_operation,
+        request_instance: request.source_request_instance,
+    })
+}
+
 fn parse_damage_source_identity(
     request: &NativeMechanicsDamageRequest,
 ) -> Result<SourceInstanceIdentity, ()> {
@@ -4348,6 +4743,28 @@ fn native_inventory_read_cost(value: InventoryReadCost) -> NativeMechanicsInvent
         item_components_read: value.item_components_read as u64,
         capacity_limits_visited: value.capacity_limits_visited as u64,
         capacity_costs_visited: value.capacity_costs_visited as u64,
+    }
+}
+fn native_capacity_usage(
+    values: &[gameplay_mechanics::CapacityUsage],
+    text: &mut CatalogLeaseText,
+) -> Vec<NativeMechanicsInventoryViewCapacityUsageRow> {
+    values
+        .iter()
+        .map(|value| NativeMechanicsInventoryViewCapacityUsageRow {
+            metric: text.copy(value.metric.as_str()),
+            used: value.used,
+            has_maximum: value.maximum.is_some(),
+            maximum: value.maximum.unwrap_or_default(),
+        })
+        .collect()
+}
+fn inventory_revision(entity: EntityId, revision: u64) -> NativeMechanicsComponentRevision {
+    NativeMechanicsComponentRevision {
+        entity_id: entity.raw(),
+        revision,
+        component: NativeMechanicsRevisionComponent::Inventory,
+        present: true,
     }
 }
 fn native_observed_revision(
@@ -5556,16 +5973,12 @@ mod tests {
         let preview_decisions = unsafe {
             std::slice::from_raw_parts(damage_preview.decisions, damage_preview.decisions_len)
         };
-        assert!(
-            preview_decisions
-                .iter()
-                .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::NoDamageResponse })
-        );
-        assert!(
-            preview_decisions
-                .iter()
-                .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::Prevent })
-        );
+        assert!(preview_decisions
+            .iter()
+            .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::NoDamageResponse }));
+        assert!(preview_decisions
+            .iter()
+            .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::Prevent }));
         assert!(preview_decisions.iter().any(|value| {
             value.kind == NativeMechanicsDamageDecisionKind::FlatReduction && value.amount == 2
         }));
@@ -5574,11 +5987,9 @@ mod tests {
                 && value.ratio_numerator == 1
                 && value.ratio_denominator == 2
         }));
-        assert!(
-            preview_decisions
-                .iter()
-                .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::Absorb })
-        );
+        assert!(preview_decisions
+            .iter()
+            .any(|value| { value.kind == NativeMechanicsDamageDecisionKind::Absorb }));
         let mut damage_applied = NativeMechanicsDamageLease::default();
         assert_eq!(
             unsafe {
@@ -6747,7 +7158,10 @@ mod tests {
         );
 
         let mut view = NativeMechanicsInventoryViewLease::default();
-        assert_eq!(unsafe { read_inventory_view(context, owner, &mut view) }, ABI_OK);
+        assert_eq!(
+            unsafe { read_inventory_view(context, owner, &mut view) },
+            ABI_OK
+        );
         assert_eq!(view.catalog_id, catalog.value);
         assert_eq!(view.owner_entity_id, 1);
         assert_eq!(
@@ -6817,5 +7231,220 @@ mod tests {
             ABI_OK
         );
         assert_eq!(unsafe { destroy_operation_lease(context, view.handle) }, 0);
+
+        let mut grant = NativeMechanicsInventoryMutationLease::default();
+        assert_eq!(
+            unsafe {
+                grant_inventory(
+                    context,
+                    &NativeMechanicsInventoryMutationRequest {
+                        owner,
+                        operation: utf8("grant-rations"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("inventory-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        item: utf8("rations"),
+                        quantity: 2,
+                        revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_revision: owner_receipt.inventory_revision,
+                    },
+                    &mut grant,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(grant.kind, NativeMechanicsInventoryMutationKind::Grant);
+        assert_eq!((grant.before_quantity, grant.after_quantity), (3, 5));
+        assert_eq!(
+            (grant.capacity_before_len, grant.capacity_after_len),
+            (2, 2)
+        );
+
+        let mut consume = NativeMechanicsInventoryMutationLease::default();
+        assert_eq!(
+            unsafe {
+                consume_inventory(
+                    context,
+                    &NativeMechanicsInventoryMutationRequest {
+                        owner,
+                        operation: utf8("consume-rations"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("inventory-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        item: utf8("rations"),
+                        quantity: 1,
+                        revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_revision: grant.committed_inventory_revision,
+                    },
+                    &mut consume,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(consume.kind, NativeMechanicsInventoryMutationKind::Consume);
+        assert_eq!((consume.before_quantity, consume.after_quantity), (5, 4));
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, grant.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, consume.handle) },
+            ABI_OK
+        );
+
+        let mut rejected = NativeMechanicsInventoryMutationLease::default();
+        assert_eq!(
+            unsafe {
+                consume_inventory(
+                    context,
+                    &NativeMechanicsInventoryMutationRequest {
+                        owner,
+                        operation: utf8("reject-rations"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("inventory-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        item: utf8("rations"),
+                        quantity: 99,
+                        revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_revision: consume.committed_inventory_revision,
+                    },
+                    &mut rejected,
+                )
+            },
+            0
+        );
+        let mut preserved = NativeMechanicsInventoryViewLease::default();
+        assert_eq!(
+            unsafe { read_inventory_view(context, owner, &mut preserved) },
+            ABI_OK
+        );
+        assert_eq!(unsafe { (*preserved.stacks).quantity }, 4);
+        assert_eq!(
+            preserved.inventory_revision.revision,
+            consume.committed_inventory_revision.revision
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, preserved.handle) },
+            ABI_OK
+        );
+
+        let mut recipient = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 3,
+                        identity: utf8("recipient"),
+                    },
+                    &mut recipient,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        has_inventory: true,
+                        inventory_stacks: std::ptr::null(),
+                        inventory_stacks_len: 0,
+                        inventory_capacity_limits: capacity_limits.as_ptr(),
+                        inventory_capacity_limits_len: capacity_limits.len(),
+                        ..empty_initial_components(recipient)
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut recipient_receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, recipient, &mut recipient_receipt) },
+            ABI_OK
+        );
+        let mut transfer = NativeMechanicsInventoryTransferLease::default();
+        assert_eq!(
+            unsafe {
+                transfer_inventory(
+                    context,
+                    &NativeMechanicsInventoryTransferRequest {
+                        from_owner: owner,
+                        to_owner: recipient,
+                        operation: utf8("transfer-rations"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("inventory-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        item: utf8("rations"),
+                        quantity: 2,
+                        from_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_from_revision: consume.committed_inventory_revision,
+                        to_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_to_revision: recipient_receipt.inventory_revision,
+                    },
+                    &mut transfer,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            (
+                transfer.from_before_quantity,
+                transfer.from_after_quantity,
+                transfer.to_before_quantity,
+                transfer.to_after_quantity
+            ),
+            (4, 2, 0, 2)
+        );
+        assert_eq!(
+            (
+                transfer.from_capacity_before_len,
+                transfer.from_capacity_after_len,
+                transfer.to_capacity_before_len,
+                transfer.to_capacity_after_len
+            ),
+            (2, 2, 1, 2)
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, transfer.handle) },
+            ABI_OK
+        );
     }
 }

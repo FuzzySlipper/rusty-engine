@@ -1005,6 +1005,127 @@ pub struct NativeMechanicsInventoryViewLease {
     pub relationship_state_revision: u64,
     pub read_cost: NativeMechanicsInventoryReadCost,
 }
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsInventoryMutationKind {
+    #[default]
+    Grant = 0,
+    Consume = 1,
+}
+
+/// A borrowed fungible inventory mutation request. The flattened `source_*`
+/// fields retain every `SourceInstanceIdentity` variant rather than narrowing
+/// product provenance, and keep UTF-8 request marshalling generated-safe.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInventoryMutationRequest {
+    pub owner: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub source_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub source_intrinsic_entity_id: u64,
+    pub source_intrinsic_instance: NativeUtf8Slice,
+    pub source_effect_entity_id: u64,
+    pub source_effect_instance: NativeUtf8Slice,
+    pub source_effect_stack: u16,
+    pub source_effect_source: NativeUtf8Slice,
+    pub source_equipped_owner_entity_id: u64,
+    pub source_equipped_item_entity_id: u64,
+    pub source_equipped_source: NativeUtf8Slice,
+    pub source_request_operation: NativeUtf8Slice,
+    pub source_request_instance: NativeUtf8Slice,
+    pub item: NativeUtf8Slice,
+    pub quantity: u64,
+    pub revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_revision: NativeMechanicsComponentRevision,
+}
+
+/// An exact fungible mutation receipt. Capacity snapshots have distinct
+/// backing collections retained until `destroy_operation_lease`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsInventoryMutationLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub capacity_before: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub capacity_before_len: usize,
+    pub capacity_after: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub capacity_after_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub kind: NativeMechanicsInventoryMutationKind,
+    pub owner_entity_id: u64,
+    pub item: NativeUtf8Slice,
+    pub requested_quantity: u64,
+    pub before_quantity: u64,
+    pub after_quantity: u64,
+    pub observed_inventory_revision: NativeMechanicsComponentRevision,
+    pub committed_inventory_revision: NativeMechanicsComponentRevision,
+    pub read_cost: NativeMechanicsInventoryReadCost,
+}
+
+/// A borrowed fungible transfer request with independent optional revision
+/// guards for both canonical inventory components.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInventoryTransferRequest {
+    pub from_owner: NativeMechanicsEntityHandle,
+    pub to_owner: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub source_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub source_intrinsic_entity_id: u64,
+    pub source_intrinsic_instance: NativeUtf8Slice,
+    pub source_effect_entity_id: u64,
+    pub source_effect_instance: NativeUtf8Slice,
+    pub source_effect_stack: u16,
+    pub source_effect_source: NativeUtf8Slice,
+    pub source_equipped_owner_entity_id: u64,
+    pub source_equipped_item_entity_id: u64,
+    pub source_equipped_source: NativeUtf8Slice,
+    pub source_request_operation: NativeUtf8Slice,
+    pub source_request_instance: NativeUtf8Slice,
+    pub item: NativeUtf8Slice,
+    pub quantity: u64,
+    pub from_revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_from_revision: NativeMechanicsComponentRevision,
+    pub to_revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_to_revision: NativeMechanicsComponentRevision,
+}
+
+/// An exact fungible transfer receipt. The four capacity collections remain
+/// independently addressable and valid until `destroy_operation_lease`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsInventoryTransferLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub from_capacity_before: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub from_capacity_before_len: usize,
+    pub from_capacity_after: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub from_capacity_after_len: usize,
+    pub to_capacity_before: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub to_capacity_before_len: usize,
+    pub to_capacity_after: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub to_capacity_after_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub from_owner_entity_id: u64,
+    pub to_owner_entity_id: u64,
+    pub item: NativeUtf8Slice,
+    pub quantity: u64,
+    pub from_before_quantity: u64,
+    pub from_after_quantity: u64,
+    pub to_before_quantity: u64,
+    pub to_after_quantity: u64,
+    pub observed_from_inventory_revision: NativeMechanicsComponentRevision,
+    pub committed_from_inventory_revision: NativeMechanicsComponentRevision,
+    pub observed_to_inventory_revision: NativeMechanicsComponentRevision,
+    pub committed_to_inventory_revision: NativeMechanicsComponentRevision,
+    pub read_cost: NativeMechanicsInventoryReadCost,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMechanicsStatOperationRequest {
