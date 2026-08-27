@@ -47,6 +47,7 @@ Throws(() => world.Set(actor, health, new Health(9), healthRevision), "snapshot 
 Require(world.Diagnostics().Components.Single(component => component.Key == health.Key).ValueCount == 1, "diagnostics lost the component table");
 
 ExerciseMechanicsLeaseRebind();
+ExerciseMechanicsUniqueItemTransfer();
 
 static void Require(bool condition, string message)
 {
@@ -100,6 +101,56 @@ static void ExerciseMechanicsLeaseRebind()
     Require(world.GetLifecycle(actor) == EntityLifecycle.Tombstoned, "explicit adapter lifecycle transition did not preserve product ownership");
 }
 
+static void ExerciseMechanicsUniqueItemTransfer()
+{
+    using var world = new EntityWorld();
+    EntityId source = world.Create();
+    EntityId destination = world.Create();
+    EntityId item = world.Create();
+    world.SetContainment(item, source, world.Revision);
+    var service = new MechanicsAdapterFake();
+    using var mechanics = new MechanicsEntityWorld(world, service, service.Catalog);
+    mechanics.Bind(source, "source");
+    mechanics.Bind(destination, "destination");
+    mechanics.Bind(item, "item");
+    mechanics.Commit(source);
+    mechanics.Commit(destination);
+    mechanics.Commit(item);
+
+    ulong managedRevision = world.Revision;
+    var sourceIdentity = new MechanicsSourceIdentity(
+        MechanicsActiveEffectProvenanceKind.Request, 0, "", 0, "", 0, "", 0, 0, "", "example", "transfer");
+    MechanicsUniqueItemTransferLeaseReceipt receipt = mechanics.TransferUniqueItem(
+        item,
+        source,
+        destination,
+        new MechanicsUniqueItemTransferOperation(
+            "transfer-item",
+            sourceIdentity,
+            7,
+            MechanicsRevisionGuard.Unchecked,
+            default,
+            MechanicsRevisionGuard.Unchecked,
+            default),
+        managedRevision);
+    Require(receipt.ItemEntityId == item.Value && receipt.FromOwnerEntityId == source.Value && receipt.ToOwnerEntityId == destination.Value,
+        "native unique-item receipt did not retain canonical identities");
+    Require(service.UniqueTransfers == 1 && service.LastUniqueTransfer == (item.Value, source.Value, destination.Value),
+        "managed adapter did not invoke the canonical native unique-item transfer");
+    Require(world.TryGetContainedIn(item, out EntityId managedOwner) && managedOwner == destination,
+        "successful native unique-item transfer did not mirror managed containment");
+    Throws(
+        () => mechanics.TransferUniqueItem(
+            item,
+            source,
+            destination,
+            new MechanicsUniqueItemTransferOperation("reject", sourceIdentity, 8, MechanicsRevisionGuard.Unchecked, default, MechanicsRevisionGuard.Unchecked, default),
+            world.Revision),
+        "managed source-containment preflight did not reject before native invocation");
+    Require(service.UniqueTransfers == 1 && world.TryGetContainedIn(item, out managedOwner) && managedOwner == destination,
+        "rejected managed preflight changed native or managed containment");
+}
+
 readonly record struct Health(int Current);
 
 readonly record struct Armor(int Current);
@@ -108,8 +159,11 @@ sealed class MechanicsAdapterFake : IMechanicsService
 {
     public const ulong InitialLifecycleStamp = 11;
     private ulong _nextHandle = 1;
+    private readonly Dictionary<ulong, ulong> _entityIds = [];
     public int ReleasedLeases { get; private set; }
     public int Rebinds { get; private set; }
+    public int UniqueTransfers { get; private set; }
+    public (ulong Item, ulong FromOwner, ulong ToOwner) LastUniqueTransfer { get; private set; }
     public MechanicsCatalog Catalog { get; } = new(new MechanicsCatalogHandle(1), static () => { });
 
     public MechanicsCatalog CreateCatalog(MechanicsCatalogCreateRequest arg0) => Catalog;
@@ -149,7 +203,7 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public MechanicsInventoryCapacityLimitComponentLeaseReceipt ReadInventoryCapacityLimitComponent(MechanicsEntity arg0) => throw new NotSupportedException();
     public MechanicsItemComponentLeaseReceipt ReadItemComponent(MechanicsEntity arg0) => throw new NotSupportedException();
     public MechanicsEquipmentAssignmentComponentLeaseReceipt ReadEquipmentAssignmentComponent(MechanicsEntity arg0) => throw new NotSupportedException();
-    public MechanicsEntity BindEntity(MechanicsEntityBindRequest arg0) => Lease();
+    public MechanicsEntity BindEntity(MechanicsEntityBindRequest arg0) => Lease(arg0.EntityId);
     public MechanicsEntity RebindEntity(MechanicsEntityRebindRequest arg0)
     {
         if (arg0.Guard != MechanicsLifecycleGuard.Exact || arg0.ExpectedStamp != InitialLifecycleStamp)
@@ -157,7 +211,7 @@ sealed class MechanicsAdapterFake : IMechanicsService
             throw new InvalidOperationException("rebind must retain the exact lifecycle stamp");
         }
         Rebinds++;
-        return Lease();
+        return Lease(arg0.EntityId);
     }
     public void SetInitialStat(MechanicsInitialStatRequest arg0) { }
     public void SetInitialTrack(MechanicsInitialTrackRequest arg0) => throw new NotSupportedException();
@@ -194,15 +248,61 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public MechanicsStatReadReceipt ReadStat(MechanicsStatReadRequest arg0) => throw new NotSupportedException();
     public MechanicsStatEvaluationLeaseReceipt EvaluateStat(MechanicsStatOperationRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackReadLeaseReceipt ReadTrack(MechanicsTrackReadRequest arg0) => throw new NotSupportedException();
+    public MechanicsInventoryViewLeaseReceipt ReadInventoryView(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsInventoryMutationLeaseReceipt GrantInventory(MechanicsInventoryMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsInventoryMutationLeaseReceipt ConsumeInventory(MechanicsInventoryMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsInventoryTransferLeaseReceipt TransferInventory(MechanicsInventoryTransferRequest arg0) => throw new NotSupportedException();
+    public MechanicsUniqueItemTransferLeaseReceipt TransferUniqueItem(MechanicsUniqueItemTransferRequest arg0)
+    {
+        ulong item = EntityId(arg0.Item);
+        ulong fromOwner = EntityId(arg0.FromOwner);
+        ulong toOwner = EntityId(arg0.ToOwner);
+        UniqueTransfers++;
+        LastUniqueTransfer = (item, fromOwner, toOwner);
+        return new MechanicsUniqueItemTransferLeaseReceipt(
+            ReadOnlyMemory<MechanicsInventoryViewCapacityUsageRow>.Empty,
+            ReadOnlyMemory<MechanicsInventoryViewCapacityUsageRow>.Empty,
+            ReadOnlyMemory<MechanicsInventoryViewCapacityUsageRow>.Empty,
+            ReadOnlyMemory<MechanicsInventoryViewCapacityUsageRow>.Empty,
+            Catalog.Handle.Value,
+            "example",
+            "example",
+            arg0.Operation,
+            new MechanicsSourceIdentity(arg0.SourceKind, arg0.SourceIntrinsicEntityId, arg0.SourceIntrinsicInstance, arg0.SourceEffectEntityId, arg0.SourceEffectInstance, arg0.SourceEffectStack, arg0.SourceEffectSource, arg0.SourceEquippedOwnerEntityId, arg0.SourceEquippedItemEntityId, arg0.SourceEquippedSource, arg0.SourceRequestOperation, arg0.SourceRequestInstance),
+            item,
+            fromOwner,
+            toOwner,
+            arg0.ExpectedRelationshipRevision,
+            arg0.ExpectedRelationshipRevision + 1,
+            default,
+            default,
+            default);
+    }
+    public MechanicsEquipmentMutationLeaseReceipt EquipEquipment(MechanicsEquipmentEquipRequest arg0) => throw new NotSupportedException();
+    public MechanicsEquipmentMutationLeaseReceipt UnequipEquipment(MechanicsEquipmentUnequipRequest arg0) => throw new NotSupportedException();
+    public MechanicsEquipmentMutationLeaseReceipt SwapEquipment(MechanicsEquipmentSwapRequest arg0) => throw new NotSupportedException();
     public MechanicsStatMutationLeaseReceipt SetStatBase(MechanicsStatBaseMutationRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackSetLeaseReceipt SetTrack(MechanicsTrackSetRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackMutationLeaseReceipt SpendTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackMutationLeaseReceipt RestoreTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
     public MechanicsTrackReconciliationLeaseReceipt ReconcileTrack(MechanicsTrackReconciliationRequest arg0) => throw new NotSupportedException();
+    public MechanicsEffectOperationLeaseReceipt ApplyEffect(MechanicsEffectMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsEffectOperationLeaseReceipt RefreshEffect(MechanicsEffectRefreshRequest arg0) => throw new NotSupportedException();
+    public MechanicsEffectOperationLeaseReceipt ReplaceEffect(MechanicsEffectMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsEffectOperationLeaseReceipt RemoveEffect(MechanicsEffectRemovalRequest arg0) => throw new NotSupportedException();
+    public MechanicsEffectOperationLeaseReceipt ExpireEffect(MechanicsEffectRemovalRequest arg0) => throw new NotSupportedException();
+    public MechanicsDamageLeaseReceipt PreviewDamage(MechanicsDamageRequest arg0) => throw new NotSupportedException();
+    public MechanicsDamageLeaseReceipt ApplyDamage(MechanicsDamageRequest arg0) => throw new NotSupportedException();
 
-    private MechanicsEntity Lease()
+    private MechanicsEntity Lease(ulong entityId = 0)
     {
         MechanicsEntityHandle handle = new(_nextHandle++);
+        _entityIds.Add(handle.Value, entityId);
         return new MechanicsEntity(handle, () => ReleasedLeases++);
     }
+
+    private ulong EntityId(MechanicsEntity entity)
+        => _entityIds.TryGetValue(entity.Handle.Value, out ulong entityId)
+            ? entityId
+            : throw new InvalidOperationException("transfer must use a bound Mechanics entity");
 }

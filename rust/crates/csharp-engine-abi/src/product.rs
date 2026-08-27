@@ -666,6 +666,11 @@ pub type NativeTransferMechanicsInventory = unsafe extern "C" fn(
     *const NativeMechanicsInventoryTransferRequest,
     *mut NativeMechanicsInventoryTransferLease,
 ) -> i32;
+pub type NativeTransferMechanicsUniqueItem = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsUniqueItemTransferRequest,
+    *mut NativeMechanicsUniqueItemTransferLease,
+) -> i32;
 pub type NativeEquipMechanicsEquipment = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEquipmentEquipRequest,
@@ -1006,6 +1011,7 @@ pub struct NativeMechanicsApi {
     pub grant_inventory: NativeGrantMechanicsInventory,
     pub consume_inventory: NativeConsumeMechanicsInventory,
     pub transfer_inventory: NativeTransferMechanicsInventory,
+    pub transfer_unique_item: NativeTransferMechanicsUniqueItem,
     pub equip_equipment: NativeEquipMechanicsEquipment,
     pub unequip_equipment: NativeUnequipMechanicsEquipment,
     pub swap_equipment: NativeSwapMechanicsEquipment,

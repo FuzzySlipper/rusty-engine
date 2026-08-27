@@ -1126,6 +1126,65 @@ pub struct NativeMechanicsInventoryTransferLease {
     pub committed_to_inventory_revision: NativeMechanicsComponentRevision,
     pub read_cost: NativeMechanicsInventoryReadCost,
 }
+
+/// A borrowed unique-item containment transfer. The relationship guard is
+/// exact because it protects the canonical item-to-owner relation; each
+/// inventory component guard remains independently optional.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsUniqueItemTransferRequest {
+    pub item: NativeMechanicsEntityHandle,
+    pub from_owner: NativeMechanicsEntityHandle,
+    pub to_owner: NativeMechanicsEntityHandle,
+    pub operation: NativeUtf8Slice,
+    pub source_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub source_intrinsic_entity_id: u64,
+    pub source_intrinsic_instance: NativeUtf8Slice,
+    pub source_effect_entity_id: u64,
+    pub source_effect_instance: NativeUtf8Slice,
+    pub source_effect_stack: u16,
+    pub source_effect_source: NativeUtf8Slice,
+    pub source_equipped_owner_entity_id: u64,
+    pub source_equipped_item_entity_id: u64,
+    pub source_equipped_source: NativeUtf8Slice,
+    pub source_request_operation: NativeUtf8Slice,
+    pub source_request_instance: NativeUtf8Slice,
+    pub expected_relationship_revision: u64,
+    pub from_revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_from_revision: NativeMechanicsComponentRevision,
+    pub to_revision_guard: NativeMechanicsRevisionGuard,
+    pub expected_to_revision: NativeMechanicsComponentRevision,
+}
+
+/// An exact `EquipmentService::transfer_unique_item` receipt. All four
+/// capacity snapshots have separate backing allocations retained until
+/// `destroy_operation_lease` releases `handle`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsUniqueItemTransferLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub from_capacity_before: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub from_capacity_before_len: usize,
+    pub from_capacity_after: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub from_capacity_after_len: usize,
+    pub to_capacity_before: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub to_capacity_before_len: usize,
+    pub to_capacity_after: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub to_capacity_after_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub item_entity_id: u64,
+    pub from_owner_entity_id: u64,
+    pub to_owner_entity_id: u64,
+    pub relationship_revision_before: u64,
+    pub relationship_revision_after: u64,
+    pub observed_from_inventory_revision: NativeMechanicsComponentRevision,
+    pub observed_to_inventory_revision: NativeMechanicsComponentRevision,
+    pub read_cost: NativeMechanicsInventoryReadCost,
+}
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeMechanicsEquipmentMutationKind {

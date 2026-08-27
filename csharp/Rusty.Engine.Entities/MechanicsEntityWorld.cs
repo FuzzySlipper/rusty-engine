@@ -197,6 +197,59 @@ public sealed class MechanicsEntityWorld : IDisposable
         return receipt;
     }
 
+    /// <summary>
+    /// Transfers one unique item through the Engine's atomic Mechanics service, then mirrors the
+    /// successful canonical containment relation in the product world. The managed revision guard
+    /// makes the synchronous cross-boundary ordering explicit to the product.
+    /// </summary>
+    public MechanicsUniqueItemTransferLeaseReceipt TransferUniqueItem(
+        EntityId item,
+        EntityId fromOwner,
+        EntityId toOwner,
+        MechanicsUniqueItemTransferOperation operation,
+        ulong? expectedManagedRevision = null)
+    {
+        ThrowIfDisposed();
+        Binding itemBinding = RequireCommitted(item);
+        Binding fromBinding = RequireCommitted(fromOwner);
+        Binding toBinding = RequireCommitted(toOwner);
+        ulong observedManagedRevision = _entities.Revision;
+        if (expectedManagedRevision is ulong expected && observedManagedRevision != expected)
+        {
+            throw new InvalidOperationException("The managed containment revision is stale.");
+        }
+        PreflightUniqueItemTransfer(item, fromOwner, toOwner);
+
+        // All managed failure conditions for SetContainment are preflighted above. Under this
+        // adapter's synchronous EntityWorld contract, the exact revision guard leaves no fallible
+        // managed work after native EquipmentService commits its already-atomic transfer.
+        MechanicsUniqueItemTransferLeaseReceipt receipt = _mechanics.TransferUniqueItem(
+            new MechanicsUniqueItemTransferRequest(
+                itemBinding.Native,
+                fromBinding.Native,
+                toBinding.Native,
+                operation.Operation,
+                operation.Source.Kind,
+                operation.Source.IntrinsicEntityId,
+                operation.Source.IntrinsicInstance,
+                operation.Source.EffectEntityId,
+                operation.Source.EffectInstance,
+                operation.Source.EffectStack,
+                operation.Source.EffectSource,
+                operation.Source.EquippedOwnerEntityId,
+                operation.Source.EquippedItemEntityId,
+                operation.Source.EquippedSource,
+                operation.Source.RequestOperation,
+                operation.Source.RequestInstance,
+                operation.ExpectedRelationshipRevision,
+                operation.FromRevisionGuard,
+                operation.ExpectedFromRevision,
+                operation.ToRevisionGuard,
+                operation.ExpectedToRevision));
+        _entities.SetContainment(item, toOwner, observedManagedRevision);
+        return receipt;
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -224,6 +277,41 @@ public sealed class MechanicsEntityWorld : IDisposable
             throw new InvalidOperationException($"Entity {entity.Value} has already committed its Mechanics projection.");
         }
         return binding;
+    }
+
+    private Binding RequireCommitted(EntityId entity)
+    {
+        Binding binding = RequireBinding(entity);
+        if (!binding.IsCommitted)
+        {
+            throw new InvalidOperationException($"Entity {entity.Value} must commit before its Mechanics state can be transferred.");
+        }
+        if (!_entities.IsAlive(entity))
+        {
+            throw new InvalidOperationException($"Entity {entity.Value} must be live before its Mechanics state can be transferred.");
+        }
+        return binding;
+    }
+
+    private void PreflightUniqueItemTransfer(EntityId item, EntityId fromOwner, EntityId toOwner)
+    {
+        if (item == fromOwner || item == toOwner || fromOwner == toOwner)
+        {
+            throw new InvalidOperationException("A unique-item transfer requires three distinct canonical entities.");
+        }
+        if (!_entities.TryGetContainedIn(item, out EntityId managedOwner) || managedOwner != fromOwner)
+        {
+            throw new InvalidOperationException($"Managed containment does not place item {item.Value} in source owner {fromOwner.Value}.");
+        }
+        for (EntityId ancestor = toOwner;
+             _entities.TryGetContainedIn(ancestor, out EntityId next);
+             ancestor = next)
+        {
+            if (next == item)
+            {
+                throw new InvalidOperationException($"Transferring item {item.Value} into owner {toOwner.Value} would create a containment cycle.");
+            }
+        }
     }
 
     private void RequireActive(EntityId entity)
@@ -257,3 +345,16 @@ public sealed class MechanicsEntityWorld : IDisposable
         public ulong LifecycleStamp { get; set; }
     }
 }
+
+/// <summary>
+/// Product-supplied facts for one Engine-owned unique-item transfer. Canonical entity bindings are
+/// deliberately selected by <see cref="MechanicsEntityWorld"/> rather than supplied by a product.
+/// </summary>
+public readonly record struct MechanicsUniqueItemTransferOperation(
+    string Operation,
+    MechanicsSourceIdentity Source,
+    ulong ExpectedRelationshipRevision,
+    MechanicsRevisionGuard FromRevisionGuard,
+    MechanicsComponentRevision ExpectedFromRevision,
+    MechanicsRevisionGuard ToRevisionGuard,
+    MechanicsComponentRevision ExpectedToRevision);

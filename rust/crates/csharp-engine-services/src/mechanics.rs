@@ -17,10 +17,10 @@ use gameplay_mechanics::{
     EquipmentUnequipRequest, ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent,
     InventoryCapacityLimit, InventoryComponent, InventoryMutationKind, InventoryMutationRequest,
     InventoryReadCost, InventoryService, InventoryTransferRequest, ItemCapacityCost, ItemComponent,
-    ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack, MechanicsCatalog,
-    MechanicsCatalogDefinition, MechanicsComponentKind, MechanicsScalar, ObservedComponentRevision,
-    OperationId, RequestSource, ResponseDecision, ResponseDecisionKind, RoundingPolicy,
-    SourceCollectionCost, SourceDefinition, SourceDefinitionId, SourceInstanceId,
+    ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack, ItemTransferRequest,
+    MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind, MechanicsScalar,
+    ObservedComponentRevision, OperationId, RequestSource, ResponseDecision, ResponseDecisionKind,
+    RoundingPolicy, SourceCollectionCost, SourceDefinition, SourceDefinitionId, SourceInstanceId,
     SourceInstanceIdentity, StackingGroupId, StackingPolicy, StatBaseMutationRequest,
     StatContribution, StatContributionDefinition, StatDecision, StatDefinition, StatId,
     StatService, StatValue, StatsComponent, TrackAdjustmentKind, TrackDamageChange,
@@ -124,6 +124,12 @@ enum OperationLeaseRows {
         capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
     },
     InventoryTransfer {
+        from_capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+        from_capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+        to_capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+        to_capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
+    },
+    UniqueItemTransfer {
         from_capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
         from_capacity_after: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
         to_capacity_before: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
@@ -428,6 +434,7 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         grant_inventory,
         consume_inventory,
         transfer_inventory,
+        transfer_unique_item,
         equip_equipment,
         unequip_equipment,
         swap_equipment,
@@ -3146,6 +3153,160 @@ unsafe extern "C" fn transfer_inventory(
     ABI_OK
 }
 
+/// Delegates the named generated C# unique-item transfer capability directly
+/// to `EquipmentService::transfer_unique_item`. Canonical same-catalog
+/// bindings and optional Inventory guards are the only bridge concerns; item
+/// eligibility, capacity, equipped-item rejection, and atomic containment
+/// policy remain in `gameplay-mechanics`.
+unsafe extern "C" fn transfer_unique_item(
+    context: *mut c_void,
+    request: *const NativeMechanicsUniqueItemTransferRequest,
+    result: *mut NativeMechanicsUniqueItemTransferLease,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    let (Ok(operation), Ok(source)) = (
+        unsafe { text(request.operation, "unique item transfer operation") }
+            .and_then(parse::<OperationId>),
+        parse_unique_item_transfer_request_source_identity(request),
+    ) else {
+        return 0;
+    };
+    let (Some(item_binding), Some(from_binding), Some(to_binding)) = (
+        bridge.binding(request.item).cloned(),
+        bridge.binding(request.from_owner).cloned(),
+        bridge.binding(request.to_owner).cloned(),
+    ) else {
+        return 0;
+    };
+    if item_binding.catalog != from_binding.catalog || item_binding.catalog != to_binding.catalog {
+        return 0;
+    }
+    let catalog_id = item_binding.catalog;
+    let receipt = {
+        let Some((state, catalog, item)) = bridge.state_and_catalog_mut(request.item) else {
+            return 0;
+        };
+        let from_owner = from_binding.entity;
+        let to_owner = to_binding.entity;
+        let (Ok(from_actual), Ok(to_actual)) = (
+            state.component_revision::<InventoryComponent>(from_owner),
+            state.component_revision::<InventoryComponent>(to_owner),
+        ) else {
+            return 0;
+        };
+        let Some(expected_from_inventory_revision) = guarded_revision(
+            request.from_revision_guard,
+            request.expected_from_revision.entity_id,
+            request.expected_from_revision.revision,
+            request.expected_from_revision.component,
+            from_owner,
+            from_actual,
+            NativeMechanicsRevisionComponent::Inventory,
+        ) else {
+            return 0;
+        };
+        let Some(expected_to_inventory_revision) = guarded_revision(
+            request.to_revision_guard,
+            request.expected_to_revision.entity_id,
+            request.expected_to_revision.revision,
+            request.expected_to_revision.component,
+            to_owner,
+            to_actual,
+            NativeMechanicsRevisionComponent::Inventory,
+        ) else {
+            return 0;
+        };
+        EquipmentService::transfer_unique_item(
+            state,
+            catalog,
+            ItemTransferRequest {
+                operation,
+                source,
+                item,
+                from_owner,
+                to_owner,
+                expected_relationship_revision: request.expected_relationship_revision,
+                expected_from_inventory_revision,
+                expected_to_inventory_revision,
+            },
+        )
+    };
+    let Ok(receipt) = receipt else {
+        return 0;
+    };
+    let mut lease_text = CatalogLeaseText::default();
+    let from_capacity_before =
+        native_capacity_usage(&receipt.from_capacity_before, &mut lease_text);
+    let from_capacity_after = native_capacity_usage(&receipt.from_capacity_after, &mut lease_text);
+    let to_capacity_before = native_capacity_usage(&receipt.to_capacity_before, &mut lease_text);
+    let to_capacity_after = native_capacity_usage(&receipt.to_capacity_after, &mut lease_text);
+    let metadata = NativeMechanicsUniqueItemTransferLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        from_capacity_before: std::ptr::null(),
+        from_capacity_before_len: from_capacity_before.len(),
+        from_capacity_after: std::ptr::null(),
+        from_capacity_after_len: from_capacity_after.len(),
+        to_capacity_before: std::ptr::null(),
+        to_capacity_before_len: to_capacity_before.len(),
+        to_capacity_after: std::ptr::null(),
+        to_capacity_after_len: to_capacity_after.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        item_entity_id: receipt.item.raw(),
+        from_owner_entity_id: receipt.from_owner.raw(),
+        to_owner_entity_id: receipt.to_owner.raw(),
+        relationship_revision_before: receipt.revision_before,
+        relationship_revision_after: receipt.revision_after,
+        observed_from_inventory_revision: inventory_revision(
+            receipt.from_owner,
+            receipt.observed_from_inventory_revision,
+        ),
+        observed_to_inventory_revision: inventory_revision(
+            receipt.to_owner,
+            receipt.observed_to_inventory_revision,
+        ),
+        read_cost: native_inventory_read_cost(receipt.read_cost),
+    };
+    let Some(handle) = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::UniqueItemTransfer {
+            from_capacity_before,
+            from_capacity_after,
+            to_capacity_before,
+            to_capacity_after,
+        },
+    }) else {
+        return 0;
+    };
+    let OperationLeaseRows::UniqueItemTransfer {
+        from_capacity_before,
+        from_capacity_after,
+        to_capacity_before,
+        to_capacity_after,
+    } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted unique-item transfer lease")
+        .rows
+    else {
+        unreachable!("unique-item transfer lease row kind matches its reader")
+    };
+    *result = NativeMechanicsUniqueItemTransferLease {
+        handle,
+        from_capacity_before: from_capacity_before.as_ptr(),
+        from_capacity_after: from_capacity_after.as_ptr(),
+        to_capacity_before: to_capacity_before.as_ptr(),
+        to_capacity_after: to_capacity_after.as_ptr(),
+        ..metadata
+    };
+    ABI_OK
+}
+
 /// Delegates the named generated C# equip capability directly to
 /// `EquipmentService::equip`. The only ABI policy is bounded foreign-span
 /// validation and canonical binding identity; all item, slot, exclusivity,
@@ -4471,6 +4632,24 @@ fn parse_inventory_request_source_identity(
 
 fn parse_inventory_transfer_request_source_identity(
     request: &NativeMechanicsInventoryTransferRequest,
+) -> Result<SourceInstanceIdentity, ()> {
+    parse_source_identity(&NativeMechanicsSourceIdentity {
+        kind: request.source_kind,
+        intrinsic_entity_id: request.source_intrinsic_entity_id,
+        intrinsic_instance: request.source_intrinsic_instance,
+        effect_entity_id: request.source_effect_entity_id,
+        effect_instance: request.source_effect_instance,
+        effect_stack: request.source_effect_stack,
+        effect_source: request.source_effect_source,
+        equipped_owner_entity_id: request.source_equipped_owner_entity_id,
+        equipped_item_entity_id: request.source_equipped_item_entity_id,
+        equipped_source: request.source_equipped_source,
+        request_operation: request.source_request_operation,
+        request_instance: request.source_request_instance,
+    })
+}
+fn parse_unique_item_transfer_request_source_identity(
+    request: &NativeMechanicsUniqueItemTransferRequest,
 ) -> Result<SourceInstanceIdentity, ()> {
     parse_source_identity(&NativeMechanicsSourceIdentity {
         kind: request.source_kind,
@@ -7841,6 +8020,168 @@ mod tests {
             ),
             (2, 2, 1, 2)
         );
+        let unique_transfer_relationship_revision = bridge
+            .catalog_slot_mut(catalog)
+            .expect("admitted catalog remains available")
+            .world
+            .state
+            .revision();
+        let mut unique_transfer = NativeMechanicsUniqueItemTransferLease::default();
+        assert_eq!(
+            unsafe {
+                transfer_unique_item(
+                    context,
+                    &NativeMechanicsUniqueItemTransferRequest {
+                        item: sword,
+                        from_owner: owner,
+                        to_owner: recipient,
+                        operation: utf8("transfer-sword"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("inventory-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        expected_relationship_revision: unique_transfer_relationship_revision,
+                        from_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_from_revision: transfer.committed_from_inventory_revision,
+                        to_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_to_revision: transfer.committed_to_inventory_revision,
+                    },
+                    &mut unique_transfer,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            (
+                unique_transfer.item_entity_id,
+                unique_transfer.from_owner_entity_id,
+                unique_transfer.to_owner_entity_id,
+            ),
+            (2, 1, 3)
+        );
+        assert_eq!(unique_transfer.catalog_id, catalog.value);
+        assert_eq!(
+            (
+                unique_transfer.observed_from_inventory_revision.entity_id,
+                unique_transfer.observed_from_inventory_revision.revision,
+                unique_transfer.observed_from_inventory_revision.component as u32,
+                unique_transfer.observed_from_inventory_revision.present,
+            ),
+            (
+                transfer.committed_from_inventory_revision.entity_id,
+                transfer.committed_from_inventory_revision.revision,
+                transfer.committed_from_inventory_revision.component as u32,
+                transfer.committed_from_inventory_revision.present,
+            )
+        );
+        assert_eq!(
+            (
+                unique_transfer.observed_to_inventory_revision.entity_id,
+                unique_transfer.observed_to_inventory_revision.revision,
+                unique_transfer.observed_to_inventory_revision.component as u32,
+                unique_transfer.observed_to_inventory_revision.present,
+            ),
+            (
+                transfer.committed_to_inventory_revision.entity_id,
+                transfer.committed_to_inventory_revision.revision,
+                transfer.committed_to_inventory_revision.component as u32,
+                transfer.committed_to_inventory_revision.present,
+            )
+        );
+        assert_eq!(
+            (
+                unique_transfer.relationship_revision_before,
+                unique_transfer.relationship_revision_after,
+            ),
+            (
+                unique_transfer_relationship_revision,
+                unique_transfer_relationship_revision + 1,
+            )
+        );
+        assert_eq!(
+            (
+                unique_transfer.from_capacity_before_len,
+                unique_transfer.from_capacity_after_len,
+                unique_transfer.to_capacity_before_len,
+                unique_transfer.to_capacity_after_len,
+            ),
+            (2, 2, 2, 2)
+        );
+        assert_ne!(
+            unique_transfer.from_capacity_before,
+            unique_transfer.from_capacity_after
+        );
+        assert_ne!(
+            unique_transfer.from_capacity_before,
+            unique_transfer.to_capacity_before
+        );
+        assert_ne!(
+            unique_transfer.to_capacity_before,
+            unique_transfer.to_capacity_after
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, unique_transfer.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, unique_transfer.handle) },
+            0
+        );
+
+        let mut stale_unique_transfer = NativeMechanicsUniqueItemTransferLease::default();
+        assert_eq!(
+            unsafe {
+                transfer_unique_item(
+                    context,
+                    &NativeMechanicsUniqueItemTransferRequest {
+                        item: sword,
+                        from_owner: owner,
+                        to_owner: recipient,
+                        operation: utf8("reject-stale-sword-transfer"),
+                        source_kind: NativeMechanicsActiveEffectProvenanceKind::Request,
+                        source_intrinsic_entity_id: 0,
+                        source_intrinsic_instance: utf8(""),
+                        source_effect_entity_id: 0,
+                        source_effect_instance: utf8(""),
+                        source_effect_stack: 0,
+                        source_effect_source: utf8(""),
+                        source_equipped_owner_entity_id: 0,
+                        source_equipped_item_entity_id: 0,
+                        source_equipped_source: utf8(""),
+                        source_request_operation: utf8("inventory-fixture"),
+                        source_request_instance: utf8("fixture"),
+                        expected_relationship_revision: unique_transfer.relationship_revision_after,
+                        from_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_from_revision: transfer.committed_from_inventory_revision,
+                        to_revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_to_revision: transfer.committed_to_inventory_revision,
+                    },
+                    &mut stale_unique_transfer,
+                )
+            },
+            0
+        );
+        let mut sword_after_transfer = NativeMechanicsContainmentReceipt::default();
+        assert_eq!(
+            unsafe {
+                read_containment(
+                    context,
+                    &NativeMechanicsContainmentReadRequest { entity: sword },
+                    &mut sword_after_transfer,
+                )
+            },
+            ABI_OK
+        );
+        assert!(sword_after_transfer.present);
+        assert_eq!(sword_after_transfer.container_entity_id, 3);
         assert_eq!(
             unsafe { destroy_operation_lease(context, transfer.handle) },
             ABI_OK
