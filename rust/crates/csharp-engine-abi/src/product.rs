@@ -646,6 +646,11 @@ pub type NativeReadMechanicsTrack = unsafe extern "C" fn(
     *const NativeMechanicsTrackReadRequest,
     *mut NativeMechanicsTrackReadLease,
 ) -> i32;
+pub type NativeReadMechanicsInventoryView = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeMechanicsInventoryViewLease,
+) -> i32;
 pub type NativeSetMechanicsStatBase = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsStatBaseMutationRequest,
@@ -967,6 +972,7 @@ pub struct NativeMechanicsApi {
     pub read_stat: NativeReadMechanicsStat,
     pub evaluate_stat: NativeEvaluateMechanicsStat,
     pub read_track: NativeReadMechanicsTrack,
+    pub read_inventory_view: NativeReadMechanicsInventoryView,
     pub set_stat_base: NativeSetMechanicsStatBase,
     pub destroy_operation_lease: NativeDestroyMechanicsOperationLease,
     pub set_track: NativeSetMechanicsTrack,

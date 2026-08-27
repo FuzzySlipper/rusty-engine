@@ -13,8 +13,9 @@ use gameplay_mechanics::{
     EffectRemovalRequest, EffectReplaceRequest, EffectService, EffectSourceActivation,
     EffectStackingPolicy, EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition,
     ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit,
-    InventoryComponent, ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy,
-    ItemKind, ItemStack, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
+    InventoryComponent, InventoryReadCost, InventoryService, ItemCapacityCost, ItemComponent,
+    ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack, MechanicsCatalog,
+    MechanicsCatalogDefinition, MechanicsComponentKind,
     MechanicsScalar, ObservedComponentRevision, OperationId, RequestSource, ResponseDecision,
     ResponseDecisionKind, RoundingPolicy, SourceCollectionCost, SourceDefinition,
     SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
@@ -110,6 +111,11 @@ enum OperationLeaseRows {
     },
     Track {
         observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
+    },
+    InventoryView {
+        stacks: Vec<NativeMechanicsInventoryViewStackRow>,
+        unique_items: Vec<NativeMechanicsInventoryViewUniqueItemRow>,
+        capacity: Vec<NativeMechanicsInventoryViewCapacityUsageRow>,
     },
     Effect {
         removed: Vec<NativeMechanicsActiveEffectComponentRow>,
@@ -401,6 +407,7 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         read_stat,
         evaluate_stat,
         read_track,
+        read_inventory_view,
         set_stat_base,
         destroy_operation_lease,
         set_track,
@@ -2717,6 +2724,112 @@ unsafe extern "C" fn read_track(
     ABI_OK
 }
 
+/// Publishes the exact `InventoryService::view` result for one already-bound
+/// canonical entity. The service owns the copied rows and text until the
+/// ordinary operation-lease release; this deliberately does not expose the
+/// mutable inventory component or relationship storage directly.
+unsafe extern "C" fn read_inventory_view(
+    context: *mut c_void,
+    entity: NativeMechanicsEntityHandle,
+    result: *mut NativeMechanicsInventoryViewLease,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    let Some(catalog_id) = bridge.binding(entity).map(|binding| binding.catalog) else {
+        return 0;
+    };
+    let (view, catalog_fingerprint) = {
+        let Some((state, catalog, owner)) = bridge.state_and_catalog_mut(entity) else {
+            return 0;
+        };
+        let Ok(view) = InventoryService::view(state, catalog, owner) else {
+            return 0;
+        };
+        (view, catalog.fingerprint().to_owned())
+    };
+
+    let mut lease_text = CatalogLeaseText::default();
+    let stacks = view
+        .stacks()
+        .iter()
+        .map(|stack| NativeMechanicsInventoryViewStackRow {
+            definition: lease_text.copy(stack.definition.as_str()),
+            quantity: stack.quantity,
+        })
+        .collect::<Vec<_>>();
+    let unique_items = view
+        .unique_items()
+        .iter()
+        .map(|item| NativeMechanicsInventoryViewUniqueItemRow {
+            entity_id: item.entity.raw(),
+            definition: lease_text.copy(item.definition.as_str()),
+        })
+        .collect::<Vec<_>>();
+    let capacity = view
+        .capacity()
+        .iter()
+        .map(|usage| NativeMechanicsInventoryViewCapacityUsageRow {
+            metric: lease_text.copy(usage.metric.as_str()),
+            used: usage.used,
+            has_maximum: usage.maximum.is_some(),
+            maximum: usage.maximum.unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsInventoryViewLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        stacks: std::ptr::null(),
+        stacks_len: stacks.len(),
+        unique_items: std::ptr::null(),
+        unique_items_len: unique_items.len(),
+        capacity: std::ptr::null(),
+        capacity_len: capacity.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(view.catalog_version().as_str()),
+        catalog_fingerprint: lease_text.copy(&catalog_fingerprint),
+        owner_entity_id: view.owner().raw(),
+        inventory_revision: NativeMechanicsComponentRevision {
+            entity_id: view.owner().raw(),
+            revision: view.revision().revision(),
+            component: NativeMechanicsRevisionComponent::Inventory,
+            present: true,
+        },
+        relationship_state_revision: view.relationship_revision(),
+        read_cost: native_inventory_read_cost(view.read_cost()),
+    };
+    let Some(handle) = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: lease_text.values,
+        rows: OperationLeaseRows::InventoryView {
+            stacks,
+            unique_items,
+            capacity,
+        },
+    }) else {
+        return 0;
+    };
+    let OperationLeaseRows::InventoryView {
+        stacks,
+        unique_items,
+        capacity,
+    } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted inventory view lease")
+        .rows
+    else {
+        unreachable!("inventory view operation lease row kind matches its reader")
+    };
+    *result = NativeMechanicsInventoryViewLease {
+        handle,
+        stacks: stacks.as_ptr(),
+        unique_items: unique_items.as_ptr(),
+        capacity: capacity.as_ptr(),
+        ..metadata
+    };
+    ABI_OK
+}
+
 unsafe extern "C" fn set_stat_base(
     context: *mut c_void,
     request: *const NativeMechanicsStatBaseMutationRequest,
@@ -4228,6 +4341,15 @@ fn native_source_cost(value: SourceCollectionCost) -> NativeMechanicsSourceColle
         request_entries_visited: value.request_entries_visited as u64,
     }
 }
+fn native_inventory_read_cost(value: InventoryReadCost) -> NativeMechanicsInventoryReadCost {
+    NativeMechanicsInventoryReadCost {
+        stack_entries_visited: value.stack_entries_visited as u64,
+        containment_entries_visited: value.containment_entries_visited as u64,
+        item_components_read: value.item_components_read as u64,
+        capacity_limits_visited: value.capacity_limits_visited as u64,
+        capacity_costs_visited: value.capacity_costs_visited as u64,
+    }
+}
 fn native_observed_revision(
     value: &ObservedComponentRevision,
 ) -> NativeMechanicsObservedComponentRevisionRow {
@@ -4730,6 +4852,36 @@ mod tests {
         NativeUtf8Slice {
             bytes: value.as_ptr(),
             len: value.len(),
+        }
+    }
+
+    fn empty_initial_components(
+        entity: NativeMechanicsEntityHandle,
+    ) -> NativeMechanicsInitialComponentsRequest {
+        NativeMechanicsInitialComponentsRequest {
+            entity,
+            has_stats: false,
+            stats: std::ptr::null(),
+            stats_len: 0,
+            has_tracks: false,
+            tracks: std::ptr::null(),
+            tracks_len: 0,
+            has_intrinsic_sources: false,
+            intrinsic_sources: std::ptr::null(),
+            intrinsic_sources_len: 0,
+            has_active_effects: false,
+            active_effects: std::ptr::null(),
+            active_effects_len: 0,
+            has_inventory: false,
+            inventory_stacks: std::ptr::null(),
+            inventory_stacks_len: 0,
+            inventory_capacity_limits: std::ptr::null(),
+            inventory_capacity_limits_len: 0,
+            has_item: false,
+            item_definition: utf8(""),
+            has_equipment: false,
+            equipment_assignments: std::ptr::null(),
+            equipment_assignments_len: 0,
         }
     }
 
@@ -6386,5 +6538,284 @@ mod tests {
         assert!(after.present);
         assert_eq!(after.container_entity_id, 1);
         assert_eq!(after.state_revision, owner_receipt.state_revision_after);
+    }
+
+    #[test]
+    fn inventory_view_uses_canonical_binding_and_copies_all_exact_collections() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("inventory-view"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                define_capacity_metric(
+                    context,
+                    &NativeMechanicsCapacityMetricDefinitionRequest {
+                        catalog,
+                        id: utf8("weight"),
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                define_capacity_metric(
+                    context,
+                    &NativeMechanicsCapacityMetricDefinitionRequest {
+                        catalog,
+                        id: utf8("volume"),
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let rations_capacity = [
+            NativeMechanicsItemCapacityCostInput {
+                metric: utf8("weight"),
+                units: 2,
+            },
+            NativeMechanicsItemCapacityCostInput {
+                metric: utf8("volume"),
+                units: 1,
+            },
+        ];
+        assert_eq!(
+            unsafe {
+                define_item(
+                    context,
+                    &NativeMechanicsItemDefinitionRequest {
+                        catalog,
+                        id: utf8("rations"),
+                        kind: NativeMechanicsItemKind::Fungible,
+                        maximum_quantity: 99,
+                        classifications: std::ptr::null(),
+                        classifications_len: 0,
+                        capacity_costs: rations_capacity.as_ptr(),
+                        capacity_costs_len: rations_capacity.len(),
+                        has_equipment: false,
+                        required_slots: 0,
+                        exclusive_group: utf8(""),
+                        sources: std::ptr::null(),
+                        sources_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let sword_capacity = [NativeMechanicsItemCapacityCostInput {
+            metric: utf8("weight"),
+            units: 5,
+        }];
+        assert_eq!(
+            unsafe {
+                define_item(
+                    context,
+                    &NativeMechanicsItemDefinitionRequest {
+                        catalog,
+                        id: utf8("sword"),
+                        kind: NativeMechanicsItemKind::Unique,
+                        maximum_quantity: 1,
+                        classifications: std::ptr::null(),
+                        classifications_len: 0,
+                        capacity_costs: sword_capacity.as_ptr(),
+                        capacity_costs_len: sword_capacity.len(),
+                        has_equipment: false,
+                        required_slots: 0,
+                        exclusive_group: utf8(""),
+                        sources: std::ptr::null(),
+                        sources_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
+
+        let mut sword = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 2,
+                        identity: utf8("sword-instance"),
+                    },
+                    &mut sword,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        has_item: true,
+                        item_definition: utf8("sword"),
+                        ..empty_initial_components(sword)
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut sword_receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, sword, &mut sword_receipt) },
+            ABI_OK
+        );
+        let mut sword_containment = NativeMechanicsContainmentReceipt::default();
+        assert_eq!(
+            unsafe {
+                read_containment(
+                    context,
+                    &NativeMechanicsContainmentReadRequest { entity: sword },
+                    &mut sword_containment,
+                )
+            },
+            ABI_OK
+        );
+
+        let mut owner = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 1,
+                        identity: utf8("owner"),
+                    },
+                    &mut owner,
+                )
+            },
+            ABI_OK
+        );
+        let stacks = [NativeMechanicsInitialInventoryStack {
+            definition: utf8("rations"),
+            quantity: 3,
+        }];
+        let capacity_limits = [NativeMechanicsInitialInventoryCapacityLimit {
+            metric: utf8("weight"),
+            maximum: 20,
+        }];
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        has_inventory: true,
+                        inventory_stacks: stacks.as_ptr(),
+                        inventory_stacks_len: stacks.len(),
+                        inventory_capacity_limits: capacity_limits.as_ptr(),
+                        inventory_capacity_limits_len: capacity_limits.len(),
+                        ..empty_initial_components(owner)
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                stage_initial_containment(
+                    context,
+                    &NativeMechanicsInitialContainmentRequest {
+                        owner,
+                        child_entity_id: 2,
+                        expected_state_revision: sword_containment.state_revision,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut owner_receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, owner, &mut owner_receipt) },
+            ABI_OK
+        );
+
+        let mut view = NativeMechanicsInventoryViewLease::default();
+        assert_eq!(unsafe { read_inventory_view(context, owner, &mut view) }, ABI_OK);
+        assert_eq!(view.catalog_id, catalog.value);
+        assert_eq!(view.owner_entity_id, 1);
+        assert_eq!(
+            view.inventory_revision.entity_id,
+            owner_receipt.inventory_revision.entity_id
+        );
+        assert_eq!(
+            view.inventory_revision.revision,
+            owner_receipt.inventory_revision.revision
+        );
+        assert_eq!(
+            view.inventory_revision.component,
+            NativeMechanicsRevisionComponent::Inventory
+        );
+        assert!(view.inventory_revision.present);
+        assert_eq!(
+            view.relationship_state_revision,
+            owner_receipt.state_revision_after
+        );
+        assert_eq!(view.stacks_len, 1);
+        assert_eq!(view.unique_items_len, 1);
+        assert_eq!(view.capacity_len, 2);
+        let stack_definition = unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                (*view.stacks).definition.bytes,
+                (*view.stacks).definition.len,
+            ))
+        };
+        assert_eq!(stack_definition, "rations");
+        assert_eq!(unsafe { (*view.stacks).quantity }, 3);
+        assert_eq!(unsafe { (*view.unique_items).entity_id }, 2);
+        let unique_definition = unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                (*view.unique_items).definition.bytes,
+                (*view.unique_items).definition.len,
+            ))
+        };
+        assert_eq!(unique_definition, "sword");
+        let capacity = unsafe { std::slice::from_raw_parts(view.capacity, view.capacity_len) };
+        let volume_metric = unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                capacity[0].metric.bytes,
+                capacity[0].metric.len,
+            ))
+        };
+        assert_eq!(volume_metric, "volume");
+        assert_eq!(capacity[0].used, 3);
+        assert!(!capacity[0].has_maximum);
+        assert_eq!(capacity[0].maximum, 0);
+        let weight_metric = unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                capacity[1].metric.bytes,
+                capacity[1].metric.len,
+            ))
+        };
+        assert_eq!(weight_metric, "weight");
+        assert_eq!(capacity[1].used, 11);
+        assert!(capacity[1].has_maximum);
+        assert_eq!(capacity[1].maximum, 20);
+        assert_eq!(view.read_cost.stack_entries_visited, 1);
+        assert_eq!(view.read_cost.containment_entries_visited, 1);
+        assert_eq!(view.read_cost.item_components_read, 1);
+        assert_eq!(view.read_cost.capacity_limits_visited, 1);
+        assert_eq!(view.read_cost.capacity_costs_visited, 3);
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, view.handle) },
+            ABI_OK
+        );
+        assert_eq!(unsafe { destroy_operation_lease(context, view.handle) }, 0);
     }
 }

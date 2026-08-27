@@ -947,6 +947,64 @@ pub struct NativeMechanicsTrackReadLease {
     pub revision: NativeMechanicsTracksRevision,
     pub source_cost: NativeMechanicsSourceCollectionCost,
 }
+/// One copied fungible stack in an exact inventory view.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInventoryViewStackRow {
+    pub definition: NativeUtf8Slice,
+    pub quantity: u64,
+}
+
+/// One copied unique item relationship in an exact inventory view.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInventoryViewUniqueItemRow {
+    pub entity_id: u64,
+    pub definition: NativeUtf8Slice,
+}
+
+/// One copied capacity result in an exact inventory view.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsInventoryViewCapacityUsageRow {
+    pub metric: NativeUtf8Slice,
+    pub used: u64,
+    pub has_maximum: bool,
+    pub maximum: u64,
+}
+
+/// The complete bounded work performed by `InventoryService::view`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsInventoryReadCost {
+    pub stack_entries_visited: u64,
+    pub containment_entries_visited: u64,
+    pub item_components_read: u64,
+    pub capacity_limits_visited: u64,
+    pub capacity_costs_visited: u64,
+}
+
+/// A typed owner for one exact `InventoryService::view` result. Its three
+/// separately typed collection pointers and all UTF-8 slices remain valid only
+/// until `destroy_operation_lease` releases `handle`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsInventoryViewLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub stacks: *const NativeMechanicsInventoryViewStackRow,
+    pub stacks_len: usize,
+    pub unique_items: *const NativeMechanicsInventoryViewUniqueItemRow,
+    pub unique_items_len: usize,
+    pub capacity: *const NativeMechanicsInventoryViewCapacityUsageRow,
+    pub capacity_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub owner_entity_id: u64,
+    pub inventory_revision: NativeMechanicsComponentRevision,
+    pub relationship_state_revision: u64,
+    pub read_cost: NativeMechanicsInventoryReadCost,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMechanicsStatOperationRequest {
