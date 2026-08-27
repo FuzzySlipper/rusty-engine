@@ -29,6 +29,64 @@ pub struct NativeVoxelObjectPlayerHandle {
     pub value: u64,
 }
 
+/// Opaque retained annotation layer. It owns an admitted annotation layer and
+/// retains its admitted voxel-asset target independently of the asset's direct
+/// product handle.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelAnnotationHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelAnnotationRegionLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelAnnotationEditLeaseHandle {
+    pub value: u64,
+}
+
+/// Bounds use explicit scalar coordinates so they stay a fixed generated C#
+/// value rather than an ABI-specific fixed-array projection.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelAnnotationBounds {
+    pub min_x: i64,
+    pub min_y: i64,
+    pub min_z: i64,
+    pub max_x: i64,
+    pub max_y: i64,
+    pub max_z: i64,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelAnnotationKind {
+    #[default]
+    Selection = 1,
+    Room = 2,
+    Portal = 3,
+    SpawnArea = 4,
+    Cover = 5,
+    Hazard = 6,
+    NavigationHint = 7,
+    Custom = 8,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelAnnotationQueryMode {
+    #[default]
+    Cell = 1,
+    Bounds = 2,
+    Region = 3,
+    LayerSummary = 4,
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeVoxelObjectLoopMode {
@@ -70,6 +128,124 @@ pub struct NativeAdmitVoxelAssetRequest {
 pub struct NativeAdmitVoxelObjectRequest {
     /// A complete bounded voxel-object artifact borrowed for this call only.
     pub bytes: NativeByteSlice,
+}
+
+/// A complete bounded annotation artifact. Its target is an already admitted
+/// asset, not a scene or renderer resource. The bridge validates the exact
+/// asset identity, voxel-data hash, and bounds before retaining the layer.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAdmitVoxelAnnotationRequest {
+    pub asset: NativeVoxelAssetHandle,
+    pub bytes: NativeByteSlice,
+}
+
+/// One typed bounded annotation query. Only fields selected by `mode` are
+/// read; `has_expected_layer_hash` controls whether stale-hash rejection is
+/// requested.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelAnnotationQueryRequest {
+    pub annotation: NativeVoxelAnnotationHandle,
+    pub mode: NativeVoxelAnnotationQueryMode,
+    pub coordinate_x: i64,
+    pub coordinate_y: i64,
+    pub coordinate_z: i64,
+    pub bounds: NativeVoxelAnnotationBounds,
+    pub region_id: NativeUtf8Slice,
+    pub has_expected_layer_hash: bool,
+    pub expected_layer_hash: NativeVoxelContentHash,
+    pub max_results: u32,
+}
+
+/// One bounded metadata item. UTF-8 slices point into the owning region lease
+/// and are copied by generated C# before its matching destroy callback.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelAnnotationRegionReadout {
+    pub region_id: NativeUtf8Slice,
+    pub label: NativeUtf8Slice,
+    pub kind: NativeVoxelAnnotationKind,
+    pub has_parent_region_id: bool,
+    pub parent_region_id: NativeUtf8Slice,
+    pub bounds: NativeVoxelAnnotationBounds,
+    pub assigned_cell_count: u64,
+}
+
+/// Engine-owned bounded collection plus fixed query facts. The outer facts are
+/// deliberately copied into the generated receipt, not inferred from the
+/// returned collection length.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelAnnotationRegionLease {
+    pub handle: NativeVoxelAnnotationRegionLeaseHandle,
+    pub regions: *const NativeVoxelAnnotationRegionReadout,
+    pub regions_len: usize,
+    pub total_layer_regions: u32,
+    pub truncated: bool,
+    pub revision: u64,
+    pub layer_hash: NativeVoxelContentHash,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSetVoxelAnnotationLabelRequest {
+    pub annotation: NativeVoxelAnnotationHandle,
+    pub expected_layer_hash: NativeVoxelContentHash,
+    pub region_id: NativeUtf8Slice,
+    pub label: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSetVoxelAnnotationKindRequest {
+    pub annotation: NativeVoxelAnnotationHandle,
+    pub expected_layer_hash: NativeVoxelContentHash,
+    pub region_id: NativeUtf8Slice,
+    pub kind: NativeVoxelAnnotationKind,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSetVoxelAnnotationParentRequest {
+    pub annotation: NativeVoxelAnnotationHandle,
+    pub expected_layer_hash: NativeVoxelContentHash,
+    pub region_id: NativeUtf8Slice,
+    pub has_parent_region_id: bool,
+    pub parent_region_id: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSetVoxelAnnotationBoundsRequest {
+    pub annotation: NativeVoxelAnnotationHandle,
+    pub expected_layer_hash: NativeVoxelContentHash,
+    pub region_id: NativeUtf8Slice,
+    pub bounds: NativeVoxelAnnotationBounds,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelAnnotationAffectedId {
+    pub region_id: NativeUtf8Slice,
+}
+
+/// A successful atomic owner edit. The associated IDs and every fixed receipt
+/// fact survive generated C# copying until this exact lease is released.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelAnnotationEditLease {
+    pub handle: NativeVoxelAnnotationEditLeaseHandle,
+    pub affected_ids: *const NativeVoxelAnnotationAffectedId,
+    pub affected_ids_len: usize,
+    pub layer_hash_before: NativeVoxelContentHash,
+    pub layer_hash_after: NativeVoxelContentHash,
+    pub membership_hash_before: NativeVoxelContentHash,
+    pub membership_hash_after: NativeVoxelContentHash,
+    pub revision: u64,
+    pub command_count: u32,
+    pub region_count: u32,
+    pub assigned_cell_count: u64,
 }
 
 /// Stable facts for one retained voxel asset. Its opaque identity stays at the
@@ -199,6 +375,42 @@ pub type NativeAdmitVoxelObject = unsafe extern "C" fn(
     *const NativeAdmitVoxelObjectRequest,
     *mut NativeVoxelObjectHandle,
 ) -> i32;
+pub type NativeAdmitVoxelAnnotation = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAdmitVoxelAnnotationRequest,
+    *mut NativeVoxelAnnotationHandle,
+) -> i32;
+pub type NativeDestroyVoxelAnnotation =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelAnnotationHandle) -> i32;
+pub type NativeQueryVoxelAnnotation = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelAnnotationQueryRequest,
+    *mut NativeVoxelAnnotationRegionLease,
+) -> i32;
+pub type NativeDestroyVoxelAnnotationRegionLease =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelAnnotationRegionLeaseHandle) -> i32;
+pub type NativeSetVoxelAnnotationLabel = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSetVoxelAnnotationLabelRequest,
+    *mut NativeVoxelAnnotationEditLease,
+) -> i32;
+pub type NativeSetVoxelAnnotationKind = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSetVoxelAnnotationKindRequest,
+    *mut NativeVoxelAnnotationEditLease,
+) -> i32;
+pub type NativeSetVoxelAnnotationParent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSetVoxelAnnotationParentRequest,
+    *mut NativeVoxelAnnotationEditLease,
+) -> i32;
+pub type NativeSetVoxelAnnotationBounds = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSetVoxelAnnotationBoundsRequest,
+    *mut NativeVoxelAnnotationEditLease,
+) -> i32;
+pub type NativeDestroyVoxelAnnotationEditLease =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelAnnotationEditLeaseHandle) -> i32;
 pub type NativeDestroyVoxelObject =
     unsafe extern "C" fn(*mut c_void, NativeVoxelObjectHandle) -> i32;
 pub type NativeReadVoxelObject = unsafe extern "C" fn(
@@ -273,4 +485,13 @@ pub struct NativeVoxelContentApi {
     pub stop_object_player: NativeStopVoxelObjectPlayer,
     pub read_object_player: NativeReadVoxelObjectPlayer,
     pub sample_object_player: NativeSampleVoxelObjectPlayer,
+    pub admit_annotation: NativeAdmitVoxelAnnotation,
+    pub destroy_annotation: NativeDestroyVoxelAnnotation,
+    pub query_annotation: NativeQueryVoxelAnnotation,
+    pub destroy_annotation_region_lease: NativeDestroyVoxelAnnotationRegionLease,
+    pub set_annotation_label: NativeSetVoxelAnnotationLabel,
+    pub set_annotation_kind: NativeSetVoxelAnnotationKind,
+    pub set_annotation_parent: NativeSetVoxelAnnotationParent,
+    pub set_annotation_bounds: NativeSetVoxelAnnotationBounds,
+    pub destroy_annotation_edit_lease: NativeDestroyVoxelAnnotationEditLease,
 }

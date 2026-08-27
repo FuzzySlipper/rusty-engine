@@ -7,6 +7,12 @@
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
 
 use csharp_engine_abi::*;
+use voxel_annotation::{
+    decode_annotation_layer, query_annotation_layer, validate_annotation_layer,
+    VoxelAnnotationBounds, VoxelAnnotationEditCommand, VoxelAnnotationEditService,
+    VoxelAnnotationEditTransaction, VoxelAnnotationKind, VoxelAnnotationLayer,
+    VoxelAnnotationQuery, VoxelAnnotationQueryMode, VoxelAnnotationRegionReadout,
+};
 use voxel_asset::{decode_voxel_asset, represented_voxel_count, VoxelAsset, VoxelFrame};
 use voxel_object_runtime::{
     admit_voxel_object_json, AdmittedVoxelObject, VoxelObjectLoopMode, VoxelObjectPlaybackPosture,
@@ -43,13 +49,50 @@ struct RetainedVoxelObjectPlayer {
     player: VoxelObjectPlayer,
 }
 
+#[derive(Debug)]
+struct RetainedVoxelAnnotation {
+    /// Retaining this Arc makes the annotation's admitted target independent of
+    /// the product's direct asset-handle lifetime.
+    _asset: Arc<VoxelAsset>,
+    layer: VoxelAnnotationLayer,
+    revision: u64,
+}
+
+#[derive(Debug)]
+struct RetainedVoxelAnnotationRegion {
+    region_id: String,
+    label: String,
+    kind: NativeVoxelAnnotationKind,
+    parent_region_id: Option<String>,
+    bounds: NativeVoxelAnnotationBounds,
+    assigned_cell_count: u64,
+}
+
+#[derive(Debug)]
+struct RetainedVoxelAnnotationRegionLease {
+    _regions: Vec<RetainedVoxelAnnotationRegion>,
+    _readout: Vec<NativeVoxelAnnotationRegionReadout>,
+}
+
+#[derive(Debug)]
+struct RetainedVoxelAnnotationEditLease {
+    _ids: Vec<String>,
+    _readout: Vec<NativeVoxelAnnotationAffectedId>,
+}
+
 pub(crate) struct RuntimeVoxelContentBridge {
-    assets: BTreeMap<u64, VoxelAsset>,
+    assets: BTreeMap<u64, Arc<VoxelAsset>>,
     objects: BTreeMap<u64, RetainedVoxelObject>,
     players: BTreeMap<u64, RetainedVoxelObjectPlayer>,
+    annotations: BTreeMap<u64, RetainedVoxelAnnotation>,
+    annotation_region_leases: BTreeMap<u64, RetainedVoxelAnnotationRegionLease>,
+    annotation_edit_leases: BTreeMap<u64, RetainedVoxelAnnotationEditLease>,
     next_asset: u64,
     next_object: u64,
     next_player: u64,
+    next_annotation: u64,
+    next_annotation_region_lease: u64,
+    next_annotation_edit_lease: u64,
 }
 
 impl RuntimeVoxelContentBridge {
@@ -58,16 +101,22 @@ impl RuntimeVoxelContentBridge {
             assets: BTreeMap::new(),
             objects: BTreeMap::new(),
             players: BTreeMap::new(),
+            annotations: BTreeMap::new(),
+            annotation_region_leases: BTreeMap::new(),
+            annotation_edit_leases: BTreeMap::new(),
             next_asset: 1,
             next_object: 1,
             next_player: 1,
+            next_annotation: 1,
+            next_annotation_region_lease: 1,
+            next_annotation_edit_lease: 1,
         }
     }
 
     fn insert_asset(&mut self, asset: VoxelAsset) -> Option<NativeVoxelAssetHandle> {
         let value = self.next_asset;
         self.next_asset = value.checked_add(1)?;
-        self.assets.insert(value, asset);
+        self.assets.insert(value, Arc::new(asset));
         Some(NativeVoxelAssetHandle { value })
     }
 
@@ -126,12 +175,236 @@ impl RuntimeVoxelContentBridge {
         &self,
         handle: NativeVoxelAssetHandle,
     ) -> Result<&VoxelAsset, CsharpEngineServicesError> {
-        self.assets.get(&handle.value).ok_or_else(|| {
+        self.assets
+            .get(&handle.value)
+            .map(Arc::as_ref)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_CONTENT_ASSET",
+                    "voxel asset handle is not admitted",
+                )
+            })
+    }
+
+    fn asset_arc(
+        &self,
+        handle: NativeVoxelAssetHandle,
+    ) -> Result<Arc<VoxelAsset>, CsharpEngineServicesError> {
+        self.assets.get(&handle.value).cloned().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_VOXEL_CONTENT_ASSET",
                 "voxel asset handle is not admitted",
             )
         })
+    }
+
+    fn insert_annotation(
+        &mut self,
+        asset: Arc<VoxelAsset>,
+        layer: VoxelAnnotationLayer,
+    ) -> Option<NativeVoxelAnnotationHandle> {
+        let value = self.next_annotation;
+        self.next_annotation = value.checked_add(1)?;
+        self.annotations.insert(
+            value,
+            RetainedVoxelAnnotation {
+                _asset: asset,
+                layer,
+                revision: 0,
+            },
+        );
+        Some(NativeVoxelAnnotationHandle { value })
+    }
+
+    fn annotation(
+        &self,
+        handle: NativeVoxelAnnotationHandle,
+    ) -> Result<&RetainedVoxelAnnotation, CsharpEngineServicesError> {
+        self.annotations.get(&handle.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_ANNOTATION",
+                "voxel annotation handle is not admitted",
+            )
+        })
+    }
+
+    fn annotation_mut(
+        &mut self,
+        handle: NativeVoxelAnnotationHandle,
+    ) -> Result<&mut RetainedVoxelAnnotation, CsharpEngineServicesError> {
+        self.annotations.get_mut(&handle.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_ANNOTATION",
+                "voxel annotation handle is not admitted",
+            )
+        })
+    }
+
+    fn insert_region_lease(
+        &mut self,
+        regions: Vec<VoxelAnnotationRegionReadout>,
+        total_layer_regions: usize,
+        truncated: bool,
+        revision: u64,
+        layer_hash: NativeVoxelContentHash,
+    ) -> Result<NativeVoxelAnnotationRegionLease, CsharpEngineServicesError> {
+        let value = self.next_annotation_region_lease;
+        self.next_annotation_region_lease = value.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_ANNOTATION_LEASE",
+                "annotation region lease handle space overflowed",
+            )
+        })?;
+        let retained: Vec<_> = regions
+            .into_iter()
+            .map(|region| RetainedVoxelAnnotationRegion {
+                region_id: region.region_id,
+                label: region.label,
+                kind: native_annotation_kind(region.kind),
+                parent_region_id: region.parent_region_id,
+                bounds: native_annotation_bounds(region.bounds),
+                assigned_cell_count: region.assigned_cell_count,
+            })
+            .collect();
+        let readout = retained
+            .iter()
+            .map(|region| NativeVoxelAnnotationRegionReadout {
+                region_id: native_utf8(&region.region_id),
+                label: native_utf8(&region.label),
+                kind: region.kind,
+                has_parent_region_id: region.parent_region_id.is_some(),
+                parent_region_id: region
+                    .parent_region_id
+                    .as_deref()
+                    .map(native_utf8)
+                    .unwrap_or(NativeUtf8Slice {
+                        bytes: std::ptr::null(),
+                        len: 0,
+                    }),
+                bounds: region.bounds,
+                assigned_cell_count: region.assigned_cell_count,
+            })
+            .collect::<Vec<_>>();
+        let lease = NativeVoxelAnnotationRegionLease {
+            handle: NativeVoxelAnnotationRegionLeaseHandle { value },
+            regions: readout.as_ptr(),
+            regions_len: readout.len(),
+            total_layer_regions: narrow(total_layer_regions)?,
+            truncated,
+            revision,
+            layer_hash,
+        };
+        self.annotation_region_leases.insert(
+            value,
+            RetainedVoxelAnnotationRegionLease {
+                _regions: retained,
+                _readout: readout,
+            },
+        );
+        Ok(lease)
+    }
+
+    fn prepare_edit_lease(
+        value: u64,
+        receipt: voxel_annotation::VoxelAnnotationEditReceipt,
+        revision: u64,
+    ) -> Result<
+        (
+            NativeVoxelAnnotationEditLease,
+            RetainedVoxelAnnotationEditLease,
+        ),
+        CsharpEngineServicesError,
+    > {
+        let ids = receipt.affected_region_ids;
+        let readout = ids
+            .iter()
+            .map(|region_id| NativeVoxelAnnotationAffectedId {
+                region_id: native_utf8(region_id),
+            })
+            .collect::<Vec<_>>();
+        let lease = NativeVoxelAnnotationEditLease {
+            handle: NativeVoxelAnnotationEditLeaseHandle { value },
+            affected_ids: readout.as_ptr(),
+            affected_ids_len: readout.len(),
+            layer_hash_before: hash(&receipt.layer_hash_before)?,
+            layer_hash_after: hash(&receipt.layer_hash_after)?,
+            membership_hash_before: hash(&receipt.membership_hash_before)?,
+            membership_hash_after: hash(&receipt.membership_hash_after)?,
+            revision,
+            command_count: narrow(receipt.command_count)?,
+            region_count: narrow(receipt.region_count)?,
+            assigned_cell_count: receipt.assigned_cell_count,
+        };
+        Ok((
+            lease,
+            RetainedVoxelAnnotationEditLease {
+                _ids: ids,
+                _readout: readout,
+            },
+        ))
+    }
+
+    fn apply_annotation_edit(
+        &mut self,
+        handle: NativeVoxelAnnotationHandle,
+        expected_layer_hash: String,
+        command: VoxelAnnotationEditCommand,
+    ) -> Result<NativeVoxelAnnotationEditLease, CsharpEngineServicesError> {
+        let (next_revision, mut candidate) = {
+            let annotation = self.annotation(handle)?;
+            (
+                annotation.revision.checked_add(1).ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_ANNOTATION_REVISION",
+                        "annotation revision overflowed",
+                    )
+                })?,
+                annotation.layer.clone(),
+            )
+        };
+        let next_lease = self.next_annotation_edit_lease;
+        let next_lease_after = next_lease.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_ANNOTATION_LEASE",
+                "annotation edit lease handle space overflowed",
+            )
+        })?;
+        let transaction = VoxelAnnotationEditTransaction {
+            expected_layer_hash,
+            commands: vec![command],
+        };
+        // Preflight the owner transaction and construct every fallible ABI
+        // receipt value before mutating the retained layer. This preserves the
+        // owner's all-or-nothing guarantee through lease construction too.
+        let candidate_receipt =
+            VoxelAnnotationEditService::apply(&mut candidate, transaction.clone()).map_err(
+                |_| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_ANNOTATION_EDIT",
+                        "voxel annotation metadata edit was rejected",
+                    )
+                },
+            )?;
+        let (lease, retained_lease) =
+            Self::prepare_edit_lease(next_lease, candidate_receipt, next_revision)?;
+        let receipt =
+            VoxelAnnotationEditService::apply(&mut self.annotation_mut(handle)?.layer, transaction)
+                .map_err(|_| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_VOXEL_ANNOTATION_EDIT",
+                        "annotation metadata changed during its atomic commit",
+                    )
+                })?;
+        debug_assert_eq!(
+            lease.layer_hash_after,
+            hash(&receipt.layer_hash_after).unwrap_or_default()
+        );
+        let annotation = self.annotation_mut(handle)?;
+        annotation.revision = next_revision;
+        self.next_annotation_edit_lease = next_lease_after;
+        self.annotation_edit_leases
+            .insert(next_lease, retained_lease);
+        Ok(lease)
     }
 
     fn select_default(
@@ -269,6 +542,15 @@ pub(crate) fn api(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentA
         stop_object_player,
         read_object_player,
         sample_object_player,
+        admit_annotation,
+        destroy_annotation,
+        query_annotation,
+        destroy_annotation_region_lease,
+        set_annotation_label,
+        set_annotation_kind,
+        set_annotation_parent,
+        set_annotation_bounds,
+        destroy_annotation_edit_lease,
     }
 }
 
@@ -358,6 +640,312 @@ unsafe extern "C" fn admit_object(
         }
         None => 0,
     }
+}
+
+unsafe extern "C" fn admit_annotation(
+    context: *mut c_void,
+    request: *const NativeAdmitVoxelAnnotationRequest,
+    output: *mut NativeVoxelAnnotationHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let body = match unsafe { borrowed_json(request.bytes) } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let layer = match decode_annotation_layer(body) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let asset = match bridge.asset_arc(request.asset) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    if validate_annotation_layer(&layer, Some(&asset), Default::default()).is_err() {
+        return 0;
+    }
+    match bridge.insert_annotation(asset, layer) {
+        Some(handle) => {
+            unsafe { *output = handle };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+
+unsafe extern "C" fn destroy_annotation(
+    context: *mut c_void,
+    handle: NativeVoxelAnnotationHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    if bridge.annotations.remove(&handle.value).is_some() {
+        ABI_OK
+    } else {
+        0
+    }
+}
+
+unsafe extern "C" fn query_annotation(
+    context: *mut c_void,
+    request: *const NativeVoxelAnnotationQueryRequest,
+    output: *mut NativeVoxelAnnotationRegionLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let expected_layer_hash = if request.has_expected_layer_hash {
+        Some(hash_string(request.expected_layer_hash))
+    } else {
+        None
+    };
+    let mode = match annotation_query_mode(request) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let (readout, revision) = {
+        let annotation = match bridge.annotation(request.annotation) {
+            Ok(value) => value,
+            Err(_) => return 0,
+        };
+        let readout = match query_annotation_layer(
+            &annotation.layer,
+            &VoxelAnnotationQuery {
+                expected_layer_hash,
+                mode,
+                max_results: request.max_results as usize,
+            },
+        ) {
+            Ok(value) => value,
+            Err(_) => return 0,
+        };
+        (readout, annotation.revision)
+    };
+    let layer_hash = match hash(&readout.layer_hash) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    match bridge.insert_region_lease(
+        readout.matched_regions,
+        readout.total_layer_regions,
+        readout.truncated,
+        revision,
+        layer_hash,
+    ) {
+        Ok(lease) => {
+            unsafe { *output = lease };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn destroy_annotation_region_lease(
+    context: *mut c_void,
+    handle: NativeVoxelAnnotationRegionLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    i32::from(
+        bridge
+            .annotation_region_leases
+            .remove(&handle.value)
+            .is_some(),
+    )
+}
+
+unsafe extern "C" fn set_annotation_label(
+    context: *mut c_void,
+    request: *const NativeSetVoxelAnnotationLabelRequest,
+    output: *mut NativeVoxelAnnotationEditLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let expected = hash_string(request.expected_layer_hash);
+    let region_id = match unsafe {
+        borrowed_utf8(
+            request.region_id.bytes,
+            request.region_id.len,
+            "annotation region id",
+        )
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return 0,
+    };
+    let label = match unsafe {
+        borrowed_utf8(request.label.bytes, request.label.len, "annotation label")
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.apply_annotation_edit(
+        request.annotation,
+        expected,
+        VoxelAnnotationEditCommand::SetLabel { region_id, label },
+    ) {
+        Ok(lease) => {
+            unsafe { *output = lease };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn set_annotation_kind(
+    context: *mut c_void,
+    request: *const NativeSetVoxelAnnotationKindRequest,
+    output: *mut NativeVoxelAnnotationEditLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let expected = hash_string(request.expected_layer_hash);
+    let region_id = match unsafe {
+        borrowed_utf8(
+            request.region_id.bytes,
+            request.region_id.len,
+            "annotation region id",
+        )
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return 0,
+    };
+    let kind = match annotation_kind(request.kind) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.apply_annotation_edit(
+        request.annotation,
+        expected,
+        VoxelAnnotationEditCommand::SetKind {
+            region_id,
+            annotation_kind: kind,
+        },
+    ) {
+        Ok(lease) => {
+            unsafe { *output = lease };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn set_annotation_parent(
+    context: *mut c_void,
+    request: *const NativeSetVoxelAnnotationParentRequest,
+    output: *mut NativeVoxelAnnotationEditLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let expected = hash_string(request.expected_layer_hash);
+    let region_id = match unsafe {
+        borrowed_utf8(
+            request.region_id.bytes,
+            request.region_id.len,
+            "annotation region id",
+        )
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return 0,
+    };
+    let parent_region_id = if request.has_parent_region_id {
+        match unsafe {
+            borrowed_utf8(
+                request.parent_region_id.bytes,
+                request.parent_region_id.len,
+                "annotation parent region id",
+            )
+        } {
+            Ok(value) => Some(value.to_owned()),
+            Err(_) => return 0,
+        }
+    } else {
+        None
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.apply_annotation_edit(
+        request.annotation,
+        expected,
+        VoxelAnnotationEditCommand::SetParent {
+            region_id,
+            parent_region_id,
+        },
+    ) {
+        Ok(lease) => {
+            unsafe { *output = lease };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn set_annotation_bounds(
+    context: *mut c_void,
+    request: *const NativeSetVoxelAnnotationBoundsRequest,
+    output: *mut NativeVoxelAnnotationEditLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let expected = hash_string(request.expected_layer_hash);
+    let region_id = match unsafe {
+        borrowed_utf8(
+            request.region_id.bytes,
+            request.region_id.len,
+            "annotation region id",
+        )
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.apply_annotation_edit(
+        request.annotation,
+        expected,
+        VoxelAnnotationEditCommand::SetBounds {
+            region_id,
+            bounds: annotation_bounds(request.bounds),
+        },
+    ) {
+        Ok(lease) => {
+            unsafe { *output = lease };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn destroy_annotation_edit_lease(
+    context: *mut c_void,
+    handle: NativeVoxelAnnotationEditLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    i32::from(
+        bridge
+            .annotation_edit_leases
+            .remove(&handle.value)
+            .is_some(),
+    )
 }
 
 unsafe extern "C" fn destroy_object(context: *mut c_void, handle: NativeVoxelObjectHandle) -> i32 {
@@ -682,6 +1270,93 @@ unsafe fn borrowed_json<'a>(value: NativeByteSlice) -> Result<&'a str, ()> {
     std::str::from_utf8(bytes).map_err(|_| ())
 }
 
+fn native_utf8(value: &str) -> NativeUtf8Slice {
+    NativeUtf8Slice {
+        bytes: value.as_ptr(),
+        len: value.len(),
+    }
+}
+
+fn native_annotation_bounds(value: VoxelAnnotationBounds) -> NativeVoxelAnnotationBounds {
+    NativeVoxelAnnotationBounds {
+        min_x: value.min[0],
+        min_y: value.min[1],
+        min_z: value.min[2],
+        max_x: value.max[0],
+        max_y: value.max[1],
+        max_z: value.max[2],
+    }
+}
+
+fn annotation_bounds(value: NativeVoxelAnnotationBounds) -> VoxelAnnotationBounds {
+    VoxelAnnotationBounds {
+        min: [value.min_x, value.min_y, value.min_z],
+        max: [value.max_x, value.max_y, value.max_z],
+    }
+}
+
+fn native_annotation_kind(value: VoxelAnnotationKind) -> NativeVoxelAnnotationKind {
+    match value {
+        VoxelAnnotationKind::Selection => NativeVoxelAnnotationKind::Selection,
+        VoxelAnnotationKind::Room => NativeVoxelAnnotationKind::Room,
+        VoxelAnnotationKind::Portal => NativeVoxelAnnotationKind::Portal,
+        VoxelAnnotationKind::SpawnArea => NativeVoxelAnnotationKind::SpawnArea,
+        VoxelAnnotationKind::Cover => NativeVoxelAnnotationKind::Cover,
+        VoxelAnnotationKind::Hazard => NativeVoxelAnnotationKind::Hazard,
+        VoxelAnnotationKind::NavigationHint => NativeVoxelAnnotationKind::NavigationHint,
+        VoxelAnnotationKind::Custom => NativeVoxelAnnotationKind::Custom,
+    }
+}
+
+fn annotation_kind(
+    value: NativeVoxelAnnotationKind,
+) -> Result<VoxelAnnotationKind, CsharpEngineServicesError> {
+    Ok(match value {
+        NativeVoxelAnnotationKind::Selection => VoxelAnnotationKind::Selection,
+        NativeVoxelAnnotationKind::Room => VoxelAnnotationKind::Room,
+        NativeVoxelAnnotationKind::Portal => VoxelAnnotationKind::Portal,
+        NativeVoxelAnnotationKind::SpawnArea => VoxelAnnotationKind::SpawnArea,
+        NativeVoxelAnnotationKind::Cover => VoxelAnnotationKind::Cover,
+        NativeVoxelAnnotationKind::Hazard => VoxelAnnotationKind::Hazard,
+        NativeVoxelAnnotationKind::NavigationHint => VoxelAnnotationKind::NavigationHint,
+        NativeVoxelAnnotationKind::Custom => VoxelAnnotationKind::Custom,
+    })
+}
+
+fn annotation_query_mode(
+    request: &NativeVoxelAnnotationQueryRequest,
+) -> Result<VoxelAnnotationQueryMode, CsharpEngineServicesError> {
+    Ok(match request.mode {
+        NativeVoxelAnnotationQueryMode::Cell => VoxelAnnotationQueryMode::Cell {
+            coordinate: [
+                request.coordinate_x,
+                request.coordinate_y,
+                request.coordinate_z,
+            ],
+        },
+        NativeVoxelAnnotationQueryMode::Bounds => VoxelAnnotationQueryMode::Bounds {
+            bounds: annotation_bounds(request.bounds),
+        },
+        NativeVoxelAnnotationQueryMode::Region => VoxelAnnotationQueryMode::Region {
+            region_id: unsafe {
+                borrowed_utf8(
+                    request.region_id.bytes,
+                    request.region_id.len,
+                    "annotation region id",
+                )
+            }
+            .map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_ANNOTATION_QUERY",
+                    "annotation region id was not valid UTF-8",
+                )
+            })?
+            .to_owned(),
+        },
+        NativeVoxelAnnotationQueryMode::LayerSummary => VoxelAnnotationQueryMode::LayerSummary,
+    })
+}
+
 fn native_asset_readout(
     asset: &VoxelAsset,
 ) -> Result<NativeVoxelAssetReadout, CsharpEngineServicesError> {
@@ -808,6 +1483,13 @@ fn hash(value: &str) -> Result<NativeVoxelContentHash, CsharpEngineServicesError
     })
 }
 
+fn hash_string(value: NativeVoxelContentHash) -> String {
+    format!(
+        "sha256:{:016x}{:016x}{:016x}{:016x}",
+        value.word0, value.word1, value.word2, value.word3
+    )
+}
+
 fn narrow(value: usize) -> Result<u32, CsharpEngineServicesError> {
     u32::try_from(value).map_err(|_| {
         CsharpEngineServicesError::new(
@@ -821,6 +1503,10 @@ fn narrow(value: usize) -> Result<u32, CsharpEngineServicesError> {
 mod tests {
     use super::*;
     use crate::spatial::RuntimeSpatialBridge;
+    use voxel_annotation::{
+        encode_annotation_layer, finalize_annotation_draft, VoxelAnnotationLayerDraft,
+        VoxelAnnotationRegion, VoxelAnnotationSelection, VoxelAnnotationSparseRun,
+    };
     use voxel_asset::{
         encode_voxel_asset, encode_voxel_object, with_computed_content_hash,
         with_computed_voxel_object_hashes, VoxelAssetBounds, VoxelAssetGrid,
@@ -1211,6 +1897,336 @@ mod tests {
         assert_eq!(unsafe { (api.stop_object_player)(api.context, player) }, 0);
     }
 
+    #[test]
+    fn retains_target_bound_annotations_queries_bounded_leases_and_keeps_metadata_edits_atomic() {
+        let mut bridge = RuntimeVoxelContentBridge::new();
+        let api = super::api(&mut bridge);
+        let asset = annotation_asset();
+        let asset_body = encode_voxel_asset(&asset)
+            .expect("canonical asset")
+            .into_bytes();
+        let mut asset_handle = NativeVoxelAssetHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.admit_asset)(
+                    api.context,
+                    &NativeAdmitVoxelAssetRequest {
+                        bytes: NativeByteSlice {
+                            bytes: asset_body.as_ptr(),
+                            len: asset_body.len(),
+                        },
+                    },
+                    &mut asset_handle,
+                )
+            },
+            ABI_OK
+        );
+
+        let annotation = annotation(&asset);
+        let annotation_body = encode_annotation_layer(&annotation)
+            .expect("canonical annotation")
+            .into_bytes();
+        let mut annotation_handle = NativeVoxelAnnotationHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.admit_annotation)(
+                    api.context,
+                    &NativeAdmitVoxelAnnotationRequest {
+                        asset: asset_handle,
+                        bytes: NativeByteSlice {
+                            bytes: annotation_body.as_ptr(),
+                            len: annotation_body.len(),
+                        },
+                    },
+                    &mut annotation_handle,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_asset)(api.context, asset_handle) },
+            ABI_OK,
+            "annotation retains its admitted target after the direct asset release"
+        );
+
+        let initial_hash = hash(&annotation.content_hashes.canonical_layer).expect("valid hash");
+        let region_a = b"region/bridge-a";
+        let bounds = NativeVoxelAnnotationBounds {
+            min_x: 0,
+            min_y: 0,
+            min_z: 0,
+            max_x: 0,
+            max_y: 0,
+            max_z: 0,
+        };
+        for mode in [
+            NativeVoxelAnnotationQueryMode::Cell,
+            NativeVoxelAnnotationQueryMode::Bounds,
+            NativeVoxelAnnotationQueryMode::Region,
+            NativeVoxelAnnotationQueryMode::LayerSummary,
+        ] {
+            let mut lease = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionLease>() };
+            let max_results = if mode == NativeVoxelAnnotationQueryMode::LayerSummary {
+                1
+            } else {
+                8
+            };
+            assert_eq!(
+                unsafe {
+                    (api.query_annotation)(
+                        api.context,
+                        &NativeVoxelAnnotationQueryRequest {
+                            annotation: annotation_handle,
+                            mode,
+                            coordinate_x: 0,
+                            coordinate_y: 0,
+                            coordinate_z: 0,
+                            bounds,
+                            region_id: NativeUtf8Slice {
+                                bytes: region_a.as_ptr(),
+                                len: region_a.len(),
+                            },
+                            has_expected_layer_hash: true,
+                            expected_layer_hash: initial_hash,
+                            max_results,
+                        },
+                        &mut lease,
+                    )
+                },
+                ABI_OK
+            );
+            assert_eq!(lease.total_layer_regions, 2);
+            assert_eq!(lease.revision, 0);
+            assert_eq!(lease.layer_hash, initial_hash);
+            assert_eq!(
+                lease.truncated,
+                mode == NativeVoxelAnnotationQueryMode::LayerSummary
+            );
+            assert!(!lease.regions.is_null());
+            assert!(lease.regions_len >= 1);
+            assert_eq!(
+                unsafe {
+                    std::str::from_utf8(std::slice::from_raw_parts(
+                        (*lease.regions).region_id.bytes,
+                        (*lease.regions).region_id.len,
+                    ))
+                }
+                .expect("leased region id"),
+                "region/bridge-a"
+            );
+            assert_eq!(
+                unsafe { (api.destroy_annotation_region_lease)(api.context, lease.handle) },
+                ABI_OK
+            );
+            assert_eq!(
+                unsafe { (api.destroy_annotation_region_lease)(api.context, lease.handle) },
+                0,
+                "each query lease has one exact release"
+            );
+        }
+
+        let label = b"renamed";
+        let mut label_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_label)(
+                    api.context,
+                    &NativeSetVoxelAnnotationLabelRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: initial_hash,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        label: NativeUtf8Slice {
+                            bytes: label.as_ptr(),
+                            len: label.len(),
+                        },
+                    },
+                    &mut label_edit,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(label_edit.revision, 1);
+        let label_hash = label_edit.layer_hash_after;
+        assert_eq!(label_edit.affected_ids_len, 1);
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8(std::slice::from_raw_parts(
+                    (*label_edit.affected_ids).region_id.bytes,
+                    (*label_edit.affected_ids).region_id.len,
+                ))
+            }
+            .expect("leased affected id"),
+            "region/bridge-a"
+        );
+        assert_eq!(
+            unsafe { (api.destroy_annotation_edit_lease)(api.context, label_edit.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_annotation_edit_lease)(api.context, label_edit.handle) },
+            0,
+            "each edit lease has one exact release"
+        );
+
+        let mut stale_kind = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_kind)(
+                    api.context,
+                    &NativeSetVoxelAnnotationKindRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: initial_hash,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        kind: NativeVoxelAnnotationKind::Room,
+                    },
+                    &mut stale_kind,
+                )
+            },
+            0,
+            "stale edits fail before the owner commits"
+        );
+
+        let mut kind_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_kind)(
+                    api.context,
+                    &NativeSetVoxelAnnotationKindRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: label_hash,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        kind: NativeVoxelAnnotationKind::Room,
+                    },
+                    &mut kind_edit,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(kind_edit.revision, 2);
+        let kind_hash = kind_edit.layer_hash_after;
+        assert_eq!(
+            unsafe { (api.destroy_annotation_edit_lease)(api.context, kind_edit.handle) },
+            ABI_OK
+        );
+
+        let region_b = b"region/bridge-b";
+        let mut parent_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_parent)(
+                    api.context,
+                    &NativeSetVoxelAnnotationParentRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: kind_hash,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_b.as_ptr(),
+                            len: region_b.len(),
+                        },
+                        has_parent_region_id: true,
+                        parent_region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                    },
+                    &mut parent_edit,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(parent_edit.revision, 3);
+        let parent_hash = parent_edit.layer_hash_after;
+        assert_eq!(
+            unsafe { (api.destroy_annotation_edit_lease)(api.context, parent_edit.handle) },
+            ABI_OK
+        );
+
+        let mut bounds_edit = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditLease>() };
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_bounds)(
+                    api.context,
+                    &NativeSetVoxelAnnotationBoundsRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: parent_hash,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        bounds: NativeVoxelAnnotationBounds { max_x: 1, ..bounds },
+                    },
+                    &mut bounds_edit,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(bounds_edit.revision, 4);
+        assert_eq!(
+            unsafe { (api.destroy_annotation_edit_lease)(api.context, bounds_edit.handle) },
+            ABI_OK
+        );
+
+        let mut after = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionLease>() };
+        assert_eq!(
+            unsafe {
+                (api.query_annotation)(
+                    api.context,
+                    &NativeVoxelAnnotationQueryRequest {
+                        annotation: annotation_handle,
+                        mode: NativeVoxelAnnotationQueryMode::Region,
+                        coordinate_x: 0,
+                        coordinate_y: 0,
+                        coordinate_z: 0,
+                        bounds,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        has_expected_layer_hash: false,
+                        expected_layer_hash: NativeVoxelContentHash::default(),
+                        max_results: 1,
+                    },
+                    &mut after,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(after.revision, 4);
+        assert_eq!(
+            unsafe { (*after.regions).kind },
+            NativeVoxelAnnotationKind::Room
+        );
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8(std::slice::from_raw_parts(
+                    (*after.regions).label.bytes,
+                    (*after.regions).label.len,
+                ))
+            }
+            .expect("leased label"),
+            "renamed",
+            "stale failure did not partially apply kind"
+        );
+        assert_eq!(unsafe { (*after.regions).bounds.max_x }, 1);
+        assert_eq!(
+            unsafe { (api.destroy_annotation_region_lease)(api.context, after.handle) },
+            ABI_OK
+        );
+
+        assert_eq!(
+            unsafe { (api.destroy_annotation)(api.context, annotation_handle) },
+            ABI_OK
+        );
+    }
+
     fn asset() -> VoxelAsset {
         with_computed_content_hash(VoxelAsset {
             schema_version: VOXEL_ASSET_SCHEMA_VERSION,
@@ -1233,6 +2249,71 @@ mod tests {
             content_hash: String::new(),
         })
         .expect("valid asset")
+    }
+
+    fn annotation_asset() -> VoxelAsset {
+        let mut value = asset();
+        value.bounds.max[0] = 1;
+        value.representation.sparse_runs.push(VoxelSparseRun {
+            start: [1, 0, 0],
+            length: 1,
+            material_slot: 1,
+        });
+        with_computed_content_hash(value).expect("valid annotation target asset")
+    }
+
+    fn annotation(asset: &VoxelAsset) -> VoxelAnnotationLayer {
+        finalize_annotation_draft(
+            VoxelAnnotationLayerDraft {
+                layer_id: "voxel-annotation/bridge-test".to_owned(),
+                target_voxel_asset_id: asset.asset_id.clone(),
+                target_voxel_data_hash: asset.voxel_data_hash.clone(),
+                target_bounds: VoxelAnnotationBounds {
+                    min: asset.bounds.min,
+                    max: asset.bounds.max,
+                },
+                regions: vec![
+                    VoxelAnnotationRegion {
+                        region_id: "region/bridge-a".to_owned(),
+                        label: "original".to_owned(),
+                        kind: VoxelAnnotationKind::Selection,
+                        tags: vec![],
+                        parent_region_id: None,
+                        bounds: VoxelAnnotationBounds {
+                            min: [0, 0, 0],
+                            max: [0, 0, 0],
+                        },
+                        selection: VoxelAnnotationSelection {
+                            sparse_runs: vec![VoxelAnnotationSparseRun {
+                                start: [0, 0, 0],
+                                length: 1,
+                            }],
+                        },
+                    },
+                    VoxelAnnotationRegion {
+                        region_id: "region/bridge-b".to_owned(),
+                        label: "second".to_owned(),
+                        kind: VoxelAnnotationKind::Selection,
+                        tags: vec![],
+                        parent_region_id: None,
+                        bounds: VoxelAnnotationBounds {
+                            min: [1, 0, 0],
+                            max: [1, 0, 0],
+                        },
+                        selection: VoxelAnnotationSelection {
+                            sparse_runs: vec![VoxelAnnotationSparseRun {
+                                start: [1, 0, 0],
+                                length: 1,
+                            }],
+                        },
+                    },
+                ],
+                provenance: vec![],
+            },
+            asset,
+            Default::default(),
+        )
+        .expect("valid annotation")
     }
 
     fn object() -> VoxelObjectAsset {

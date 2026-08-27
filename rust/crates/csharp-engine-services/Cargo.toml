@@ -24,6 +24,7 @@ svc-spatial.workspace = true
 svc-rng.workspace = true
 sha2.workspace = true
 voxel-asset.workspace = true
+voxel-annotation.workspace = true
 voxel-object-runtime.workspace = true
 
 [dev-dependencies]
