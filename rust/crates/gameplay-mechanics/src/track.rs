@@ -19,6 +19,21 @@ pub enum TrackSetPolicy {
     ClampToBounds,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackReadReceipt {
+    pub catalog_version: crate::CatalogVersion,
+    pub catalog_fingerprint: String,
+    pub operation: OperationId,
+    pub entity: EntityId,
+    pub track: TrackId,
+    pub current: MechanicsScalar,
+    pub minimum: MechanicsScalar,
+    pub maximum: MechanicsScalar,
+    pub observed_tracks_revision: u64,
+    pub observed_revisions: Vec<ObservedComponentRevision>,
+    pub source_cost: SourceCollectionCost,
+}
+
 #[derive(Debug, Clone)]
 pub struct TrackSetRequest {
     pub operation: OperationId,
@@ -123,6 +138,57 @@ pub struct TrackReconciliationReceipt {
 pub struct TrackService;
 
 impl TrackService {
+    pub fn read(
+        state: &EntityState,
+        catalog: &MechanicsCatalog,
+        entity: EntityId,
+        track: &TrackId,
+        operation: &OperationId,
+    ) -> Result<TrackReadReceipt, MechanicsError> {
+        let component = state.component::<TracksComponent>(entity)?.ok_or(
+            MechanicsError::MissingComponent {
+                entity,
+                component: TracksComponent::LABEL,
+            },
+        )?;
+        crate::source::ensure_catalog_version(
+            catalog,
+            entity,
+            TracksComponent::LABEL,
+            component.catalog_version(),
+        )?;
+        let current = component
+            .current(track)
+            .ok_or_else(|| MechanicsError::MissingTrack {
+                entity,
+                track: track.clone(),
+            })?;
+        let revision = state.component_revision::<TracksComponent>(entity)?;
+        let (minimum, maximum, mut observed_revisions, source_cost) =
+            track_bounds(state, catalog, entity, track, operation)?;
+        observed_revisions.push(ObservedComponentRevision {
+            entity,
+            component: MechanicsComponentKind::Tracks,
+            revision: revision.revision(),
+        });
+        observed_revisions.sort_by_key(|value| (value.entity, value.component));
+        observed_revisions.dedup();
+
+        Ok(TrackReadReceipt {
+            catalog_version: catalog.version().clone(),
+            catalog_fingerprint: catalog.fingerprint().to_string(),
+            operation: operation.clone(),
+            entity,
+            track: track.clone(),
+            current,
+            minimum,
+            maximum,
+            observed_tracks_revision: revision.revision(),
+            observed_revisions,
+            source_cost,
+        })
+    }
+
     pub fn spend(
         state: &mut EntityState,
         catalog: &MechanicsCatalog,

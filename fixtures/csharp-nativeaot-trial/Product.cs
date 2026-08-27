@@ -97,7 +97,7 @@ public sealed class Product : IEngineProduct
         {
             throw new InvalidOperationException("exact mechanics contribution did not apply");
         }
-        MechanicsTrackMutationReceipt staminaSpend = _engine.Mechanics.SpendTrack(new MechanicsTrackMutationRequest(_mechanicsEntity, "trial_spend", "trial_spend_source", "stamina", 2, MechanicsRevisionGuard.Exact, mechanicsReceipt.TracksRevision));
+        MechanicsTrackMutationLeaseReceipt staminaSpend = _engine.Mechanics.SpendTrack(new MechanicsTrackMutationRequest(_mechanicsEntity, "trial_spend", "trial_spend_source", "stamina", 2, MechanicsRevisionGuard.Exact, mechanicsReceipt.TracksRevision));
         if (staminaSpend.After != 10)
         {
             throw new InvalidOperationException("exact mechanics spend did not preserve the track bound");

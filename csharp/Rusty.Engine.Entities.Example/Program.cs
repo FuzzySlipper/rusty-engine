@@ -193,12 +193,12 @@ sealed class MechanicsAdapterFake : IMechanicsService
     }
     public MechanicsStatReadReceipt ReadStat(MechanicsStatReadRequest arg0) => throw new NotSupportedException();
     public MechanicsStatEvaluationLeaseReceipt EvaluateStat(MechanicsStatOperationRequest arg0) => throw new NotSupportedException();
-    public MechanicsTrackReadReceipt ReadTrack(MechanicsTrackReadRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackReadLeaseReceipt ReadTrack(MechanicsTrackReadRequest arg0) => throw new NotSupportedException();
     public MechanicsStatMutationLeaseReceipt SetStatBase(MechanicsStatBaseMutationRequest arg0) => throw new NotSupportedException();
-    public MechanicsTrackSetReceipt SetTrack(MechanicsTrackSetRequest arg0) => throw new NotSupportedException();
-    public MechanicsTrackMutationReceipt SpendTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
-    public MechanicsTrackMutationReceipt RestoreTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
-    public MechanicsTrackReconciliationReceipt ReconcileTrack(MechanicsTrackReconciliationRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackSetLeaseReceipt SetTrack(MechanicsTrackSetRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackMutationLeaseReceipt SpendTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackMutationLeaseReceipt RestoreTrack(MechanicsTrackMutationRequest arg0) => throw new NotSupportedException();
+    public MechanicsTrackReconciliationLeaseReceipt ReconcileTrack(MechanicsTrackReconciliationRequest arg0) => throw new NotSupportedException();
 
     private MechanicsEntity Lease()
     {

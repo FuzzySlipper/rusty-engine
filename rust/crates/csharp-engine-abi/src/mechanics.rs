@@ -28,17 +28,27 @@ pub enum NativeMechanicsStackingPolicy {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum NativeMechanicsTrackSetPolicy {
+    #[default]
     RejectOutOfBounds = 0,
     ClampToBounds = 1,
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum NativeMechanicsTrackReconciliationPolicy {
+    #[default]
     PreserveCurrent = 0,
     ClampToMaximum = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsTrackAdjustmentKind {
+    #[default]
+    Spend = 0,
+    Restore = 1,
 }
 
 #[repr(u32)]
@@ -888,11 +898,21 @@ pub struct NativeMechanicsTrackReadRequest {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeMechanicsTrackReadReceipt {
+pub struct NativeMechanicsTrackReadLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub entity_id: u64,
+    pub track: NativeUtf8Slice,
     pub current: i64,
     pub minimum: i64,
     pub maximum: i64,
     pub revision: NativeMechanicsTracksRevision,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1048,7 +1068,18 @@ pub struct NativeMechanicsTrackMutationRequest {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeMechanicsTrackMutationReceipt {
+pub struct NativeMechanicsTrackMutationLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub entity_id: u64,
+    pub track: NativeUtf8Slice,
+    pub kind: NativeMechanicsTrackAdjustmentKind,
     pub requested_amount: i64,
     pub applied_amount: i64,
     pub before: i64,
@@ -1057,10 +1088,22 @@ pub struct NativeMechanicsTrackMutationReceipt {
     pub maximum: i64,
     pub observed_revision: NativeMechanicsTracksRevision,
     pub committed_revision: NativeMechanicsTracksRevision,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeMechanicsTrackSetReceipt {
+pub struct NativeMechanicsTrackSetLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub entity_id: u64,
+    pub track: NativeUtf8Slice,
+    pub policy: NativeMechanicsTrackSetPolicy,
     pub target: i64,
     pub before: i64,
     pub after: i64,
@@ -1068,6 +1111,7 @@ pub struct NativeMechanicsTrackSetReceipt {
     pub maximum: i64,
     pub observed_revision: NativeMechanicsTracksRevision,
     pub committed_revision: NativeMechanicsTracksRevision,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1083,7 +1127,18 @@ pub struct NativeMechanicsTrackReconciliationRequest {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeMechanicsTrackReconciliationReceipt {
+pub struct NativeMechanicsTrackReconciliationLease {
+    pub handle: NativeMechanicsOperationLeaseHandle,
+    pub observed_revisions: *const NativeMechanicsObservedComponentRevisionRow,
+    pub observed_revisions_len: usize,
+    pub catalog_id: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub source: NativeMechanicsSourceIdentity,
+    pub entity_id: u64,
+    pub track: NativeUtf8Slice,
+    pub policy: NativeMechanicsTrackReconciliationPolicy,
     pub before: i64,
     pub after: i64,
     pub minimum: i64,
@@ -1091,4 +1146,5 @@ pub struct NativeMechanicsTrackReconciliationReceipt {
     pub prospective_maximum: i64,
     pub observed_revision: NativeMechanicsTracksRevision,
     pub committed_revision: NativeMechanicsTracksRevision,
+    pub source_cost: NativeMechanicsSourceCollectionCost,
 }

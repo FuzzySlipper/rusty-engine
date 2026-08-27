@@ -18,8 +18,8 @@ use gameplay_mechanics::{
     StackingGroupId, StackingPolicy, StatBaseMutationRequest, StatContribution,
     StatContributionDefinition, StatDecision, StatDefinition, StatId, StatService, StatValue,
     StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackMaximum, TrackMutationRequest,
-    TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
-    TrackSetRequest, TrackValue, TracksComponent,
+    TrackReadReceipt, TrackReconciliationPolicy, TrackReconciliationRequest, TrackService,
+    TrackSetPolicy, TrackSetRequest, TrackValue, TracksComponent,
 };
 
 use crate::composition::{borrowed_utf8, ABI_OK};
@@ -102,6 +102,9 @@ enum OperationLeaseRows {
         observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
     },
     StatMutation {
+        observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
+    },
+    Track {
         observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
     },
 }
@@ -2627,7 +2630,7 @@ unsafe extern "C" fn evaluate_stat(
 unsafe extern "C" fn read_track(
     context: *mut c_void,
     request: *const NativeMechanicsTrackReadRequest,
-    result: *mut NativeMechanicsTrackReadReceipt,
+    result: *mut NativeMechanicsTrackReadLease,
 ) -> i32 {
     let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
         return 0;
@@ -2640,39 +2643,52 @@ unsafe extern "C" fn read_track(
     ) else {
         return 0;
     };
-    let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+    let Some(catalog_id) = bridge
+        .binding(request.entity)
+        .map(|binding| binding.catalog)
+    else {
         return 0;
     };
-    let Ok(component) = state.component::<TracksComponent>(entity) else {
+    let receipt: TrackReadReceipt = {
+        let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+            return 0;
+        };
+        let Ok(receipt) = TrackService::read(state, catalog, entity, &track, &operation) else {
+            return 0;
+        };
+        receipt
+    };
+    let mut lease_text = CatalogLeaseText::default();
+    let observed_revisions = receipt
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsTrackReadLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        entity_id: receipt.entity.raw(),
+        track: lease_text.copy(receipt.track.as_str()),
+        current: receipt.current.get(),
+        minimum: receipt.minimum.get(),
+        maximum: receipt.maximum.get(),
+        revision: tracks_revision(receipt.entity, receipt.observed_tracks_revision),
+        source_cost: native_source_cost(receipt.source_cost),
+    };
+    let Some((handle, observed_revisions)) =
+        insert_track_operation_lease(bridge, lease_text, observed_revisions)
+    else {
         return 0;
     };
-    let Some(component) = component else {
-        return 0;
-    };
-    let Some(current) = component.current(&track) else {
-        return 0;
-    };
-    let Some(definition) = catalog.track(&track) else {
-        return 0;
-    };
-    let maximum = match &definition.maximum {
-        TrackMaximum::Fixed { value } => Ok(*value),
-        TrackMaximum::Stat { stat } => {
-            StatService::evaluate(state, catalog, entity, stat, &operation, &[])
-                .map(|evaluation| evaluation.value)
-        }
-    };
-    let Ok(maximum) = maximum else {
-        return 0;
-    };
-    let Ok(revision) = state.component_revision::<TracksComponent>(entity) else {
-        return 0;
-    };
-    *result = NativeMechanicsTrackReadReceipt {
-        current: current.get(),
-        minimum: definition.minimum.get(),
-        maximum: maximum.get(),
-        revision: tracks_revision(entity, revision.revision()),
+    *result = NativeMechanicsTrackReadLease {
+        handle,
+        observed_revisions,
+        ..metadata
     };
     ABI_OK
 }
@@ -2801,7 +2817,7 @@ unsafe extern "C" fn destroy_operation_lease(
 unsafe extern "C" fn set_track(
     context: *mut c_void,
     request: *const NativeMechanicsTrackSetRequest,
-    result: *mut NativeMechanicsTrackSetReceipt,
+    result: *mut NativeMechanicsTrackSetLease,
 ) -> i32 {
     let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
         return 0;
@@ -2821,50 +2837,90 @@ unsafe extern "C" fn set_track(
         NativeMechanicsTrackSetPolicy::RejectOutOfBounds => TrackSetPolicy::RejectOutOfBounds,
         NativeMechanicsTrackSetPolicy::ClampToBounds => TrackSetPolicy::ClampToBounds,
     };
-    let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
-        return 0;
-    };
-    let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
-        return 0;
-    };
-    let Some(expected_revision) = guarded_revision(
-        request.revision_guard,
-        request.expected_revision.entity_id,
-        request.expected_revision.revision,
-        request.expected_revision.component,
-        entity,
-        actual,
-        NativeMechanicsRevisionComponent::Tracks,
-    ) else {
+    let Some(catalog_id) = bridge
+        .binding(request.entity)
+        .map(|binding| binding.catalog)
+    else {
         return 0;
     };
     let request_source = gameplay_mechanics::SourceInstanceIdentity::Request {
         operation: operation.clone(),
         instance: source,
     };
-    let Ok(receipt) = TrackService::set_under_policy(
-        state,
-        catalog,
-        TrackSetRequest {
-            operation,
-            source: request_source,
+    let receipt = {
+        let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
+            return 0;
+        };
+        let Some(expected_revision) = guarded_revision(
+            request.revision_guard,
+            request.expected_revision.entity_id,
+            request.expected_revision.revision,
+            request.expected_revision.component,
             entity,
-            track,
-            value,
-            policy,
-            expected_revision,
-        },
-    ) else {
-        return 0;
+            actual,
+            NativeMechanicsRevisionComponent::Tracks,
+        ) else {
+            return 0;
+        };
+        let Ok(receipt) = TrackService::set_under_policy(
+            state,
+            catalog,
+            TrackSetRequest {
+                operation,
+                source: request_source,
+                entity,
+                track,
+                value,
+                policy,
+                expected_revision,
+            },
+        ) else {
+            return 0;
+        };
+        receipt
     };
-    *result = NativeMechanicsTrackSetReceipt {
+    let mut lease_text = CatalogLeaseText::default();
+    let observed_revisions = receipt
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsTrackSetLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        entity_id: receipt.entity.raw(),
+        track: lease_text.copy(receipt.track.as_str()),
+        policy: match receipt.policy {
+            TrackSetPolicy::RejectOutOfBounds => NativeMechanicsTrackSetPolicy::RejectOutOfBounds,
+            TrackSetPolicy::ClampToBounds => NativeMechanicsTrackSetPolicy::ClampToBounds,
+        },
         target: receipt.requested.get(),
         before: receipt.before.get(),
         after: receipt.after.get(),
         minimum: receipt.minimum.get(),
         maximum: receipt.maximum.get(),
-        observed_revision: tracks_revision(entity, receipt.observed_tracks_revision),
-        committed_revision: tracks_revision(entity, receipt.committed_tracks_revision),
+        observed_revision: tracks_revision(receipt.entity, receipt.observed_tracks_revision),
+        committed_revision: tracks_revision(receipt.entity, receipt.committed_tracks_revision),
+        source_cost: native_source_cost(receipt.source_cost),
+    };
+    let Some((handle, observed_revisions)) =
+        insert_track_operation_lease(bridge, lease_text, observed_revisions)
+    else {
+        return 0;
+    };
+    *result = NativeMechanicsTrackSetLease {
+        handle,
+        observed_revisions,
+        ..metadata
     };
     ABI_OK
 }
@@ -2872,7 +2928,7 @@ unsafe extern "C" fn set_track(
 unsafe extern "C" fn spend_track(
     context: *mut c_void,
     request: *const NativeMechanicsTrackMutationRequest,
-    result: *mut NativeMechanicsTrackMutationReceipt,
+    result: *mut NativeMechanicsTrackMutationLease,
 ) -> i32 {
     mutate_track(context, request, result, TrackAdjustmentKind::Spend)
 }
@@ -2880,7 +2936,7 @@ unsafe extern "C" fn spend_track(
 unsafe extern "C" fn restore_track(
     context: *mut c_void,
     request: *const NativeMechanicsTrackMutationRequest,
-    result: *mut NativeMechanicsTrackMutationReceipt,
+    result: *mut NativeMechanicsTrackMutationLease,
 ) -> i32 {
     mutate_track(context, request, result, TrackAdjustmentKind::Restore)
 }
@@ -2888,7 +2944,7 @@ unsafe extern "C" fn restore_track(
 unsafe fn mutate_track(
     context: *mut c_void,
     request: *const NativeMechanicsTrackMutationRequest,
-    result: *mut NativeMechanicsTrackMutationReceipt,
+    result: *mut NativeMechanicsTrackMutationLease,
     kind: TrackAdjustmentKind,
 ) -> i32 {
     let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
@@ -2905,60 +2961,99 @@ unsafe fn mutate_track(
     ) else {
         return 0;
     };
-    let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+    let Some(catalog_id) = bridge
+        .binding(request.entity)
+        .map(|binding| binding.catalog)
+    else {
         return 0;
     };
-    let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
-        return 0;
+    let receipt = {
+        let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
+            return 0;
+        };
+        let Some(expected_revision) = guarded_revision(
+            request.revision_guard,
+            request.expected_revision.entity_id,
+            request.expected_revision.revision,
+            request.expected_revision.component,
+            entity,
+            actual,
+            NativeMechanicsRevisionComponent::Tracks,
+        ) else {
+            return 0;
+        };
+        let request = TrackMutationRequest {
+            operation: operation.clone(),
+            source: gameplay_mechanics::SourceInstanceIdentity::Request {
+                operation,
+                instance: source,
+            },
+            entity,
+            track,
+            amount,
+            kind,
+            expected_revision,
+        };
+        let receipt = match kind {
+            TrackAdjustmentKind::Spend => TrackService::spend(state, catalog, request),
+            TrackAdjustmentKind::Restore => TrackService::restore(state, catalog, request),
+        };
+        let Ok(receipt) = receipt else {
+            return 0;
+        };
+        receipt
     };
-    let Some(expected_revision) = guarded_revision(
-        request.revision_guard,
-        request.expected_revision.entity_id,
-        request.expected_revision.revision,
-        request.expected_revision.component,
-        entity,
-        actual,
-        NativeMechanicsRevisionComponent::Tracks,
-    ) else {
-        return 0;
-    };
-    let request = TrackMutationRequest {
-        operation: operation.clone(),
-        source: gameplay_mechanics::SourceInstanceIdentity::Request {
-            operation,
-            instance: source,
+    let mut lease_text = CatalogLeaseText::default();
+    let observed_revisions = receipt
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsTrackMutationLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        entity_id: receipt.entity.raw(),
+        track: lease_text.copy(receipt.track.as_str()),
+        kind: match receipt.kind {
+            TrackAdjustmentKind::Spend => NativeMechanicsTrackAdjustmentKind::Spend,
+            TrackAdjustmentKind::Restore => NativeMechanicsTrackAdjustmentKind::Restore,
         },
-        entity,
-        track,
-        amount,
-        kind,
-        expected_revision,
+        requested_amount: receipt.requested_amount.get(),
+        applied_amount: receipt.applied_amount.get(),
+        before: receipt.before.get(),
+        after: receipt.after.get(),
+        minimum: receipt.minimum.get(),
+        maximum: receipt.maximum.get(),
+        observed_revision: tracks_revision(receipt.entity, receipt.observed_tracks_revision),
+        committed_revision: tracks_revision(receipt.entity, receipt.committed_tracks_revision),
+        source_cost: native_source_cost(receipt.source_cost),
     };
-    let receipt = match kind {
-        TrackAdjustmentKind::Spend => TrackService::spend(state, catalog, request),
-        TrackAdjustmentKind::Restore => TrackService::restore(state, catalog, request),
-    };
-    let Ok(receipt) = receipt else {
+    let Some((handle, observed_revisions)) =
+        insert_track_operation_lease(bridge, lease_text, observed_revisions)
+    else {
         return 0;
     };
-    *result = track_mutation_receipt(
-        entity,
-        receipt.requested_amount.get(),
-        receipt.applied_amount.get(),
-        receipt.before.get(),
-        receipt.after.get(),
-        receipt.minimum.get(),
-        receipt.maximum.get(),
-        receipt.observed_tracks_revision,
-        receipt.committed_tracks_revision,
-    );
+    *result = NativeMechanicsTrackMutationLease {
+        handle,
+        observed_revisions,
+        ..metadata
+    };
     ABI_OK
 }
 
 unsafe extern "C" fn reconcile_track(
     context: *mut c_void,
     request: *const NativeMechanicsTrackReconciliationRequest,
-    result: *mut NativeMechanicsTrackReconciliationReceipt,
+    result: *mut NativeMechanicsTrackReconciliationLease,
 ) -> i32 {
     let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
         return 0;
@@ -2982,50 +3077,94 @@ unsafe extern "C" fn reconcile_track(
             TrackReconciliationPolicy::ClampToMaximum
         }
     };
-    let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
-        return 0;
-    };
-    let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
-        return 0;
-    };
-    let Some(expected_revision) = guarded_revision(
-        request.revision_guard,
-        request.expected_revision.entity_id,
-        request.expected_revision.revision,
-        request.expected_revision.component,
-        entity,
-        actual,
-        NativeMechanicsRevisionComponent::Tracks,
-    ) else {
+    let Some(catalog_id) = bridge
+        .binding(request.entity)
+        .map(|binding| binding.catalog)
+    else {
         return 0;
     };
     let request_source = gameplay_mechanics::SourceInstanceIdentity::Request {
         operation: operation.clone(),
         instance: source,
     };
-    let Ok(receipt) = TrackService::reconcile_to_maximum(
-        state,
-        catalog,
-        TrackReconciliationRequest {
-            operation,
-            source: request_source,
+    let receipt = {
+        let Some((state, catalog, entity)) = bridge.state_and_catalog_mut(request.entity) else {
+            return 0;
+        };
+        let Ok(actual) = state.component_revision::<TracksComponent>(entity) else {
+            return 0;
+        };
+        let Some(expected_revision) = guarded_revision(
+            request.revision_guard,
+            request.expected_revision.entity_id,
+            request.expected_revision.revision,
+            request.expected_revision.component,
             entity,
-            track,
-            prospective_maximum,
-            policy,
-            expected_revision,
-        },
-    ) else {
-        return 0;
+            actual,
+            NativeMechanicsRevisionComponent::Tracks,
+        ) else {
+            return 0;
+        };
+        let Ok(receipt) = TrackService::reconcile_to_maximum(
+            state,
+            catalog,
+            TrackReconciliationRequest {
+                operation,
+                source: request_source,
+                entity,
+                track,
+                prospective_maximum,
+                policy,
+                expected_revision,
+            },
+        ) else {
+            return 0;
+        };
+        receipt
     };
-    *result = NativeMechanicsTrackReconciliationReceipt {
+    let mut lease_text = CatalogLeaseText::default();
+    let observed_revisions = receipt
+        .observed_revisions
+        .iter()
+        .map(native_observed_revision)
+        .collect::<Vec<_>>();
+    let metadata = NativeMechanicsTrackReconciliationLease {
+        handle: NativeMechanicsOperationLeaseHandle::default(),
+        observed_revisions: std::ptr::null(),
+        observed_revisions_len: observed_revisions.len(),
+        catalog_id,
+        catalog_version: lease_text.copy(receipt.catalog_version.as_str()),
+        catalog_fingerprint: lease_text.copy(&receipt.catalog_fingerprint),
+        operation: lease_text.copy(receipt.operation.as_str()),
+        source: native_source_identity(&receipt.source, &mut lease_text),
+        entity_id: receipt.entity.raw(),
+        track: lease_text.copy(receipt.track.as_str()),
+        policy: match receipt.policy {
+            TrackReconciliationPolicy::PreserveCurrent => {
+                NativeMechanicsTrackReconciliationPolicy::PreserveCurrent
+            }
+            TrackReconciliationPolicy::ClampToMaximum => {
+                NativeMechanicsTrackReconciliationPolicy::ClampToMaximum
+            }
+        },
         before: receipt.before.get(),
         after: receipt.after.get(),
         minimum: receipt.minimum.get(),
         current_maximum: receipt.current_maximum.get(),
         prospective_maximum: receipt.prospective_maximum.get(),
-        observed_revision: tracks_revision(entity, receipt.observed_tracks_revision),
-        committed_revision: tracks_revision(entity, receipt.committed_tracks_revision),
+        observed_revision: tracks_revision(receipt.entity, receipt.observed_tracks_revision),
+        committed_revision: tracks_revision(receipt.entity, receipt.committed_tracks_revision),
+        source_cost: native_source_cost(receipt.source_cost),
+    };
+    let Some((handle, observed_revisions)) =
+        insert_track_operation_lease(bridge, lease_text, observed_revisions)
+    else {
+        return 0;
+    };
+    *result = NativeMechanicsTrackReconciliationLease {
+        handle,
+        observed_revisions,
+        ..metadata
     };
     ABI_OK
 }
@@ -3465,6 +3604,28 @@ fn native_stat_decision(
         contribution_ratio_denominator: ratio_denominator,
     }
 }
+fn insert_track_operation_lease(
+    bridge: &mut RuntimeMechanicsBridge,
+    text: CatalogLeaseText,
+    observed_revisions: Vec<NativeMechanicsObservedComponentRevisionRow>,
+) -> Option<(
+    NativeMechanicsOperationLeaseHandle,
+    *const NativeMechanicsObservedComponentRevisionRow,
+)> {
+    let handle = bridge.insert_operation_lease(OperationLeaseBacking {
+        _text: text.values,
+        rows: OperationLeaseRows::Track { observed_revisions },
+    })?;
+    let OperationLeaseRows::Track { observed_revisions } = &bridge
+        .operation_leases
+        .get(&handle.value)
+        .expect("just inserted track operation lease")
+        .rows
+    else {
+        unreachable!("track operation lease row kind matches its reader")
+    };
+    Some((handle, observed_revisions.as_ptr()))
+}
 fn guarded_revision(
     guard: NativeMechanicsRevisionGuard,
     expected_entity: u64,
@@ -3646,29 +3807,6 @@ unsafe fn bridge_request_result<'a, T, R>(
             .map(|(bridge, request)| (bridge, request, unsafe { &mut *result }))
     }
 }
-fn track_mutation_receipt(
-    entity: EntityId,
-    requested_amount: i64,
-    applied_amount: i64,
-    before: i64,
-    after: i64,
-    minimum: i64,
-    maximum: i64,
-    observed_revision: u64,
-    committed_revision: u64,
-) -> NativeMechanicsTrackMutationReceipt {
-    NativeMechanicsTrackMutationReceipt {
-        requested_amount,
-        applied_amount,
-        before,
-        after,
-        minimum,
-        maximum,
-        observed_revision: tracks_revision(entity, observed_revision),
-        committed_revision: tracks_revision(entity, committed_revision),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3891,7 +4029,7 @@ mod tests {
             revision_guard: NativeMechanicsRevisionGuard::Exact,
             expected_revision: entity_receipt.tracks_revision,
         };
-        let mut rejected_cross_entity = NativeMechanicsTrackMutationReceipt::default();
+        let mut rejected_cross_entity = NativeMechanicsTrackMutationLease::default();
         assert_eq!(
             unsafe { spend_track(context, &cross_entity_request, &mut rejected_cross_entity) },
             0
@@ -3951,6 +4089,29 @@ mod tests {
             ABI_OK
         );
 
+        let mut track_read = NativeMechanicsTrackReadLease::default();
+        assert_eq!(
+            unsafe {
+                read_track(
+                    context,
+                    &NativeMechanicsTrackReadRequest {
+                        entity,
+                        track: utf8("stamina"),
+                        operation: utf8("read_stamina"),
+                    },
+                    &mut track_read,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(track_read.current, 12);
+        assert_eq!(track_read.maximum, 12);
+        assert!(track_read.observed_revisions_len >= 2);
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, track_read.handle) },
+            ABI_OK
+        );
+
         let spend_request = NativeMechanicsTrackMutationRequest {
             entity,
             operation: utf8("spend"),
@@ -3960,7 +4121,7 @@ mod tests {
             revision_guard: NativeMechanicsRevisionGuard::Exact,
             expected_revision: entity_receipt.tracks_revision,
         };
-        let mut spend = NativeMechanicsTrackMutationReceipt::default();
+        let mut spend = NativeMechanicsTrackMutationLease::default();
         assert_eq!(
             unsafe { spend_track(context, &spend_request, &mut spend) },
             ABI_OK
@@ -3968,6 +4129,7 @@ mod tests {
         assert_eq!(spend.before, 12);
         assert_eq!(spend.after, 10);
         assert_eq!(spend.applied_amount, 2);
+        assert_eq!(spend.kind, NativeMechanicsTrackAdjustmentKind::Spend);
         let set_request = NativeMechanicsTrackSetRequest {
             entity,
             operation: utf8("set"),
@@ -3978,13 +4140,74 @@ mod tests {
             revision_guard: NativeMechanicsRevisionGuard::Exact,
             expected_revision: spend.committed_revision,
         };
-        let mut set = NativeMechanicsTrackSetReceipt::default();
+        let mut set = NativeMechanicsTrackSetLease::default();
         assert_eq!(
             unsafe { set_track(context, &set_request, &mut set) },
             ABI_OK
         );
         assert_eq!(set.target, 9);
         assert_eq!(set.after, 9);
+        let mut restore = NativeMechanicsTrackMutationLease::default();
+        assert_eq!(
+            unsafe {
+                restore_track(
+                    context,
+                    &NativeMechanicsTrackMutationRequest {
+                        entity,
+                        operation: utf8("restore"),
+                        source: utf8("restore_source"),
+                        track: utf8("stamina"),
+                        amount: 10,
+                        revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_revision: set.committed_revision,
+                    },
+                    &mut restore,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(restore.after, 12);
+        assert_eq!(restore.applied_amount, 3);
+        assert_eq!(restore.kind, NativeMechanicsTrackAdjustmentKind::Restore);
+        let mut reconciliation = NativeMechanicsTrackReconciliationLease::default();
+        assert_eq!(
+            unsafe {
+                reconcile_track(
+                    context,
+                    &NativeMechanicsTrackReconciliationRequest {
+                        entity,
+                        operation: utf8("reconcile"),
+                        source: utf8("reconcile_source"),
+                        track: utf8("stamina"),
+                        prospective_maximum: 10,
+                        policy: NativeMechanicsTrackReconciliationPolicy::ClampToMaximum,
+                        revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_revision: restore.committed_revision,
+                    },
+                    &mut reconciliation,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(reconciliation.after, 10);
+        assert_eq!(reconciliation.current_maximum, 12);
+        assert_eq!(reconciliation.prospective_maximum, 10);
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, spend.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, set.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, restore.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_operation_lease(context, reconciliation.handle) },
+            ABI_OK
+        );
         let mut stat_mutation = NativeMechanicsStatMutationLease::default();
         assert_eq!(
             unsafe {
