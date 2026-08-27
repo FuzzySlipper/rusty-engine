@@ -59,6 +59,43 @@ pub enum NativeMechanicsRevisionComponent {
     Equipment = 6,
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsDamageResponseKind {
+    #[default]
+    Prevent = 0,
+    FlatReduction = 1,
+    Scale = 2,
+    Absorb = 3,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsEffectStackingKind {
+    #[default]
+    IndependentByProvenance = 0,
+    Refresh = 1,
+    Replace = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsItemKind {
+    #[default]
+    Fungible = 0,
+    Unique = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMechanicsActiveEffectProvenanceKind {
+    #[default]
+    Intrinsic = 0,
+    Effect = 1,
+    EquippedItem = 2,
+    Request = 3,
+}
+
 /// The mechanics mirror intentionally follows the product's EntityWorld lifecycle.
 /// It is not a second source of product identity.
 #[repr(u32)]
@@ -124,6 +161,18 @@ pub struct NativeMechanicsCatalogCreateRequest {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsText {
+    pub value: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsSourceDefinitionRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub id: NativeUtf8Slice,
+    pub priority: i32,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeMechanicsStatDefinitionRequest {
     pub catalog: NativeMechanicsCatalogHandle,
     pub id: NativeUtf8Slice,
@@ -153,6 +202,76 @@ pub struct NativeMechanicsContributionDefinitionRequest {
     pub ratio_denominator: u32,
     pub stacking_group: NativeUtf8Slice,
     pub stacking: NativeMechanicsStackingPolicy,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsDamageKindDefinitionRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsDamageResponseDefinitionRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub source: NativeUtf8Slice,
+    pub kind: NativeMechanicsDamageResponseKind,
+    pub selector_is_exact: bool,
+    pub selector_damage_kind: NativeUtf8Slice,
+    pub amount: i64,
+    pub ratio_numerator: u32,
+    pub ratio_denominator: u32,
+    pub stacking_group: NativeUtf8Slice,
+    pub stacking: NativeMechanicsStackingPolicy,
+    pub absorb_track: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEffectDefinitionRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub id: NativeUtf8Slice,
+    pub stacking_group: NativeUtf8Slice,
+    pub stacking: NativeMechanicsEffectStackingKind,
+    pub maximum_instances: u16,
+    pub maximum_stacks: u16,
+    pub sources: *const NativeMechanicsText,
+    pub sources_len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsCapacityMetricDefinitionRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemCapacityCostInput {
+    pub metric: NativeUtf8Slice,
+    pub units: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsItemDefinitionRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub id: NativeUtf8Slice,
+    pub kind: NativeMechanicsItemKind,
+    pub maximum_quantity: u64,
+    pub classifications: *const NativeMechanicsText,
+    pub classifications_len: usize,
+    pub capacity_costs: *const NativeMechanicsItemCapacityCostInput,
+    pub capacity_costs_len: usize,
+    pub has_equipment: bool,
+    pub required_slots: u16,
+    pub exclusive_group: NativeUtf8Slice,
+    pub sources: *const NativeMechanicsText,
+    pub sources_len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsEquipmentSlotDefinitionRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub id: NativeUtf8Slice,
+    pub allowed_classifications: *const NativeMechanicsText,
+    pub allowed_classifications_len: usize,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -189,6 +308,84 @@ pub struct NativeMechanicsIntrinsicSourceRequest {
     pub entity: NativeMechanicsEntityHandle,
     pub instance: NativeUtf8Slice,
     pub definition: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialStatValue {
+    pub stat: NativeUtf8Slice,
+    pub base: i64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialTrackValue {
+    pub track: NativeUtf8Slice,
+    pub current: i64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialIntrinsicSource {
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialActiveEffect {
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+    pub provenance_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub provenance_entity_id: u64,
+    pub provenance_effect: NativeUtf8Slice,
+    pub provenance_stack: u16,
+    pub provenance_source: NativeUtf8Slice,
+    pub provenance_item_entity_id: u64,
+    pub provenance_operation: NativeUtf8Slice,
+    pub provenance_instance: NativeUtf8Slice,
+    pub stacks: u16,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialInventoryStack {
+    pub definition: NativeUtf8Slice,
+    pub quantity: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialInventoryCapacityLimit {
+    pub metric: NativeUtf8Slice,
+    pub maximum: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialEquipmentAssignment {
+    pub slot: NativeUtf8Slice,
+    pub item_entity_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsInitialComponentsRequest {
+    pub entity: NativeMechanicsEntityHandle,
+    pub has_stats: bool,
+    pub stats: *const NativeMechanicsInitialStatValue,
+    pub stats_len: usize,
+    pub has_tracks: bool,
+    pub tracks: *const NativeMechanicsInitialTrackValue,
+    pub tracks_len: usize,
+    pub has_intrinsic_sources: bool,
+    pub intrinsic_sources: *const NativeMechanicsInitialIntrinsicSource,
+    pub intrinsic_sources_len: usize,
+    pub has_active_effects: bool,
+    pub active_effects: *const NativeMechanicsInitialActiveEffect,
+    pub active_effects_len: usize,
+    pub has_inventory: bool,
+    pub inventory_stacks: *const NativeMechanicsInitialInventoryStack,
+    pub inventory_stacks_len: usize,
+    pub inventory_capacity_limits: *const NativeMechanicsInitialInventoryCapacityLimit,
+    pub inventory_capacity_limits_len: usize,
+    pub has_item: bool,
+    pub item_definition: NativeUtf8Slice,
+    pub has_equipment: bool,
+    pub equipment_assignments: *const NativeMechanicsInitialEquipmentAssignment,
+    pub equipment_assignments_len: usize,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]

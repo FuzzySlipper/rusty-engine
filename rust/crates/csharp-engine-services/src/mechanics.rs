@@ -4,13 +4,16 @@ use core_ids::EntityId;
 use csharp_engine_abi::*;
 use entity_state::{ComponentRevision, EntityAuthoringService, EntityDefinition, EntityState};
 use gameplay_mechanics::{
-    gameplay_component_registry, validate_state_against_catalog, ActiveEffectsComponent,
-    CatalogVersion, EquipmentComponent, ExactRatio, IntrinsicSourceBinding,
-    IntrinsicSourcesComponent, InventoryComponent, ItemComponent, MechanicsCatalog,
-    MechanicsCatalogDefinition, MechanicsScalar, OperationId, SourceDefinition, SourceDefinitionId,
-    SourceInstanceId, StackingGroupId, StackingPolicy, StatBaseMutationRequest, StatContribution,
-    StatContributionDefinition, StatDefinition, StatId, StatService, StatValue, StatsComponent,
-    TrackAdjustmentKind, TrackDefinition, TrackMaximum, TrackMutationRequest,
+    gameplay_component_registry, validate_state_against_catalog, ActiveEffectInstance,
+    ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion, DamageKindDefinition,
+    DamageKindSelector, DamageResponseDefinition, EffectDefinition, EffectStackingPolicy,
+    EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition, ExactRatio,
+    IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit, InventoryComponent,
+    ItemCapacityCost, ItemComponent, ItemDefinition, ItemEquipmentPolicy, ItemKind, ItemStack,
+    MechanicsCatalog, MechanicsCatalogDefinition, MechanicsScalar, OperationId, SourceDefinition,
+    SourceDefinitionId, SourceInstanceId, StackingGroupId, StackingPolicy, StatBaseMutationRequest,
+    StatContribution, StatContributionDefinition, StatDefinition, StatId, StatService, StatValue,
+    StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackMaximum, TrackMutationRequest,
     TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
     TrackSetRequest, TrackValue, TracksComponent,
 };
@@ -23,6 +26,11 @@ struct CatalogBuilder {
     stats: Vec<StatDefinition>,
     tracks: Vec<TrackDefinition>,
     sources: BTreeMap<SourceDefinitionId, SourceDefinition>,
+    damage_kinds: Vec<DamageKindDefinition>,
+    effects: Vec<EffectDefinition>,
+    capacity_metrics: Vec<CapacityMetricDefinition>,
+    items: Vec<ItemDefinition>,
+    equipment_slots: Vec<EquipmentSlotDefinition>,
 }
 
 struct CatalogSlot {
@@ -125,9 +133,14 @@ struct EntityBinding {
     catalog: u64,
     entity: EntityId,
     identity: String,
-    stats: Vec<StatValue>,
-    tracks: Vec<TrackValue>,
-    intrinsic_sources: Vec<IntrinsicSourceBinding>,
+    stats: Option<Vec<StatValue>>,
+    tracks: Option<Vec<TrackValue>>,
+    intrinsic_sources: Option<Vec<IntrinsicSourceBinding>>,
+    active_effects: Option<Vec<ActiveEffectInstance>>,
+    inventory: Option<(Vec<ItemStack>, Vec<InventoryCapacityLimit>)>,
+    item: Option<gameplay_mechanics::ItemDefinitionId>,
+    equipment: Option<Vec<EquipmentAssignment>>,
+    initial_components_set: bool,
     committed: bool,
 }
 
@@ -188,6 +201,13 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         define_stat,
         define_track,
         define_contribution,
+        define_source,
+        define_damage_kind,
+        define_damage_response,
+        define_effect,
+        define_capacity_metric,
+        define_item,
+        define_equipment_slot,
         admit_catalog,
         destroy_catalog,
         bind_entity,
@@ -195,6 +215,7 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         set_initial_stat,
         set_initial_track,
         bind_intrinsic_source,
+        set_initial_components,
         commit_entity,
         set_entity_lifecycle,
         destroy_entity,
@@ -241,6 +262,11 @@ unsafe extern "C" fn create_catalog(
                 stats: Vec::new(),
                 tracks: Vec::new(),
                 sources: BTreeMap::new(),
+                damage_kinds: Vec::new(),
+                effects: Vec::new(),
+                capacity_metrics: Vec::new(),
+                items: Vec::new(),
+                equipment_slots: Vec::new(),
             }),
             catalog: None,
             world: MechanicsWorld::new(state),
@@ -397,6 +423,342 @@ unsafe extern "C" fn define_contribution(
     ABI_OK
 }
 
+unsafe extern "C" fn define_source(
+    context: *mut c_void,
+    request: *const NativeMechanicsSourceDefinitionRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let (Ok(id), Ok(priority)) = (
+        unsafe { text(request.id, "mechanics source id") }.and_then(parse::<SourceDefinitionId>),
+        i16::try_from(request.priority),
+    ) else {
+        return 0;
+    };
+    let Some(builder) = bridge
+        .catalog_slot_mut(request.catalog)
+        .and_then(|slot| slot.builder.as_mut())
+    else {
+        return 0;
+    };
+    if builder.sources.contains_key(&id) {
+        return 0;
+    }
+    builder.sources.insert(
+        id.clone(),
+        SourceDefinition {
+            id,
+            priority,
+            stat_contributions: Vec::new(),
+            damage_responses: Vec::new(),
+        },
+    );
+    ABI_OK
+}
+
+unsafe extern "C" fn define_damage_kind(
+    context: *mut c_void,
+    request: *const NativeMechanicsDamageKindDefinitionRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let Ok(id) = unsafe { text(request.id, "mechanics damage kind") }
+        .and_then(parse::<gameplay_mechanics::DamageKindId>)
+    else {
+        return 0;
+    };
+    let Some(builder) = bridge
+        .catalog_slot_mut(request.catalog)
+        .and_then(|slot| slot.builder.as_mut())
+    else {
+        return 0;
+    };
+    builder.damage_kinds.push(DamageKindDefinition { id });
+    ABI_OK
+}
+
+unsafe extern "C" fn define_damage_response(
+    context: *mut c_void,
+    request: *const NativeMechanicsDamageResponseDefinitionRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let Ok(source) = unsafe { text(request.source, "mechanics damage response source") }
+        .and_then(parse::<SourceDefinitionId>)
+    else {
+        return 0;
+    };
+    let selector = if request.selector_is_exact {
+        match unsafe { text(request.selector_damage_kind, "mechanics damage selector") }
+            .and_then(parse::<gameplay_mechanics::DamageKindId>)
+        {
+            Ok(damage_kind) => DamageKindSelector::Exact { damage_kind },
+            Err(_) => return 0,
+        }
+    } else {
+        DamageKindSelector::Any
+    };
+    let stacking = match request.stacking {
+        NativeMechanicsStackingPolicy::Sum => StackingPolicy::Sum,
+        NativeMechanicsStackingPolicy::Highest => StackingPolicy::Highest,
+        NativeMechanicsStackingPolicy::Lowest => StackingPolicy::Lowest,
+        NativeMechanicsStackingPolicy::UniqueBySource => StackingPolicy::UniqueBySource,
+    };
+    let response = match request.kind {
+        NativeMechanicsDamageResponseKind::Prevent => {
+            let Ok(stacking_group) =
+                unsafe { text(request.stacking_group, "mechanics damage stacking group") }
+                    .and_then(parse::<StackingGroupId>)
+            else {
+                return 0;
+            };
+            DamageResponseDefinition::Prevent {
+                selector,
+                stacking_group,
+                stacking,
+            }
+        }
+        NativeMechanicsDamageResponseKind::FlatReduction => {
+            let (Ok(amount), Ok(stacking_group)) = (
+                scalar(request.amount),
+                unsafe { text(request.stacking_group, "mechanics damage stacking group") }
+                    .and_then(parse::<StackingGroupId>),
+            ) else {
+                return 0;
+            };
+            DamageResponseDefinition::FlatReduction {
+                selector,
+                amount,
+                stacking_group,
+                stacking,
+            }
+        }
+        NativeMechanicsDamageResponseKind::Scale => {
+            let (Ok(ratio), Ok(stacking_group)) = (
+                ratio(request.ratio_numerator, request.ratio_denominator),
+                unsafe { text(request.stacking_group, "mechanics damage stacking group") }
+                    .and_then(parse::<StackingGroupId>),
+            ) else {
+                return 0;
+            };
+            DamageResponseDefinition::Scale {
+                selector,
+                ratio,
+                stacking_group,
+                stacking,
+            }
+        }
+        NativeMechanicsDamageResponseKind::Absorb => {
+            let Ok(track) = unsafe { text(request.absorb_track, "mechanics absorb track") }
+                .and_then(parse::<gameplay_mechanics::TrackId>)
+            else {
+                return 0;
+            };
+            DamageResponseDefinition::Absorb { selector, track }
+        }
+    };
+    let Some(builder) = bridge
+        .catalog_slot_mut(request.catalog)
+        .and_then(|slot| slot.builder.as_mut())
+    else {
+        return 0;
+    };
+    let Some(definition) = builder.sources.get_mut(&source) else {
+        return 0;
+    };
+    definition.damage_responses.push(response);
+    ABI_OK
+}
+
+unsafe extern "C" fn define_effect(
+    context: *mut c_void,
+    request: *const NativeMechanicsEffectDefinitionRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let (Ok(id), Ok(stacking_group), Ok(sources)) = (
+        unsafe { text(request.id, "mechanics effect id") }
+            .and_then(parse::<gameplay_mechanics::EffectDefinitionId>),
+        unsafe { text(request.stacking_group, "mechanics effect stacking group") }
+            .and_then(parse::<StackingGroupId>),
+        unsafe {
+            text_slice(
+                request.sources,
+                request.sources_len,
+                "mechanics effect sources",
+            )
+        }
+        .and_then(parse_text_values::<SourceDefinitionId>),
+    ) else {
+        return 0;
+    };
+    let stacking = match request.stacking {
+        NativeMechanicsEffectStackingKind::IndependentByProvenance => {
+            EffectStackingPolicy::IndependentByProvenance {
+                maximum_instances: request.maximum_instances,
+            }
+        }
+        NativeMechanicsEffectStackingKind::Refresh => EffectStackingPolicy::Refresh,
+        NativeMechanicsEffectStackingKind::Replace => EffectStackingPolicy::Replace,
+    };
+    let Some(builder) = bridge
+        .catalog_slot_mut(request.catalog)
+        .and_then(|slot| slot.builder.as_mut())
+    else {
+        return 0;
+    };
+    builder.effects.push(EffectDefinition {
+        id,
+        stacking_group,
+        stacking,
+        maximum_stacks: request.maximum_stacks,
+        sources,
+    });
+    ABI_OK
+}
+
+unsafe extern "C" fn define_capacity_metric(
+    context: *mut c_void,
+    request: *const NativeMechanicsCapacityMetricDefinitionRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let Ok(id) = unsafe { text(request.id, "mechanics capacity metric") }
+        .and_then(parse::<gameplay_mechanics::CapacityMetricId>)
+    else {
+        return 0;
+    };
+    let Some(builder) = bridge
+        .catalog_slot_mut(request.catalog)
+        .and_then(|slot| slot.builder.as_mut())
+    else {
+        return 0;
+    };
+    builder
+        .capacity_metrics
+        .push(CapacityMetricDefinition { id });
+    ABI_OK
+}
+
+unsafe extern "C" fn define_item(
+    context: *mut c_void,
+    request: *const NativeMechanicsItemDefinitionRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let (Ok(id), Ok(classifications), Ok(sources), Ok(costs)) = (
+        unsafe { text(request.id, "mechanics item id") }
+            .and_then(parse::<gameplay_mechanics::ItemDefinitionId>),
+        unsafe {
+            text_slice(
+                request.classifications,
+                request.classifications_len,
+                "mechanics item classifications",
+            )
+        }
+        .and_then(parse_text_values::<gameplay_mechanics::ItemClassificationId>),
+        unsafe {
+            text_slice(
+                request.sources,
+                request.sources_len,
+                "mechanics item sources",
+            )
+        }
+        .and_then(parse_text_values::<SourceDefinitionId>),
+        unsafe {
+            borrowed_slice(
+                request.capacity_costs,
+                request.capacity_costs_len,
+                "mechanics item capacity costs",
+            )
+        }
+        .and_then(parse_capacity_costs),
+    ) else {
+        return 0;
+    };
+    let equipment = if request.has_equipment {
+        let exclusive_group = match unsafe {
+            text(
+                request.exclusive_group,
+                "mechanics equipment exclusive group",
+            )
+        } {
+            Ok("") => None,
+            Ok(value) => match parse::<gameplay_mechanics::EquipmentExclusivityId>(value) {
+                Ok(value) => Some(value),
+                Err(_) => return 0,
+            },
+            Err(_) => return 0,
+        };
+        Some(ItemEquipmentPolicy {
+            required_slots: request.required_slots,
+            exclusive_group,
+        })
+    } else {
+        None
+    };
+    let kind = match request.kind {
+        NativeMechanicsItemKind::Fungible => ItemKind::Fungible,
+        NativeMechanicsItemKind::Unique => ItemKind::Unique,
+    };
+    let Some(builder) = bridge
+        .catalog_slot_mut(request.catalog)
+        .and_then(|slot| slot.builder.as_mut())
+    else {
+        return 0;
+    };
+    builder.items.push(ItemDefinition {
+        id,
+        kind,
+        maximum_quantity: request.maximum_quantity,
+        classifications,
+        capacity_costs: costs,
+        equipment,
+        sources,
+    });
+    ABI_OK
+}
+
+unsafe extern "C" fn define_equipment_slot(
+    context: *mut c_void,
+    request: *const NativeMechanicsEquipmentSlotDefinitionRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let (Ok(id), Ok(allowed_classifications)) = (
+        unsafe { text(request.id, "mechanics equipment slot") }
+            .and_then(parse::<gameplay_mechanics::EquipmentSlotId>),
+        unsafe {
+            text_slice(
+                request.allowed_classifications,
+                request.allowed_classifications_len,
+                "mechanics slot classifications",
+            )
+        }
+        .and_then(parse_text_values::<gameplay_mechanics::ItemClassificationId>),
+    ) else {
+        return 0;
+    };
+    let Some(builder) = bridge
+        .catalog_slot_mut(request.catalog)
+        .and_then(|slot| slot.builder.as_mut())
+    else {
+        return 0;
+    };
+    builder.equipment_slots.push(EquipmentSlotDefinition {
+        id,
+        allowed_classifications,
+    });
+    ABI_OK
+}
+
 unsafe extern "C" fn admit_catalog(
     context: *mut c_void,
     handle: NativeMechanicsCatalogHandle,
@@ -416,11 +778,11 @@ unsafe extern "C" fn admit_catalog(
         stats: builder.stats.clone(),
         tracks: builder.tracks.clone(),
         sources: builder.sources.values().cloned().collect(),
-        damage_kinds: Vec::new(),
-        effects: Vec::new(),
-        capacity_metrics: Vec::new(),
-        items: Vec::new(),
-        equipment_slots: Vec::new(),
+        damage_kinds: builder.damage_kinds.clone(),
+        effects: builder.effects.clone(),
+        capacity_metrics: builder.capacity_metrics.clone(),
+        items: builder.items.clone(),
+        equipment_slots: builder.equipment_slots.clone(),
     };
     match MechanicsCatalog::admit(definition) {
         Ok(catalog) => {
@@ -508,9 +870,14 @@ unsafe extern "C" fn bind_entity(
             catalog: request.catalog.value,
             entity: state_entity,
             identity,
-            stats: Vec::new(),
-            tracks: Vec::new(),
-            intrinsic_sources: Vec::new(),
+            stats: None,
+            tracks: None,
+            intrinsic_sources: None,
+            active_effects: None,
+            inventory: None,
+            item: None,
+            equipment: None,
+            initial_components_set: false,
             committed: false,
         },
     );
@@ -558,9 +925,14 @@ unsafe extern "C" fn rebind_entity(
             catalog: request.catalog.value,
             entity,
             identity: String::new(),
-            stats: Vec::new(),
-            tracks: Vec::new(),
-            intrinsic_sources: Vec::new(),
+            stats: None,
+            tracks: None,
+            intrinsic_sources: None,
+            active_effects: None,
+            inventory: None,
+            item: None,
+            equipment: None,
+            initial_components_set: true,
             committed: true,
         },
     );
@@ -590,7 +962,10 @@ unsafe extern "C" fn set_initial_stat(
     else {
         return 0;
     };
-    binding.stats.push(StatValue::new(stat, base));
+    binding
+        .stats
+        .get_or_insert_with(Vec::new)
+        .push(StatValue::new(stat, base));
     ABI_OK
 }
 
@@ -616,7 +991,10 @@ unsafe extern "C" fn set_initial_track(
     else {
         return 0;
     };
-    binding.tracks.push(TrackValue::new(track, current));
+    binding
+        .tracks
+        .get_or_insert_with(Vec::new)
+        .push(TrackValue::new(track, current));
     ABI_OK
 }
 
@@ -646,7 +1024,111 @@ unsafe extern "C" fn bind_intrinsic_source(
     };
     binding
         .intrinsic_sources
+        .get_or_insert_with(Vec::new)
         .push(IntrinsicSourceBinding::new(instance, definition));
+    ABI_OK
+}
+
+/// Replaces the complete pre-commit component builder. Boolean presence fields
+/// are intentional: an empty durable collection component is distinct from an
+/// omitted component.
+unsafe extern "C" fn set_initial_components(
+    context: *mut c_void,
+    request: *const NativeMechanicsInitialComponentsRequest,
+) -> i32 {
+    let Some((bridge, request)) = bridge_request(context, request) else {
+        return 0;
+    };
+    let (
+        Ok(stats),
+        Ok(tracks),
+        Ok(intrinsic_sources),
+        Ok(active_effects),
+        Ok(inventory_stacks),
+        Ok(inventory_limits),
+        Ok(equipment),
+    ) = (
+        unsafe { borrowed_slice(request.stats, request.stats_len, "mechanics initial stats") }
+            .and_then(parse_initial_stats),
+        unsafe {
+            borrowed_slice(
+                request.tracks,
+                request.tracks_len,
+                "mechanics initial tracks",
+            )
+        }
+        .and_then(parse_initial_tracks),
+        unsafe {
+            borrowed_slice(
+                request.intrinsic_sources,
+                request.intrinsic_sources_len,
+                "mechanics initial intrinsic sources",
+            )
+        }
+        .and_then(parse_initial_intrinsic_sources),
+        unsafe {
+            borrowed_slice(
+                request.active_effects,
+                request.active_effects_len,
+                "mechanics initial active effects",
+            )
+        }
+        .and_then(parse_initial_active_effects),
+        unsafe {
+            borrowed_slice(
+                request.inventory_stacks,
+                request.inventory_stacks_len,
+                "mechanics initial inventory stacks",
+            )
+        }
+        .and_then(parse_initial_inventory_stacks),
+        unsafe {
+            borrowed_slice(
+                request.inventory_capacity_limits,
+                request.inventory_capacity_limits_len,
+                "mechanics initial inventory capacity limits",
+            )
+        }
+        .and_then(parse_initial_inventory_limits),
+        unsafe {
+            borrowed_slice(
+                request.equipment_assignments,
+                request.equipment_assignments_len,
+                "mechanics initial equipment assignments",
+            )
+        }
+        .and_then(parse_initial_equipment),
+    )
+    else {
+        return 0;
+    };
+    let item = if request.has_item {
+        match unsafe { text(request.item_definition, "mechanics initial item definition") }
+            .and_then(parse::<gameplay_mechanics::ItemDefinitionId>)
+        {
+            Ok(value) => Some(value),
+            Err(_) => return 0,
+        }
+    } else {
+        None
+    };
+    let Some(binding) = bridge
+        .entities
+        .get_mut(&request.entity.value)
+        .filter(|binding| !binding.committed && !binding.initial_components_set)
+    else {
+        return 0;
+    };
+    binding.stats = request.has_stats.then_some(stats);
+    binding.tracks = request.has_tracks.then_some(tracks);
+    binding.intrinsic_sources = request.has_intrinsic_sources.then_some(intrinsic_sources);
+    binding.active_effects = request.has_active_effects.then_some(active_effects);
+    binding.inventory = request
+        .has_inventory
+        .then_some((inventory_stacks, inventory_limits));
+    binding.item = item;
+    binding.equipment = request.has_equipment.then_some(equipment);
+    binding.initial_components_set = true;
     ABI_OK
 }
 
@@ -688,34 +1170,87 @@ unsafe extern "C" fn commit_entity(
     {
         return 0;
     }
-    if attach(
-        &mut candidate,
-        binding.entity,
-        StatsComponent::new(catalog.version().clone(), binding.stats).ok(),
-    )
-    .is_err()
-    {
-        return 0;
-    }
-    if attach(
-        &mut candidate,
-        binding.entity,
-        TracksComponent::new(catalog.version().clone(), binding.tracks).ok(),
-    )
-    .is_err()
-    {
-        return 0;
-    }
-    if !binding.intrinsic_sources.is_empty()
-        && attach(
+    if let Some(stats) = binding.stats {
+        if attach(
             &mut candidate,
             binding.entity,
-            IntrinsicSourcesComponent::new(catalog.version().clone(), binding.intrinsic_sources)
-                .ok(),
+            StatsComponent::new(catalog.version().clone(), stats).ok(),
         )
         .is_err()
-    {
-        return 0;
+        {
+            return 0;
+        }
+    }
+    if let Some(tracks) = binding.tracks {
+        if attach(
+            &mut candidate,
+            binding.entity,
+            TracksComponent::new(catalog.version().clone(), tracks).ok(),
+        )
+        .is_err()
+        {
+            return 0;
+        }
+    }
+    if let Some(intrinsic_sources) = binding.intrinsic_sources {
+        if attach(
+            &mut candidate,
+            binding.entity,
+            IntrinsicSourcesComponent::new(catalog.version().clone(), intrinsic_sources).ok(),
+        )
+        .is_err()
+        {
+            return 0;
+        }
+    }
+    if let Some(active_effects) = binding.active_effects {
+        if attach(
+            &mut candidate,
+            binding.entity,
+            ActiveEffectsComponent::new(catalog.version().clone(), active_effects).ok(),
+        )
+        .is_err()
+        {
+            return 0;
+        }
+    }
+    if let Some((stacks, capacity_limits)) = binding.inventory {
+        if attach(
+            &mut candidate,
+            binding.entity,
+            InventoryComponent::with_capacity_limits(
+                catalog.version().clone(),
+                stacks,
+                capacity_limits,
+            )
+            .ok(),
+        )
+        .is_err()
+        {
+            return 0;
+        }
+    }
+    if let Some(definition) = binding.item {
+        if attach(
+            &mut candidate,
+            binding.entity,
+            Some(ItemComponent::new(catalog.version().clone(), definition)),
+        )
+        .is_err()
+        {
+            return 0;
+        }
+    }
+    if let Some(assignments) = binding.equipment {
+        if attach(
+            &mut candidate,
+            binding.entity,
+            EquipmentComponent::new(catalog.version().clone(), assignments).ok(),
+        )
+        .is_err()
+        {
+            return 0;
+        }
     }
     if validate_state_against_catalog(&candidate, catalog).is_err() {
         return 0;
@@ -1268,6 +1803,215 @@ where
 {
     T::parse_text(value)
 }
+unsafe fn borrowed_slice<'a, T>(
+    values: *const T,
+    len: usize,
+    _field: &'static str,
+) -> Result<&'a [T], ()> {
+    const MAX_BORROWED_ITEMS: usize = 1_048_576;
+    if len > MAX_BORROWED_ITEMS || (len != 0 && values.is_null()) {
+        return Err(());
+    }
+    if len == 0 {
+        return Ok(&[]);
+    }
+    Ok(unsafe { std::slice::from_raw_parts(values, len) })
+}
+unsafe fn text_slice<'a>(
+    values: *const NativeMechanicsText,
+    len: usize,
+    field: &'static str,
+) -> Result<&'a [NativeMechanicsText], ()> {
+    unsafe { borrowed_slice(values, len, field) }
+}
+fn parse_text_values<T>(values: &[NativeMechanicsText]) -> Result<Vec<T>, ()>
+where
+    T: FromMechanicsText,
+{
+    values
+        .iter()
+        .map(|value| unsafe { text(value.value, "mechanics text array") }.and_then(parse::<T>))
+        .collect()
+}
+fn parse_capacity_costs(
+    values: &[NativeMechanicsItemCapacityCostInput],
+) -> Result<Vec<ItemCapacityCost>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            Ok(ItemCapacityCost {
+                metric: unsafe { text(value.metric, "mechanics item capacity metric") }
+                    .and_then(parse::<gameplay_mechanics::CapacityMetricId>)?,
+                units: value.units,
+            })
+        })
+        .collect()
+}
+fn parse_initial_stats(values: &[NativeMechanicsInitialStatValue]) -> Result<Vec<StatValue>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            Ok(StatValue::new(
+                unsafe { text(value.stat, "mechanics initial stat") }.and_then(parse::<StatId>)?,
+                scalar(value.base)?,
+            ))
+        })
+        .collect()
+}
+fn parse_initial_tracks(
+    values: &[NativeMechanicsInitialTrackValue],
+) -> Result<Vec<TrackValue>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            Ok(TrackValue::new(
+                unsafe { text(value.track, "mechanics initial track") }
+                    .and_then(parse::<gameplay_mechanics::TrackId>)?,
+                scalar(value.current)?,
+            ))
+        })
+        .collect()
+}
+fn parse_initial_intrinsic_sources(
+    values: &[NativeMechanicsInitialIntrinsicSource],
+) -> Result<Vec<IntrinsicSourceBinding>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            Ok(IntrinsicSourceBinding::new(
+                unsafe { text(value.instance, "mechanics initial source instance") }
+                    .and_then(parse::<SourceInstanceId>)?,
+                unsafe { text(value.definition, "mechanics initial source definition") }
+                    .and_then(parse::<SourceDefinitionId>)?,
+            ))
+        })
+        .collect()
+}
+fn parse_initial_active_effects(
+    values: &[NativeMechanicsInitialActiveEffect],
+) -> Result<Vec<ActiveEffectInstance>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            let provenance = match value.provenance_kind {
+                NativeMechanicsActiveEffectProvenanceKind::Intrinsic => {
+                    gameplay_mechanics::SourceInstanceIdentity::Intrinsic {
+                        entity: EntityId::new(value.provenance_entity_id),
+                        instance: unsafe {
+                            text(
+                                value.provenance_instance,
+                                "mechanics intrinsic effect provenance",
+                            )
+                        }
+                        .and_then(parse::<SourceInstanceId>)?,
+                    }
+                }
+                NativeMechanicsActiveEffectProvenanceKind::Effect => {
+                    gameplay_mechanics::SourceInstanceIdentity::Effect {
+                        entity: EntityId::new(value.provenance_entity_id),
+                        effect: unsafe {
+                            text(
+                                value.provenance_effect,
+                                "mechanics effect provenance effect",
+                            )
+                        }
+                        .and_then(parse::<gameplay_mechanics::EffectInstanceId>)?,
+                        stack: value.provenance_stack,
+                        source: unsafe {
+                            text(
+                                value.provenance_source,
+                                "mechanics effect provenance source",
+                            )
+                        }
+                        .and_then(parse::<SourceDefinitionId>)?,
+                    }
+                }
+                NativeMechanicsActiveEffectProvenanceKind::EquippedItem => {
+                    gameplay_mechanics::SourceInstanceIdentity::EquippedItem {
+                        owner: EntityId::new(value.provenance_entity_id),
+                        item: EntityId::new(value.provenance_item_entity_id),
+                        source: unsafe {
+                            text(
+                                value.provenance_source,
+                                "mechanics equipment effect provenance source",
+                            )
+                        }
+                        .and_then(parse::<SourceDefinitionId>)?,
+                    }
+                }
+                NativeMechanicsActiveEffectProvenanceKind::Request => {
+                    gameplay_mechanics::SourceInstanceIdentity::Request {
+                        operation: unsafe {
+                            text(
+                                value.provenance_operation,
+                                "mechanics request effect operation",
+                            )
+                        }
+                        .and_then(parse::<OperationId>)?,
+                        instance: unsafe {
+                            text(
+                                value.provenance_instance,
+                                "mechanics request effect provenance",
+                            )
+                        }
+                        .and_then(parse::<SourceInstanceId>)?,
+                    }
+                }
+            };
+            ActiveEffectInstance::new(
+                unsafe { text(value.instance, "mechanics initial effect instance") }
+                    .and_then(parse::<gameplay_mechanics::EffectInstanceId>)?,
+                unsafe { text(value.definition, "mechanics initial effect definition") }
+                    .and_then(parse::<gameplay_mechanics::EffectDefinitionId>)?,
+                provenance,
+                value.stacks,
+            )
+            .map_err(|_| ())
+        })
+        .collect()
+}
+fn parse_initial_inventory_stacks(
+    values: &[NativeMechanicsInitialInventoryStack],
+) -> Result<Vec<ItemStack>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            Ok(ItemStack {
+                definition: unsafe { text(value.definition, "mechanics initial inventory item") }
+                    .and_then(parse::<gameplay_mechanics::ItemDefinitionId>)?,
+                quantity: value.quantity,
+            })
+        })
+        .collect()
+}
+fn parse_initial_inventory_limits(
+    values: &[NativeMechanicsInitialInventoryCapacityLimit],
+) -> Result<Vec<InventoryCapacityLimit>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            Ok(InventoryCapacityLimit::new(
+                unsafe { text(value.metric, "mechanics initial inventory metric") }
+                    .and_then(parse::<gameplay_mechanics::CapacityMetricId>)?,
+                value.maximum,
+            ))
+        })
+        .collect()
+}
+fn parse_initial_equipment(
+    values: &[NativeMechanicsInitialEquipmentAssignment],
+) -> Result<Vec<EquipmentAssignment>, ()> {
+    values
+        .iter()
+        .map(|value| {
+            Ok(EquipmentAssignment {
+                slot: unsafe { text(value.slot, "mechanics initial equipment slot") }
+                    .and_then(parse::<gameplay_mechanics::EquipmentSlotId>)?,
+                item: EntityId::new(value.item_entity_id),
+            })
+        })
+        .collect()
+}
 trait FromMechanicsText: Sized {
     fn parse_text(value: &str) -> Result<Self, ()>;
 }
@@ -1279,7 +2023,15 @@ identity!(
     SourceDefinitionId,
     SourceInstanceId,
     StackingGroupId,
-    OperationId
+    OperationId,
+    gameplay_mechanics::DamageKindId,
+    gameplay_mechanics::EffectDefinitionId,
+    gameplay_mechanics::EffectInstanceId,
+    gameplay_mechanics::CapacityMetricId,
+    gameplay_mechanics::ItemDefinitionId,
+    gameplay_mechanics::ItemClassificationId,
+    gameplay_mechanics::EquipmentExclusivityId,
+    gameplay_mechanics::EquipmentSlotId,
 );
 fn scalar(value: i64) -> Result<MechanicsScalar, ()> {
     MechanicsScalar::new(value).map_err(|_| ())
@@ -1894,5 +2646,85 @@ mod tests {
             12,
             NativeMechanicsRevisionComponent::Tracks,
         ));
+    }
+
+    #[test]
+    fn initial_component_bundle_preserves_empty_present_component_slots() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("empty-components"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
+        let mut entity = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 91,
+                        identity: utf8("item-owner"),
+                    },
+                    &mut entity,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        entity,
+                        has_stats: true,
+                        stats: std::ptr::null(),
+                        stats_len: 0,
+                        has_tracks: true,
+                        tracks: std::ptr::null(),
+                        tracks_len: 0,
+                        has_intrinsic_sources: true,
+                        intrinsic_sources: std::ptr::null(),
+                        intrinsic_sources_len: 0,
+                        has_active_effects: true,
+                        active_effects: std::ptr::null(),
+                        active_effects_len: 0,
+                        has_inventory: true,
+                        inventory_stacks: std::ptr::null(),
+                        inventory_stacks_len: 0,
+                        inventory_capacity_limits: std::ptr::null(),
+                        inventory_capacity_limits_len: 0,
+                        has_item: false,
+                        item_definition: utf8(""),
+                        has_equipment: true,
+                        equipment_assignments: std::ptr::null(),
+                        equipment_assignments_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut receipt = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, entity, &mut receipt) },
+            ABI_OK
+        );
+        assert!(receipt.stats_slot.present);
+        assert!(receipt.tracks_slot.present);
+        assert!(receipt.intrinsic_sources_revision.present);
+        assert!(receipt.active_effects_revision.present);
+        assert!(receipt.inventory_revision.present);
+        assert!(!receipt.item_revision.present);
+        assert!(receipt.equipment_revision.present);
     }
 }

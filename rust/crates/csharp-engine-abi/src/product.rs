@@ -447,6 +447,20 @@ pub type NativeDefineMechanicsTrack =
     unsafe extern "C" fn(*mut c_void, *const NativeMechanicsTrackDefinitionRequest) -> i32;
 pub type NativeDefineMechanicsContribution =
     unsafe extern "C" fn(*mut c_void, *const NativeMechanicsContributionDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsSource =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsSourceDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsDamageKind =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsDamageKindDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsDamageResponse =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsDamageResponseDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsEffect =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsEffectDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsCapacityMetric =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsCapacityMetricDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsItem =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsItemDefinitionRequest) -> i32;
+pub type NativeDefineMechanicsEquipmentSlot =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsEquipmentSlotDefinitionRequest) -> i32;
 pub type NativeAdmitMechanicsCatalog =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogHandle) -> i32;
 pub type NativeDestroyMechanicsCatalog =
@@ -467,6 +481,8 @@ pub type NativeSetMechanicsInitialTrack =
     unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialTrackRequest) -> i32;
 pub type NativeBindMechanicsIntrinsicSource =
     unsafe extern "C" fn(*mut c_void, *const NativeMechanicsIntrinsicSourceRequest) -> i32;
+pub type NativeSetMechanicsInitialComponents =
+    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialComponentsRequest) -> i32;
 pub type NativeCommitMechanicsEntity = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
@@ -728,6 +744,13 @@ pub struct NativeMechanicsApi {
     pub define_stat: NativeDefineMechanicsStat,
     pub define_track: NativeDefineMechanicsTrack,
     pub define_contribution: NativeDefineMechanicsContribution,
+    pub define_source: NativeDefineMechanicsSource,
+    pub define_damage_kind: NativeDefineMechanicsDamageKind,
+    pub define_damage_response: NativeDefineMechanicsDamageResponse,
+    pub define_effect: NativeDefineMechanicsEffect,
+    pub define_capacity_metric: NativeDefineMechanicsCapacityMetric,
+    pub define_item: NativeDefineMechanicsItem,
+    pub define_equipment_slot: NativeDefineMechanicsEquipmentSlot,
     pub admit_catalog: NativeAdmitMechanicsCatalog,
     pub destroy_catalog: NativeDestroyMechanicsCatalog,
     pub bind_entity: NativeBindMechanicsEntity,
@@ -735,6 +758,7 @@ pub struct NativeMechanicsApi {
     pub set_initial_stat: NativeSetMechanicsInitialStat,
     pub set_initial_track: NativeSetMechanicsInitialTrack,
     pub bind_intrinsic_source: NativeBindMechanicsIntrinsicSource,
+    pub set_initial_components: NativeSetMechanicsInitialComponents,
     pub commit_entity: NativeCommitMechanicsEntity,
     pub set_entity_lifecycle: NativeSetMechanicsEntityLifecycle,
     pub destroy_entity: NativeDestroyMechanicsEntity,

@@ -294,7 +294,7 @@ internal sealed class BindingModel
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe CXChildVisitResult CollectChild(CXCursor cursor, CXCursor parent, void* clientData) { sChildren.Add(cursor); return CXChildVisitResult.CXChildVisit_Continue; }
     public static string Bare(string type) => type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Replace("enum ", "", StringComparison.Ordinal).Replace(" *", "", StringComparison.Ordinal).Trim();
-    public static bool IsScalar(string type) => type is "void" or "bool" or "_Bool" or "int" or "int32_t" or "int64_t" or "uint32_t" or "uint64_t" or "size_t" or "float" or "double" or "uint8_t";
+    public static bool IsScalar(string type) => type is "void" or "bool" or "_Bool" or "int" or "int16_t" or "int32_t" or "int64_t" or "uint16_t" or "uint32_t" or "uint64_t" or "size_t" or "float" or "double" or "uint8_t";
 }
 
 internal static class Emit
@@ -517,8 +517,10 @@ internal static class Emit
         }
         output.AppendLine("    internal static byte ToNativeBool(bool value) => value ? (byte)1 : (byte)0;");
         output.AppendLine("    internal static int ToNative(int value) => value;");
+        output.AppendLine("    internal static short ToNative(short value) => value;");
         output.AppendLine("    internal static long ToNative(long value) => value;");
         output.AppendLine("    internal static uint ToNative(uint value) => value;");
+        output.AppendLine("    internal static ushort ToNative(ushort value) => value;");
         output.AppendLine("    internal static ulong ToNative(ulong value) => value;");
         output.AppendLine("    internal static nuint ToNative(nuint value) => value;");
         output.AppendLine("    internal static float ToNative(float value) => value;");
@@ -526,8 +528,10 @@ internal static class Emit
         output.AppendLine("    internal static byte ToNative(byte value) => value;");
         output.AppendLine("    internal static bool FromNativeBool(byte value) => value != 0;");
         output.AppendLine("    internal static int FromNative(int value) => value;");
+        output.AppendLine("    internal static short FromNative(short value) => value;");
         output.AppendLine("    internal static long FromNative(long value) => value;");
         output.AppendLine("    internal static uint FromNative(uint value) => value;");
+        output.AppendLine("    internal static ushort FromNative(ushort value) => value;");
         output.AppendLine("    internal static ulong FromNative(ulong value) => value;");
         output.AppendLine("    internal static nuint FromNative(nuint value) => value;");
         output.AppendLine("    internal static float FromNative(float value) => value;");
@@ -862,13 +866,13 @@ internal static class Emit
         if (args.Length == 2 && args[0].StartsWith("const ", StringComparison.Ordinal) && args[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[1]) == "size_t") return $"ReadOnlySpan<{SafeType(model, BindingModel.Bare(args[0]))}> values";
         return string.Join(", ", args.Select((type, index) => $"{SafeType(model, BindingModel.Bare(type))} arg{index}"));
     }
-    private static string SafeType(string native) => native switch { "bool" or "_Bool" => "bool", "int" or "int32_t" => "int", "int64_t" => "long", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
+    private static string SafeType(string native) => native switch { "bool" or "_Bool" => "bool", "int16_t" => "short", "int" or "int32_t" => "int", "int64_t" => "long", "uint16_t" => "ushort", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
     private static string SafeEnumMember(string enumName, string member) => member.StartsWith($"{enumName}_", StringComparison.Ordinal) ? member[(enumName.Length + 1)..] : member;
     private static string SafeType(BindingModel model, string native) => IsDisposableHandle(model, native) ? OwnerType(native) : SafeType(native);
     private static string RawType(string type)
     {
         string value = type.Replace("const ", "", StringComparison.Ordinal).Replace("struct ", "", StringComparison.Ordinal).Replace("enum ", "", StringComparison.Ordinal).Trim(); int pointers = value.Count(character => character == '*'); value = value.TrimEnd('*').Trim();
-        string mapped = value switch { "void" => "void", "bool" or "_Bool" => "byte", "int32_t" or "int" => "int", "int64_t" => "long", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", _ => value };
+        string mapped = value switch { "void" => "void", "bool" or "_Bool" => "byte", "int16_t" => "short", "int32_t" or "int" => "int", "int64_t" => "long", "uint16_t" => "ushort", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", _ => value };
         return mapped + new string('*', pointers);
     }
     private static string RawFieldDeclaration(Field field)
