@@ -2,10 +2,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct NativeUtf8Slice {
+typedef struct NativeByteSlice {
   const uint8_t *bytes;
   size_t len;
-} NativeUtf8Slice;
+} NativeByteSlice;
 
 typedef struct NativeLeaseFixtureItemLeaseHandle {
   uint64_t value;
@@ -19,7 +19,7 @@ typedef struct NativeLeaseFixtureItemLease {
   NativeLeaseFixtureItemLeaseHandle handle;
   const NativeLeaseFixtureItem *entries;
   size_t entries_len;
-  NativeUtf8Slice source;
+  NativeByteSlice source;
 } NativeLeaseFixtureItemLease;
 
 typedef int32_t (*NativeReadLeaseFixtureItems)(void *, NativeLeaseFixtureItemLease *);

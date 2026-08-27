@@ -7,7 +7,7 @@ namespace Rusty.Engine.NativeProduct;
 
 internal static unsafe class Program
 {
-    private static readonly Dictionary<ulong, (nint Entries, nint Label, nint Payload)> Leases = [];
+    private static readonly Dictionary<ulong, (nint Entries, nint Observations, nint Label, nint Payload)> Leases = [];
     private static readonly Dictionary<ulong, (nint Diagnostics, nint Code, nint Message, nint Source, nint Service, nint Operation)> DiagnosticLeases = [];
     private static readonly List<(string Value, byte[] Payload)> ReplacedTags = [];
     private static ulong _nextLease = 1;
@@ -38,15 +38,18 @@ internal static unsafe class Program
 
         LeaseFixtureItemLeaseReceipt empty = service.ReadItems(new LeaseFixtureRequest(0));
         Require(empty.Entries.IsEmpty, "empty lease did not become an empty managed collection");
+        Require(empty.Observations.IsEmpty, "empty secondary lease collection did not become an empty managed collection");
         Require(empty.Total == 0 && !empty.Truncated && empty.Completeness == LeaseFixtureCompleteness.Complete && empty.Revision == 10 && empty.ContentHash == 0 && empty.Anchor == new System.Numerics.Vector2(1, 2), "empty lease metadata was not copied");
         Require(_destroyed == 1 && Leases.Count == 0, "empty lease was not released exactly once");
 
         LeaseFixtureItemLeaseReceipt copied = service.ReadItems(new LeaseFixtureRequest(1));
         Require(copied.Entries.Length == 1, "one-element lease was not copied");
+        Require(copied.Observations.Length == 2, "secondary lease collection was not copied");
         Require(copied.Total == 3 && copied.Truncated && copied.Completeness == LeaseFixtureCompleteness.Truncated && copied.Revision == 11 && copied.ContentHash == 0xC0FFEE && copied.Anchor == new System.Numerics.Vector2(3, 4), "collection lease metadata was not copied");
         LeaseFixtureItem item = copied.Entries.Span[0];
         Require(item.Label == "café" && item.Ordinal == 7, "non-ASCII nested UTF-8 was not copied");
         Require(item.Payload.Span.SequenceEqual(new byte[] { 0x00, 0xC3, 0xA9, 0xFF }), "nested bytes were not copied");
+        Require(copied.Observations.Span[0] == new LeaseFixtureObservation(21, 3) && copied.Observations.Span[1] == new LeaseFixtureObservation(34, 5), "secondary collection values were not copied");
         Require(_destroyed == 2 && Leases.Count == 0, "one-element lease was not released exactly once");
 
         try
@@ -154,6 +157,7 @@ internal static unsafe class Program
         byte* label = (byte*)NativeMemory.Alloc((nuint)labelSource.Length);
         byte* payload = (byte*)NativeMemory.Alloc((nuint)payloadSource.Length);
         NativeLeaseFixtureItem* entries = (NativeLeaseFixtureItem*)NativeMemory.Alloc((nuint)sizeof(NativeLeaseFixtureItem));
+        NativeLeaseFixtureObservation* observations = (NativeLeaseFixtureObservation*)NativeMemory.Alloc((nuint)(2 * sizeof(NativeLeaseFixtureObservation)));
         labelSource.CopyTo(new Span<byte>(label, labelSource.Length));
         payloadSource.CopyTo(new Span<byte>(payload, payloadSource.Length));
         *entries = new NativeLeaseFixtureItem
@@ -162,12 +166,16 @@ internal static unsafe class Program
             payload = new NativeByteSlice { bytes = payload, len = (nuint)payloadSource.Length },
             ordinal = 7,
         };
-        Leases.Add(handle, ((nint)entries, (nint)label, (nint)payload));
+        observations[0] = new NativeLeaseFixtureObservation { revision = 21, kind = 3 };
+        observations[1] = new NativeLeaseFixtureObservation { revision = 34, kind = 5 };
+        Leases.Add(handle, ((nint)entries, (nint)observations, (nint)label, (nint)payload));
         *result = new NativeLeaseFixtureItemLease
         {
             handle = new NativeLeaseFixtureItemLeaseHandle { value = handle },
             entries = entries,
             entries_len = 1,
+            observations = observations,
+            observations_len = 2,
             total = 3,
             truncated = 1,
             completeness = NativeLeaseFixtureCompleteness.NativeLeaseFixtureCompleteness_Truncated,
@@ -181,8 +189,9 @@ internal static unsafe class Program
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int DestroyItemLease(void* _, NativeLeaseFixtureItemLeaseHandle handle)
     {
-        if (!Leases.Remove(handle.value, out (nint Entries, nint Label, nint Payload) lease)) return 0;
+        if (!Leases.Remove(handle.value, out (nint Entries, nint Observations, nint Label, nint Payload) lease)) return 0;
         if (lease.Entries != 0) NativeMemory.Free((void*)lease.Entries);
+        if (lease.Observations != 0) NativeMemory.Free((void*)lease.Observations);
         if (lease.Label != 0) NativeMemory.Free((void*)lease.Label);
         if (lease.Payload != 0) NativeMemory.Free((void*)lease.Payload);
         _destroyed++;

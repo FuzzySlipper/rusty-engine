@@ -41,6 +41,11 @@ typedef struct NativeLeaseFixtureItem {
   uint32_t ordinal;
 } NativeLeaseFixtureItem;
 
+typedef struct NativeLeaseFixtureObservation {
+  uint64_t revision;
+  uint32_t kind;
+} NativeLeaseFixtureObservation;
+
 typedef enum NativeLeaseFixtureCompleteness {
   NativeLeaseFixtureCompleteness_Complete = 0,
   NativeLeaseFixtureCompleteness_Truncated = 1,
@@ -50,6 +55,8 @@ typedef struct NativeLeaseFixtureItemLease {
   NativeLeaseFixtureItemLeaseHandle handle;
   const NativeLeaseFixtureItem *entries;
   size_t entries_len;
+  const NativeLeaseFixtureObservation *observations;
+  size_t observations_len;
   uint32_t total;
   bool truncated;
   NativeLeaseFixtureCompleteness completeness;
