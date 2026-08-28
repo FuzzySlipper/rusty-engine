@@ -916,6 +916,39 @@ pub type NativeDescribePersistenceBlob = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeCopyPersistenceBlob =
     unsafe extern "C" fn(*mut c_void, *const NativePersistenceCopyBlobRequest) -> i32;
+pub type NativeOpenContentStore = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContentStoreOpenRequest,
+    *mut NativeContentStoreHandle,
+) -> i32;
+pub type NativeDestroyContentStore =
+    unsafe extern "C" fn(*mut c_void, NativeContentStoreHandle) -> i32;
+pub type NativeCaptureContentStoreSnapshot = unsafe extern "C" fn(
+    *mut c_void,
+    NativeContentStoreHandle,
+    *mut NativeContentStoreSnapshotHandle,
+) -> i32;
+pub type NativeDestroyContentStoreSnapshot =
+    unsafe extern "C" fn(*mut c_void, NativeContentStoreSnapshotHandle) -> i32;
+pub type NativeReadContentStoreSnapshot = unsafe extern "C" fn(
+    *mut c_void,
+    NativeContentStoreSnapshotHandle,
+    *mut NativeContentStoreSnapshotLease,
+) -> i32;
+pub type NativeDestroyContentStoreSnapshotLease =
+    unsafe extern "C" fn(*mut c_void, NativeContentStoreSnapshotLeaseHandle) -> i32;
+pub type NativeReadContentStoreBody = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContentStoreBodyRequest,
+    *mut NativeByteLease,
+) -> i32;
+pub type NativeDestroyContentStoreByteLease =
+    unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;
+pub type NativePublishContentStore = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContentStorePublishRequest,
+    *mut NativeContentStorePublishReceipt,
+) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1203,6 +1236,21 @@ pub struct NativePersistenceApi {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeContentStoreApi {
+    pub context: *mut c_void,
+    pub open_store: NativeOpenContentStore,
+    pub destroy_store: NativeDestroyContentStore,
+    pub capture_snapshot: NativeCaptureContentStoreSnapshot,
+    pub destroy_snapshot: NativeDestroyContentStoreSnapshot,
+    pub read_snapshot: NativeReadContentStoreSnapshot,
+    pub destroy_snapshot_lease: NativeDestroyContentStoreSnapshotLease,
+    pub read_body: NativeReadContentStoreBody,
+    pub destroy_byte_lease: NativeDestroyContentStoreByteLease,
+    pub publish: NativePublishContentStore,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeRulesApi {
     pub context: *mut c_void,
     pub admit_package: NativeAdmitRulesPackage,
@@ -1271,6 +1319,7 @@ pub struct NativeEngineApi {
     pub rng: NativeRngApi,
     pub mechanics: NativeMechanicsApi,
     pub persistence: NativePersistenceApi,
+    pub content_store: NativeContentStoreApi,
     pub rules: NativeRulesApi,
     pub standard_exact: NativeStandardExactApi,
     pub standard_continuous: NativeStandardContinuousApi,

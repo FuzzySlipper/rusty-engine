@@ -72,6 +72,9 @@ pub struct CsharpProductRuntimeConfig {
     /// Optional host-selected application root for opaque product state.
     /// Products choose only relative scopes beneath this root.
     persistence_root: Option<PathBuf>,
+    /// Optional host-selected root for admitted content-store generations.
+    /// Omitting it leaves this distinct service unavailable.
+    content_store_root: Option<PathBuf>,
 }
 
 impl CsharpProductRuntimeConfig {
@@ -84,6 +87,7 @@ impl CsharpProductRuntimeConfig {
             direct_intents,
             physical_mappings: Vec::new(),
             persistence_root: None,
+            content_store_root: None,
         }
     }
 
@@ -100,6 +104,12 @@ impl CsharpProductRuntimeConfig {
     /// persistence service unconfigured for products that do not need it.
     pub fn with_persistence_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.persistence_root = Some(root.into());
+        self
+    }
+
+    /// Selects the explicit host-owned root for content-store execution.
+    pub fn with_content_store_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.content_store_root = Some(root.into());
         self
     }
 }
@@ -259,6 +269,7 @@ impl CsharpProductRuntime {
         config: CsharpProductRuntimeConfig,
     ) -> Result<Self, CsharpProductRuntimeError> {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
+        let content_store_root = prepare_content_store_root(config.content_store_root.as_deref())?;
         let input_mappings = CompiledInputMappings::standard(
             config.direct_intents.clone(),
             config.physical_mappings.clone(),
@@ -327,7 +338,8 @@ impl CsharpProductRuntime {
             appearance_catalog,
             content_resources,
             persistence_root,
-        ));
+            content_store_root,
+        )?);
         let native_content: Vec<NativeContentFile> = content
             .iter()
             .map(|file| NativeContentFile {
@@ -1505,6 +1517,36 @@ fn prepare_persistence_root(
         return Err(CsharpProductRuntimeError::new(
             "CSHARP_PERSISTENCE_ROOT",
             format!("persistence root {} is not a directory", root.display()),
+        ));
+    }
+    Ok(Some(root.to_path_buf()))
+}
+
+fn prepare_content_store_root(
+    root: Option<&Path>,
+) -> Result<Option<PathBuf>, CsharpProductRuntimeError> {
+    let Some(root) = root else {
+        return Ok(None);
+    };
+    if root.as_os_str().is_empty() || !root.is_absolute() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_CONTENT_STORE_ROOT",
+            "content store root must be an explicit absolute host path",
+        ));
+    }
+    fs::create_dir_all(root).map_err(|error| {
+        CsharpProductRuntimeError::new(
+            "CSHARP_CONTENT_STORE_ROOT",
+            format!(
+                "could not create content store root {}: {error}",
+                root.display()
+            ),
+        )
+    })?;
+    if !root.is_dir() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_CONTENT_STORE_ROOT",
+            format!("content store root {} is not a directory", root.display()),
         ));
     }
     Ok(Some(root.to_path_buf()))

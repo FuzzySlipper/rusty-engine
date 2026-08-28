@@ -5,6 +5,7 @@ mod audio;
 mod camera_view;
 mod composition;
 mod content;
+mod content_store;
 mod dynamics;
 mod look;
 mod mechanics;

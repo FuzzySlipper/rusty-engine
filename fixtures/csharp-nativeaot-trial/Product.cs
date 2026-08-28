@@ -118,6 +118,62 @@ public sealed class Product : IEngineProduct
             Require(_engine.Persistence.ReadBlobBytes(loaded).Span.SequenceEqual(leasePayload),
                 "native byte lease did not copy and release its payload");
         }
+        using (ContentStore store = _engine.ContentStore.OpenStore(new ContentStoreOpenRequest(
+            $"nativeaot-content-store-{Environment.ProcessId}")))
+        using (ContentStoreSnapshot emptySnapshot = _engine.ContentStore.CaptureSnapshot(store))
+        {
+            ContentStoreSnapshotLeaseReceipt empty = _engine.ContentStore.ReadSnapshot(emptySnapshot);
+            Require(empty.Identity.Revision == 0 && empty.Artifacts.IsEmpty && empty.LoadPlan.IsEmpty,
+                "content store did not expose an empty retained snapshot");
+            ContentStoreArtifactDefinition[] artifacts = [
+                new ContentStoreArtifactDefinition(
+                    "state/trial.bin",
+                    ContentStoreArtifactClass.Durable,
+                    ContentStoreArtifactRoleKind.Resource,
+                    "resource:nativeaot-trial")
+            ];
+            byte[] body = "typed content-store body"u8.ToArray();
+            ContentStorePublishReceipt published = _engine.ContentStore.Publish(new ContentStorePublishRequest(
+                store,
+                empty.Identity,
+                artifacts,
+                new ContentStoreWriteRow[] { new("state/trial.bin", body) },
+                ReadOnlyMemory<ContentStoreMoveRow>.Empty,
+                ReadOnlyMemory<ContentStoreDeleteRow>.Empty));
+            Require(published.Status == ContentStorePublishStatus.Published
+                && published.Identity.Revision == 1
+                && published.CandidateHash != default,
+                "content store did not publish its typed write");
+            // The old exact snapshot remains readable after publication.
+            Require(_engine.ContentStore.ReadSnapshot(emptySnapshot).Identity == empty.Identity,
+                "old content-store snapshot was not retained across publication");
+            using ContentStoreSnapshot publishedSnapshot = _engine.ContentStore.CaptureSnapshot(store);
+            ContentStoreSnapshotLeaseReceipt publishedReadout = _engine.ContentStore.ReadSnapshot(publishedSnapshot);
+            Require(publishedReadout.Artifacts.Length == 1
+                && publishedReadout.Artifacts.Span[0].Path == "state/trial.bin"
+                && publishedReadout.Artifacts.Span[0].HasHash
+                && publishedReadout.Artifacts.Span[0].HasByteLength
+                && publishedReadout.LoadPlan.Span[0].Stage == ContentStoreLoadStage.Resources,
+                "content store did not return copied artifact and load-plan facts");
+            Require(_engine.ContentStore.ReadBody(new ContentStoreBodyRequest(
+                publishedSnapshot, "state/trial.bin", 0, 1024)).Span.SequenceEqual(body),
+                "content store byte lease did not copy and release the retained body");
+            ContentStorePublishReceipt stale = _engine.ContentStore.Publish(new ContentStorePublishRequest(
+                store,
+                empty.Identity,
+                artifacts,
+                new ContentStoreWriteRow[] { new("state/trial.bin", "must-not-publish"u8.ToArray()) },
+                ReadOnlyMemory<ContentStoreMoveRow>.Empty,
+                ReadOnlyMemory<ContentStoreDeleteRow>.Empty));
+            Require(stale.Status == ContentStorePublishStatus.Stale
+                && stale.Identity == published.Identity
+                && stale.CandidateHash == default,
+                "content store stale publish did not report the observed identity");
+            using ContentStoreSnapshot afterStale = _engine.ContentStore.CaptureSnapshot(store);
+            Require(_engine.ContentStore.ReadBody(new ContentStoreBodyRequest(
+                afterStale, "state/trial.bin", 0, 1024)).Span.SequenceEqual(body),
+                "stale content-store publish mutated the current generation");
+        }
         using (ContentReference opened = _engine.Content.OpenReference(new ContentOpenRequest("trial.txt")))
         {
             ContentReferenceInfo reference = _engine.Content.ReadReferenceInfo(opened).Span[0];

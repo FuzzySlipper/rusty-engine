@@ -535,6 +535,7 @@ name = "csharp-engine-services"
 version = "0.1.0"
 dependencies = [
  "asset-import",
+ "content-store",
  "core-ids",
  "core-math",
  "core-space",
@@ -552,6 +553,7 @@ dependencies = [
  "runtime-ui",
  "serde_json",
  "sha2",
+ "svc-content-store",
  "svc-pathfinding",
  "svc-rng",
  "svc-spatial",

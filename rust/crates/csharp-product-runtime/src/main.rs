@@ -81,6 +81,7 @@ struct Arguments {
     mode: RuntimeMode,
     direct_intents: Vec<DirectInputIntentDescriptor>,
     persistence_root: Option<PathBuf>,
+    content_store_root: Option<PathBuf>,
     exercise: bool,
 }
 
@@ -144,6 +145,9 @@ impl Arguments {
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());
         }
+        if let Some(root) = &self.content_store_root {
+            config = config.with_content_store_root(root.clone());
+        }
         config
     }
 
@@ -156,6 +160,7 @@ impl Arguments {
         let mut mode = None;
         let mut direct_intents = Vec::new();
         let mut persistence_root = None;
+        let mut content_store_root = None;
         let mut exercise = false;
         let mut values = env::args().skip(1);
         while let Some(arg) = values.next() {
@@ -173,11 +178,14 @@ impl Arguments {
                             .ok_or("--persistence-root requires a value")?,
                     ))
                 }
+                "--content-store-root" => {
+                    content_store_root = Some(PathBuf::from(values.next().ok_or("--content-store-root requires a value")?))
+                }
                 "--direct-intent" => direct_intents.push(parse_direct_intent(
                     &values.next().ok_or("--direct-intent requires id=digital, id=axis, or id=payload:contract")?,
                 )?),
                 "--exercise" => exercise = true,
-                "--help" => return Err("usage: csharp-product-runtime --library <product.so> --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--bind-host <ipv4>] [--port <u16>] [--exercise]".to_owned()),
+                "--help" => return Err("usage: csharp-product-runtime --library <product.so> --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--bind-host <ipv4>] [--port <u16>] [--exercise]".to_owned()),
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
         }
@@ -190,6 +198,7 @@ impl Arguments {
             mode: mode.ok_or("--mode is required")?,
             direct_intents,
             persistence_root,
+            content_store_root,
             exercise,
         })
     }

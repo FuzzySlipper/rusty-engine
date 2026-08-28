@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 asset-import.workspace = true
 csharp-engine-abi.workspace = true
+content-store.workspace = true
 core-ids.workspace = true
 core-math.workspace = true
 core-space.workspace = true
@@ -24,6 +25,7 @@ serde_json.workspace = true
 svc-pathfinding.workspace = true
 svc-spatial.workspace = true
 svc-rng.workspace = true
+svc-content-store.workspace = true
 sha2.workspace = true
 voxel-asset.workspace = true
 voxel-annotation.workspace = true

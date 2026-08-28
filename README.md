@@ -46,13 +46,16 @@ cargo run -p csharp-product-runtime --locked -- \
   --bundle-dir fixtures/csharp-nativeaot-trial/browser \
   --content-dir fixtures/csharp-nativeaot-trial/content \
   --mode demand --persistence-root /tmp/rusty-nativeaot-persistence \
+  --content-store-root /tmp/rusty-nativeaot-content-store \
   --direct-intent runtime.exercise=payload:runtime.exercise.payload --port 0 --exercise
 ```
 
-The persistence root is an explicit developer-host choice. Product code opens
-relative named scopes beneath it; omitting `--persistence-root` leaves the
-optional persistence service unavailable, and the Engine never deletes the
-selected root on shutdown.
+Persistence and content-store roots are separate explicit developer-host
+choices. Product code opens relative named scopes beneath either owner;
+omitting a root leaves that optional service unavailable, and the Engine never
+deletes a selected root on shutdown. Content-store publication is typed
+manifest/write-set/CAS execution, not the opaque product-byte Persistence
+store.
 
 Generated sources belong under `obj/Generated` and are not committed.
 

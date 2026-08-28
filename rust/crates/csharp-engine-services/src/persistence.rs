@@ -352,7 +352,10 @@ unsafe extern "C" fn copy_blob(
     ABI_OK
 }
 
-unsafe fn borrowed_bytes<'a>(value: NativeByteSlice, _field: &'static str) -> Result<&'a [u8], ()> {
+pub(crate) unsafe fn borrowed_bytes<'a>(
+    value: NativeByteSlice,
+    _field: &'static str,
+) -> Result<&'a [u8], ()> {
     if value.len > 0 && value.bytes.is_null() {
         return Err(());
     }
