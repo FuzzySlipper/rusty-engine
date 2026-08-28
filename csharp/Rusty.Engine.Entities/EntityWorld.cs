@@ -329,6 +329,18 @@ public sealed class EntityWorld : IDisposable
 
     public EntityBatchReceipt Commit(EntityBatch batch, ulong? expectedRevision = null)
     {
+        EntityWorldBatchCandidate prepared = PrepareBatch(batch, expectedRevision);
+        prepared.Publish();
+        return prepared.Receipt;
+    }
+
+    /// <summary>
+    /// Validates and stages one batch without changing the live world. This is
+    /// the managed half of a synchronous cross-owner transaction: callers
+    /// publish it only after their other owner has committed successfully.
+    /// </summary>
+    public EntityWorldBatchCandidate PrepareBatch(EntityBatch batch, ulong? expectedRevision = null)
+    {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(batch);
         if (expectedRevision is ulong expected && expected != _state.Revision)
@@ -347,9 +359,11 @@ public sealed class EntityWorld : IDisposable
         if (batch.Mutations.Count != 0)
         {
             staged._state.Revision = checked(revisionBefore + 1);
-            _state = staged._state;
         }
-        return new EntityBatchReceipt(revisionBefore, _state.Revision, batch.Mutations.Count);
+        return new EntityWorldBatchCandidate(
+            this,
+            staged._state,
+            new EntityBatchReceipt(revisionBefore, staged._state.Revision, batch.Mutations.Count));
     }
 
     public EntityWorldSnapshot Snapshot()
@@ -698,6 +712,8 @@ public sealed class EntityWorld : IDisposable
     }
 
     internal void PublishPreparedRestore(WorldState restored) => _state = restored;
+
+    internal void PublishPreparedBatch(WorldState state) => _state = state;
 
     internal sealed class WorldState
     {

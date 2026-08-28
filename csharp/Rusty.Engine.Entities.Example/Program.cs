@@ -59,6 +59,7 @@ ExerciseContinuousMechanicsSibling();
 ExerciseContinuousMechanicsComposition();
 ExerciseStateMachineEntityComposition();
 ExerciseSpatialEntityProjection();
+ExerciseWorldOriginEntityComposition();
 
 static void Require(bool condition, string message)
 {
@@ -87,6 +88,37 @@ static void ValidateHealth(in Health health)
     {
         throw new ArgumentOutOfRangeException(nameof(health), "Health cannot be negative.");
     }
+}
+
+static void ExerciseWorldOriginEntityComposition()
+{
+    const uint GlobalPositionLocalComponentId = 40;
+    var globalPositions = ComponentType<WorldOriginGlobalPosition>.Create(
+        ProductComponentKeys.Create(GlobalPositionLocalComponentId));
+    using var world = new EntityWorld([EngineComponentTypes.Transform, globalPositions]);
+    EntityId entity = world.Create();
+    world.Set(entity, EngineComponentTypes.Transform, new Transform(
+        new Vector3(100.0f, 2.0f, -3.0f), Quaternion.Identity, new Vector3(2.0f, 3.0f, 4.0f)));
+    world.Set(entity, globalPositions, new WorldOriginGlobalPosition(100, 2, -3, 0.0, 0.0, 0.0));
+    var service = new WorldOriginServiceFake();
+    var adapter = new WorldOriginEntityWorld(world, service, service.Session, globalPositions);
+
+    using WorldOriginEntityWorldPrepared prepared = adapter.Prepare(100, 0, 0, maximumEntities: 1);
+    Require(prepared.Receipt.Native.AffectedEntityCount == 1
+        && prepared.Receipt.Affected.Span[0].EntityId == entity.Value,
+        "world-origin prepare did not retain one deterministic root fact");
+    WorldOriginEntityWorldCommitReceipt committed = prepared.Commit();
+    Require(committed.Native.OriginAfterCellX == 100
+        && committed.Managed.MutationCount == 1
+        && world.Get(entity, EngineComponentTypes.Transform).Translation.X == 0.0f,
+        "world-origin commit did not pair the native receipt with one managed transform batch");
+
+    using WorldOriginEntityWorldPrepared stale = adapter.Prepare(200, 0, 0, maximumEntities: 1);
+    world.Set(entity, EngineComponentTypes.Transform, new Transform(
+        new Vector3(1.0f, 2.0f, -3.0f), Quaternion.Identity, new Vector3(2.0f, 3.0f, 4.0f)));
+    Throws(() => stale.Commit(), "world-origin candidate did not reject stale managed transform state");
+    Require(service.CommitCount == 1,
+        "stale managed world state crossed into the native world-origin commit");
 }
 
 static void ExerciseStateMachineEntityComposition()
@@ -1161,10 +1193,12 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public ILookService Look => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public ISpatialService Spatial => throw new NotSupportedException();
+    public IWorldOriginService WorldOrigin => throw new NotSupportedException();
     public IVoxelService Voxel => throw new NotSupportedException();
     public IVoxelContentService VoxelContent => throw new NotSupportedException();
     public IContentService Content => throw new NotSupportedException();
     public IAppearanceService Appearance => throw new NotSupportedException();
+    public IPresentationService Presentation => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();
@@ -1704,4 +1738,87 @@ sealed class MechanicsAdapterFake : IMechanicsService
         => _entityIds.TryGetValue(entity.Handle.Value, out ulong entityId)
             ? entityId
             : throw new InvalidOperationException("transfer must use a bound Mechanics entity");
+}
+
+sealed class WorldOriginServiceFake : IWorldOriginService
+{
+    private const ulong InitialRevision = 0;
+    private readonly Dictionary<ulong, Prepared> _prepared = [];
+    private ulong _nextPrepared = 1;
+
+    public SpatialSession Session { get; } = new(new SpatialSessionHandle(1), () => { });
+    public int CommitCount { get; private set; }
+
+    public WorldOriginPrepared Prepare(WorldOriginPrepareRequest request)
+    {
+        ulong handle = _nextPrepared++;
+        var facts = new WorldOriginAffectedAtReceipt[request.Entities.Length];
+        ReadOnlySpan<WorldOriginEntityRow> rows = request.Entities.Span;
+        for (int index = 0; index < rows.Length; index++)
+        {
+            WorldOriginEntityRow row = rows[index];
+            Transform local = row.LocalTransform with
+            {
+                Translation = new Vector3(
+                    checked((float)(row.GlobalPosition.CellX - request.TargetCellX)) + (float)row.GlobalPosition.OffsetX,
+                    checked((float)(row.GlobalPosition.CellY - request.TargetCellY)) + (float)row.GlobalPosition.OffsetY,
+                    checked((float)(row.GlobalPosition.CellZ - request.TargetCellZ)) + (float)row.GlobalPosition.OffsetZ),
+            };
+            facts[index] = new WorldOriginAffectedAtReceipt(true, row.EntityId, local);
+        }
+        _prepared.Add(handle, new Prepared(request, facts));
+        return new WorldOriginPrepared(new WorldOriginPreparedHandle(handle), () => _prepared.Remove(handle));
+    }
+
+    public WorldOriginReadout Read(WorldOriginReadRequest request)
+        => new(0, 0, 0, InitialRevision, 16_384.0f, 0, 0);
+
+    public WorldOriginPreparedReadout ReadPrepared(WorldOriginPreparedReadRequest request)
+    {
+        Prepared prepared = Require(request.Prepared);
+        return new WorldOriginPreparedReadout(
+            true,
+            prepared.Request.TargetCellX,
+            prepared.Request.TargetCellY,
+            prepared.Request.TargetCellZ,
+            InitialRevision + 1,
+            0,
+            0,
+            checked((uint)prepared.Facts.Length),
+            16_384.0f);
+    }
+
+    public WorldOriginAffectedAtReceipt ReadAffectedAt(WorldOriginAffectedAtRequest request)
+    {
+        Prepared prepared = Require(request.Prepared);
+        return request.Index < prepared.Facts.Length
+            ? prepared.Facts[request.Index]
+            : default;
+    }
+
+    public WorldOriginCommitReceipt Commit(WorldOriginCommitRequest request)
+    {
+        Prepared prepared = Require(request.Prepared);
+        CommitCount++;
+        return new WorldOriginCommitReceipt(
+            InitialRevision,
+            InitialRevision + 1,
+            0,
+            0,
+            0,
+            prepared.Request.TargetCellX,
+            prepared.Request.TargetCellY,
+            prepared.Request.TargetCellZ,
+            0,
+            0,
+            checked((uint)prepared.Facts.Length),
+            16_384.0f);
+    }
+
+    private Prepared Require(WorldOriginPrepared prepared)
+        => _prepared.TryGetValue(prepared.Handle.Value, out Prepared? value)
+            ? value
+            : throw new InvalidOperationException("world-origin prepared handle was unavailable");
+
+    private sealed record Prepared(WorldOriginPrepareRequest Request, WorldOriginAffectedAtReceipt[] Facts);
 }
