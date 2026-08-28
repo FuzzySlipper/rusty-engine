@@ -26,6 +26,7 @@ members = [
     "rust/crates/authored-scene",
     "rust/crates/asset-catalog",
     "rust/crates/content-store",
+    "rust/crates/svc-content-store",
     "rust/crates/developer-command",
     "rust/crates/developer-command-standard",
     "rust/crates/environment-authoring",
@@ -89,6 +90,7 @@ voxel-convert = { path = "rust/crates/voxel-convert" }
 authored-scene = { path = "rust/crates/authored-scene" }
 asset-catalog = { path = "rust/crates/asset-catalog" }
 content-store = { path = "rust/crates/content-store" }
+svc-content-store = { path = "rust/crates/svc-content-store" }
 developer-command = { path = "rust/crates/developer-command" }
 developer-command-standard = { path = "rust/crates/developer-command-standard" }
 environment-authoring = { path = "rust/crates/environment-authoring" }
@@ -132,6 +134,7 @@ gltf = { version = "1.4", default-features = false, features = ["utils", "names"
 cap-std = "3"
 tempfile = "3"
 rquickjs = "0.12.2"
+fs2 = "0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
