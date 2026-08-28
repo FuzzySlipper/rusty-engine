@@ -18,7 +18,9 @@ use render_host_contracts::{
     RendererCameraBasis, RendererCameraPose, RendererHostDiagnostic, RendererPhysicalInputReadout,
     RendererPickReceipt, RendererPickRequest, RendererViewComposition,
 };
-use render_model::RenderFrameDiff;
+use render_model::{
+    validate_animated_embedded_material_slots, AnimatedMeshEmbeddedMaterialSlot, RenderFrameDiff,
+};
 use render_presentation::PresentationFrameDiff;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
@@ -94,6 +96,10 @@ pub struct RendererAnimatedMeshResource {
     pub content_hash: String,
     pub clip_ids: Vec<String>,
     pub clip_source_names: Vec<String>,
+    /// Optional importer-derived map from dense Engine material slots to the
+    /// explicit source material indices in this admitted GLB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded_material_slots: Option<Vec<AnimatedMeshEmbeddedMaterialSlot>>,
 }
 
 /// Explicit clip-only GLB resource for the fixed renderer webview bridge.
@@ -731,6 +737,7 @@ fn validate_animation_clip_pack_resources(
             content_hash: pack.content_hash.clone(),
             clip_ids: pack.clip_ids.clone(),
             clip_source_names: pack.clip_source_names.clone(),
+            embedded_material_slots: None,
         })
         .collect::<Vec<_>>();
     validate_resource_descriptors(resources, &adapted, "clip-pack-resource")
@@ -750,6 +757,15 @@ fn validate_resource_descriptors(
 ) -> Result<(), RendererWebviewError> {
     let mut assets = std::collections::BTreeSet::new();
     for animated in animated_meshes {
+        if animated
+            .embedded_material_slots
+            .as_ref()
+            .is_some_and(|slots| validate_animated_embedded_material_slots(slots).is_err())
+        {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh embedded material slots must be dense with unique source material slots",
+            ));
+        }
         if animated.asset.is_empty()
             || animated.asset.len() > 256
             || animated.asset.chars().any(char::is_control)
@@ -1152,6 +1168,16 @@ mod tests {
             content_hash,
             clip_ids: vec!["idle".to_owned(), "run".to_owned()],
             clip_source_names: vec!["idle".to_owned(), "run".to_owned()],
+            embedded_material_slots: Some(vec![
+                AnimatedMeshEmbeddedMaterialSlot {
+                    slot: 0,
+                    source_material_slot: 3,
+                },
+                AnimatedMeshEmbeddedMaterialSlot {
+                    slot: 1,
+                    source_material_slot: 7,
+                },
+            ]),
         }];
         assert!(validate_animated_mesh_resources(&resources, &animated).is_ok());
 
@@ -1160,6 +1186,7 @@ mod tests {
             content_hash: animated[0].content_hash.clone(),
             clip_ids: Vec::new(),
             clip_source_names: Vec::new(),
+            embedded_material_slots: None,
         }];
         assert!(validate_animated_mesh_resources(&resources, &static_glb).is_ok());
 
@@ -1185,6 +1212,73 @@ mod tests {
                 Err(RendererWebviewError::InvalidResource(_))
             ));
         }
+
+        let mut non_dense = animated.clone();
+        non_dense[0].embedded_material_slots = Some(vec![AnimatedMeshEmbeddedMaterialSlot {
+            slot: 1,
+            source_material_slot: 3,
+        }]);
+        assert!(matches!(
+            validate_animated_mesh_resources(&resources, &non_dense),
+            Err(RendererWebviewError::InvalidResource(_))
+        ));
+
+        let mut duplicate_source = animated;
+        duplicate_source[0].embedded_material_slots = Some(vec![
+            AnimatedMeshEmbeddedMaterialSlot {
+                slot: 0,
+                source_material_slot: 3,
+            },
+            AnimatedMeshEmbeddedMaterialSlot {
+                slot: 1,
+                source_material_slot: 3,
+            },
+        ]);
+        assert!(matches!(
+            validate_animated_mesh_resources(&resources, &duplicate_source),
+            Err(RendererWebviewError::InvalidResource(_))
+        ));
+    }
+
+    #[test]
+    fn wire_configuration_preserves_optional_embedded_material_slots() {
+        let with_slots = RendererAnimatedMeshResource {
+            asset: "mesh-animation/test-actor".to_owned(),
+            content_hash: format!("sha256:{}", "0".repeat(64)),
+            clip_ids: vec!["idle".to_owned()],
+            clip_source_names: vec!["idle".to_owned()],
+            embedded_material_slots: Some(vec![AnimatedMeshEmbeddedMaterialSlot {
+                slot: 0,
+                source_material_slot: 3,
+            }]),
+        };
+        let encoded = serde_json::to_value(RendererWireConfiguration::new(
+            RendererWebviewOptions::default(),
+            vec![with_slots],
+            Vec::new(),
+        ))
+        .unwrap();
+        assert_eq!(
+            encoded["animatedMeshes"][0]["embeddedMaterialSlots"],
+            serde_json::json!([{ "slot": 0, "sourceMaterialSlot": 3 }])
+        );
+
+        let without_slots = RendererAnimatedMeshResource {
+            asset: "mesh-animation/legacy-actor".to_owned(),
+            content_hash: format!("sha256:{}", "1".repeat(64)),
+            clip_ids: vec!["idle".to_owned()],
+            clip_source_names: vec!["idle".to_owned()],
+            embedded_material_slots: None,
+        };
+        let encoded = serde_json::to_value(RendererWireConfiguration::new(
+            RendererWebviewOptions::default(),
+            vec![without_slots],
+            Vec::new(),
+        ))
+        .unwrap();
+        assert!(encoded["animatedMeshes"][0]
+            .get("embeddedMaterialSlots")
+            .is_none());
     }
 
     #[test]

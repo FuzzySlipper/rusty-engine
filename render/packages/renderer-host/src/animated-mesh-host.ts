@@ -388,7 +388,7 @@ function validateManifest(manifest: RendererAnimatedMeshResourceManifest): void 
   }
 }
 
-function validEmbeddedMaterialSlots(
+export function validEmbeddedMaterialSlots(
   slots: readonly RendererAnimatedMeshEmbeddedMaterialSlot[],
 ): boolean {
   const sources = new Set<number>();

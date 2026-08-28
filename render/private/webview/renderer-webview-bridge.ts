@@ -13,11 +13,14 @@ import {
   RendererParticleHost,
   RendererPresentationHostSet,
   RendererTelemetryOverlayHost,
+  validEmbeddedMaterialSlots,
   mountRendererSurface,
   mountRendererSurfaceWithResources,
   type RendererSurface,
   type RendererSurfaceCameraPose,
   type RendererSurfacePickRequest,
+  type RendererAnimatedMeshResourceDescriptor,
+  type RendererAnimationClipPackResourceDescriptor,
   type RendererParticleSceneSink,
 } from '@rusty-engine/renderer-host';
 
@@ -36,18 +39,11 @@ interface RendererResourceEntry {
 
 interface RendererWebviewConfiguration {
   readonly autoStart: boolean;
-  readonly animatedMeshes: readonly RendererAnimatedMeshEntry[];
-  readonly animationClipPacks: readonly RendererAnimatedMeshEntry[];
+  readonly animatedMeshes: readonly RendererAnimatedMeshResourceDescriptor[];
+  readonly animationClipPacks: readonly RendererAnimationClipPackResourceDescriptor[];
   readonly clearColor: number | null;
   readonly pixelRatio: number;
   readonly resources: readonly RendererResourceEntry[];
-}
-
-interface RendererAnimatedMeshEntry {
-  readonly asset: string;
-  readonly contentHash: string;
-  readonly clipSourceNames?: readonly string[];
-  readonly clipIds: readonly string[];
 }
 
 interface RendererWebviewPrivateApi {
@@ -282,7 +278,7 @@ export function installRendererWebviewBridge(): void {
         resources: configuration.animatedMeshes,
         ...(configuration.animationClipPacks.length === 0 ? {} : { clipPacks: configuration.animationClipPacks }),
       },
-      resolveAnimatedMeshResource: async (descriptor: RendererAnimatedMeshEntry) =>
+      resolveAnimatedMeshResource: async (descriptor: RendererAnimatedMeshResourceDescriptor) =>
         resourceBytesByIdentity(
           bytesByIdentity,
           `${clipPackAssets.has(descriptor.asset) ? 'clip-pack' : 'mesh'}-resource/${descriptor.contentHash.slice('sha256:'.length)}`,
@@ -440,7 +436,8 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
     if (typeof entry !== 'object' || entry === null) {
       throw new Error(`configuration.animatedMeshes[${String(index)}] must be an object`);
     }
-    const animated = entry as Partial<RendererAnimatedMeshEntry>;
+    const animated = entry as Partial<RendererAnimatedMeshResourceDescriptor>;
+    const embeddedMaterialSlots = decodeEmbeddedMaterialSlots(animated.embeddedMaterialSlots);
     if (typeof animated.asset !== 'string' || animated.asset.length === 0
       || animatedAssets.has(animated.asset)
       || typeof animated.contentHash !== 'string'
@@ -451,7 +448,8 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
       || (animated.clipSourceNames !== undefined && (!Array.isArray(animated.clipSourceNames)
         || animated.clipSourceNames.length !== animated.clipIds.length
         || !animated.clipSourceNames.every((clip) => typeof clip === 'string' && clip.length > 0)
-        || new Set(animated.clipSourceNames).size !== animated.clipSourceNames.length))) {
+        || new Set(animated.clipSourceNames).size !== animated.clipSourceNames.length))
+      || (animated.embeddedMaterialSlots !== undefined && embeddedMaterialSlots === undefined)) {
       throw new Error(`configuration.animatedMeshes[${String(index)}] is invalid or duplicated`);
     }
     animatedAssets.add(animated.asset);
@@ -460,6 +458,7 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
       contentHash: animated.contentHash,
       clipIds: Object.freeze([...animated.clipIds]),
       ...(animated.clipSourceNames === undefined ? {} : { clipSourceNames: Object.freeze([...animated.clipSourceNames]) }),
+      ...(embeddedMaterialSlots === undefined ? {} : { embeddedMaterialSlots }),
     });
   });
   if (!Array.isArray(configuredAnimationClipPacks) || configuredAnimationClipPacks.length > 256) {
@@ -468,7 +467,7 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
   const packAssets = new Set<string>();
   const animationClipPacks = configuredAnimationClipPacks.map((entry, index) => {
     if (typeof entry !== 'object' || entry === null) throw new Error(`configuration.animationClipPacks[${String(index)}] must be an object`);
-    const pack = entry as Partial<RendererAnimatedMeshEntry>;
+    const pack = entry as Partial<RendererAnimationClipPackResourceDescriptor>;
     if (typeof pack.asset !== 'string' || pack.asset.length === 0 || packAssets.has(pack.asset)
       || typeof pack.contentHash !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(pack.contentHash)
       || !Array.isArray(pack.clipIds) || pack.clipIds.length === 0
@@ -528,6 +527,26 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
     pixelRatio,
     resources: Object.freeze(resources),
   });
+}
+
+function decodeEmbeddedMaterialSlots(
+  candidate: unknown,
+): readonly { readonly slot: number; readonly sourceMaterialSlot: number }[] | undefined {
+  if (candidate === undefined) return undefined;
+  if (!Array.isArray(candidate)) return undefined;
+  const slots = candidate.map((value) => {
+    if (typeof value !== 'object' || value === null) return undefined;
+    const binding = value as { readonly slot?: unknown; readonly sourceMaterialSlot?: unknown };
+    if (typeof binding.slot !== 'number' || typeof binding.sourceMaterialSlot !== 'number') {
+      return undefined;
+    }
+    return Object.freeze({ slot: binding.slot, sourceMaterialSlot: binding.sourceMaterialSlot });
+  });
+  if (!slots.every((slot): slot is { readonly slot: number; readonly sourceMaterialSlot: number } => slot !== undefined)
+    || !validEmbeddedMaterialSlots(slots)) {
+    return undefined;
+  }
+  return Object.freeze(slots);
 }
 
 function meshManifest(resources: readonly RendererResourceEntry[]): {

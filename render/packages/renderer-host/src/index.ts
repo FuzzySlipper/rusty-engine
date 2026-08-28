@@ -97,6 +97,7 @@ export { sampleCameraTransition } from './camera-transition.js';
 export {
   RendererHostError,
   createRendererAnimatedMeshProjection,
+  validEmbeddedMaterialSlots,
 } from './animated-mesh-host.js';
 
 export {

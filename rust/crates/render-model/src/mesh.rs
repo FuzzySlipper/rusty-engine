@@ -990,7 +990,7 @@ pub struct AnimatedMeshEmbeddedMaterialSlot {
     pub source_material_slot: u16,
 }
 
-fn validate_animated_embedded_material_slots(
+pub fn validate_animated_embedded_material_slots(
     slots: &[AnimatedMeshEmbeddedMaterialSlot],
 ) -> Result<(), AnimatedMeshEmbeddedMaterialSlotError> {
     let mut source_slots = BTreeSet::new();
