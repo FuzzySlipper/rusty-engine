@@ -126,8 +126,7 @@ def main() -> None:
         "rust/crates/renderer-webview-host/artifacts/renderer-webview.js": {"render"},
         "rust/crates/renderer-webview-host/src/lib.rs": {"render", "verify"},
         "rust/crates/entity-state/src/lib.rs": {"studio", "verify"},
-        "docs/known-limitations.md": {"docs"},
-        "docs/gameplay-rules-contract.md": {"docs", "rules"},
+        "docs/csharp-sdk.md": {"docs"},
         "rules/packages/gameplay-rules-authoring/src/index.ts": {"rules"},
         "studio/apps/studio-app/src/main.ts": {"studio"},
         ".github/workflows/render.yml": {"docs", "render"},
@@ -202,8 +201,8 @@ def main() -> None:
     require_paths(
         "rules",
         workflows["rules"],
-        {"rules/**", "rust/crates/gameplay-rules/**", "docs/gameplay-rules-contract.md"},
-        {"docs/known-limitations.md", "docs/README.md", "README.md", "AGENTS.md"},
+        {"rules/**", "rust/crates/gameplay-rules/**"},
+        {"docs/**", "README.md", "AGENTS.md"},
     )
     require_paths(
         "docs",

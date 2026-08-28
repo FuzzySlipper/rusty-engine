@@ -1,41 +1,47 @@
-# Rusty Engine — C# downstream runtime
+# Rusty Engine
 
-Rusty Engine uses ordinary C# as its downstream application/game language:
-
-- Engine checkout: `/home/dev/rusty-engine`
-- paired proving product: `/home/dev/rusty-dagger`
-
-The current NativeAOT implementation proves the direction but still has
-walking-spike organization. Engine ABI, host, generator, and public C# SDK
-ownership are the next architecture-planning focus before broad API expansion.
-
-## Current model
+Rusty Engine is reusable Rust infrastructure for NativeAOT C# products. A
+product owns its game and application meaning; the Engine supplies durable
+mechanisms and the host that makes that product run.
 
 > The product decides. The Engine guarantees.
 
-C# owns downstream gameplay, state, orchestration, and product meaning. Rust
-provides direct named Engine mechanisms. The NativeAOT product is trusted; the
-boundary is a generated ABI, not a JSON protocol or policy sandbox.
+The paired proving product is `/home/dev/rusty-dagger`.
 
-The Engine continues to own rendering infrastructure. Downstream C# publishes
-product facts through generated APIs; TypeScript remains limited to DOM UI and
-Engine-owned host/backend implementation.
+## Start here
 
-## Generated bindings
+- [Architecture overview](docs/architecture.md) — ownership, layers, and data
+  flow.
+- [C# SDK guide](docs/csharp-sdk.md) — build a product through the current
+  generated safe API.
+- [C# product style](docs/csharp-product-style.md) — recommended downstream
+  organization and coding conventions.
+- [Agent guidance](AGENTS.md) — task-time boundary and verification rules.
 
-The sole ABI source is:
+## Repository map
 
-```text
-rust/crates/csharp-engine-abi
-```
+| Owner | Location | Responsibility |
+| --- | --- | --- |
+| Rust ABI declaration | [`rust/crates/csharp-engine-abi`](rust/crates/csharp-engine-abi) | The single C ABI/function-table source. |
+| Rust Engine bridges | [`rust/crates/csharp-engine-services`](rust/crates/csharp-engine-services) | Concrete named Engine service bridges. |
+| Product runtime | [`rust/crates/csharp-product-runtime`](rust/crates/csharp-product-runtime) | Loads NativeAOT products and integrates their lifecycle with the host. |
+| Binding generation | [`scripts/generate-csharp-native-bindings.sh`](scripts/generate-csharp-native-bindings.sh) and [`csharp/Rusty.Engine.BindingGenerator`](csharp/Rusty.Engine.BindingGenerator) | Generates native declarations, safe contracts/values, and generator inputs. |
+| Safe C# surface | [`csharp/Rusty.Engine`](csharp/Rusty.Engine) | Generated contracts plus handwritten managed helpers. |
+| Product bootstrap | [`csharp/Rusty.Engine.ProductGenerator`](csharp/Rusty.Engine.ProductGenerator) | Generates the internal NativeAOT exports and safe service implementations. |
+| Optional C# helpers | [`csharp/Rusty.Engine.Application`](csharp/Rusty.Engine.Application), [`Entities`](csharp/Rusty.Engine.Entities), [`Persistence`](csharp/Rusty.Engine.Persistence), [`Resolution`](csharp/Rusty.Engine.Resolution) | Reusable managed scheduling, entity, persistence, and resolution helpers. |
+| Working fixture | [`fixtures/csharp-nativeaot-trial`](fixtures/csharp-nativeaot-trial) | Minimal buildable product and direct runtime exercise. |
 
-Generate a product's C header and C# bindings with:
+## NativeAOT quick start
+
+Generate bindings into a product-local ignored directory:
 
 ```bash
 scripts/generate-csharp-native-bindings.sh /absolute/product/obj/Generated
 ```
 
-The NativeAOT fixture invokes generation automatically:
+The fixture is the smallest current end-to-end reference. Its game project
+references `Rusty.Engine`; its composition project references the source
+generator that supplies the internal native bootstrap.
 
 ```bash
 dotnet publish fixtures/csharp-nativeaot-trial/CsharpNativeAotTrial.csproj \
@@ -47,35 +53,26 @@ cargo run -p csharp-product-runtime --locked -- \
   --content-dir fixtures/csharp-nativeaot-trial/content \
   --mode demand --persistence-root /tmp/rusty-nativeaot-persistence \
   --content-store-root /tmp/rusty-nativeaot-content-store \
-  --direct-intent runtime.exercise=payload:runtime.exercise.payload --port 0 --exercise
+  --direct-intent runtime.exercise=payload:runtime.exercise.payload \
+  --port 0 --exercise
 ```
 
-Persistence and content-store roots are separate explicit developer-host
-choices. Product code opens relative named scopes beneath either owner;
-omitting a root leaves that optional service unavailable, and the Engine never
-deletes a selected root on shutdown. Content-store publication is typed
-manifest/write-set/CAS execution, not the opaque product-byte Persistence
-store.
+`obj/Generated` is build output: do not edit or commit it. Persistence and
+content-store roots are separate developer-host choices. The Engine never
+deletes a selected root on shutdown.
 
-Generated sources belong under `obj/Generated` and are not committed.
+## Boundary in one page
 
-`csharp-engine-services` owns the concrete Engine bridges; the product runtime
-owns loaded-product binding and lifetime management.
+- C# owns product state, rules, orchestration, content meaning, and policy.
+- Rust owns lifecycle/host integration, input delivery, renderer and
+  presentation infrastructure, spatial mechanisms, resources, persistence
+  primitives, and other named Engine capabilities.
+- The generated API is the green path. A missing capability is an upstream
+  request and a valid stopping point—not permission to recreate an Engine
+  mechanism downstream.
+- TypeScript is limited to DOM UI, accessibility, and explicit Engine
+  host/backend work. It does not own gameplay state or render non-UI game
+  elements.
 
-## Trial rules
-
-- Prefer adding a direct upstream capability over recreating Engine mechanisms
-  downstream.
-- A missing upstream capability is a valid stopping result.
-- Do not introduce JSON invocation/results, generic dispatch, registries,
-  version negotiation, or adversarial boundary ceremony.
-- Do not use TypeScript or browser code to render non-UI game elements.
-- Use narrow compilation/direct-exercise evidence only when it answers the
-  current task.
-
-## Documentation
-
-The prior architecture documentation was intentionally removed so it cannot
-steer implementation back toward superseded assumptions. Git history retains
-it. A later focused task will recover useful durable mechanisms and write new
-documentation from the proven architecture.
+For details and the product coding lane, use the linked guides rather than
+duplicating architecture here.

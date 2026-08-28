@@ -1,99 +1,114 @@
-# Rusty Engine C# downstream guidance
+# Rusty Engine downstream guidance
 
-## Scope
+## Direction and ownership
 
-This is the current mainline direction for `/home/dev/rusty-engine`. The paired
-downstream proving product is `/home/dev/rusty-dagger`.
-
-The NativeAOT work has established technical viability, but its current crate,
-ABI, generator, and C# facade layout is walking-spike scaffolding. Before broad
-new capability work, follow the current Den planning work that separates those
-owners into a durable SDK shape. Do not treat file placement in the spike as an
-architecture decision.
-
-## Den
-
-- Engine project: `rusty-engine`.
-- Resolve live Den guidance before substantial work. The user's current task
-  and its C#-trial task description override older project documents that
-  assume downstream Rust, compiled TypeScript gameplay, Product Model, or the
-  previous authority posture.
-- If Den is unreachable, stop and report the failed tool. Do not invent local
-  task records or reconstruct current task state from deleted documentation.
-
-## Trial posture
+Rusty Engine's current downstream lane is ordinary NativeAOT C#. The paired
+proving product is `/home/dev/rusty-dagger`.
 
 > The product decides. The Engine guarantees.
 
-- Downstream C# owns application and game logic, authoritative product state,
+- A C# product owns application and game logic, authoritative product state,
   orchestration, content meaning, and product policy.
-- Engine Rust owns durable reusable infrastructure: lifecycle and host
-  integration, input delivery, rendering and presentation mechanisms, spatial
-  services, content/resource mechanisms, persistence primitives, diagnostics,
-  and other named Engine capabilities.
-- This division is not a contest over language authority. C# is expected to
-  have substantial authority gravity. Engine mechanisms remain upstream so
-  products do not recreate fragile infrastructure.
-- NativeAOT product code is trusted first-party application code. Do not add
-  compatibility negotiation, permission systems, hostile-input policy,
-  canonical schemas, registries, generic command buses, or JSON invocation
-  protocols merely to protect Engine from the product.
-- Underlying Engine services retain their ordinary correctness invariants. The
-  foreign boundary owns only real ABI and memory responsibilities: layout,
-  pointer/length coherence, borrowed lifetime, copying retained data, no
-  unwind/exception across the ABI, and exact ownership/release.
+- Rust owns reusable Engine mechanisms: lifecycle and host integration, input
+  delivery, rendering and presentation infrastructure, spatial mechanisms,
+  resources/content, persistence primitives, diagnostics, and other named
+  Engine services.
+- This is not a language-authority contest. C# is expected to carry substantial
+  application authority; Engine mechanisms stay upstream so products do not
+  recreate fragile infrastructure.
+- NativeAOT product code is trusted first-party code. Do not add JSON protocols,
+  generic dispatch, registries, compatibility negotiation, permission systems,
+  or hostile-input ceremony to protect Engine from the product.
 
-## Generated native API
+Read [the architecture overview](docs/architecture.md) and
+[the C# SDK guide](docs/csharp-sdk.md) before changing this boundary.
 
-- `rust/crates/csharp-engine-abi` is the sole ABI declaration source;
-  `rust/crates/csharp-engine-services` owns the concrete Engine bridges, while
-  `csharp-product-runtime` owns product binding and lifetimes.
+## Den and missing capabilities
+
+- Engine project: `rusty-engine`. Resolve current Den guidance before
+  substantial work; the current task overrides stale documentation and old
+  assumptions about downstream Rust, compiled TypeScript gameplay, or Product
+  Model.
+- If Den is unreachable, stop and report the failed tool. Do not invent local
+  task records.
+- If a needed mechanism is not expressible through the generated API, identify
+  the exact upstream capability, file or link the owning request when
+  authorized, and stop. Do not recreate it in C#, TypeScript, or browser code
+  merely to complete a task.
+
+## Generated NativeAOT boundary
+
+- `rust/crates/csharp-engine-abi` is the sole ABI declaration source.
+  `rust/crates/csharp-engine-services` implements named Engine bridges, and
+  `rust/crates/csharp-product-runtime` owns loaded-product binding, lifecycle,
+  and host integration.
 - `scripts/generate-csharp-native-bindings.sh` runs pinned cbindgen and
-  ClangSharp and emits the C header plus raw/idiomatic C# API into a product's
-  ignored `obj/Generated` directory.
-- Generated files are never manually edited or checked in.
-- Add named Engine capabilities to the Rust function table. Do not create
-  method-name dispatch, reflection, a plugin registry, or parallel handwritten
-  C# declarations.
-- One explicit `rusty_product_bind` bootstrap is acceptable; lifecycle and
-  Engine callbacks are compiler-checked through generated function tables.
+  ClangSharp, generating the header plus raw and safe C# inputs under ignored
+  `obj/Generated` paths. Generated files are never edited or checked in.
+- `csharp/Rusty.Engine` is the public safe service/value surface;
+  `csharp/Rusty.Engine.ProductGenerator` generates the internal NativeAOT
+  bootstrap and service implementations. Ordinary product code references the
+  former and must not handwrite P/Invoke, exported entrypoints, unsafe native
+  calls, or parallel declarations.
+- Add coherent named Engine capabilities to the Rust function table and the
+  generator path. Do not create method-name dispatch, reflection, plugin
+  registries, or a task-specific callback list.
+- The boundary handles actual ABI/lifetime concerns only: layout,
+  pointer/length coherence, copied retained data, no unwind across ABI, and
+  exact release. Underlying Engine services retain their normal invariants.
 
 ## Rendering and TypeScript
 
 - Engine owns renderer resources, retained handles, frame construction,
-  backend realization, the canvas, and renderer lifecycle.
+  backend realization, canvas ownership, and renderer lifecycle.
 - C# publishes product facts through named Engine APIs. It must not build a
   second renderer, retained-frame implementation, resource loader, canvas, or
   browser-rendering substitute.
 - TypeScript may own DOM UI, accessibility, and explicit Engine host/backend
   implementation. Downstream TypeScript must never render non-UI game elements
   or acquire application/gameplay state.
-- When a product cannot express a needed presentation or mechanism through the
-  generated API, stop and request the missing upstream capability. Inability to
-  proceed is a valid task result and is preferred to a downstream substitute or
-  fake proof.
 
-## Work and verification
+## C# product style
 
-- Add capabilities as coherent Engine service families, informed by concrete
-  downstream needs. Do not accumulate a Dagger-shaped callback list or claim
-  blanket coverage of Rust source-level APIs.
+The following are product-facing recommendations, not an unimplemented Engine
+module framework. See [C# product style](docs/csharp-product-style.md) for the
+full guide.
+
+- Organize code by gameplay domain, with one clear mutable state owner for each
+  domain. Keep systems thin: **Read → Decide → Apply → Publish**.
+- Use views, requests, receipts, and facts when a boundary benefits from an
+  explicit typed contract; do not introduce a bus or framework where a direct
+  method is clearer.
+- Use Engine-provided update facts, input, and random services for gameplay
+  behavior. Do not retain native pointers, create a second loop, or depend on
+  browser state for game meaning.
+- Prefer file-scoped namespaces, nullable reference types, `internal` and
+  `sealed` defaults, records/value types for small immutable data, and explicit
+  composition. Keep unsafe/PInvoke out of ordinary product projects.
+- Never bury numeric or string tuning/identities in behavior. At minimum give a
+  local value a named `const` or `static readonly` declaration; prefer typed
+  definitions or product-owned configuration adapters for values that need
+  tuning. Avoid a giant global constants dump unless a value is genuinely
+  cross-domain.
+
+## Work and evidence
+
+- Add capabilities as coherent service families informed by real downstream
+  needs. The generated surface is not a claim that every Rust source API is
+  available in C#.
 - Report a short milestone before expensive integration: goal advanced,
   necessary surfaces, proof scaffolding, drift/unsupported boundary, and any
   upstream request.
-- Tests are optional evidence, not the deliverable. Run only generation,
-  focused compilation, NativeAOT publish, or the direct exercise when those
-  checks answer the task's actual question.
-- Do not run old documentation, provider-wide, browser, packaging, security,
-  conformance, or downstream-Rust gates unless the current task explicitly
-  requires one.
-- Preserve unrelated work and follow the current task's branch and promotion
+- Tests are evidence, not the deliverable. Run generation, focused compilation,
+  NativeAOT publish, or a direct exercise only when it answers the task's
+  actual question. Do not chase old documentation, provider-wide, browser,
+  packaging, security, conformance, or downstream-Rust gates without a task
+  requirement.
+- Preserve unrelated work and follow the task's branch and promotion
   instructions.
 
-## Documentation status
+## Documentation
 
-The repository deliberately contains no broad `docs/` corpus during this
-transition. Deleted documents remain available in Git history. A later focused
-documentation task will extract still-useful durable mechanisms and write a
-coherent architecture from demonstrated behavior. Until then, keep this short
-guidance truthful and do not recreate aspirational documentation.
+The intentionally small documentation set is rooted in current source, not in
+the superseded corpus preserved in Git history. Keep it concise and truthful;
+use history as donor material only. Start at [docs/README.md](docs/README.md).

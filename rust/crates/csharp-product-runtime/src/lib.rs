@@ -1,9 +1,9 @@
-//! Deliberately permissive, experimental loader for one trusted NativeAOT C# product.
+//! Deliberately permissive loader for one trusted NativeAOT C# product.
 //!
-//! This is a walking trial, not a product plugin framework or a compatibility
-//! promise. The product is first-party trusted code. This adapter owns only the
-//! fixed C ABI, copying borrowed/owned buffers, and deterministic library
-//! lifetime; the C# product owns its gameplay state and orchestration.
+//! This is the Engine's direct product runtime, not a hostile plugin boundary or
+//! compatibility protocol. The product is first-party trusted code. This adapter
+//! owns the fixed C ABI, copying borrowed/owned buffers, and deterministic library
+//! lifetime; the C# product owns its application state and orchestration.
 
 pub use csharp_engine_abi::*;
 
@@ -1550,7 +1550,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
     {
         Err(ProductDevRuntimeError::new(
             "CSHARP_TIMELINE_UNSUPPORTED",
-            "the NativeAOT walking trial has no timeline bridge",
+            "the C# NativeAOT runtime does not yet bridge timeline completions",
         )
         .expect("fixed error"))
     }

@@ -10,9 +10,7 @@ on:
       - 'docs/**'
       - 'scripts/check-ci-routing.py'
       - 'scripts/check-doc-links.sh'
-      - 'scripts/code_map_freshness.py'
       - 'scripts/test-ci-routing-checker.sh'
-      - 'scripts/test_architecture_checks.py'
       - 'scripts/verify-docs.sh'
       - '.github/workflows/**'
   pull_request:
@@ -22,9 +20,7 @@ on:
       - 'docs/**'
       - 'scripts/check-ci-routing.py'
       - 'scripts/check-doc-links.sh'
-      - 'scripts/code_map_freshness.py'
       - 'scripts/test-ci-routing-checker.sh'
-      - 'scripts/test_architecture_checks.py'
       - 'scripts/verify-docs.sh'
       - '.github/workflows/**'
 

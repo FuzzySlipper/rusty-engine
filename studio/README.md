@@ -18,11 +18,11 @@ capability authoring, general asset import/reimport and dependency/lock browsing
 host-user camera/input settings. Those operations remain named project or host boundaries rather
 than a universal editor command layer.
 
-See [the Studio migration contract](../docs/studio-migration-contract.md).
-The closed adapter protocol and its explicit integration gate are documented in
-[the Studio adapter protocol](../docs/studio-adapter-protocol.md).
-The rationale and classification for every host/browser size ceiling is kept in
-[the Studio size-limit inventory](../docs/studio-size-limit-inventory.md).
+Studio is an Engine-owned tool surface. Its relationship to downstream C# and
+the Engine host is summarized in the
+[Engine architecture overview](../docs/architecture.md). Historical migration,
+adapter, and size-limit notes remain available in Git history as donor
+material; they are not current standalone contracts.
 
 ## Isolated verification
 
@@ -42,15 +42,14 @@ Ordinary `./scripts/verify.sh` does not install or execute this workspace.
 ## Package and host ownership
 
 Studio and the renderer are isolated Engine-owned workspaces. Verify this workspace with
-`pnpm run verify:studio`; a downstream Rust game does not install, import, build, or configure
+`pnpm run verify:studio`; a downstream product does not install, import, build, or configure
 these packages as a second Studio or renderer authority.
 
-Downstream projects consume the complete Rust facade through one unconditional sibling path
-dependency and submit retained facts through the Engine-owned Rust renderer/webview or
+Downstream products use the Engine-owned renderer/webview or
 `@rusty-engine/application-host` boundary. The Engine-hosted Studio discovers a project through its
-root-local `.rusty-studio.json`, project data, and the project's Rust adapter. It does not require a
-downstream copy of the Studio shell, renderer TypeScript, Three/WebGL backend, private bridge, or
-child HTML document.
+root-local `.rusty-studio.json`, project data, and the project's current Studio adapter. It does not
+require a downstream copy of the Studio shell, renderer TypeScript, Three/WebGL backend, private
+bridge, or child HTML document.
 
 When a selected downstream checkout needs focused adapter or browser proof, use the explicit
 integration gate for that checkout. Exact source and consumer commits belong in the Den task or

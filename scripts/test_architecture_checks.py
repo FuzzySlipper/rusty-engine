@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
-"""Focused positive and negative tests for the lightweight architecture checks."""
+"""Focused positive and negative tests for Rust workspace dependency boundaries."""
 
 from __future__ import annotations
 
-from contextlib import redirect_stdout
-import io
-import os
 import sys
-import tempfile
 from pathlib import Path
 import unittest
-from unittest import mock
 
 sys.dont_write_bytecode = True
-import code_map_freshness
 import dependency_boundary_check
 
 
@@ -158,66 +152,6 @@ class DependencyBoundaryTests(unittest.TestCase):
             [("core-assets", "entity-state", "build", "generated_facts")],
         )
         self.assertNotEqual(dependency_boundary_check.find_violations(build_metadata), [])
-
-
-class CodeMapFreshnessTests(unittest.TestCase):
-    def test_current_workspace_has_complete_resolving_owner_maps(self) -> None:
-        metadata = code_map_freshness.load_metadata(REPO_ROOT)
-        self.assertEqual(code_map_freshness.find_advisories(REPO_ROOT, metadata), [])
-
-    def test_missing_assignment_stale_crate_and_unresolved_path_are_advisory(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="rusty-code-map-test-") as temporary:
-            root = Path(temporary)
-            (root / "docs" / "code-map").mkdir(parents=True)
-            for name in ("core-a", "core-b", "stale-owner"):
-                (root / "rust" / "crates" / name).mkdir(parents=True)
-            (root / "docs" / "code-map" / "foundations.md").write_text(
-                """# Foundations
-
-## Primary paths
-
-- [`core-a`](../../rust/crates/core-a)
-- [`stale-owner`](../../rust/crates/stale-owner)
-- [`missing`](../../missing/entry.rs)
-
-## Acceptance gates and fixtures
-""",
-                encoding="utf-8",
-            )
-            metadata = metadata_fixture(["core-a", "core-b"], [], root)
-            rendered = "\n".join(
-                advisory.message for advisory in code_map_freshness.find_advisories(root, metadata)
-            )
-            self.assertIn("missing owner-map assignment for Cargo package core-b", rendered)
-            self.assertIn("stale Cargo crate path", rendered)
-            self.assertIn("unresolved primary-path reference", rendered)
-
-    def test_github_advisory_emits_annotation_and_step_summary_without_failure(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="rusty-code-map-output-") as temporary:
-            summary_path = Path(temporary) / "summary.md"
-            output = io.StringIO()
-            with mock.patch.dict(
-                os.environ,
-                {
-                    "GITHUB_ACTIONS": "true",
-                    "GITHUB_STEP_SUMMARY": str(summary_path),
-                },
-            ), redirect_stdout(output):
-                code_map_freshness.report(
-                    2,
-                    [
-                        code_map_freshness.Advisory(
-                            "missing owner-map assignment",
-                            Path("docs/code-map/example.md"),
-                            12,
-                        )
-                    ],
-                )
-            self.assertIn("::warning ", output.getvalue())
-            self.assertIn("file=docs/code-map/example.md", output.getvalue())
-            self.assertIn("line=12", output.getvalue())
-            self.assertIn("verification remains green", output.getvalue())
-            self.assertIn("non-blocking issue", summary_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
