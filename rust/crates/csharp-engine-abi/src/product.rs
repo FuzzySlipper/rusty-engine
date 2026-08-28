@@ -1492,11 +1492,18 @@ pub struct NativeAuthoredContentApi {
     pub context: *mut c_void,
     pub admit_catalog: NativeAdmitAuthoredCatalog,
     pub admit_catalog_from_content: NativeAdmitAuthoredCatalogFromContent,
+    pub admit_catalog_payload: NativeAdmitAuthoredCatalogPayload,
     pub destroy_catalog: NativeDestroyAuthoredCatalog,
     pub read_catalog: NativeReadAuthoredCatalog,
     pub destroy_catalog_readout_lease: NativeDestroyAuthoredCatalogReadoutLease,
     pub resolve_reference: NativeResolveAuthoredCatalogReference,
     pub destroy_resolved_entry_lease: NativeDestroyAuthoredResolvedEntryLease,
+    pub resolve_material: NativeResolveAuthoredMaterial,
+    pub destroy_material_resolution_lease: NativeDestroyAuthoredMaterialResolutionLease,
+    pub resolve_voxel_surface: NativeResolveAuthoredVoxelSurface,
+    pub destroy_voxel_surface_resolution_lease: NativeDestroyAuthoredVoxelSurfaceResolutionLease,
+    pub resolve_fallback: NativeResolveAuthoredFallback,
+    pub destroy_fallback_lease: NativeDestroyAuthoredFallbackLease,
     pub destroy_operation_diagnostic_lease: NativeDestroyAuthoredContentOperationDiagnosticLease,
 }
 
