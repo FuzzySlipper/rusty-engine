@@ -7,7 +7,13 @@
 
 pub use csharp_engine_abi::*;
 
-use std::{ffi::c_void, fs, path::Path, ptr, sync::Arc};
+use std::{
+    ffi::c_void,
+    fs,
+    path::{Path, PathBuf},
+    ptr,
+    sync::Arc,
+};
 
 use csharp_engine_services::{
     CsharpAppearanceCatalog, CsharpEngineServicesError, CsharpRenderResource,
@@ -63,6 +69,9 @@ pub struct CsharpProductRuntimeConfig {
     lifecycle: RuntimeLifecycleConfig,
     direct_intents: Vec<DirectInputIntentDescriptor>,
     physical_mappings: Vec<RuntimeInputMapping>,
+    /// Optional host-selected application root for opaque product state.
+    /// Products choose only relative scopes beneath this root.
+    persistence_root: Option<PathBuf>,
 }
 
 impl CsharpProductRuntimeConfig {
@@ -74,6 +83,7 @@ impl CsharpProductRuntimeConfig {
             lifecycle,
             direct_intents,
             physical_mappings: Vec::new(),
+            persistence_root: None,
         }
     }
 
@@ -82,6 +92,14 @@ impl CsharpProductRuntimeConfig {
     /// own or mutate the runtime lane's mapping evaluation.
     pub fn with_physical_mappings(mut self, mappings: Vec<RuntimeInputMapping>) -> Self {
         self.physical_mappings = mappings;
+        self
+    }
+
+    /// Selects the explicit host-owned root used by product persistence.
+    /// There is no implicit filesystem root; omitting this option leaves the
+    /// persistence service unconfigured for products that do not need it.
+    pub fn with_persistence_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.persistence_root = Some(root.into());
         self
     }
 }
@@ -240,6 +258,7 @@ impl CsharpProductRuntime {
         content: CsharpProductContent,
         config: CsharpProductRuntimeConfig,
     ) -> Result<Self, CsharpProductRuntimeError> {
+        let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
         let input_mappings = CompiledInputMappings::standard(
             config.direct_intents.clone(),
             config.physical_mappings.clone(),
@@ -304,7 +323,11 @@ impl CsharpProductRuntime {
         // The generated ABI stores raw context pointers. Boxing the whole
         // service set keeps every callback context at one stable address for
         // the complete lifetime of the product.
-        let mut services = Box::new(EngineServiceSet::new(appearance_catalog, content_resources));
+        let mut services = Box::new(EngineServiceSet::new(
+            appearance_catalog,
+            content_resources,
+            persistence_root,
+        ));
         let native_content: Vec<NativeContentFile> = content
             .iter()
             .map(|file| NativeContentFile {
@@ -1457,6 +1480,36 @@ fn input_error(error: runtime_input::RuntimeInputError) -> CsharpProductRuntimeE
     CsharpProductRuntimeError::new("CSHARP_INPUT_ADMISSION", error.to_string())
 }
 
+fn prepare_persistence_root(
+    root: Option<&Path>,
+) -> Result<Option<PathBuf>, CsharpProductRuntimeError> {
+    let Some(root) = root else {
+        return Ok(None);
+    };
+    if root.as_os_str().is_empty() || !root.is_absolute() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_PERSISTENCE_ROOT",
+            "persistence root must be an explicit absolute host path",
+        ));
+    }
+    fs::create_dir_all(root).map_err(|error| {
+        CsharpProductRuntimeError::new(
+            "CSHARP_PERSISTENCE_ROOT",
+            format!(
+                "could not create persistence root {}: {error}",
+                root.display()
+            ),
+        )
+    })?;
+    if !root.is_dir() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_PERSISTENCE_ROOT",
+            format!("persistence root {} is not a directory", root.display()),
+        ));
+    }
+    Ok(Some(root.to_path_buf()))
+}
+
 fn input_runtime_error(error: runtime_input::RuntimeInputError) -> ProductDevRuntimeError {
     ProductDevRuntimeError::new("CSHARP_INPUT_ADMISSION", error.to_string())
         .expect("bounded input admission diagnostic")
@@ -2248,5 +2301,28 @@ mod tests {
             let lifecycle = RuntimeLifecycle::new(RuntimeInstanceId::new(1), config);
             assert_eq!(dev_readout(lifecycle.readout()).mode(), expected_mode);
         }
+    }
+
+    #[test]
+    fn persistence_root_is_explicit_and_prepared_before_product_creation() {
+        let root = std::env::temp_dir().join(format!(
+            "rusty-engine-persistence-root-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        assert!(!root.exists());
+
+        let prepared = prepare_persistence_root(Some(&root)).expect("explicit root");
+        assert_eq!(prepared.as_deref(), Some(root.as_path()));
+        assert!(root.is_dir());
+
+        assert!(prepare_persistence_root(None)
+            .expect("optional root")
+            .is_none());
+        let relative = Path::new("relative-persistence-root");
+        let error = prepare_persistence_root(Some(relative)).expect_err("relative root");
+        assert_eq!(error.code(), "CSHARP_PERSISTENCE_ROOT");
+
+        fs::remove_dir_all(root).expect("remove fixture root");
     }
 }

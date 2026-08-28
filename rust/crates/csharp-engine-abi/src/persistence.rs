@@ -24,8 +24,9 @@ pub enum NativePersistenceRevisionGuard {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePersistenceOpenRequest {
-    /// An explicit product-selected root. Host default-root policy is separate.
-    pub root: NativeUtf8Slice,
+    /// A product-selected relative scope beneath the host-selected root.
+    /// The host owns the base root; product code never supplies its path.
+    pub scope: NativeUtf8Slice,
 }
 
 #[repr(C)]

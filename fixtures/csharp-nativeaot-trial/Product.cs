@@ -103,7 +103,7 @@ public sealed class Product : IEngineProduct
             throw new InvalidOperationException("exact mechanics spend did not preserve the track bound");
         }
         _persistenceStore = _engine.Persistence.OpenStore(new PersistenceOpenRequest(
-            Path.Combine(Path.GetTempPath(), "rusty-engine-nativeaot-lease-fixture")));
+            "lease-fixture"));
         const string leaseKey = "fixtures/café";
         byte[] leasePayload = [0x00, 0xC3, 0xA9, 0xFF];
         _engine.Persistence.Save(new PersistenceSaveRequest(

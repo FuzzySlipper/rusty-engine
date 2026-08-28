@@ -31,6 +31,8 @@ public readonly record struct ProductStateLoad<TState>(bool Present, ulong Revis
 /// <summary>
 /// Managed composition around the generated direct Persistence service. It is
 /// intentionally the place where a C# product selects codecs and migrations.
+/// The constructor receives a relative product scope; the developer host
+/// selects the absolute persistence root before product creation.
 /// </summary>
 public sealed class ProductStateStore<TState> : IDisposable
 {
@@ -41,16 +43,16 @@ public sealed class ProductStateStore<TState> : IDisposable
 
     public ProductStateStore(
         IEngineContext engine,
-        string root,
+        string scope,
         IProductStateCodec<TState> codec,
         IReadOnlyList<IProductStateMigration>? migrations = null)
     {
         ArgumentNullException.ThrowIfNull(engine);
-        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
         _migrations = migrations ?? [];
         _persistence = engine.Persistence;
-        _store = _persistence.OpenStore(new PersistenceOpenRequest(root));
+        _store = _persistence.OpenStore(new PersistenceOpenRequest(scope));
     }
 
     public PersistenceSaveReceipt Save(
@@ -131,14 +133,14 @@ public sealed class EntityWorldProductStateStore<TState> : IDisposable
         Func<EntityWorld, TState> capture,
         Action<EntityWorld, TState> restore,
         IEngineContext engine,
-        string root,
+        string scope,
         IProductStateCodec<TState> codec,
         IReadOnlyList<IProductStateMigration>? migrations = null)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
         _restore = restore ?? throw new ArgumentNullException(nameof(restore));
-        _state = new ProductStateStore<TState>(engine, root, codec, migrations);
+        _state = new ProductStateStore<TState>(engine, scope, codec, migrations);
     }
 
     public PersistenceSaveReceipt Save(string key, PersistenceRevisionGuard guard = PersistenceRevisionGuard.Any, ulong expectedRevision = 0) =>

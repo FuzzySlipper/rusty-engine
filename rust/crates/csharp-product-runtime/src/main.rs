@@ -80,6 +80,7 @@ struct Arguments {
     bind_host: Ipv4Addr,
     mode: RuntimeMode,
     direct_intents: Vec<DirectInputIntentDescriptor>,
+    persistence_root: Option<PathBuf>,
     exercise: bool,
 }
 
@@ -137,8 +138,13 @@ impl Arguments {
         } else {
             Vec::new()
         };
-        CsharpProductRuntimeConfig::new(self.mode.lifecycle_config(), direct_intents)
-            .with_physical_mappings(physical_mappings)
+        let mut config =
+            CsharpProductRuntimeConfig::new(self.mode.lifecycle_config(), direct_intents)
+                .with_physical_mappings(physical_mappings);
+        if let Some(root) = &self.persistence_root {
+            config = config.with_persistence_root(root.clone());
+        }
+        config
     }
 
     fn parse() -> Result<Self, String> {
@@ -149,6 +155,7 @@ impl Arguments {
         let mut bind_host = Ipv4Addr::LOCALHOST;
         let mut mode = None;
         let mut direct_intents = Vec::new();
+        let mut persistence_root = None;
         let mut exercise = false;
         let mut values = env::args().skip(1);
         while let Some(arg) = values.next() {
@@ -159,11 +166,18 @@ impl Arguments {
                 "--port" => port = values.next().ok_or("--port requires a value")?.parse().map_err(|_| "--port must be a u16")?,
                 "--bind-host" => bind_host = values.next().ok_or("--bind-host requires an IPv4 address")?.parse().map_err(|_| "--bind-host must be an IPv4 address")?,
                 "--mode" => mode = Some(RuntimeMode::parse(&values.next().ok_or("--mode requires a value")?)?),
+                "--persistence-root" => {
+                    persistence_root = Some(PathBuf::from(
+                        values
+                            .next()
+                            .ok_or("--persistence-root requires a value")?,
+                    ))
+                }
                 "--direct-intent" => direct_intents.push(parse_direct_intent(
                     &values.next().ok_or("--direct-intent requires id=digital, id=axis, or id=payload:contract")?,
                 )?),
                 "--exercise" => exercise = true,
-                "--help" => return Err("usage: csharp-product-runtime --library <product.so> --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--direct-intent <id=digital|axis|payload:contract>] [--bind-host <ipv4>] [--port <u16>] [--exercise]".to_owned()),
+                "--help" => return Err("usage: csharp-product-runtime --library <product.so> --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--bind-host <ipv4>] [--port <u16>] [--exercise]".to_owned()),
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
         }
@@ -175,6 +189,7 @@ impl Arguments {
             bind_host,
             mode: mode.ok_or("--mode is required")?,
             direct_intents,
+            persistence_root,
             exercise,
         })
     }

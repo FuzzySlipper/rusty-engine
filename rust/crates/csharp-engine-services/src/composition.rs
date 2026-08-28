@@ -3,7 +3,7 @@
 //! This crate owns the callback contexts and their staged Engine state. The
 //! runtime crate only composes this service family with a loaded product.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use core_math::Vec3;
 use csharp_engine_abi::*;
@@ -213,6 +213,7 @@ impl EngineServiceSet {
     pub fn new(
         catalog: CsharpAppearanceCatalog,
         content_resources: BTreeMap<String, Arc<[u8]>>,
+        persistence_root: Option<PathBuf>,
     ) -> Self {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let dynamics = crate::dynamics::RuntimeDynamicsBridge::new(spatial.collision_source());
@@ -225,7 +226,7 @@ impl EngineServiceSet {
             voxel_content: RuntimeVoxelContentBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
             mechanics: crate::mechanics::RuntimeMechanicsBridge::new(),
-            persistence: crate::persistence::RuntimePersistenceBridge::new(),
+            persistence: crate::persistence::RuntimePersistenceBridge::new(persistence_root),
             rules: crate::rules::RuntimeRulesBridge::new(),
             standard_exact: crate::standard_exact::RuntimeStandardExactBridge::new(),
             standard_continuous: crate::standard_continuous::RuntimeStandardContinuousBridge::new(),

@@ -35,6 +35,9 @@ struct PersistenceBlob {
 }
 
 pub(crate) struct RuntimePersistenceBridge {
+    /// Host-selected application root. Product code supplies only a relative
+    /// scope to `open_store`; this base is never exposed across the ABI.
+    persistence_root: Option<PathBuf>,
     stores: BTreeMap<u64, DurableStore>,
     blobs: BTreeMap<u64, PersistenceBlob>,
     byte_leases: BTreeMap<u64, Arc<[u8]>>,
@@ -44,8 +47,9 @@ pub(crate) struct RuntimePersistenceBridge {
 }
 
 impl RuntimePersistenceBridge {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(persistence_root: Option<PathBuf>) -> Self {
         Self {
+            persistence_root,
             stores: BTreeMap::new(),
             blobs: BTreeMap::new(),
             byte_leases: BTreeMap::new(),
@@ -106,15 +110,22 @@ unsafe extern "C" fn open_store(
         return 0;
     }
     let request = unsafe { &*request };
-    let root =
-        match unsafe { borrowed_utf8(request.root.bytes, request.root.len, "persistence root") } {
-            Ok(value) if !value.is_empty() => PathBuf::from(value),
-            _ => return 0,
+    let scope =
+        match unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "persistence scope") }
+        {
+            Ok(value) => value,
+            Err(_) => return 0,
         };
+    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
+    let Some(base_root) = bridge.persistence_root.as_ref() else {
+        return 0;
+    };
+    let Ok(root) = storage_path(base_root, scope) else {
+        return 0;
+    };
     if fs::create_dir_all(&root).is_err() || !root.is_dir() {
         return 0;
     }
-    let bridge = unsafe { &mut *context.cast::<RuntimePersistenceBridge>() };
     match bridge.insert_store(DurableStore { root }) {
         Some(handle) => {
             unsafe { *result = handle };
@@ -455,13 +466,13 @@ mod tests {
     #[test]
     fn direct_storage_round_trip_and_stale_save_preserves_committed_payload() {
         let root = tempfile::tempdir().unwrap();
-        let root_text = root.path().to_str().unwrap().as_bytes();
-        let mut bridge = RuntimePersistenceBridge::new();
+        let mut bridge = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
         let context = (&mut bridge as *mut RuntimePersistenceBridge).cast();
+        let scope = b"campaign";
         let open = NativePersistenceOpenRequest {
-            root: NativeUtf8Slice {
-                bytes: root_text.as_ptr(),
-                len: root_text.len(),
+            scope: NativeUtf8Slice {
+                bytes: scope.as_ptr(),
+                len: scope.len(),
             },
         };
         let mut store = NativePersistenceStoreHandle::default();
@@ -549,5 +560,37 @@ mod tests {
 
         assert_eq!(unsafe { destroy_blob(context, blob) }, ABI_OK);
         assert_eq!(unsafe { destroy_store(context, store) }, ABI_OK);
+        assert!(root.path().join("campaign/campaign.state").is_file());
+    }
+
+    #[test]
+    fn open_store_requires_host_root_and_rejects_escape_scopes() {
+        let scope = b"campaign";
+        let request = NativePersistenceOpenRequest {
+            scope: NativeUtf8Slice {
+                bytes: scope.as_ptr(),
+                len: scope.len(),
+            },
+        };
+        let mut store = NativePersistenceStoreHandle::default();
+        let mut unconfigured = RuntimePersistenceBridge::new(None);
+        let unconfigured_context = (&mut unconfigured as *mut RuntimePersistenceBridge).cast();
+        assert_eq!(
+            unsafe { open_store(unconfigured_context, &request, &mut store) },
+            0
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let mut bridge = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
+        let context = (&mut bridge as *mut RuntimePersistenceBridge).cast();
+        let escape = b"../outside";
+        let request = NativePersistenceOpenRequest {
+            scope: NativeUtf8Slice {
+                bytes: escape.as_ptr(),
+                len: escape.len(),
+            },
+        };
+        assert_eq!(unsafe { open_store(context, &request, &mut store) }, 0);
+        assert!(!root.path().join("outside").exists());
     }
 }
