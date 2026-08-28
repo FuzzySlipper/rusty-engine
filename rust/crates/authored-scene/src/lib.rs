@@ -14,9 +14,9 @@ mod model;
 mod validation;
 
 pub use admission::{
-    AvailableSceneAsset, PlannedSceneEntity, PlannedSceneLight, ResolvedSceneInstance,
-    SceneAdmissionError, SceneAdmissionPlan, SceneAdmissionReceipt, SceneReferenceError,
-    SceneResolutionContext, DEFAULT_BASE_ENTITY_ID,
+    AvailableSceneAsset, PlannedSceneEntity, PlannedSceneLight, PlannedSceneRenderable,
+    ResolvedSceneInstance, SceneAdmissionError, SceneAdmissionPlan, SceneAdmissionReceipt,
+    SceneReferenceError, SceneResolutionContext, DEFAULT_BASE_ENTITY_ID,
 };
 pub use codec::{decode_scene, decode_scene_unvalidated, encode_scene, SceneCodecError};
 pub use edit::{

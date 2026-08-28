@@ -282,6 +282,7 @@ struct ScenePlanReadoutLease {
     allocations: Vec<NativeAuthoredSceneAllocationReadout>,
     instances: Vec<NativeAuthoredSceneResolvedInstanceReadout>,
     lights: Vec<NativeAuthoredScenePlannedLightReadout>,
+    renderables: Vec<NativeAuthoredScenePlannedRenderableReadout>,
     generators: Vec<NativeAuthoredSceneBootstrapGeneratorReadout>,
     catalog_bindings: Vec<NativeAuthoredSceneBootstrapCatalogBindingReadout>,
 }
@@ -1110,6 +1111,11 @@ impl RuntimeAuthoredContentBridge {
             .map(|item| scene_instance_row(&mut text, item))
             .collect();
         let lights = plan.lights().iter().map(scene_light_row).collect();
+        let renderables = plan
+            .renderables()
+            .iter()
+            .map(|value| scene_renderable_row(&mut text, value))
+            .collect();
         let (generators, catalog_bindings) = plan
             .bootstrap_bindings()
             .map(|bindings| scene_bootstrap_rows(&mut text, bindings))
@@ -1119,6 +1125,7 @@ impl RuntimeAuthoredContentBridge {
             allocations,
             instances,
             lights,
+            renderables,
             generators,
             catalog_bindings,
         };
@@ -1132,6 +1139,8 @@ impl RuntimeAuthoredContentBridge {
             resolved_instances_len: lease.instances.len(),
             lights: lease.lights.as_ptr(),
             lights_len: lease.lights.len(),
+            renderables: lease.renderables.as_ptr(),
+            renderables_len: lease.renderables.len(),
             generators: lease.generators.as_ptr(),
             generators_len: lease.generators.len(),
             catalog_bindings: lease.catalog_bindings.as_ptr(),
@@ -2819,6 +2828,19 @@ fn scene_light_row(value: &PlannedSceneLight) -> NativeAuthoredScenePlannedLight
         world_transform: native_scene_transform(value.world_transform),
     }
 }
+fn scene_renderable_row(
+    text: &mut Text,
+    value: &authored_scene::PlannedSceneRenderable,
+) -> NativeAuthoredScenePlannedRenderableReadout {
+    NativeAuthoredScenePlannedRenderableReadout {
+        node_id: value.node.raw(),
+        entity_id: value.entity.raw(),
+        asset_kind: native_kind(value.asset.id().kind()),
+        asset: native_reference(text, &value.asset),
+        world_transform: native_scene_transform(value.world_transform),
+        renderable_local_transform: native_scene_transform(value.renderable_local_transform),
+    }
+}
 fn scene_bootstrap_rows(
     text: &mut Text,
     bindings: &SceneBootstrapBindings,
@@ -4405,6 +4427,11 @@ mod tests {
                 },
             }
         }
+        fn translated(x: f32, y: f32, z: f32) -> NativeTransform {
+            let mut value = identity();
+            value.translation = NativeVec3 { x, y, z };
+            value
+        }
         fn empty_receipt() -> NativeOperationErrorReceipt {
             NativeOperationErrorReceipt {
                 service: slice(b""),
@@ -4421,10 +4448,12 @@ mod tests {
         let mut bridge = RuntimeAuthoredContentBridge::new();
         let catalog = bridge
             .retain(
-                AdmittedAssetCatalog::admit(AssetCatalog::from_entries(vec![CatalogEntry::new(
-                    AssetId::parse("scene/unused").unwrap(),
-                    1,
-                )]))
+                AdmittedAssetCatalog::admit(AssetCatalog::from_entries(vec![
+                    CatalogEntry::new(AssetId::parse("mesh/crate").unwrap(), 1),
+                    CatalogEntry::new(AssetId::parse("mesh-animation/actor").unwrap(), 1),
+                    CatalogEntry::new(AssetId::parse("sprite/sign").unwrap(), 1),
+                    CatalogEntry::new(AssetId::parse("voxel-volume/room").unwrap(), 1),
+                ]))
                 .unwrap(),
             )
             .unwrap();
@@ -4520,6 +4549,104 @@ mod tests {
                 has_label: false,
                 label: slice(b""),
             },
+            NativeAuthoredSceneNodeInput {
+                id: 5,
+                has_parent: false,
+                parent_id: 0,
+                child_order: 4,
+                transform: translated(10.0, 0.0, 0.0),
+                renderable_transform: translated(0.0, -1.0, 0.0),
+                kind: NativeAuthoredSceneNodeKind::StaticMesh,
+                asset_id: slice(b"mesh/crate"),
+                asset_version_kind: NativeAssetVersionRequirementKind::Exact,
+                asset_version: 1,
+                asset_has_hash: false,
+                asset_hash: slice(b""),
+                marker_id: slice(b""),
+                has_label: false,
+                label: slice(b""),
+            },
+            NativeAuthoredSceneNodeInput {
+                id: 6,
+                has_parent: false,
+                parent_id: 0,
+                child_order: 5,
+                transform: translated(20.0, 0.0, 0.0),
+                renderable_transform: identity(),
+                kind: NativeAuthoredSceneNodeKind::AnimatedMesh,
+                asset_id: slice(b"mesh-animation/actor"),
+                asset_version_kind: NativeAssetVersionRequirementKind::Exact,
+                asset_version: 1,
+                asset_has_hash: false,
+                asset_hash: slice(b""),
+                marker_id: slice(b""),
+                has_label: false,
+                label: slice(b""),
+            },
+            NativeAuthoredSceneNodeInput {
+                id: 7,
+                has_parent: false,
+                parent_id: 0,
+                child_order: 6,
+                transform: translated(30.0, 0.0, 0.0),
+                renderable_transform: identity(),
+                kind: NativeAuthoredSceneNodeKind::Sprite,
+                asset_id: slice(b"sprite/sign"),
+                asset_version_kind: NativeAssetVersionRequirementKind::Exact,
+                asset_version: 1,
+                asset_has_hash: false,
+                asset_hash: slice(b""),
+                marker_id: slice(b""),
+                has_label: false,
+                label: slice(b""),
+            },
+            NativeAuthoredSceneNodeInput {
+                id: 8,
+                has_parent: false,
+                parent_id: 0,
+                child_order: 7,
+                transform: translated(40.0, 0.0, 0.0),
+                renderable_transform: identity(),
+                kind: NativeAuthoredSceneNodeKind::VoxelVolume,
+                asset_id: slice(b"voxel-volume/room"),
+                asset_version_kind: NativeAssetVersionRequirementKind::Exact,
+                asset_version: 1,
+                asset_has_hash: false,
+                asset_hash: slice(b""),
+                marker_id: slice(b""),
+                has_label: false,
+                label: slice(b""),
+            },
+        ];
+        let dependencies = [
+            NativeAuthoredSceneDependencyInput {
+                reference_id: slice(b"mesh/crate"),
+                reference_version_kind: NativeAssetVersionRequirementKind::Exact,
+                reference_version: 1,
+                reference_has_hash: false,
+                reference_hash: slice(b""),
+            },
+            NativeAuthoredSceneDependencyInput {
+                reference_id: slice(b"mesh-animation/actor"),
+                reference_version_kind: NativeAssetVersionRequirementKind::Exact,
+                reference_version: 1,
+                reference_has_hash: false,
+                reference_hash: slice(b""),
+            },
+            NativeAuthoredSceneDependencyInput {
+                reference_id: slice(b"sprite/sign"),
+                reference_version_kind: NativeAssetVersionRequirementKind::Exact,
+                reference_version: 1,
+                reference_has_hash: false,
+                reference_hash: slice(b""),
+            },
+            NativeAuthoredSceneDependencyInput {
+                reference_id: slice(b"voxel-volume/room"),
+                reference_version_kind: NativeAssetVersionRequirementKind::Exact,
+                reference_version: 1,
+                reference_has_hash: false,
+                reference_hash: slice(b""),
+            },
         ];
         let instances = [NativeAuthoredSceneEntityInstanceInput {
             node_id: 2,
@@ -4579,8 +4706,8 @@ mod tests {
             catalog_ids: catalog_ids.as_ptr(),
             catalog_ids_len: catalog_ids.len(),
             base_entity: 100,
-            dependencies: std::ptr::null(),
-            dependencies_len: 0,
+            dependencies: dependencies.as_ptr(),
+            dependencies_len: dependencies.len(),
             nodes: nodes.as_ptr(),
             nodes_len: nodes.len(),
             tags: std::ptr::null(),
@@ -4598,7 +4725,7 @@ mod tests {
         };
         let source = scene_document_from_rows(
             request,
-            &[],
+            &dependencies,
             &nodes,
             &[],
             &instances,
@@ -4650,12 +4777,14 @@ mod tests {
                 typed_readout.allocations_len,
                 typed_readout.resolved_instances_len,
                 typed_readout.lights_len,
+                typed_readout.renderables_len,
                 typed_readout.generators_len,
                 typed_readout.catalog_bindings_len
             ),
-            (7, 3, 4, 1, 1, 1, 1)
+            (7, 3, 8, 1, 1, 4, 1, 1)
         );
         assert_eq!(unsafe { (*typed_readout.allocations).entity_id }, 100);
+        assert_eq!(typed_readout.renderables_len, 4);
         assert_eq!(
             unsafe { (api.destroy_scene_plan_readout_lease)(api.context, typed_readout.handle) },
             ABI_OK
@@ -4700,9 +4829,27 @@ mod tests {
                 content_readout.allocations_len,
                 content_readout.resolved_instances_len,
                 content_readout.lights_len,
+                content_readout.renderables_len,
                 content_readout.catalog_bindings_len
             ),
-            (4, 1, 1, 1)
+            (8, 1, 1, 4, 1)
+        );
+        assert_eq!(
+            unsafe { (*content_readout.renderables).asset_kind },
+            NativeAssetKind::StaticMesh
+        );
+        assert_eq!(
+            unsafe { (*content_readout.renderables).world_transform.translation.x },
+            10.0
+        );
+        assert_eq!(
+            unsafe {
+                (*content_readout.renderables)
+                    .renderable_local_transform
+                    .translation
+                    .y
+            },
+            -1.0
         );
         assert_eq!(
             unsafe { (api.destroy_scene_plan_readout_lease)(api.context, content_readout.handle) },

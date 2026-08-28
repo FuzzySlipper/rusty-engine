@@ -90,6 +90,18 @@ pub struct PlannedSceneLight {
     pub world_transform: SceneTransform,
 }
 
+/// One asset-bearing node planned by the scene owner. The application/world
+/// transform and presentation-only renderable-local transform intentionally
+/// remain distinct facts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedSceneRenderable {
+    pub node: SceneNodeId,
+    pub entity: EntityId,
+    pub asset: AssetReference,
+    pub world_transform: SceneTransform,
+    pub renderable_local_transform: SceneTransform,
+}
+
 #[derive(Debug)]
 pub enum SceneAdmissionError {
     InvalidScene(SceneValidationReport),
@@ -125,6 +137,7 @@ pub struct SceneAdmissionPlan {
     definitions: Vec<EntityDefinition>,
     resolved_instances: Vec<ResolvedSceneInstance>,
     lights: Vec<PlannedSceneLight>,
+    renderables: Vec<PlannedSceneRenderable>,
     bootstrap_bindings: Option<SceneBootstrapBindings>,
 }
 
@@ -196,6 +209,7 @@ impl SceneAdmissionPlan {
         let mut definitions = Vec::with_capacity(document.nodes.len());
         let mut resolved_instances = Vec::new();
         let mut lights = Vec::new();
+        let mut renderables = Vec::new();
         for node in &document.nodes {
             let entity = node_entities[&node.id];
             let marker_spawn = match &node.kind {
@@ -242,6 +256,13 @@ impl SceneAdmissionPlan {
                     .with_renderable(asset.id().as_str(), true)
                     .with_renderable_local_transform(node.renderable_transform)
                     .with_asset_binding(asset.clone());
+                renderables.push(PlannedSceneRenderable {
+                    node: node.id,
+                    entity,
+                    asset: asset.clone(),
+                    world_transform,
+                    renderable_local_transform: node.renderable_transform,
+                });
             }
             definitions.push(definition);
 
@@ -276,6 +297,7 @@ impl SceneAdmissionPlan {
             definitions,
             resolved_instances,
             lights,
+            renderables,
             bootstrap_bindings,
         })
     }
@@ -298,6 +320,10 @@ impl SceneAdmissionPlan {
 
     pub fn lights(&self) -> &[PlannedSceneLight] {
         &self.lights
+    }
+
+    pub fn renderables(&self) -> &[PlannedSceneRenderable] {
+        &self.renderables
     }
 
     pub fn bootstrap_bindings(&self) -> Option<&SceneBootstrapBindings> {

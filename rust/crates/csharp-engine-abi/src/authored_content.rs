@@ -940,6 +940,16 @@ pub struct NativeAuthoredScenePlannedLightReadout {
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredScenePlannedRenderableReadout {
+    pub node_id: u64,
+    pub entity_id: u64,
+    pub asset_kind: NativeAssetKind,
+    pub asset: NativeAuthoredAssetReference,
+    pub world_transform: NativeTransform,
+    pub renderable_local_transform: NativeTransform,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeAuthoredSceneBootstrapGeneratorReadout {
     pub provider_id: NativeUtf8Slice,
     pub preset_id: NativeUtf8Slice,
@@ -964,6 +974,8 @@ pub struct NativeAuthoredScenePlanReadoutLease {
     pub resolved_instances_len: usize,
     pub lights: *const NativeAuthoredScenePlannedLightReadout,
     pub lights_len: usize,
+    pub renderables: *const NativeAuthoredScenePlannedRenderableReadout,
+    pub renderables_len: usize,
     pub generators: *const NativeAuthoredSceneBootstrapGeneratorReadout,
     pub generators_len: usize,
     pub catalog_bindings: *const NativeAuthoredSceneBootstrapCatalogBindingReadout,
