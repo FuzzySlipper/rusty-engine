@@ -564,6 +564,7 @@ include = [
     "NativeReadLight",
     "NativeReadPresentation",
     "NativeOpenUiStream",
+    "NativeDestroyUiStream",
     "NativePublishUiProjection",
     "NativeDestroyUiOperationDiagnosticLease",
     "NativeAdmitRulesPackage",

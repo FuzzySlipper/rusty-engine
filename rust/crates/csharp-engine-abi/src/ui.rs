@@ -42,7 +42,7 @@ pub enum NativeStructuredValueKind {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeStructuredValueNode {
-    pub kind: u32,
+    pub kind: NativeStructuredValueKind,
     pub bool_value: u32,
     pub number_value: f64,
     pub key_offset: u32,

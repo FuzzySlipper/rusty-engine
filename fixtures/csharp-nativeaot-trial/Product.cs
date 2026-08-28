@@ -12,7 +12,7 @@ public sealed class Product : IEngineProduct
     private readonly Rng _forkedRng;
     private readonly SpatialSession _spatial;
     private readonly VoxelChunkLease _voxelLease;
-    private readonly UiStreamHandle _uiStream;
+    private readonly UiStream _uiStream;
     private readonly Appearance _appearance;
     private readonly Material _material;
     private readonly Camera _camera;
@@ -633,6 +633,7 @@ public sealed class Product : IEngineProduct
         _mechanicsEntity.Dispose();
         _mechanicsCatalog.Dispose();
         _persistenceStore.Dispose();
+        _uiStream.Dispose();
     }
 
     private static LookConfig LookConfig() => new(0.01f, 0.01f, -1.4f, 1.4f, 1.0f, false, false, true);
@@ -909,10 +910,10 @@ public sealed class Product : IEngineProduct
     {
         StructuredValueNode[] nodes =
         [
-            new(5, 0, 0, 0, 0, 0, 0, 0, 3),
-            new(2, 0, _turns, 0, 5, 0, 0, 0, 0),
-            new(2, 0, _look.YawRadians, 5, 3, 0, 0, 0, 0),
-            new(2, 0, _x, 8, 1, 0, 0, 0, 0),
+            new(StructuredValueKind.Object, 0, 0, 0, 0, 0, 0, 0, 3),
+            new(StructuredValueKind.Number, 0, _turns, 0, 5, 0, 0, 0, 0),
+            new(StructuredValueKind.Number, 0, _look.YawRadians, 5, 3, 0, 0, 0, 0),
+            new(StructuredValueKind.Number, 0, _x, 8, 1, 0, 0, 0, 0),
         ];
         return new UiValue(nodes, new uint[] { 1, 2, 3 }, 0, "turnsyawx"u8.ToArray());
     }

@@ -204,6 +204,35 @@ impl RuntimeUiBridge {
         Ok(())
     }
 
+    fn destroy_stream(
+        &mut self,
+        handle: NativeUiStreamHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if handle.value == 0 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_UI_STREAM",
+                "C# UI stream handle was zero",
+            ));
+        }
+        if let Some(streams) = self.staged_streams.as_mut() {
+            return streams.remove(&handle.value).map(|_| ()).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_UI_STREAM",
+                    "C# UI stream handle was unknown or already closed",
+                )
+            });
+        }
+        self.streams
+            .remove(&handle.value)
+            .map(|_| ())
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_UI_STREAM",
+                    "C# UI stream handle was unknown or already closed",
+                )
+            })
+    }
+
     unsafe fn stage_projection(
         &mut self,
         projection: *const NativeUiProjection,
@@ -325,6 +354,23 @@ unsafe extern "C" fn open_ui_stream(
     }
 }
 
+unsafe extern "C" fn destroy_ui_stream(context: *mut c_void, handle: NativeUiStreamHandle) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: `context` is stable for the complete product lifetime.
+    let bridge = unsafe { &mut *context.cast::<RuntimeUiBridge>() };
+    match bridge.destroy_stream(handle) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            if bridge.staged_streams.is_some() {
+                bridge.callback_error = Some(error);
+            }
+            0
+        }
+    }
+}
+
 unsafe fn decode_structured_value(
     arena: NativeStructuredValue,
 ) -> Result<Value, CsharpEngineServicesError> {
@@ -391,13 +437,17 @@ fn decode_structured_node(
     }
     visiting[index] = true;
     let value = match node.kind {
-        0 => Value::Null,
-        1 => Value::Bool(node.bool_value != 0),
-        2 => Value::Number(Number::from_f64(node.number_value).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_UI_NUMBER", "C# UI number was not finite")
-        })?),
-        3 => Value::String(arena_text(bytes, node.text_offset, node.text_len, "text")?.to_owned()),
-        4 => {
+        NativeStructuredValueKind::Null => Value::Null,
+        NativeStructuredValueKind::Bool => Value::Bool(node.bool_value != 0),
+        NativeStructuredValueKind::Number => {
+            Value::Number(Number::from_f64(node.number_value).ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_UI_NUMBER", "C# UI number was not finite")
+            })?)
+        }
+        NativeStructuredValueKind::String => {
+            Value::String(arena_text(bytes, node.text_offset, node.text_len, "text")?.to_owned())
+        }
+        NativeStructuredValueKind::Array => {
             let children = arena_children(node, edges)?;
             let mut values = Vec::with_capacity(children.len());
             for child in children {
@@ -407,7 +457,7 @@ fn decode_structured_node(
             }
             Value::Array(values)
         }
-        5 => {
+        NativeStructuredValueKind::Object => {
             let children = arena_children(node, edges)?;
             let mut values = Map::new();
             for child in children {
@@ -425,12 +475,6 @@ fn decode_structured_node(
                 );
             }
             Value::Object(values)
-        }
-        _ => {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_UI_KIND",
-                "C# UI node had an unknown kind",
-            ))
         }
     };
     visiting[index] = false;
@@ -488,6 +532,7 @@ pub(crate) fn api(bridge: &mut RuntimeUiBridge) -> NativeUiApi {
     NativeUiApi {
         context: (bridge as *mut RuntimeUiBridge).cast(),
         open_stream: open_ui_stream,
+        destroy_stream: destroy_ui_stream,
         publish_projection: publish_ui_projection,
         destroy_operation_diagnostic_lease: destroy_ui_operation_diagnostic_lease,
     }
@@ -507,6 +552,19 @@ fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stream_request() -> NativeUiStreamRequest {
+        NativeUiStreamRequest {
+            stream: NativeUtf8Slice {
+                bytes: b"fixture".as_ptr(),
+                len: b"fixture".len(),
+            },
+            contract: NativeUtf8Slice {
+                bytes: b"fixture.v1".as_ptr(),
+                len: b"fixture.v1".len(),
+            },
+        }
+    }
 
     #[test]
     fn publish_projection_returns_owned_error_diagnostic_and_releases_it_once() {
@@ -570,6 +628,97 @@ mod tests {
                 (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
             },
             0
+        );
+    }
+
+    #[test]
+    fn stream_close_stages_rollback_and_committed_teardown() {
+        let mut bridge = RuntimeUiBridge::new();
+        let api = api(&mut bridge);
+        let mut stream = NativeUiStreamHandle::default();
+
+        bridge.begin_call();
+        assert_eq!(
+            unsafe { (api.open_stream)(api.context, &stream_request(), &mut stream) },
+            ABI_OK
+        );
+        let initial_call = bridge.take_staged_call().expect("initial staged stream");
+        bridge.commit(initial_call);
+
+        let nodes = [NativeStructuredValueNode {
+            kind: NativeStructuredValueKind::Null,
+            bool_value: 0,
+            number_value: 0.0,
+            key_offset: 0,
+            key_len: 0,
+            text_offset: 0,
+            text_len: 0,
+            first_edge: 0,
+            child_count: 0,
+        }];
+        let projection = NativeUiProjection {
+            stream,
+            sequence: 1,
+            value: NativeStructuredValue {
+                nodes: nodes.as_ptr(),
+                node_count: nodes.len(),
+                edges: std::ptr::null(),
+                edge_count: 0,
+                root: 0,
+                utf8: std::ptr::null(),
+                utf8_len: 0,
+            },
+        };
+        bridge.begin_call();
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
+            ABI_OK,
+            "typed structured projection is accepted before close"
+        );
+        let published_call = bridge.take_staged_call().expect("published projection");
+        assert_eq!(published_call.projections.len(), 1);
+        bridge.commit(published_call);
+
+        bridge.begin_call();
+        assert_eq!(unsafe { (api.destroy_stream)(api.context, stream) }, ABI_OK);
+        assert_eq!(
+            unsafe { (api.destroy_stream)(api.context, stream) },
+            0,
+            "duplicate staged close is rejected"
+        );
+        assert!(
+            bridge.take_staged_call().is_err(),
+            "failed call cannot commit"
+        );
+
+        assert_eq!(
+            unsafe { (api.destroy_stream)(api.context, stream) },
+            ABI_OK,
+            "discard rolled the staged close back into committed state"
+        );
+        assert_eq!(
+            unsafe { (api.destroy_stream)(api.context, stream) },
+            0,
+            "duplicate committed teardown is rejected"
+        );
+
+        bridge.begin_call();
+        assert!(
+            bridge.take_staged_call().is_ok(),
+            "out-of-call close failure does not poison the next call"
+        );
+
+        bridge.begin_call();
+        let mut stale_receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.publish_projection)(api.context, &projection, &mut stale_receipt) },
+            0,
+            "publish after committed close is rejected"
+        );
+        assert!(
+            bridge.take_staged_call().is_err(),
+            "stale publish prevents the call from committing"
         );
     }
 }

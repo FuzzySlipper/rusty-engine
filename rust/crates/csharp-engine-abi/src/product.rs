@@ -503,6 +503,7 @@ pub type NativeOpenUiStream = unsafe extern "C" fn(
     *const NativeUiStreamRequest,
     *mut NativeUiStreamHandle,
 ) -> i32;
+pub type NativeDestroyUiStream = unsafe extern "C" fn(*mut c_void, NativeUiStreamHandle) -> i32;
 pub type NativePublishUiProjection = unsafe extern "C" fn(
     *mut c_void,
     *const NativeUiProjection,
@@ -1422,6 +1423,7 @@ pub struct NativeWorldOriginApi {
 pub struct NativeUiApi {
     pub context: *mut c_void,
     pub open_stream: NativeOpenUiStream,
+    pub destroy_stream: NativeDestroyUiStream,
     pub publish_projection: NativePublishUiProjection,
     pub destroy_operation_diagnostic_lease: NativeDestroyUiOperationDiagnosticLease,
 }
