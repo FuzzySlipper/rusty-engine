@@ -45,6 +45,7 @@ world.Restore(snapshot, expectedRevision: receipt.RevisionAfter);
 Require(world.Get(actor, health).Current == 10, "in-memory snapshot restore did not recover the typed value");
 Throws(() => world.Set(actor, health, new Health(9), healthRevision), "snapshot restore must invalidate old component guards");
 Require(world.Diagnostics().Components.Single(component => component.Key == health.Key).ValueCount == 1, "diagnostics lost the component table");
+ExerciseManagedRestorePlan(world, actor, pack, health, armor);
 
 ExerciseMechanicsLeaseRebind();
 ExerciseMechanicsUniqueItemTransfer();
@@ -78,6 +79,60 @@ static void ValidateHealth(in Health health)
     {
         throw new ArgumentOutOfRangeException(nameof(health), "Health cannot be negative.");
     }
+}
+
+static void ExerciseManagedRestorePlan(
+    EntityWorld world,
+    EntityId actor,
+    EntityId pack,
+    ComponentType<Health> health,
+    ComponentType<Armor> armor)
+{
+    ulong revisionBefore = world.Revision;
+    ComponentRevision absentHealthRevision = world.GetComponentRevision(pack, health);
+    EntityWorldRestorePlan plan = new(world.Revision, world.NextEntityValue);
+    foreach (EntityWorldEntityState entity in world.CaptureEntities())
+    {
+        plan.AddEntity(entity);
+    }
+    foreach (EntityWorldContainmentState relation in world.CaptureContainment())
+    {
+        plan.AddContainment(relation);
+    }
+    plan.AddComponentFamily(EngineComponentTypes.Transform, world.CaptureComponentFamily(EngineComponentTypes.Transform));
+    plan.AddComponentFamily(EngineComponentTypes.CharacterMotion, world.CaptureComponentFamily(EngineComponentTypes.CharacterMotion));
+    plan.AddComponentFamily(health, world.CaptureComponentFamily(health));
+    plan.AddComponentFamily(armor, world.CaptureComponentFamily(armor));
+
+    EntityWorldRestoreCandidate candidate = world.PrepareRestore(plan, revisionBefore);
+    candidate.Publish();
+    candidate.Publish();
+    Require(world.Revision == revisionBefore + 1, "managed restore candidate did not publish exactly once");
+    Throws(
+        () => world.Set(pack, health, new Health(3), absentHealthRevision),
+        "absent component revision was not rebased during managed restore");
+
+    EntityWorldRestorePlan invalid = new(world.Revision, world.NextEntityValue);
+    foreach (EntityWorldEntityState entity in world.CaptureEntities())
+    {
+        invalid.AddEntity(entity);
+    }
+    foreach (EntityWorldContainmentState relation in world.CaptureContainment())
+    {
+        invalid.AddContainment(relation);
+    }
+    invalid.AddComponentFamily(EngineComponentTypes.Transform, world.CaptureComponentFamily(EngineComponentTypes.Transform));
+    invalid.AddComponentFamily(EngineComponentTypes.CharacterMotion, world.CaptureComponentFamily(EngineComponentTypes.CharacterMotion));
+    invalid.AddComponentFamily(
+        health,
+        world.CaptureComponentFamily(health)
+            .Select(slot => slot.Entity == actor ? slot with { Present = true, Value = new Health(-1) } : slot)
+            .ToArray());
+    invalid.AddComponentFamily(armor, world.CaptureComponentFamily(armor));
+    Throws(
+        () => world.PrepareRestore(invalid, world.Revision),
+        "invalid managed restore input was accepted");
+    Require(world.Get(actor, health).Current == 10, "rejected managed restore input changed live state");
 }
 
 static void ExerciseMechanicsLeaseRebind()

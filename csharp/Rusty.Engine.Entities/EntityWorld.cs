@@ -43,6 +43,16 @@ public sealed class EntityWorld : IDisposable
         }
     }
 
+    /// <summary>The next identity cursor admitted by this world.</summary>
+    public ulong NextEntityValue
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _state.NextEntityValue;
+        }
+    }
+
     public void Register<T>(ComponentType<T> componentType) where T : struct
     {
         ThrowIfDisposed();
@@ -348,6 +358,38 @@ public sealed class EntityWorld : IDisposable
         return new EntityWorldSnapshot(_state.Clone(forSnapshot: true));
     }
 
+    /// <summary>Returns copied entity lifecycle and revision evidence in entity-id order.</summary>
+    public IReadOnlyList<EntityWorldEntityState> CaptureEntities()
+    {
+        ThrowIfDisposed();
+        return _state.Entities
+            .Select(entry => new EntityWorldEntityState(
+                new EntityId(entry.Key),
+                entry.Value.Lifecycle,
+                entry.Value.Revision))
+            .ToArray();
+    }
+
+    /// <summary>Returns copied canonical containment evidence in child-id order.</summary>
+    public IReadOnlyList<EntityWorldContainmentState> CaptureContainment()
+    {
+        ThrowIfDisposed();
+        return _state.Containment
+            .Select(entry => new EntityWorldContainmentState(new EntityId(entry.Key), new EntityId(entry.Value)))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Returns copied present/absent evidence for every known entity in one registered typed
+    /// component family. The product owns how this evidence is encoded durably.
+    /// </summary>
+    public IReadOnlyList<EntityWorldComponentSlot<T>> CaptureComponentFamily<T>(ComponentType<T> componentType)
+        where T : struct
+    {
+        ThrowIfDisposed();
+        return GetTable(componentType).CaptureSlots(_state.Entities.Keys.Select(value => new EntityId(value)));
+    }
+
     public void Restore(EntityWorldSnapshot snapshot, ulong? expectedRevision = null)
     {
         PrepareRestore(snapshot, expectedRevision).Publish();
@@ -370,6 +412,26 @@ public sealed class EntityWorld : IDisposable
         WorldState restored = snapshot.State.Clone(forSnapshot: true);
         restored.ValidateComponents();
         restored.ValidateContainment();
+        restored.RebaseRevisionsAfter(_state);
+        return new EntityWorldRestoreCandidate(this, restored);
+    }
+
+    /// <summary>
+    /// Prepares a fully validated detached candidate from product-decoded semantic evidence.
+    /// Durable schema, codec, and migration ownership remain with the product.
+    /// </summary>
+    public EntityWorldRestoreCandidate PrepareRestore(
+        EntityWorldRestorePlan plan,
+        ulong? expectedRevision = null)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(plan);
+        if (expectedRevision is ulong expected && expected != _state.Revision)
+        {
+            throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
+        }
+
+        WorldState restored = BuildRestoreState(plan);
         restored.RebaseRevisionsAfter(_state);
         return new EntityWorldRestoreCandidate(this, restored);
     }
@@ -540,6 +602,101 @@ public sealed class EntityWorld : IDisposable
         }
     }
 
+    private WorldState BuildRestoreState(EntityWorldRestorePlan plan)
+    {
+        if (plan.SavedNextEntityValue == 0)
+        {
+            throw new InvalidOperationException("Restore next-entity high-watermark must be non-zero.");
+        }
+        EntityWorldRestorePlan.ValidateRevision(plan.SavedRevision, "world");
+
+        Dictionary<ulong, EntityWorldEntityState> entities = [];
+        foreach (EntityWorldEntityState state in plan.Entities)
+        {
+            if (state.Id.Value == 0 || state.Id.Value >= plan.SavedNextEntityValue)
+            {
+                throw new InvalidOperationException(
+                    $"Restore entity identity {state.Id.Value} is outside its saved high-watermark.");
+            }
+            if (!entities.TryAdd(state.Id.Value, state))
+            {
+                throw new InvalidOperationException($"Restore contains duplicate entity {state.Id.Value}.");
+            }
+            EntityWorldRestorePlan.ValidateRevision(state.Revision, $"entity {state.Id.Value}");
+            if (state.Lifecycle is not (EntityLifecycle.Active or EntityLifecycle.Disabled or EntityLifecycle.Tombstoned))
+            {
+                throw new InvalidOperationException($"Restore entity {state.Id.Value} has an invalid lifecycle.");
+            }
+        }
+
+        HashSet<ulong> containmentChildren = [];
+        foreach (EntityWorldContainmentState relation in plan.Containment)
+        {
+            if (relation.Child.Value == 0 || relation.Container.Value == 0)
+            {
+                throw new InvalidOperationException("Restore containment identities must be non-zero.");
+            }
+            if (!entities.ContainsKey(relation.Child.Value) || !entities.ContainsKey(relation.Container.Value))
+            {
+                throw new InvalidOperationException("Restore containment references an unknown entity.");
+            }
+            if (!containmentChildren.Add(relation.Child.Value))
+            {
+                throw new InvalidOperationException($"Restore contains duplicate containment for child {relation.Child.Value}.");
+            }
+        }
+
+        if (plan.ComponentFamilies.Count != _state.Tables.Count)
+        {
+            throw new InvalidOperationException("Restore must declare every registered component family exactly once.");
+        }
+        HashSet<ComponentTypeKey> familyKeys = [];
+        foreach (EntityWorldRestorePlan.ComponentFamilyPlan family in plan.ComponentFamilies)
+        {
+            if (!familyKeys.Add(family.Descriptor.Key))
+            {
+                throw new InvalidOperationException($"Restore contains duplicate component family {family.Descriptor.Key.Value}.");
+            }
+            family.Validate(_state.Tables, entities);
+        }
+
+        WorldState restored = new()
+        {
+            Revision = plan.SavedRevision,
+            NextEntityValue = plan.SavedNextEntityValue,
+        };
+        foreach ((ComponentTypeKey key, ComponentTable table) in _state.Tables)
+        {
+            restored.Tables.Add(key, table.CreateEmpty());
+        }
+        foreach ((ulong id, EntityWorldEntityState state) in entities)
+        {
+            restored.Entities.Add(id, new EntityRecord(state.Lifecycle, state.Revision));
+        }
+        foreach (EntityWorldContainmentState relation in plan.Containment)
+        {
+            restored.Containment.Add(relation.Child.Value, relation.Container.Value);
+        }
+        restored.RebuildContainmentReverseIndex();
+        foreach (EntityWorldRestorePlan.ComponentFamilyPlan family in plan.ComponentFamilies)
+        {
+            family.Import(restored);
+        }
+
+        restored.ValidateComponents();
+        restored.ValidateContainment();
+        return restored;
+    }
+
+    private static ulong RebaseRevision(ulong saved, ulong current)
+    {
+        if (saved == ulong.MaxValue || current == ulong.MaxValue)
+        {
+            throw new InvalidOperationException("Restore revision cannot be rebased without overflow.");
+        }
+        return Math.Max(saved, current) + 1;
+    }
+
     internal void PublishPreparedRestore(WorldState restored) => _state = restored;
 
     internal sealed class WorldState
@@ -581,7 +738,7 @@ public sealed class EntityWorld : IDisposable
             foreach ((ulong id, EntityRecord entity) in Entities)
             {
                 ulong currentRevision = current.Entities.TryGetValue(id, out EntityRecord? value) ? value.Revision : 0;
-                entity.Revision = checked(Math.Max(entity.Revision, currentRevision) + 1);
+                entity.Revision = RebaseRevision(entity.Revision, currentRevision);
             }
             foreach (ComponentTable table in Tables.Values)
             {
@@ -591,7 +748,7 @@ public sealed class EntityWorld : IDisposable
                 }
                 table.RebaseRevisionsAfter(currentTable, Entities.Keys.Select(value => new EntityId(value)));
             }
-            Revision = checked(Math.Max(Revision, current.Revision) + 1);
+            Revision = RebaseRevision(Revision, current.Revision);
         }
 
         internal void ValidateComponents()
@@ -632,6 +789,35 @@ public sealed class EntityWorld : IDisposable
             }
         }
 
+        internal void RebuildContainmentReverseIndex()
+        {
+            ContainedChildren.Clear();
+            foreach ((ulong child, ulong container) in Containment)
+            {
+                if (!ContainedChildren.TryGetValue(container, out SortedSet<ulong>? children))
+                {
+                    children = [];
+                    ContainedChildren.Add(container, children);
+                }
+                children.Add(child);
+            }
+        }
+
+        internal void ImportComponentFamily<T>(
+            ComponentType<T> descriptor,
+            IReadOnlyList<EntityWorldComponentSlot<T>> slots)
+            where T : struct
+        {
+            if (!Tables.TryGetValue(descriptor.Key, out ComponentTable? table)
+                || table is not ComponentTable<T> typedTable
+                || !ReferenceEquals(table.Descriptor, descriptor))
+            {
+                throw new InvalidOperationException(
+                    $"Restore component family {descriptor.Key.Value} is not registered with this world.");
+            }
+            typedTable.ImportSlots(slots);
+        }
+
         private bool IsAlive(ulong entity) => Entities.TryGetValue(entity, out EntityRecord? record)
             && record.Lifecycle != EntityLifecycle.Tombstoned;
     }
@@ -648,6 +834,7 @@ public sealed class EntityWorld : IDisposable
         protected ComponentTable(ComponentType descriptor) => Descriptor = descriptor;
         internal ComponentType Descriptor { get; }
         internal abstract ComponentTable Clone(bool forSnapshot);
+        internal abstract ComponentTable CreateEmpty();
         internal abstract bool Remove(EntityId entity);
         internal abstract void InvalidateRevisions();
         internal abstract void RebaseRevisionsAfter(ComponentTable current, IEnumerable<EntityId> entities);
@@ -680,6 +867,8 @@ public sealed class EntityWorld : IDisposable
 
         internal override ComponentTable Clone(bool forSnapshot) => new ComponentTable<T>(this, forSnapshot);
 
+        internal override ComponentTable CreateEmpty() => new ComponentTable<T>(TypedDescriptor);
+
         internal bool Contains(EntityId entity) => _values.ContainsKey(entity.Value);
 
         internal bool TryGet(EntityId entity, out T value) => _values.TryGetValue(entity.Value, out value);
@@ -703,6 +892,33 @@ public sealed class EntityWorld : IDisposable
 
         internal ulong RevisionFor(EntityId entity) => _revisions.GetValueOrDefault(entity.Value);
 
+        internal IReadOnlyList<EntityWorldComponentSlot<T>> CaptureSlots(IEnumerable<EntityId> entities)
+        {
+            List<EntityWorldComponentSlot<T>> result = [];
+            foreach (EntityId entity in entities)
+            {
+                bool present = _values.TryGetValue(entity.Value, out T value);
+                if (present && TypedDescriptor.SnapshotCodec is ComponentSnapshotCodec<T> codec)
+                {
+                    value = codec(in value);
+                }
+                result.Add(new EntityWorldComponentSlot<T>(entity, present, value, RevisionFor(entity)));
+            }
+            return result;
+        }
+
+        internal void ImportSlots(IReadOnlyList<EntityWorldComponentSlot<T>> slots)
+        {
+            foreach (EntityWorldComponentSlot<T> slot in slots)
+            {
+                if (slot.Present)
+                {
+                    _values.Add(slot.Entity.Value, slot.Value);
+                }
+                _revisions.Add(slot.Entity.Value, slot.Revision);
+            }
+        }
+
         internal override void InvalidateRevisions()
         {
             foreach (ulong entity in _revisions.Keys.ToArray())
@@ -719,7 +935,7 @@ public sealed class EntityWorld : IDisposable
             }
             foreach (EntityId entity in entities)
             {
-                _revisions[entity.Value] = checked(Math.Max(RevisionFor(entity), typedCurrent.RevisionFor(entity)) + 1);
+                _revisions[entity.Value] = RebaseRevision(RevisionFor(entity), typedCurrent.RevisionFor(entity));
             }
         }
 
