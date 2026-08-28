@@ -12,6 +12,7 @@ core-space.workspace = true
 engine-spatial.workspace = true
 entity-state.workspace = true
 gameplay-mechanics.workspace = true
+gameplay-rules.workspace = true
 render-model.workspace = true
 render-presentation.workspace = true
 render-host-contracts.workspace = true

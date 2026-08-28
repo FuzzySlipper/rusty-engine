@@ -927,7 +927,7 @@ internal static class Emit
         {
             if (handle == "NativeByteLease") return "ReadOnlyMemory<byte>";
             Struct lease = model.Structs[handle];
-            if (HasLeaseMetadata(model, lease)) return LeaseReceiptType(lease);
+            if (UsesLeaseReceipt(model, lease)) return LeaseReceiptType(lease);
             Field pointer = lease.Fields.First(field => field.Type.Contains('*', StringComparison.Ordinal));
             return $"ReadOnlyMemory<{SafeType(model, BindingModel.Bare(pointer.Type))}>";
         }

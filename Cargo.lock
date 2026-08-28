@@ -542,6 +542,7 @@ dependencies = [
  "engine-spatial",
  "entity-state",
  "gameplay-mechanics",
+ "gameplay-rules",
  "render-host-contracts",
  "render-model",
  "render-presentation",

@@ -84,6 +84,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Random = new RngServiceImplementation(native.rng);
                     Mechanics = new MechanicsServiceImplementation(native.mechanics);
                     Persistence = new PersistenceServiceImplementation(native.persistence);
+                    Rules = new RulesServiceImplementation(native.rules);
                     Ui = new UiServiceImplementation(native.ui);
                 }
 
@@ -99,6 +100,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IRandomService Random { get; }
                 public IMechanicsService Mechanics { get; }
                 public IPersistenceService Persistence { get; }
+                public IRulesService Rules { get; }
                 public IUiService Ui { get; }
             }
 

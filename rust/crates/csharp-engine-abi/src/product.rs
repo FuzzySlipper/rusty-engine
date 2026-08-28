@@ -416,6 +416,23 @@ pub type NativePublishUiProjection = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyUiOperationDiagnosticLease =
     unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
+pub type NativeAdmitRulesPackage = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeRulesPackageAdmitRequest,
+    *mut NativeRulesPackageHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyRulesPackage =
+    unsafe extern "C" fn(*mut c_void, NativeRulesPackageHandle) -> i32;
+pub type NativeReadRulesPackage = unsafe extern "C" fn(
+    *mut c_void,
+    NativeRulesPackageHandle,
+    *mut NativeRulesPackageReadoutLease,
+) -> i32;
+pub type NativeDestroyRulesPackageReadoutLease =
+    unsafe extern "C" fn(*mut c_void, NativeRulesPackageReadoutLeaseHandle) -> i32;
+pub type NativeDestroyRulesOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeDrawKeyedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKeyedRngRequest,
@@ -1057,6 +1074,17 @@ pub struct NativePersistenceApi {
     pub destroy_byte_lease: NativeDestroyPersistenceByteLease,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeRulesApi {
+    pub context: *mut c_void,
+    pub admit_package: NativeAdmitRulesPackage,
+    pub destroy_package: NativeDestroyRulesPackage,
+    pub read_package: NativeReadRulesPackage,
+    pub destroy_package_readout_lease: NativeDestroyRulesPackageReadoutLease,
+    pub destroy_operation_diagnostic_lease: NativeDestroyRulesOperationDiagnosticLease,
+}
+
 /// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1073,6 +1101,7 @@ pub struct NativeEngineApi {
     pub rng: NativeRngApi,
     pub mechanics: NativeMechanicsApi,
     pub persistence: NativePersistenceApi,
+    pub rules: NativeRulesApi,
     pub ui: NativeUiApi,
 }
 

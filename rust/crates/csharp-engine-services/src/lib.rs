@@ -9,6 +9,7 @@ mod look;
 mod mechanics;
 mod persistence;
 mod rng;
+mod rules;
 mod spatial;
 mod ui;
 mod voxel;
