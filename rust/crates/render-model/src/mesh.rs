@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     validate_asset_id, RenderAssetError, RenderAssetKind, RenderMetadata, Transform,
@@ -741,6 +742,62 @@ pub struct AnimationRigSignature {
     pub root_joint_id: String,
 }
 
+impl AnimationRigSignature {
+    /// Validates the Engine's declared skeleton surface. A rig may contain a
+    /// deterministic forest: `root_joint_id` identifies the one structural
+    /// root which owns the supported root-motion policy, rather than implying
+    /// that every skin must have one global root.
+    pub fn validate(&self) -> Result<(), AnimationRigSignatureError> {
+        if self.joints.is_empty() || self.joints.len() > 256 || !valid_sha256(&self.bind_rest_hash)
+        {
+            return Err(AnimationRigSignatureError::Invalid);
+        }
+        let mut joints = BTreeSet::new();
+        for joint in &self.joints {
+            if !valid_joint_id(&joint.id) || !joints.insert(joint.id.as_str()) {
+                return Err(AnimationRigSignatureError::Invalid);
+            }
+        }
+        for joint in &self.joints {
+            if joint
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent == &joint.id || !joints.contains(parent.as_str()))
+            {
+                return Err(AnimationRigSignatureError::Invalid);
+            }
+        }
+        if !valid_joint_id(&self.root_joint_id)
+            || !self
+                .joints
+                .iter()
+                .any(|joint| joint.id == self.root_joint_id && joint.parent.is_none())
+        {
+            return Err(AnimationRigSignatureError::Invalid);
+        }
+        for joint in &self.joints {
+            let mut seen = BTreeSet::new();
+            let mut current = Some(joint.id.as_str());
+            while let Some(id) = current {
+                if !seen.insert(id) {
+                    return Err(AnimationRigSignatureError::Invalid);
+                }
+                current = self
+                    .joints
+                    .iter()
+                    .find(|candidate| candidate.id == id)
+                    .and_then(|candidate| candidate.parent.as_deref());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationRigSignatureError {
+    Invalid,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AnimationBindRestConvention {
@@ -752,6 +809,102 @@ pub enum AnimationBindRestConvention {
 pub struct AnimationRigJoint {
     pub id: String,
     pub parent: Option<String>,
+}
+
+/// One importer/renderer decoded joint used to derive the canonical
+/// `bind_rest_hash`. Matrices are column-major local-rest and inverse-bind
+/// values exactly as they cross the GLB boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimationRigFingerprintJoint {
+    pub id: String,
+    pub parent: Option<String>,
+    pub local_rest_matrix: [f64; 16],
+    pub inverse_bind_matrix: [f64; 16],
+}
+
+/// Canonical SHA-256 used by the Three renderer for rig admission. This is
+/// deliberately the same sorted JSON shape as `animationRigFingerprint` in
+/// `renderer-three`; accepting a merely similar hash would bypass the
+/// renderer's decoded-skeleton check.
+pub fn animation_rig_fingerprint(
+    joints: &[AnimationRigFingerprintJoint],
+) -> Result<String, AnimationRigSignatureError> {
+    let mut ordered = joints.to_vec();
+    ordered.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut ids = BTreeSet::new();
+    let mut canonical = String::from("[");
+    for (index, joint) in ordered.iter().enumerate() {
+        if !valid_joint_id(&joint.id)
+            || !ids.insert(joint.id.as_str())
+            || joint
+                .parent
+                .as_ref()
+                .is_some_and(|parent| !valid_joint_id(parent))
+            || joint
+                .local_rest_matrix
+                .iter()
+                .chain(joint.inverse_bind_matrix.iter())
+                .any(|value| !value.is_finite() || value.abs() >= 1e21)
+        {
+            return Err(AnimationRigSignatureError::Invalid);
+        }
+        if index != 0 {
+            canonical.push(',');
+        }
+        canonical.push('[');
+        push_json_string(&mut canonical, &joint.id);
+        canonical.push(',');
+        match &joint.parent {
+            Some(parent) => push_json_string(&mut canonical, parent),
+            None => canonical.push_str("null"),
+        }
+        for value in joint
+            .local_rest_matrix
+            .iter()
+            .chain(joint.inverse_bind_matrix.iter())
+        {
+            canonical.push(',');
+            push_renderer_rounded_number(&mut canonical, *value)?;
+        }
+        canonical.push(']');
+    }
+    canonical.push(']');
+    Ok(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+}
+
+fn push_json_string(output: &mut String, value: &str) {
+    // Joint IDs are restricted to ASCII identifiers, but delegate escaping to
+    // serde for correctness if this helper is ever reused with wider names.
+    output.push_str(&serde_json::to_string(value).expect("serializing a string cannot fail"));
+}
+
+fn push_renderer_rounded_number(
+    output: &mut String,
+    value: f64,
+) -> Result<(), AnimationRigSignatureError> {
+    // Three computes Number(value.toFixed(6)) before JSON.stringify. The GLB
+    // import surface is finite f32-derived affine data, so this fixed decimal
+    // form is byte-for-byte equivalent in the admitted range and avoids a
+    // platform-dependent generic float serializer.
+    let rounded = (value * 1_000_000.0).round() / 1_000_000.0;
+    if !rounded.is_finite() || rounded.abs() >= 1e21 {
+        return Err(AnimationRigSignatureError::Invalid);
+    }
+    if rounded == 0.0 {
+        output.push('0');
+    } else if rounded.fract() == 0.0 {
+        output.push_str(&format!("{rounded:.0}"));
+    } else {
+        let mut decimal = format!("{rounded:.6}");
+        while decimal.ends_with('0') {
+            decimal.pop();
+        }
+        if decimal.ends_with('.') {
+            decimal.pop();
+        }
+        output.push_str(&decimal);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -796,58 +949,9 @@ impl AnimationClipPack {
         {
             return Err(AnimationClipPackError::EmptyProvenance);
         }
-        if self.rig.joints.is_empty() || self.rig.joints.len() > 256 {
-            return Err(AnimationClipPackError::InvalidRig);
-        }
-        if !valid_sha256(&self.rig.bind_rest_hash) {
-            return Err(AnimationClipPackError::InvalidRig);
-        }
-        let mut joints = BTreeSet::new();
-        for joint in &self.rig.joints {
-            if !valid_joint_id(&joint.id) || !joints.insert(joint.id.as_str()) {
-                return Err(AnimationClipPackError::InvalidRig);
-            }
-        }
-        for joint in &self.rig.joints {
-            if joint
-                .parent
-                .as_ref()
-                .is_some_and(|parent| parent == &joint.id || !joints.contains(parent.as_str()))
-            {
-                return Err(AnimationClipPackError::InvalidRig);
-            }
-        }
-        if self
-            .rig
-            .joints
-            .iter()
-            .filter(|joint| joint.parent.is_none())
-            .count()
-            != 1
-            || !valid_joint_id(&self.rig.root_joint_id)
-            || !self
-                .rig
-                .joints
-                .iter()
-                .any(|joint| joint.id == self.rig.root_joint_id && joint.parent.is_none())
-        {
-            return Err(AnimationClipPackError::InvalidRig);
-        }
-        for joint in &self.rig.joints {
-            let mut seen = BTreeSet::new();
-            let mut current = Some(joint.id.as_str());
-            while let Some(id) = current {
-                if !seen.insert(id) {
-                    return Err(AnimationClipPackError::InvalidRig);
-                }
-                current = self
-                    .rig
-                    .joints
-                    .iter()
-                    .find(|candidate| candidate.id == id)
-                    .and_then(|candidate| candidate.parent.as_deref());
-            }
-        }
+        self.rig
+            .validate()
+            .map_err(|_| AnimationClipPackError::InvalidRig)?;
         if self.clips.is_empty() || self.clips.len() > 256 {
             return Err(AnimationClipPackError::InvalidClips);
         }
@@ -898,6 +1002,11 @@ pub struct AnimatedMeshAsset {
     pub runtime_format: AnimatedMeshRuntimeFormat,
     pub content_hash: Option<String>,
     pub clips: Vec<AnimationClipDescriptor>,
+    /// Optional importer-derived skeleton metadata. Static and unskinned GLBs
+    /// retain the established resource shape but cannot serve as clip-pack
+    /// association endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rig: Option<AnimationRigSignature>,
     #[serde(default)]
     pub clip_packs: Vec<AnimationClipPack>,
     pub default_clip: Option<String>,
@@ -926,6 +1035,10 @@ impl AnimatedMeshAsset {
             return Err(AnimatedMeshAssetError::EmptyContentHash);
         }
         let mut ids = BTreeSet::new();
+        if let Some(rig) = &self.rig {
+            rig.validate()
+                .map_err(|_| AnimatedMeshAssetError::InvalidRig)?;
+        }
         for clip in &self.clips {
             if clip.id.trim().is_empty() {
                 return Err(AnimatedMeshAssetError::EmptyClipId);
@@ -1026,6 +1139,7 @@ pub enum AnimatedMeshAssetError {
     EmptyClipId,
     DuplicateClipId { clip: String },
     InvalidClipDuration { clip: String },
+    InvalidRig,
     ClipPack(AnimationClipPackError),
     DuplicateClipPack { asset: String },
     EffectiveClipCollision { clip: String },
@@ -1277,6 +1391,60 @@ mod tests {
             ]),
             Err(AnimatedMeshEmbeddedMaterialSlotError::DuplicateSource { .. })
         ));
+    }
+
+    #[test]
+    fn animation_rig_fingerprint_matches_the_renderer_canonical_golden() {
+        let identity = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let mut root_a_rest = identity;
+        root_a_rest[12] = 0.123_456_74_f32 as f64;
+        root_a_rest[13] = -0.765_432_18_f32 as f64;
+        let mut root_b_inverse_bind = identity;
+        root_b_inverse_bind[12] = -1.234_567_76_f32 as f64;
+        root_b_inverse_bind[13] = 0.333_333_34_f32 as f64;
+        let fingerprint = animation_rig_fingerprint(&[
+            AnimationRigFingerprintJoint {
+                id: "RootB".to_owned(),
+                parent: None,
+                local_rest_matrix: identity,
+                inverse_bind_matrix: root_b_inverse_bind,
+            },
+            AnimationRigFingerprintJoint {
+                id: "RootA".to_owned(),
+                parent: None,
+                local_rest_matrix: root_a_rest,
+                inverse_bind_matrix: identity,
+            },
+        ])
+        .expect("finite named matrices are canonicalizable");
+        assert_eq!(
+            fingerprint,
+            "sha256:7d1cd48c239af954230c7eb699b1255577ef1ce709f9b9d22a74b6249a20592f"
+        );
+    }
+
+    #[test]
+    fn rig_signature_allows_a_joint_forest_with_one_designated_root() {
+        let signature = AnimationRigSignature {
+            joints: vec![
+                AnimationRigJoint {
+                    id: "RootA".to_owned(),
+                    parent: None,
+                },
+                AnimationRigJoint {
+                    id: "RootB".to_owned(),
+                    parent: None,
+                },
+            ],
+            bind_rest_hash:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
+            root_convention: AnimationRootConvention::InPlace,
+            root_joint_id: "RootB".to_owned(),
+        };
+        assert_eq!(signature.validate(), Ok(()));
     }
 
     #[test]

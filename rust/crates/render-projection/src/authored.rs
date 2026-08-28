@@ -1175,6 +1175,7 @@ mod tests {
                 name: Some("Idle".to_string()),
                 duration_seconds: Some(1.0),
             }],
+            rig: None,
             clip_packs: vec![],
             default_clip: Some("idle".to_string()),
             embedded_material_slots: vec![],

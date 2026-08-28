@@ -1,18 +1,23 @@
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use asset_catalog::{validate_catalog, AssetCatalog, CatalogEntry};
 use core_assets::{AssetHash, AssetId, AssetKind};
 use gltf::buffer::Source as BufferSource;
 use gltf::image::Source as ImageSource;
 use render_model::{
-    AnimatedMeshAsset, AnimatedMeshEmbeddedMaterialSlot, AnimatedMeshRuntimeFormat,
-    AnimationClipDescriptor, MeshBoundsDescriptor,
+    animation_rig_fingerprint, AnimatedMeshAsset, AnimatedMeshEmbeddedMaterialSlot,
+    AnimatedMeshRuntimeFormat, AnimationBindRestConvention, AnimationClipDescriptor,
+    AnimationRigFingerprintJoint, AnimationRigJoint, AnimationRigSignature,
+    AnimationRootConvention, MeshBoundsDescriptor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use voxel_convert::{
-    import_animated_mesh_source, import_mesh_source, MeshSourceFormat, MeshSourceImportRequest,
-    MAX_CONVERSION_SOURCE_BYTES,
+    import_animated_mesh_source, import_mesh_source, AnimationChannelValues, AnimationProperty,
+    MeshSourceFormat, MeshSourceImportRequest, MAX_CONVERSION_SOURCE_BYTES,
 };
 
 use crate::{ImportCode, ImportContext, ImportDiagnostic, SourceUri};
@@ -131,6 +136,7 @@ pub fn import_animated_glb_asset(
         source_bounds,
         source_material_slots,
         clips,
+        rig,
         channel_count,
         keyframe_count,
     ) = if parsed.document.animations().next().is_some() {
@@ -174,6 +180,22 @@ pub fn import_animated_glb_asset(
             .flat_map(|clip| &clip.channels)
             .map(|channel| channel.timestamps_microseconds.len() as u64)
             .sum::<u64>();
+        let rig = match derive_animation_rig_signature(&imported.model) {
+            Ok(rig) => rig,
+            Err(message) => {
+                // Embedded clips remain independently usable. We retain no
+                // approximate signature, so a later clip-pack association
+                // fails closed while this primary resource can still serve
+                // its own decoded animations.
+                diagnostics.push(ImportDiagnostic::warning(
+                    ImportCode::InvalidAnimation,
+                    asset_id.as_str(),
+                    message,
+                    "export one named skin joint forest with a supported designated root-motion policy before using this GLB as a clip-pack endpoint",
+                ));
+                None
+            }
+        };
         (
             GlbAnimationKind::Animated,
             imported.source.receipt.metadata.source_bounds,
@@ -186,6 +208,7 @@ pub fn import_animated_glb_asset(
                 .map(|material| material.source_material_slot)
                 .collect::<Vec<_>>(),
             clips,
+            rig,
             channel_count,
             keyframe_count,
         )
@@ -223,6 +246,7 @@ pub fn import_animated_glb_asset(
                 .map(|material| material.source_material_slot)
                 .collect::<Vec<_>>(),
             Vec::new(),
+            None,
             0,
             0,
         )
@@ -247,6 +271,7 @@ pub fn import_animated_glb_asset(
         runtime_format: AnimatedMeshRuntimeFormat::Glb,
         content_hash: Some(source_hash.clone()),
         clips,
+        rig,
         clip_packs: Vec::new(),
         default_clip,
         embedded_material_slots,
@@ -315,6 +340,180 @@ pub fn import_animated_glb_asset(
         }),
         diagnostics,
     }
+}
+
+/// Derives the exact renderer compatibility signature from the already
+/// bounded voxel-convert model. Only named skin joints participate: container
+/// ancestry stays out of the skeleton and is never promoted into a joint.
+fn derive_animation_rig_signature(
+    model: &voxel_convert::ImportedAnimatedModel,
+) -> Result<Option<AnimationRigSignature>, String> {
+    if model.skins.is_empty() {
+        return Ok(None);
+    }
+    let scene_nodes = model
+        .scene
+        .nodes
+        .iter()
+        .map(|node| (node.source_node_index, node))
+        .collect::<BTreeMap<_, _>>();
+    let mut inverse_binds = BTreeMap::<u32, [f64; 16]>::new();
+    let mut joint_nodes = BTreeSet::new();
+    for skin in &model.skins {
+        for (node_index, inverse_bind) in skin
+            .joint_node_indices
+            .iter()
+            .copied()
+            .zip(skin.inverse_bind_matrices.iter().copied())
+        {
+            joint_nodes.insert(node_index);
+            if let Some(prior) = inverse_binds.insert(node_index, inverse_bind) {
+                if prior != inverse_bind {
+                    return Err(format!(
+                        "named skin joint node {node_index} has conflicting inverse-bind matrices"
+                    ));
+                }
+            }
+        }
+    }
+    let mut names = BTreeMap::new();
+    for node_index in &joint_nodes {
+        let node = scene_nodes.get(node_index).ok_or_else(|| {
+            format!("skin joint node {node_index} is absent from the imported scene")
+        })?;
+        let name = node.source_node_name.clone().ok_or_else(|| {
+            format!(
+                "skin joint node {node_index} has no name; joint identities are never synthesized"
+            )
+        })?;
+        if let Some(prior) = names.insert(name.clone(), *node_index) {
+            return Err(format!(
+                "named skin joints {prior} and {node_index} both use the identity `{name}`"
+            ));
+        }
+    }
+    let ids_by_node = names
+        .iter()
+        .map(|(name, node)| (*node, name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut fingerprint_joints = Vec::with_capacity(joint_nodes.len());
+    let mut joints = Vec::with_capacity(joint_nodes.len());
+    for node_index in &joint_nodes {
+        let node = scene_nodes[node_index];
+        let id = ids_by_node[node_index].clone();
+        let parent = node
+            .parent_node_index
+            .filter(|parent| joint_nodes.contains(parent))
+            .map(|parent| ids_by_node[&parent].clone());
+        let inverse_bind = inverse_binds
+            .get(node_index)
+            .copied()
+            .ok_or_else(|| format!("skin joint node {node_index} has no inverse-bind matrix"))?;
+        fingerprint_joints.push(AnimationRigFingerprintJoint {
+            id: id.clone(),
+            parent: parent.clone(),
+            local_rest_matrix: node.local_transform,
+            inverse_bind_matrix: inverse_bind,
+        });
+        joints.push(AnimationRigJoint { id, parent });
+    }
+    joints.sort_by(|left, right| left.id.cmp(&right.id));
+    let roots = joints
+        .iter()
+        .filter(|joint| joint.parent.is_none())
+        .map(|joint| joint.id.clone())
+        .collect::<Vec<_>>();
+    let default_root = roots
+        .first()
+        .cloned()
+        .ok_or_else(|| "the named skin joint forest has no structural root".to_owned())?;
+
+    let mut changing_horizontal_roots = BTreeSet::new();
+    let mut every_clip_has_changing_root = true;
+    for clip in &model.clips {
+        let mut clip_changing_roots = BTreeSet::new();
+        for channel in &clip.channels {
+            if channel.property != AnimationProperty::Translation {
+                continue;
+            }
+            let Some(joint_id) = ids_by_node.get(&channel.target_node_index) else {
+                // Animation channels outside a named skin joint are ordinary
+                // GLB animation data, not a root-motion declaration.
+                continue;
+            };
+            if !roots.contains(joint_id) {
+                // Child translation remains pose data. The renderer validates
+                // the eventual clip pack independently; deriving metadata
+                // must not reduce primary GLB animation compatibility.
+                continue;
+            }
+            let AnimationChannelValues::Translations(values) = &channel.values else {
+                return Err(format!(
+                    "clip `{}` has malformed translation values",
+                    clip.name
+                ));
+            };
+            if values.is_empty()
+                || values
+                    .iter()
+                    .any(|value| !value.iter().all(|item| item.is_finite()))
+            {
+                return Err(format!(
+                    "clip `{}` has non-finite structural-root translation values",
+                    clip.name
+                ));
+            }
+            let origin = values[0];
+            if values.iter().any(|value| {
+                (value[0] - origin[0]).abs() > 1e-6 || (value[2] - origin[2]).abs() > 1e-6
+            }) {
+                clip_changing_roots.insert(joint_id.clone());
+            }
+        }
+        if clip_changing_roots.len() > 1 {
+            return Err(format!(
+                "clip `{}` has changing horizontal translation on multiple structural roots",
+                clip.name
+            ));
+        }
+        every_clip_has_changing_root &= !clip_changing_roots.is_empty();
+        changing_horizontal_roots.extend(clip_changing_roots);
+    }
+    if changing_horizontal_roots.len() > 1 {
+        return Err(
+            "clip pack mixes changing horizontal translation across multiple structural roots"
+                .to_owned(),
+        );
+    }
+    let root_joint_id = changing_horizontal_roots
+        .iter()
+        .next()
+        .cloned()
+        .unwrap_or(default_root);
+    let root_convention = if changing_horizontal_roots.is_empty() {
+        AnimationRootConvention::InPlace
+    } else {
+        if !every_clip_has_changing_root {
+            return Err(
+                "authored horizontal root translation is not changing on the designated structural root in every clip".to_owned(),
+            );
+        }
+        AnimationRootConvention::AuthoredRootTranslation
+    };
+    let bind_rest_hash = animation_rig_fingerprint(&fingerprint_joints).map_err(|_| {
+        "named skin joint matrices cannot produce the canonical renderer fingerprint".to_owned()
+    })?;
+    let signature = AnimationRigSignature {
+        joints,
+        bind_rest_hash,
+        bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
+        root_convention,
+        root_joint_id,
+    };
+    signature.validate().map_err(|_| {
+        "derived named skin joint forest is not a valid renderer rig signature".to_owned()
+    })?;
+    Ok(Some(signature))
 }
 
 /// Derive dense Engine-facing slots from the admitted source parser's used

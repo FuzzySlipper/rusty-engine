@@ -2485,51 +2485,8 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: &NativeAnimationClipPackAssociationRequest,
     ) -> Result<(), CsharpEngineServicesError> {
-        if request.joints_len > 256 {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_CLIP_PACK_RIG",
-                "animation clip-pack rigs may contain at most 256 joints",
-            ));
-        }
-        let bind_rest_hash =
-            borrowed_request_utf8(request.bind_rest_hash, "animation clip-pack bind-rest hash")?;
-        let root_joint_id =
-            borrowed_request_utf8(request.root_joint_id, "animation clip-pack root joint")?;
         let producer = borrowed_request_utf8(request.producer, "animation clip-pack producer")?;
         let license = borrowed_request_utf8(request.license, "animation clip-pack license")?;
-        let joints = unsafe {
-            borrowed_slice(
-                request.joints,
-                request.joints_len,
-                "animation clip-pack rig joints",
-            )?
-        }
-        .iter()
-        .map(|joint| {
-            Ok(AnimationRigJoint {
-                id: borrowed_request_utf8(joint.id, "animation clip-pack rig joint id")?,
-                parent: if joint.has_parent {
-                    Some(borrowed_request_utf8(
-                        joint.parent_id,
-                        "animation clip-pack rig parent id",
-                    )?)
-                } else {
-                    None
-                },
-            })
-        })
-        .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
-        let bind_rest_convention = match request.bind_rest_convention {
-            NativeAnimationBindRestConvention::LocalMatrixV1 => {
-                AnimationBindRestConvention::LocalMatrixV1
-            }
-        };
-        let root_convention = match request.root_convention {
-            NativeAnimationRootConvention::InPlace => AnimationRootConvention::InPlace,
-            NativeAnimationRootConvention::AuthoredRootTranslation => {
-                AnimationRootConvention::AuthoredRootTranslation
-            }
-        };
 
         let primary = self.resource(request.primary_mesh.value)?.clone();
         if primary.kind() != CsharpRenderResourceKind::AnimatedMesh {
@@ -2557,6 +2514,24 @@ impl RuntimeAppearanceBridge {
                 "clip-pack resource did not retain an imported animated descriptor",
             )
         })?;
+        let primary_rig = primary_mesh.rig.clone().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_PRIMARY_RIG",
+                "primary animated mesh has no importer-derived named skin rig",
+            )
+        })?;
+        let pack_rig = pack_mesh.rig.clone().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_RIG",
+                "animation clip-pack has no importer-derived named skin rig",
+            )
+        })?;
+        if primary_rig != pack_rig {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_RIG",
+                "primary animated mesh and clip-pack importer-derived rig signatures differ",
+            ));
+        }
         let asset = format!(
             "animation-clip-pack/{}",
             pack.content_hash()
@@ -2567,13 +2542,7 @@ impl RuntimeAppearanceBridge {
             asset,
             runtime_format: pack_mesh.runtime_format,
             content_hash: pack.content_hash().to_owned(),
-            rig: AnimationRigSignature {
-                joints,
-                bind_rest_hash,
-                bind_rest_convention,
-                root_convention,
-                root_joint_id,
-            },
+            rig: pack_rig,
             clips: pack_mesh.clips.clone(),
             provenance: AnimationClipPackProvenance {
                 producer,
@@ -6123,20 +6092,9 @@ mod tests {
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let primary_path = b"primary.glb";
         let pack_path = b"pack.glb";
-        let joint_id = b"Root";
         let hash = format!("sha256:{:x}", Sha256::digest(CHARACTER_GLB));
-        let bind_rest_hash =
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let producer = b"test-import";
         let license = b"CC0-1.0";
-        let joints = [NativeAnimationRigJointRequest {
-            id: NativeUtf8Slice {
-                bytes: joint_id.as_ptr(),
-                len: joint_id.len(),
-            },
-            parent_id: NativeUtf8Slice::default(),
-            has_parent: false,
-        }];
 
         bridge.begin_call();
         let primary = bridge
@@ -6159,22 +6117,38 @@ mod tests {
             primary.value, pack.value,
             "same bytes retain distinct roles"
         );
+        // `character-medium` intentionally has unsupported multi-root
+        // translation metadata. This service-level retention test supplies a
+        // coherent importer result directly so it can exercise association
+        // lifetime without treating that real asset as a positive rig fixture.
+        let rig = AnimationRigSignature {
+            joints: vec![AnimationRigJoint {
+                id: "Root".to_owned(),
+                parent: None,
+            }],
+            bind_rest_hash:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
+            root_convention: AnimationRootConvention::InPlace,
+            root_joint_id: "Root".to_owned(),
+        };
+        for handle in [primary.value, pack.value] {
+            bridge
+                .staged
+                .as_mut()
+                .expect("staged state")
+                .state
+                .render_resources
+                .get_mut(usize::try_from(handle - 1).expect("small handle"))
+                .expect("animated resource")
+                .animated_mesh_mut()
+                .expect("animated descriptor")
+                .rig = Some(rig.clone());
+        }
 
         let associate = NativeAnimationClipPackAssociationRequest {
             primary_mesh: primary,
             clip_pack: pack,
-            joints: joints.as_ptr(),
-            joints_len: joints.len(),
-            bind_rest_hash: NativeUtf8Slice {
-                bytes: bind_rest_hash.as_ptr(),
-                len: bind_rest_hash.len(),
-            },
-            bind_rest_convention: NativeAnimationBindRestConvention::LocalMatrixV1,
-            root_convention: NativeAnimationRootConvention::InPlace,
-            root_joint_id: NativeUtf8Slice {
-                bytes: joint_id.as_ptr(),
-                len: joint_id.len(),
-            },
             producer: NativeUtf8Slice {
                 bytes: producer.as_ptr(),
                 len: producer.len(),

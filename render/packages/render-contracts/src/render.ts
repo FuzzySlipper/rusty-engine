@@ -202,6 +202,8 @@ export interface AnimatedMeshAsset {
   readonly runtimeFormat: AnimatedMeshRuntimeFormat;
   readonly contentHash: string | null;
   readonly clips: readonly AnimationClipDescriptor[];
+  /** Importer-derived named skin signature when this GLB can be a clip-pack endpoint. */
+  readonly rig?: AnimationRigSignature;
   /** Omitted by schema-v1 producers that only use embedded clips. */
   readonly clipPacks?: readonly AnimationClipPack[];
   readonly defaultClip: string | null;

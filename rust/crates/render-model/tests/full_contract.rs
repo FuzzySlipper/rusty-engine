@@ -120,6 +120,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             name: Some("idle".to_string()),
             duration_seconds: Some(1.0),
         }],
+        rig: None,
         clip_packs: vec![],
         default_clip: Some("idle".to_string()),
         embedded_material_slots: vec![],

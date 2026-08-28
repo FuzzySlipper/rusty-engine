@@ -988,7 +988,9 @@ function assertClipPack(
     throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (bind/rest fingerprint)`);
   }
   const roots = pack.rig.joints.filter((joint) => joint.parent === null);
-  if (roots.length !== 1) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (root)`);
+  if (!roots.some((joint) => joint.id === pack.rig.rootJointId)) {
+    throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (designated root)`);
+  }
   for (const [, clip] of requireDescriptorClips(resource, pack.clips)) {
     assertClipChannels(pack, clip, new Set(pack.rig.joints.map((joint) => joint.id)));
   }

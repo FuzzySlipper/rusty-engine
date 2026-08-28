@@ -3419,6 +3419,31 @@ void test('clip-pack channels reject malformed decoded keyframes before publicat
   });
 });
 
+void test('clip packs admit a joint forest when the designated root is structural', () => {
+  const target = forestRigScene();
+  const sourceScene = forestRigScene();
+  const hash = animationRigFingerprint(target);
+  assert.equal(hash, 'sha256:7d1cd48c239af954230c7eb699b1255577ef1ce709f9b9d22a74b6249a20592f');
+  const pack = {
+    asset: 'animation-clip-pack/forest', runtimeFormat: 'glb' as const, contentHash: hash,
+    rig: {
+      joints: [{ id: 'RootA', parent: null }, { id: 'RootB', parent: null }],
+      bindRestHash: hash, bindRestConvention: 'localMatrixV1' as const,
+      rootConvention: 'inPlace' as const, rootJointId: 'RootB',
+    },
+    clips: [{ id: 'wave', name: 'Wave', durationSeconds: 1 }],
+    provenance: { producer: 'fixture', sourceHash: `sha256:${'c'.repeat(64)}`, targetHash: `sha256:${'c'.repeat(64)}`, license: 'CC0-1.0' },
+  };
+  const asset = animatedMeshAsset({ clips: [], defaultClip: null, clipPacks: [pack] });
+  const registry = new AnimatedMeshRegistry(new MapAnimatedMeshAssetSource(
+    [{ asset: asset.asset, contentHash: asset.contentHash, scene: target, clips: [] }],
+    [{ asset: pack.asset, contentHash: hash, scene: sourceScene, clips: [
+      new THREE.AnimationClip('Wave', 1, [new THREE.QuaternionKeyframeTrack('RootA.quaternion', [0, 1], [0, 0, 0, 1, 0, 0, 0, 1])]),
+    ] }],
+  ));
+  assert.doesNotThrow(() => registry.define(asset));
+});
+
 function rigScene(withSkin = false): THREE.Group {
   const scene = new THREE.Group();
   const root = new THREE.Bone();
@@ -3433,6 +3458,30 @@ function rigScene(withSkin = false): THREE.Group {
     mesh.bind(new THREE.Skeleton([root], [new THREE.Matrix4()]));
     scene.add(mesh);
   }
+  return scene;
+}
+
+function forestRigScene(): THREE.Group {
+  const scene = new THREE.Group();
+  const rootA = new THREE.Bone();
+  rootA.name = 'RootA';
+  rootA.position.set(Math.fround(0.12345674), Math.fround(-0.76543218), 0);
+  const rootB = new THREE.Bone();
+  rootB.name = 'RootB';
+  scene.add(rootA, rootB);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 1, 0, 0], 4));
+  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute([0.5, 0.5, 0, 0], 4));
+  const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+  mesh.bind(new THREE.Skeleton([rootA, rootB], [
+    new THREE.Matrix4(),
+    new THREE.Matrix4().fromArray([
+      1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+      Math.fround(-1.23456776), Math.fround(0.33333334), 0, 1,
+    ]),
+  ]), new THREE.Matrix4());
+  scene.add(mesh);
   return scene;
 }
 

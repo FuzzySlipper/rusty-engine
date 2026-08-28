@@ -546,7 +546,7 @@ function staticMeshInstance(input: unknown, path: string): void {
 function animatedMesh(input: unknown, path: string): void {
   const value = recordOptional(input, path,
     ['asset', 'runtimeFormat', 'contentHash', 'clips', 'defaultClip', 'materialSlots', 'bounds'],
-    ['clipPacks', 'embeddedMaterialSlots'],
+    ['clipPacks', 'embeddedMaterialSlots', 'rig'],
   );
   nonEmptyText(value['asset'], `${path}.asset`);
   enumeration(value['runtimeFormat'], `${path}.runtimeFormat`, ['glb'] as const);
@@ -561,6 +561,7 @@ function animatedMesh(input: unknown, path: string): void {
     nullable(clip['name'], `${clipPath}.name`, nonEmptyText);
     nullable(clip['durationSeconds'], `${clipPath}.durationSeconds`, positiveFinite);
   });
+  if (value['rig'] !== undefined) validateAnimationRig(value['rig'], `${path}.rig`);
   const packAssets = new Set<string>();
   list(value['clipPacks'] ?? [], `${path}.clipPacks`).forEach((item, index) => {
     const packPath = `${path}.clipPacks[${String(index)}]`;
@@ -575,39 +576,7 @@ function animatedMesh(input: unknown, path: string): void {
     sha256(provenance['sourceHash'], `${packPath}.provenance.sourceHash`);
     sha256(provenance['targetHash'], `${packPath}.provenance.targetHash`);
     nonEmptyText(provenance['license'], `${packPath}.provenance.license`);
-    const rig = record(pack['rig'], `${packPath}.rig`, ['joints', 'bindRestHash', 'bindRestConvention', 'rootConvention', 'rootJointId']);
-    sha256(rig['bindRestHash'], `${packPath}.rig.bindRestHash`);
-    enumeration(rig['bindRestConvention'], `${packPath}.rig.bindRestConvention`, ['localMatrixV1'] as const);
-    enumeration(rig['rootConvention'], `${packPath}.rig.rootConvention`, ['inPlace', 'authoredRootTranslation'] as const);
-    const rootJointId = jointId(rig['rootJointId'], `${packPath}.rig.rootJointId`);
-    const joints = list(rig['joints'], `${packPath}.rig.joints`);
-    if (joints.length === 0 || joints.length > 256) fail(`${packPath}.rig.joints`, 'must contain 1..=256 entries');
-    const jointIds = new Set<string>();
-    const parentIds: (string | null)[] = [];
-    joints.forEach((jointValue, jointIndex) => {
-      const jointPath = `${packPath}.rig.joints[${String(jointIndex)}]`;
-      const joint = record(jointValue, jointPath, ['id', 'parent']);
-      const id = jointId(joint['id'], `${jointPath}.id`);
-      if (jointIds.has(id)) fail(`${jointPath}.id`, 'is duplicated');
-      jointIds.add(id);
-      parentIds.push(nullableJointId(joint['parent'], `${jointPath}.parent`));
-    });
-    parentIds.forEach((parent, jointIndex) => {
-      if (parent !== null && !jointIds.has(parent)) fail(`${packPath}.rig.joints[${String(jointIndex)}].parent`, 'is not declared');
-      if (parent !== null && parent === (joints[jointIndex] as { id?: unknown }).id) fail(`${packPath}.rig.joints[${String(jointIndex)}].parent`, 'must not reference itself');
-    });
-    if (parentIds.filter((parent) => parent === null).length !== 1) fail(`${packPath}.rig.joints`, 'must declare exactly one root');
-    const parents = new Map([...jointIds].map((id, index) => [id, parentIds[index] ?? null]));
-    if (!jointIds.has(rootJointId) || parents.get(rootJointId) !== null) fail(`${packPath}.rig.rootJointId`, 'must identify the declared root joint');
-    for (const id of jointIds) {
-      const seen = new Set<string>();
-      let current: string | null = id;
-      while (current !== null) {
-        if (seen.has(current)) fail(`${packPath}.rig.joints`, 'must not contain a parent cycle');
-        seen.add(current);
-        current = parents.get(current) ?? null;
-      }
-    }
+    validateAnimationRig(pack['rig'], `${packPath}.rig`);
     const packClips = list(pack['clips'], `${packPath}.clips`);
     if (packClips.length === 0 || packClips.length > 256) fail(`${packPath}.clips`, 'must contain 1..=256 entries');
     packClips.forEach((clipValue, clipIndex) => {
@@ -627,6 +596,42 @@ function animatedMesh(input: unknown, path: string): void {
   animatedEmbeddedMaterialSlots(value['embeddedMaterialSlots'] ?? [], `${path}.embeddedMaterialSlots`);
   materialSlots(value['materialSlots'], `${path}.materialSlots`);
   bounds(value['bounds'], `${path}.bounds`);
+}
+
+function validateAnimationRig(input: unknown, path: string): void {
+  const rig = record(input, path, ['joints', 'bindRestHash', 'bindRestConvention', 'rootConvention', 'rootJointId']);
+  sha256(rig['bindRestHash'], `${path}.bindRestHash`);
+  enumeration(rig['bindRestConvention'], `${path}.bindRestConvention`, ['localMatrixV1'] as const);
+  enumeration(rig['rootConvention'], `${path}.rootConvention`, ['inPlace', 'authoredRootTranslation'] as const);
+  const rootJointId = jointId(rig['rootJointId'], `${path}.rootJointId`);
+  const joints = list(rig['joints'], `${path}.joints`);
+  if (joints.length === 0 || joints.length > 256) fail(`${path}.joints`, 'must contain 1..=256 entries');
+  const jointIds = new Set<string>();
+  const parentIds: (string | null)[] = [];
+  joints.forEach((jointValue, jointIndex) => {
+    const jointPath = `${path}.joints[${String(jointIndex)}]`;
+    const joint = record(jointValue, jointPath, ['id', 'parent']);
+    const id = jointId(joint['id'], `${jointPath}.id`);
+    if (jointIds.has(id)) fail(`${jointPath}.id`, 'is duplicated');
+    jointIds.add(id);
+    parentIds.push(nullableJointId(joint['parent'], `${jointPath}.parent`));
+  });
+  parentIds.forEach((parent, jointIndex) => {
+    if (parent !== null && !jointIds.has(parent)) fail(`${path}.joints[${String(jointIndex)}].parent`, 'is not declared');
+    if (parent !== null && parent === (joints[jointIndex] as { id?: unknown }).id) fail(`${path}.joints[${String(jointIndex)}].parent`, 'must not reference itself');
+  });
+  if (parentIds.filter((parent) => parent === null).length === 0) fail(`${path}.joints`, 'must declare at least one structural root');
+  const parents = new Map([...jointIds].map((id, index) => [id, parentIds[index] ?? null]));
+  if (!jointIds.has(rootJointId) || parents.get(rootJointId) !== null) fail(`${path}.rootJointId`, 'must identify the designated structural root joint');
+  for (const id of jointIds) {
+    const seen = new Set<string>();
+    let current: string | null = id;
+    while (current !== null) {
+      if (seen.has(current)) fail(`${path}.joints`, 'must not contain a parent cycle');
+      seen.add(current);
+      current = parents.get(current) ?? null;
+    }
+  }
 }
 
 function animatedMeshInstance(input: unknown, path: string): void {
