@@ -66,6 +66,18 @@ impl RuntimeContentBridge {
         Some(NativeContentReferenceHandle { value })
     }
 
+    /// Engine-internal composition seam for semantic owners. The retained
+    /// content handle remains authoritative; callers receive a cheap immutable
+    /// clone and never route its bytes through the C# ABI.
+    pub(crate) fn retained_bytes(
+        &self,
+        reference: NativeContentReferenceHandle,
+    ) -> Option<Arc<[u8]>> {
+        self.references
+            .get(&reference.value)
+            .map(|content| Arc::clone(&content.bytes))
+    }
+
     fn read_info(
         &mut self,
         reference: NativeContentReferenceHandle,

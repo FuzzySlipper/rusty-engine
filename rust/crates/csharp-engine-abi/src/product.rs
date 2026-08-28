@@ -1488,6 +1488,20 @@ pub struct NativeContentApi {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredContentApi {
+    pub context: *mut c_void,
+    pub admit_catalog: NativeAdmitAuthoredCatalog,
+    pub admit_catalog_from_content: NativeAdmitAuthoredCatalogFromContent,
+    pub destroy_catalog: NativeDestroyAuthoredCatalog,
+    pub read_catalog: NativeReadAuthoredCatalog,
+    pub destroy_catalog_readout_lease: NativeDestroyAuthoredCatalogReadoutLease,
+    pub resolve_reference: NativeResolveAuthoredCatalogReference,
+    pub destroy_resolved_entry_lease: NativeDestroyAuthoredResolvedEntryLease,
+    pub destroy_operation_diagnostic_lease: NativeDestroyAuthoredContentOperationDiagnosticLease,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationApi {
     pub context: *mut c_void,
     pub open_animated_mesh: NativeOpenAnimatedMesh,
@@ -1783,6 +1797,7 @@ pub struct NativeEngineApi {
     pub voxel: NativeVoxelApi,
     pub voxel_content: NativeVoxelContentApi,
     pub content: NativeContentApi,
+    pub authored_content: NativeAuthoredContentApi,
     pub appearance: NativeAppearanceApi,
     pub presentation: NativePresentationApi,
     pub animation: NativeAnimationApi,

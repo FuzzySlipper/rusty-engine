@@ -534,8 +534,10 @@ version = "0.1.0"
 name = "csharp-engine-services"
 version = "0.1.0"
 dependencies = [
+ "asset-catalog",
  "asset-import",
  "content-store",
+ "core-assets",
  "core-ids",
  "core-math",
  "core-space",

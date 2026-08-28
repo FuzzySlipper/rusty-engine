@@ -8,6 +8,7 @@
 mod animation;
 mod appearance;
 mod audio;
+mod authored_content;
 mod camera_view;
 mod content;
 mod content_store;
@@ -38,6 +39,7 @@ mod world_origin;
 pub use animation::*;
 pub use appearance::*;
 pub use audio::*;
+pub use authored_content::*;
 pub use camera_view::*;
 pub use content::*;
 pub use content_store::*;

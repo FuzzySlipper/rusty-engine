@@ -11,6 +11,7 @@ use entity_state::Quat;
 
 use crate::{
     audio::{RuntimeAudioBridge, RuntimeAudioCall},
+    authored_content::RuntimeAuthoredContentBridge,
     camera_view::RuntimeCameraViewBridge,
     content::RuntimeContentBridge,
     dynamics::RuntimeDynamicsBridge,
@@ -44,6 +45,7 @@ use crate::appearance::{
 fn engine_api(
     appearance_bridge: &mut RuntimeAppearanceBridge,
     content_bridge: &mut RuntimeContentBridge,
+    authored_content_bridge: &mut RuntimeAuthoredContentBridge,
     content_store_bridge: &mut crate::content_store::RuntimeContentStoreBridge,
     audio_bridge: &mut RuntimeAudioBridge,
     camera_view_bridge: &mut RuntimeCameraViewBridge,
@@ -70,6 +72,7 @@ fn engine_api(
         voxel: crate::voxel::api(spatial_bridge),
         voxel_content: crate::voxel_content::api(voxel_content_bridge, appearance_bridge),
         content: crate::content::api(content_bridge),
+        authored_content: crate::authored_content::api(authored_content_bridge),
         content_store: crate::content_store::api(content_store_bridge),
         appearance: NativeAppearanceApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
@@ -208,7 +211,8 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 /// Engine-facing effects created through the generated function tables.
 pub struct EngineServiceSet {
     appearance: RuntimeAppearanceBridge,
-    content: RuntimeContentBridge,
+    content: Box<RuntimeContentBridge>,
+    authored_content: RuntimeAuthoredContentBridge,
     content_store: crate::content_store::RuntimeContentStoreBridge,
     audio: RuntimeAudioBridge,
     camera_view: RuntimeCameraViewBridge,
@@ -257,9 +261,13 @@ impl EngineServiceSet {
     ) -> Result<Self, CsharpEngineServicesError> {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let dynamics = crate::dynamics::RuntimeDynamicsBridge::new(spatial.collision_source());
+        let content = Box::new(RuntimeContentBridge::new(content_resources.clone()));
+        let mut authored_content = RuntimeAuthoredContentBridge::new();
+        authored_content.bind_content(&content);
         Ok(Self {
             appearance: crate::appearance::create(catalog.0, content_resources.clone()),
-            content: RuntimeContentBridge::new(content_resources.clone()),
+            content,
+            authored_content,
             content_store: crate::content_store::RuntimeContentStoreBridge::new(
                 content_store_root,
             )?,
@@ -284,6 +292,7 @@ impl EngineServiceSet {
         engine_api(
             &mut self.appearance,
             &mut self.content,
+            &mut self.authored_content,
             &mut self.content_store,
             &mut self.audio,
             &mut self.camera_view,

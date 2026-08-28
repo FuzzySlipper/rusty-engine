@@ -199,22 +199,11 @@ impl AssetCatalog {
         &self,
         reference: &AssetReference,
     ) -> Result<&CatalogEntry, VoxelSurfaceResolutionError> {
-        let entry = self
-            .get(reference.id())
-            .ok_or(VoxelSurfaceResolutionError::MissingAsset)?;
-        let version_matches = match reference.version() {
-            AssetVersionReq::Any => true,
-            AssetVersionReq::Exact(version) => entry.version == version,
-            AssetVersionReq::AtLeast(version) => entry.version >= version,
-        };
-        if !version_matches
-            || reference
-                .hash()
-                .is_some_and(|hash| entry.hash.as_ref() != Some(hash))
-        {
-            return Err(VoxelSurfaceResolutionError::StaleReference);
-        }
-        Ok(entry)
+        self.resolve_reference(reference)
+            .map_err(|error| match error {
+                CatalogResolveError::Missing { .. } => VoxelSurfaceResolutionError::MissingAsset,
+                CatalogResolveError::Stale { .. } => VoxelSurfaceResolutionError::StaleReference,
+            })
     }
 
     /// A deterministic copy. Entry identity controls order; dependency order is
@@ -242,6 +231,43 @@ impl AssetCatalog {
             }
         }
         catalog
+    }
+}
+
+/// Why an exact catalog reference did not resolve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogResolveError {
+    Missing { id: AssetId },
+    Stale { id: AssetId },
+}
+
+impl AssetCatalog {
+    /// Resolve an entry and preserve the distinction between an absent identity
+    /// and a present entry that no longer satisfies its version/hash pins.
+    pub fn resolve_reference(
+        &self,
+        reference: &AssetReference,
+    ) -> Result<&CatalogEntry, CatalogResolveError> {
+        let Some(entry) = self.get(reference.id()) else {
+            return Err(CatalogResolveError::Missing {
+                id: reference.id().clone(),
+            });
+        };
+        let matches_version = match reference.version() {
+            AssetVersionReq::Any => true,
+            AssetVersionReq::Exact(version) => entry.version == version,
+            AssetVersionReq::AtLeast(version) => entry.version >= version,
+        };
+        if !matches_version
+            || reference
+                .hash()
+                .is_some_and(|hash| entry.hash.as_ref() != Some(hash))
+        {
+            return Err(CatalogResolveError::Stale {
+                id: reference.id().clone(),
+            });
+        }
+        Ok(entry)
     }
 }
 
