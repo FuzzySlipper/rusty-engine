@@ -56,6 +56,7 @@ ExerciseMechanicsWorldImport();
 ExerciseMechanicsWorldPersistenceComposition();
 ExerciseContinuousMechanicsSibling();
 ExerciseContinuousMechanicsComposition();
+ExerciseStateMachineEntityComposition();
 
 static void Require(bool condition, string message)
 {
@@ -84,6 +85,106 @@ static void ValidateHealth(in Health health)
     {
         throw new ArgumentOutOfRangeException(nameof(health), "Health cannot be negative.");
     }
+}
+
+static void ExerciseStateMachineEntityComposition()
+{
+    const uint MovementMachineComponentId = 30;
+    const uint ActivityMachineComponentId = 31;
+    var movement = ComponentType<StateMachineInstance>.Create(
+        ProductComponentKeys.Create(MovementMachineComponentId));
+    var activity = ComponentType<StateMachineInstance>.Create(
+        ProductComponentKeys.Create(ActivityMachineComponentId));
+    using var world = new EntityWorld([movement, activity]);
+    var service = new StateMachineServiceFake();
+    var adapter = new StateMachineEntityWorld(world, service);
+    using StateMachineDefinition movementDefinition = service.AdmitDefinition(
+        new StateMachineDefinitionRequest(
+            100,
+            new StateMachineState[] { new(1), new(2) },
+            new StateMachineTransition[] { new(1, 2), new(2, 1) }));
+    using StateMachineDefinition activityDefinition = service.AdmitDefinition(
+        new StateMachineDefinitionRequest(
+            200,
+            new StateMachineState[] { new(10), new(20) },
+            new StateMachineTransition[] { new(10, 20), new(20, 10) }));
+
+    EntityId actor = world.Create();
+    StateMachineEntityAttachmentReceipt attached = adapter.Attach(
+        actor,
+        movement,
+        movementDefinition,
+        1,
+        world.GetEntityRevision(actor),
+        world.GetComponentRevision(actor, movement));
+    adapter.Attach(actor, activity, activityDefinition, 10);
+    Require(attached.Instance == new StateMachineInstance(100, 1, 0)
+        && world.Has(actor, movement)
+        && world.Has(actor, activity),
+        "explicit state-machine component lanes did not attach to the canonical entity");
+
+    StateMachineEntityInspectionPage inspected = adapter.Inspect(movement, maximum: 1);
+    Require(inspected.TotalCount == 1
+        && inspected.Items.Span[0].Entity == actor
+        && inspected.Items.Span[0].Lifecycle == EntityLifecycle.Active,
+        "bounded state-machine inspection did not report the canonical entity facts");
+
+    ComponentRevision beforeTransition = world.GetComponentRevision(actor, movement);
+    EntityRevision staleEntityRevision = world.GetEntityRevision(actor);
+    StateMachineEntityTransitionReceipt transitioned = adapter.Transition(
+        actor,
+        movement,
+        movementDefinition,
+        1,
+        2,
+        expectedComponentRevision: beforeTransition);
+    Require(transitioned.Before == new StateMachineInstance(100, 1, 0)
+        && transitioned.After == new StateMachineInstance(100, 2, 1),
+        "state-machine transition did not publish the detached result into EntityWorld");
+
+    StateMachineInstance beforeStale = world.Get(actor, movement);
+    Throws(
+        () => adapter.Transition(
+            actor,
+            movement,
+            movementDefinition,
+            2,
+            1,
+            expectedEntityRevision: staleEntityRevision),
+        "stale entity revision was not rejected");
+    Throws(
+        () => adapter.Transition(
+            actor,
+            movement,
+            movementDefinition,
+            2,
+            1,
+            expectedComponentRevision: beforeTransition),
+        "stale component revision was not rejected");
+    Throws(
+        () => adapter.Transition(
+            actor,
+            movement,
+            movementDefinition,
+            2,
+            1,
+            expectedInstanceRevision: 0),
+        "stale state-machine revision was not rejected");
+    Require(world.Get(actor, movement) == beforeStale,
+        "a rejected state-machine transition changed canonical component state");
+
+    world.SetLifecycle(actor, EntityLifecycle.Disabled);
+    Throws(
+        () => adapter.Transition(actor, movement, movementDefinition, 2, 1),
+        "disabled entity admitted a state-machine transition");
+    StateMachineEntityDetachReceipt detached = adapter.Detach(actor, movement);
+    Require(detached.Removed && !world.Has(actor, movement) && world.Has(actor, activity),
+        "disabled detach did not remove only the selected machine lane");
+
+    world.SetLifecycle(actor, EntityLifecycle.Active);
+    world.Destroy(actor);
+    Require(!world.Has(actor, movement) && !world.Has(actor, activity),
+        "tombstoning did not remove attached state-machine components");
 }
 
 static void ExerciseManagedRestorePlan(
@@ -881,6 +982,68 @@ sealed class InMemoryContinuousCheckpointMigration : IProductStateMigration
         Calls++;
         return new byte[] { 1 };
     }
+}
+
+sealed class StateMachineServiceFake : IStateMachineService
+{
+    private readonly Dictionary<ulong, Definition> _definitions = [];
+    private ulong _nextHandle = 1;
+
+    public StateMachineDefinition AdmitDefinition(StateMachineDefinitionRequest request)
+    {
+        StateMachineState[] states = request.States.ToArray();
+        StateMachineTransition[] transitions = request.Transitions.ToArray();
+        if (states.Length == 0
+            || states.Select(state => state.Value).Distinct().Count() != states.Length
+            || transitions.Any(edge => !states.Contains(new StateMachineState(edge.From))
+                || !states.Contains(new StateMachineState(edge.To))))
+        {
+            throw new InvalidOperationException("State-machine definition is invalid.");
+        }
+        ulong handle = _nextHandle++;
+        _definitions.Add(handle, new Definition(request.Machine, states, transitions));
+        return new StateMachineDefinition(
+            new StateMachineDefinitionHandle(handle),
+            () => _definitions.Remove(handle));
+    }
+
+    public StateMachineDefinitionReadoutLeaseReceipt ReadDefinition(StateMachineDefinition definition)
+    {
+        Definition value = RequireDefinition(definition);
+        return new StateMachineDefinitionReadoutLeaseReceipt(
+            new StateMachineDefinitionReadoutRow[]
+            {
+                new(value.Machine, 0, (uint)value.States.Length, 0, (uint)value.Transitions.Length),
+            },
+            value.States,
+            value.Transitions);
+    }
+
+    public StateMachineTransitionReceipt ApplyTransition(StateMachineTransitionRequest request)
+    {
+        Definition definition = RequireDefinition(request.Definition);
+        StateMachineInstance instance = request.Instance;
+        if (instance.Machine != definition.Machine
+            || instance.Current != request.Expected
+            || request.HasExpectedRevision && instance.Revision != request.ExpectedRevision
+            || !definition.Transitions.Contains(new StateMachineTransition(request.Expected, request.Next)))
+        {
+            throw new InvalidOperationException("Detached state-machine transition was rejected.");
+        }
+        ulong revision = checked(instance.Revision + 1);
+        StateMachineInstance updated = new(instance.Machine, request.Next, revision);
+        return new StateMachineTransitionReceipt(updated, instance.Current, revision);
+    }
+
+    private Definition RequireDefinition(StateMachineDefinition definition)
+        => _definitions.TryGetValue(definition.Handle.Value, out Definition? value)
+            ? value
+            : throw new InvalidOperationException("State-machine definition handle is not active.");
+
+    private sealed record Definition(
+        ulong Machine,
+        StateMachineState[] States,
+        StateMachineTransition[] Transitions);
 }
 
 sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngineContext
