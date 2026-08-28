@@ -15,7 +15,8 @@ use authored_scene::{
     SceneMetadata, SceneNodeKind, SceneNodeRecord, SceneResolutionContext, SceneTransform,
 };
 use content_store::{
-    decode_prefab_registry, resolve_prefab as resolve_prefab_owner, PrefabDefinition,
+    asset_catalog_body, decode_prefab_registry, prefab_registry_body,
+    resolve_prefab as resolve_prefab_owner, scene_document_body, ArtifactRole, PrefabDefinition,
     PrefabDiagnostic, PrefabOverride, PrefabOverrideValue, PrefabPart, PrefabPartRoleBinding,
     PrefabPartSource, PrefabRegistry, PrefabRegistryValidationContext, PrefabTransform,
     PrefabVariantDelta, ValidatedPrefabRegistry,
@@ -66,6 +67,7 @@ pub(crate) struct RuntimeAuthoredContentBridge {
     scene_plan_readout_leases: BTreeMap<u64, ScenePlanReadoutLease>,
     next_scene_plan_readout_lease: u64,
     content: Option<*const RuntimeContentBridge>,
+    content_store: Option<*mut crate::content_store::RuntimeContentStoreBridge>,
 }
 struct Text {
     values: Vec<String>,
@@ -334,10 +336,79 @@ impl RuntimeAuthoredContentBridge {
             scene_plan_readout_leases: BTreeMap::new(),
             next_scene_plan_readout_lease: 1,
             content: None,
+            content_store: None,
         }
     }
     pub(crate) fn bind_content(&mut self, content: &RuntimeContentBridge) {
         self.content = Some(content);
+    }
+    pub(crate) fn bind_content_store(
+        &mut self,
+        content_store: &mut crate::content_store::RuntimeContentStoreBridge,
+    ) {
+        self.content_store = Some(content_store);
+    }
+    fn publish_semantic_owner(
+        &mut self,
+        request: NativeAuthoredContentStorePublishRequest,
+        role: ArtifactRole,
+        body: Vec<u8>,
+    ) -> Result<NativeAuthoredContentStorePublishReceipt, AuthoredError> {
+        let path = parse_text(request.path, "semantic content store artifact path")
+            .map_err(AuthoredError::simple)?;
+        let content_store = unsafe {
+            self.content_store
+                .ok_or_else(|| AuthoredError::simple("authored content store is not composed"))?
+                .as_mut()
+        }
+        .ok_or_else(|| AuthoredError::simple("authored content store is not composed"))?;
+        match content_store.publish_semantic_owner(
+            request.store,
+            crate::content_store::from_native_identity(request.expected),
+            path,
+            role,
+            body,
+        ) {
+            Ok(crate::content_store::SemanticOwnerPublish::Published {
+                identity,
+                body_hash,
+            }) => Ok(NativeAuthoredContentStorePublishReceipt {
+                status: NativeContentStorePublishStatus::Published,
+                identity: crate::content_store::native_identity(&identity),
+                body_hash: crate::content_store::native_store_hash(body_hash),
+            }),
+            Ok(crate::content_store::SemanticOwnerPublish::Stale { identity }) => {
+                Ok(NativeAuthoredContentStorePublishReceipt {
+                    status: NativeContentStorePublishStatus::Stale,
+                    identity: crate::content_store::native_identity(&identity),
+                    body_hash: NativeContentStoreHash::default(),
+                })
+            }
+            Err(error) => Err(AuthoredError::simple(error)),
+        }
+    }
+    fn reopen_semantic_owner(
+        &mut self,
+        request: NativeAuthoredContentStoreReopenRequest,
+        role: ArtifactRole,
+    ) -> Result<Vec<u8>, AuthoredError> {
+        let path = parse_text(request.path, "semantic content store artifact path")
+            .map_err(AuthoredError::simple)?;
+        let content_store = unsafe {
+            self.content_store
+                .ok_or_else(|| AuthoredError::simple("authored content store is not composed"))?
+                .as_ref()
+        }
+        .ok_or_else(|| AuthoredError::simple("authored content store is not composed"))?;
+        content_store
+            .semantic_owner_body(
+                request.snapshot,
+                crate::content_store::from_native_identity(request.expected),
+                &path,
+                role,
+                crate::content_store::from_native_store_hash(request.body_hash),
+            )
+            .map_err(AuthoredError::simple)
     }
     fn retain(
         &mut self,
@@ -639,6 +710,33 @@ impl RuntimeAuthoredContentBridge {
             .map_err(|_| AuthoredError::simple("catalog content was not UTF-8"))?;
         self.retain(AdmittedAssetCatalog::reopen(text).map_err(admission_error)?)
     }
+    fn publish_catalog_to_store(
+        &mut self,
+        catalog: NativeAuthoredCatalogHandle,
+        request: NativeAuthoredContentStorePublishRequest,
+    ) -> Result<NativeAuthoredContentStorePublishReceipt, AuthoredError> {
+        let path = parse_text(request.path, "semantic content store artifact path")
+            .map_err(AuthoredError::simple)?;
+        let body = {
+            let catalog = self
+                .catalogs
+                .get(&catalog.value)
+                .ok_or_else(|| AuthoredError::simple("unknown catalog handle"))?;
+            asset_catalog_body(path, catalog.catalog())
+                .map_err(|error| AuthoredError::simple(error.to_string()))?
+                .bytes
+        };
+        self.publish_semantic_owner(request, ArtifactRole::AssetCatalog, body)
+    }
+    fn reopen_catalog_from_store(
+        &mut self,
+        request: NativeAuthoredContentStoreReopenRequest,
+    ) -> Result<NativeAuthoredCatalogHandle, AuthoredError> {
+        let bytes = self.reopen_semantic_owner(request, ArtifactRole::AssetCatalog)?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| AuthoredError::simple("stored catalog body was not UTF-8"))?;
+        self.retain(AdmittedAssetCatalog::reopen(text).map_err(admission_error)?)
+    }
     fn prefab_context(
         &self,
         catalog: NativeAuthoredCatalogHandle,
@@ -762,6 +860,49 @@ impl RuntimeAuthoredContentBridge {
         self.retain_prefab_registry(decode_prefab_registry(text, &context).map_err(|error| {
             AuthoredError::Simple {
                 code: "AUTHORED_PREFAB_CONTENT",
+                message: error.message,
+                source: error.path,
+            }
+        })?)
+    }
+    fn publish_prefab_registry_to_store(
+        &mut self,
+        registry: NativeAuthoredPrefabRegistryHandle,
+        request: NativeAuthoredContentStorePublishRequest,
+    ) -> Result<NativeAuthoredContentStorePublishReceipt, AuthoredError> {
+        let path = parse_text(request.path, "semantic content store artifact path")
+            .map_err(AuthoredError::simple)?;
+        let body = {
+            let registry = self
+                .prefab_registries
+                .get(&registry.value)
+                .ok_or_else(|| AuthoredError::simple("unknown prefab registry handle"))?;
+            prefab_registry_body(path, registry)
+                .map_err(|error| AuthoredError::simple(error.to_string()))?
+                .bytes
+        };
+        self.publish_semantic_owner(request, ArtifactRole::PrefabRegistry, body)
+    }
+    fn reopen_prefab_registry_from_store(
+        &mut self,
+        request: NativeAuthoredPrefabRegistryFromStoreRequest,
+        entity_definition_ids: &[NativeAuthoredPrefabEntityDefinitionInput],
+    ) -> Result<NativeAuthoredPrefabRegistryHandle, AuthoredError> {
+        let context = self.prefab_context(request.catalog, entity_definition_ids)?;
+        let bytes = self.reopen_semantic_owner(
+            NativeAuthoredContentStoreReopenRequest {
+                snapshot: request.snapshot,
+                expected: request.expected,
+                path: request.path,
+                body_hash: request.body_hash,
+            },
+            ArtifactRole::PrefabRegistry,
+        )?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| AuthoredError::simple("stored prefab registry body was not UTF-8"))?;
+        self.retain_prefab_registry(decode_prefab_registry(text, &context).map_err(|error| {
+            AuthoredError::Simple {
+                code: "AUTHORED_PREFAB_STORE",
                 message: error.message,
                 source: error.path,
             }
@@ -1062,6 +1203,66 @@ impl RuntimeAuthoredContentBridge {
         let plan = SceneAdmissionPlan::prepare_with_base(
             &document,
             EntityId::new(request.base_entity),
+            &resolution,
+        )
+        .map_err(|error| AuthoredError::Simple {
+            code: "AUTHORED_SCENE_ADMISSION",
+            message: error.to_string(),
+            source: document.id.raw().to_string(),
+        })?;
+        self.retain_scene_plan(document, plan)
+    }
+    fn publish_scene_to_store(
+        &mut self,
+        scene: NativeAuthoredScenePlanHandle,
+        request: NativeAuthoredContentStorePublishRequest,
+    ) -> Result<NativeAuthoredContentStorePublishReceipt, AuthoredError> {
+        let path = parse_text(request.path, "semantic content store artifact path")
+            .map_err(AuthoredError::simple)?;
+        let body = {
+            let scene = self
+                .scene_plans
+                .get(&scene.value)
+                .ok_or_else(|| AuthoredError::simple("unknown scene plan handle"))?;
+            scene_document_body(path, &scene._document)
+                .map_err(|error| AuthoredError::simple(error.to_string()))?
+                .bytes
+        };
+        self.publish_semantic_owner(request, ArtifactRole::SceneDocument, body)
+    }
+    fn prepare_scene_from_store(
+        &mut self,
+        request: NativeAuthoredScenePrepareFromStoreRequest,
+        entity_definition_ids: &[NativeAuthoredSceneEntityDefinitionInput],
+        generator_presets: &[NativeAuthoredSceneGeneratorPresetInput],
+        catalog_ids: &[NativeAuthoredSceneCatalogIdInput],
+    ) -> Result<NativeAuthoredScenePlanHandle, AuthoredError> {
+        let resolution = self.scene_context(
+            request.catalog,
+            request.prefab_registry,
+            entity_definition_ids,
+            generator_presets,
+            catalog_ids,
+        )?;
+        let bytes = self.reopen_semantic_owner(
+            NativeAuthoredContentStoreReopenRequest {
+                snapshot: request.snapshot,
+                expected: request.expected,
+                path: request.path,
+                body_hash: request.body_hash,
+            },
+            ArtifactRole::SceneDocument,
+        )?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| AuthoredError::simple("stored scene body was not UTF-8"))?;
+        let document = decode_scene(text).map_err(|error| AuthoredError::Simple {
+            code: "AUTHORED_SCENE_STORE",
+            message: error.message,
+            source: error.path,
+        })?;
+        let plan = SceneAdmissionPlan::prepare_with_base(
+            &document,
+            EntityId::new(request.base_entity_id),
             &resolution,
         )
         .map_err(|error| AuthoredError::Simple {
@@ -2880,6 +3081,8 @@ pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredCo
         destroy_catalog,
         read_catalog,
         destroy_catalog_readout_lease,
+        publish_catalog_to_store,
+        reopen_catalog_from_store,
         resolve_reference,
         destroy_resolved_entry_lease,
         resolve_material,
@@ -2893,6 +3096,8 @@ pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredCo
         destroy_prefab_registry,
         read_prefab_registry,
         destroy_prefab_registry_readout_lease,
+        publish_prefab_registry_to_store,
+        reopen_prefab_registry_from_store,
         resolve_prefab,
         destroy_resolved_prefab_lease,
         prepare_scene,
@@ -2900,6 +3105,8 @@ pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredCo
         destroy_scene_plan,
         read_scene_plan,
         destroy_scene_plan_readout_lease,
+        publish_scene_to_store,
+        prepare_scene_from_store,
         destroy_operation_diagnostic_lease,
     }
 }
@@ -3060,6 +3267,57 @@ unsafe extern "C" fn destroy_catalog_readout_lease(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
     i32::from(handle.value != 0 && bridge.leases.remove(&handle.value).is_some())
+}
+unsafe extern "C" fn publish_catalog_to_store(
+    context: *mut c_void,
+    catalog: NativeAuthoredCatalogHandle,
+    request: *const NativeAuthoredContentStorePublishRequest,
+    result: *mut NativeAuthoredContentStorePublishReceipt,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.publish_catalog_to_store(catalog, unsafe { *request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"PublishCatalogToStore", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn reopen_catalog_from_store(
+    context: *mut c_void,
+    request: *const NativeAuthoredContentStoreReopenRequest,
+    result: *mut NativeAuthoredCatalogHandle,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.reopen_catalog_from_store(unsafe { *request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"ReopenCatalogFromStore", error) };
+            0
+        }
+    }
 }
 unsafe extern "C" fn resolve_reference(
     context: *mut c_void,
@@ -3352,6 +3610,68 @@ unsafe extern "C" fn destroy_prefab_registry_readout_lease(
     let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
     i32::from(handle.value != 0 && bridge.prefab_leases.remove(&handle.value).is_some())
 }
+unsafe extern "C" fn publish_prefab_registry_to_store(
+    context: *mut c_void,
+    registry: NativeAuthoredPrefabRegistryHandle,
+    request: *const NativeAuthoredContentStorePublishRequest,
+    result: *mut NativeAuthoredContentStorePublishReceipt,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.publish_prefab_registry_to_store(registry, unsafe { *request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"PublishPrefabRegistryToStore", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn reopen_prefab_registry_from_store(
+    context: *mut c_void,
+    request: *const NativeAuthoredPrefabRegistryFromStoreRequest,
+    result: *mut NativeAuthoredPrefabRegistryHandle,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    let entity_definition_ids = match unsafe {
+        borrowed_slice(
+            request.entity_definition_ids,
+            request.entity_definition_ids_len,
+            "stored prefab entity definition ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.reopen_prefab_registry_from_store(request, entity_definition_ids) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"ReopenPrefabRegistryFromStore", error) };
+            0
+        }
+    }
+}
 unsafe extern "C" fn resolve_prefab(
     context: *mut c_void,
     request: *const NativeAuthoredPrefabResolveRequest,
@@ -3589,6 +3909,93 @@ unsafe extern "C" fn prepare_scene_from_content(
         }
         Err(error) => {
             unsafe { *receipt_out = receipt(bridge, b"PrepareSceneFromContent", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn publish_scene_to_store(
+    context: *mut c_void,
+    scene: NativeAuthoredScenePlanHandle,
+    request: *const NativeAuthoredContentStorePublishRequest,
+    result: *mut NativeAuthoredContentStorePublishReceipt,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.publish_scene_to_store(scene, unsafe { *request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"PublishSceneToStore", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn prepare_scene_from_store(
+    context: *mut c_void,
+    request: *const NativeAuthoredScenePrepareFromStoreRequest,
+    result: *mut NativeAuthoredScenePlanHandle,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    let entity_definition_ids = match unsafe {
+        borrowed_slice(
+            request.entity_definition_ids,
+            request.entity_definition_ids_len,
+            "stored scene entity definition ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let generator_presets = match unsafe {
+        borrowed_slice(
+            request.generator_presets,
+            request.generator_presets_len,
+            "stored scene generator presets",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let catalog_ids = match unsafe {
+        borrowed_slice(
+            request.catalog_ids,
+            request.catalog_ids_len,
+            "stored scene logical catalog ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.prepare_scene_from_store(
+        request,
+        entity_definition_ids,
+        generator_presets,
+        catalog_ids,
+    ) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"PrepareSceneFromStore", error) };
             0
         }
     }
@@ -4869,6 +5276,174 @@ mod tests {
         );
         assert_eq!(
             unsafe { (content_api.destroy_reference)(content_api.context, content_reference) },
+            ABI_OK
+        );
+    }
+
+    #[test]
+    fn publishes_and_reopens_catalog_through_exact_content_store_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store_bridge =
+            crate::content_store::RuntimeContentStoreBridge::new(Some(root.path().to_path_buf()))
+                .unwrap();
+        let mut bridge = RuntimeAuthoredContentBridge::new();
+        bridge.bind_content_store(&mut store_bridge);
+        let store_api = crate::content_store::api(&mut store_bridge);
+        let authored_api = super::api(&mut bridge);
+
+        let mut store = NativeContentStoreHandle::default();
+        assert_eq!(
+            unsafe {
+                (store_api.open_store)(
+                    store_api.context,
+                    &NativeContentStoreOpenRequest {
+                        scope: slice(b"semantic-owner"),
+                    },
+                    &mut store,
+                )
+            },
+            ABI_OK
+        );
+        let mut initial_snapshot = NativeContentStoreSnapshotHandle::default();
+        assert_eq!(
+            unsafe {
+                (store_api.capture_snapshot)(store_api.context, store, &mut initial_snapshot)
+            },
+            ABI_OK
+        );
+        let mut initial_readout = unsafe { std::mem::zeroed::<NativeContentStoreSnapshotLease>() };
+        assert_eq!(
+            unsafe {
+                (store_api.read_snapshot)(store_api.context, initial_snapshot, &mut initial_readout)
+            },
+            ABI_OK
+        );
+        let initial_identity = initial_readout.identity;
+        assert_eq!(
+            unsafe {
+                (store_api.destroy_snapshot_lease)(store_api.context, initial_readout.handle)
+            },
+            ABI_OK
+        );
+
+        let entries = [NativeAuthoredCatalogEntryInput {
+            id: slice(b"texture/checker"),
+            version: 1,
+            has_hash: false,
+            hash: slice(b""),
+            has_source_path: false,
+            source_path: slice(b""),
+            has_label: true,
+            label: slice(b"Checker"),
+        }];
+        let mut catalog = NativeAuthoredCatalogHandle::default();
+        let mut admit_receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (authored_api.admit_catalog)(
+                    authored_api.context,
+                    &NativeAuthoredCatalogAdmitRequest {
+                        entries: entries.as_ptr(),
+                        entries_len: entries.len(),
+                        dependencies: std::ptr::null(),
+                        dependencies_len: 0,
+                    },
+                    &mut catalog,
+                    &mut admit_receipt,
+                )
+            },
+            ABI_OK
+        );
+
+        let path = b"catalogs/main.json";
+        let publish_request = NativeAuthoredContentStorePublishRequest {
+            store,
+            expected: initial_identity,
+            path: slice(path),
+        };
+        let mut published = NativeAuthoredContentStorePublishReceipt {
+            status: NativeContentStorePublishStatus::Stale,
+            identity: NativeContentStoreIdentity::default(),
+            body_hash: NativeContentStoreHash::default(),
+        };
+        let mut publish_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (authored_api.publish_catalog_to_store)(
+                    authored_api.context,
+                    catalog,
+                    &publish_request,
+                    &mut published,
+                    &mut publish_error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(published.status, NativeContentStorePublishStatus::Published);
+        assert_eq!(published.identity.revision, 1);
+        assert_ne!(published.body_hash, NativeContentStoreHash::default());
+
+        let mut published_snapshot = NativeContentStoreSnapshotHandle::default();
+        assert_eq!(
+            unsafe {
+                (store_api.capture_snapshot)(store_api.context, store, &mut published_snapshot)
+            },
+            ABI_OK
+        );
+        let mut reopened = NativeAuthoredCatalogHandle::default();
+        let mut reopen_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (authored_api.reopen_catalog_from_store)(
+                    authored_api.context,
+                    &NativeAuthoredContentStoreReopenRequest {
+                        snapshot: published_snapshot,
+                        expected: published.identity,
+                        path: slice(path),
+                        body_hash: published.body_hash,
+                    },
+                    &mut reopened,
+                    &mut reopen_error,
+                )
+            },
+            ABI_OK
+        );
+        let mut readout = unsafe { std::mem::zeroed::<NativeAuthoredCatalogReadoutLease>() };
+        assert_eq!(
+            unsafe { (authored_api.read_catalog)(authored_api.context, reopened, &mut readout) },
+            ABI_OK
+        );
+        assert_eq!(readout.entries_len, 1);
+        assert_eq!(
+            unsafe {
+                std::slice::from_raw_parts((*readout.entries).id.bytes, (*readout.entries).id.len)
+            },
+            b"texture/checker"
+        );
+        assert_eq!(
+            unsafe {
+                (authored_api.destroy_catalog_readout_lease)(authored_api.context, readout.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (authored_api.destroy_catalog)(authored_api.context, reopened) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (authored_api.destroy_catalog)(authored_api.context, catalog) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (store_api.destroy_snapshot)(store_api.context, published_snapshot) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (store_api.destroy_snapshot)(store_api.context, initial_snapshot) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (store_api.destroy_store)(store_api.context, store) },
             ABI_OK
         );
     }

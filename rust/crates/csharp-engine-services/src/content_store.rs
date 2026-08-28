@@ -53,6 +53,20 @@ pub(crate) struct RuntimeContentStoreBridge {
     next_byte_lease: u64,
 }
 
+/// Result of replacing one exact durable owner artifact through the existing
+/// ContentStore publication path. The body hash is present only on a real
+/// publication; stale mirrors the public ContentStore callback by returning
+/// the refreshed observed identity instead of claiming a write succeeded.
+pub(crate) enum SemanticOwnerPublish {
+    Published {
+        identity: ContentStoreIdentity,
+        body_hash: ContentHash,
+    },
+    Stale {
+        identity: ContentStoreIdentity,
+    },
+}
+
 impl RuntimeContentStoreBridge {
     pub(crate) fn new(
         content_store_root: Option<PathBuf>,
@@ -164,6 +178,102 @@ impl RuntimeContentStoreBridge {
             load_plan: retained.load_plan.as_ptr(),
             load_plan_len: retained.load_plan.len(),
         })
+    }
+
+    /// Publish exactly one typed durable owner body while preserving every
+    /// other artifact and body in the current admitted generation. This is
+    /// deliberately crate-private composition, not a parallel C# manifest or
+    /// CAS API.
+    pub(crate) fn publish_semantic_owner(
+        &mut self,
+        store: NativeContentStoreHandle,
+        expected: ContentStoreIdentity,
+        path: String,
+        role: ArtifactRole,
+        body: Vec<u8>,
+    ) -> Result<SemanticOwnerPublish, String> {
+        let retained = self
+            .stores
+            .get_mut(&store.value)
+            .ok_or_else(|| "unknown content store handle".to_owned())?;
+        let prior = retained.store.snapshot();
+        if let Some(existing) = prior.manifest().artifact(&path) {
+            if existing.class != ArtifactClass::Durable || existing.role != role {
+                return Err(
+                    "semantic artifact path is occupied by a different durable role".to_owned(),
+                );
+            }
+        }
+        let mut artifacts = prior.manifest().artifacts.clone();
+        let replacement = ContentArtifact::durable(path.clone(), role, &body);
+        match artifacts.iter_mut().find(|artifact| artifact.path == path) {
+            Some(existing) => *existing = replacement,
+            None => artifacts.push(replacement),
+        }
+        let body_hash = ContentHash::of(&body);
+        let draft = ContentWriteSetDraft {
+            next_manifest: ContentManifest::new(artifacts),
+            writes: vec![ContentWrite::new(path, body)],
+            moves: Vec::new(),
+            deletes: Vec::new(),
+        };
+        match retained.store.publish(&expected, draft) {
+            Ok(confirmation) => Ok(SemanticOwnerPublish::Published {
+                identity: confirmation.identity,
+                body_hash,
+            }),
+            Err(ContentStoreExecutorError::WriteSet(
+                content_store::ContentWriteSetError::StaleStore,
+            )) => {
+                let executor = self
+                    .executor
+                    .as_ref()
+                    .ok_or_else(|| "content store executor is unavailable".to_owned())?;
+                let observed = executor
+                    .open(&retained.scope)
+                    .map_err(|error| error.to_string())?;
+                let identity = observed.snapshot().identity().clone();
+                retained.store = observed;
+                Ok(SemanticOwnerPublish::Stale { identity })
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Copies one exact stored body only after identity, path, durable role,
+    /// and body hash agree with the caller's typed selection.
+    pub(crate) fn semantic_owner_body(
+        &self,
+        snapshot: NativeContentStoreSnapshotHandle,
+        expected: ContentStoreIdentity,
+        path: &str,
+        role: ArtifactRole,
+        body_hash: ContentHash,
+    ) -> Result<Vec<u8>, String> {
+        let snapshot = self
+            .snapshots
+            .get(&snapshot.value)
+            .ok_or_else(|| "unknown content store snapshot handle".to_owned())?;
+        if snapshot.identity() != &expected {
+            return Err("content store snapshot identity does not match request".to_owned());
+        }
+        let artifact = snapshot
+            .manifest()
+            .artifact(path)
+            .ok_or_else(|| "semantic artifact path is absent from snapshot".to_owned())?;
+        if artifact.class != ArtifactClass::Durable || artifact.role != role {
+            return Err("semantic artifact role does not match typed owner".to_owned());
+        }
+        if artifact.content_hash != Some(body_hash) {
+            return Err("semantic artifact body hash does not match request".to_owned());
+        }
+        let body = snapshot
+            .body(path)
+            .ok_or_else(|| "semantic artifact body is absent from snapshot".to_owned())?;
+        if ContentHash::of(body) != body_hash {
+            return Err("semantic artifact body hash does not match stored bytes".to_owned());
+        }
+        Ok(body.to_vec())
     }
 }
 
@@ -531,7 +641,7 @@ fn native_utf8(value: &str) -> NativeUtf8Slice {
         len: value.len(),
     }
 }
-fn native_hash(value: ContentHash) -> NativeContentSha256 {
+pub(crate) fn native_hash(value: ContentHash) -> NativeContentSha256 {
     let bytes = value.as_bytes();
     NativeContentSha256 {
         word0: u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
@@ -540,7 +650,7 @@ fn native_hash(value: ContentHash) -> NativeContentSha256 {
         word3: u64::from_be_bytes(bytes[24..32].try_into().unwrap()),
     }
 }
-fn native_store_hash(value: ContentHash) -> NativeContentStoreHash {
+pub(crate) fn native_store_hash(value: ContentHash) -> NativeContentStoreHash {
     let hash = native_hash(value);
     NativeContentStoreHash {
         word0: hash.word0,
@@ -549,7 +659,15 @@ fn native_store_hash(value: ContentHash) -> NativeContentStoreHash {
         word3: hash.word3,
     }
 }
-fn from_native_hash(value: NativeContentSha256) -> ContentHash {
+pub(crate) fn from_native_store_hash(value: NativeContentStoreHash) -> ContentHash {
+    from_native_hash(NativeContentSha256 {
+        word0: value.word0,
+        word1: value.word1,
+        word2: value.word2,
+        word3: value.word3,
+    })
+}
+pub(crate) fn from_native_hash(value: NativeContentSha256) -> ContentHash {
     let mut bytes = [0; 32];
     bytes[0..8].copy_from_slice(&value.word0.to_be_bytes());
     bytes[8..16].copy_from_slice(&value.word1.to_be_bytes());
@@ -563,14 +681,14 @@ fn from_native_hash(value: NativeContentSha256) -> ContentHash {
     )
     .expect("native SHA-256 always encodes")
 }
-fn native_identity(value: &ContentStoreIdentity) -> NativeContentStoreIdentity {
+pub(crate) fn native_identity(value: &ContentStoreIdentity) -> NativeContentStoreIdentity {
     NativeContentStoreIdentity {
         revision: value.revision,
         manifest_hash: native_hash(value.manifest_hash),
         content_set_hash: native_hash(value.content_set_hash),
     }
 }
-fn from_native_identity(value: NativeContentStoreIdentity) -> ContentStoreIdentity {
+pub(crate) fn from_native_identity(value: NativeContentStoreIdentity) -> ContentStoreIdentity {
     ContentStoreIdentity {
         revision: value.revision,
         manifest_hash: from_native_hash(value.manifest_hash),

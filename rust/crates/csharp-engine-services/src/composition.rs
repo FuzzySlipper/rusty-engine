@@ -213,7 +213,7 @@ pub struct EngineServiceSet {
     appearance: RuntimeAppearanceBridge,
     content: Box<RuntimeContentBridge>,
     authored_content: RuntimeAuthoredContentBridge,
-    content_store: crate::content_store::RuntimeContentStoreBridge,
+    content_store: Box<crate::content_store::RuntimeContentStoreBridge>,
     audio: RuntimeAudioBridge,
     camera_view: RuntimeCameraViewBridge,
     dynamics: RuntimeDynamicsBridge,
@@ -264,13 +264,15 @@ impl EngineServiceSet {
         let content = Box::new(RuntimeContentBridge::new(content_resources.clone()));
         let mut authored_content = RuntimeAuthoredContentBridge::new();
         authored_content.bind_content(&content);
+        let mut content_store = Box::new(crate::content_store::RuntimeContentStoreBridge::new(
+            content_store_root,
+        )?);
+        authored_content.bind_content_store(&mut content_store);
         Ok(Self {
             appearance: crate::appearance::create(catalog.0, content_resources.clone()),
             content,
             authored_content,
-            content_store: crate::content_store::RuntimeContentStoreBridge::new(
-                content_store_root,
-            )?,
+            content_store,
             audio: RuntimeAudioBridge::new(content_resources),
             camera_view: RuntimeCameraViewBridge::new(),
             dynamics,

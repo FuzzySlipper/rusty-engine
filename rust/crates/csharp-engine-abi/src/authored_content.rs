@@ -1,9 +1,10 @@
 //! Typed, retained authored-content catalog access for trusted NativeAOT products.
 
 use crate::{
-    NativeColor, NativeContentReferenceHandle, NativeEngineDiagnosticLeaseHandle,
-    NativeLightShadowIntent, NativeOperationErrorReceipt, NativeTransform, NativeUtf8Slice,
-    NativeVec3,
+    NativeColor, NativeContentReferenceHandle, NativeContentStoreHandle, NativeContentStoreHash,
+    NativeContentStoreIdentity, NativeContentStorePublishStatus, NativeContentStoreSnapshotHandle,
+    NativeEngineDiagnosticLeaseHandle, NativeLightShadowIntent, NativeOperationErrorReceipt,
+    NativeTransform, NativeUtf8Slice, NativeVec3,
 };
 use std::ffi::c_void;
 
@@ -981,6 +982,65 @@ pub struct NativeAuthoredScenePlanReadoutLease {
     pub catalog_bindings: *const NativeAuthoredSceneBootstrapCatalogBindingReadout,
     pub catalog_bindings_len: usize,
 }
+/// One exact durable semantic artifact target. The product names the path and
+/// supplies the full store identity it observed; the owner callback fixes the
+/// role from its typed catalog, prefab registry, or scene-plan handle.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredContentStorePublishRequest {
+    pub store: NativeContentStoreHandle,
+    pub expected: NativeContentStoreIdentity,
+    pub path: NativeUtf8Slice,
+}
+/// The typed semantic publish result. `body_hash` is meaningful only when
+/// `status` is Published; a stale result carries the refreshed identity and a
+/// zero body hash, matching the existing ContentStore stale convention.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredContentStorePublishReceipt {
+    pub status: NativeContentStorePublishStatus,
+    pub identity: NativeContentStoreIdentity,
+    pub body_hash: NativeContentStoreHash,
+}
+/// An exact immutable body selected from one retained ContentStore snapshot.
+/// The path, identity, role, and body hash are all verified before the typed
+/// owner decoder receives the body; this is not a path lookup convention.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredContentStoreReopenRequest {
+    pub snapshot: NativeContentStoreSnapshotHandle,
+    pub expected: NativeContentStoreIdentity,
+    pub path: NativeUtf8Slice,
+    pub body_hash: NativeContentStoreHash,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabRegistryFromStoreRequest {
+    pub snapshot: NativeContentStoreSnapshotHandle,
+    pub expected: NativeContentStoreIdentity,
+    pub path: NativeUtf8Slice,
+    pub body_hash: NativeContentStoreHash,
+    pub catalog: NativeAuthoredCatalogHandle,
+    pub entity_definition_ids: *const NativeAuthoredPrefabEntityDefinitionInput,
+    pub entity_definition_ids_len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredScenePrepareFromStoreRequest {
+    pub snapshot: NativeContentStoreSnapshotHandle,
+    pub expected: NativeContentStoreIdentity,
+    pub path: NativeUtf8Slice,
+    pub body_hash: NativeContentStoreHash,
+    pub catalog: NativeAuthoredCatalogHandle,
+    pub prefab_registry: NativeAuthoredPrefabRegistryHandle,
+    pub base_entity_id: u64,
+    pub entity_definition_ids: *const NativeAuthoredSceneEntityDefinitionInput,
+    pub entity_definition_ids_len: usize,
+    pub generator_presets: *const NativeAuthoredSceneGeneratorPresetInput,
+    pub generator_presets_len: usize,
+    pub catalog_ids: *const NativeAuthoredSceneCatalogIdInput,
+    pub catalog_ids_len: usize,
+}
 
 pub type NativeAdmitAuthoredCatalog = unsafe extern "C" fn(
     *mut c_void,
@@ -1009,6 +1069,19 @@ pub type NativeReadAuthoredCatalog = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyAuthoredCatalogReadoutLease =
     unsafe extern "C" fn(*mut c_void, NativeAuthoredCatalogReadoutLeaseHandle) -> i32;
+pub type NativePublishAuthoredCatalogToStore = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAuthoredCatalogHandle,
+    *const NativeAuthoredContentStorePublishRequest,
+    *mut NativeAuthoredContentStorePublishReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReopenAuthoredCatalogFromStore = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredContentStoreReopenRequest,
+    *mut NativeAuthoredCatalogHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeResolveAuthoredCatalogReference = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredCatalogResolveRequest,
@@ -1062,6 +1135,19 @@ pub type NativeReadAuthoredPrefabRegistry = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyAuthoredPrefabRegistryReadoutLease =
     unsafe extern "C" fn(*mut c_void, NativeAuthoredPrefabRegistryReadoutLeaseHandle) -> i32;
+pub type NativePublishAuthoredPrefabRegistryToStore = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAuthoredPrefabRegistryHandle,
+    *const NativeAuthoredContentStorePublishRequest,
+    *mut NativeAuthoredContentStorePublishReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReopenAuthoredPrefabRegistryFromStore = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredPrefabRegistryFromStoreRequest,
+    *mut NativeAuthoredPrefabRegistryHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeResolveAuthoredPrefab = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAuthoredPrefabResolveRequest,
@@ -1091,5 +1177,18 @@ pub type NativeReadAuthoredScenePlan = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyAuthoredScenePlanReadoutLease =
     unsafe extern "C" fn(*mut c_void, NativeAuthoredScenePlanReadoutLeaseHandle) -> i32;
+pub type NativePublishAuthoredSceneToStore = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAuthoredScenePlanHandle,
+    *const NativeAuthoredContentStorePublishRequest,
+    *mut NativeAuthoredContentStorePublishReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativePrepareAuthoredSceneFromStore = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredScenePrepareFromStoreRequest,
+    *mut NativeAuthoredScenePlanHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeDestroyAuthoredContentOperationDiagnosticLease =
     unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
