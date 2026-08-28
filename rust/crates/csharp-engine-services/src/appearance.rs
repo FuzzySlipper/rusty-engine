@@ -13,6 +13,7 @@ use render_presentation::{
     BillboardLayoutSizing, BillboardMeter, BillboardMeterFillDirection, BillboardOverlapBehavior,
     BillboardPatch, BillboardProjectionDiagnosticCode, BillboardProjectionOp, BillboardProjector,
     BillboardSafeArea, BillboardStatusCue, BillboardStyle, BillboardTextureRef, ParticleAnchor,
+    ParticleCollisionDescriptor, ParticleCollisionLimitBehavior, ParticleCollisionVolume,
     ParticleEmitterDescriptor, ParticleEmitterHandle, ParticleEmitterPatch,
     ParticleProjectionDiagnosticCode, ParticleProjectionOp, ParticleProjector, ParticleSpriteRef,
     ParticleVisual, PresentationFrameDiff, PresentationOpMeta,
@@ -1086,6 +1087,50 @@ impl RuntimeAppearanceBridge {
             color: native_color(key.color),
         })
         .collect();
+        let collision = request
+            .has_collision
+            .then(|| {
+                let volumes = unsafe {
+                    borrowed_slice(
+                        request.collision_volumes,
+                        request.collision_volumes_len,
+                        "particle collision volumes",
+                    )?
+                }
+                .iter()
+                .map(|volume| match volume.kind {
+                    NativePresentationParticleCollisionVolumeKind::Plane => {
+                        ParticleCollisionVolume::Plane {
+                            normal: native_vec3_array(volume.normal),
+                            offset: volume.offset,
+                        }
+                    }
+                    NativePresentationParticleCollisionVolumeKind::Aabb => {
+                        ParticleCollisionVolume::Aabb {
+                            minimum: native_vec3_array(volume.minimum),
+                            maximum: native_vec3_array(volume.maximum),
+                        }
+                    }
+                })
+                .collect();
+                Ok(ParticleCollisionDescriptor {
+                    radius: request.collision.radius,
+                    restitution: request.collision.restitution,
+                    friction: request.collision.friction,
+                    maximum_impacts: request.collision.maximum_impacts,
+                    sleep_speed: request.collision.sleep_speed,
+                    limit_behavior: match request.collision.limit_behavior {
+                        NativePresentationParticleCollisionLimitBehavior::Sleep => {
+                            ParticleCollisionLimitBehavior::Sleep
+                        }
+                        NativePresentationParticleCollisionLimitBehavior::Kill => {
+                            ParticleCollisionLimitBehavior::Kill
+                        }
+                    },
+                    volumes,
+                })
+            })
+            .transpose()?;
         Ok(ParticleEmitterDescriptor {
             anchor: native_presentation_particle_anchor(request.anchor),
             visual,
@@ -1101,7 +1146,7 @@ impl RuntimeAppearanceBridge {
             seed: request.seed,
             max_particles: request.max_particles,
             visible: request.visible,
-            collision: None,
+            collision,
         })
     }
 
@@ -4653,6 +4698,17 @@ fn material_descriptor(
 mod tests {
     use super::*;
 
+    fn inert_particle_collision() -> NativePresentationParticleCollision {
+        NativePresentationParticleCollision {
+            radius: 0.0,
+            restitution: 0.0,
+            friction: 0.0,
+            maximum_impacts: 0,
+            sleep_speed: 0.0,
+            limit_behavior: NativePresentationParticleCollisionLimitBehavior::Sleep,
+        }
+    }
+
     const RGBA_PNG: &[u8] = &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6,
         0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68,
@@ -5273,6 +5329,10 @@ mod tests {
                 seed: 3,
                 max_particles: 4,
                 visible: true,
+                has_collision: false,
+                collision: inert_particle_collision(),
+                collision_volumes: std::ptr::null(),
+                collision_volumes_len: 0,
             })
             .expect("cube emitter");
         bridge
@@ -5325,6 +5385,10 @@ mod tests {
                     seed: 4,
                     max_particles: 4,
                     visible: true,
+                    has_collision: false,
+                    collision: inert_particle_collision(),
+                    collision_volumes: std::ptr::null(),
+                    collision_volumes_len: 0,
                 },
             )
             .expect("direct burst");
@@ -5615,5 +5679,197 @@ mod tests {
             panic!("retained content remains structured");
         };
         assert_eq!(indicator.meters[0].segments, 2);
+    }
+
+    #[test]
+    fn particle_collision_create_update_emit_and_rejection_preserve_projected_facts() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let signal = b"collision-burst";
+        let slice = |value: &[u8]| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        let color = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let size_curve = [
+            NativePresentationParticleScalarKey {
+                age: 0.0,
+                value: 1.0,
+            },
+            NativePresentationParticleScalarKey {
+                age: 1.0,
+                value: 0.0,
+            },
+        ];
+        let color_curve = [
+            NativePresentationParticleColorKey { age: 0.0, color },
+            NativePresentationParticleColorKey { age: 1.0, color },
+        ];
+        let plane = [NativePresentationParticleCollisionVolume {
+            kind: NativePresentationParticleCollisionVolumeKind::Plane,
+            normal: NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            offset: 0.0,
+            minimum: NativeVec3::default(),
+            maximum: NativeVec3::default(),
+        }];
+        let descriptor = |volumes: &[NativePresentationParticleCollisionVolume]| {
+            NativePresentationParticleDescriptor {
+                logical_id: 31,
+                signal_id: slice(signal),
+                anchor: NativePresentationAnchor {
+                    kind: NativePresentationAnchorKind::World,
+                    position: NativeVec3::default(),
+                    entity: 0,
+                    offset: NativeVec3::default(),
+                },
+                visual: NativePresentationParticleVisual::Cube,
+                sprite: NativeRenderResourceHandle::default(),
+                sprite_frame_count: 0,
+                rate_per_second: 1.0,
+                burst_count: 2,
+                lifetime_min_seconds: 0.1,
+                lifetime_max_seconds: 1.0,
+                velocity_min: NativeVec3::default(),
+                velocity_max: NativeVec3::default(),
+                acceleration: NativeVec3::default(),
+                size_curve: size_curve.as_ptr(),
+                size_curve_len: size_curve.len(),
+                color_curve: color_curve.as_ptr(),
+                color_curve_len: color_curve.len(),
+                flipbook_frames_per_second: 0.0,
+                seed: 7,
+                max_particles: 8,
+                visible: true,
+                has_collision: true,
+                collision: NativePresentationParticleCollision {
+                    radius: 0.1,
+                    restitution: 0.5,
+                    friction: 0.25,
+                    maximum_impacts: 3,
+                    sleep_speed: 0.5,
+                    limit_behavior: NativePresentationParticleCollisionLimitBehavior::Sleep,
+                },
+                collision_volumes: volumes.as_ptr(),
+                collision_volumes_len: volumes.len(),
+            }
+        };
+
+        bridge.begin_call();
+        let owner = bridge
+            .presentation_create_emitter(&descriptor(&plane))
+            .expect("collision emitter create");
+        let create = bridge.take_staged_call().expect("collision create call");
+        bridge.commit(create);
+        let retained = bridge
+            .state
+            .particle_projector
+            .descriptor(ParticleEmitterHandle::new(31))
+            .expect("retained collision emitter");
+        assert!(matches!(
+            retained
+                .collision
+                .as_ref()
+                .expect("collision")
+                .volumes
+                .as_slice(),
+            [ParticleCollisionVolume::Plane { .. }]
+        ));
+
+        let aabb = [NativePresentationParticleCollisionVolume {
+            kind: NativePresentationParticleCollisionVolumeKind::Aabb,
+            normal: NativeVec3::default(),
+            offset: 0.0,
+            minimum: NativeVec3 {
+                x: -1.0,
+                y: -1.0,
+                z: -1.0,
+            },
+            maximum: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+        }];
+        let mut update = descriptor(&aabb);
+        update.collision.limit_behavior = NativePresentationParticleCollisionLimitBehavior::Kill;
+        bridge.begin_call();
+        bridge
+            .presentation_update_emitter(owner, &update)
+            .expect("collision emitter update");
+        let update_call = bridge.take_staged_call().expect("collision update call");
+        bridge.commit(update_call);
+        let retained = bridge
+            .state
+            .particle_projector
+            .descriptor(ParticleEmitterHandle::new(31))
+            .expect("updated collision emitter");
+        assert!(matches!(
+            retained
+                .collision
+                .as_ref()
+                .expect("collision")
+                .volumes
+                .as_slice(),
+            [ParticleCollisionVolume::Aabb { .. }]
+        ));
+        assert_eq!(
+            retained
+                .collision
+                .as_ref()
+                .expect("collision")
+                .limit_behavior,
+            ParticleCollisionLimitBehavior::Kill
+        );
+
+        bridge.begin_call();
+        bridge
+            .presentation_emit_particles(slice(signal), &update)
+            .expect("collision particle emit");
+        let emit = bridge
+            .take_staged_call()
+            .expect("collision emit call")
+            .expect("appearance call");
+        assert!(matches!(
+            &emit.presentation[0].ops[0],
+            render_presentation::PresentationOp::Particle {
+                op: ParticleProjectionOp::Emit { descriptor, .. },
+                ..
+            } if matches!(descriptor.collision.as_ref().map(|collision| collision.volumes.as_slice()), Some([ParticleCollisionVolume::Aabb { .. }]))
+        ));
+
+        let invalid = [NativePresentationParticleCollisionVolume {
+            normal: NativeVec3::default(),
+            ..plane[0]
+        }];
+        bridge.begin_call();
+        let error = bridge
+            .presentation_update_emitter(owner, &descriptor(&invalid))
+            .expect_err("invalid collision update");
+        bridge.record_callback_error(error);
+        assert_eq!(bridge.presentation_readout().particle_diagnostic_count, 1);
+        assert!(bridge.take_staged_call().is_err());
+        let retained = bridge
+            .state
+            .particle_projector
+            .descriptor(ParticleEmitterHandle::new(31))
+            .expect("collision update remains atomic");
+        assert!(matches!(
+            retained
+                .collision
+                .as_ref()
+                .expect("collision")
+                .volumes
+                .as_slice(),
+            [ParticleCollisionVolume::Aabb { .. }]
+        ));
     }
 }

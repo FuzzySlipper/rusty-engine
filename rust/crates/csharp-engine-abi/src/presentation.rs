@@ -236,10 +236,50 @@ pub struct NativePresentationParticleColorKey {
     pub color: NativeColor,
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationParticleCollisionLimitBehavior {
+    Sleep = 1,
+    Kill = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationParticleCollisionVolumeKind {
+    Plane = 1,
+    Aabb = 2,
+}
+
+/// A closed spawn-relative presentation collision volume. Plane values use
+/// `normal` and `offset`; AABB values use `minimum` and `maximum`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationParticleCollisionVolume {
+    pub kind: NativePresentationParticleCollisionVolumeKind,
+    pub normal: NativeVec3,
+    pub offset: f32,
+    pub minimum: NativeVec3,
+    pub maximum: NativeVec3,
+}
+
+/// Scalar collision settings for presentation particles. Volumes remain a
+/// top-level bounded borrowed slice on the enclosing particle descriptor so
+/// generated C# can pin and copy them synchronously.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationParticleCollision {
+    pub radius: f32,
+    pub restitution: f32,
+    pub friction: f32,
+    pub maximum_impacts: u16,
+    pub sleep_speed: f32,
+    pub limit_behavior: NativePresentationParticleCollisionLimitBehavior,
+}
+
 /// A full replacement descriptor for a retained particle emitter. Curves use
-/// borrowed typed slices copied by Engine before the call returns. Presentation-
-/// only collision remains a separate future typed surface rather than a JSON
-/// escape hatch.
+/// borrowed typed slices copied by Engine before the call returns. Optional
+/// presentation-only collision is spawn-relative and never uses Spatial or
+/// Dynamics state.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePresentationParticleDescriptor {
@@ -267,6 +307,10 @@ pub struct NativePresentationParticleDescriptor {
     pub seed: u64,
     pub max_particles: u32,
     pub visible: bool,
+    pub has_collision: bool,
+    pub collision: NativePresentationParticleCollision,
+    pub collision_volumes: *const NativePresentationParticleCollisionVolume,
+    pub collision_volumes_len: usize,
 }
 
 #[repr(C)]
