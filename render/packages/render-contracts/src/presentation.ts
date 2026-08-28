@@ -59,11 +59,19 @@ export interface AudioSourcePatch {
   readonly emitter: AudioEmitter | null;
 }
 
+export type AudioVoiceControl = 'pause' | 'resume' | 'retrigger';
+
+export type AudioBusControl =
+  | { readonly kind: 'setVolume'; readonly volume: number }
+  | { readonly kind: 'setMuted'; readonly muted: boolean };
+
 export type AudioProjectionOp =
   | { readonly op: 'emit'; readonly signalId: string; readonly descriptor: AudioSourceDescriptor }
   | { readonly op: 'create'; readonly handle: AudioHandle; readonly descriptor: AudioSourceDescriptor }
   | { readonly op: 'update'; readonly handle: AudioHandle; readonly patch: AudioSourcePatch }
-  | { readonly op: 'destroy'; readonly handle: AudioHandle };
+  | { readonly op: 'destroy'; readonly handle: AudioHandle }
+  | { readonly op: 'voiceControl'; readonly handle: AudioHandle; readonly control: AudioVoiceControl }
+  | { readonly op: 'busControl'; readonly bus: AudioBus; readonly control: AudioBusControl };
 
 export type BillboardAnchor =
   | { readonly kind: 'world'; readonly position: Vec3 }

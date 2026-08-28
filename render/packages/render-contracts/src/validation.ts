@@ -996,7 +996,27 @@ function audioOperation(op: string, input: unknown, path: string): void {
   } else if (op === 'destroy') {
     const value = record(input, path, ['op', 'handle']);
     handle(value['handle'], `${path}.handle`);
+  } else if (op === 'voiceControl') {
+    const value = record(input, path, ['op', 'handle', 'control']);
+    handle(value['handle'], `${path}.handle`);
+    enumeration(value['control'], `${path}.control`, ['pause', 'resume', 'retrigger'] as const);
+  } else if (op === 'busControl') {
+    const value = record(input, path, ['op', 'bus', 'control']);
+    enumeration(value['bus'], `${path}.bus`, ['sfx', 'ambient', 'ui'] as const);
+    audioBusControl(value['control'], `${path}.control`);
   } else fail(`${path}.op`, 'is unsupported for audio');
+}
+
+function audioBusControl(input: unknown, path: string): void {
+  const value = looseRecord(input, path);
+  const kind = enumeration(value['kind'], `${path}.kind`, ['setVolume', 'setMuted'] as const);
+  if (kind === 'setVolume') {
+    const control = record(input, path, ['kind', 'volume']);
+    range(control['volume'], `${path}.volume`, 0, 1);
+  } else {
+    const control = record(input, path, ['kind', 'muted']);
+    booleanValue(control['muted'], `${path}.muted`);
+  }
 }
 
 function audioDescriptor(input: unknown, path: string): void {

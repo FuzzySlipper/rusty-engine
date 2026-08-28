@@ -8,8 +8,8 @@ use crate::billboard::{
     MIN_POSITIVE_BILLBOARD_VALUE,
 };
 use crate::{
-    AnimationControllerProjectionState, AnimationProjectionOp, AudioEmitter, AudioProjectionOp,
-    AudioSourceDescriptor, AudioSourcePatch, BillboardAnchor, BillboardContent,
+    AnimationControllerProjectionState, AnimationProjectionOp, AudioBusControl, AudioEmitter,
+    AudioProjectionOp, AudioSourceDescriptor, AudioSourcePatch, BillboardAnchor, BillboardContent,
     BillboardDescriptor, BillboardFontRef, BillboardLayoutPolicy, BillboardLayoutSizing,
     BillboardMeter, BillboardPatch, BillboardProjectionOp, BillboardStyle, BillboardTextureRef,
     ParticleAnchor, ParticleCollisionVolume, ParticleEmitterDescriptor, ParticleEmitterPatch,
@@ -174,6 +174,12 @@ fn validate_json_safe_integers(
             AudioProjectionOp::Destroy { handle } => {
                 json_safe(handle.raw(), sequence, "audio.handle")
             }
+            AudioProjectionOp::VoiceControl { handle, .. } => {
+                json_safe(handle.raw(), sequence, "audio.handle")
+            }
+            AudioProjectionOp::BusControl { control, .. } => {
+                validate_audio_bus_control(control, sequence)
+            }
         },
         PresentationOp::Billboard { op, .. } => match op {
             BillboardProjectionOp::Create { handle, descriptor } => {
@@ -244,6 +250,25 @@ fn validate_audio_patch(
         .emitter
         .as_ref()
         .map_or(Ok(()), |emitter| validate_audio_emitter(emitter, sequence))
+}
+
+fn validate_audio_bus_control(
+    control: &AudioBusControl,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    match control {
+        AudioBusControl::SetVolume { volume } => {
+            finite_f32(*volume, sequence, "audio.control.volume")?;
+            if !(0.0..=1.0).contains(volume) {
+                return Err(PresentationFrameError::InvalidDescriptor {
+                    sequence,
+                    field: "audio.control.volume",
+                });
+            }
+            Ok(())
+        }
+        AudioBusControl::SetMuted { .. } => Ok(()),
+    }
 }
 
 fn validate_audio_emitter(

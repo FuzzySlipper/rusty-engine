@@ -230,6 +230,129 @@ fn audio_diagnostics_are_bounded_oldest_first_and_reset_eviction_state() {
 }
 
 #[test]
+fn audio_retained_voice_controls_and_fixed_bus_state_are_owner_truth() {
+    let assets = assets();
+    let handle = AudioHandle::new(7);
+    let descriptor = audio_descriptor();
+    let mut projector = AudioProjector::default();
+
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(0),
+            AudioProjectionOp::Create {
+                handle,
+                descriptor: descriptor.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        projector.voice(handle).unwrap().desired_state,
+        AudioVoiceDesiredState::Playing
+    );
+
+    for (sequence, control, expected) in [
+        (1, AudioVoiceControl::Pause, AudioVoiceDesiredState::Paused),
+        // Repeating the same desired state is intentionally idempotent.
+        (2, AudioVoiceControl::Pause, AudioVoiceDesiredState::Paused),
+        (3, AudioVoiceControl::Resume, AudioVoiceDesiredState::Playing),
+        (4, AudioVoiceControl::Resume, AudioVoiceDesiredState::Playing),
+        // Retrigger stays on the same retained handle and has the same
+        // descriptor; the wire operation directs host realization to offset 0.
+        (5, AudioVoiceControl::Retrigger, AudioVoiceDesiredState::Playing),
+    ] {
+        projector
+            .project(
+                &assets,
+                PresentationOpMeta::new(sequence),
+                AudioProjectionOp::VoiceControl { handle, control },
+            )
+            .unwrap();
+        let voice = projector.voice(handle).unwrap();
+        assert_eq!(voice.desired_state, expected);
+        assert_eq!(voice.descriptor, descriptor);
+        assert_eq!(
+            projector.readout().paused_sources,
+            u32::from(expected == AudioVoiceDesiredState::Paused)
+        );
+    }
+
+    let unknown = projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(6),
+            AudioProjectionOp::VoiceControl {
+                handle: AudioHandle::new(99),
+                control: AudioVoiceControl::Pause,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(unknown.code, AudioProjectionDiagnosticCode::UnknownHandle);
+
+    assert_eq!(projector.bus(AudioBus::Ambient).volume, 1.0);
+    assert!(!projector.bus(AudioBus::Ambient).muted);
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(7),
+            AudioProjectionOp::BusControl {
+                bus: AudioBus::Sfx,
+                control: AudioBusControl::SetVolume { volume: 0.25 },
+            },
+        )
+        .unwrap();
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(8),
+            AudioProjectionOp::BusControl {
+                bus: AudioBus::Sfx,
+                control: AudioBusControl::SetMuted { muted: true },
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        projector.bus(AudioBus::Sfx),
+        AudioBusReadout {
+            bus: AudioBus::Sfx,
+            volume: 0.25,
+            muted: true,
+        }
+    );
+    assert_eq!(projector.readout().active_sources, 1);
+    assert_eq!(projector.readout().paused_sources, 0);
+
+    let error = projector
+        .project_batch(
+            &assets,
+            vec![
+                (
+                    PresentationOpMeta::new(9),
+                    AudioProjectionOp::BusControl {
+                        bus: AudioBus::Ui,
+                        control: AudioBusControl::SetMuted { muted: true },
+                    },
+                ),
+                (
+                    PresentationOpMeta::new(10),
+                    AudioProjectionOp::BusControl {
+                        bus: AudioBus::Sfx,
+                        control: AudioBusControl::SetVolume { volume: 2.0 },
+                    },
+                ),
+            ],
+        )
+        .unwrap_err();
+    assert_eq!(error.code, AudioProjectionDiagnosticCode::InvalidControl);
+    assert!(!projector.bus(AudioBus::Ui).muted);
+
+    projector.reset();
+    assert!(projector.voice(handle).is_none());
+    assert_eq!(projector.bus(AudioBus::Sfx).volume, 1.0);
+    assert!(!projector.bus(AudioBus::Sfx).muted);
+}
+
+#[test]
 fn audio_rejects_wrong_kind_and_content_identity() {
     let mut wrong_kind_assets = assets();
     wrong_kind_assets.get_mut("audio/pulse").unwrap().kind = RenderAssetKind::Font;

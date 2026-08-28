@@ -27,7 +27,7 @@ impl AudioHandle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioBus {
     Sfx,
@@ -76,6 +76,52 @@ pub struct AudioSourcePatch {
     pub emitter: Option<AudioEmitter>,
 }
 
+/// The desired presentation state for a retained voice.
+///
+/// This is deliberately not a host cursor or completion signal. The audio
+/// owner knows whether the product currently wants the retained voice playing
+/// or paused; host realization owns any eventual playback position feedback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioVoiceDesiredState {
+    Playing,
+    Paused,
+}
+
+/// A lifecycle control for a retained audio voice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioVoiceControl {
+    Pause,
+    Resume,
+    Retrigger,
+}
+
+/// A fixed-bus control. Audio buses are a closed Engine enum; this is not a
+/// product-defined group registry.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum AudioBusControl {
+    SetVolume { volume: f32 },
+    SetMuted { muted: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioVoiceReadout {
+    pub handle: AudioHandle,
+    pub descriptor: AudioSourceDescriptor,
+    pub desired_state: AudioVoiceDesiredState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioBusReadout {
+    pub bus: AudioBus,
+    pub volume: f32,
+    pub muted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "op",
@@ -99,6 +145,14 @@ pub enum AudioProjectionOp {
     Destroy {
         handle: AudioHandle,
     },
+    VoiceControl {
+        handle: AudioHandle,
+        control: AudioVoiceControl,
+    },
+    BusControl {
+        bus: AudioBus,
+        control: AudioBusControl,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +165,7 @@ pub enum AudioProjectionDiagnosticCode {
     DuplicateSignal,
     DuplicateHandle,
     UnknownHandle,
+    InvalidControl,
     UnavailableHost,
     AudioContextBlocked,
     DecodeFailed,
@@ -130,6 +185,7 @@ pub struct AudioProjectionDiagnostic {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AudioProjectionReadout {
     pub active_sources: u32,
+    pub paused_sources: u32,
     pub referenced_clips: u32,
     pub emitted_signals: u64,
     pub retained_diagnostic_count: u32,
@@ -139,12 +195,34 @@ pub struct AudioProjectionReadout {
 
 #[derive(Debug, Clone, Default)]
 pub struct AudioProjector {
-    active: BTreeMap<AudioHandle, AudioSourceDescriptor>,
+    active: BTreeMap<AudioHandle, RetainedAudioVoice>,
+    buses: BTreeMap<AudioBus, AudioBusState>,
     seen_signals: BTreeSet<String>,
     referenced_clips: BTreeSet<String>,
     emitted_signals: u64,
     diagnostics: Vec<AudioProjectionDiagnostic>,
     evicted_diagnostic_count: u64,
+}
+
+#[derive(Debug, Clone)]
+struct RetainedAudioVoice {
+    descriptor: AudioSourceDescriptor,
+    desired_state: AudioVoiceDesiredState,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AudioBusState {
+    volume: f32,
+    muted: bool,
+}
+
+impl Default for AudioBusState {
+    fn default() -> Self {
+        Self {
+            volume: 1.0,
+            muted: false,
+        }
+    }
 }
 
 impl AudioProjector {
@@ -185,12 +263,34 @@ impl AudioProjector {
     }
 
     pub fn descriptor(&self, handle: AudioHandle) -> Option<&AudioSourceDescriptor> {
-        self.active.get(&handle)
+        self.active.get(&handle).map(|voice| &voice.descriptor)
+    }
+
+    pub fn voice(&self, handle: AudioHandle) -> Option<AudioVoiceReadout> {
+        self.active.get(&handle).map(|voice| AudioVoiceReadout {
+            handle,
+            descriptor: voice.descriptor.clone(),
+            desired_state: voice.desired_state,
+        })
+    }
+
+    pub fn bus(&self, bus: AudioBus) -> AudioBusReadout {
+        let state = self.buses.get(&bus).copied().unwrap_or_default();
+        AudioBusReadout {
+            bus,
+            volume: state.volume,
+            muted: state.muted,
+        }
     }
 
     pub fn readout(&self) -> AudioProjectionReadout {
         AudioProjectionReadout {
             active_sources: self.active.len() as u32,
+            paused_sources: self
+                .active
+                .values()
+                .filter(|voice| voice.desired_state == AudioVoiceDesiredState::Paused)
+                .count() as u32,
             referenced_clips: self.referenced_clips.len() as u32,
             emitted_signals: self.emitted_signals,
             retained_diagnostic_count: self.diagnostics.len() as u32,
@@ -237,7 +337,16 @@ impl AudioProjector {
                 }
                 validate_descriptor(assets, descriptor)?;
                 self.referenced_clips.insert(descriptor.clip.asset.clone());
-                self.active.insert(*handle, descriptor.clone());
+                self.active.insert(
+                    *handle,
+                    RetainedAudioVoice {
+                        descriptor: descriptor.clone(),
+                        // Creation is an explicit play from offset zero. The
+                        // offset is a wire/host realization rule, not a host
+                        // cursor this owner can truthfully report.
+                        desired_state: AudioVoiceDesiredState::Playing,
+                    },
+                );
             }
             AudioProjectionOp::Update { handle, patch } => {
                 let current = self
@@ -245,14 +354,44 @@ impl AudioProjector {
                     .get(handle)
                     .cloned()
                     .ok_or(AudioProjectionDiagnosticCode::UnknownHandle)?;
-                let updated = apply_patch(current, patch);
+                let updated = apply_patch(current.descriptor, patch);
                 validate_descriptor(assets, &updated)?;
                 self.referenced_clips.insert(updated.clip.asset.clone());
-                self.active.insert(*handle, updated);
+                self.active.insert(
+                    *handle,
+                    RetainedAudioVoice {
+                        descriptor: updated,
+                        desired_state: current.desired_state,
+                    },
+                );
             }
             AudioProjectionOp::Destroy { handle } => {
                 if self.active.remove(handle).is_none() {
                     return Err(AudioProjectionDiagnosticCode::UnknownHandle);
+                }
+            }
+            AudioProjectionOp::VoiceControl { handle, control } => {
+                let voice = self
+                    .active
+                    .get_mut(handle)
+                    .ok_or(AudioProjectionDiagnosticCode::UnknownHandle)?;
+                voice.desired_state = match control {
+                    AudioVoiceControl::Pause => AudioVoiceDesiredState::Paused,
+                    AudioVoiceControl::Resume | AudioVoiceControl::Retrigger => {
+                        AudioVoiceDesiredState::Playing
+                    }
+                };
+            }
+            AudioProjectionOp::BusControl { bus, control } => {
+                let state = self.buses.entry(*bus).or_default();
+                match control {
+                    AudioBusControl::SetVolume { volume } => {
+                        if !in_range(*volume, 0.0, 1.0) {
+                            return Err(AudioProjectionDiagnosticCode::InvalidControl);
+                        }
+                        state.volume = *volume;
+                    }
+                    AudioBusControl::SetMuted { muted } => state.muted = *muted,
                 }
             }
         }
@@ -341,7 +480,9 @@ fn operation_handle(op: &AudioProjectionOp) -> Option<AudioHandle> {
         AudioProjectionOp::Emit { .. } => None,
         AudioProjectionOp::Create { handle, .. }
         | AudioProjectionOp::Update { handle, .. }
-        | AudioProjectionOp::Destroy { handle } => Some(*handle),
+        | AudioProjectionOp::Destroy { handle }
+        | AudioProjectionOp::VoiceControl { handle, .. } => Some(*handle),
+        AudioProjectionOp::BusControl { .. } => None,
     }
 }
 
@@ -360,6 +501,7 @@ const fn diagnostic_message(code: AudioProjectionDiagnosticCode) -> &'static str
         }
         AudioProjectionDiagnosticCode::DuplicateHandle => "audio handle is already active",
         AudioProjectionDiagnosticCode::UnknownHandle => "audio handle is not active",
+        AudioProjectionDiagnosticCode::InvalidControl => "audio control is invalid",
         AudioProjectionDiagnosticCode::UnavailableHost => "audio host is unavailable",
         AudioProjectionDiagnosticCode::AudioContextBlocked => "audio context start was blocked",
         AudioProjectionDiagnosticCode::DecodeFailed => "audio clip decoding failed",

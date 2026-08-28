@@ -404,6 +404,42 @@ void test('presentation decoding rejects unsafe identities, sequence gaps, and n
   assert.throws(() => decodePresentationFrameDiff(unknown), /sendMessage is unknown/);
 });
 
+void test('presentation decoding carries only typed retained-voice and fixed-bus audio controls', () => {
+  const frame = {
+    schemaVersion: 1,
+    ops: [
+      {
+        domain: 'audio',
+        meta: { sequence: 0 },
+        op: { op: 'voiceControl', handle: 3, control: 'retrigger' },
+      },
+      {
+        domain: 'audio',
+        meta: { sequence: 1 },
+        op: { op: 'busControl', bus: 'ambient', control: { kind: 'setVolume', volume: 0.5 } },
+      },
+      {
+        domain: 'audio',
+        meta: { sequence: 2 },
+        op: { op: 'busControl', bus: 'ui', control: { kind: 'setMuted', muted: true } },
+      },
+    ],
+  };
+  assert.equal(decodePresentationFrameDiff(frame).ops.length, 3);
+
+  const invalidVolume = structuredClone(frame);
+  (invalidVolume.ops[1]!.op.control as { volume: number }).volume = 1.01;
+  assert.throws(() => decodePresentationFrameDiff(invalidVolume), /control\.volume/);
+
+  const invalidGroup = structuredClone(frame);
+  (invalidGroup.ops[1]!.op as { bus: string }).bus = 'music';
+  assert.throws(() => decodePresentationFrameDiff(invalidGroup), /bus/);
+
+  const unknownControlField = structuredClone(frame);
+  (unknownControlField.ops[0]!.op as Record<string, unknown>)['offsetSeconds'] = 0;
+  assert.throws(() => decodePresentationFrameDiff(unknownControlField), /offsetSeconds is unknown/);
+});
+
 void test('voxel-object resources decode strictly and reject invalid frame references', () => {
   const payload = {
     layout: {

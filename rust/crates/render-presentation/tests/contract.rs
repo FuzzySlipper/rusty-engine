@@ -304,6 +304,27 @@ fn every_presentation_operation_survives_the_json_border() {
                 handle: AnimationProjectionHandle::new(5),
             },
         },
+        PresentationOp::Audio {
+            meta: PresentationOpMeta::new(17),
+            op: AudioProjectionOp::VoiceControl {
+                handle: AudioHandle::new(1),
+                control: AudioVoiceControl::Retrigger,
+            },
+        },
+        PresentationOp::Audio {
+            meta: PresentationOpMeta::new(18),
+            op: AudioProjectionOp::BusControl {
+                bus: AudioBus::Ambient,
+                control: AudioBusControl::SetVolume { volume: 0.5 },
+            },
+        },
+        PresentationOp::Audio {
+            meta: PresentationOpMeta::new(19),
+            op: AudioProjectionOp::BusControl {
+                bus: AudioBus::Ui,
+                control: AudioBusControl::SetMuted { muted: true },
+            },
+        },
     ];
     let frame = PresentationFrameDiff::try_from_ops(ops).unwrap();
     let encoded = frame.encode_json().unwrap();
@@ -313,6 +334,11 @@ fn every_presentation_operation_survives_the_json_border() {
         "create",
         "update",
         "destroy",
+        "voiceControl",
+        "busControl",
+        "retrigger",
+        "setVolume",
+        "setMuted",
         "audio",
         "billboard",
         "particle",
