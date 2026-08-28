@@ -11,8 +11,8 @@ use engine_spatial::{
     SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
     StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
     StaticMeshTransform, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,
-    TriggerReconcileCause, TriggerVolumeSystem, VoxelCollisionScene, VoxelPickHint,
-    VoxelPickService,
+    TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem, VoxelCollisionScene,
+    VoxelPickHint, VoxelPickService,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityAuthoringService, EntityDefinition,
@@ -33,15 +33,22 @@ use crate::composition::{
 
 const MAX_SPATIAL_QUERY_ENTITIES: usize = engine_spatial::MAX_OCCLUSION_QUERY_ENTITIES;
 const MAX_SPATIAL_QUERY_IGNORED_ENTITIES: usize = engine_spatial::MAX_OCCLUSION_IGNORED_ENTITIES;
+const SPATIAL_SERVICE: &[u8] = b"Spatial";
+const REGISTER_TRIGGER_OPERATION: &[u8] = b"RegisterTrigger";
+const RECONCILE_TRIGGERS_OPERATION: &[u8] = b"ReconcileTriggers";
+const MAX_TRIGGER_OPERATION_DIAGNOSTICS: usize = 64;
+const MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES: usize = 512;
 
 /// Engine-owned collision/navigation mechanisms. Player and game state never
 /// live here: a character proposal builds its EntityState only for the call.
 pub(crate) struct RuntimeSpatialBridge {
     sessions: BTreeMap<u64, SpatialSession>,
     pub(crate) voxel_history_exports: BTreeMap<u64, Arc<[u8]>>,
+    trigger_diagnostic_leases: BTreeMap<u64, SpatialTriggerDiagnosticLease>,
     collision_source: SpatialCollisionSource,
     next_session: u64,
     pub(crate) next_voxel_history_export: u64,
+    next_trigger_diagnostic_lease: u64,
 }
 
 pub(crate) struct SpatialSession {
@@ -55,6 +62,44 @@ pub(crate) struct SpatialSession {
     last_character_receipt: Option<CharacterControllerReceipt>,
     triggers: TriggerVolumeSystem,
     last_trigger_facts: Vec<TriggerOverlapFact>,
+}
+
+/// Trigger failures retain their original diagnostics until generated C# has
+/// copied them and called the named Spatial release operation. This keeps the
+/// stable code/message/entity correlation intact at the ABI boundary.
+struct SpatialTriggerDiagnosticLease {
+    _values: Vec<SpatialTriggerDiagnosticValue>,
+    diagnostics: Box<[NativeEngineDiagnostic]>,
+}
+
+struct SpatialTriggerDiagnosticValue {
+    code: String,
+    message: String,
+    source: String,
+}
+
+enum SpatialTriggerOperationError {
+    Service(CsharpEngineServicesError),
+    Trigger(TriggerVolumeError),
+}
+
+impl SpatialTriggerDiagnosticLease {
+    fn new(values: Vec<SpatialTriggerDiagnosticValue>) -> Option<Self> {
+        (!values.is_empty()).then(|| {
+            let diagnostics = values
+                .iter()
+                .map(|value| NativeEngineDiagnostic {
+                    code: native_utf8(value.code.as_bytes()),
+                    message: native_utf8(value.message.as_bytes()),
+                    source: native_utf8(value.source.as_bytes()),
+                })
+                .collect();
+            Self {
+                _values: values,
+                diagnostics,
+            }
+        })
+    }
 }
 
 /// A retained navigation source is Engine-owned state. C# only borrows typed
@@ -138,9 +183,11 @@ impl RuntimeSpatialBridge {
         Self {
             sessions: BTreeMap::new(),
             voxel_history_exports: BTreeMap::new(),
+            trigger_diagnostic_leases: BTreeMap::new(),
             collision_source: SpatialCollisionSource::new(),
             next_session: 1,
             next_voxel_history_export: 1,
+            next_trigger_diagnostic_lease: 1,
         }
     }
 
@@ -1130,16 +1177,19 @@ impl RuntimeSpatialBridge {
     fn register_trigger(
         &mut self,
         request: &NativeSpatialTriggerRegisterRequest,
-    ) -> Result<(), CsharpEngineServicesError> {
+    ) -> Result<(), SpatialTriggerOperationError> {
         let scope =
-            unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "trigger scope") }?;
-        let tag = unsafe { borrowed_utf8(request.tag.bytes, request.tag.len, "trigger tag") }?;
+            unsafe { borrowed_utf8(request.scope.bytes, request.scope.len, "trigger scope") }
+                .map_err(SpatialTriggerOperationError::Service)?;
+        let tag = unsafe { borrowed_utf8(request.tag.bytes, request.tag.len, "trigger tag") }
+            .map_err(SpatialTriggerOperationError::Service)?;
         let geometry = match request.geometry {
             NativeSpatialTriggerGeometry::ActiveCollision => TriggerGeometrySource::ActiveCollision,
             NativeSpatialTriggerGeometry::EntityBounds => TriggerGeometrySource::EntityBounds,
         };
         let tags = (!tag.is_empty()).then_some(tag).into_iter();
-        self.session_mut(request.session)?
+        self.session_mut(request.session)
+            .map_err(SpatialTriggerOperationError::Service)?
             .triggers
             .register(
                 engine_spatial::KinematicTriggerDefinition::new(
@@ -1149,35 +1199,89 @@ impl RuntimeSpatialBridge {
                 )
                 .with_geometry_source(geometry),
             )
-            .map_err(|error| spatial_error("CSHARP_SPATIAL_TRIGGER", error.to_string()))
+            .map_err(SpatialTriggerOperationError::Trigger)
     }
 
     fn reconcile_triggers(
         &mut self,
         request: &NativeSpatialTriggerReconcileRequest,
-    ) -> Result<NativeSpatialTriggerReceipt, CsharpEngineServicesError> {
+    ) -> Result<NativeSpatialTriggerReceipt, SpatialTriggerOperationError> {
         let entities =
-            unsafe { borrowed_slice(request.entities, request.entities_len, "trigger entities") }?;
-        let state = entity_state(entities)?;
+            unsafe { borrowed_slice(request.entities, request.entities_len, "trigger entities") }
+                .map_err(SpatialTriggerOperationError::Service)?;
+        let state = entity_state(entities).map_err(SpatialTriggerOperationError::Service)?;
         let cause = native_trigger_cause(request.cause);
-        let session = self.session_mut(request.session)?;
+        let session = self
+            .session_mut(request.session)
+            .map_err(SpatialTriggerOperationError::Service)?;
         let receipt = session
             .triggers
             .reconcile(&state, request.tick, cause)
-            .map_err(|error| spatial_error("CSHARP_SPATIAL_TRIGGER", error.to_string()))?;
+            .map_err(SpatialTriggerOperationError::Trigger)?;
         session.last_trigger_facts = receipt.facts.clone();
         Ok(NativeSpatialTriggerReceipt {
             tick: receipt.tick,
             cause: request.cause,
             revision: receipt.revision,
-            fact_count: checked_u32(receipt.facts.len(), "trigger fact count")?,
-            continued_count: checked_u32(receipt.continued.len(), "trigger continued count")?,
+            fact_count: checked_u32(receipt.facts.len(), "trigger fact count")
+                .map_err(SpatialTriggerOperationError::Service)?,
+            continued_count: checked_u32(receipt.continued.len(), "trigger continued count")
+                .map_err(SpatialTriggerOperationError::Service)?,
             active_overlap_count: checked_u32(
                 receipt.active_overlaps.len(),
                 "trigger active overlap count",
-            )?,
-            diagnostic_count: checked_u32(receipt.diagnostics.len(), "trigger diagnostic count")?,
+            )
+            .map_err(SpatialTriggerOperationError::Service)?,
+            diagnostic_count: checked_u32(receipt.diagnostics.len(), "trigger diagnostic count")
+                .map_err(SpatialTriggerOperationError::Service)?,
         })
+    }
+
+    fn retain_trigger_operation_diagnostic(
+        &mut self,
+        error: &SpatialTriggerOperationError,
+    ) -> Option<NativeEngineDiagnosticLease> {
+        let values = match error {
+            SpatialTriggerOperationError::Trigger(error) => error
+                .diagnostics
+                .iter()
+                .take(MAX_TRIGGER_OPERATION_DIAGNOSTICS)
+                .map(|diagnostic| SpatialTriggerDiagnosticValue {
+                    code: diagnostic.code.code().to_owned(),
+                    message: bounded_trigger_diagnostic_text(&diagnostic.message),
+                    source: diagnostic
+                        .entity
+                        .map(|entity| format!("entity:{}", entity.raw()))
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            SpatialTriggerOperationError::Service(error) => vec![SpatialTriggerDiagnosticValue {
+                code: error.code().to_owned(),
+                message: bounded_trigger_diagnostic_text(error.detail()),
+                source: String::new(),
+            }],
+        };
+        let lease = SpatialTriggerDiagnosticLease::new(values)?;
+        let value = self.next_trigger_diagnostic_lease;
+        self.next_trigger_diagnostic_lease = value.checked_add(1)?;
+        let diagnostics = NativeEngineDiagnosticLease {
+            handle: NativeEngineDiagnosticLeaseHandle { value },
+            diagnostics: lease.diagnostics.as_ptr(),
+            diagnostics_len: lease.diagnostics.len(),
+        };
+        self.trigger_diagnostic_leases.insert(value, lease);
+        Some(diagnostics)
+    }
+
+    fn destroy_trigger_operation_diagnostic_lease(
+        &mut self,
+        handle: NativeEngineDiagnosticLeaseHandle,
+    ) -> bool {
+        handle.value != 0
+            && self
+                .trigger_diagnostic_leases
+                .remove(&handle.value)
+                .is_some()
     }
 
     fn read_trigger(
@@ -2220,13 +2324,6 @@ spatial_request_with_output!(
     NativeSpatialCapsuleQueryRequest,
     NativeSpatialHit
 );
-spatial_request_with_output!(
-    reconcile_triggers,
-    reconcile_triggers,
-    NativeSpatialTriggerReconcileRequest,
-    NativeSpatialTriggerReceipt
-);
-
 unsafe extern "C" fn pick_voxel(
     context: *mut c_void,
     request: NativeSpatialPickRequest,
@@ -2247,16 +2344,87 @@ unsafe extern "C" fn pick_voxel(
 unsafe extern "C" fn register_trigger(
     context: *mut c_void,
     request: *const NativeSpatialTriggerRegisterRequest,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: the receipt is borrowed for this direct call and starts without
+    // a retained diagnostic on every observable path.
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || request.is_null() {
         return 0;
     }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-        .register_trigger(unsafe { &*request })
-    {
+    // SAFETY: bridge context and request are retained for this callback only.
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.register_trigger(unsafe { &*request }) {
         Ok(()) => ABI_OK,
-        Err(_) => 0,
+        Err(error) => {
+            retain_trigger_operation_error(bridge, &error, receipt, REGISTER_TRIGGER_OPERATION);
+            0
+        }
     }
+}
+
+unsafe extern "C" fn reconcile_triggers(
+    context: *mut c_void,
+    request: *const NativeSpatialTriggerReconcileRequest,
+    output: *mut NativeSpatialTriggerReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: the receipt is borrowed for this direct call and starts without
+    // a retained diagnostic on every observable path.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    // SAFETY: bridge context/request/output are retained for this callback only.
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.reconcile_triggers(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(error) => {
+            retain_trigger_operation_error(bridge, &error, receipt, RECONCILE_TRIGGERS_OPERATION);
+            0
+        }
+    }
+}
+
+fn retain_trigger_operation_error(
+    bridge: &mut RuntimeSpatialBridge,
+    error: &SpatialTriggerOperationError,
+    receipt: *mut NativeOperationErrorReceipt,
+    operation: &'static [u8],
+) {
+    if let Some(diagnostics) = bridge.retain_trigger_operation_diagnostic(error) {
+        // SAFETY: receipt was checked by the direct callback and names only
+        // this independently retained Spatial diagnostic lease.
+        unsafe {
+            *receipt = NativeOperationErrorReceipt {
+                service: native_utf8(SPATIAL_SERVICE),
+                operation: native_utf8(operation),
+                status: 0,
+                diagnostics,
+            };
+        }
+    }
+}
+
+unsafe extern "C" fn destroy_trigger_operation_diagnostic_lease(
+    context: *mut c_void,
+    handle: NativeEngineDiagnosticLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: context remains valid for the product lifetime.
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    i32::from(bridge.destroy_trigger_operation_diagnostic_lease(handle))
 }
 
 unsafe extern "C" fn read_trigger(
@@ -2340,6 +2508,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         pick_voxel,
         register_trigger,
         reconcile_triggers,
+        destroy_operation_diagnostic_lease: destroy_trigger_operation_diagnostic_lease,
         read_trigger,
         read_trigger_overlap_at,
         read_trigger_fact_at,
@@ -2348,6 +2517,25 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
 
 fn spatial_error(code: &'static str, detail: impl Into<String>) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new(code, detail)
+}
+
+fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
+    NativeUtf8Slice {
+        bytes: if value.is_empty() {
+            std::ptr::null()
+        } else {
+            value.as_ptr()
+        },
+        len: value.len(),
+    }
+}
+
+fn bounded_trigger_diagnostic_text(value: &str) -> String {
+    let mut end = value.len().min(MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES);
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
 }
 
 fn finite_vec3(value: Vec3) -> bool {
@@ -2905,5 +3093,185 @@ fn native_trigger_cause_value(value: TriggerReconcileCause) -> NativeSpatialTrig
         TriggerReconcileCause::ActivationChanged => NativeSpatialTriggerCause::ActivationChanged,
         TriggerReconcileCause::LifecycleChanged => NativeSpatialTriggerCause::LifecycleChanged,
         TriggerReconcileCause::Restore => NativeSpatialTriggerCause::Restore,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn utf8(value: &str) -> NativeUtf8Slice {
+        NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        }
+    }
+
+    fn copied_utf8(value: NativeUtf8Slice) -> String {
+        // SAFETY: this test copies the receipt before its exact Spatial lease
+        // release, which is the generated binding's required lifetime rule.
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(value.bytes, value.len)) }
+            .to_owned()
+    }
+
+    fn create_session(api: &NativeSpatialApi) -> NativeSpatialSessionHandle {
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.create_session)(
+                    api.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 16,
+                        reserved: 0,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        session
+    }
+
+    #[test]
+    fn trigger_callbacks_retain_copyable_diagnostics_and_release_spatial_leases() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let scope = "fixture.trigger";
+        let tag = "fixture";
+        let request = NativeSpatialTriggerRegisterRequest {
+            session,
+            trigger: 41,
+            scope: utf8(scope),
+            tag: utf8(tag),
+            geometry: NativeSpatialTriggerGeometry::EntityBounds,
+        };
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+
+        assert_eq!(
+            unsafe { (api.register_trigger)(api.context, &request, &mut receipt) },
+            ABI_OK
+        );
+        assert_eq!(receipt.diagnostics.handle.value, 0);
+
+        receipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.register_trigger)(api.context, &request, &mut receipt) },
+            0
+        );
+        assert_eq!(copied_utf8(receipt.service), "Spatial");
+        assert_eq!(copied_utf8(receipt.operation), "RegisterTrigger");
+        assert_eq!(receipt.status, 0);
+        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
+        assert_eq!(copied_utf8(diagnostic.code), "duplicate-trigger-definition");
+        assert_eq!(
+            copied_utf8(diagnostic.message),
+            "trigger entity already has a registered definition"
+        );
+        assert_eq!(copied_utf8(diagnostic.source), "entity:41");
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            0
+        );
+
+        let mut read = NativeSpatialTriggerReadReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.read_trigger)(
+                    api.context,
+                    NativeSpatialTriggerReadRequest {
+                        session,
+                        trigger: 41,
+                    },
+                    &mut read,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(read.trigger, 41);
+
+        let duplicate_entities = [
+            NativeSpatialEntityCollider {
+                entity: 41,
+                min: NativeVec3::default(),
+                max: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+                enabled: true,
+                ..Default::default()
+            },
+            NativeSpatialEntityCollider {
+                entity: 41,
+                min: NativeVec3::default(),
+                max: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+                enabled: true,
+                ..Default::default()
+            },
+        ];
+        let mut reconcile = NativeSpatialTriggerReceipt::default();
+        receipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.reconcile_triggers)(
+                    api.context,
+                    &NativeSpatialTriggerReconcileRequest {
+                        session,
+                        tick: 7,
+                        cause: NativeSpatialTriggerCause::Scheduled,
+                        entities: duplicate_entities.as_ptr(),
+                        entities_len: duplicate_entities.len(),
+                    },
+                    &mut reconcile,
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_eq!(copied_utf8(receipt.service), "Spatial");
+        assert_eq!(copied_utf8(receipt.operation), "ReconcileTriggers");
+        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
+        assert_eq!(copied_utf8(diagnostic.code), "CSHARP_SPATIAL_ENTITY");
+        assert!(!copied_utf8(diagnostic.message).is_empty());
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            ABI_OK
+        );
+
+        let mut unchanged = NativeSpatialTriggerReadReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.read_trigger)(
+                    api.context,
+                    NativeSpatialTriggerReadRequest {
+                        session,
+                        trigger: 41,
+                    },
+                    &mut unchanged,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unchanged.trigger, read.trigger);
+        assert_eq!(unchanged.revision, read.revision);
+        assert_eq!(unchanged.overlap_count, read.overlap_count);
     }
 }

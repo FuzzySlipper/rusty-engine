@@ -489,6 +489,7 @@ include = [
     "NativeSpatialPickVoxel",
     "NativeSpatialRegisterTrigger",
     "NativeSpatialReconcileTriggers",
+    "NativeDestroySpatialOperationDiagnosticLease",
     "NativeSpatialReadTrigger",
     "NativeSpatialReadTriggerOverlapAt",
     "NativeSpatialReadTriggerFactAt",

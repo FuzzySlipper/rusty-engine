@@ -202,13 +202,19 @@ pub type NativeSpatialOverlapCapsule = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeSpatialPickVoxel =
     unsafe extern "C" fn(*mut c_void, NativeSpatialPickRequest, *mut NativeSpatialHit) -> i32;
-pub type NativeSpatialRegisterTrigger =
-    unsafe extern "C" fn(*mut c_void, *const NativeSpatialTriggerRegisterRequest) -> i32;
+pub type NativeSpatialRegisterTrigger = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpatialTriggerRegisterRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSpatialReconcileTriggers = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialTriggerReconcileRequest,
     *mut NativeSpatialTriggerReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeDestroySpatialOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeSpatialReadTrigger = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialTriggerReadRequest,
@@ -1295,6 +1301,7 @@ pub struct NativeSpatialApi {
     pub pick_voxel: NativeSpatialPickVoxel,
     pub register_trigger: NativeSpatialRegisterTrigger,
     pub reconcile_triggers: NativeSpatialReconcileTriggers,
+    pub destroy_operation_diagnostic_lease: NativeDestroySpatialOperationDiagnosticLease,
     pub read_trigger: NativeSpatialReadTrigger,
     pub read_trigger_overlap_at: NativeSpatialReadTriggerOverlapAt,
     pub read_trigger_fact_at: NativeSpatialReadTriggerFactAt,
