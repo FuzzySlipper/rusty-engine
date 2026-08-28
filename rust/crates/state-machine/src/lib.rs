@@ -9,7 +9,14 @@ mod model;
 mod store;
 
 pub use model::{
-    apply_transition_to_instance, MachineInstance, StateMachineError, StateMachineFact,
-    StateMachineSpec, TransitionApplied, TransitionRequest,
+    apply_detached_transition, apply_transition_to_instance, DetachedMachineInstance,
+    DetachedTransitionApplied, DetachedTransitionRequest, MachineInstance, StateMachineError,
+    StateMachineFact, StateMachineSpec, TransitionApplied, TransitionRequest,
 };
 pub use store::StateMachineStore;
+
+/// Maximum number of states admitted by a generated detached definition.
+pub const MAX_DETACHED_DEFINITION_STATES: usize = 256;
+
+/// Maximum number of directed transition edges admitted by a generated detached definition.
+pub const MAX_DETACHED_DEFINITION_TRANSITIONS: usize = 1_024;

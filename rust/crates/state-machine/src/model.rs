@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use core_ids::{EntityId, ModeId, ProcessId};
 use entity_state::EntityLifecycle;
 
+use crate::{MAX_DETACHED_DEFINITION_STATES, MAX_DETACHED_DEFINITION_TRANSITIONS};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateMachineSpec {
     pub machine: ProcessId,
@@ -40,7 +42,8 @@ impl StateMachineSpec {
         self.transitions.iter().copied()
     }
 
-    pub(crate) fn validate(&self) -> Result<(), StateMachineError> {
+    /// Validate a definition before retaining or applying it.
+    pub fn validate(&self) -> Result<(), StateMachineError> {
         if self.states.is_empty() {
             return Err(StateMachineError::EmptyMachine {
                 machine: self.machine,
@@ -59,6 +62,26 @@ impl StateMachineSpec {
                     state: to,
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// Validate the bounded flat shape used by the detached generated API.
+    pub fn validate_detached(&self) -> Result<(), StateMachineError> {
+        self.validate()?;
+        if self.states.len() > MAX_DETACHED_DEFINITION_STATES {
+            return Err(StateMachineError::DefinitionStateLimitExceeded {
+                machine: self.machine,
+                maximum: MAX_DETACHED_DEFINITION_STATES,
+                actual: self.states.len(),
+            });
+        }
+        if self.transitions.len() > MAX_DETACHED_DEFINITION_TRANSITIONS {
+            return Err(StateMachineError::DefinitionTransitionLimitExceeded {
+                machine: self.machine,
+                maximum: MAX_DETACHED_DEFINITION_TRANSITIONS,
+                actual: self.transitions.len(),
+            });
         }
         Ok(())
     }
@@ -122,6 +145,59 @@ pub struct TransitionApplied {
     pub fact: StateMachineFact,
 }
 
+/// A caller-owned state-machine value with no entity or lifecycle identity.
+///
+/// Detached values are intentionally not retained by the Engine. A product
+/// keeps this value, decides where it belongs, and supplies it again when it
+/// asks the Engine to validate a transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetachedMachineInstance {
+    pub machine: ProcessId,
+    pub current: ModeId,
+    pub revision: u64,
+}
+
+impl DetachedMachineInstance {
+    pub const fn new(machine: ProcessId, current: ModeId, revision: u64) -> Self {
+        Self {
+            machine,
+            current,
+            revision,
+        }
+    }
+}
+
+/// A guarded transition over a caller-owned detached instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetachedTransitionRequest {
+    pub expected: ModeId,
+    pub next: ModeId,
+    pub expected_revision: Option<u64>,
+}
+
+impl DetachedTransitionRequest {
+    pub const fn new(expected: ModeId, next: ModeId) -> Self {
+        Self {
+            expected,
+            next,
+            expected_revision: None,
+        }
+    }
+
+    pub const fn expecting_revision(mut self, revision: u64) -> Self {
+        self.expected_revision = Some(revision);
+        self
+    }
+}
+
+/// Fixed receipt for one successful detached transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetachedTransitionApplied {
+    pub instance: DetachedMachineInstance,
+    pub previous: ModeId,
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateMachineError {
     EmptyMachine {
@@ -173,6 +249,38 @@ pub enum StateMachineError {
         entity: EntityId,
         machine: ProcessId,
     },
+    DetachedStaleCurrentState {
+        machine: ProcessId,
+        expected: ModeId,
+        actual: ModeId,
+    },
+    DetachedStaleRevision {
+        machine: ProcessId,
+        expected: u64,
+        actual: u64,
+    },
+    DetachedRevisionOverflow {
+        machine: ProcessId,
+    },
+    DuplicateState {
+        machine: ProcessId,
+        state: ModeId,
+    },
+    DuplicateTransition {
+        machine: ProcessId,
+        from: ModeId,
+        to: ModeId,
+    },
+    DefinitionStateLimitExceeded {
+        machine: ProcessId,
+        maximum: usize,
+        actual: usize,
+    },
+    DefinitionTransitionLimitExceeded {
+        machine: ProcessId,
+        maximum: usize,
+        actual: usize,
+    },
 }
 
 impl StateMachineError {
@@ -190,6 +298,15 @@ impl StateMachineError {
             Self::StaleCurrentState { .. } => "stale-current-state",
             Self::StaleRevision { .. } => "stale-revision",
             Self::RevisionOverflow { .. } => "state-machine-revision-overflow",
+            Self::DetachedStaleCurrentState { .. } => "detached-stale-current-state",
+            Self::DetachedStaleRevision { .. } => "detached-stale-revision",
+            Self::DetachedRevisionOverflow { .. } => "detached-revision-overflow",
+            Self::DuplicateState { .. } => "duplicate-state",
+            Self::DuplicateTransition { .. } => "duplicate-transition",
+            Self::DefinitionStateLimitExceeded { .. } => "definition-state-limit-exceeded",
+            Self::DefinitionTransitionLimitExceeded { .. } => {
+                "definition-transition-limit-exceeded"
+            }
         }
     }
 }
@@ -271,5 +388,69 @@ pub fn apply_transition_to_instance(
             to: request.next,
             revision,
         },
+    })
+}
+
+/// Apply one guarded transition to a caller-owned detached value.
+///
+/// The Engine validates the retained definition and returns a new value. It
+/// never stores or mutates the supplied instance, so stale or invalid input
+/// leaves product-owned state untouched.
+pub fn apply_detached_transition(
+    spec: &StateMachineSpec,
+    instance: DetachedMachineInstance,
+    request: DetachedTransitionRequest,
+) -> Result<DetachedTransitionApplied, StateMachineError> {
+    spec.validate_detached()?;
+    if spec.machine != instance.machine {
+        return Err(StateMachineError::MachineMissing {
+            machine: instance.machine,
+        });
+    }
+    if !spec.contains_state(request.next) {
+        return Err(StateMachineError::InvalidState {
+            machine: instance.machine,
+            state: request.next,
+        });
+    }
+    if !spec.allows_transition(request.expected, request.next) {
+        return Err(StateMachineError::InvalidTransition {
+            machine: instance.machine,
+            from: request.expected,
+            to: request.next,
+        });
+    }
+    if instance.current != request.expected {
+        return Err(StateMachineError::DetachedStaleCurrentState {
+            machine: instance.machine,
+            expected: request.expected,
+            actual: instance.current,
+        });
+    }
+    if let Some(expected) = request.expected_revision {
+        if instance.revision != expected {
+            return Err(StateMachineError::DetachedStaleRevision {
+                machine: instance.machine,
+                expected,
+                actual: instance.revision,
+            });
+        }
+    }
+    let revision =
+        instance
+            .revision
+            .checked_add(1)
+            .ok_or(StateMachineError::DetachedRevisionOverflow {
+                machine: instance.machine,
+            })?;
+    let updated = DetachedMachineInstance {
+        current: request.next,
+        revision,
+        ..instance
+    };
+    Ok(DetachedTransitionApplied {
+        instance: updated,
+        previous: instance.current,
+        revision,
     })
 }

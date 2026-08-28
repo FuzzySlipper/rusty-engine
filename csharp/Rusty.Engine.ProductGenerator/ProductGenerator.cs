@@ -88,6 +88,8 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     ContinuousMechanics = new ContinuousMechanicsServiceImplementation(native.continuous_mechanics);
                     Persistence = new PersistenceServiceImplementation(native.persistence);
                     Rules = new RulesServiceImplementation(native.rules);
+                    Resolution = new ResolutionServiceImplementation(native.resolution);
+                    StateMachine = new StateMachineServiceImplementation(native.state_machine);
                     StandardExact = new StandardExactServiceImplementation(native.standard_exact);
                     StandardContinuous = new StandardContinuousServiceImplementation(native.standard_continuous);
                     Ui = new UiServiceImplementation(native.ui);
@@ -109,6 +111,8 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IContinuousMechanicsService ContinuousMechanics { get; }
                 public IPersistenceService Persistence { get; }
                 public IRulesService Rules { get; }
+                public IResolutionService Resolution { get; }
+                public IStateMachineService StateMachine { get; }
                 public IStandardExactService StandardExact { get; }
                 public IStandardContinuousService StandardContinuous { get; }
                 public IUiService Ui { get; }

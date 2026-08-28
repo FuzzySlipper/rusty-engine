@@ -1,7 +1,8 @@
 use core_ids::{EntityId, ModeId, ProcessId};
 use entity_state::{EntityAuthoringService, EntityDefinition, EntityState};
 use state_machine::{
-    apply_transition_to_instance, MachineInstance, StateMachineError, StateMachineFact,
+    apply_detached_transition, apply_transition_to_instance, DetachedMachineInstance,
+    DetachedTransitionRequest, MachineInstance, StateMachineError, StateMachineFact,
     StateMachineSpec, StateMachineStore, TransitionRequest,
 };
 
@@ -156,6 +157,70 @@ fn detached_transition_rejects_an_invalid_machine_spec() {
     ));
     assert_eq!(instance.current, idle());
     assert_eq!(instance.revision, 4);
+}
+
+#[test]
+fn detached_transition_is_a_purpose_neutral_value_operation() {
+    let instance = DetachedMachineInstance::new(machine(), idle(), 4);
+    let applied = apply_detached_transition(
+        &spec(),
+        instance,
+        DetachedTransitionRequest::new(idle(), moving()).expecting_revision(4),
+    )
+    .unwrap();
+
+    assert_eq!(applied.previous, idle());
+    assert_eq!(applied.revision, 5);
+    assert_eq!(
+        applied.instance,
+        DetachedMachineInstance::new(machine(), moving(), 5)
+    );
+    assert_eq!(instance, DetachedMachineInstance::new(machine(), idle(), 4));
+
+    let stale_state = apply_detached_transition(
+        &spec(),
+        applied.instance,
+        DetachedTransitionRequest::new(idle(), moving()).expecting_revision(5),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        stale_state,
+        StateMachineError::DetachedStaleCurrentState { .. }
+    ));
+    assert_eq!(applied.instance.current, moving());
+    assert_eq!(applied.instance.revision, 5);
+
+    let stale_revision = apply_detached_transition(
+        &spec(),
+        applied.instance,
+        DetachedTransitionRequest::new(moving(), stopped()).expecting_revision(4),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        stale_revision,
+        StateMachineError::DetachedStaleRevision { .. }
+    ));
+}
+
+#[test]
+fn detached_transition_checks_bounded_definition_shape() {
+    let states = (0..=state_machine::MAX_DETACHED_DEFINITION_STATES)
+        .map(|state| ModeId::new(state as u64))
+        .collect::<Vec<_>>();
+    let spec = StateMachineSpec::new(machine(), states);
+    let instance = DetachedMachineInstance::new(machine(), ModeId::new(0), 0);
+    let error = apply_detached_transition(
+        &spec,
+        instance,
+        DetachedTransitionRequest::new(ModeId::new(0), ModeId::new(0)),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        StateMachineError::DefinitionStateLimitExceeded { .. }
+    ));
+    assert_eq!(instance.current, ModeId::new(0));
+    assert_eq!(instance.revision, 0);
 }
 
 #[test]

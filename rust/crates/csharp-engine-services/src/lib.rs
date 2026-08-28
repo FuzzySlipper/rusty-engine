@@ -16,6 +16,7 @@ mod rules;
 mod spatial;
 mod standard_continuous;
 mod standard_exact;
+mod state_machine;
 mod ui;
 mod voxel;
 mod voxel_content;

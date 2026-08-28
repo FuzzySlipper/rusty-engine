@@ -102,6 +102,7 @@ public sealed class Product : IEngineProduct
         {
             throw new InvalidOperationException("exact mechanics spend did not preserve the track bound");
         }
+        ExerciseStateMachine();
         _persistenceStore = _engine.Persistence.OpenStore(new PersistenceOpenRequest(
             "lease-fixture"));
         const string leaseKey = "fixtures/café";
@@ -565,6 +566,45 @@ public sealed class Product : IEngineProduct
     }
 
     private static LookConfig LookConfig() => new(0.01f, 0.01f, -1.4f, 1.4f, 1.0f, false, false, true);
+
+    private void ExerciseStateMachine()
+    {
+        const ulong machine = 1;
+        const ulong idle = 10;
+        const ulong active = 20;
+        const ulong finished = 30;
+        StateMachineState[] states = [new(idle), new(active), new(finished)];
+        StateMachineTransition[] transitions = [new(idle, active), new(active, finished)];
+
+        using StateMachineDefinition definition = _engine.StateMachine.AdmitDefinition(
+            new StateMachineDefinitionRequest(machine, states, transitions));
+        StateMachineDefinitionReadoutLeaseReceipt readout = _engine.StateMachine.ReadDefinition(definition);
+        Require(readout.Definitions.Length == 1
+            && readout.States.Span.SequenceEqual(states)
+            && readout.Transitions.Span.SequenceEqual(transitions),
+            "state-machine definition readout did not preserve deterministic states and edges");
+        StateMachineDefinitionReadoutRow row = readout.Definitions.Span[0];
+        Require(row.Machine == machine
+            && row.StatesStart == 0
+            && row.StatesLen == states.Length
+            && row.TransitionsStart == 0
+            && row.TransitionsLen == transitions.Length,
+            "state-machine readout ranges did not describe the admitted definition");
+
+        StateMachineInstance instance = new(machine, idle, 0);
+        StateMachineTransitionReceipt applied = _engine.StateMachine.ApplyTransition(
+            new StateMachineTransitionRequest(definition, instance, idle, active, true, instance.Revision));
+        Require(applied.Previous == idle
+            && applied.Instance == new StateMachineInstance(machine, active, 1)
+            && applied.Revision == 1,
+            "state-machine detached transition did not return the expected caller-owned value");
+        instance = applied.Instance;
+        StateMachineInstance beforeStale = instance;
+        ExpectEngineFailure(() => _engine.StateMachine.ApplyTransition(
+            new StateMachineTransitionRequest(definition, instance, active, finished, true, 0)));
+        Require(instance == beforeStale,
+            "stale detached state-machine transition mutated the caller-owned value");
+    }
 
     private void ExerciseCharacterController()
     {

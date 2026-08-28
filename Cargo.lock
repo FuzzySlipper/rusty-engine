@@ -555,6 +555,7 @@ dependencies = [
  "runtime-ui",
  "serde_json",
  "sha2",
+ "state-machine",
  "svc-content-store",
  "svc-pathfinding",
  "svc-rng",

@@ -102,6 +102,8 @@ sealed class ExampleEngineContext : IEngineContext
     public ICameraViewService CameraView => throw new NotSupportedException();
     public IPersistenceService Persistence => throw new NotSupportedException();
     public IRulesService Rules => throw new NotSupportedException();
+    public IResolutionService Resolution => throw new NotSupportedException();
+    public IStateMachineService StateMachine => throw new NotSupportedException();
     public IStandardExactService StandardExact => throw new NotSupportedException();
     public IStandardContinuousService StandardContinuous => throw new NotSupportedException();
     public IUiService Ui => throw new NotSupportedException();
