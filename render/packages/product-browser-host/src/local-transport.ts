@@ -952,6 +952,14 @@ function snapshotAnimationFeedbackFact(value: unknown): ProductBrowserAnimationF
       sampledAtSeconds: record['sampledAtSeconds'] === null ? null : requireFiniteNumber(record['sampledAtSeconds'], 'animation sample seconds', 0, Number.MAX_VALUE),
     });
   }
+  if (record.kind === 'naturalCompletion') {
+    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'clip'], 'animation natural completion');
+    return Object.freeze({ kind: 'naturalCompletion', factId,
+      objectId: requireU64Text(record['objectId'], 'animation feedback objectId'),
+      generation: requireU64Text(record['generation'], 'animation feedback generation'),
+      clip: requireBoundedString(record['clip'], 'animation completion clip'),
+    });
+  }
   if (record.kind === 'cue') {
     requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'cueId', 'clip', 'markerSeconds', 'sampledAtSeconds', 'signalDomain', 'signalId'], 'animation cue');
     const signalDomain = requireCatalogValue<'audio' | 'particle'>(record['signalDomain'], 'animation cue signal domain', new Set(['audio', 'particle']));

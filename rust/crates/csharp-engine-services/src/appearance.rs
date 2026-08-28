@@ -61,6 +61,12 @@ pub enum AnimationRealizationFact {
         clip: Option<String>,
         sampled_millis: Option<u64>,
     },
+    NaturalCompletion {
+        fact_id: u64,
+        object_id: u64,
+        generation: u64,
+        clip: String,
+    },
     Diagnostic {
         fact_id: u64,
         object_id: Option<u64>,
@@ -5350,6 +5356,18 @@ fn animation_realization_receipt(
             out.clip = animation_feedback_text(clip.as_deref().unwrap_or(""));
             out.has_sampled_millis = sampled_millis.is_some();
             out.sampled_millis = sampled_millis.unwrap_or(0);
+        }
+        AnimationRealizationFact::NaturalCompletion {
+            fact_id,
+            object_id,
+            generation,
+            clip,
+        } => {
+            out.kind = NativeAnimationRealizationFactKind::NaturalCompletion;
+            out.fact_id = *fact_id;
+            out.object_id = *object_id;
+            out.generation = *generation;
+            out.clip = animation_feedback_text(clip);
         }
         AnimationRealizationFact::Diagnostic {
             fact_id,

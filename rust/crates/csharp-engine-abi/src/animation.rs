@@ -119,6 +119,7 @@ pub enum NativeAnimationRealizationFactKind {
     Diagnostic = 2,
     Cue = 3,
     Stopped = 4,
+    NaturalCompletion = 5,
 }
 
 #[repr(C)]

@@ -1640,6 +1640,17 @@ fn animation_realization_fact(
             clip: selected_clip,
             sampled_millis: sampled_at_seconds.map(millis).transpose()?,
         },
+        Fact::NaturalCompletion {
+            fact_id,
+            object_id,
+            generation,
+            clip,
+        } => AnimationRealizationFact::NaturalCompletion {
+            fact_id: fact_id.get(),
+            object_id: object_id.get(),
+            generation: generation.get(),
+            clip,
+        },
         Fact::Diagnostic {
             fact_id,
             object_id,

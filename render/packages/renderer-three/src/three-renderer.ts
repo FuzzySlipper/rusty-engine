@@ -38,6 +38,7 @@ import {
   type AnimatedMeshAssetSource,
   type AnimatedMeshCaptureAppearance,
   type AnimatedMeshControllerClip,
+  type AnimatedMeshNaturalCompletion,
   type AnimatedMeshPlaybackReadout,
   type AnimatedMeshSampleReadout,
 } from './animated-mesh.js';
@@ -1287,6 +1288,13 @@ export class ThreeRenderer {
   /** Projection/debug readback for animated mesh playback; never authority. */
   animatedMeshPlayback(handle: RenderHandle): AnimatedMeshPlaybackReadout | undefined {
     return this.#animatedMeshes.playback(handle);
+  }
+
+  /** Subscribe to typed renderer-owned one-shot completion observations. */
+  subscribeAnimatedMeshNaturalCompletions(
+    listener: (completion: AnimatedMeshNaturalCompletion) => void,
+  ): () => void {
+    return this.#animatedMeshes.subscribeNaturalCompletions(listener);
   }
 
   /** Deterministically pose and inspect one retained animated instance. */

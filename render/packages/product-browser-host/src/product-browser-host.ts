@@ -111,6 +111,7 @@ export interface ProductBrowserAudioFeedbackResult {
 /** Closed renderer-observation feedback; this is not an animation command route. */
 export type ProductBrowserAnimationFeedbackFact =
   | { readonly kind: 'playbackObservation'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly sequence: number; readonly status: string; readonly selectedClip: string | null; readonly sampledAtSeconds: number | null }
+  | { readonly kind: 'naturalCompletion'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly clip: string }
   | { readonly kind: 'diagnostic'; readonly factId: string; readonly objectId: string | null; readonly generation: string | null; readonly code: string; readonly sequence: number }
   | { readonly kind: 'cue'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly cueId: string; readonly clip: string; readonly markerSeconds: number; readonly sampledAtSeconds: number; readonly signalDomain: 'audio' | 'particle'; readonly signalId: string }
   | { readonly kind: 'stopped'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly sequence: number; readonly reason: 'destroyed' | 'teardown' };
@@ -1159,6 +1160,12 @@ function snapshotAnimationFeedbackFact(
     generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
     sequence: requireAudioFeedbackSequence(value.sequence), status: value.status,
     selectedClip: value.selectedClip, sampledAtSeconds: value.sampledAtSeconds,
+  });
+  if (value.kind === 'naturalCompletion') return Object.freeze({
+    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
+    objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),
+    generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
+    clip: value.clip,
   });
   if (value.kind === 'diagnostic') return Object.freeze({
     kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),

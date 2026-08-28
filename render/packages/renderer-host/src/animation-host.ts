@@ -55,9 +55,10 @@ export interface RendererAnimationFrameReceipt {
 
 /**
  * Renderer-realized animation observations for the fixed product feedback
- * lane. `objectId` is product logical identity; `generation` is assigned by
- * this host whenever that object receives a new realization. Neither value is
- * a renderer or projection handle.
+ * lane. `objectId` is product logical identity; `generation` identifies the
+ * owning renderer realization (controller facts use this host's realization,
+ * while direct one-shot facts preserve the renderer's generation). Neither
+ * value is a renderer or projection handle.
  */
 export type RendererAnimationRealizedFact =
   | {
@@ -95,6 +96,13 @@ export type RendererAnimationRealizedFact =
     readonly generation: number;
     readonly sequence: number;
     readonly reason: 'destroyed' | 'teardown';
+  }
+  | {
+    readonly kind: 'naturalCompletion';
+    readonly factId: number;
+    readonly objectId: number;
+    readonly generation: number;
+    readonly clip: string;
   };
 
 export interface RendererAnimationRealizedFactsReadout {
@@ -107,7 +115,8 @@ type RendererAnimationRealizedFactInput =
   | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'playbackObservation' }>, 'factId'>
   | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'diagnostic' }>, 'factId'>
   | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'cue' }>, 'factId'>
-  | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'stopped' }>, 'factId'>;
+  | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'stopped' }>, 'factId'>
+  | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'naturalCompletion' }>, 'factId'>;
 
 interface AnimationControllerRealization {
   readonly handle: AnimationProjectionHandle;
@@ -145,6 +154,7 @@ export class RendererAnimationHost {
   #epoch = 1;
   #sampledFrames = 0;
   #compatibilityFallbacks = 0;
+  readonly #unsubscribeNaturalCompletions: () => void;
 
   constructor(
     projection: RendererAnimatedMeshProjection,
@@ -153,6 +163,9 @@ export class RendererAnimationHost {
     this.#projection = projection;
     this.#cues = validateCueDefinitions(options.cues ?? []);
     this.#maxRetainedFacts = 128;
+    this.#unsubscribeNaturalCompletions = projection.subscribeNaturalCompletions((completion) => {
+      this.#appendFact({ kind: 'naturalCompletion', ...completion });
+    });
   }
 
   /**
@@ -313,6 +326,7 @@ export class RendererAnimationHost {
       });
     }
     this.#controllers.clear();
+    this.#unsubscribeNaturalCompletions();
     return { applied, diagnostics, cues: [], readout: this.readout() };
   }
 

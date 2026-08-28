@@ -3732,6 +3732,80 @@ void test('animated mesh playback is command-selected and advances through rende
   );
 });
 
+void test('LoopOnce natural completion is mixer-event driven and rejects invalidated epochs', () => {
+  const asset = animatedMeshAsset();
+  const registry = new AnimatedMeshRegistry(testAnimatedMeshSource(asset));
+  const completions: { readonly objectId: number; readonly generation: number; readonly clip: string }[] = [];
+  const unsubscribe = registry.subscribeNaturalCompletions((completion) => completions.push(completion));
+  const handle = renderHandle(4810);
+  const instance = {
+    asset: asset.asset,
+    transform: { translation: [0, 0, 0] as const, rotation: [0, 0, 0, 1] as const, scale: [1, 1, 1] as const },
+    materialOverrides: [], playback: null, visible: true,
+    metadata: { sourceEntity: 77, sourceSceneNode: null, tags: [], label: 'one shot' },
+  };
+  const playOnce = () => registry.setPlayback(handle, {
+    kind: 'play', clip: 'run', loop: 'once', speed: 1, weight: 1, restart: true, fadeSeconds: null,
+  });
+  registry.define(asset);
+  registry.create(handle, instance);
+
+  // The actual Three mixer event completes exactly once; no time/status poll
+  // can produce another observation after the token has been cleared.
+  playOnce();
+  registry.advance(1);
+  assert.deepEqual(completions.splice(0), [{ objectId: 77, generation: 1, clip: 'run' }]);
+  assert.equal(registry.playback(handle)?.status, 'stopped');
+  registry.advance(1);
+  assert.deepEqual(completions.splice(0), []);
+
+  registry.setPlayback(handle, { kind: 'play', clip: 'run', loop: 'repeat', speed: 1, weight: 1, restart: true, fadeSeconds: null });
+  registry.advance(2);
+  assert.deepEqual(completions.splice(0), []);
+
+  // Pause invalidates the token; resume arms a fresh token for the retained
+  // LoopOnce action and only that resumed run can report completion.
+  playOnce();
+  registry.advance(0.2);
+  registry.setPlayback(handle, { kind: 'pause' });
+  registry.advance(2);
+  assert.deepEqual(completions.splice(0), []);
+  registry.setPlayback(handle, { kind: 'resume' });
+  registry.advance(1);
+  assert.deepEqual(completions.splice(0), [{ objectId: 77, generation: 1, clip: 'run' }]);
+
+  playOnce();
+  registry.setPlayback(handle, { kind: 'stop', fadeSeconds: 0.1 });
+  registry.advance(2);
+  assert.deepEqual(completions.splice(0), []);
+
+  playOnce();
+  registry.setControllerWeights(handle, [{ clip: 'idle', weight: 1, speed: 1 }]);
+  registry.advance(2);
+  assert.deepEqual(completions.splice(0), []);
+  registry.clearControllerWeights(handle);
+  assert.deepEqual(completions.splice(0), []);
+
+  playOnce();
+  registry.sample(handle, 'run', 1);
+  registry.advance(2);
+  assert.deepEqual(completions.splice(0), []);
+
+  // Releasing removes the mixer listener before uncache, so the old action
+  // cannot report after replacement; the new realization has generation two.
+  playOnce();
+  registry.release(handle);
+  registry.create(handle, instance);
+  playOnce();
+  registry.advance(1);
+  assert.deepEqual(completions.splice(0), [{ objectId: 77, generation: 2, clip: 'run' }]);
+  playOnce();
+  registry.release(handle);
+  assert.deepEqual(completions.splice(0), []);
+  unsubscribe();
+  registry.dispose();
+});
+
 void test('animated skinning inspection rejects an over-budget hierarchy before playback mutation', () => {
   const asset = animatedMeshAsset();
   const renderer = new ThreeRenderer({

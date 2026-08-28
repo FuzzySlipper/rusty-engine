@@ -118,6 +118,13 @@ export interface RendererAnimatedMeshEffectiveClip {
   readonly durationSeconds: number;
 }
 
+/** Typed renderer observation with product identity but no renderer handle. */
+export interface RendererAnimatedMeshNaturalCompletion {
+  readonly objectId: number;
+  readonly generation: number;
+  readonly clip: string;
+}
+
 export interface RendererAnimatedMeshProjection {
   readonly kind: 'rusty_renderer_animated_mesh_projection.v1';
   readonly applyFrame: (frame: RenderFrameDiff) => RendererAnimatedMeshFrameReceipt;
@@ -131,6 +138,9 @@ export interface RendererAnimatedMeshProjection {
   ) => void;
   readonly hasAnimationClips: (handle: RenderHandle, clipIds: readonly string[]) => boolean;
   readonly clearAnimationControllerWeights: (handle: RenderHandle) => void;
+  readonly subscribeNaturalCompletions: (
+    listener: (completion: RendererAnimatedMeshNaturalCompletion) => void,
+  ) => () => void;
 }
 
 export interface RendererAnimationControllerClip {
@@ -314,6 +324,7 @@ function createProjectionController(
     },
     hasAnimationClips: (handle, clipIds) => renderer.hasAnimationControllerClips(handle, clipIds),
     clearAnimationControllerWeights: (handle) => renderer.clearAnimationControllerWeights(handle),
+    subscribeNaturalCompletions: (listener) => renderer.subscribeAnimatedMeshNaturalCompletions(listener),
   };
 }
 

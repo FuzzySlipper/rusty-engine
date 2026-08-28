@@ -374,6 +374,12 @@ pub enum ProductDevAnimationFeedbackFact {
         selected_clip: Option<String>,
         sampled_at_seconds: Option<f64>,
     },
+    NaturalCompletion {
+        fact_id: CanonicalU64,
+        object_id: CanonicalU64,
+        generation: CanonicalU64,
+        clip: String,
+    },
     Diagnostic {
         fact_id: CanonicalU64,
         object_id: Option<CanonicalU64>,
@@ -405,6 +411,7 @@ impl ProductDevAnimationFeedbackFact {
     pub const fn fact_id(&self) -> CanonicalU64 {
         match self {
             Self::PlaybackObservation { fact_id, .. }
+            | Self::NaturalCompletion { fact_id, .. }
             | Self::Diagnostic { fact_id, .. }
             | Self::Cue { fact_id, .. }
             | Self::Stopped { fact_id, .. } => *fact_id,
@@ -469,6 +476,14 @@ impl ProductDevAnimationFeedback {
                             "animation playback observation is invalid",
                         ));
                     }
+                }
+                ProductDevAnimationFeedbackFact::NaturalCompletion { clip, .. }
+                    if !animation_feedback_text_fits(clip) =>
+                {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
+                        "animation natural completion is invalid",
+                    ))
                 }
                 ProductDevAnimationFeedbackFact::Diagnostic { code, .. }
                     if !animation_feedback_text_fits(code) =>

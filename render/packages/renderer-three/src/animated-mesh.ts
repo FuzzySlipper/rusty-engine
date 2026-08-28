@@ -194,6 +194,13 @@ interface AnimatedMeshInstanceRecord {
   readonly mixer: THREE.AnimationMixer;
   readonly actions: ReadonlyMap<string, THREE.AnimationAction>;
   readonly clipOrigins: ReadonlyMap<string, 'embedded' | 'pack'>;
+  /** Product logical identity copied from retained descriptor metadata. */
+  readonly sourceEntity: number | null;
+  /** Monotonic renderer realization generation for this logical object. */
+  readonly generation: number;
+  completionEpoch: number;
+  completionToken: AnimatedMeshCompletionToken | null;
+  finishedListener: ((event: { readonly action?: THREE.AnimationAction }) => void) | null;
   currentClip: string | null;
   heldSample: { readonly clip: string; readonly normalizedTime: number } | null;
   commandSelected: boolean;
@@ -202,6 +209,19 @@ interface AnimatedMeshInstanceRecord {
   speed: number | null;
   weight: number | null;
   controllerClips: readonly AnimatedMeshControllerClip[];
+}
+
+interface AnimatedMeshCompletionToken {
+  readonly epoch: number;
+  readonly action: THREE.AnimationAction;
+  readonly clip: string;
+}
+
+/** A backend-neutral observation. No retained handle or Three object escapes. */
+export interface AnimatedMeshNaturalCompletion {
+  readonly objectId: number;
+  readonly generation: number;
+  readonly clip: string;
 }
 
 interface AnimatedMeshInstanceMaterialOverride {
@@ -331,6 +351,8 @@ export class AnimatedMeshRegistry {
   readonly #assets = new Map<string, AnimatedMeshAssetRecord>();
   readonly #instances = new Map<RenderHandle, AnimatedMeshInstanceRecord>();
   readonly #assetGenerations = new Map<string, number>();
+  readonly #nextGenerationByObject = new Map<number, number>();
+  readonly #naturalCompletionListeners = new Set<(completion: AnimatedMeshNaturalCompletion) => void>();
 
   constructor(assetSource: AnimatedMeshAssetSource | undefined) {
     this.#assetSource = assetSource;
@@ -338,6 +360,14 @@ export class AnimatedMeshRegistry {
 
   get instanceCount(): number {
     return this.#instances.size;
+  }
+
+  /** Subscribe to actual Three LoopOnce completion events with no handle escape. */
+  subscribeNaturalCompletions(
+    listener: (completion: AnimatedMeshNaturalCompletion) => void,
+  ): () => void {
+    this.#naturalCompletionListeners.add(listener);
+    return () => this.#naturalCompletionListeners.delete(listener);
   }
 
   define(asset: AnimatedMeshAsset): void {
@@ -447,6 +477,8 @@ export class AnimatedMeshRegistry {
         clipOrigins.set(clip.id, 'pack');
       }
     }
+    const sourceEntity = instance.metadata.sourceEntity;
+    const generation = sourceEntity === null ? 0 : this.#nextGeneration(sourceEntity);
     const instanceRecord: AnimatedMeshInstanceRecord = {
       handle,
       asset: instance.asset,
@@ -456,6 +488,11 @@ export class AnimatedMeshRegistry {
       mixer,
       actions,
       clipOrigins,
+      sourceEntity,
+      generation,
+      completionEpoch: 0,
+      completionToken: null,
+      finishedListener: null,
       currentClip: null,
       heldSample: null,
       commandSelected: false,
@@ -465,6 +502,21 @@ export class AnimatedMeshRegistry {
       weight: null,
       controllerClips: [],
     };
+    instanceRecord.finishedListener = (event) => {
+      const token = instanceRecord.completionToken;
+      if (token === null || event.action !== token.action || token.epoch !== instanceRecord.completionEpoch) return;
+      instanceRecord.completionToken = null;
+      instanceRecord.status = 'stopped';
+      if (instanceRecord.sourceEntity !== null) {
+        const completion = {
+          objectId: instanceRecord.sourceEntity,
+          generation: instanceRecord.generation,
+          clip: token.clip,
+        };
+        for (const listener of this.#naturalCompletionListeners) listener(completion);
+      }
+    };
+    mixer.addEventListener('finished', instanceRecord.finishedListener);
     // Validate optional initial playback against a detached instance first;
     // rejected creation must not publish an instance or consume a refcount.
     if (instance.playback?.kind === 'sample') {
@@ -505,6 +557,7 @@ export class AnimatedMeshRegistry {
 
   clearControllerWeights(handle: RenderHandle): void {
     const instance = this.#requireInstance(handle, 'clearAnimationControllerWeights');
+    invalidateNaturalCompletion(instance);
     instance.mixer.stopAllAction();
     instance.currentClip = null;
     instance.heldSample = null;
@@ -662,6 +715,11 @@ export class AnimatedMeshRegistry {
     if (!instance) {
       return;
     }
+    invalidateNaturalCompletion(instance);
+    if (instance.finishedListener !== null) {
+      instance.mixer.removeEventListener('finished', instance.finishedListener);
+      instance.finishedListener = null;
+    }
     instance.mixer.stopAllAction();
     instance.mixer.uncacheRoot(instance.object);
     instance.materialOverrides.forEach((override) => {
@@ -720,6 +778,12 @@ export class AnimatedMeshRegistry {
       throw new AnimatedMeshApplyError(`${ctx}: handle ${handle} is not an animated mesh`);
     }
     return instance;
+  }
+
+  #nextGeneration(objectId: number): number {
+    const generation = this.#nextGenerationByObject.get(objectId) ?? 1;
+    this.#nextGenerationByObject.set(objectId, generation + 1);
+    return generation;
   }
 }
 
@@ -1154,6 +1218,7 @@ function applyPlaybackCommand(
       playClip(instance, command);
       return;
     case 'stop':
+      invalidateNaturalCompletion(instance);
       stopCurrent(instance, command.fadeSeconds);
       instance.currentClip = null;
       instance.commandSelected = true;
@@ -1165,19 +1230,24 @@ function applyPlaybackCommand(
       return;
     case 'sample':
       throw new AnimatedMeshApplyError('sample playback must be applied through the animated mesh registry');
-    case 'pause':
-      currentAction(instance, 'pause').paused = true;
+    case 'pause': {
+      const action = currentAction(instance, 'pause');
+      invalidateNaturalCompletion(instance);
+      action.paused = true;
       instance.commandSelected = true;
       instance.status = 'paused';
       instance.heldSample = null;
       return;
+    }
     case 'resume': {
       const action = currentAction(instance, 'resume');
+      invalidateNaturalCompletion(instance);
       action.paused = false;
       action.play();
       instance.commandSelected = true;
       instance.status = 'playing';
       instance.heldSample = null;
+      if (instance.loop === 'once') armNaturalCompletion(instance, action, instance.currentClip!);
       return;
     }
   }
@@ -1209,6 +1279,7 @@ function holdSample(
   // Skinning inspection is a bounded preflight. It must complete before the
   // disposable mixer or playback record changes so rejection is fail-atomic.
   const skinningFacts = animatedMeshSkinningFacts(instance.object, asset.scene, action.getClip());
+  invalidateNaturalCompletion(instance);
   instance.mixer.stopAllAction();
   action.reset();
   action.enabled = true;
@@ -1272,6 +1343,7 @@ function applyControllerWeights(
       `setAnimationControllerWeights: weights must sum to 1, received ${totalWeight}`,
     );
   }
+  invalidateNaturalCompletion(instance);
   for (const [clipId, action] of instance.actions) {
     const sample = byClip.get(clipId);
     if (sample === undefined) {
@@ -1304,6 +1376,7 @@ function playClip(
   if (!action) {
     throw new AnimatedMeshApplyError(`setAnimatedMeshPlayback: missing clip ${command.clip} on ${instance.asset}`);
   }
+  invalidateNaturalCompletion(instance);
   const prior = instance.currentClip === null ? null : instance.actions.get(instance.currentClip) ?? null;
   if (command.restart) {
     action.reset();
@@ -1330,6 +1403,21 @@ function playClip(
   instance.loop = command.loop;
   instance.speed = command.speed;
   instance.weight = command.weight;
+  if (command.loop === 'once') armNaturalCompletion(instance, action, command.clip);
+}
+
+function invalidateNaturalCompletion(instance: AnimatedMeshInstanceRecord): void {
+  instance.completionEpoch += 1;
+  instance.completionToken = null;
+}
+
+function armNaturalCompletion(
+  instance: AnimatedMeshInstanceRecord,
+  action: THREE.AnimationAction,
+  clip: string,
+): void {
+  instance.completionEpoch += 1;
+  instance.completionToken = { epoch: instance.completionEpoch, action, clip };
 }
 
 function stopCurrent(instance: AnimatedMeshInstanceRecord, fadeSeconds: number | null): void {

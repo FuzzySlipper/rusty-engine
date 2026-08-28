@@ -32,7 +32,7 @@ const ANIMATED_MANIFEST: RendererAnimatedMeshResourceManifest = {
   }],
 };
 
-function sceneFrame(): RenderFrameDiff {
+function sceneFrame(sourceEntity: number | null = null): RenderFrameDiff {
   return {
     schemaVersion: 1,
     ops: [
@@ -63,7 +63,7 @@ function sceneFrame(): RenderFrameDiff {
           playback: null,
           visible: true,
           metadata: {
-            sourceEntity: null,
+            sourceEntity,
             sourceSceneNode: null,
             tags: [],
             label: 'controller target',
@@ -254,6 +254,41 @@ void test('G1 controller sequence drives deterministic renderer-local blend and 
   } finally {
     console.warn = priorWarn;
     console.error = priorError;
+    testGlobal.self = priorSelf;
+  }
+});
+
+void test('renderer host maps only direct LoopOnce mixer completion into bounded facts', async () => {
+  const testGlobal = globalThis as unknown as { self: unknown };
+  const priorSelf = testGlobal.self;
+  testGlobal.self = globalThis;
+  try {
+    const projection = await createRendererAnimatedMeshProjection({
+      manifest: ANIMATED_MANIFEST,
+      resolveResource: fixtureResolver,
+    });
+    assert.equal(projection.applyFrame(sceneFrame(77)).applied, true);
+    const host = new RendererAnimationHost(projection);
+    assert.equal(projection.applyFrame({
+      schemaVersion: 1,
+      ops: [{
+        op: 'setAnimatedMeshPlayback',
+        handle: renderHandle(4100),
+        playback: { kind: 'play', clip: 'jump', loop: 'once', speed: 1, weight: 1, restart: true, fadeSeconds: null },
+      }],
+    }).applied, true);
+    host.advance(1);
+    const completions = host.realizedFacts().facts.filter((fact) => fact.kind === 'naturalCompletion');
+    assert.deepEqual(completions, [{
+      kind: 'naturalCompletion', factId: 1, objectId: 77, generation: 1, clip: 'jump',
+    }]);
+
+    // Controller weights are LoopRepeat/Infinity and therefore cannot make a
+    // natural-completion fact even after many renderer advances.
+    assert.equal(host.applyPresentation(createFrame()).applied, 1);
+    host.advance(2);
+    assert.equal(host.realizedFacts().facts.filter((fact) => fact.kind === 'naturalCompletion').length, 1);
+  } finally {
     testGlobal.self = priorSelf;
   }
 });
