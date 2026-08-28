@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 asset-import.workspace = true
 asset-catalog.workspace = true
+authored-scene.workspace = true
 csharp-engine-abi.workspace = true
 content-store.workspace = true
 core-assets.workspace = true

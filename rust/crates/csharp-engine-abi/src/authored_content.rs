@@ -2,7 +2,8 @@
 
 use crate::{
     NativeColor, NativeContentReferenceHandle, NativeEngineDiagnosticLeaseHandle,
-    NativeOperationErrorReceipt, NativeTransform, NativeUtf8Slice,
+    NativeLightShadowIntent, NativeOperationErrorReceipt, NativeTransform, NativeUtf8Slice,
+    NativeVec3,
 };
 use std::ffi::c_void;
 
@@ -31,6 +32,18 @@ pub struct NativeAuthoredPrefabRegistryReadoutLeaseHandle {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeAuthoredResolvedPrefabLeaseHandle {
+    pub value: u64,
+}
+/// Retained, immutable scene admission plan. It owns the prepared
+/// `SceneAdmissionPlan` as well as the copied readout rows exposed to C#.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAuthoredScenePlanHandle {
+    pub value: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAuthoredScenePlanReadoutLeaseHandle {
     pub value: u64,
 }
 
@@ -72,6 +85,33 @@ pub enum NativeAuthoredPrefabOverrideKind {
     Asset = 3,
     Material = 4,
     Activation = 5,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredSceneNodeKind {
+    EmptyGroup = 1,
+    StaticMesh = 2,
+    AnimatedMesh = 3,
+    Sprite = 4,
+    VoxelVolume = 5,
+    Light = 6,
+    Marker = 7,
+    EntityInstance = 8,
+    Bootstrap = 9,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredSceneEntityReferenceKind {
+    EntityDefinition = 1,
+    Prefab = 2,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredSceneLightKind {
+    Ambient = 1,
+    Directional = 2,
+    Point = 3,
+    Spot = 4,
 }
 
 #[repr(C)]
@@ -397,6 +437,162 @@ pub struct NativeAuthoredPrefabResolveRequest {
     pub instance_overrides: *const NativeAuthoredPrefabInstanceOverrideInput,
     pub instance_overrides_len: usize,
 }
+/// Explicit product-owned identity admitted as part of scene preparation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneEntityDefinitionInput {
+    pub stable_id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneGeneratorPresetInput {
+    pub provider_id: NativeUtf8Slice,
+    pub preset_id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneCatalogIdInput {
+    pub catalog_id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneDependencyInput {
+    pub reference_id: NativeUtf8Slice,
+    pub reference_version_kind: NativeAssetVersionRequirementKind,
+    pub reference_version: u32,
+    pub reference_has_hash: bool,
+    pub reference_hash: NativeUtf8Slice,
+}
+/// One flat scene node. `asset` is used only by the four asset-bearing kinds;
+/// `marker_id` only by Marker. Other fields must still be initialized.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneNodeInput {
+    pub id: u64,
+    pub has_parent: bool,
+    pub parent_id: u64,
+    pub child_order: u32,
+    pub transform: NativeTransform,
+    pub renderable_transform: NativeTransform,
+    pub kind: NativeAuthoredSceneNodeKind,
+    pub asset_id: NativeUtf8Slice,
+    pub asset_version_kind: NativeAssetVersionRequirementKind,
+    pub asset_version: u32,
+    pub asset_has_hash: bool,
+    pub asset_hash: NativeUtf8Slice,
+    pub marker_id: NativeUtf8Slice,
+    pub has_label: bool,
+    pub label: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneNodeTagInput {
+    pub node_id: u64,
+    pub tag: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneEntityInstanceInput {
+    pub node_id: u64,
+    pub instance_id: NativeUtf8Slice,
+    pub reference_kind: NativeAuthoredSceneEntityReferenceKind,
+    /// Stable entity-definition id for EntityDefinition; initialized but unused for Prefab.
+    pub entity_definition_id: NativeUtf8Slice,
+    pub prefab_id: u64,
+    pub has_variant: bool,
+    pub variant_id: NativeUtf8Slice,
+    pub instantiation_seed: u64,
+    pub has_spawn_marker: bool,
+    pub spawn_marker_id: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneLightInput {
+    pub node_id: u64,
+    pub kind: NativeAuthoredSceneLightKind,
+    pub color: NativeVec3,
+    pub intensity: f32,
+    pub enabled: bool,
+    pub has_range: bool,
+    pub range: f32,
+    pub decay: f32,
+    pub outer_angle_radians: f32,
+    pub penumbra: f32,
+    pub shadow_intent: NativeLightShadowIntent,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneBootstrapInput {
+    pub node_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneGeneratorInput {
+    pub bootstrap_node_id: u64,
+    pub provider_id: NativeUtf8Slice,
+    pub preset_id: NativeUtf8Slice,
+    pub seed: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneCatalogBindingInput {
+    pub bootstrap_node_id: u64,
+    pub binding_id: NativeUtf8Slice,
+    pub catalog_id: NativeUtf8Slice,
+    pub source_path: NativeUtf8Slice,
+}
+/// All typed scene spans are borrowed only for direct plan preparation. The
+/// service builds and validates `FlatSceneDocument` before retaining its plan.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredScenePrepareRequest {
+    pub scene_id: u64,
+    pub scene_revision: u64,
+    pub schema_version: u32,
+    pub has_name: bool,
+    pub name: NativeUtf8Slice,
+    pub authoring_format_version: u32,
+    /// Retained catalog and prefab handles derive asset and prefab reachability.
+    pub catalog: NativeAuthoredCatalogHandle,
+    pub prefab_registry: NativeAuthoredPrefabRegistryHandle,
+    pub entity_definition_ids: *const NativeAuthoredSceneEntityDefinitionInput,
+    pub entity_definition_ids_len: usize,
+    pub generator_presets: *const NativeAuthoredSceneGeneratorPresetInput,
+    pub generator_presets_len: usize,
+    pub catalog_ids: *const NativeAuthoredSceneCatalogIdInput,
+    pub catalog_ids_len: usize,
+    pub base_entity: u64,
+    pub dependencies: *const NativeAuthoredSceneDependencyInput,
+    pub dependencies_len: usize,
+    pub nodes: *const NativeAuthoredSceneNodeInput,
+    pub nodes_len: usize,
+    pub tags: *const NativeAuthoredSceneNodeTagInput,
+    pub tags_len: usize,
+    pub instances: *const NativeAuthoredSceneEntityInstanceInput,
+    pub instances_len: usize,
+    pub lights: *const NativeAuthoredSceneLightInput,
+    pub lights_len: usize,
+    pub bootstraps: *const NativeAuthoredSceneBootstrapInput,
+    pub bootstraps_len: usize,
+    pub generators: *const NativeAuthoredSceneGeneratorInput,
+    pub generators_len: usize,
+    pub catalog_bindings: *const NativeAuthoredSceneCatalogBindingInput,
+    pub catalog_bindings_len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredScenePrepareFromContentRequest {
+    pub content: NativeContentReferenceHandle,
+    pub catalog: NativeAuthoredCatalogHandle,
+    pub prefab_registry: NativeAuthoredPrefabRegistryHandle,
+    pub entity_definition_ids: *const NativeAuthoredSceneEntityDefinitionInput,
+    pub entity_definition_ids_len: usize,
+    pub generator_presets: *const NativeAuthoredSceneGeneratorPresetInput,
+    pub generator_presets_len: usize,
+    pub catalog_ids: *const NativeAuthoredSceneCatalogIdInput,
+    pub catalog_ids_len: usize,
+    pub base_entity: u64,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAuthoredCatalogResolveRequest {
@@ -698,6 +894,81 @@ pub struct NativeAuthoredResolvedPrefabLease {
     pub roles: *const NativeAuthoredPrefabRoleReadout,
     pub roles_len: usize,
 }
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneAllocationReadout {
+    pub node_id: u64,
+    pub entity_id: u64,
+    pub has_parent_entity: bool,
+    pub parent_entity_id: u64,
+    pub local_transform: NativeTransform,
+    pub world_transform: NativeTransform,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneResolvedInstanceReadout {
+    pub node_id: u64,
+    pub entity_id: u64,
+    pub instance_id: NativeUtf8Slice,
+    pub reference_kind: NativeAuthoredSceneEntityReferenceKind,
+    pub entity_definition_id: NativeUtf8Slice,
+    pub prefab_id: u64,
+    pub has_variant: bool,
+    pub variant_id: NativeUtf8Slice,
+    pub instantiation_seed: u64,
+    pub has_spawn_marker: bool,
+    pub spawn_marker_id: NativeUtf8Slice,
+    pub local_transform: NativeTransform,
+    pub world_transform: NativeTransform,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredScenePlannedLightReadout {
+    pub node_id: u64,
+    pub entity_id: u64,
+    pub kind: NativeAuthoredSceneLightKind,
+    pub color: NativeVec3,
+    pub intensity: f32,
+    pub enabled: bool,
+    pub has_range: bool,
+    pub range: f32,
+    pub decay: f32,
+    pub outer_angle_radians: f32,
+    pub penumbra: f32,
+    pub shadow_intent: NativeLightShadowIntent,
+    pub world_transform: NativeTransform,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneBootstrapGeneratorReadout {
+    pub provider_id: NativeUtf8Slice,
+    pub preset_id: NativeUtf8Slice,
+    pub seed: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredSceneBootstrapCatalogBindingReadout {
+    pub binding_id: NativeUtf8Slice,
+    pub catalog_id: NativeUtf8Slice,
+    pub source_path: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredScenePlanReadoutLease {
+    pub handle: NativeAuthoredScenePlanReadoutLeaseHandle,
+    pub scene_id: u64,
+    pub scene_revision: u64,
+    pub allocations: *const NativeAuthoredSceneAllocationReadout,
+    pub allocations_len: usize,
+    pub resolved_instances: *const NativeAuthoredSceneResolvedInstanceReadout,
+    pub resolved_instances_len: usize,
+    pub lights: *const NativeAuthoredScenePlannedLightReadout,
+    pub lights_len: usize,
+    pub generators: *const NativeAuthoredSceneBootstrapGeneratorReadout,
+    pub generators_len: usize,
+    pub catalog_bindings: *const NativeAuthoredSceneBootstrapCatalogBindingReadout,
+    pub catalog_bindings_len: usize,
+}
 
 pub type NativeAdmitAuthoredCatalog = unsafe extern "C" fn(
     *mut c_void,
@@ -787,5 +1058,26 @@ pub type NativeResolveAuthoredPrefab = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyAuthoredResolvedPrefabLease =
     unsafe extern "C" fn(*mut c_void, NativeAuthoredResolvedPrefabLeaseHandle) -> i32;
+pub type NativePrepareAuthoredScene = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredScenePrepareRequest,
+    *mut NativeAuthoredScenePlanHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativePrepareAuthoredSceneFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredScenePrepareFromContentRequest,
+    *mut NativeAuthoredScenePlanHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyAuthoredScenePlan =
+    unsafe extern "C" fn(*mut c_void, NativeAuthoredScenePlanHandle) -> i32;
+pub type NativeReadAuthoredScenePlan = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAuthoredScenePlanHandle,
+    *mut NativeAuthoredScenePlanReadoutLease,
+) -> i32;
+pub type NativeDestroyAuthoredScenePlanReadoutLease =
+    unsafe extern "C" fn(*mut c_void, NativeAuthoredScenePlanReadoutLeaseHandle) -> i32;
 pub type NativeDestroyAuthoredContentOperationDiagnosticLease =
     unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;

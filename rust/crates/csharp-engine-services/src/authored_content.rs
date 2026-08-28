@@ -8,6 +8,12 @@ use asset_catalog::{
     StructuralClass, TextureDefinition, TextureFilter, TextureWrap, UvStrategy, VoxelAlphaMode,
     VoxelAtlasDefinition, VoxelSurfaceBinding, VoxelSurfaceMapping, VoxelSurfaceResolutionError,
 };
+use authored_scene::{
+    decode_scene, AvailableSceneAsset, FlatSceneDocument, NodeMetadata, PlannedSceneLight, Quat,
+    SceneAdmissionPlan, SceneBootstrapBindings, SceneCatalogBinding, SceneEntityInstance,
+    SceneEntityReference, SceneGeneratorBinding, SceneLight, SceneLightShadowIntent, SceneMarker,
+    SceneMetadata, SceneNodeKind, SceneNodeRecord, SceneResolutionContext, SceneTransform,
+};
 use content_store::{
     decode_prefab_registry, resolve_prefab as resolve_prefab_owner, PrefabDefinition,
     PrefabDiagnostic, PrefabOverride, PrefabOverrideValue, PrefabPart, PrefabPartRoleBinding,
@@ -15,7 +21,7 @@ use content_store::{
     PrefabVariantDelta, ValidatedPrefabRegistry,
 };
 use core_assets::{AssetHash, AssetId, AssetKind, AssetReference, AssetVersionReq};
-use core_ids::{PrefabId, PrefabPartId};
+use core_ids::{EntityId, PrefabId, PrefabPartId, SceneId, SceneNodeId};
 use csharp_engine_abi::*;
 
 use crate::{
@@ -32,6 +38,7 @@ const MAX_DIAGNOSTICS: usize = 128;
 const MAX_PREFAB_DEFINITIONS: usize = 4096;
 const MAX_PREFAB_ROWS: usize = 16384;
 const MAX_ENTITY_DEFINITION_IDS: usize = 16384;
+const MAX_SCENE_ROWS: usize = 16384;
 
 pub(crate) struct RuntimeAuthoredContentBridge {
     catalogs: BTreeMap<u64, AdmittedAssetCatalog>,
@@ -54,6 +61,10 @@ pub(crate) struct RuntimeAuthoredContentBridge {
     next_prefab_lease: u64,
     resolved_prefab_leases: BTreeMap<u64, ResolvedPrefabLease>,
     next_resolved_prefab_lease: u64,
+    scene_plans: BTreeMap<u64, ScenePlanOwner>,
+    next_scene_plan: u64,
+    scene_plan_readout_leases: BTreeMap<u64, ScenePlanReadoutLease>,
+    next_scene_plan_readout_lease: u64,
     content: Option<*const RuntimeContentBridge>,
 }
 struct Text {
@@ -259,6 +270,21 @@ struct ResolvedPrefabLease {
     parts: Vec<NativeAuthoredPrefabPartReadout>,
     roles: Vec<NativeAuthoredPrefabRoleReadout>,
 }
+/// The owner plan is deliberately retained even though the ABI currently only
+/// exposes copied rows. Follow-up readout work can extend this owner without
+/// reparsing or reconstructing scene state.
+struct ScenePlanOwner {
+    _document: FlatSceneDocument,
+    _plan: SceneAdmissionPlan,
+}
+struct ScenePlanReadoutLease {
+    _text: Text,
+    allocations: Vec<NativeAuthoredSceneAllocationReadout>,
+    instances: Vec<NativeAuthoredSceneResolvedInstanceReadout>,
+    lights: Vec<NativeAuthoredScenePlannedLightReadout>,
+    generators: Vec<NativeAuthoredSceneBootstrapGeneratorReadout>,
+    catalog_bindings: Vec<NativeAuthoredSceneBootstrapCatalogBindingReadout>,
+}
 #[derive(Debug)]
 enum AuthoredError {
     Validation(Vec<CatalogDiagnostic>),
@@ -302,6 +328,10 @@ impl RuntimeAuthoredContentBridge {
             next_prefab_lease: 1,
             resolved_prefab_leases: BTreeMap::new(),
             next_resolved_prefab_lease: 1,
+            scene_plans: BTreeMap::new(),
+            next_scene_plan: 1,
+            scene_plan_readout_leases: BTreeMap::new(),
+            next_scene_plan_readout_lease: 1,
             content: None,
         }
     }
@@ -869,6 +899,246 @@ impl RuntimeAuthoredContentBridge {
         };
         self.resolved_prefab_leases.insert(value, lease);
         Ok(result)
+    }
+    fn scene_context(
+        &self,
+        catalog_handle: NativeAuthoredCatalogHandle,
+        prefab_registry_handle: NativeAuthoredPrefabRegistryHandle,
+        entity_definition_ids: &[NativeAuthoredSceneEntityDefinitionInput],
+        generator_presets: &[NativeAuthoredSceneGeneratorPresetInput],
+        catalog_ids: &[NativeAuthoredSceneCatalogIdInput],
+    ) -> Result<SceneResolutionContext, AuthoredError> {
+        if [
+            entity_definition_ids.len(),
+            generator_presets.len(),
+            catalog_ids.len(),
+        ]
+        .into_iter()
+        .any(|count| count > MAX_SCENE_ROWS)
+        {
+            return Err(AuthoredError::simple("scene context exceeds engine bounds"));
+        }
+        let catalog = self
+            .catalogs
+            .get(&catalog_handle.value)
+            .ok_or_else(|| AuthoredError::simple("unknown scene catalog handle"))?;
+        let registry = self
+            .prefab_registries
+            .get(&prefab_registry_handle.value)
+            .ok_or_else(|| AuthoredError::simple("unknown scene prefab registry handle"))?;
+        let mut context = SceneResolutionContext::default();
+        context.available_assets = catalog
+            .catalog()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.id.clone(),
+                    AvailableSceneAsset {
+                        version: entry.version,
+                        hash: entry.hash.clone(),
+                    },
+                )
+            })
+            .collect();
+        context.prefab_ids = registry
+            .as_registry()
+            .definitions
+            .iter()
+            .map(|definition| definition.id)
+            .collect();
+        context.entity_definition_ids = entity_definition_ids
+            .iter()
+            .map(|row| parse_text(row.stable_id, "scene entity definition id"))
+            .collect::<Result<_, _>>()
+            .map_err(AuthoredError::simple)?;
+        context.generator_presets = generator_presets
+            .iter()
+            .map(|row| {
+                Ok((
+                    parse_text(row.provider_id, "scene generator provider id")?,
+                    parse_text(row.preset_id, "scene generator preset id")?,
+                ))
+            })
+            .collect::<Result<_, String>>()
+            .map_err(AuthoredError::simple)?;
+        context.catalog_ids = catalog_ids
+            .iter()
+            .map(|row| parse_text(row.catalog_id, "scene logical catalog id"))
+            .collect::<Result<_, _>>()
+            .map_err(AuthoredError::simple)?;
+        Ok(context)
+    }
+    fn prepare_scene_rows(
+        &mut self,
+        request: NativeAuthoredScenePrepareRequest,
+        entity_definition_ids: &[NativeAuthoredSceneEntityDefinitionInput],
+        generator_presets: &[NativeAuthoredSceneGeneratorPresetInput],
+        catalog_ids: &[NativeAuthoredSceneCatalogIdInput],
+        dependencies: &[NativeAuthoredSceneDependencyInput],
+        nodes: &[NativeAuthoredSceneNodeInput],
+        tags: &[NativeAuthoredSceneNodeTagInput],
+        instances: &[NativeAuthoredSceneEntityInstanceInput],
+        lights: &[NativeAuthoredSceneLightInput],
+        bootstraps: &[NativeAuthoredSceneBootstrapInput],
+        generators: &[NativeAuthoredSceneGeneratorInput],
+        catalog_bindings: &[NativeAuthoredSceneCatalogBindingInput],
+    ) -> Result<NativeAuthoredScenePlanHandle, AuthoredError> {
+        if [
+            dependencies.len(),
+            nodes.len(),
+            tags.len(),
+            instances.len(),
+            lights.len(),
+            bootstraps.len(),
+            generators.len(),
+            catalog_bindings.len(),
+        ]
+        .into_iter()
+        .any(|count| count > MAX_SCENE_ROWS)
+        {
+            return Err(AuthoredError::simple("scene input exceeds engine bounds"));
+        }
+        let resolution = self.scene_context(
+            request.catalog,
+            request.prefab_registry,
+            entity_definition_ids,
+            generator_presets,
+            catalog_ids,
+        )?;
+        let document = scene_document_from_rows(
+            request,
+            dependencies,
+            nodes,
+            tags,
+            instances,
+            lights,
+            bootstraps,
+            generators,
+            catalog_bindings,
+        )?;
+        let plan = SceneAdmissionPlan::prepare_with_base(
+            &document,
+            EntityId::new(request.base_entity),
+            &resolution,
+        )
+        .map_err(|error| AuthoredError::Simple {
+            code: "AUTHORED_SCENE_ADMISSION",
+            message: error.to_string(),
+            source: request.scene_id.to_string(),
+        })?;
+        self.retain_scene_plan(document, plan)
+    }
+    fn prepare_scene_content(
+        &mut self,
+        request: NativeAuthoredScenePrepareFromContentRequest,
+        entity_definition_ids: &[NativeAuthoredSceneEntityDefinitionInput],
+        generator_presets: &[NativeAuthoredSceneGeneratorPresetInput],
+        catalog_ids: &[NativeAuthoredSceneCatalogIdInput],
+    ) -> Result<NativeAuthoredScenePlanHandle, AuthoredError> {
+        let resolution = self.scene_context(
+            request.catalog,
+            request.prefab_registry,
+            entity_definition_ids,
+            generator_presets,
+            catalog_ids,
+        )?;
+        let content = unsafe {
+            self.content
+                .ok_or_else(|| AuthoredError::simple("authored content is not composed"))?
+                .as_ref()
+        }
+        .ok_or_else(|| AuthoredError::simple("authored content is not composed"))?;
+        let bytes = content
+            .retained_bytes(request.content)
+            .ok_or_else(|| AuthoredError::simple("unknown content reference"))?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| AuthoredError::simple("scene content was not UTF-8"))?;
+        let document = decode_scene(text).map_err(|error| AuthoredError::Simple {
+            code: "AUTHORED_SCENE_CONTENT",
+            message: error.message,
+            source: error.path,
+        })?;
+        let plan = SceneAdmissionPlan::prepare_with_base(
+            &document,
+            EntityId::new(request.base_entity),
+            &resolution,
+        )
+        .map_err(|error| AuthoredError::Simple {
+            code: "AUTHORED_SCENE_ADMISSION",
+            message: error.to_string(),
+            source: document.id.raw().to_string(),
+        })?;
+        self.retain_scene_plan(document, plan)
+    }
+    fn retain_scene_plan(
+        &mut self,
+        document: FlatSceneDocument,
+        plan: SceneAdmissionPlan,
+    ) -> Result<NativeAuthoredScenePlanHandle, AuthoredError> {
+        let value = self.next_scene_plan;
+        self.next_scene_plan = value
+            .checked_add(1)
+            .ok_or_else(|| AuthoredError::simple("scene plan handle exhausted"))?;
+        self.scene_plans.insert(
+            value,
+            ScenePlanOwner {
+                _document: document,
+                _plan: plan,
+            },
+        );
+        Ok(NativeAuthoredScenePlanHandle { value })
+    }
+    fn read_scene_plan(
+        &mut self,
+        handle: NativeAuthoredScenePlanHandle,
+    ) -> Option<NativeAuthoredScenePlanReadoutLease> {
+        let owner = self.scene_plans.get(&handle.value)?;
+        let plan = &owner._plan;
+        let value = self.next_scene_plan_readout_lease;
+        self.next_scene_plan_readout_lease = value.checked_add(1)?;
+        let scene_id = plan.scene_id().raw();
+        let scene_revision = plan.scene_revision();
+        let mut text = Text { values: vec![] };
+        let allocations = plan
+            .allocations()
+            .iter()
+            .map(scene_allocation_row)
+            .collect();
+        let instances = plan
+            .resolved_instances()
+            .iter()
+            .map(|item| scene_instance_row(&mut text, item))
+            .collect();
+        let lights = plan.lights().iter().map(scene_light_row).collect();
+        let (generators, catalog_bindings) = plan
+            .bootstrap_bindings()
+            .map(|bindings| scene_bootstrap_rows(&mut text, bindings))
+            .unwrap_or_default();
+        let lease = ScenePlanReadoutLease {
+            _text: text,
+            allocations,
+            instances,
+            lights,
+            generators,
+            catalog_bindings,
+        };
+        let result = NativeAuthoredScenePlanReadoutLease {
+            handle: NativeAuthoredScenePlanReadoutLeaseHandle { value },
+            scene_id,
+            scene_revision,
+            allocations: lease.allocations.as_ptr(),
+            allocations_len: lease.allocations.len(),
+            resolved_instances: lease.instances.as_ptr(),
+            resolved_instances_len: lease.instances.len(),
+            lights: lease.lights.as_ptr(),
+            lights_len: lease.lights.len(),
+            generators: lease.generators.as_ptr(),
+            generators_len: lease.generators.len(),
+            catalog_bindings: lease.catalog_bindings.as_ptr(),
+            catalog_bindings_len: lease.catalog_bindings.len(),
+        };
+        self.scene_plan_readout_leases.insert(value, lease);
+        Some(result)
     }
     fn read_catalog(
         &mut self,
@@ -2037,6 +2307,548 @@ fn resolved_prefab_part_row(
         active: part.active,
     }
 }
+fn scene_document_from_rows(
+    request: NativeAuthoredScenePrepareRequest,
+    dependencies: &[NativeAuthoredSceneDependencyInput],
+    nodes: &[NativeAuthoredSceneNodeInput],
+    tags: &[NativeAuthoredSceneNodeTagInput],
+    instances: &[NativeAuthoredSceneEntityInstanceInput],
+    lights: &[NativeAuthoredSceneLightInput],
+    bootstraps: &[NativeAuthoredSceneBootstrapInput],
+    generators: &[NativeAuthoredSceneGeneratorInput],
+    catalog_bindings: &[NativeAuthoredSceneCatalogBindingInput],
+) -> Result<FlatSceneDocument, AuthoredError> {
+    let mut document = FlatSceneDocument {
+        id: SceneId::new(request.scene_id),
+        revision: request.scene_revision,
+        schema_version: request.schema_version,
+        metadata: SceneMetadata {
+            name: request
+                .has_name
+                .then(|| parse_text(request.name, "scene name"))
+                .transpose()
+                .map_err(AuthoredError::simple)?,
+            authoring_format_version: request.authoring_format_version,
+        },
+        dependencies: dependencies
+            .iter()
+            .map(|row| {
+                scene_asset_reference_parts(
+                    row.reference_id,
+                    row.reference_version_kind,
+                    row.reference_version,
+                    row.reference_has_hash,
+                    row.reference_hash,
+                )
+            })
+            .collect::<Result<_, _>>()?,
+        nodes: nodes.iter().map(scene_node_row).collect::<Result<_, _>>()?,
+    };
+    for row in tags {
+        scene_node_mut(&mut document, row.node_id)?
+            .metadata
+            .tags
+            .push(parse_text(row.tag, "scene node tag").map_err(AuthoredError::simple)?);
+    }
+    for row in instances {
+        let node = scene_node_mut(&mut document, row.node_id)?;
+        set_scene_node_kind(
+            node,
+            NativeAuthoredSceneNodeKind::EntityInstance,
+            SceneNodeKind::EntityInstance(SceneEntityInstance {
+                instance_id: parse_text(row.instance_id, "scene instance id")
+                    .map_err(AuthoredError::simple)?,
+                reference: match row.reference_kind {
+                    NativeAuthoredSceneEntityReferenceKind::EntityDefinition => {
+                        SceneEntityReference::EntityDefinition {
+                            stable_id: parse_text(
+                                row.entity_definition_id,
+                                "scene entity-definition reference",
+                            )
+                            .map_err(AuthoredError::simple)?,
+                        }
+                    }
+                    NativeAuthoredSceneEntityReferenceKind::Prefab => {
+                        SceneEntityReference::Prefab {
+                            prefab_id: PrefabId::new(row.prefab_id),
+                            variant_id: row
+                                .has_variant
+                                .then(|| parse_text(row.variant_id, "scene prefab variant id"))
+                                .transpose()
+                                .map_err(AuthoredError::simple)?,
+                            instantiation_seed: row.instantiation_seed,
+                        }
+                    }
+                },
+                spawn_marker_id: row
+                    .has_spawn_marker
+                    .then(|| parse_text(row.spawn_marker_id, "scene spawn marker id"))
+                    .transpose()
+                    .map_err(AuthoredError::simple)?,
+            }),
+        )?;
+    }
+    for row in lights {
+        let node = scene_node_mut(&mut document, row.node_id)?;
+        set_scene_node_kind(
+            node,
+            NativeAuthoredSceneNodeKind::Light,
+            SceneNodeKind::Light(scene_light(row)),
+        )?;
+    }
+    for row in bootstraps {
+        let node = scene_node_mut(&mut document, row.node_id)?;
+        set_scene_node_kind(
+            node,
+            NativeAuthoredSceneNodeKind::Bootstrap,
+            SceneNodeKind::Bootstrap(SceneBootstrapBindings::default()),
+        )?;
+    }
+    for row in generators {
+        let node = scene_node_mut(&mut document, row.bootstrap_node_id)?;
+        let SceneNodeKind::Bootstrap(bindings) = &mut node.kind else {
+            return Err(AuthoredError::simple(
+                "scene generator owner is not a bootstrap node",
+            ));
+        };
+        if bindings.generator.is_some() {
+            return Err(AuthoredError::simple(
+                "scene bootstrap has duplicate generator rows",
+            ));
+        }
+        bindings.generator = Some(SceneGeneratorBinding {
+            provider_id: parse_text(row.provider_id, "scene generator provider id")
+                .map_err(AuthoredError::simple)?,
+            preset_id: parse_text(row.preset_id, "scene generator preset id")
+                .map_err(AuthoredError::simple)?,
+            seed: row.seed,
+        });
+    }
+    for row in catalog_bindings {
+        let node = scene_node_mut(&mut document, row.bootstrap_node_id)?;
+        let SceneNodeKind::Bootstrap(bindings) = &mut node.kind else {
+            return Err(AuthoredError::simple(
+                "scene catalog binding owner is not a bootstrap node",
+            ));
+        };
+        bindings.catalogs.push(SceneCatalogBinding {
+            binding_id: parse_text(row.binding_id, "scene catalog binding id")
+                .map_err(AuthoredError::simple)?,
+            catalog_id: parse_text(row.catalog_id, "scene bootstrap catalog id")
+                .map_err(AuthoredError::simple)?,
+            source_path: parse_text(row.source_path, "scene catalog source path")
+                .map_err(AuthoredError::simple)?,
+        });
+    }
+    for row in nodes {
+        let node = scene_node_mut(&mut document, row.id)?;
+        if !scene_node_kind_matches(row.kind, &node.kind) {
+            return Err(AuthoredError::simple(
+                "scene node kind requires exactly one matching typed detail row",
+            ));
+        }
+    }
+    Ok(document)
+}
+fn scene_node_row(row: &NativeAuthoredSceneNodeInput) -> Result<SceneNodeRecord, AuthoredError> {
+    Ok(SceneNodeRecord {
+        id: SceneNodeId::new(row.id),
+        parent: row.has_parent.then(|| SceneNodeId::new(row.parent_id)),
+        child_order: row.child_order,
+        transform: scene_transform(row.transform),
+        renderable_transform: scene_transform(row.renderable_transform),
+        kind: match row.kind {
+            NativeAuthoredSceneNodeKind::EmptyGroup
+            | NativeAuthoredSceneNodeKind::Light
+            | NativeAuthoredSceneNodeKind::EntityInstance
+            | NativeAuthoredSceneNodeKind::Bootstrap => SceneNodeKind::EmptyGroup,
+            NativeAuthoredSceneNodeKind::StaticMesh => {
+                SceneNodeKind::StaticMesh(scene_asset_reference_parts(
+                    row.asset_id,
+                    row.asset_version_kind,
+                    row.asset_version,
+                    row.asset_has_hash,
+                    row.asset_hash,
+                )?)
+            }
+            NativeAuthoredSceneNodeKind::AnimatedMesh => {
+                SceneNodeKind::AnimatedMesh(scene_asset_reference_parts(
+                    row.asset_id,
+                    row.asset_version_kind,
+                    row.asset_version,
+                    row.asset_has_hash,
+                    row.asset_hash,
+                )?)
+            }
+            NativeAuthoredSceneNodeKind::Sprite => {
+                SceneNodeKind::Sprite(scene_asset_reference_parts(
+                    row.asset_id,
+                    row.asset_version_kind,
+                    row.asset_version,
+                    row.asset_has_hash,
+                    row.asset_hash,
+                )?)
+            }
+            NativeAuthoredSceneNodeKind::VoxelVolume => {
+                SceneNodeKind::VoxelVolume(scene_asset_reference_parts(
+                    row.asset_id,
+                    row.asset_version_kind,
+                    row.asset_version,
+                    row.asset_has_hash,
+                    row.asset_hash,
+                )?)
+            }
+            NativeAuthoredSceneNodeKind::Marker => SceneNodeKind::Marker(SceneMarker {
+                marker_id: parse_text(row.marker_id, "scene marker id")
+                    .map_err(AuthoredError::simple)?,
+            }),
+        },
+        metadata: NodeMetadata {
+            label: row
+                .has_label
+                .then(|| parse_text(row.label, "scene node label"))
+                .transpose()
+                .map_err(AuthoredError::simple)?,
+            tags: Vec::new(),
+        },
+    })
+}
+fn scene_node_mut(
+    document: &mut FlatSceneDocument,
+    node_id: u64,
+) -> Result<&mut SceneNodeRecord, AuthoredError> {
+    document
+        .nodes
+        .iter_mut()
+        .find(|node| node.id.raw() == node_id)
+        .ok_or_else(|| AuthoredError::simple("scene detail row refers to an absent node"))
+}
+fn set_scene_node_kind(
+    node: &mut SceneNodeRecord,
+    expected: NativeAuthoredSceneNodeKind,
+    kind: SceneNodeKind,
+) -> Result<(), AuthoredError> {
+    if !matches!(node.kind, SceneNodeKind::EmptyGroup) {
+        return Err(AuthoredError::simple(
+            "scene node has duplicate typed detail rows",
+        ));
+    }
+    node.kind = kind;
+    if !scene_node_kind_matches(expected, &node.kind) {
+        return Err(AuthoredError::simple(
+            "scene typed detail row does not match node kind",
+        ));
+    }
+    Ok(())
+}
+fn scene_node_kind_matches(expected: NativeAuthoredSceneNodeKind, kind: &SceneNodeKind) -> bool {
+    matches!(
+        (expected, kind),
+        (
+            NativeAuthoredSceneNodeKind::EmptyGroup,
+            SceneNodeKind::EmptyGroup
+        ) | (
+            NativeAuthoredSceneNodeKind::StaticMesh,
+            SceneNodeKind::StaticMesh(_)
+        ) | (
+            NativeAuthoredSceneNodeKind::AnimatedMesh,
+            SceneNodeKind::AnimatedMesh(_)
+        ) | (
+            NativeAuthoredSceneNodeKind::Sprite,
+            SceneNodeKind::Sprite(_)
+        ) | (
+            NativeAuthoredSceneNodeKind::VoxelVolume,
+            SceneNodeKind::VoxelVolume(_)
+        ) | (NativeAuthoredSceneNodeKind::Light, SceneNodeKind::Light(_))
+            | (
+                NativeAuthoredSceneNodeKind::Marker,
+                SceneNodeKind::Marker(_)
+            )
+            | (
+                NativeAuthoredSceneNodeKind::EntityInstance,
+                SceneNodeKind::EntityInstance(_)
+            )
+            | (
+                NativeAuthoredSceneNodeKind::Bootstrap,
+                SceneNodeKind::Bootstrap(_)
+            )
+    )
+}
+fn scene_asset_reference_parts(
+    id: NativeUtf8Slice,
+    version_kind: NativeAssetVersionRequirementKind,
+    version: u32,
+    has_hash: bool,
+    hash: NativeUtf8Slice,
+) -> Result<AssetReference, AuthoredError> {
+    parse_reference_parts(id, version_kind, version, has_hash, hash).map_err(AuthoredError::simple)
+}
+fn scene_transform(value: NativeTransform) -> SceneTransform {
+    SceneTransform {
+        translation: core_math::Vec3::new(
+            value.translation.x,
+            value.translation.y,
+            value.translation.z,
+        ),
+        rotation: Quat::new(
+            value.rotation.x,
+            value.rotation.y,
+            value.rotation.z,
+            value.rotation.w,
+        ),
+        scale: core_math::Vec3::new(value.scale.x, value.scale.y, value.scale.z),
+    }
+}
+fn native_scene_transform(value: SceneTransform) -> NativeTransform {
+    NativeTransform {
+        translation: NativeVec3 {
+            x: value.translation.x,
+            y: value.translation.y,
+            z: value.translation.z,
+        },
+        rotation: NativeQuat {
+            x: value.rotation.x,
+            y: value.rotation.y,
+            z: value.rotation.z,
+            w: value.rotation.w,
+        },
+        scale: NativeVec3 {
+            x: value.scale.x,
+            y: value.scale.y,
+            z: value.scale.z,
+        },
+    }
+}
+fn scene_light(row: &NativeAuthoredSceneLightInput) -> SceneLight {
+    let color = [row.color.x, row.color.y, row.color.z];
+    let shadow_intent = match row.shadow_intent {
+        NativeLightShadowIntent::Disabled => SceneLightShadowIntent::Disabled,
+        NativeLightShadowIntent::Requested => SceneLightShadowIntent::Requested,
+    };
+    match row.kind {
+        NativeAuthoredSceneLightKind::Ambient => SceneLight::Ambient {
+            color,
+            intensity: row.intensity,
+            enabled: row.enabled,
+            shadow_intent,
+        },
+        NativeAuthoredSceneLightKind::Directional => SceneLight::Directional {
+            color,
+            intensity: row.intensity,
+            enabled: row.enabled,
+            shadow_intent,
+        },
+        NativeAuthoredSceneLightKind::Point => SceneLight::Point {
+            color,
+            intensity: row.intensity,
+            enabled: row.enabled,
+            range: row.has_range.then_some(row.range),
+            decay: row.decay,
+            shadow_intent,
+        },
+        NativeAuthoredSceneLightKind::Spot => SceneLight::Spot {
+            color,
+            intensity: row.intensity,
+            enabled: row.enabled,
+            range: row.has_range.then_some(row.range),
+            decay: row.decay,
+            outer_angle_radians: row.outer_angle_radians,
+            penumbra: row.penumbra,
+            shadow_intent,
+        },
+    }
+}
+fn scene_allocation_row(
+    value: &authored_scene::PlannedSceneEntity,
+) -> NativeAuthoredSceneAllocationReadout {
+    NativeAuthoredSceneAllocationReadout {
+        node_id: value.node.raw(),
+        entity_id: value.entity.raw(),
+        has_parent_entity: value.parent_entity.is_some(),
+        parent_entity_id: value.parent_entity.map(EntityId::raw).unwrap_or_default(),
+        local_transform: native_scene_transform(value.local_transform),
+        world_transform: native_scene_transform(value.world_transform),
+    }
+}
+fn scene_instance_row(
+    text: &mut Text,
+    value: &authored_scene::ResolvedSceneInstance,
+) -> NativeAuthoredSceneResolvedInstanceReadout {
+    let (reference_kind, entity_definition_id, prefab_id, has_variant, variant_id, seed) =
+        match &value.reference {
+            SceneEntityReference::EntityDefinition { stable_id } => (
+                NativeAuthoredSceneEntityReferenceKind::EntityDefinition,
+                stable_id.as_str(),
+                0,
+                false,
+                "",
+                0,
+            ),
+            SceneEntityReference::Prefab {
+                prefab_id,
+                variant_id,
+                instantiation_seed,
+            } => (
+                NativeAuthoredSceneEntityReferenceKind::Prefab,
+                "",
+                prefab_id.raw(),
+                variant_id.is_some(),
+                variant_id.as_deref().unwrap_or(""),
+                *instantiation_seed,
+            ),
+        };
+    NativeAuthoredSceneResolvedInstanceReadout {
+        node_id: value.node.raw(),
+        entity_id: value.entity.raw(),
+        instance_id: text.copy(&value.instance_id),
+        reference_kind,
+        entity_definition_id: text.copy(entity_definition_id),
+        prefab_id,
+        has_variant,
+        variant_id: text.copy(variant_id),
+        instantiation_seed: seed,
+        has_spawn_marker: value.spawn_marker_id.is_some(),
+        spawn_marker_id: text.copy(value.spawn_marker_id.as_deref().unwrap_or("")),
+        local_transform: native_scene_transform(value.local_transform),
+        world_transform: native_scene_transform(value.world_transform),
+    }
+}
+fn scene_light_row(value: &PlannedSceneLight) -> NativeAuthoredScenePlannedLightReadout {
+    let (
+        kind,
+        color,
+        intensity,
+        enabled,
+        range,
+        decay,
+        outer_angle_radians,
+        penumbra,
+        shadow_intent,
+    ) = match &value.light {
+        SceneLight::Ambient {
+            color,
+            intensity,
+            enabled,
+            shadow_intent,
+        } => (
+            NativeAuthoredSceneLightKind::Ambient,
+            *color,
+            *intensity,
+            *enabled,
+            None,
+            0.0,
+            0.0,
+            0.0,
+            *shadow_intent,
+        ),
+        SceneLight::Directional {
+            color,
+            intensity,
+            enabled,
+            shadow_intent,
+        } => (
+            NativeAuthoredSceneLightKind::Directional,
+            *color,
+            *intensity,
+            *enabled,
+            None,
+            0.0,
+            0.0,
+            0.0,
+            *shadow_intent,
+        ),
+        SceneLight::Point {
+            color,
+            intensity,
+            enabled,
+            range,
+            decay,
+            shadow_intent,
+        } => (
+            NativeAuthoredSceneLightKind::Point,
+            *color,
+            *intensity,
+            *enabled,
+            *range,
+            *decay,
+            0.0,
+            0.0,
+            *shadow_intent,
+        ),
+        SceneLight::Spot {
+            color,
+            intensity,
+            enabled,
+            range,
+            decay,
+            outer_angle_radians,
+            penumbra,
+            shadow_intent,
+        } => (
+            NativeAuthoredSceneLightKind::Spot,
+            *color,
+            *intensity,
+            *enabled,
+            *range,
+            *decay,
+            *outer_angle_radians,
+            *penumbra,
+            *shadow_intent,
+        ),
+    };
+    NativeAuthoredScenePlannedLightReadout {
+        node_id: value.node.raw(),
+        entity_id: value.entity.raw(),
+        kind,
+        color: NativeVec3 {
+            x: color[0],
+            y: color[1],
+            z: color[2],
+        },
+        intensity,
+        enabled,
+        has_range: range.is_some(),
+        range: range.unwrap_or_default(),
+        decay,
+        outer_angle_radians,
+        penumbra,
+        shadow_intent: match shadow_intent {
+            SceneLightShadowIntent::Disabled => NativeLightShadowIntent::Disabled,
+            SceneLightShadowIntent::Requested => NativeLightShadowIntent::Requested,
+        },
+        world_transform: native_scene_transform(value.world_transform),
+    }
+}
+fn scene_bootstrap_rows(
+    text: &mut Text,
+    bindings: &SceneBootstrapBindings,
+) -> (
+    Vec<NativeAuthoredSceneBootstrapGeneratorReadout>,
+    Vec<NativeAuthoredSceneBootstrapCatalogBindingReadout>,
+) {
+    let generators = bindings
+        .generator
+        .as_ref()
+        .map(|generator| NativeAuthoredSceneBootstrapGeneratorReadout {
+            provider_id: text.copy(&generator.provider_id),
+            preset_id: text.copy(&generator.preset_id),
+            seed: generator.seed,
+        })
+        .into_iter()
+        .collect();
+    let catalog_bindings = bindings
+        .catalogs
+        .iter()
+        .map(
+            |binding| NativeAuthoredSceneBootstrapCatalogBindingReadout {
+                binding_id: text.copy(&binding.binding_id),
+                catalog_id: text.copy(&binding.catalog_id),
+                source_path: text.copy(&binding.source_path),
+            },
+        )
+        .collect();
+    (generators, catalog_bindings)
+}
 pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredContentApi {
     NativeAuthoredContentApi {
         context: (bridge as *mut RuntimeAuthoredContentBridge).cast(),
@@ -2061,6 +2873,11 @@ pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredCo
         destroy_prefab_registry_readout_lease,
         resolve_prefab,
         destroy_resolved_prefab_lease,
+        prepare_scene,
+        prepare_scene_from_content,
+        destroy_scene_plan,
+        read_scene_plan,
+        destroy_scene_plan_readout_lease,
         destroy_operation_diagnostic_lease,
     }
 }
@@ -2561,6 +3378,238 @@ unsafe extern "C" fn destroy_resolved_prefab_lease(
         handle.value != 0
             && bridge
                 .resolved_prefab_leases
+                .remove(&handle.value)
+                .is_some(),
+    )
+}
+unsafe extern "C" fn prepare_scene(
+    context: *mut c_void,
+    request: *const NativeAuthoredScenePrepareRequest,
+    result: *mut NativeAuthoredScenePlanHandle,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    let entity_definition_ids = match unsafe {
+        borrowed_slice(
+            request.entity_definition_ids,
+            request.entity_definition_ids_len,
+            "scene entity definition ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let generator_presets = match unsafe {
+        borrowed_slice(
+            request.generator_presets,
+            request.generator_presets_len,
+            "scene generator presets",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let catalog_ids = match unsafe {
+        borrowed_slice(
+            request.catalog_ids,
+            request.catalog_ids_len,
+            "scene logical catalog ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let dependencies = match unsafe {
+        borrowed_slice(
+            request.dependencies,
+            request.dependencies_len,
+            "scene dependencies",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let nodes = match unsafe { borrowed_slice(request.nodes, request.nodes_len, "scene nodes") } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let tags = match unsafe { borrowed_slice(request.tags, request.tags_len, "scene tags") } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let instances = match unsafe {
+        borrowed_slice(request.instances, request.instances_len, "scene instances")
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let lights = match unsafe { borrowed_slice(request.lights, request.lights_len, "scene lights") }
+    {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bootstraps = match unsafe {
+        borrowed_slice(
+            request.bootstraps,
+            request.bootstraps_len,
+            "scene bootstraps",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let generators = match unsafe {
+        borrowed_slice(
+            request.generators,
+            request.generators_len,
+            "scene generators",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let catalog_bindings = match unsafe {
+        borrowed_slice(
+            request.catalog_bindings,
+            request.catalog_bindings_len,
+            "scene catalog bindings",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.prepare_scene_rows(
+        request,
+        entity_definition_ids,
+        generator_presets,
+        catalog_ids,
+        dependencies,
+        nodes,
+        tags,
+        instances,
+        lights,
+        bootstraps,
+        generators,
+        catalog_bindings,
+    ) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"PrepareScene", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn prepare_scene_from_content(
+    context: *mut c_void,
+    request: *const NativeAuthoredScenePrepareFromContentRequest,
+    result: *mut NativeAuthoredScenePlanHandle,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    let entity_definition_ids = match unsafe {
+        borrowed_slice(
+            request.entity_definition_ids,
+            request.entity_definition_ids_len,
+            "scene entity definition ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let generator_presets = match unsafe {
+        borrowed_slice(
+            request.generator_presets,
+            request.generator_presets_len,
+            "scene generator presets",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let catalog_ids = match unsafe {
+        borrowed_slice(
+            request.catalog_ids,
+            request.catalog_ids_len,
+            "scene logical catalog ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.prepare_scene_content(
+        request,
+        entity_definition_ids,
+        generator_presets,
+        catalog_ids,
+    ) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"PrepareSceneFromContent", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn destroy_scene_plan(
+    context: *mut c_void,
+    handle: NativeAuthoredScenePlanHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    i32::from(handle.value != 0 && bridge.scene_plans.remove(&handle.value).is_some())
+}
+unsafe extern "C" fn read_scene_plan(
+    context: *mut c_void,
+    handle: NativeAuthoredScenePlanHandle,
+    result: *mut NativeAuthoredScenePlanReadoutLease,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.read_scene_plan(handle) {
+        Some(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+unsafe extern "C" fn destroy_scene_plan_readout_lease(
+    context: *mut c_void,
+    handle: NativeAuthoredScenePlanReadoutLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    i32::from(
+        handle.value != 0
+            && bridge
+                .scene_plan_readout_leases
                 .remove(&handle.value)
                 .is_some(),
     )
@@ -3328,6 +4377,351 @@ mod tests {
         );
         assert_eq!(
             unsafe { (api.destroy_catalog)(api.context, catalog) },
+            ABI_OK
+        );
+    }
+
+    #[test]
+    fn prepares_typed_and_content_scenes_as_retained_owner_plans() {
+        use std::{collections::BTreeMap, sync::Arc};
+
+        fn identity() -> NativeTransform {
+            NativeTransform {
+                translation: NativeVec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            }
+        }
+        fn empty_receipt() -> NativeOperationErrorReceipt {
+            NativeOperationErrorReceipt {
+                service: slice(b""),
+                operation: slice(b""),
+                status: 0,
+                diagnostics: NativeEngineDiagnosticLease {
+                    handle: NativeEngineDiagnosticLeaseHandle::default(),
+                    diagnostics: std::ptr::null(),
+                    diagnostics_len: 0,
+                },
+            }
+        }
+
+        let mut bridge = RuntimeAuthoredContentBridge::new();
+        let catalog = bridge
+            .retain(
+                AdmittedAssetCatalog::admit(AssetCatalog::from_entries(vec![CatalogEntry::new(
+                    AssetId::parse("scene/unused").unwrap(),
+                    1,
+                )]))
+                .unwrap(),
+            )
+            .unwrap();
+        let prefab_context = bridge.prefab_context(catalog, &[]).unwrap();
+        let registry = bridge
+            .retain_prefab_registry(
+                ValidatedPrefabRegistry::new(
+                    PrefabRegistry {
+                        schema_version: 1,
+                        definitions: vec![],
+                    },
+                    &prefab_context,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let entity_definitions = [NativeAuthoredSceneEntityDefinitionInput {
+            stable_id: slice(b"npc"),
+        }];
+        let generator_presets = [NativeAuthoredSceneGeneratorPresetInput {
+            provider_id: slice(b"generator"),
+            preset_id: slice(b"default"),
+        }];
+        let catalog_ids = [NativeAuthoredSceneCatalogIdInput {
+            catalog_id: slice(b"bootstrap-catalog"),
+        }];
+        let nodes = [
+            NativeAuthoredSceneNodeInput {
+                id: 1,
+                has_parent: false,
+                parent_id: 0,
+                child_order: 0,
+                transform: identity(),
+                renderable_transform: identity(),
+                kind: NativeAuthoredSceneNodeKind::Marker,
+                asset_id: slice(b""),
+                asset_version_kind: NativeAssetVersionRequirementKind::Any,
+                asset_version: 0,
+                asset_has_hash: false,
+                asset_hash: slice(b""),
+                marker_id: slice(b"spawn"),
+                has_label: false,
+                label: slice(b""),
+            },
+            NativeAuthoredSceneNodeInput {
+                id: 2,
+                has_parent: false,
+                parent_id: 0,
+                child_order: 1,
+                transform: identity(),
+                renderable_transform: identity(),
+                kind: NativeAuthoredSceneNodeKind::EntityInstance,
+                asset_id: slice(b""),
+                asset_version_kind: NativeAssetVersionRequirementKind::Any,
+                asset_version: 0,
+                asset_has_hash: false,
+                asset_hash: slice(b""),
+                marker_id: slice(b""),
+                has_label: false,
+                label: slice(b""),
+            },
+            NativeAuthoredSceneNodeInput {
+                id: 3,
+                has_parent: false,
+                parent_id: 0,
+                child_order: 2,
+                transform: identity(),
+                renderable_transform: identity(),
+                kind: NativeAuthoredSceneNodeKind::Light,
+                asset_id: slice(b""),
+                asset_version_kind: NativeAssetVersionRequirementKind::Any,
+                asset_version: 0,
+                asset_has_hash: false,
+                asset_hash: slice(b""),
+                marker_id: slice(b""),
+                has_label: false,
+                label: slice(b""),
+            },
+            NativeAuthoredSceneNodeInput {
+                id: 4,
+                has_parent: false,
+                parent_id: 0,
+                child_order: 3,
+                transform: identity(),
+                renderable_transform: identity(),
+                kind: NativeAuthoredSceneNodeKind::Bootstrap,
+                asset_id: slice(b""),
+                asset_version_kind: NativeAssetVersionRequirementKind::Any,
+                asset_version: 0,
+                asset_has_hash: false,
+                asset_hash: slice(b""),
+                marker_id: slice(b""),
+                has_label: false,
+                label: slice(b""),
+            },
+        ];
+        let instances = [NativeAuthoredSceneEntityInstanceInput {
+            node_id: 2,
+            instance_id: slice(b"npc-1"),
+            reference_kind: NativeAuthoredSceneEntityReferenceKind::EntityDefinition,
+            entity_definition_id: slice(b"npc"),
+            prefab_id: 0,
+            has_variant: false,
+            variant_id: slice(b""),
+            instantiation_seed: 0,
+            has_spawn_marker: true,
+            spawn_marker_id: slice(b"spawn"),
+        }];
+        let lights = [NativeAuthoredSceneLightInput {
+            node_id: 3,
+            kind: NativeAuthoredSceneLightKind::Ambient,
+            color: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            intensity: 0.5,
+            enabled: true,
+            has_range: false,
+            range: 0.0,
+            decay: 0.0,
+            outer_angle_radians: 0.0,
+            penumbra: 0.0,
+            shadow_intent: NativeLightShadowIntent::Disabled,
+        }];
+        let bootstraps = [NativeAuthoredSceneBootstrapInput { node_id: 4 }];
+        let generators = [NativeAuthoredSceneGeneratorInput {
+            bootstrap_node_id: 4,
+            provider_id: slice(b"generator"),
+            preset_id: slice(b"default"),
+            seed: 9,
+        }];
+        let bindings = [NativeAuthoredSceneCatalogBindingInput {
+            bootstrap_node_id: 4,
+            binding_id: slice(b"main"),
+            catalog_id: slice(b"bootstrap-catalog"),
+            source_path: slice(b"catalogs/main.json"),
+        }];
+        let request = NativeAuthoredScenePrepareRequest {
+            scene_id: 7,
+            scene_revision: 3,
+            schema_version: 5,
+            has_name: true,
+            name: slice(b"Scene"),
+            authoring_format_version: 5,
+            catalog,
+            prefab_registry: registry,
+            entity_definition_ids: entity_definitions.as_ptr(),
+            entity_definition_ids_len: entity_definitions.len(),
+            generator_presets: generator_presets.as_ptr(),
+            generator_presets_len: generator_presets.len(),
+            catalog_ids: catalog_ids.as_ptr(),
+            catalog_ids_len: catalog_ids.len(),
+            base_entity: 100,
+            dependencies: std::ptr::null(),
+            dependencies_len: 0,
+            nodes: nodes.as_ptr(),
+            nodes_len: nodes.len(),
+            tags: std::ptr::null(),
+            tags_len: 0,
+            instances: instances.as_ptr(),
+            instances_len: instances.len(),
+            lights: lights.as_ptr(),
+            lights_len: lights.len(),
+            bootstraps: bootstraps.as_ptr(),
+            bootstraps_len: bootstraps.len(),
+            generators: generators.as_ptr(),
+            generators_len: generators.len(),
+            catalog_bindings: bindings.as_ptr(),
+            catalog_bindings_len: bindings.len(),
+        };
+        let source = scene_document_from_rows(
+            request,
+            &[],
+            &nodes,
+            &[],
+            &instances,
+            &lights,
+            &bootstraps,
+            &generators,
+            &bindings,
+        )
+        .unwrap();
+        let mut resources = BTreeMap::new();
+        resources.insert(
+            "scene.json".to_owned(),
+            Arc::from(authored_scene::encode_scene(&source).unwrap().into_bytes()),
+        );
+        let mut content = RuntimeContentBridge::new(resources);
+        bridge.bind_content(&content);
+        let content_api = crate::content::api(&mut content);
+        let mut content_reference = NativeContentReferenceHandle::default();
+        assert_eq!(
+            unsafe {
+                (content_api.open_reference)(
+                    content_api.context,
+                    &NativeContentOpenRequest {
+                        path: slice(b"scene.json"),
+                    },
+                    &mut content_reference,
+                )
+            },
+            ABI_OK
+        );
+        let api = super::api(&mut bridge);
+
+        let mut typed = NativeAuthoredScenePlanHandle::default();
+        let mut typed_receipt = empty_receipt();
+        assert_eq!(
+            unsafe { (api.prepare_scene)(api.context, &request, &mut typed, &mut typed_receipt) },
+            ABI_OK
+        );
+        let mut typed_readout =
+            unsafe { std::mem::zeroed::<NativeAuthoredScenePlanReadoutLease>() };
+        assert_eq!(
+            unsafe { (api.read_scene_plan)(api.context, typed, &mut typed_readout) },
+            ABI_OK
+        );
+        assert_eq!(
+            (
+                typed_readout.scene_id,
+                typed_readout.scene_revision,
+                typed_readout.allocations_len,
+                typed_readout.resolved_instances_len,
+                typed_readout.lights_len,
+                typed_readout.generators_len,
+                typed_readout.catalog_bindings_len
+            ),
+            (7, 3, 4, 1, 1, 1, 1)
+        );
+        assert_eq!(unsafe { (*typed_readout.allocations).entity_id }, 100);
+        assert_eq!(
+            unsafe { (api.destroy_scene_plan_readout_lease)(api.context, typed_readout.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_scene_plan)(api.context, typed) },
+            ABI_OK
+        );
+
+        let mut from_content = NativeAuthoredScenePlanHandle::default();
+        let mut content_receipt = empty_receipt();
+        assert_eq!(
+            unsafe {
+                (api.prepare_scene_from_content)(
+                    api.context,
+                    &NativeAuthoredScenePrepareFromContentRequest {
+                        content: content_reference,
+                        catalog,
+                        prefab_registry: registry,
+                        entity_definition_ids: entity_definitions.as_ptr(),
+                        entity_definition_ids_len: entity_definitions.len(),
+                        generator_presets: generator_presets.as_ptr(),
+                        generator_presets_len: generator_presets.len(),
+                        catalog_ids: catalog_ids.as_ptr(),
+                        catalog_ids_len: catalog_ids.len(),
+                        base_entity: 100,
+                    },
+                    &mut from_content,
+                    &mut content_receipt,
+                )
+            },
+            ABI_OK
+        );
+        let mut content_readout =
+            unsafe { std::mem::zeroed::<NativeAuthoredScenePlanReadoutLease>() };
+        assert_eq!(
+            unsafe { (api.read_scene_plan)(api.context, from_content, &mut content_readout) },
+            ABI_OK
+        );
+        assert_eq!(
+            (
+                content_readout.allocations_len,
+                content_readout.resolved_instances_len,
+                content_readout.lights_len,
+                content_readout.catalog_bindings_len
+            ),
+            (4, 1, 1, 1)
+        );
+        assert_eq!(
+            unsafe { (api.destroy_scene_plan_readout_lease)(api.context, content_readout.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_scene_plan)(api.context, from_content) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_prefab_registry)(api.context, registry) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_catalog)(api.context, catalog) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (content_api.destroy_reference)(content_api.context, content_reference) },
             ABI_OK
         );
     }

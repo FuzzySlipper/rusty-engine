@@ -1511,6 +1511,11 @@ pub struct NativeAuthoredContentApi {
     pub destroy_prefab_registry_readout_lease: NativeDestroyAuthoredPrefabRegistryReadoutLease,
     pub resolve_prefab: NativeResolveAuthoredPrefab,
     pub destroy_resolved_prefab_lease: NativeDestroyAuthoredResolvedPrefabLease,
+    pub prepare_scene: NativePrepareAuthoredScene,
+    pub prepare_scene_from_content: NativePrepareAuthoredSceneFromContent,
+    pub destroy_scene_plan: NativeDestroyAuthoredScenePlan,
+    pub read_scene_plan: NativeReadAuthoredScenePlan,
+    pub destroy_scene_plan_readout_lease: NativeDestroyAuthoredScenePlanReadoutLease,
     pub destroy_operation_diagnostic_lease: NativeDestroyAuthoredContentOperationDiagnosticLease,
 }
 
