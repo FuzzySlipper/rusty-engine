@@ -1803,6 +1803,117 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
+    unsafe fn update_animated_mesh_materials(
+        &mut self,
+        request: &NativeAnimatedMeshMaterialUpdateRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let bindings = borrowed_slice(
+            request.bindings,
+            request.bindings_len,
+            "animated mesh material bindings",
+        )?;
+        let staged = self.staged_mut()?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&request.appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_APPEARANCE_HANDLE",
+                    "appearance handle is not live",
+                )
+            })?;
+        let resource_handle = staged
+            .state
+            .animated_appearances
+            .get(&request.appearance.value)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATED_MESH_APPEARANCE",
+                    "material bindings require a live animated mesh appearance",
+                )
+            })?;
+        let embedded_slots = staged
+            .state
+            .render_resources
+            .get(
+                usize::try_from(resource_handle.saturating_sub(1)).map_err(|_| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_RENDER_RESOURCE_HANDLE",
+                        "invalid animated mesh resource handle",
+                    )
+                })?,
+            )
+            .and_then(CsharpRenderResource::animated_mesh)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_RESOURCE_KIND",
+                    "animated appearance no longer has its admitted mesh resource",
+                )
+            })?
+            .embedded_material_slots
+            .iter()
+            .map(|binding| binding.slot)
+            .collect::<BTreeSet<_>>();
+        let mut slots = BTreeSet::new();
+        let mut material_overrides = Vec::with_capacity(bindings.len());
+        let mut material_handles = BTreeSet::new();
+        for binding in bindings {
+            let slot = u16::try_from(binding.material_slot).map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATED_MESH_SLOT",
+                    "animated mesh material slot exceeded u16",
+                )
+            })?;
+            if !slots.insert(slot) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATED_MESH_SLOT",
+                    "animated mesh material bindings must not repeat a slot",
+                ));
+            }
+            if !embedded_slots.contains(&slot) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATED_MESH_SLOT",
+                    "animated mesh material binding names an unbound embedded slot",
+                ));
+            }
+            let material = staged
+                .state
+                .materials
+                .get(&binding.material.value)
+                .cloned()
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_MATERIAL_HANDLE",
+                        "material handle is not live",
+                    )
+                })?;
+            material_overrides.push(MeshMaterialSlot { slot, material });
+            material_handles.insert(binding.material.value);
+        }
+        match staged.state.projector.appearance_mut(&identity) {
+            Some(Appearance::AnimatedMesh {
+                material_overrides: current,
+                ..
+            }) => {
+                *current = material_overrides;
+            }
+            _ => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATED_MESH_APPEARANCE",
+                    "material bindings require a live animated mesh appearance",
+                ))
+            }
+        }
+        staged
+            .state
+            .appearance_materials
+            .insert(request.appearance.value, material_handles);
+        Ok(())
+    }
+
     fn create_primitive(
         &mut self,
         request: NativePrimitiveAppearanceRequest,
@@ -4752,6 +4863,17 @@ pub(crate) unsafe extern "C" fn replace_animated_mesh_appearance(
         bridge.replace_animated_mesh_appearance(appearance, unsafe { *request })
     })
 }
+pub(crate) unsafe extern "C" fn update_animated_mesh_materials(
+    context: *mut c_void,
+    request: *const NativeAnimatedMeshMaterialUpdateRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    animation_void(context, |bridge| unsafe {
+        bridge.update_animated_mesh_materials(&*request)
+    })
+}
 pub(crate) unsafe extern "C" fn destroy_animated_mesh_appearance(
     context: *mut c_void,
     appearance: NativeAppearanceHandle,
@@ -4947,6 +5069,7 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         associate_animation_clip_pack,
         create_animated_mesh_appearance,
         replace_animated_mesh_appearance,
+        update_animated_mesh_materials,
         destroy_appearance: destroy_animated_mesh_appearance,
         create_instance: create_animation_instance,
         destroy_instance: destroy_animation_instance,
@@ -5481,6 +5604,101 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn animated_mesh_material_bindings_retain_selected_material_handles() {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let path = b"character.glb";
+
+        bridge.begin_call();
+        let resource = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted animated GLB");
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .expect("animated appearance");
+        let material = bridge
+            .create_material(NativeMaterialRequest {
+                color: NativeColor {
+                    r: 0.8,
+                    g: 0.2,
+                    b: 0.1,
+                    a: 1.0,
+                },
+                texture: NativeRenderResourceHandle { value: 0 },
+                roughness: 0.5,
+                texture_tint: NativeColor {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: false,
+            })
+            .expect("material");
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 0,
+            material,
+        }];
+        unsafe {
+            bridge
+                .update_animated_mesh_materials(&NativeAnimatedMeshMaterialUpdateRequest {
+                    appearance,
+                    bindings: bindings.as_ptr(),
+                    bindings_len: bindings.len(),
+                })
+                .expect("animated material binding");
+        }
+        let invalid_bindings = [NativeMeshMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        assert_eq!(
+            unsafe {
+                bridge.update_animated_mesh_materials(&NativeAnimatedMeshMaterialUpdateRequest {
+                    appearance,
+                    bindings: invalid_bindings.as_ptr(),
+                    bindings_len: invalid_bindings.len(),
+                })
+            }
+            .expect_err("unbound embedded material slot is rejected")
+            .code(),
+            "CSHARP_ANIMATED_MESH_SLOT"
+        );
+        assert_eq!(
+            bridge
+                .destroy_material(material)
+                .expect_err("bound material remains live")
+                .code(),
+            "CSHARP_MATERIAL_IN_USE"
+        );
+
+        unsafe {
+            bridge
+                .update_animated_mesh_materials(&NativeAnimatedMeshMaterialUpdateRequest {
+                    appearance,
+                    bindings: std::ptr::null(),
+                    bindings_len: 0,
+                })
+                .expect("clear animated material bindings");
+        }
+        bridge
+            .destroy_material(material)
+            .expect("cleared material is releasable");
     }
 
     #[test]

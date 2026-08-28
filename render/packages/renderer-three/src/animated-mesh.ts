@@ -8,6 +8,7 @@ import type {
   AnimationClipPack,
   AnimatedMeshInstanceDescriptor,
   AnimatedMeshPlaybackCommand,
+  MeshMaterialSlot,
   RenderHandle,
 } from '@rusty-engine/render-contracts';
 
@@ -189,6 +190,7 @@ interface AnimatedMeshInstanceRecord {
   readonly asset: string;
   readonly object: THREE.Object3D;
   readonly embeddedMaterialSlots: ReadonlyMap<number, AnimatedMeshEmbeddedMaterial>;
+  readonly materialOverrides: ReadonlyMap<number, AnimatedMeshInstanceMaterialOverride>;
   readonly mixer: THREE.AnimationMixer;
   readonly actions: ReadonlyMap<string, THREE.AnimationAction>;
   readonly clipOrigins: ReadonlyMap<string, 'embedded' | 'pack'>;
@@ -201,6 +203,13 @@ interface AnimatedMeshInstanceRecord {
   weight: number | null;
   controllerClips: readonly AnimatedMeshControllerClip[];
 }
+
+interface AnimatedMeshInstanceMaterialOverride {
+  readonly binding: MeshMaterialSlot;
+  materials: THREE.Material[];
+}
+
+export type AnimatedMeshMaterialFactory = (binding: MeshMaterialSlot) => THREE.Material;
 
 export class MapAnimatedMeshAssetSource implements AnimatedMeshAssetSource {
   readonly #resources = new Map<string, AnimatedMeshResource>();
@@ -404,17 +413,24 @@ export class AnimatedMeshRegistry {
     return { resource, packs };
   }
 
-  create(handle: RenderHandle, instance: AnimatedMeshInstanceDescriptor): AnimatedMeshInstanceRecord {
+  create(
+    handle: RenderHandle,
+    instance: AnimatedMeshInstanceDescriptor,
+    materialFactory?: AnimatedMeshMaterialFactory,
+  ): AnimatedMeshInstanceRecord {
     const record = this.#assets.get(instance.asset);
     if (!record) {
       throw new AnimatedMeshApplyError(`createAnimatedMeshInstance: undefined animated mesh asset ${instance.asset}`);
     }
-    if (instance.materialOverrides.length > 0) {
+    if (instance.materialOverrides.length > 0 && materialFactory === undefined) {
       throw new AnimatedMeshApplyError(
-        `createAnimatedMeshInstance: material overrides are not implemented for animated mesh ${instance.asset}`,
+        `createAnimatedMeshInstance: material overrides require an Engine material factory for ${instance.asset}`,
       );
     }
     const object = SkeletonUtils.clone(record.scene);
+    const materialOverrides = materialFactory === undefined
+      ? new Map<number, AnimatedMeshInstanceMaterialOverride>()
+      : applyMaterialOverrides(object, record.embeddedMaterialSlots, instance.materialOverrides, materialFactory);
     const mixer = new THREE.AnimationMixer(object);
     const actions = new Map<string, THREE.AnimationAction>();
     const clipOrigins = new Map<string, 'embedded' | 'pack'>();
@@ -436,6 +452,7 @@ export class AnimatedMeshRegistry {
       asset: instance.asset,
       object,
       embeddedMaterialSlots: record.embeddedMaterialSlots,
+      materialOverrides,
       mixer,
       actions,
       clipOrigins,
@@ -582,6 +599,7 @@ export class AnimatedMeshRegistry {
     // source instance while SkeletonUtils still gives the capture lease an
     // independent skeleton and mixer.
     const object = SkeletonUtils.clone(instance.object);
+    const captureOwnedMaterials = cloneCaptureOverrideMaterials(object, instance.materialOverrides);
     object.visible = true;
     const mixer = new THREE.AnimationMixer(object);
     const action = mixer.clipAction(clip);
@@ -634,6 +652,7 @@ export class AnimatedMeshRegistry {
         object.traverse((node) => {
           if (node instanceof THREE.SkinnedMesh) node.skeleton.dispose();
         });
+        captureOwnedMaterials.forEach((material) => material.dispose());
       },
     });
   }
@@ -645,6 +664,9 @@ export class AnimatedMeshRegistry {
     }
     instance.mixer.stopAllAction();
     instance.mixer.uncacheRoot(instance.object);
+    instance.materialOverrides.forEach((override) => {
+      override.materials.forEach((material) => material.dispose());
+    });
     this.#instances.delete(handle);
     const asset = this.#assets.get(instance.asset);
     if (asset) {
@@ -660,6 +682,36 @@ export class AnimatedMeshRegistry {
       disposeAnimatedMeshAssetScene(asset.scene);
     }
     this.#assets.clear();
+  }
+
+  /** Rebuild every instance-owned override that selects one redefined material. */
+  replaceLiveMaterial(id: string, materialFactory: AnimatedMeshMaterialFactory): void {
+    for (const instance of this.#instances.values()) {
+      for (const override of instance.materialOverrides.values()) {
+        if (override.binding.material !== id) continue;
+        const replacements = override.materials.map(() => materialFactory(override.binding));
+        let applied = 0;
+        try {
+          override.materials.forEach((material, index) => {
+            const references = replaceMaterialReferences(instance.object, material, replacements[index]!);
+            if (references === 0) {
+              throw new AnimatedMeshApplyError(
+                `replaceLiveMaterial: instance material override for ${id} is no longer attached`,
+              );
+            }
+            applied += 1;
+          });
+        } catch (cause) {
+          for (let index = 0; index < applied; index += 1) {
+            replaceMaterialReferences(instance.object, replacements[index]!, override.materials[index]!);
+          }
+          replacements.forEach((material) => material.dispose());
+          throw cause;
+        }
+        override.materials.forEach((material) => material.dispose());
+        override.materials = replacements;
+      }
+    }
   }
 
   #requireInstance(handle: RenderHandle, ctx: string): AnimatedMeshInstanceRecord {
@@ -712,6 +764,108 @@ function createAnimatedMeshAssetScene(
     }));
   }
   return { scene, embeddedMaterialSlots };
+}
+
+function applyMaterialOverrides(
+  object: THREE.Object3D,
+  embeddedMaterialSlots: ReadonlyMap<number, AnimatedMeshEmbeddedMaterial>,
+  bindings: readonly MeshMaterialSlot[],
+  materialFactory: AnimatedMeshMaterialFactory,
+): Map<number, AnimatedMeshInstanceMaterialOverride> {
+  const overrides = new Map<number, AnimatedMeshInstanceMaterialOverride>();
+  const sourceMaterials = new Set<THREE.Material>();
+  try {
+    for (const binding of bindings) {
+      if (overrides.has(binding.slot)) {
+        throw new AnimatedMeshApplyError(
+          `createAnimatedMeshInstance: repeated material override slot ${String(binding.slot)}`,
+        );
+      }
+      const source = embeddedMaterialSlots.get(binding.slot);
+      if (source === undefined) {
+        throw new AnimatedMeshApplyError(
+          `createAnimatedMeshInstance: override for unbound embedded material slot ${String(binding.slot)}`,
+        );
+      }
+      const materials: THREE.Material[] = [];
+      try {
+        for (const templateMaterial of source.materials) {
+          if (sourceMaterials.has(templateMaterial)) {
+            throw new AnimatedMeshApplyError(
+              `createAnimatedMeshInstance: embedded material slot ${String(binding.slot)} overlaps another source slot`,
+            );
+          }
+          sourceMaterials.add(templateMaterial);
+          const replacement = materialFactory(binding);
+          const references = replaceMaterialReferences(object, templateMaterial, replacement);
+          if (references === 0) {
+            replacement.dispose();
+            throw new AnimatedMeshApplyError(
+              `createAnimatedMeshInstance: embedded material slot ${String(binding.slot)} is absent from the cloned instance`,
+            );
+          }
+          materials.push(replacement);
+        }
+      } catch (cause) {
+        materials.forEach((material) => material.dispose());
+        throw cause;
+      }
+      overrides.set(binding.slot, { binding, materials });
+    }
+    return overrides;
+  } catch (cause) {
+    overrides.forEach((override) => override.materials.forEach((material) => material.dispose()));
+    throw cause;
+  }
+}
+
+function replaceMaterialReferences(
+  object: THREE.Object3D,
+  prior: THREE.Material,
+  replacement: THREE.Material,
+): number {
+  let references = 0;
+  object.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    if (Array.isArray(node.material)) {
+      const materials = node.material.slice();
+      let changed = false;
+      for (let index = 0; index < materials.length; index += 1) {
+        if (materials[index] !== prior) continue;
+        materials[index] = replacement;
+        references += 1;
+        changed = true;
+      }
+      if (changed) node.material = materials;
+    } else if (node.material === prior) {
+      node.material = replacement;
+      references += 1;
+    }
+  });
+  return references;
+}
+
+/**
+ * Captures borrow the template materials but clone per-instance replacements.
+ * The capture can therefore outlive its source instance without a broad
+ * shared-resource accounting layer: it owns only these short-lived clones.
+ */
+function cloneCaptureOverrideMaterials(
+  object: THREE.Object3D,
+  overrides: ReadonlyMap<number, AnimatedMeshInstanceMaterialOverride>,
+): THREE.Material[] {
+  const owned: THREE.Material[] = [];
+  for (const override of overrides.values()) {
+    for (const material of override.materials) {
+      const clone = material.clone();
+      if (replaceMaterialReferences(object, material, clone) === 0) {
+        clone.dispose();
+        continue;
+      }
+      owned.push(clone);
+    }
+  }
+  return owned;
 }
 
 function cloneSharedMaterial(

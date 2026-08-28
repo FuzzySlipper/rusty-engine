@@ -3969,6 +3969,69 @@ void test('frame rollback does not publish an animated definition or instance af
   assert.doesNotThrow(() => renderer.applyDiff({ op: 'defineAnimatedMesh', asset }));
 });
 
+void test('animated mesh overrides are instance-owned, live-redefined, and capture-safe after source release', () => {
+  const base = new THREE.MeshStandardMaterial({ color: 0xffffff });
+  const scene = new THREE.Group();
+  scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), base));
+  const asset = animatedMeshAsset({
+    clips: [{ id: 'idle', name: 'idle', durationSeconds: 1 }],
+    embeddedMaterialSlots: [{ slot: 0, sourceMaterialSlot: 0 }],
+  });
+  const resource = {
+    asset: asset.asset,
+    scene,
+    clips: [new THREE.AnimationClip('idle', 1, [])],
+    embeddedMaterialSlots: new Map([[0, {
+      sourceMaterialSlot: 0,
+      materials: [base],
+    }]]),
+  };
+  const instance = {
+    asset: asset.asset,
+    transform: { translation: [0, 0, 0] as const, rotation: [0, 0, 0, 1] as const, scale: [1, 1, 1] as const },
+    visible: true,
+    materialOverrides: [{ slot: 0, material: 'material/wood' }],
+    playback: null,
+    metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'override' },
+  };
+  const registry = new AnimatedMeshRegistry(new MapAnimatedMeshAssetSource([resource]));
+  registry.define(asset);
+  const record = registry.create(renderHandle(880), instance, () => new THREE.MeshStandardMaterial({ color: 0xff0000 }));
+  const live = firstMesh(record.object).material as THREE.Material;
+  assert.notEqual(live, base, 'the override never mutates the admitted GLB material');
+  let liveDisposed = false;
+  live.addEventListener('dispose', () => { liveDisposed = true; });
+  const capture = registry.createCaptureAppearance(renderHandle(880), 'idle', 0.5);
+  const captured = firstMesh(capture.object).material as THREE.Material;
+  assert.notEqual(captured, live, 'capture owns a clone of the source instance override');
+  let captureDisposed = false;
+  captured.addEventListener('dispose', () => { captureDisposed = true; });
+  registry.release(renderHandle(880));
+  assert.ok(liveDisposed, 'releasing the source disposes only its owned override');
+  assert.equal(captureDisposed, false, 'capture material remains valid after source release');
+  capture.dispose();
+  assert.ok(captureDisposed, 'capture disposal releases its override clone');
+
+  const renderer = new ThreeRenderer({ animatedMeshSource: new MapAnimatedMeshAssetSource([resource]) });
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineMaterial', material: woodMaterial() },
+    { op: 'defineAnimatedMesh', asset },
+    { op: 'createAnimatedMeshInstance', handle: renderHandle(881), parent: null, instance },
+  ] });
+  const before = firstMesh(renderer.objectFor(renderHandle(881))!).material as THREE.MeshStandardMaterial;
+  assert.ok(Math.abs(before.color.r - 0.6) < 1e-6);
+  let redefinedDisposed = false;
+  before.addEventListener('dispose', () => { redefinedDisposed = true; });
+  renderer.applyDiff({
+    op: 'defineMaterial',
+    material: { ...woodMaterial(), color: [0.1, 0.8, 0.2, 1] },
+  });
+  const after = firstMesh(renderer.objectFor(renderHandle(881))!).material as THREE.MeshStandardMaterial;
+  assert.notEqual(after, before);
+  assert.ok(Math.abs(after.color.g - 0.8) < 1e-6, 'redefinition reaches the owned animated override');
+  assert.ok(redefinedDisposed, 'the prior owned animated override is disposed');
+});
+
 // ── Sprites, billboards, and picking ───────────────────────────────────────────
 
 function sparkSprite(over: Partial<SpriteInstanceDescriptor> = {}): SpriteInstanceDescriptor {

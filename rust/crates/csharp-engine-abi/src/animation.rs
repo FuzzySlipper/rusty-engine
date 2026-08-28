@@ -4,7 +4,9 @@
 //! Engine retains resource, instance, graph and controller lifetime; the
 //! browser renderer remains an implementation detail behind the generated API.
 
-use crate::{NativeAppearanceHandle, NativeRenderResourceHandle, NativeUtf8Slice};
+use crate::{
+    NativeAppearanceHandle, NativeMeshMaterialBinding, NativeRenderResourceHandle, NativeUtf8Slice,
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -153,6 +155,17 @@ pub struct NativeAnimationClipPackAssociationRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimatedMeshAppearanceRequest {
     pub resource: NativeRenderResourceHandle,
+}
+
+/// Replaces the complete Engine-owned material selection for one animated
+/// appearance. Bindings name importer-derived embedded GLB slots and retain
+/// the selected Engine material handles for ordinary lifetime checks.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimatedMeshMaterialUpdateRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub bindings: *const NativeMeshMaterialBinding,
+    pub bindings_len: usize,
 }
 
 /// Retained instance identity tied to one product object and one animated

@@ -780,13 +780,6 @@ export class ThreeRenderer {
           // Validate the exact source/hash/clip contract without allocating the
           // asset-scoped render template before the retained mutation.
           this.#animatedMeshes.validateDefinition(operation.asset);
-        } else if (
-          operation.op === 'createAnimatedMeshInstance'
-          && operation.instance.materialOverrides.length > 0
-        ) {
-          throw new RenderApplyError(
-            `createAnimatedMeshInstance: material overrides are not implemented for animated mesh ${operation.instance.asset}`,
-          );
         } else if (operation.op === 'createAnimatedMeshInstance') {
           const playback = operation.instance.playback;
           if (playback?.kind === 'pause' || playback?.kind === 'resume') {
@@ -1583,7 +1576,11 @@ export class ThreeRenderer {
     }
     let record: { readonly object: THREE.Object3D };
     try {
-      record = this.#animatedMeshes.create(diff.handle, diff.instance);
+      record = this.#animatedMeshes.create(
+        diff.handle,
+        diff.instance,
+        (binding) => this.#materialFor(binding),
+      );
     } catch (cause) {
       throw animatedMeshError(cause);
     }
@@ -2127,6 +2124,8 @@ export class ThreeRenderer {
       }
     }
 
+    this.#animatedMeshes.replaceLiveMaterial(id, (binding) => this.#materialFor(binding));
+
     for (const entry of this.#handles.values()) {
       if (entry.meshMaterialSlots?.some(slot => `voxel-material/${String(slot)}` === id)) {
         this.#applyUploadedMeshMaterial(entry, entry.viewMaterial ?? MaterialFallback);
@@ -2179,6 +2178,9 @@ export class ThreeRenderer {
       if (changed) {
         mesh.material = arr.length === 1 ? arr[0]! : arr;
       }
+    }
+    for (const entry of this.#handles.values()) {
+      if (entry.kind === 'animatedMesh') this.#trackObjectResources(entry.object);
     }
     replacedSharedMaterials.forEach((material) => material.dispose());
   }
