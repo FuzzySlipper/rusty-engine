@@ -17,8 +17,9 @@ use std::{
 };
 
 use csharp_engine_services::{
-    AudioRealizationFact, CsharpAppearanceCatalog, CsharpEngineCallOutput,
-    CsharpEngineServicesError, CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet,
+    AudioRealizationFact, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
+    CsharpEngineCallOutput, CsharpEngineServicesError, CsharpRenderResource,
+    CsharpRenderResourceKind, EngineServiceSet,
 };
 use libloading::Library;
 use product_dev_host::{
@@ -2949,6 +2950,16 @@ fn service_outputs(
     output: csharp_engine_services::CsharpEngineCallOutput,
 ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
     let mut outputs = Vec::new();
+    for appearance in &output.appearance {
+        match appearance {
+            CsharpAppearanceCallOutput::Frame(frame) => {
+                outputs.push(ProductDevRuntimeOutput::frame(frame).map_err(host_error)?);
+            }
+            CsharpAppearanceCallOutput::Presentation(frame) => {
+                outputs.push(ProductDevRuntimeOutput::presentation(frame).map_err(host_error)?);
+            }
+        }
+    }
     for frame in &output.frames {
         outputs.push(ProductDevRuntimeOutput::frame(frame).map_err(host_error)?);
     }
@@ -3041,6 +3052,35 @@ mod tests {
             std::process::id(),
             CONTENT_FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    #[test]
+    fn service_outputs_preserve_appearance_frame_and_presentation_order() {
+        let output = CsharpEngineCallOutput {
+            appearance: vec![
+                CsharpAppearanceCallOutput::Presentation(
+                    render_presentation::PresentationFrameDiff::new(),
+                ),
+                CsharpAppearanceCallOutput::Frame(Default::default()),
+            ],
+            frames: Vec::new(),
+            view_composition: None,
+            ui: Vec::new(),
+            presentation: Vec::new(),
+        };
+        let encoded = service_outputs(output)
+            .expect("ordered service output")
+            .into_iter()
+            .map(|output| {
+                serde_json::to_value(output)
+                    .expect("runtime output JSON")
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("runtime output kind")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(encoded, ["presentation", "frame"]);
     }
 
     #[test]

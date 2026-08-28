@@ -483,6 +483,11 @@ export async function mountProductBrowserHost(
   let transportClosed = false;
   let runtimeProgress = 0;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
+  // Renderer calls can be asynchronous (notably presentation realization),
+  // while the retained runtime output port is synchronous. Keep their typed
+  // realization order private to this host so a later frame cannot overtake a
+  // teardown presentation from the same product callback.
+  let rendererOutputTail: Promise<void> = Promise.resolve();
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
   const maximumPendingOutputs = 64;
 
@@ -572,6 +577,20 @@ export async function mountProductBrowserHost(
     });
   };
 
+  const enqueueRendererOutput = (apply: () => void | Promise<void>): void => {
+    rendererOutputTail = rendererOutputTail.then(async () => {
+      // Disposal unsubscribes the source before awaiting this tail, so work
+      // already accepted by the host must still drain. A terminal renderer
+      // failure is the only state that invalidates the remaining queue.
+      if (state === 'failed') return;
+      try {
+        await apply();
+      } catch (cause) {
+        failAndClose(cause, 'output_failed');
+      }
+    });
+  };
+
   const applyOutput = (output: ProductBrowserRuntimeOutput): void => {
     if (application === null) {
       if (pendingOutputs.length >= maximumPendingOutputs) {
@@ -616,30 +635,32 @@ export async function mountProductBrowserHost(
           cadence?.pulseRustHost();
           return;
         case 'frame': {
-          const receipt = host.renderer.applyFrame(output.frame);
-          if (!receipt.applied) {
-            throw new ProductBrowserHostError(
-              'output_failed',
-              receipt.diagnostics.map((item) => item.message).join('; ') || 'retained frame was rejected',
-            );
-          }
+          enqueueRendererOutput(() => {
+            const receipt = host.renderer.applyFrame(output.frame);
+            if (!receipt.applied) {
+              throw new ProductBrowserHostError(
+                'output_failed',
+                receipt.diagnostics.map((item) => item.message).join('; ') || 'retained frame was rejected',
+              );
+            }
+          });
           return;
         }
         case 'view-composition': {
-          const receipt = host.renderer.configureViews(output.composition);
-          if (!receipt.applied) {
-            throw new ProductBrowserHostError(
-              'output_failed',
-              receipt.diagnostics.map((item) => item.message).join('; ') || 'view composition was rejected',
-            );
-          }
+          enqueueRendererOutput(() => {
+            const receipt = host.renderer.configureViews(output.composition);
+            if (!receipt.applied) {
+              throw new ProductBrowserHostError(
+                'output_failed',
+                receipt.diagnostics.map((item) => item.message).join('; ') || 'view composition was rejected',
+              );
+            }
+          });
           return;
         }
         case 'presentation':
-          // `applyPresentation` is asynchronous because presentation owners
-          // may retain resources, but output delivery itself stays on the
-          // fixed typed port and never becomes a promise bus.
-          void host.renderer.applyPresentation(output.frame).then((receipt) => {
+          enqueueRendererOutput(async () => {
+            const receipt = await host.renderer.applyPresentation(output.frame);
             if (receipt.diagnostics.length > 0) {
               const presentationFailure = new ProductBrowserHostError(
                 'output_failed',
@@ -648,15 +669,15 @@ export async function mountProductBrowserHost(
               // Preserve the existing terminal presentation posture, but give
               // the fixed audio-feedback lane one serialized attempt first so
               // a just-realized audio diagnostic reaches its C# readout.
-              void queue.enqueue(flushAudioFeedback).then(
-                () => { failAndClose(presentationFailure, 'output_failed'); },
-                (cause: unknown) => { failAndClose(cause, 'transport_failed'); },
-              );
-              return;
+              try {
+                await queue.enqueue(flushAudioFeedback);
+              } catch (cause) {
+                failAndClose(cause, 'transport_failed');
+                return;
+              }
+              throw presentationFailure;
             }
             scheduleAudioFeedbackFlush();
-          }).catch((cause: unknown) => {
-            failAndClose(cause, 'output_failed');
           });
           return;
         case 'ui-projection':
@@ -801,6 +822,7 @@ export async function mountProductBrowserHost(
     });
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
     for (const output of bufferedOutputs) applyOutput(output);
+    await rendererOutputTail;
     if (failure !== null) throw failure;
     if (options.autoStart !== false) {
       const result = await queue.enqueue(() => transport.lifecycle({ kind: 'start' }));
@@ -945,6 +967,7 @@ export async function mountProductBrowserHost(
       unsubscribeOutputs?.();
       unsubscribeOutputs = null;
       await queue.settle();
+      await rendererOutputTail;
       const failures: unknown[] = [];
       try {
         await transport.dispose();

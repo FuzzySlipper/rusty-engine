@@ -29,6 +29,6 @@ mod world_origin;
 pub use appearance::{CsharpRenderResource, CsharpRenderResourceKind};
 pub use audio::AudioRealizationFact;
 pub use composition::{
-    parse_runtime_appearance_catalog, CsharpAppearanceCatalog, CsharpEngineCallOutput,
-    CsharpEngineServicesError, EngineServiceSet,
+    parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
+    CsharpEngineCallOutput, CsharpEngineServicesError, EngineServiceSet,
 };

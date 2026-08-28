@@ -241,10 +241,18 @@ pub struct CsharpEngineCall {
 
 /// Staged Engine observations from one successful product call.
 pub struct CsharpEngineCallOutput {
+    pub appearance: Vec<CsharpAppearanceCallOutput>,
     pub frames: Vec<render_model::RenderFrameDiff>,
     pub view_composition: Option<render_host_contracts::RendererViewComposition>,
     pub ui: Vec<RuntimeUiProjectionEnvelope>,
     pub presentation: Vec<render_presentation::PresentationFrameDiff>,
+}
+
+/// Ordered renderer realization work emitted by the existing Appearance API
+/// during one product callback.
+pub enum CsharpAppearanceCallOutput {
+    Frame(render_model::RenderFrameDiff),
+    Presentation(render_presentation::PresentationFrameDiff),
 }
 
 /// Parsed optional appearance catalog retained with admitted product content.
@@ -391,33 +399,35 @@ impl EngineServiceSet {
     }
 
     pub fn outputs(&self, call: &CsharpEngineCall) -> CsharpEngineCallOutput {
-        let mut frames = call
+        let appearance = call
             .appearance
             .as_ref()
             .map(|call| {
-                call.frame
-                    .clone()
-                    .into_iter()
-                    .chain(call.extra_frames.clone())
+                call.outputs
+                    .iter()
+                    .cloned()
+                    .map(|output| match output {
+                        crate::appearance::RuntimeAppearanceCallOutput::Frame(frame) => {
+                            CsharpAppearanceCallOutput::Frame(frame)
+                        }
+                        crate::appearance::RuntimeAppearanceCallOutput::Presentation(frame) => {
+                            CsharpAppearanceCallOutput::Presentation(frame)
+                        }
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let mut frames = Vec::new();
         if let Some(frame) = call.sky_frame.clone() {
             frames.push(frame);
         }
         frames.extend(call.voxel_content.frames.clone());
         CsharpEngineCallOutput {
+            appearance,
             frames,
             view_composition: call.camera_view.composition.clone(),
             ui: call.ui.projections.clone(),
-            presentation: call
-                .appearance
-                .as_ref()
-                .map(|call| call.presentation.clone())
-                .unwrap_or_default()
-                .into_iter()
-                .chain(call.audio.frame.clone())
-                .collect(),
+            presentation: call.audio.frame.clone().into_iter().collect(),
         }
     }
 }

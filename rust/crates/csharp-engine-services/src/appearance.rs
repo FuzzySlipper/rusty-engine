@@ -403,10 +403,20 @@ pub(crate) struct RuntimeAppearanceState {
 
 pub(crate) struct RuntimeAppearanceCall {
     pub(crate) state: RuntimeAppearanceState,
+    /// Typed browser realization work in the order the C# product invoked the
+    /// owning appearance APIs. This remains call-local: it is not a general
+    /// output transport and only represents this service family's existing
+    /// renderer and presentation outputs.
+    pub(crate) outputs: Vec<RuntimeAppearanceCallOutput>,
     pub(crate) frame: Option<render_model::RenderFrameDiff>,
     pub(crate) extra_frames: Vec<render_model::RenderFrameDiff>,
     pub(crate) presentation: Vec<PresentationFrameDiff>,
-    animation_teardown_staged: bool,
+}
+
+#[derive(Clone)]
+pub(crate) enum RuntimeAppearanceCallOutput {
+    Frame(render_model::RenderFrameDiff),
+    Presentation(PresentationFrameDiff),
 }
 
 const MAX_PRESENTATION_DIAGNOSTICS: usize = 128;
@@ -540,10 +550,10 @@ impl RuntimeAppearanceBridge {
     pub(crate) fn begin_call(&mut self) {
         self.staged = Some(RuntimeAppearanceCall {
             state: self.state.clone(),
+            outputs: Vec::new(),
             frame: None,
             extra_frames: Vec::new(),
             presentation: Vec::new(),
-            animation_teardown_staged: false,
         });
         self.callback_error = None;
     }
@@ -1276,7 +1286,7 @@ impl RuntimeAppearanceBridge {
             Ok(projected) => {
                 let mut frame = PresentationFrameDiff::new();
                 frame.ops.push(projected);
-                self.staged_mut()?.presentation.push(frame);
+                push_presentation_frame(self.staged_mut()?, frame);
                 Ok(())
             }
             Err(diagnostic) => {
@@ -1311,7 +1321,7 @@ impl RuntimeAppearanceBridge {
             Ok(projected) => {
                 let mut frame = PresentationFrameDiff::new();
                 frame.ops.push(projected);
-                self.staged_mut()?.presentation.push(frame);
+                push_presentation_frame(self.staged_mut()?, frame);
                 Ok(())
             }
             Err(diagnostic) => {
@@ -2647,7 +2657,7 @@ impl RuntimeAppearanceBridge {
         if staged.frame.is_some() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-                "dispose an animation instance in a product call separate from PublishSnapshot",
+                "dispose the animation instance before publishing its removal snapshot",
             ));
         }
         if let Some(target) = instance.last_playback_target {
@@ -2663,9 +2673,8 @@ impl RuntimeAppearanceBridge {
                     format!("animation teardown frame is invalid: {error:?}"),
                 )
             })?;
-            staged.extra_frames.push(frame);
+            push_extra_frame(staged, frame);
         }
-        staged.animation_teardown_staged = true;
         staged.state.animation_instances.remove(&handle.value);
         Ok(())
     }
@@ -3161,7 +3170,7 @@ impl RuntimeAppearanceBridge {
         if staged.frame.is_some() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-                "dispose an animation controller in a product call separate from PublishSnapshot",
+                "dispose the animation controller before publishing its removal snapshot",
             ));
         }
         let Some(controller) = staged.state.animation_controllers.remove(&handle.value) else {
@@ -3195,7 +3204,7 @@ impl RuntimeAppearanceBridge {
                 })?;
             let mut frame = PresentationFrameDiff::new();
             frame.ops.push(op);
-            staged.presentation.push(frame);
+            push_presentation_frame(staged, frame);
         }
         if let Some(instance) = staged
             .state
@@ -3204,7 +3213,6 @@ impl RuntimeAppearanceBridge {
         {
             instance.controller = None;
         }
-        staged.animation_teardown_staged = true;
         Ok(())
     }
 
@@ -3489,7 +3497,7 @@ impl RuntimeAppearanceBridge {
                 format!("animation playback frame is invalid: {error:?}"),
             )
         })?;
-        staged.extra_frames.push(frame);
+        push_extra_frame(staged, frame);
         let instance = staged
             .state
             .animation_instances
@@ -3598,7 +3606,7 @@ impl RuntimeAppearanceBridge {
         controller.last_revision = Some(state.revision);
         let mut frame = PresentationFrameDiff::new();
         frame.ops.push(op);
-        staged.presentation.push(frame);
+        push_presentation_frame(staged, frame);
         Ok(())
     }
 
@@ -3842,12 +3850,6 @@ impl RuntimeAppearanceBridge {
             retained_appearances.insert(fact.object_id, fact.appearance.value);
         }
         let staged = self.staged_mut()?;
-        if staged.animation_teardown_staged {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_SNAPSHOT_ORDER",
-                "PublishSnapshot cannot share a product call with animation instance or controller disposal",
-            ));
-        }
         for controller in staged.state.animation_controllers.values() {
             if !controller.projected {
                 continue;
@@ -4189,21 +4191,37 @@ fn append_projection_frame(
     staged: &mut RuntimeAppearanceCall,
     next: render_model::RenderFrameDiff,
 ) -> Result<(), CsharpEngineServicesError> {
-    let Some(previous) = staged.frame.take() else {
-        staged.frame = Some(next);
-        return Ok(());
-    };
-    let mut operations = previous.ops;
-    operations.extend(next.ops);
-    staged.frame = Some(
-        render_model::RenderFrameDiff::try_from_ops(operations).map_err(|error| {
-            CsharpEngineServicesError::new(
-                "CSHARP_APPEARANCE_FRAME",
-                format!("combined retained appearance/light frame is invalid: {error:?}"),
-            )
-        })?,
-    );
+    staged.frame = Some(match staged.frame.take() {
+        Some(previous) => {
+            let mut operations = previous.ops;
+            operations.extend(next.ops.iter().cloned());
+            render_model::RenderFrameDiff::try_from_ops(operations).map_err(|error| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_APPEARANCE_FRAME",
+                    format!("combined retained appearance/light frame is invalid: {error:?}"),
+                )
+            })?
+        }
+        None => next.clone(),
+    });
+    staged
+        .outputs
+        .push(RuntimeAppearanceCallOutput::Frame(next));
     Ok(())
+}
+
+fn push_extra_frame(staged: &mut RuntimeAppearanceCall, frame: render_model::RenderFrameDiff) {
+    staged.extra_frames.push(frame.clone());
+    staged
+        .outputs
+        .push(RuntimeAppearanceCallOutput::Frame(frame));
+}
+
+fn push_presentation_frame(staged: &mut RuntimeAppearanceCall, frame: PresentationFrameDiff) {
+    staged.presentation.push(frame.clone());
+    staged
+        .outputs
+        .push(RuntimeAppearanceCallOutput::Presentation(frame));
 }
 
 fn narrow_retained_count(
@@ -5994,9 +6012,25 @@ mod tests {
         bridge.commit(setup);
 
         bridge.begin_call();
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("snapshot before teardown");
+        assert_eq!(
+            bridge
+                .destroy_animation_controller(controller)
+                .expect_err("snapshot-before-teardown remains rejected")
+                .code(),
+            "CSHARP_ANIMATION_SNAPSHOT_ORDER"
+        );
+        bridge.discard_call();
+
+        bridge.begin_call();
         bridge
             .destroy_animation_controller(controller)
             .expect("controller teardown");
+        bridge
+            .destroy_animation_instance(instance)
+            .expect("instance teardown after its controller");
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }
+            .expect("teardown before target-removal snapshot is ordered");
         assert_eq!(
             bridge
                 .staged
@@ -6006,12 +6040,19 @@ mod tests {
                 .len(),
             1
         );
-        assert_eq!(
-            unsafe { bridge.stage_snapshot(&fact, 1) }
-                .expect_err("controller teardown and target snapshot must be ordered")
-                .code(),
-            "CSHARP_ANIMATION_SNAPSHOT_ORDER"
-        );
+        let outputs = &bridge
+            .staged
+            .as_ref()
+            .expect("ordered teardown call")
+            .outputs;
+        assert!(matches!(
+            outputs.first(),
+            Some(RuntimeAppearanceCallOutput::Presentation(_))
+        ));
+        assert!(matches!(
+            outputs.last(),
+            Some(RuntimeAppearanceCallOutput::Frame(_))
+        ));
     }
 
     #[test]
