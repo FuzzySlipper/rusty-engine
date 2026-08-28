@@ -9,12 +9,12 @@ use core_math::Vec3;
 use core_space::{GlobalPosition, WorldOrigin};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    rigid_body_mass_properties, RigidBodyAction, RigidBodyContactReadout, RigidBodyService,
-    RigidBodyStepRequest, VoxelCollisionScene,
+    rigid_body_component_mass_properties, RigidBodyAction, RigidBodyContactReadout,
+    RigidBodyService, RigidBodyStepRequest, VoxelCollisionScene,
 };
 use entity_state::{
     replace_rigid_body_states, EntityAuthoringService, EntityDefinition, EntityLifecycle,
-    EntityState, EntityTransform, Quat, RigidBodyComponent, RigidBodyShape,
+    EntityState, EntityTransform, Quat, RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyShape,
     RigidBodyStateReplacement, TransformComponent,
 };
 
@@ -717,7 +717,13 @@ fn read_entity(
     let body = world.entities.rigid_body(entity).ok_or_else(|| {
         CsharpEngineServicesError::new("CSHARP_DYNAMICS_READ", "body lacked dynamics state")
     })?;
-    let properties = rigid_body_mass_properties(body.shape, body.mass);
+    let properties = rigid_body_component_mass_properties(*body);
+    let policy = match body.inertia {
+        RigidBodyInertiaPolicy::DeriveFromShapeAndMass => {
+            NativeDynamicsMassPolicyKind::DeriveFromShapeAndMass
+        }
+        RigidBodyInertiaPolicy::Explicit { .. } => NativeDynamicsMassPolicyKind::Explicit,
+    };
     let contact = world
         .last_contacts
         .get(&entity)
@@ -733,6 +739,13 @@ fn read_entity(
             mass: body.mass,
             principal_inertia: properties.map_or(NativeVec3::default(), |value| {
                 native_vec3(value.principal_inertia)
+            }),
+            policy,
+            center_of_mass: properties.map_or(NativeVec3::default(), |value| {
+                native_vec3(value.center_of_mass)
+            }),
+            principal_inertia_local_frame: properties.map_or(NativeQuat::default(), |value| {
+                native_quat(value.principal_inertia_local_frame)
             }),
         },
         contact_count: contact.count,
@@ -912,6 +925,7 @@ fn cuboid_body_config(
         transform,
         shape,
         value.mass,
+        value.mass_policy,
         value.axis_locks,
         value.gravity_scale,
     )
@@ -927,6 +941,7 @@ fn sphere_body_config(
             radius: value.radius,
         },
         value.mass,
+        value.mass_policy,
         value.axis_locks,
         value.gravity_scale,
     )
@@ -972,14 +987,33 @@ fn capsule_body_config(
     )
 }
 
+fn rigid_body_inertia_policy(
+    value: NativeDynamicsMassPolicy,
+) -> Result<RigidBodyInertiaPolicy, CsharpEngineServicesError> {
+    Ok(match value.kind {
+        NativeDynamicsMassPolicyKind::DeriveFromShapeAndMass => {
+            RigidBodyInertiaPolicy::DeriveFromShapeAndMass
+        }
+        NativeDynamicsMassPolicyKind::Explicit => RigidBodyInertiaPolicy::Explicit {
+            center_of_mass: native_vec3_value(value.explicit.center_of_mass),
+            principal_inertia: native_vec3_value(value.explicit.principal_inertia),
+            principal_inertia_local_frame: native_quat_value(
+                value.explicit.principal_inertia_local_frame,
+            ),
+        },
+    })
+}
+
 fn body_config(
     transform: EntityTransform,
     shape: RigidBodyShape,
     mass: f32,
+    mass_policy: NativeDynamicsMassPolicy,
     axis_locks: NativeAxisLocks,
     gravity_scale: f32,
 ) -> Result<BodyConfig, CsharpEngineServicesError> {
     let mut body = RigidBodyComponent::dynamic(shape, mass);
+    body.inertia = rigid_body_inertia_policy(mass_policy)?;
     body.locked_translation_axes = [
         axis_locks.translation_x,
         axis_locks.translation_y,
@@ -1012,6 +1046,7 @@ fn body_with_properties(
     properties: NativeDynamicsBodyProperties,
 ) -> Result<RigidBodyComponent, CsharpEngineServicesError> {
     let mut body = RigidBodyComponent::dynamic(shape, properties.mass);
+    body.inertia = rigid_body_inertia_policy(properties.mass_policy)?;
     body.linear_velocity = native_vec3_value(properties.linear_velocity);
     body.angular_velocity = native_vec3_value(properties.angular_velocity);
     body.locked_translation_axes = [
@@ -1572,6 +1607,7 @@ mod tests {
                 z: 0.5,
             },
             mass: 2.0,
+            mass_policy: NativeDynamicsMassPolicy::default(),
             axis_locks: NativeAxisLocks::default(),
             gravity_scale: 0.0,
         }
@@ -1735,6 +1771,7 @@ mod tests {
             .unwrap();
         let properties = NativeDynamicsBodyProperties {
             mass: 4.0,
+            mass_policy: NativeDynamicsMassPolicy::default(),
             linear_velocity: NativeVec3::default(),
             angular_velocity: NativeVec3::default(),
             axis_locks: NativeAxisLocks {

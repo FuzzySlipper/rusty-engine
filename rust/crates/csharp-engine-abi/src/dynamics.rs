@@ -41,12 +41,43 @@ pub struct NativeAxisLocks {
     pub rotation_z: bool,
 }
 
+/// Selects whether the Engine derives inertia from the admitted primitive and
+/// total mass or uses the authored local tuple below.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeDynamicsMassPolicyKind {
+    #[default]
+    DeriveFromShapeAndMass = 0,
+    Explicit = 1,
+}
+
+/// Pointer-free local mass properties for an authored dynamic body. `mass` is
+/// deliberately kept on each body/config as the sole authoritative total
+/// mass; this tuple supplies only the remaining properties.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsExplicitMassProperties {
+    pub center_of_mass: NativeVec3,
+    pub principal_inertia: NativeVec3,
+    pub principal_inertia_local_frame: NativeQuat,
+}
+
+/// Fixed-size mass policy passed by value through the generated ABI. The
+/// explicit tuple is ignored for the derived kind.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsMassPolicy {
+    pub kind: NativeDynamicsMassPolicyKind,
+    pub explicit: NativeDynamicsExplicitMassProperties,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsBodyConfig {
     pub transform: NativeTransform,
     pub half_extents: NativeVec3,
     pub mass: f32,
+    pub mass_policy: NativeDynamicsMassPolicy,
     pub axis_locks: NativeAxisLocks,
     pub gravity_scale: f32,
 }
@@ -58,6 +89,7 @@ pub struct NativeDynamicsBodyConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsBodyProperties {
     pub mass: f32,
+    pub mass_policy: NativeDynamicsMassPolicy,
     pub linear_velocity: NativeVec3,
     pub angular_velocity: NativeVec3,
     pub axis_locks: NativeAxisLocks,
@@ -134,6 +166,7 @@ pub struct NativeDynamicsSphereBodyConfig {
     pub transform: NativeTransform,
     pub radius: f32,
     pub mass: f32,
+    pub mass_policy: NativeDynamicsMassPolicy,
     pub axis_locks: NativeAxisLocks,
     pub gravity_scale: f32,
 }
@@ -242,6 +275,9 @@ pub struct NativeMassProperties {
     pub available: bool,
     pub mass: f32,
     pub principal_inertia: NativeVec3,
+    pub policy: NativeDynamicsMassPolicyKind,
+    pub center_of_mass: NativeVec3,
+    pub principal_inertia_local_frame: NativeQuat,
 }
 
 #[repr(C)]
