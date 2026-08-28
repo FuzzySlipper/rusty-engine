@@ -361,6 +361,10 @@ struct MechanicsWorldExportLease {
 /// bindings have already been allocated before publication, so publication cannot fail midway.
 struct PreparedMechanicsWorldImport {
     catalog: u64,
+    /// The exact exported revision supplied by the product. Continuous staging
+    /// must correlate to this durable image, not the live revision observed
+    /// while the detached candidate was built.
+    saved_state_revision: u64,
     state_revision_before: u64,
     candidate: Option<MechanicsWorld>,
     canonical_membership: Option<BTreeMap<EntityId, u64>>,
@@ -371,6 +375,7 @@ struct PreparedMechanicsWorldImport {
     _text: Vec<String>,
     revisions: Vec<NativeMechanicsRevisionRemapRow>,
     lifecycles: Vec<NativeMechanicsLifecycleReceipt>,
+    continuous_stage: Option<continuous::PreparedContinuousMechanicsWorldImportStage>,
     published: bool,
 }
 
@@ -3914,6 +3919,7 @@ unsafe extern "C" fn prepare_world_import(
         import_handle,
         Box::new(PreparedMechanicsWorldImport {
             catalog: request.catalog.value,
+            saved_state_revision: request.state_revision,
             state_revision_before: slot.world.state.revision(),
             candidate: Some(candidate),
             canonical_membership: Some(
@@ -3929,6 +3935,7 @@ unsafe extern "C" fn prepare_world_import(
             _text: output_text.values,
             revisions,
             lifecycles: lifecycle_receipts,
+            continuous_stage: None,
             published: false,
         }),
     );
@@ -3950,6 +3957,11 @@ unsafe extern "C" fn destroy_world_import(
         .world_import_leases
         .values()
         .any(|value| *value == handle.value)
+        || bridge
+            .continuous
+            .world_import_leases
+            .values()
+            .any(|value| *value == handle.value)
     {
         return 0;
     }
@@ -4048,6 +4060,21 @@ unsafe extern "C" fn publish_world_import(
         return 0;
     };
     slot.world = candidate;
+    // Continuous facts share this exact candidate. They become visible only
+    // during the same publish assignment; an exact-only import intentionally
+    // clears prior continuous associations for this catalog.
+    bridge
+        .continuous
+        .associations
+        .retain(|entity, _| bridge.canonical_entities.get(entity) != Some(&catalog));
+    if let Some(stage) = import.continuous_stage.as_ref() {
+        bridge.continuous.associations.extend(
+            stage
+                .associations
+                .iter()
+                .map(|(entity, catalog)| (*entity, *catalog)),
+        );
+    }
     bridge
         .canonical_entities
         .retain(|_, catalog| *catalog != import.catalog);

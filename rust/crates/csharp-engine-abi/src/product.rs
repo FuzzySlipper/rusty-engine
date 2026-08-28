@@ -579,6 +579,22 @@ pub type NativeReadContinuousMechanicsComponents = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyContinuousMechanicsComponentLease =
     unsafe extern "C" fn(*mut c_void, NativeContinuousMechanicsComponentLeaseHandle) -> i32;
+pub type NativeExportContinuousMechanicsWorld = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsWorldExportRequest,
+    *mut NativeContinuousMechanicsWorldExportLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyContinuousMechanicsWorldExportLease =
+    unsafe extern "C" fn(*mut c_void, NativeContinuousMechanicsWorldExportLeaseHandle) -> i32;
+pub type NativeStageContinuousMechanicsWorldImport = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsWorldImportStageRequest,
+    *mut NativeContinuousMechanicsWorldImportLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyContinuousMechanicsWorldImportLease =
+    unsafe extern "C" fn(*mut c_void, NativeContinuousMechanicsWorldImportLeaseHandle) -> i32;
 pub type NativeEvaluateContinuousMechanicsStat = unsafe extern "C" fn(
     *mut c_void,
     *const NativeContinuousMechanicsStatEvaluateRequest,
@@ -1596,6 +1612,10 @@ pub struct NativeContinuousMechanicsApi {
     pub set_initial_components: NativeSetContinuousMechanicsInitialComponents,
     pub read_components: NativeReadContinuousMechanicsComponents,
     pub destroy_component_lease: NativeDestroyContinuousMechanicsComponentLease,
+    pub export_world: NativeExportContinuousMechanicsWorld,
+    pub destroy_world_export_lease: NativeDestroyContinuousMechanicsWorldExportLease,
+    pub stage_world_import: NativeStageContinuousMechanicsWorldImport,
+    pub destroy_world_import_lease: NativeDestroyContinuousMechanicsWorldImportLease,
     pub evaluate_stat: NativeEvaluateContinuousMechanicsStat,
     pub set_stat_base: NativeSetContinuousMechanicsStatBase,
     pub read_track: NativeReadContinuousMechanicsTrack,

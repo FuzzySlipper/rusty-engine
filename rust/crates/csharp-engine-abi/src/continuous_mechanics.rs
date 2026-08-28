@@ -34,7 +34,7 @@ pub enum NativeContinuousMechanicsStackingPolicy {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NativeContinuousMechanicsComponentKind {
     #[default]
     Stats = 0,
@@ -281,6 +281,141 @@ pub struct NativeContinuousMechanicsComponentLease {
     pub intrinsic_sources_len: usize,
     pub active_effects: *const NativeContinuousMechanicsInitialActiveEffectRow,
     pub active_effects_len: usize,
+}
+
+/// A copied, flat image of continuous Mechanics facts correlated to one exact
+/// Mechanics world revision.  This is semantic evidence for product-owned
+/// persistence, never a codec or a second entity world.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeContinuousMechanicsWorldExportLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsWorldExportRequest {
+    pub mechanics_catalog: crate::NativeMechanicsCatalogHandle,
+    pub continuous_catalog: NativeContinuousMechanicsCatalogHandle,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeContinuousMechanicsWorldComponentPresenceRow {
+    pub entity_id: u64,
+    pub component: NativeContinuousMechanicsComponentKind,
+    pub present: bool,
+    pub revision: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsWorldStatRow {
+    pub entity_id: u64,
+    pub stat: NativeUtf8Slice,
+    pub base_bits: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsWorldTrackRow {
+    pub entity_id: u64,
+    pub track: NativeUtf8Slice,
+    pub current_bits: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsWorldIntrinsicSourceRow {
+    pub entity_id: u64,
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsWorldActiveEffectRow {
+    pub entity_id: u64,
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsWorldExportLease {
+    pub handle: NativeContinuousMechanicsWorldExportLeaseHandle,
+    pub mechanics_catalog_id: u64,
+    pub mechanics_state_revision: u64,
+    pub continuous_catalog_id: u64,
+    pub continuous_catalog_version: NativeUtf8Slice,
+    pub continuous_catalog_fingerprint: NativeUtf8Slice,
+    pub component_presence: *const NativeContinuousMechanicsWorldComponentPresenceRow,
+    pub component_presence_len: usize,
+    pub stats: *const NativeContinuousMechanicsWorldStatRow,
+    pub stats_len: usize,
+    pub tracks: *const NativeContinuousMechanicsWorldTrackRow,
+    pub tracks_len: usize,
+    pub intrinsic_sources: *const NativeContinuousMechanicsWorldIntrinsicSourceRow,
+    pub intrinsic_sources_len: usize,
+    pub active_effects: *const NativeContinuousMechanicsWorldActiveEffectRow,
+    pub active_effects_len: usize,
+}
+
+/// Stages continuous facts into an already prepared exact Mechanics import.
+/// It deliberately carries no entity or containment topology: the exact
+/// candidate is the sole owner of those facts.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsWorldImportStageRequest {
+    pub import: crate::NativeMechanicsWorldImportHandle,
+    pub mechanics_catalog: crate::NativeMechanicsCatalogHandle,
+    pub mechanics_state_revision: u64,
+    pub continuous_catalog: NativeContinuousMechanicsCatalogHandle,
+    pub continuous_catalog_version: NativeUtf8Slice,
+    pub continuous_catalog_fingerprint: NativeUtf8Slice,
+    pub component_presence: *const NativeContinuousMechanicsWorldComponentPresenceRow,
+    pub component_presence_len: usize,
+    pub stats: *const NativeContinuousMechanicsWorldStatRow,
+    pub stats_len: usize,
+    pub tracks: *const NativeContinuousMechanicsWorldTrackRow,
+    pub tracks_len: usize,
+    pub intrinsic_sources: *const NativeContinuousMechanicsWorldIntrinsicSourceRow,
+    pub intrinsic_sources_len: usize,
+    pub active_effects: *const NativeContinuousMechanicsWorldActiveEffectRow,
+    pub active_effects_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeContinuousMechanicsRevisionRemapRow {
+    pub entity_id: u64,
+    pub component: NativeContinuousMechanicsComponentKind,
+    pub present: bool,
+    pub snapshot_revision: u64,
+    pub current_revision: u64,
+    pub restored_revision: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeContinuousMechanicsWorldImportLeaseHandle {
+    pub value: u64,
+}
+
+/// Copied staged-continuous receipt. Its rows remain valid until the matching
+/// lease is destroyed; it proves preparation only, never publication.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsWorldImportLease {
+    pub handle: NativeContinuousMechanicsWorldImportLeaseHandle,
+    pub mechanics_catalog_id: u64,
+    pub mechanics_state_revision_before: u64,
+    pub mechanics_state_revision_after: u64,
+    pub continuous_catalog_id: u64,
+    pub continuous_catalog_version: NativeUtf8Slice,
+    pub continuous_catalog_fingerprint: NativeUtf8Slice,
+    pub revisions: *const NativeContinuousMechanicsRevisionRemapRow,
+    pub revisions_len: usize,
 }
 
 #[repr(C)]

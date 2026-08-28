@@ -44,6 +44,19 @@ public sealed class MechanicsEntityWorld : IDisposable
         EntityWorldRestorePlan plan,
         MechanicsWorldImportRequest request,
         ulong? expectedManagedRevision = null)
+        => PrepareImport(plan, request, expectedManagedRevision, null);
+
+    /// <summary>
+    /// Internal extension point for a named sibling service that must stage facts on the one
+    /// detached exact import candidate. The callback runs after exact admission and native
+    /// candidate creation, but before either managed preparation or exact receipt validation.
+    /// It must not publish or retain the supplied import handle.
+    /// </summary>
+    internal MechanicsEntityWorldImportCandidate PrepareImport(
+        EntityWorldRestorePlan plan,
+        MechanicsWorldImportRequest request,
+        ulong? expectedManagedRevision,
+        Action<MechanicsWorldImport, MechanicsWorldImportRequest>? stageBeforeManagedPrepare)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(plan);
@@ -53,6 +66,7 @@ public sealed class MechanicsEntityWorld : IDisposable
         MechanicsWorldImport native = _mechanics.PrepareWorldImport(admitted);
         try
         {
+            stageBeforeManagedPrepare?.Invoke(native, admitted);
             EntityWorldRestoreCandidate managed = _entities.PrepareRestore(plan, expectedManagedRevision);
             MechanicsWorldImportLeaseReceipt receipt = _mechanics.ReadWorldImport(native);
             ValidateImportReceipt(admitted, receipt);
@@ -472,6 +486,9 @@ public sealed class MechanicsEntityWorld : IDisposable
         ThrowIfDisposed();
         return RequireCommitted(entity).Native;
     }
+
+    /// <summary>Catalog identity for named sibling services sharing this exact world.</summary>
+    internal MechanicsCatalog Catalog => _catalog;
 
     public void Dispose()
     {

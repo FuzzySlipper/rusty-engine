@@ -308,3 +308,137 @@ public sealed class MechanicsEntityWorldProductStateLoad<TState> : IDisposable
         candidate?.Dispose();
     }
 }
+
+/// <summary>
+/// Product-decoded transient state for the canonical three-part restore: managed entity facts,
+/// exact Mechanics facts, and handle-free continuous Mechanics facts. It is not a persistence
+/// format; products retain ownership of the durable DTO, codec, and migration policy.
+/// </summary>
+public sealed class ContinuousMechanicsEntityWorldProductStateRestorePlan
+{
+    public ContinuousMechanicsEntityWorldProductStateRestorePlan(
+        EntityWorldRestorePlan entities,
+        MechanicsWorldImportRequest mechanics,
+        ContinuousMechanicsWorldImportImage continuous)
+    {
+        Entities = entities ?? throw new ArgumentNullException(nameof(entities));
+        Mechanics = mechanics;
+        Continuous = continuous ?? throw new ArgumentNullException(nameof(continuous));
+    }
+
+    public EntityWorldRestorePlan Entities { get; }
+    public MechanicsWorldImportRequest Mechanics { get; }
+    public ContinuousMechanicsWorldImportImage Continuous { get; }
+}
+
+/// <summary>
+/// Product-owned persistence composition for the canonical paired exact/continuous Mechanics
+/// entity world. Product callbacks map before prepare; explicit publication never calls them.
+/// </summary>
+public sealed class ContinuousMechanicsEntityWorldProductStateStore<TState> : IDisposable
+{
+    private readonly ContinuousMechanicsEntityWorld _world;
+    private readonly ProductStateStore<TState> _state;
+    private readonly Func<ContinuousMechanicsEntityWorldExport, TState> _capture;
+    private readonly Func<TState, ContinuousMechanicsEntityWorldProductStateRestorePlan> _restore;
+
+    public ContinuousMechanicsEntityWorldProductStateStore(
+        ContinuousMechanicsEntityWorld world,
+        IEngineContext engine,
+        string scope,
+        IProductStateCodec<TState> codec,
+        Func<ContinuousMechanicsEntityWorldExport, TState> capture,
+        Func<TState, ContinuousMechanicsEntityWorldProductStateRestorePlan> restore,
+        IReadOnlyList<IProductStateMigration>? migrations = null)
+    {
+        _world = world ?? throw new ArgumentNullException(nameof(world));
+        ArgumentNullException.ThrowIfNull(engine);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        ArgumentNullException.ThrowIfNull(codec);
+        _capture = capture ?? throw new ArgumentNullException(nameof(capture));
+        _restore = restore ?? throw new ArgumentNullException(nameof(restore));
+        _state = new ProductStateStore<TState>(engine, scope, codec, migrations);
+    }
+
+    public PersistenceSaveReceipt Save(
+        string key,
+        PersistenceRevisionGuard guard = PersistenceRevisionGuard.Any,
+        ulong expectedRevision = 0)
+    {
+        ContinuousMechanicsEntityWorldExport export = _world.Export();
+        return _state.Save(key, _capture(export), guard, expectedRevision);
+    }
+
+    public ContinuousMechanicsEntityWorldProductStateLoad<TState> LoadPrepared(
+        string key,
+        ulong? expectedManagedRevision = null)
+    {
+        ProductStateLoad<TState> loaded = _state.Load(key);
+        if (!loaded.Present)
+        {
+            return new ContinuousMechanicsEntityWorldProductStateLoad<TState>(loaded, null);
+        }
+
+        ContinuousMechanicsEntityWorldProductStateRestorePlan plan = _restore(loaded.State!)
+            ?? throw new InvalidOperationException("The product restore mapper returned no paired continuous Mechanics plan.");
+        ContinuousMechanicsEntityWorldImportCandidate candidate = _world.PrepareImport(
+            plan.Entities,
+            plan.Mechanics,
+            plan.Continuous,
+            expectedManagedRevision);
+        return new ContinuousMechanicsEntityWorldProductStateLoad<TState>(loaded, candidate);
+    }
+
+    public ProductStateLoad<TState> LoadAndPublish(string key, ulong? expectedManagedRevision = null)
+    {
+        using var loaded = LoadPrepared(key, expectedManagedRevision);
+        loaded.Publish();
+        return new ProductStateLoad<TState>(loaded.Present, loaded.PersistenceRevision, loaded.State);
+    }
+
+    public void Dispose() => _state.Dispose();
+}
+
+/// <summary>
+/// A present decoded product state and its one prepared paired candidate. Dispose cancels the
+/// exact candidate; absent state is deliberately an honest no-op.
+/// </summary>
+public sealed class ContinuousMechanicsEntityWorldProductStateLoad<TState> : IDisposable
+{
+    private ContinuousMechanicsEntityWorldImportCandidate? _candidate;
+    private int _published;
+
+    internal ContinuousMechanicsEntityWorldProductStateLoad(
+        ProductStateLoad<TState> loaded,
+        ContinuousMechanicsEntityWorldImportCandidate? candidate)
+    {
+        Present = loaded.Present;
+        PersistenceRevision = loaded.Revision;
+        State = loaded.State;
+        _candidate = candidate;
+    }
+
+    public bool Present { get; }
+    public ulong PersistenceRevision { get; }
+    public TState? State { get; }
+    public MechanicsWorldImportLeaseReceipt? PreparedExactImport => _candidate?.ExactReceipt;
+    public ContinuousMechanicsWorldImportLeaseReceipt? PreparedContinuousImport => _candidate?.ContinuousReceipt;
+
+    public void Publish()
+    {
+        if (!Present || Interlocked.Exchange(ref _published, 1) != 0)
+        {
+            return;
+        }
+
+        ContinuousMechanicsEntityWorldImportCandidate candidate = _candidate
+            ?? throw new ObjectDisposedException(nameof(ContinuousMechanicsEntityWorldProductStateLoad<TState>));
+        candidate.Publish();
+    }
+
+    public void Dispose()
+    {
+        ContinuousMechanicsEntityWorldImportCandidate? candidate = Interlocked.Exchange(ref _candidate, null);
+        candidate?.Dispose();
+    }
+}

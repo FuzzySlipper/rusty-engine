@@ -463,12 +463,94 @@ static void ExerciseContinuousMechanicsSibling()
     Require(mutation.AfterBits == 0 && continuous.EvaluateStat(actor, "strength").ValueBits == 0,
         "continuous mutation did not preserve Engine binary64 normalization through the same lease");
 
+    ContinuousMechanicsEntityWorldExport pairedExport = continuous.Export();
+    Require(pairedExport.Exact.CatalogId == pairedExport.Continuous.MechanicsCatalogId
+        && pairedExport.Exact.StateRevision == pairedExport.Continuous.MechanicsStateRevision
+        && pairedExport.Continuous.ComponentPresence.Length == 4 && continuousService.WorldExports == 1,
+        "paired continuous export did not retain copied exact catalog/state correlation");
+
     mechanics.SetLifecycle(actor, EntityLifecycle.Tombstoned, world.GetEntityRevision(actor));
     int evaluationsBeforeFence = continuousService.Evaluations;
     Throws(() => continuous.EvaluateStat(actor, "strength"),
         "continuous sibling bypassed the exact Mechanics lifecycle fence");
     Require(continuousService.Evaluations == evaluationsBeforeFence,
         "continuous service was called after the exact binding had been retired");
+
+    EntityWorldRestorePlan plan = new(world.Revision, 4);
+    plan.AddEntity(new EntityWorldEntityState(new EntityId(2), EntityLifecycle.Disabled, 1));
+    plan.AddEntity(new EntityWorldEntityState(new EntityId(3), EntityLifecycle.Active, 1));
+    plan.AddContainment(new EntityWorldContainmentState(new EntityId(3), new EntityId(2)));
+    MechanicsWorldImportRequest request = ImportRequest(exactService.Catalog);
+    ContinuousMechanicsWorldImportImage image = ContinuousImportImage();
+
+    Throws(() => continuous.PrepareImport(plan, request, new ContinuousMechanicsWorldImportImage(
+            image.MechanicsStateRevision + 1,
+            image.ContinuousCatalogVersion,
+            image.ContinuousCatalogFingerprint,
+            image.ComponentPresence,
+            image.Stats,
+            image.Tracks,
+            image.IntrinsicSources,
+            image.ActiveEffects), world.Revision),
+        "mismatched exact/continuous state revisions were accepted");
+    Require(world.GetLifecycle(actor) == EntityLifecycle.Tombstoned && exactService.ImportPublishes == 0
+        && exactService.ImportDisposals == 1 && continuousService.WorldImportStages == 0,
+        "rejected continuous correlation changed a live world or reached staging");
+
+    using (ContinuousMechanicsEntityWorldImportCandidate cancelled = continuous.PrepareImport(plan, request, image, world.Revision))
+    {
+        Require(cancelled.ExactReceipt.Entities.Length == 2 && cancelled.ContinuousReceipt.Revisions.Length == 8,
+            "paired continuous preparation did not produce complete copied remap evidence");
+        cancelled.Dispose();
+    }
+    Require(exactService.ImportPublishes == 0 && exactService.ImportDisposals == 2 && continuousService.WorldImportStages == 1,
+        "cancelling a paired continuous import did not retire exactly its exact candidate");
+
+    using ContinuousMechanicsEntityWorldImportCandidate prepared = continuous.PrepareImport(plan, request, image, world.Revision);
+    prepared.Publish();
+    prepared.Publish();
+    Require(exactService.ImportPublishes == 1 && exactService.ImportClaims == 2
+        && prepared.ContinuousReceipt.Revisions.Span.ToArray().All(row => row.RestoredRevision > row.CurrentRevision),
+        "paired continuous import did not publish once with fresh continuous remaps and exact bindings");
+
+    var persistence = new InMemoryPersistenceService();
+    var checkpoint = new ContinuousCheckpoint(plan, request, image);
+    var codec = new InMemoryContinuousCheckpointCodec();
+    var migration = new InMemoryContinuousCheckpointMigration();
+    int captures = 0;
+    int mappings = 0;
+    using var store = new ContinuousMechanicsEntityWorldProductStateStore<ContinuousCheckpoint>(
+        continuous,
+        new PersistenceEngineContext(persistence),
+        "continuous-example",
+        codec,
+        export =>
+        {
+            captures++;
+            Require(export.Exact.CatalogId == export.Continuous.MechanicsCatalogId
+                && export.Exact.StateRevision == export.Continuous.MechanicsStateRevision,
+                "product capture did not receive the correlated paired copied export");
+            return checkpoint;
+        },
+        state =>
+        {
+            mappings++;
+            return new ContinuousMechanicsEntityWorldProductStateRestorePlan(state.Plan, state.Request, state.Image);
+        },
+        new[] { migration });
+    store.Save("checkpoint");
+    persistence.Seed("continuous-example", "checkpoint", 1, new byte[] { 0 });
+    using (ContinuousMechanicsEntityWorldProductStateLoad<ContinuousCheckpoint> cancelled = store.LoadPrepared("checkpoint", world.Revision))
+    {
+        Require(cancelled.Present && cancelled.PreparedExactImport is not null && cancelled.PreparedContinuousImport is not null,
+            "continuous product load did not complete mapping and paired Engine preparation before publication");
+        cancelled.Dispose();
+    }
+    using ContinuousMechanicsEntityWorldProductStateLoad<ContinuousCheckpoint> loaded = store.LoadPrepared("checkpoint", world.Revision);
+    loaded.Publish();
+    loaded.Publish();
+    Require(captures == 1 && mappings == 2 && migration.Calls == 2 && continuousService.WorldImportStages == 4,
+        "continuous product persistence did not retain explicit, callback-free paired publication");
 }
 
 static MechanicsWorldImportRequest ImportRequest(MechanicsCatalog catalog)
@@ -503,6 +585,30 @@ static IEnumerable<MechanicsWorldComponentPresenceRow> ImportPresence(ulong enti
             component == MechanicsRevisionComponent.Stats && statsPresent,
             (ulong)component + 1));
 
+static ContinuousMechanicsWorldImportImage ContinuousImportImage()
+{
+    ReadOnlyMemory<ContinuousMechanicsWorldComponentPresenceRow> presence = new[]
+    {
+        new ContinuousMechanicsWorldComponentPresenceRow(2, ContinuousMechanicsComponentKind.Stats, true, 1),
+        new ContinuousMechanicsWorldComponentPresenceRow(2, ContinuousMechanicsComponentKind.Tracks, true, 2),
+        new ContinuousMechanicsWorldComponentPresenceRow(2, ContinuousMechanicsComponentKind.IntrinsicSources, true, 3),
+        new ContinuousMechanicsWorldComponentPresenceRow(2, ContinuousMechanicsComponentKind.ActiveEffects, true, 4),
+        new ContinuousMechanicsWorldComponentPresenceRow(3, ContinuousMechanicsComponentKind.Stats, false, 5),
+        new ContinuousMechanicsWorldComponentPresenceRow(3, ContinuousMechanicsComponentKind.Tracks, false, 6),
+        new ContinuousMechanicsWorldComponentPresenceRow(3, ContinuousMechanicsComponentKind.IntrinsicSources, false, 7),
+        new ContinuousMechanicsWorldComponentPresenceRow(3, ContinuousMechanicsComponentKind.ActiveEffects, false, 8),
+    };
+    return new ContinuousMechanicsWorldImportImage(
+        40,
+        "example",
+        "example",
+        presence,
+        new[] { new ContinuousMechanicsWorldStatRow(2, "strength", 0x0000_0000_0000_0001) },
+        new[] { new ContinuousMechanicsWorldTrackRow(2, "health", 0) },
+        new[] { new ContinuousMechanicsWorldIntrinsicSourceRow(2, "body", "body-source") },
+        new[] { new ContinuousMechanicsWorldActiveEffectRow(2, "blessing", "blessing-effect") });
+}
+
 readonly record struct Health(int Current);
 
 readonly record struct Armor(int Current);
@@ -510,6 +616,11 @@ readonly record struct Armor(int Current);
 readonly record struct MechanicsCheckpoint(
     EntityWorldRestorePlan Plan,
     MechanicsWorldImportRequest Request);
+
+readonly record struct ContinuousCheckpoint(
+    EntityWorldRestorePlan Plan,
+    MechanicsWorldImportRequest Request,
+    ContinuousMechanicsWorldImportImage Image);
 
 // This in-memory codec exists only to exercise the persistence composition. Products supply
 // their own durable archive bytes, schema, and migrations; the Engine does not select them.
@@ -530,6 +641,42 @@ sealed class InMemoryMechanicsCheckpointCodec : IProductStateCodec<MechanicsChec
         => payload.Length == 1 && payload[0] == 1 && _saved is MechanicsCheckpoint saved
             ? saved
             : throw new InvalidOperationException("example checkpoint bytes were not available");
+}
+
+sealed class InMemoryContinuousCheckpointCodec : IProductStateCodec<ContinuousCheckpoint>
+{
+    private ContinuousCheckpoint? _saved;
+
+    public uint SchemaVersion => 2;
+
+    public void Encode(in ContinuousCheckpoint state, System.Buffers.IBufferWriter<byte> destination)
+    {
+        _saved = state;
+        destination.GetSpan(1)[0] = 1;
+        destination.Advance(1);
+    }
+
+    public ContinuousCheckpoint Decode(ReadOnlySpan<byte> payload)
+        => payload.Length == 1 && payload[0] == 1 && _saved is ContinuousCheckpoint saved
+            ? saved
+            : throw new InvalidOperationException("example continuous checkpoint bytes were not available");
+}
+
+sealed class InMemoryContinuousCheckpointMigration : IProductStateMigration
+{
+    public uint FromSchemaVersion => 1;
+    public uint ToSchemaVersion => 2;
+    public int Calls { get; private set; }
+
+    public byte[] Migrate(ReadOnlySpan<byte> payload)
+    {
+        if (!payload.SequenceEqual(new byte[] { 0 }))
+        {
+            throw new InvalidOperationException("continuous product migration received unexpected bytes");
+        }
+        Calls++;
+        return new byte[] { 1 };
+    }
 }
 
 sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngineContext
@@ -601,6 +748,9 @@ sealed class InMemoryPersistenceService : IPersistenceService
 
     public ReadOnlyMemory<byte> ReadBlobBytes(PersistenceBlob blob)
         => _blobs[blob.Handle.Value].Payload;
+
+    public void Seed(string scope, string key, uint schemaVersion, byte[] payload)
+        => _saved[(scope, key)] = new Saved(schemaVersion, 1, payload);
 }
 
 sealed class ContinuousMechanicsAdapterFake : IContinuousMechanicsService
@@ -611,6 +761,8 @@ sealed class ContinuousMechanicsAdapterFake : IContinuousMechanicsService
     public ContinuousMechanicsCatalog Catalog { get; } = new(new ContinuousMechanicsCatalogHandle(1), static () => { });
     public ulong LastEntityHandle { get; private set; }
     public int Evaluations { get; private set; }
+    public int WorldExports { get; private set; }
+    public int WorldImportStages { get; private set; }
 
     public ContinuousMechanicsCatalog CreateCatalog(ContinuousMechanicsCatalogCreateRequest arg0) => Catalog;
 
@@ -657,6 +809,48 @@ sealed class ContinuousMechanicsAdapterFake : IContinuousMechanicsService
             "example",
             "example",
             LastEntityHandle);
+    }
+
+    public ContinuousMechanicsWorldExportLeaseReceipt ExportWorld(ContinuousMechanicsWorldExportRequest arg0)
+    {
+        WorldExports++;
+        ContinuousMechanicsInitialComponentsRequest initial = _initial
+            ?? throw new InvalidOperationException("continuous components were not initialized");
+        ulong entity = LastEntityHandle;
+        return new ContinuousMechanicsWorldExportLeaseReceipt(
+            new[]
+            {
+                new ContinuousMechanicsWorldComponentPresenceRow(entity, ContinuousMechanicsComponentKind.Stats, initial.HasStats, 1),
+                new ContinuousMechanicsWorldComponentPresenceRow(entity, ContinuousMechanicsComponentKind.Tracks, initial.HasTracks, 1),
+                new ContinuousMechanicsWorldComponentPresenceRow(entity, ContinuousMechanicsComponentKind.IntrinsicSources, initial.HasIntrinsicSources, 1),
+                new ContinuousMechanicsWorldComponentPresenceRow(entity, ContinuousMechanicsComponentKind.ActiveEffects, initial.HasActiveEffects, 1),
+            },
+            initial.Stats.Span.ToArray().Select(row => new ContinuousMechanicsWorldStatRow(entity, row.Stat, row.BaseBits)).ToArray(),
+            initial.Tracks.Span.ToArray().Select(row => new ContinuousMechanicsWorldTrackRow(entity, row.Track, row.CurrentBits)).ToArray(),
+            initial.IntrinsicSources.Span.ToArray().Select(row => new ContinuousMechanicsWorldIntrinsicSourceRow(entity, row.Instance, row.Definition)).ToArray(),
+            initial.ActiveEffects.Span.ToArray().Select(row => new ContinuousMechanicsWorldActiveEffectRow(entity, row.Instance, row.Definition)).ToArray(),
+            arg0.MechanicsCatalog.Handle.Value,
+            50,
+            arg0.ContinuousCatalog.Handle.Value,
+            "example",
+            "example");
+    }
+
+    public ContinuousMechanicsWorldImportLeaseReceipt StageWorldImport(ContinuousMechanicsWorldImportStageRequest arg0)
+    {
+        WorldImportStages++;
+        ContinuousMechanicsRevisionRemapRow[] remaps = arg0.ComponentPresence.Span.ToArray()
+            .Select(row => new ContinuousMechanicsRevisionRemapRow(
+                row.EntityId, row.Component, row.Present, row.Revision, row.Revision + 1, row.Revision + 2))
+            .ToArray();
+        return new ContinuousMechanicsWorldImportLeaseReceipt(
+            remaps,
+            arg0.MechanicsCatalog.Handle.Value,
+            arg0.MechanicsStateRevision,
+            arg0.MechanicsStateRevision + 1,
+            arg0.ContinuousCatalog.Handle.Value,
+            arg0.ContinuousCatalogVersion,
+            arg0.ContinuousCatalogFingerprint);
     }
 
     public ContinuousMechanicsStatEvaluationLeaseReceipt EvaluateStat(ContinuousMechanicsStatEvaluateRequest arg0)
