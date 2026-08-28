@@ -28,6 +28,14 @@ export interface AnimatedMeshResource {
   readonly contentHash?: string | null;
   readonly scene: THREE.Object3D;
   readonly clips: readonly THREE.AnimationClip[];
+  /** Engine-facing slot to the exact canonical GLB material association. */
+  readonly embeddedMaterialSlots?: ReadonlyMap<number, AnimatedMeshEmbeddedMaterial>;
+}
+
+export interface AnimatedMeshEmbeddedMaterial {
+  readonly sourceMaterialSlot: number;
+  /** Every Three material object that GLTFLoader associated with this source index. */
+  readonly materials: readonly THREE.Material[];
 }
 
 export interface AnimationClipPackResource {
@@ -170,6 +178,7 @@ interface AnimatedMeshAssetRecord {
   readonly asset: AnimatedMeshAsset;
   readonly resource: AnimatedMeshResource;
   readonly scene: THREE.Object3D;
+  readonly embeddedMaterialSlots: ReadonlyMap<number, AnimatedMeshEmbeddedMaterial>;
   readonly packs: readonly AnimationClipPackResource[];
   readonly generation: number;
   refCount: number;
@@ -179,6 +188,7 @@ interface AnimatedMeshInstanceRecord {
   readonly handle: RenderHandle;
   readonly asset: string;
   readonly object: THREE.Object3D;
+  readonly embeddedMaterialSlots: ReadonlyMap<number, AnimatedMeshEmbeddedMaterial>;
   readonly mixer: THREE.AnimationMixer;
   readonly actions: ReadonlyMap<string, THREE.AnimationAction>;
   readonly clipOrigins: ReadonlyMap<string, 'embedded' | 'pack'>;
@@ -221,6 +231,7 @@ export async function loadAnimatedMeshGlbResource(
   asset: string,
   data: ArrayBuffer,
   contentHash?: string,
+  embeddedMaterialSlots: readonly { readonly slot: number; readonly sourceMaterialSlot: number }[] = [],
 ): Promise<AnimatedMeshResource> {
   const loader = new GLTFLoader();
   const gltf = await new Promise<GLTF>((resolve, reject) => {
@@ -231,7 +242,72 @@ export async function loadAnimatedMeshGlbResource(
     ...(contentHash === undefined ? {} : { contentHash }),
     scene: gltf.scene,
     clips: gltf.animations,
+    embeddedMaterialSlots: resolveEmbeddedMaterialSlots(gltf, embeddedMaterialSlots),
   };
+}
+
+/**
+ * Resolves importer-owned GLB material indices through GLTFLoader's parser
+ * associations. Associations are source-indexed, so this never depends on the
+ * order Three happens to visit meshes in the scene graph.
+ */
+function resolveEmbeddedMaterialSlots(
+  gltf: GLTF,
+  bindings: readonly { readonly slot: number; readonly sourceMaterialSlot: number }[],
+): ReadonlyMap<number, AnimatedMeshEmbeddedMaterial> {
+  const sources = new Set<number>();
+  bindings.forEach((binding, index) => {
+    if (!Number.isSafeInteger(binding.slot) || binding.slot !== index
+      || !Number.isSafeInteger(binding.sourceMaterialSlot) || binding.sourceMaterialSlot < 0
+      || binding.sourceMaterialSlot > 65_535 || sources.has(binding.sourceMaterialSlot)) {
+      throw new AnimatedMeshApplyError('loadAnimatedMeshGlbResource: embedded material slots are invalid');
+    }
+    sources.add(binding.sourceMaterialSlot);
+  });
+  const materialsBySourceSlot = new Map<number, Set<THREE.Material>>();
+  for (const [candidate, association] of gltf.parser.associations) {
+    if (!(candidate instanceof THREE.Mesh)) continue;
+    const sourceMaterialSlot = sourceMaterialSlotForMesh(gltf, association);
+    if (sourceMaterialSlot === undefined) continue;
+    const materials = materialsBySourceSlot.get(sourceMaterialSlot) ?? new Set<THREE.Material>();
+    if (Array.isArray(candidate.material)) {
+      candidate.material.forEach((material) => materials.add(material));
+    } else if (candidate.material instanceof THREE.Material) {
+      materials.add(candidate.material);
+    }
+    materialsBySourceSlot.set(sourceMaterialSlot, materials);
+  }
+  return new Map(bindings.map((binding) => {
+    const materials = materialsBySourceSlot.get(binding.sourceMaterialSlot);
+    if (materials === undefined || materials.size === 0) {
+      throw new AnimatedMeshApplyError(
+        `loadAnimatedMeshGlbResource: source material ${String(binding.sourceMaterialSlot)} is missing from the admitted GLB`,
+      );
+    }
+    return [binding.slot, Object.freeze({
+      sourceMaterialSlot: binding.sourceMaterialSlot,
+      materials: Object.freeze([...materials]),
+    })] as const;
+  }));
+}
+
+function sourceMaterialSlotForMesh(
+  gltf: GLTF,
+  association: { readonly meshes?: number; readonly primitives?: number },
+): number | undefined {
+  const meshIndex = association.meshes;
+  const primitiveIndex = association.primitives;
+  if (typeof meshIndex !== 'number' || !Number.isSafeInteger(meshIndex)
+    || typeof primitiveIndex !== 'number' || !Number.isSafeInteger(primitiveIndex)) {
+    return undefined;
+  }
+  const mesh = (gltf.parser.json as { readonly meshes?: readonly {
+    readonly primitives?: readonly { readonly material?: unknown }[];
+  }[] }).meshes?.[meshIndex];
+  const material = mesh?.primitives?.[primitiveIndex]?.material;
+  return typeof material === 'number' && Number.isSafeInteger(material) && material >= 0
+    ? material
+    : undefined;
 }
 
 export async function loadAnimationClipPackGlbResource(
@@ -263,17 +339,32 @@ export class AnimatedMeshRegistry {
       );
     }
     const { resource, packs } = this.#validatedResource(asset);
-    const scene = createAnimatedMeshAssetScene(resource.scene);
+    const template = createAnimatedMeshAssetScene(resource.scene, resource.embeddedMaterialSlots);
     if (existing) {
       disposeAnimatedMeshAssetScene(existing.scene);
     }
     const generation = (this.#assetGenerations.get(asset.asset) ?? 0) + 1;
     this.#assetGenerations.set(asset.asset, generation);
-    this.#assets.set(asset.asset, { asset, resource, scene, packs, generation, refCount: 0 });
+    this.#assets.set(asset.asset, {
+      asset,
+      resource,
+      scene: template.scene,
+      embeddedMaterialSlots: template.embeddedMaterialSlots,
+      packs,
+      generation,
+      refCount: 0,
+    });
   }
 
   validateDefinition(asset: AnimatedMeshAsset): void {
     this.#validatedResource(asset);
+  }
+
+  /** Renderer-internal proof surface for the admitted template/instance map. */
+  embeddedMaterialSlots(
+    handle: RenderHandle,
+  ): ReadonlyMap<number, AnimatedMeshEmbeddedMaterial> | undefined {
+    return this.#instances.get(handle)?.embeddedMaterialSlots;
   }
 
   #validatedResource(asset: AnimatedMeshAsset): { resource: AnimatedMeshResource; packs: readonly AnimationClipPackResource[] } {
@@ -287,6 +378,17 @@ export class AnimatedMeshRegistry {
     if (resource.contentHash !== undefined && resource.contentHash !== asset.contentHash) {
       throw new AnimatedMeshApplyError(
         `defineAnimatedMesh: content hash mismatch for ${asset.asset}; expected ${resource.contentHash}, received ${asset.contentHash}`,
+      );
+    }
+    const requestedEmbeddedSlots = asset.embeddedMaterialSlots ?? [];
+    const resolvedEmbeddedSlots = resource.embeddedMaterialSlots
+      ?? new Map<number, AnimatedMeshEmbeddedMaterial>();
+    if (requestedEmbeddedSlots.length !== resolvedEmbeddedSlots.size
+      || requestedEmbeddedSlots.some((binding) => (
+        resolvedEmbeddedSlots.get(binding.slot)?.sourceMaterialSlot !== binding.sourceMaterialSlot
+      ))) {
+      throw new AnimatedMeshApplyError(
+        `defineAnimatedMesh: embedded material slot mapping is unavailable for ${asset.asset}`,
       );
     }
     assertClipDescriptors(asset, resource);
@@ -333,6 +435,7 @@ export class AnimatedMeshRegistry {
       handle,
       asset: instance.asset,
       object,
+      embeddedMaterialSlots: record.embeddedMaterialSlots,
       mixer,
       actions,
       clipOrigins,
@@ -568,7 +671,13 @@ export class AnimatedMeshRegistry {
   }
 }
 
-function createAnimatedMeshAssetScene(source: THREE.Object3D): THREE.Object3D {
+function createAnimatedMeshAssetScene(
+  source: THREE.Object3D,
+  sourceEmbeddedMaterialSlots: ReadonlyMap<number, AnimatedMeshEmbeddedMaterial> | undefined,
+): {
+  readonly scene: THREE.Object3D;
+  readonly embeddedMaterialSlots: ReadonlyMap<number, AnimatedMeshEmbeddedMaterial>;
+} {
   const scene = SkeletonUtils.clone(source);
   const geometries = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
   const materials = new Map<THREE.Material, THREE.Material>();
@@ -589,7 +698,20 @@ function createAnimatedMeshAssetScene(source: THREE.Object3D): THREE.Object3D {
       mesh.material = cloneSharedMaterial(mesh.material, materials);
     }
   });
-  return scene;
+  const embeddedMaterialSlots = new Map<number, AnimatedMeshEmbeddedMaterial>();
+  for (const [slot, sourceBinding] of sourceEmbeddedMaterialSlots ?? []) {
+    const templateMaterials = sourceBinding.materials.map((sourceMaterial) => materials.get(sourceMaterial));
+    if (templateMaterials.some((material) => material === undefined)) {
+      throw new AnimatedMeshApplyError(
+        `createAnimatedMeshAssetScene: source material mapping for slot ${String(slot)} is not part of the GLB template`,
+      );
+    }
+    embeddedMaterialSlots.set(slot, Object.freeze({
+      sourceMaterialSlot: sourceBinding.sourceMaterialSlot,
+      materials: Object.freeze(templateMaterials as THREE.Material[]),
+    }));
+  }
+  return { scene, embeddedMaterialSlots };
 }
 
 function cloneSharedMaterial(

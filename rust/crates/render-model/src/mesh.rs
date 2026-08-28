@@ -901,6 +901,12 @@ pub struct AnimatedMeshAsset {
     #[serde(default)]
     pub clip_packs: Vec<AnimationClipPack>,
     pub default_clip: Option<String>,
+    /// Immutable mapping from the Engine-facing dense slot to the material
+    /// index in the admitted GLB. This is deliberately distinct from
+    /// `material_slots`: embedded GLB materials are not Engine material
+    /// assets, and must not be validated as such.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded_material_slots: Vec<AnimatedMeshEmbeddedMaterialSlot>,
     pub material_slots: Vec<MeshMaterialSlot>,
     pub bounds: MeshBoundsDescriptor,
 }
@@ -964,8 +970,52 @@ impl AnimatedMeshAsset {
                 clip: self.default_clip.clone().unwrap_or_default(),
             });
         }
+        validate_animated_embedded_material_slots(&self.embedded_material_slots)
+            .map_err(AnimatedMeshAssetError::EmbeddedMaterialSlot)?;
         validate_slots(&self.material_slots).map_err(AnimatedMeshAssetError::MaterialSlot)
     }
+}
+
+/// A deterministic Engine-facing material slot for an admitted GLB resource.
+///
+/// `slot` is dense and stable for the exact admitted source. The renderer
+/// resolves `source_material_slot` through GLTFLoader's material association,
+/// never by Three scene traversal order. A separate future appearance override
+/// may target `slot`; this mapping does not create an Engine material asset or
+/// override behavior by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimatedMeshEmbeddedMaterialSlot {
+    pub slot: u16,
+    pub source_material_slot: u16,
+}
+
+fn validate_animated_embedded_material_slots(
+    slots: &[AnimatedMeshEmbeddedMaterialSlot],
+) -> Result<(), AnimatedMeshEmbeddedMaterialSlotError> {
+    let mut source_slots = BTreeSet::new();
+    for (expected_slot, binding) in slots.iter().enumerate() {
+        let expected_slot = u16::try_from(expected_slot)
+            .expect("animated GLB admission bounds material slots to u16");
+        if binding.slot != expected_slot {
+            return Err(AnimatedMeshEmbeddedMaterialSlotError::NonDense {
+                expected: expected_slot,
+                actual: binding.slot,
+            });
+        }
+        if !source_slots.insert(binding.source_material_slot) {
+            return Err(AnimatedMeshEmbeddedMaterialSlotError::DuplicateSource {
+                source_material_slot: binding.source_material_slot,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnimatedMeshEmbeddedMaterialSlotError {
+    NonDense { expected: u16, actual: u16 },
+    DuplicateSource { source_material_slot: u16 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -980,6 +1030,7 @@ pub enum AnimatedMeshAssetError {
     DuplicateClipPack { asset: String },
     EffectiveClipCollision { clip: String },
     DefaultClipMissing { clip: String },
+    EmbeddedMaterialSlot(AnimatedMeshEmbeddedMaterialSlotError),
     MaterialSlot(MeshMaterialSlotError),
 }
 
@@ -1188,6 +1239,43 @@ mod tests {
         assert!(matches!(
             asset.resolve_collision(),
             CollisionResolution::Aabb { .. }
+        ));
+    }
+
+    #[test]
+    fn embedded_animated_material_slots_are_dense_and_source_unique() {
+        assert_eq!(
+            validate_animated_embedded_material_slots(&[
+                AnimatedMeshEmbeddedMaterialSlot {
+                    slot: 0,
+                    source_material_slot: 3,
+                },
+                AnimatedMeshEmbeddedMaterialSlot {
+                    slot: 1,
+                    source_material_slot: 7,
+                },
+            ]),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_animated_embedded_material_slots(&[AnimatedMeshEmbeddedMaterialSlot {
+                slot: 1,
+                source_material_slot: 3,
+            }]),
+            Err(AnimatedMeshEmbeddedMaterialSlotError::NonDense { .. })
+        ));
+        assert!(matches!(
+            validate_animated_embedded_material_slots(&[
+                AnimatedMeshEmbeddedMaterialSlot {
+                    slot: 0,
+                    source_material_slot: 3,
+                },
+                AnimatedMeshEmbeddedMaterialSlot {
+                    slot: 1,
+                    source_material_slot: 3,
+                },
+            ]),
+            Err(AnimatedMeshEmbeddedMaterialSlotError::DuplicateSource { .. })
         ));
     }
 

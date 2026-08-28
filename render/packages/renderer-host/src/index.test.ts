@@ -40,6 +40,7 @@ const ANIMATED_MANIFEST: RendererAnimatedMeshResourceManifest = {
     asset: ANIMATED_ASSET,
     contentHash: ANIMATED_HASH,
     clipIds: ['idle', 'run', 'jump'],
+    embeddedMaterialSlots: [{ slot: 0, sourceMaterialSlot: 0 }],
   }],
 };
 
@@ -59,6 +60,7 @@ function animationIntentFrame(clip = 'run'): RenderFrameDiff {
             { id: 'jump', name: 'jump', durationSeconds: 0.5 },
           ],
           defaultClip: 'idle',
+          embeddedMaterialSlots: [{ slot: 0, sourceMaterialSlot: 0 }],
           materialSlots: [],
           bounds: { min: [-0.02, -0.01, 0], max: [0.02, 0.01, 0.04] },
         },
@@ -473,6 +475,18 @@ void test('animated resources and playback fail closed with typed diagnostics', 
       createRendererAnimatedMeshProjection({ manifest: badManifest, resolveResource: fixtureResolver }),
       (error: unknown) => error instanceof RendererHostError
         && error.diagnostics[0]?.code === 'animated_mesh_content_hash_mismatch',
+    );
+    const invalidSlotManifest: RendererAnimatedMeshResourceManifest = {
+      ...ANIMATED_MANIFEST,
+      resources: ANIMATED_MANIFEST.resources.map((resource) => ({
+        ...resource,
+        embeddedMaterialSlots: [{ slot: 1, sourceMaterialSlot: 0 }],
+      })),
+    };
+    await assert.rejects(
+      createRendererAnimatedMeshProjection({ manifest: invalidSlotManifest, resolveResource: fixtureResolver }),
+      (error: unknown) => error instanceof RendererHostError
+        && error.diagnostics[0]?.code === 'animated_mesh_manifest_invalid',
     );
 
     const projection = await createRendererAnimatedMeshProjection({

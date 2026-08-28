@@ -488,6 +488,26 @@ function materialSlots(input: unknown, path: string): Set<number> {
   return slots;
 }
 
+function animatedEmbeddedMaterialSlots(input: unknown, path: string): void {
+  const sources = new Set<number>();
+  list(input, path).forEach((item, index) => {
+    const slotPath = `${path}[${String(index)}]`;
+    const value = record(item, slotPath, ['slot', 'sourceMaterialSlot']);
+    const slot = integer(value['slot'], `${slotPath}.slot`, 0, 65_535);
+    if (slot !== index) fail(`${slotPath}.slot`, `must be the dense slot ${String(index)}`);
+    const sourceMaterialSlot = integer(
+      value['sourceMaterialSlot'],
+      `${slotPath}.sourceMaterialSlot`,
+      0,
+      65_535,
+    );
+    if (sources.has(sourceMaterialSlot)) {
+      fail(`${slotPath}.sourceMaterialSlot`, 'is duplicated');
+    }
+    sources.add(sourceMaterialSlot);
+  });
+}
+
 function staticMesh(input: unknown, path: string): void {
   const value = record(input, path, ['asset', 'payload', 'materialSlots', 'collision']);
   nonEmptyText(value['asset'], `${path}.asset`);
@@ -526,7 +546,7 @@ function staticMeshInstance(input: unknown, path: string): void {
 function animatedMesh(input: unknown, path: string): void {
   const value = recordOptional(input, path,
     ['asset', 'runtimeFormat', 'contentHash', 'clips', 'defaultClip', 'materialSlots', 'bounds'],
-    ['clipPacks'],
+    ['clipPacks', 'embeddedMaterialSlots'],
   );
   nonEmptyText(value['asset'], `${path}.asset`);
   enumeration(value['runtimeFormat'], `${path}.runtimeFormat`, ['glb'] as const);
@@ -604,6 +624,7 @@ function animatedMesh(input: unknown, path: string): void {
     const defaultClip = nonEmptyText(value['defaultClip'], `${path}.defaultClip`);
     if (!clips.has(defaultClip)) fail(`${path}.defaultClip`, 'is not declared');
   }
+  animatedEmbeddedMaterialSlots(value['embeddedMaterialSlots'] ?? [], `${path}.embeddedMaterialSlots`);
   materialSlots(value['materialSlots'], `${path}.materialSlots`);
   bounds(value['bounds'], `${path}.bounds`);
 }

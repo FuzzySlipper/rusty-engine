@@ -47,6 +47,13 @@ export interface RendererAnimatedMeshResourceDescriptor {
   /** Decoded GLB clip names in the same order as effective clip IDs. */
   readonly clipSourceNames?: readonly string[];
   readonly clipIds: readonly string[];
+  /** Dense Engine slots mapped to explicit source GLB material indices. */
+  readonly embeddedMaterialSlots?: readonly RendererAnimatedMeshEmbeddedMaterialSlot[];
+}
+
+export interface RendererAnimatedMeshEmbeddedMaterialSlot {
+  readonly slot: number;
+  readonly sourceMaterialSlot: number;
 }
 
 export interface RendererAnimationClipPackResourceDescriptor {
@@ -167,7 +174,12 @@ export async function loadRendererAnimatedMeshSource(
         `expected ${descriptor.contentHash}, received ${actualHash}`,
       );
     }
-    const resource = await loadAnimatedMeshGlbResource(descriptor.asset, immutableData, descriptor.contentHash).catch((cause: unknown) => {
+    const resource = await loadAnimatedMeshGlbResource(
+      descriptor.asset,
+      immutableData,
+      descriptor.contentHash,
+      descriptor.embeddedMaterialSlots,
+    ).catch((cause: unknown) => {
       throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
     });
     const missingClip = missingDeclaredSourceClip(resource.clips, descriptor);
@@ -344,7 +356,9 @@ function validateManifest(manifest: RendererAnimatedMeshResourceManifest): void 
     const sourceNames = resource.clipSourceNames ?? resource.clipIds;
     const validClips = new Set(resource.clipIds).size === resource.clipIds.length
       && sourceNames.length === resource.clipIds.length && new Set(sourceNames).size === sourceNames.length;
-    if (resource.asset.length === 0 || !validHash || !validClips || assets.has(resource.asset)) {
+    if (resource.asset.length === 0 || !validHash || !validClips
+      || !validEmbeddedMaterialSlots(resource.embeddedMaterialSlots ?? [])
+      || assets.has(resource.asset)) {
       throw hostError('animated_mesh_manifest_invalid', resource.asset || null, null, 'animated mesh resource descriptor is invalid or duplicated');
     }
     assets.add(resource.asset);
@@ -361,6 +375,24 @@ function validateManifest(manifest: RendererAnimatedMeshResourceManifest): void 
     }
     packs.add(resource.asset);
   }
+}
+
+function validEmbeddedMaterialSlots(
+  slots: readonly RendererAnimatedMeshEmbeddedMaterialSlot[],
+): boolean {
+  const sources = new Set<number>();
+  for (const [index, binding] of slots.entries()) {
+    if (!Number.isSafeInteger(binding.slot)
+      || binding.slot !== index
+      || !Number.isSafeInteger(binding.sourceMaterialSlot)
+      || binding.sourceMaterialSlot < 0
+      || binding.sourceMaterialSlot > 65_535
+      || sources.has(binding.sourceMaterialSlot)) {
+      return false;
+    }
+    sources.add(binding.sourceMaterialSlot);
+  }
+  return true;
 }
 
 function animationDiagnosticCode(code: string): RendererHostDiagnosticCode {

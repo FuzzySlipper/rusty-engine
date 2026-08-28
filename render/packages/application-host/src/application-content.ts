@@ -335,6 +335,7 @@ function animatedMeshDescriptors(
       readonly asset?: unknown;
       readonly contentHash?: unknown;
       readonly clips?: unknown;
+      readonly embeddedMaterialSlots?: unknown;
     };
     if (typeof candidate.asset !== 'string'
       || typeof candidate.contentHash !== 'string'
@@ -346,13 +347,40 @@ function animatedMeshDescriptors(
     ));
     if (!clips.every((clip): clip is { readonly id: string; readonly name: string | null } => clip !== undefined
       && typeof clip.id === 'string' && (typeof clip.name === 'string' || clip.name === null))) return [];
+    const embeddedMaterialSlots = animatedEmbeddedMaterialSlots(candidate.embeddedMaterialSlots);
+    if (embeddedMaterialSlots === undefined) return [];
     return [{
       asset: candidate.asset,
       contentHash: candidate.contentHash,
       clipIds: Object.freeze(clips.map((clip) => clip.id)),
       clipSourceNames: Object.freeze(clips.map((clip) => clip.name ?? clip.id)),
+      embeddedMaterialSlots,
     }];
   });
+}
+
+function animatedEmbeddedMaterialSlots(
+  candidate: unknown,
+): readonly { readonly slot: number; readonly sourceMaterialSlot: number }[] | undefined {
+  if (candidate === undefined) return Object.freeze([]);
+  if (!Array.isArray(candidate)) return undefined;
+  const sources = new Set<number>();
+  const slots = candidate.map((value, index) => {
+    if (typeof value !== 'object' || value === null) return undefined;
+    const binding = value as { readonly slot?: unknown; readonly sourceMaterialSlot?: unknown };
+    const slot = binding.slot;
+    const sourceMaterialSlot = binding.sourceMaterialSlot;
+    if (typeof slot !== 'number' || !Number.isSafeInteger(slot) || slot !== index
+      || typeof sourceMaterialSlot !== 'number' || !Number.isSafeInteger(sourceMaterialSlot) || sourceMaterialSlot < 0
+      || sourceMaterialSlot > 65_535 || sources.has(sourceMaterialSlot)) {
+      return undefined;
+    }
+    sources.add(sourceMaterialSlot);
+    return Object.freeze({ slot, sourceMaterialSlot });
+  });
+  return slots.every((slot): slot is { readonly slot: number; readonly sourceMaterialSlot: number } => slot !== undefined)
+    ? Object.freeze(slots)
+    : undefined;
 }
 
 function resourceDescriptor(resource: PreparedRustyApplicationResource): {

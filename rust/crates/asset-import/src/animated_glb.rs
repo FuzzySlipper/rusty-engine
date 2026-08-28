@@ -1,11 +1,12 @@
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use asset_catalog::{validate_catalog, AssetCatalog, CatalogEntry};
 use core_assets::{AssetHash, AssetId, AssetKind};
 use gltf::buffer::Source as BufferSource;
 use gltf::image::Source as ImageSource;
 use render_model::{
-    AnimatedMeshAsset, AnimatedMeshRuntimeFormat, AnimationClipDescriptor, MeshBoundsDescriptor,
+    AnimatedMeshAsset, AnimatedMeshEmbeddedMaterialSlot, AnimatedMeshRuntimeFormat,
+    AnimationClipDescriptor, MeshBoundsDescriptor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -125,86 +126,107 @@ pub fn import_animated_glb_asset(
         expected_source_sha256: Some(source_hash.clone()),
         mesh_primitive: None,
     };
-    let (animation_kind, source_bounds, clips, channel_count, keyframe_count) =
-        if parsed.document.animations().next().is_some() {
-            let imported = match import_animated_mesh_source(&animated_request) {
-                Ok(imported) => imported,
-                Err(error) => {
-                    diagnostics.extend(error.diagnostics().iter().map(|item| {
-                        ImportDiagnostic::error(
-                            map_conversion_code(item.code, &item.message),
-                            item.path.clone(),
-                            item.message.clone(),
-                            conversion_remedy(item.code),
-                        )
-                    }));
-                    return failed(diagnostics);
-                }
-            };
-            let clips = imported
-                .model
-                .clips
-                .iter()
-                .map(|clip| AnimationClipDescriptor {
-                    id: clip.name.clone(),
-                    name: Some(clip.name.clone()),
-                    duration_seconds: Some(
-                        clip.duration_microseconds as f32
-                            / voxel_convert::ANIMATION_TIMESTAMP_TICKS_PER_SECOND as f32,
-                    ),
-                })
-                .collect::<Vec<_>>();
-            let channel_count = imported
-                .model
-                .clips
-                .iter()
-                .map(|clip| clip.channels.len())
-                .sum::<usize>();
-            let keyframe_count = imported
-                .model
-                .clips
-                .iter()
-                .flat_map(|clip| &clip.channels)
-                .map(|channel| channel.timestamps_microseconds.len() as u64)
-                .sum::<u64>();
-            (
-                GlbAnimationKind::Animated,
-                imported.source.receipt.metadata.source_bounds,
-                clips,
-                channel_count,
-                keyframe_count,
-            )
-        } else {
-            // `voxel-convert` retains separate static and animated source parsers.
-            // This uses the existing bounded static scene parser only to validate
-            // and measure a zero-clip GLB; publication remains the same GLB mesh
-            // descriptor/resource lifecycle below.
-            let static_request = MeshSourceImportRequest {
-                source_asset_id: format!("mesh/{name}"),
-                ..animated_request
-            };
-            let imported = match import_mesh_source(&static_request) {
-                Ok(imported) => imported,
-                Err(error) => {
-                    diagnostics.extend(error.diagnostics().iter().map(|item| {
-                        ImportDiagnostic::error(
-                            map_conversion_code(item.code, &item.message),
-                            item.path.clone(),
-                            item.message.clone(),
-                            conversion_remedy(item.code),
-                        )
-                    }));
-                    return failed(diagnostics);
-                }
-            };
-            (
-                GlbAnimationKind::Static,
-                imported.receipt.metadata.source_bounds,
-                Vec::new(),
-                0,
-                0,
-            )
+    let (
+        animation_kind,
+        source_bounds,
+        source_material_slots,
+        clips,
+        channel_count,
+        keyframe_count,
+    ) = if parsed.document.animations().next().is_some() {
+        let imported = match import_animated_mesh_source(&animated_request) {
+            Ok(imported) => imported,
+            Err(error) => {
+                diagnostics.extend(error.diagnostics().iter().map(|item| {
+                    ImportDiagnostic::error(
+                        map_conversion_code(item.code, &item.message),
+                        item.path.clone(),
+                        item.message.clone(),
+                        conversion_remedy(item.code),
+                    )
+                }));
+                return failed(diagnostics);
+            }
         };
+        let clips = imported
+            .model
+            .clips
+            .iter()
+            .map(|clip| AnimationClipDescriptor {
+                id: clip.name.clone(),
+                name: Some(clip.name.clone()),
+                duration_seconds: Some(
+                    clip.duration_microseconds as f32
+                        / voxel_convert::ANIMATION_TIMESTAMP_TICKS_PER_SECOND as f32,
+                ),
+            })
+            .collect::<Vec<_>>();
+        let channel_count = imported
+            .model
+            .clips
+            .iter()
+            .map(|clip| clip.channels.len())
+            .sum::<usize>();
+        let keyframe_count = imported
+            .model
+            .clips
+            .iter()
+            .flat_map(|clip| &clip.channels)
+            .map(|channel| channel.timestamps_microseconds.len() as u64)
+            .sum::<u64>();
+        (
+            GlbAnimationKind::Animated,
+            imported.source.receipt.metadata.source_bounds,
+            imported
+                .source
+                .receipt
+                .metadata
+                .material_slots
+                .iter()
+                .map(|material| material.source_material_slot)
+                .collect::<Vec<_>>(),
+            clips,
+            channel_count,
+            keyframe_count,
+        )
+    } else {
+        // `voxel-convert` retains separate static and animated source parsers.
+        // This uses the existing bounded static scene parser only to validate
+        // and measure a zero-clip GLB; publication remains the same GLB mesh
+        // descriptor/resource lifecycle below.
+        let static_request = MeshSourceImportRequest {
+            source_asset_id: format!("mesh/{name}"),
+            ..animated_request
+        };
+        let imported = match import_mesh_source(&static_request) {
+            Ok(imported) => imported,
+            Err(error) => {
+                diagnostics.extend(error.diagnostics().iter().map(|item| {
+                    ImportDiagnostic::error(
+                        map_conversion_code(item.code, &item.message),
+                        item.path.clone(),
+                        item.message.clone(),
+                        conversion_remedy(item.code),
+                    )
+                }));
+                return failed(diagnostics);
+            }
+        };
+        (
+            GlbAnimationKind::Static,
+            imported.receipt.metadata.source_bounds,
+            imported
+                .receipt
+                .metadata
+                .material_slots
+                .iter()
+                .map(|material| material.source_material_slot)
+                .collect::<Vec<_>>(),
+            Vec::new(),
+            0,
+            0,
+        )
+    };
     let bounds = match render_bounds(source_bounds) {
         Ok(bounds) => bounds,
         Err(diagnostic) => {
@@ -213,6 +235,8 @@ pub fn import_animated_glb_asset(
         }
     };
     let clip_count = clips.len();
+    let embedded_material_slots =
+        embedded_material_slots(source_material_slots, parsed.document.materials().count());
     let default_clip = clips
         .iter()
         .find(|clip| clip.id == "idle")
@@ -225,6 +249,7 @@ pub fn import_animated_glb_asset(
         clips,
         clip_packs: Vec::new(),
         default_clip,
+        embedded_material_slots,
         material_slots: Vec::new(),
         bounds,
     };
@@ -290,6 +315,33 @@ pub fn import_animated_glb_asset(
         }),
         diagnostics,
     }
+}
+
+/// Derive dense Engine-facing slots from the admitted source parser's used
+/// material slots. Only explicit GLB material indices participate: primitives
+/// without a `material` property use Three's default material and have no
+/// source material index suitable for an Engine override slot.
+fn embedded_material_slots(
+    source_material_slots: Vec<u32>,
+    glb_material_count: usize,
+) -> Vec<AnimatedMeshEmbeddedMaterialSlot> {
+    let glb_material_count =
+        u32::try_from(glb_material_count).expect("animated GLB material admission bound fits u32");
+    source_material_slots
+        .into_iter()
+        .filter(|source_material_slot| *source_material_slot < glb_material_count)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .enumerate()
+        .map(
+            |(slot, source_material_slot)| AnimatedMeshEmbeddedMaterialSlot {
+                slot: u16::try_from(slot)
+                    .expect("animated GLB material admission bound keeps dense slots in u16"),
+                source_material_slot: u16::try_from(source_material_slot)
+                    .expect("animated GLB material admission bound keeps source slots in u16"),
+            },
+        )
+        .collect()
 }
 
 fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportDiagnostic> {

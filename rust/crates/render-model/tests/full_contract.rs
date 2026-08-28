@@ -122,6 +122,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
         }],
         clip_packs: vec![],
         default_clip: Some("idle".to_string()),
+        embedded_material_slots: vec![],
         material_slots: vec![MeshMaterialSlot {
             slot: 0,
             material: "material/plain".to_string(),

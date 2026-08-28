@@ -210,6 +210,7 @@ void test('application content composes animated GLB, packed mesh, and texture r
             provenance: { producer: 'fixture', sourceHash: `sha256:${animatedDigest}`, targetHash: `sha256:${animatedDigest}`, license: 'CC0-1.0' },
           }],
           defaultClip: 'idle',
+          embeddedMaterialSlots: [{ slot: 0, sourceMaterialSlot: 3 }],
           materialSlots: [],
           bounds: { min: [0, 0, 0], max: [1, 1, 1] },
         },
@@ -248,6 +249,7 @@ void test('application content composes animated GLB, packed mesh, and texture r
     contentHash: `sha256:${animatedDigest}`,
     clipIds: ['idle'],
     clipSourceNames: ['idle'],
+    embeddedMaterialSlots: [{ slot: 0, sourceMaterialSlot: 3 }],
   });
   assert.deepEqual(
     new Uint8Array(await options.resolveAnimatedMeshResource!(descriptor!)),

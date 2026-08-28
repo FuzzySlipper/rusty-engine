@@ -259,6 +259,13 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
         ["idle", "run", "jump"]
     );
     assert_eq!(descriptor.default_clip.as_deref(), Some("idle"));
+    assert_eq!(
+        descriptor.embedded_material_slots,
+        vec![render_model::AnimatedMeshEmbeddedMaterialSlot {
+            slot: 0,
+            source_material_slot: 0,
+        }]
+    );
     assert!(descriptor.material_slots.is_empty());
 
     let catalog = decode_catalog(
@@ -331,6 +338,13 @@ fn zero_clip_unlit_glb_uses_the_existing_mesh_resource_lifecycle() {
     assert_eq!(descriptor.asset, "mesh-animation/static-unlit-triangle");
     assert!(descriptor.clips.is_empty());
     assert_eq!(descriptor.default_clip, None);
+    assert_eq!(
+        descriptor.embedded_material_slots,
+        vec![render_model::AnimatedMeshEmbeddedMaterialSlot {
+            slot: 0,
+            source_material_slot: 0,
+        }]
+    );
     assert!(descriptor.material_slots.is_empty());
 
     let imported = import_animated_glb_asset(&uri, &source, &ImportContext::default())

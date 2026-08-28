@@ -205,8 +205,18 @@ export interface AnimatedMeshAsset {
   /** Omitted by schema-v1 producers that only use embedded clips. */
   readonly clipPacks?: readonly AnimationClipPack[];
   readonly defaultClip: string | null;
+  /**
+   * Dense Engine-facing slots mapped to explicit source GLB material indices.
+   * These are embedded-resource identities, not Engine material assets.
+   */
+  readonly embeddedMaterialSlots?: readonly AnimatedMeshEmbeddedMaterialSlot[];
   readonly materialSlots: readonly MeshMaterialSlot[];
   readonly bounds: MeshBoundsDescriptor;
+}
+
+export interface AnimatedMeshEmbeddedMaterialSlot {
+  readonly slot: number;
+  readonly sourceMaterialSlot: number;
 }
 
 export type AnimatedMeshPlaybackCommand =

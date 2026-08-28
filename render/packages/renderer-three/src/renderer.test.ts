@@ -3522,12 +3522,40 @@ void test('committed animated GLB instances share GPU resources while playback r
       resolve(import.meta.dirname, '../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb'),
     );
     const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-    const resource = await loadAnimatedMeshGlbResource('mesh-animation/kenney-retro-character-medium', data);
+    const embeddedMaterialSlots = [{ slot: 0, sourceMaterialSlot: 0 }] as const;
+    const resource = await loadAnimatedMeshGlbResource(
+      'mesh-animation/kenney-retro-character-medium',
+      data,
+      undefined,
+      embeddedMaterialSlots,
+    );
+    assert.equal(resource.embeddedMaterialSlots?.get(0)?.sourceMaterialSlot, 0);
     assert.deepEqual(
       resource.clips.map((clip) => clip.name).sort(),
       ['idle', 'jump', 'run'],
     );
-    const asset = animatedMeshAsset();
+    const asset = animatedMeshAsset({ embeddedMaterialSlots });
+    const registry = new AnimatedMeshRegistry(new MapAnimatedMeshAssetSource([resource]));
+    registry.define(asset);
+    const mappedInstance = registry.create(renderHandle(4097), {
+      asset: asset.asset,
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      visible: true,
+      materialOverrides: [],
+      playback: null,
+      metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'mapped-instance' },
+    });
+    const mappedMaterial = registry.embeddedMaterialSlots(renderHandle(4097))?.get(0);
+    assert.equal(mappedMaterial?.sourceMaterialSlot, 0);
+    assert.ok(mappedMaterial?.materials.includes(firstMesh(mappedInstance.object).material as THREE.Material));
+    assert.throws(
+      () => registry.validateDefinition({
+        ...asset,
+        embeddedMaterialSlots: [{ slot: 0, sourceMaterialSlot: 1 }],
+      }),
+      /embedded material slot mapping is unavailable/,
+    );
+    registry.release(renderHandle(4097));
     const renderer = new ThreeRenderer({
       animatedMeshSource: new MapAnimatedMeshAssetSource([resource]),
     });
