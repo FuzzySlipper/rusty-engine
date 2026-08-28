@@ -42,17 +42,20 @@ const MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES: usize = 512;
 /// Engine-owned collision/navigation mechanisms. Player and game state never
 /// live here: a character proposal builds its EntityState only for the call.
 pub(crate) struct RuntimeSpatialBridge {
-    sessions: BTreeMap<u64, SpatialSession>,
+    pub(crate) sessions: BTreeMap<u64, SpatialSession>,
     pub(crate) voxel_history_exports: BTreeMap<u64, Arc<[u8]>>,
     trigger_diagnostic_leases: BTreeMap<u64, SpatialTriggerDiagnosticLease>,
     collision_source: SpatialCollisionSource,
     next_session: u64,
     pub(crate) next_voxel_history_export: u64,
     next_trigger_diagnostic_lease: u64,
+    pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
+    pub(crate) next_world_origin_prepared: u64,
 }
 
 pub(crate) struct SpatialSession {
     pub(crate) scene: Arc<VoxelCollisionScene>,
+    pub(crate) world_origin: engine_spatial::WorldOriginState,
     pub(crate) voxel_history: engine_spatial::VoxelEditHistory,
     pub(crate) voxel_leases: engine_spatial::VoxelChunkLeaseRegistry,
     pub(crate) last_voxel_dirty_chunks: Vec<[i64; 3]>,
@@ -188,6 +191,8 @@ impl RuntimeSpatialBridge {
             next_session: 1,
             next_voxel_history_export: 1,
             next_trigger_diagnostic_lease: 1,
+            prepared_world_origins: BTreeMap::new(),
+            next_world_origin_prepared: 1,
         }
     }
 
@@ -242,6 +247,7 @@ impl RuntimeSpatialBridge {
                 voxel_leases: engine_spatial::VoxelChunkLeaseRegistry::default(),
                 last_voxel_dirty_chunks: Vec::new(),
                 scene: Arc::clone(&scene),
+                world_origin: engine_spatial::WorldOriginState::default(),
                 navigation: None,
                 navigation_revision: 0,
                 controller: CharacterControllerService::default(),
@@ -1975,6 +1981,9 @@ unsafe extern "C" fn destroy_spatial_session(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
     if bridge.sessions.remove(&handle.value).is_some() {
+        bridge
+            .prepared_world_origins
+            .retain(|_, prepared| prepared.session != handle.value);
         bridge
             .collision_source
             .scenes

@@ -31,6 +31,7 @@ mod state_machine;
 mod ui;
 mod voxel;
 mod voxel_content;
+mod world_origin;
 
 pub use animation::*;
 pub use appearance::*;
@@ -58,3 +59,4 @@ pub use state_machine::*;
 pub use ui::*;
 pub use voxel::*;
 pub use voxel_content::*;
+pub use world_origin::*;

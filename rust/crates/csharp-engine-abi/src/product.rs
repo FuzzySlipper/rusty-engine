@@ -230,6 +230,33 @@ pub type NativeSpatialReadTriggerFactAt = unsafe extern "C" fn(
     NativeSpatialTriggerFactAtRequest,
     *mut NativeSpatialTriggerFactAtReceipt,
 ) -> i32;
+pub type NativeWorldOriginPrepare = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeWorldOriginPrepareRequest,
+    *mut NativeWorldOriginPreparedHandle,
+) -> i32;
+pub type NativeWorldOriginRead = unsafe extern "C" fn(
+    *mut c_void,
+    NativeWorldOriginReadRequest,
+    *mut NativeWorldOriginReadout,
+) -> i32;
+pub type NativeWorldOriginReadPrepared = unsafe extern "C" fn(
+    *mut c_void,
+    NativeWorldOriginPreparedReadRequest,
+    *mut NativeWorldOriginPreparedReadout,
+) -> i32;
+pub type NativeWorldOriginReadAffectedAt = unsafe extern "C" fn(
+    *mut c_void,
+    NativeWorldOriginAffectedAtRequest,
+    *mut NativeWorldOriginAffectedAtReceipt,
+) -> i32;
+pub type NativeWorldOriginCommit = unsafe extern "C" fn(
+    *mut c_void,
+    NativeWorldOriginCommitRequest,
+    *mut NativeWorldOriginCommitReceipt,
+) -> i32;
+pub type NativeDestroyWorldOriginPrepared =
+    unsafe extern "C" fn(*mut c_void, NativeWorldOriginPreparedHandle) -> i32;
 pub type NativeOpenRenderResource = unsafe extern "C" fn(
     *mut c_void,
     *const NativeRenderResourceRequest,
@@ -1358,6 +1385,20 @@ pub struct NativeSpatialApi {
     pub read_trigger_fact_at: NativeSpatialReadTriggerFactAt,
 }
 
+/// Origin rebasing is a distinct named service family, but shares the Spatial
+/// session context because origin and collision scene commit as one unit.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeWorldOriginApi {
+    pub context: *mut c_void,
+    pub prepare: NativeWorldOriginPrepare,
+    pub read: NativeWorldOriginRead,
+    pub read_prepared: NativeWorldOriginReadPrepared,
+    pub read_affected_at: NativeWorldOriginReadAffectedAt,
+    pub commit: NativeWorldOriginCommit,
+    pub destroy_prepared: NativeDestroyWorldOriginPrepared,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeUiApi {
@@ -1718,6 +1759,7 @@ pub struct NativeEngineApi {
     pub look: NativeLookApi,
     pub dynamics: NativeDynamicsApi,
     pub spatial: NativeSpatialApi,
+    pub world_origin: NativeWorldOriginApi,
     pub voxel: NativeVoxelApi,
     pub voxel_content: NativeVoxelContentApi,
     pub content: NativeContentApi,

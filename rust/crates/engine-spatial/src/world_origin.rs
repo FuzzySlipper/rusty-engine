@@ -105,7 +105,39 @@ pub struct PreparedWorldOriginRebase {
     target_origin: WorldOrigin,
     candidate_entities: EntityState,
     candidate_scene: VoxelCollisionScene,
+    affected_entities: Vec<EntityId>,
     entity_count: usize,
+}
+
+/// A validated world-origin candidate with only the spatial facts an external
+/// owner needs to retain. It deliberately contains no [`EntityState`]: callers
+/// publish the copied local transforms through their own product state model.
+pub struct PreparedWorldOriginSpatialRebase {
+    expected_origin_revision: u64,
+    expected_voxel_source_revision: u64,
+    expected_static_mesh_revision: u64,
+    candidate_origin: WorldOriginState,
+    candidate_scene: VoxelCollisionScene,
+    affected_transforms: Vec<WorldOriginAffectedTransform>,
+    entity_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorldOriginAffectedTransform {
+    pub entity: EntityId,
+    pub transform: EntityTransform,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorldOriginSpatialRebaseReceipt {
+    pub revision_before: u64,
+    pub revision_after: u64,
+    pub origin_before: WorldOrigin,
+    pub origin_after: WorldOrigin,
+    pub voxel_source_revision: u64,
+    pub static_mesh_revision: u64,
+    pub entity_count: usize,
+    pub local_envelope: f32,
 }
 
 impl std::fmt::Debug for PreparedWorldOriginRebase {
@@ -117,6 +149,64 @@ impl std::fmt::Debug for PreparedWorldOriginRebase {
             .field("target_origin", &self.target_origin)
             .field("entity_count", &self.entity_count)
             .finish_non_exhaustive()
+    }
+}
+
+impl PreparedWorldOriginRebase {
+    /// Drops the call-local entity candidate after extracting its transformed
+    /// roots into a reusable spatial candidate. This supports product-owned
+    /// entity stores without introducing a second Engine entity world.
+    pub fn into_spatial_candidate(
+        self,
+        origin: WorldOriginState,
+    ) -> PreparedWorldOriginSpatialRebase {
+        let affected_transforms = self
+            .affected_entities
+            .iter()
+            .map(|entity| {
+                self.candidate_entities
+                    .transform(*entity)
+                    .copied()
+                    .map(|component| component.transform())
+                    .map(|transform| WorldOriginAffectedTransform {
+                        entity: *entity,
+                        transform,
+                    })
+                    .expect("validated rebase roots retain their transform")
+            })
+            .collect();
+        let candidate_origin = WorldOriginState {
+            origin: self.target_origin,
+            revision: origin.revision + 1,
+            local_envelope: origin.local_envelope,
+        };
+        PreparedWorldOriginSpatialRebase {
+            expected_origin_revision: self.expected_origin_revision,
+            expected_voxel_source_revision: self.expected_voxel_source_revision,
+            expected_static_mesh_revision: self.expected_static_mesh_revision,
+            candidate_origin,
+            candidate_scene: self.candidate_scene,
+            affected_transforms,
+            entity_count: self.entity_count,
+        }
+    }
+}
+
+impl PreparedWorldOriginSpatialRebase {
+    pub fn affected_transforms(&self) -> &[WorldOriginAffectedTransform] {
+        &self.affected_transforms
+    }
+
+    pub const fn origin(&self) -> WorldOriginReadout {
+        self.candidate_origin.readout()
+    }
+
+    pub const fn scene_source_revision(&self) -> u64 {
+        self.candidate_scene.source_revision().raw()
+    }
+
+    pub fn scene_static_mesh_revision(&self) -> u64 {
+        self.candidate_scene.static_mesh_collision_revision()
     }
 }
 
@@ -287,6 +377,7 @@ impl WorldOriginRebaseService {
             target_origin: request.target_origin,
             candidate_entities,
             candidate_scene,
+            affected_entities: supplied.keys().copied().collect(),
             entity_count: supplied.len(),
         })
     }
@@ -338,6 +429,54 @@ impl WorldOriginRebaseService {
     ) -> Result<WorldOriginRebaseReceipt, WorldOriginRebaseError> {
         let prepared = self.prepare(origin, entities, scene, request)?;
         self.commit(origin, entities, scene, prepared)
+    }
+
+    /// Commits a candidate that was prepared using a temporary entity state.
+    /// The product remains responsible for applying the returned local
+    /// transforms and guarding its own entity revision; Engine rechecks only
+    /// the origin and collision-scene facts it owns.
+    pub fn commit_spatial(
+        self,
+        origin: &mut WorldOriginState,
+        scene: &mut VoxelCollisionScene,
+        prepared: &PreparedWorldOriginSpatialRebase,
+    ) -> Result<WorldOriginSpatialRebaseReceipt, WorldOriginRebaseError> {
+        if prepared.expected_origin_revision != origin.revision {
+            return Err(WorldOriginRebaseError::StaleOrigin {
+                expected: prepared.expected_origin_revision,
+                actual: origin.revision,
+            });
+        }
+        if prepared.expected_voxel_source_revision != scene.source_revision().raw() {
+            return Err(WorldOriginRebaseError::StaleVoxelScene {
+                expected: prepared.expected_voxel_source_revision,
+                actual: scene.source_revision().raw(),
+            });
+        }
+        if prepared.expected_static_mesh_revision != scene.static_mesh_collision_revision() {
+            return Err(WorldOriginRebaseError::StaleStaticMeshes {
+                expected: prepared.expected_static_mesh_revision,
+                actual: scene.static_mesh_collision_revision(),
+            });
+        }
+        if scene.world_origin() != origin.origin || scene.rebase_revision() != origin.revision {
+            return Err(WorldOriginRebaseError::SceneOriginMismatch);
+        }
+
+        let revision_before = origin.revision;
+        let origin_before = origin.origin;
+        *origin = prepared.candidate_origin;
+        *scene = prepared.candidate_scene.clone();
+        Ok(WorldOriginSpatialRebaseReceipt {
+            revision_before,
+            revision_after: origin.revision,
+            origin_before,
+            origin_after: origin.origin,
+            voxel_source_revision: scene.source_revision().raw(),
+            static_mesh_revision: scene.static_mesh_collision_revision(),
+            entity_count: prepared.entity_count,
+            local_envelope: origin.local_envelope,
+        })
     }
 }
 

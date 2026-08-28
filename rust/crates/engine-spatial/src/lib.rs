@@ -116,8 +116,9 @@ pub use voxel_template::{
 };
 pub use world_origin::{
     decode_world_origin_state, encode_world_origin_state, PreparedWorldOriginRebase,
-    WorldOriginEntity, WorldOriginReadout, WorldOriginRebaseError, WorldOriginRebaseReceipt,
-    WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
+    PreparedWorldOriginSpatialRebase, WorldOriginAffectedTransform, WorldOriginEntity,
+    WorldOriginReadout, WorldOriginRebaseError, WorldOriginRebaseReceipt, WorldOriginRebaseRequest,
+    WorldOriginRebaseService, WorldOriginSpatialRebaseReceipt, WorldOriginState,
     DEFAULT_LOCAL_COORDINATE_ENVELOPE, MAX_WORLD_ORIGIN_ENTITIES,
     WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION,
 };
