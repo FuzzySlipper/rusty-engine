@@ -53,6 +53,7 @@ pub enum CsharpRenderResourceKind {
     Font,
     Audio,
     AnimatedMesh,
+    AnimationClipPack,
 }
 
 impl CsharpRenderResource {
@@ -240,6 +241,67 @@ impl CsharpRenderResource {
         })
     }
 
+    pub(crate) fn admit_animation_clip_pack(
+        path: String,
+        bytes: Vec<u8>,
+    ) -> Result<Self, CsharpEngineServicesError> {
+        use sha2::{Digest, Sha256};
+
+        let path = renderer_path(path, ".glb")?;
+        admit_bundle_resource(&path, &bytes)?;
+        let relative_path = path
+            .strip_prefix("content/")
+            .expect("renderer path retains content prefix");
+        let outcome = import_animated_glb_asset(
+            &SourceUri::RelativePath(relative_path.to_owned()),
+            &bytes,
+            &ImportContext::default(),
+        );
+        let imported = outcome.assets.ok_or_else(|| {
+            let detail = outcome
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_ADMISSION",
+                if detail.is_empty() {
+                    "animation clip-pack GLB admission produced no asset".to_owned()
+                } else {
+                    detail
+                },
+            )
+        })?;
+        if imported.runtime_resource_bytes != bytes || imported.animated_mesh.clips.is_empty() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_ADMISSION",
+                "animation clip-pack GLB must retain its immutable source bytes and contain clips",
+            ));
+        }
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        if imported.animated_mesh.content_hash.as_deref() != Some(content_hash.as_str()) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_ADMISSION",
+                "animation clip-pack descriptor content hash did not match admitted source bytes",
+            ));
+        }
+        let identity = format!(
+            "clip-pack-resource/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: CsharpRenderResourceKind::AnimationClipPack,
+            identity,
+            content_hash,
+            path,
+            bytes,
+            animated_mesh: Some(imported.animated_mesh),
+        })
+    }
+
     pub const fn kind(&self) -> CsharpRenderResourceKind {
         self.kind
     }
@@ -257,6 +319,10 @@ impl CsharpRenderResource {
     }
     pub(crate) fn animated_mesh(&self) -> Option<&AnimatedMeshAsset> {
         self.animated_mesh.as_ref()
+    }
+
+    fn animated_mesh_mut(&mut self) -> Option<&mut AnimatedMeshAsset> {
+        self.animated_mesh.as_mut()
     }
 }
 
@@ -1390,6 +1456,12 @@ impl RuntimeAppearanceBridge {
                         "animated GLB resources are exposed by the Animation service, not Appearance",
                     ))
                 }
+                CsharpRenderResourceKind::AnimationClipPack => {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_RENDER_RESOURCE_KIND",
+                        "animation clip-pack GLB resources are exposed by the Animation service, not Appearance",
+                    ))
+                }
             },
             byte_length: u32::try_from(resource.bytes().len()).map_err(|_| {
                 CsharpEngineServicesError::new(
@@ -2113,11 +2185,221 @@ impl RuntimeAppearanceBridge {
         Ok(NativeRenderResourceHandle { value: handle })
     }
 
+    fn open_animation_clip_pack(
+        &mut self,
+        request: &NativeAnimationClipPackResourceRequest,
+    ) -> Result<NativeRenderResourceHandle, CsharpEngineServicesError> {
+        let requested_path = unsafe {
+            borrowed_utf8(
+                request.path.bytes,
+                request.path.len,
+                "animation clip-pack resource path",
+            )?
+            .to_owned()
+        };
+        if let Some(handle) = self
+            .staged
+            .as_ref()
+            .and_then(|staged| staged.state.resource_paths.get(&requested_path))
+            .copied()
+        {
+            if self.resource(handle)?.kind() == CsharpRenderResourceKind::AnimationClipPack {
+                return Ok(NativeRenderResourceHandle { value: handle });
+            }
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_RESOURCE_KIND",
+                "this content path is already admitted as a different renderer resource kind",
+            ));
+        }
+        if self.selection_sealed {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_RESOURCE_SELECTION_CLOSED",
+                "animation clip-pack GLB resources must be selected during product Create",
+            ));
+        }
+        let relative_path = requested_path
+            .strip_prefix("content/")
+            .unwrap_or(&requested_path)
+            .to_owned();
+        let bytes = self
+            .content_resources
+            .get(&relative_path)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_CLIP_PACK_RESOURCE_UNKNOWN",
+                    format!("product content has no animation clip-pack GLB `{requested_path}`"),
+                )
+            })?;
+        let browser_path = format!("content/{relative_path}");
+        let resource =
+            CsharpRenderResource::admit_animation_clip_pack(browser_path.clone(), bytes.to_vec())?;
+        let handle =
+            self.stage_resource(resource, [browser_path, relative_path, requested_path])?;
+        Ok(NativeRenderResourceHandle { value: handle })
+    }
+
+    fn associate_animation_clip_pack(
+        &mut self,
+        request: &NativeAnimationClipPackAssociationRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if request.joints_len > 256 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_RIG",
+                "animation clip-pack rigs may contain at most 256 joints",
+            ));
+        }
+        let bind_rest_hash =
+            borrowed_request_utf8(request.bind_rest_hash, "animation clip-pack bind-rest hash")?;
+        let root_joint_id =
+            borrowed_request_utf8(request.root_joint_id, "animation clip-pack root joint")?;
+        let producer = borrowed_request_utf8(request.producer, "animation clip-pack producer")?;
+        let license = borrowed_request_utf8(request.license, "animation clip-pack license")?;
+        let joints = unsafe {
+            borrowed_slice(
+                request.joints,
+                request.joints_len,
+                "animation clip-pack rig joints",
+            )?
+        }
+        .iter()
+        .map(|joint| {
+            Ok(AnimationRigJoint {
+                id: borrowed_request_utf8(joint.id, "animation clip-pack rig joint id")?,
+                parent: if joint.has_parent {
+                    Some(borrowed_request_utf8(
+                        joint.parent_id,
+                        "animation clip-pack rig parent id",
+                    )?)
+                } else {
+                    None
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
+        let bind_rest_convention = match request.bind_rest_convention {
+            NativeAnimationBindRestConvention::LocalMatrixV1 => {
+                AnimationBindRestConvention::LocalMatrixV1
+            }
+        };
+        let root_convention = match request.root_convention {
+            NativeAnimationRootConvention::InPlace => AnimationRootConvention::InPlace,
+            NativeAnimationRootConvention::AuthoredRootTranslation => {
+                AnimationRootConvention::AuthoredRootTranslation
+            }
+        };
+
+        let primary = self.resource(request.primary_mesh.value)?.clone();
+        if primary.kind() != CsharpRenderResourceKind::AnimatedMesh {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_PRIMARY",
+                "clip-pack association requires an admitted primary animated mesh",
+            ));
+        }
+        let pack = self.resource(request.clip_pack.value)?.clone();
+        if pack.kind() != CsharpRenderResourceKind::AnimationClipPack {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_RESOURCE_KIND",
+                "clip-pack association requires an admitted animation clip-pack resource",
+            ));
+        }
+        let primary_mesh = primary.animated_mesh().cloned().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_PRIMARY",
+                "primary animated mesh resource did not retain an animated descriptor",
+            )
+        })?;
+        let pack_mesh = pack.animated_mesh().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_RESOURCE_KIND",
+                "clip-pack resource did not retain an imported animated descriptor",
+            )
+        })?;
+        let asset = format!(
+            "animation-clip-pack/{}",
+            pack.content_hash()
+                .strip_prefix("sha256:")
+                .expect("admitted clip-pack hashes use SHA-256")
+        );
+        let clip_pack = AnimationClipPack {
+            asset,
+            runtime_format: pack_mesh.runtime_format,
+            content_hash: pack.content_hash().to_owned(),
+            rig: AnimationRigSignature {
+                joints,
+                bind_rest_hash,
+                bind_rest_convention,
+                root_convention,
+                root_joint_id,
+            },
+            clips: pack_mesh.clips.clone(),
+            provenance: AnimationClipPackProvenance {
+                producer,
+                source_hash: pack.content_hash().to_owned(),
+                target_hash: primary.content_hash().to_owned(),
+                license,
+            },
+        };
+        let mut assembled = primary_mesh;
+        assembled.clip_packs.push(clip_pack);
+        assembled.validate().map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_ASSOCIATION",
+                format!("clip-pack association is incompatible with the primary animated mesh: {error:?}"),
+            )
+        })?;
+
+        let staged = self.staged_mut()?;
+        if staged
+            .state
+            .animated_appearances
+            .values()
+            .any(|handle| *handle == request.primary_mesh.value)
+            || staged
+                .state
+                .animation_graphs
+                .values()
+                .any(|graph| graph.resource == request.primary_mesh.value)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_ASSOCIATION_CLOSED",
+                "associate clip packs before creating an animated appearance or graph for the primary mesh",
+            ));
+        }
+        let primary_resource = staged
+            .state
+            .render_resources
+            .get_mut(
+                usize::try_from(request.primary_mesh.value.saturating_sub(1)).map_err(|_| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_RENDER_RESOURCE_HANDLE",
+                        "invalid primary animated mesh resource handle",
+                    )
+                })?,
+            )
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_RENDER_RESOURCE_HANDLE",
+                    "unknown primary animated mesh resource handle",
+                )
+            })?;
+        *primary_resource
+            .animated_mesh_mut()
+            .expect("validated primary descriptor") = assembled;
+        Ok(())
+    }
+
     fn create_animated_mesh_appearance(
         &mut self,
         request: NativeAnimatedMeshAppearanceRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
         let resource = self.resource(request.resource.value)?.clone();
+        if resource.kind() != CsharpRenderResourceKind::AnimatedMesh {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_RESOURCE_KIND",
+                "animated mesh appearance requires an admitted primary animated GLB resource",
+            ));
+        }
         let asset = resource.animated_mesh().cloned().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_RESOURCE_KIND",
@@ -2312,8 +2594,14 @@ impl RuntimeAppearanceBridge {
                 "animation graph version must be non-zero",
             ));
         }
-        let asset_id = self
-            .resource(request.resource.value)?
+        let resource = self.resource(request.resource.value)?;
+        if resource.kind() != CsharpRenderResourceKind::AnimatedMesh {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_GRAPH_RESOURCE",
+                "animation graph requires an admitted primary animated GLB",
+            ));
+        }
+        let asset_id = resource
             .animated_mesh()
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
@@ -2673,6 +2961,12 @@ impl RuntimeAppearanceBridge {
                     "animation graph resource is unavailable",
                 )
             })?;
+        if resource.kind() != CsharpRenderResourceKind::AnimatedMesh {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_RESOURCE",
+                "animation graph resource is not a primary animated GLB",
+            ));
+        }
         let mesh = resource.animated_mesh().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_RESOURCE",
@@ -2685,12 +2979,15 @@ impl RuntimeAppearanceBridge {
                 "animation graph and instance must reference the same animated GLB",
             ));
         }
+        let mesh_asset = mesh.asset.clone();
+        let mesh_content_hash = mesh.content_hash.clone();
+        let effective_clips = animation_asset_clips(&staged.state.render_resources, &mesh_asset);
         let assets = BTreeMap::from([(
-            mesh.asset.clone(),
+            mesh_asset.clone(),
             ResolvedRenderAsset {
-                id: mesh.asset.clone(),
+                id: mesh_asset.clone(),
                 kind: RenderAssetKind::AnimatedMesh,
-                content_hash: mesh.content_hash.clone(),
+                content_hash: mesh_content_hash.clone(),
                 version: 0,
             },
         )]);
@@ -2699,9 +2996,9 @@ impl RuntimeAppearanceBridge {
                 schema_version: 1,
                 catalog_id: format!("csharp/{}", graph.definition.graph_id),
                 assets: vec![AnimationClipAsset {
-                    asset_id: mesh.asset.clone(),
-                    content_hash: mesh.content_hash.clone().unwrap_or_default(),
-                    clips: mesh.clips.iter().map(|clip| clip.id.clone()).collect(),
+                    asset_id: mesh_asset,
+                    content_hash: mesh_content_hash.unwrap_or_default(),
+                    clips: effective_clips,
                 }],
                 graphs: vec![graph.definition.clone()],
             },
@@ -3341,6 +3638,28 @@ impl RuntimeAppearanceBridge {
                     .count(),
             )
             .unwrap_or(u32::MAX),
+            admitted_clip_packs: u32::try_from(
+                staged
+                    .state
+                    .render_resources
+                    .iter()
+                    .filter(|resource| {
+                        resource.kind() == CsharpRenderResourceKind::AnimationClipPack
+                    })
+                    .count(),
+            )
+            .unwrap_or(u32::MAX),
+            retained_clip_pack_associations: u32::try_from(
+                staged
+                    .state
+                    .render_resources
+                    .iter()
+                    .filter_map(CsharpRenderResource::animated_mesh)
+                    .filter(|mesh| mesh.runtime_format == AnimatedMeshRuntimeFormat::Glb)
+                    .map(|mesh| mesh.clip_packs.len())
+                    .sum::<usize>(),
+            )
+            .unwrap_or(u32::MAX),
             retained_instances: u32::try_from(staged.state.animation_instances.len())
                 .unwrap_or(u32::MAX),
             retained_graphs: u32::try_from(staged.state.animation_graphs.len()).unwrap_or(u32::MAX),
@@ -3455,6 +3774,7 @@ impl RuntimeAppearanceBridge {
 fn animation_assets(resources: &[CsharpRenderResource]) -> BTreeMap<String, ResolvedRenderAsset> {
     resources
         .iter()
+        .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
         .filter_map(|resource| resource.animated_mesh())
         .map(|mesh| {
             (
@@ -3690,6 +4010,7 @@ fn native_particle_diagnostic_code(
 fn animation_asset_clips(resources: &[CsharpRenderResource], asset: &str) -> Vec<String> {
     resources
         .iter()
+        .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
         .filter_map(CsharpRenderResource::animated_mesh)
         .find(|mesh| mesh.asset == asset)
         .map(|mesh| {
@@ -4383,6 +4704,29 @@ pub(crate) unsafe extern "C" fn open_animated_mesh(
         bridge.open_animated_mesh(unsafe { &*request })
     })
 }
+pub(crate) unsafe extern "C" fn open_animation_clip_pack(
+    context: *mut c_void,
+    request: *const NativeAnimationClipPackResourceRequest,
+    result: *mut NativeRenderResourceHandle,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    animation_result(context, result, |bridge| {
+        bridge.open_animation_clip_pack(unsafe { &*request })
+    })
+}
+pub(crate) unsafe extern "C" fn associate_animation_clip_pack(
+    context: *mut c_void,
+    request: *const NativeAnimationClipPackAssociationRequest,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    animation_void(context, |bridge| {
+        bridge.associate_animation_clip_pack(unsafe { &*request })
+    })
+}
 pub(crate) unsafe extern "C" fn create_animated_mesh_appearance(
     context: *mut c_void,
     request: *const NativeAnimatedMeshAppearanceRequest,
@@ -4599,6 +4943,8 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
     NativeAnimationApi {
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
         open_animated_mesh,
+        open_animation_clip_pack,
+        associate_animation_clip_pack,
         create_animated_mesh_appearance,
         replace_animated_mesh_appearance,
         destroy_appearance: destroy_animated_mesh_appearance,
@@ -4621,6 +4967,13 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         read_controller: read_animation_controller,
         read: read_animation,
     }
+}
+
+fn borrowed_request_utf8(
+    value: NativeUtf8Slice,
+    field: &'static str,
+) -> Result<String, CsharpEngineServicesError> {
+    unsafe { borrowed_utf8(value.bytes, value.len, field) }.map(str::to_owned)
 }
 
 fn native_vec2(value: NativeVec2) -> [f32; 2] {
@@ -5128,6 +5481,207 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn admitted_clip_pack_is_retained_separately_and_augments_effective_graph_clips() {
+        use sha2::{Digest, Sha256};
+
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert("primary.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert("pack.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let primary_path = b"primary.glb";
+        let pack_path = b"pack.glb";
+        let joint_id = b"Root";
+        let hash = format!("sha256:{:x}", Sha256::digest(CHARACTER_GLB));
+        let bind_rest_hash =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let producer = b"test-import";
+        let license = b"CC0-1.0";
+        let joints = [NativeAnimationRigJointRequest {
+            id: NativeUtf8Slice {
+                bytes: joint_id.as_ptr(),
+                len: joint_id.len(),
+            },
+            parent_id: NativeUtf8Slice::default(),
+            has_parent: false,
+        }];
+
+        bridge.begin_call();
+        let primary = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: primary_path.as_ptr(),
+                    len: primary_path.len(),
+                },
+            })
+            .expect("primary animated mesh admission");
+        let pack = bridge
+            .open_animation_clip_pack(&NativeAnimationClipPackResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: pack_path.as_ptr(),
+                    len: pack_path.len(),
+                },
+            })
+            .expect("clip-pack admission");
+        assert_ne!(
+            primary.value, pack.value,
+            "same bytes retain distinct roles"
+        );
+
+        let associate = NativeAnimationClipPackAssociationRequest {
+            primary_mesh: primary,
+            clip_pack: pack,
+            joints: joints.as_ptr(),
+            joints_len: joints.len(),
+            bind_rest_hash: NativeUtf8Slice {
+                bytes: bind_rest_hash.as_ptr(),
+                len: bind_rest_hash.len(),
+            },
+            bind_rest_convention: NativeAnimationBindRestConvention::LocalMatrixV1,
+            root_convention: NativeAnimationRootConvention::InPlace,
+            root_joint_id: NativeUtf8Slice {
+                bytes: joint_id.as_ptr(),
+                len: joint_id.len(),
+            },
+            producer: NativeUtf8Slice {
+                bytes: producer.as_ptr(),
+                len: producer.len(),
+            },
+            license: NativeUtf8Slice {
+                bytes: license.as_ptr(),
+                len: license.len(),
+            },
+        };
+        let collision = bridge
+            .associate_animation_clip_pack(&associate)
+            .expect_err("same clip identities must remain incompatible");
+        assert_eq!(collision.code(), "CSHARP_ANIMATION_CLIP_PACK_ASSOCIATION");
+        assert!(bridge
+            .resource(primary.value)
+            .expect("primary resource")
+            .animated_mesh()
+            .expect("primary descriptor")
+            .clip_packs
+            .is_empty());
+
+        // The repository has no second compatible animated GLB fixture with
+        // different clips. Keep the exercised successful association typed and
+        // in-memory after proving the real admitted GLBs reject their overlap.
+        bridge
+            .staged
+            .as_mut()
+            .expect("staged state")
+            .state
+            .render_resources
+            .get_mut(usize::try_from(pack.value - 1).expect("small handle"))
+            .expect("clip-pack resource")
+            .animated_mesh_mut()
+            .expect("clip-pack descriptor")
+            .clips
+            .iter_mut()
+            .enumerate()
+            .for_each(|(index, clip)| clip.id = format!("pack-clip-{index}"));
+        bridge
+            .associate_animation_clip_pack(&associate)
+            .expect("typed compatible in-memory clip-pack association");
+        let primary_mesh = bridge
+            .resource(primary.value)
+            .expect("primary resource")
+            .animated_mesh()
+            .expect("primary descriptor");
+        assert_eq!(primary_mesh.clip_packs.len(), 1);
+        assert_eq!(
+            primary_mesh.clip_packs[0].asset,
+            format!("animation-clip-pack/{}", &hash["sha256:".len()..])
+        );
+        assert_eq!(primary_mesh.clip_packs[0].provenance.source_hash, hash);
+        assert_eq!(
+            primary_mesh.clip_packs[0].provenance.target_hash,
+            primary_mesh
+                .content_hash
+                .clone()
+                .expect("primary content hash")
+        );
+        let primary_asset = primary_mesh.asset.clone();
+        let expected_effective_clip_count =
+            primary_mesh.clips.len() + primary_mesh.clip_packs[0].clips.len();
+        assert_eq!(
+            animation_asset_clips(
+                &bridge
+                    .staged
+                    .as_ref()
+                    .expect("staged state")
+                    .state
+                    .render_resources,
+                &primary_asset,
+            )
+            .len(),
+            expected_effective_clip_count,
+        );
+        let graph_id = b"clip-pack-graph";
+        let state_id = b"wave";
+        let clip_id = b"pack-clip-0";
+        let graph = bridge
+            .create_animation_graph(&NativeAnimationGraphCreateRequest {
+                resource: primary,
+                graph_id: NativeUtf8Slice {
+                    bytes: graph_id.as_ptr(),
+                    len: graph_id.len(),
+                },
+                version: 1,
+                initial_state_id: NativeUtf8Slice {
+                    bytes: state_id.as_ptr(),
+                    len: state_id.len(),
+                },
+            })
+            .expect("graph retains the assembled primary mesh");
+        bridge
+            .define_animation_state(&NativeAnimationStateDefinitionRequest {
+                graph,
+                state_id: NativeUtf8Slice {
+                    bytes: state_id.as_ptr(),
+                    len: state_id.len(),
+                },
+                motion_kind: NativeAnimationMotionKind::Clip,
+                clip_a: NativeUtf8Slice {
+                    bytes: clip_id.as_ptr(),
+                    len: clip_id.len(),
+                },
+                clip_b: NativeUtf8Slice::default(),
+                parameter_id: NativeUtf8Slice::default(),
+                minimum_milli: 0,
+                maximum_milli: 0,
+                speed_milli: 1000,
+            })
+            .expect("graph state can name an effective clip-pack clip");
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest {
+                resource: primary,
+            })
+            .expect("primary animated appearance");
+        let instance = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance,
+                object_id: 17,
+            })
+            .expect("animation instance");
+        bridge
+            .create_animation_controller(NativeAnimationControllerCreateRequest {
+                graph,
+                instance,
+                tick_duration_millis: 16,
+            })
+            .expect("controller validates the effective clip list");
+        let readout = bridge.read_animation().expect("animation readout");
+        assert_eq!(readout.admitted_meshes, 1);
+        assert_eq!(readout.admitted_clip_packs, 1);
+        assert_eq!(readout.retained_clip_pack_associations, 1);
     }
 
     #[test]

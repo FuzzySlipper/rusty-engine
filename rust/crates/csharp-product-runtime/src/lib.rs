@@ -2928,6 +2928,12 @@ fn admit_renderer_resource(
             resource.path(),
             resource.bytes().to_vec(),
         ),
+        CsharpRenderResourceKind::AnimationClipPack => {
+            ProductDevRendererResource::admit_animation_clip_pack(
+                resource.path(),
+                resource.bytes().to_vec(),
+            )
+        }
     }
     .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))
 }

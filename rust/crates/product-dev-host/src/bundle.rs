@@ -34,6 +34,7 @@ pub enum ProductDevRendererResourceKind {
     Font,
     Audio,
     AnimatedMesh,
+    AnimationClipPack,
 }
 
 impl ProductDevRendererResource {
@@ -203,6 +204,39 @@ impl ProductDevRendererResource {
         })
     }
 
+    /// A separately-addressed clip-only GLB selected by the Engine animation
+    /// service. The browser host receives it only through the fixed preload
+    /// descriptor and resolves it against an Engine-authored clip-pack entry.
+    pub fn admit_animation_clip_pack(
+        path: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Result<Self, ProductDevHostError> {
+        use sha2::{Digest, Sha256};
+
+        let path = renderer_path(path.into(), ".glb")?;
+        if bytes.len() < 20 || bytes.get(..4) != Some(b"glTF") {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RENDERER_ANIMATION_CLIP_PACK",
+                "animation clip-pack preload is not a binary GLB resource",
+            ));
+        }
+        ProductDevBundleEntry::new(path.clone(), "model/gltf-binary", bytes.clone())?;
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let identity = format!(
+            "clip-pack-resource/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: ProductDevRendererResourceKind::AnimationClipPack,
+            identity,
+            content_hash,
+            path,
+            bytes,
+        })
+    }
+
     pub const fn kind(&self) -> ProductDevRendererResourceKind {
         self.kind
     }
@@ -230,6 +264,7 @@ impl ProductDevRendererResource {
             ProductDevRendererResourceKind::Font => "font/woff2",
             ProductDevRendererResourceKind::Audio => "audio/wav",
             ProductDevRendererResourceKind::AnimatedMesh => "model/gltf-binary",
+            ProductDevRendererResourceKind::AnimationClipPack => "model/gltf-binary",
         }
     }
 

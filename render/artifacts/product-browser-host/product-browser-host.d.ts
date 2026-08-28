@@ -45,6 +45,40 @@ export interface ProductBrowserRuntimeInputResult {
     readonly readout?: ProductBrowserRuntimeReadout;
     readonly diagnostic?: string;
 }
+/** Closed browser-to-runtime audio realization feedback; no browser objects cross this boundary. */
+export type ProductBrowserAudioFeedbackFact = {
+    readonly kind: 'naturalCompletion';
+    readonly source: 'oneShot';
+    readonly factId: string;
+    readonly sequence: number;
+    readonly signalHandle: string;
+} | {
+    readonly kind: 'naturalCompletion';
+    readonly source: 'retainedVoice';
+    readonly factId: string;
+    readonly sequence: number;
+    readonly voiceHandle: string;
+} | {
+    readonly kind: 'diagnostic';
+    readonly factId: string;
+    readonly code: string;
+    readonly sequence: number;
+    readonly voiceHandle: string | null;
+};
+export interface ProductBrowserAudioFeedback {
+    readonly runtime: RustyApplicationRuntimeIdentity;
+    readonly replaceOwner: boolean;
+    readonly evictedFactCount: string;
+    readonly facts: readonly ProductBrowserAudioFeedbackFact[];
+}
+export interface ProductBrowserAudioFeedbackResult {
+    readonly accepted: boolean;
+    /** The exact runtime binding which accepted or rejected this fixed report. */
+    readonly runtime: RustyApplicationRuntimeIdentity;
+    /** The accepted submitted boundary; absent when the fixed report had no facts. */
+    readonly acceptedThroughFactId?: string;
+    readonly diagnostic?: string;
+}
 export interface ProductBrowserTimelineCompletion {
     /** Canonical decimal u64 ticket issued by runtime-timeline. */
     readonly ticket: string;
@@ -130,6 +164,7 @@ export type ProductBrowserRuntimeTerminalFailureListener = (failure: ProductBrow
 export interface ProductBrowserRuntimeAdapter {
     readonly lifecycle: (operation: ProductBrowserLifecycleOperation) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly input: (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => Promise<ProductBrowserRuntimeInputResult>;
+    readonly reportAudioFeedback: (feedback: ProductBrowserAudioFeedback) => Promise<ProductBrowserAudioFeedbackResult>;
     readonly advanceRealtime: (observedTimeNs: string) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly admitDemandStep?: () => Promise<ProductBrowserRuntimeOperationResult>;
     readonly admitExternalStep?: (step: string) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -142,6 +177,7 @@ export interface ProductBrowserRuntimeAdapter {
 export interface ProductBrowserRuntimeTransport {
     readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
     readonly input: ProductBrowserRuntimeAdapter['input'];
+    readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
     readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
     readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
     readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -215,6 +251,18 @@ export declare class ProductBrowserHostError extends Error {
 type ProductBrowserJson = null | boolean | number | string | readonly ProductBrowserJson[] | {
     readonly [key: string]: ProductBrowserJson;
 };
+interface ProductBrowserAudioFeedbackReporter {
+    readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
+    readonly flush: () => Promise<void>;
+}
+/** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
+export declare function createProductBrowserAudioFeedbackReporter(options: {
+    readonly renderer: Pick<RustyApplicationHost['renderer'], 'audioRealizedFacts' | 'acknowledgeAudioRealizedFacts' | 'resetAudioRealizationOwner'>;
+    readonly report: ProductBrowserRuntimeTransport['reportAudioFeedback'];
+    readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+}): ProductBrowserAudioFeedbackReporter;
+/** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
+export declare function flushProductBrowserAudioFeedbackBeforeUpdate<T>(flush: () => Promise<void>, update: () => Promise<T>): Promise<T>;
 /**
  * Mounts the one Engine-owned application composition root. The browser host
  * has no renderer implementation, product state, evaluator, or own cadence;

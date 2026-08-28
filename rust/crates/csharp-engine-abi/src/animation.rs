@@ -89,6 +89,63 @@ pub struct NativeAnimatedMeshResourceRequest {
     pub path: NativeUtf8Slice,
 }
 
+/// A separately-addressed immutable GLB containing animation clips. The
+/// Engine copies and validates its bytes before this direct call returns. Its
+/// rig and provenance are deliberately associated with a primary mesh in a
+/// separate typed call because the current importer does not derive them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationClipPackResourceRequest {
+    pub path: NativeUtf8Slice,
+}
+
+/// One declared joint in the explicit temporary rig metadata required for a
+/// clip-pack association. `has_parent` distinguishes the root from a joint
+/// named with an empty parent value.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationRigJointRequest {
+    pub id: NativeUtf8Slice,
+    pub parent_id: NativeUtf8Slice,
+    pub has_parent: bool,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAnimationBindRestConvention {
+    LocalMatrixV1 = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAnimationRootConvention {
+    InPlace = 1,
+    AuthoredRootTranslation = 2,
+}
+
+/// Attaches one admitted clip-pack GLB to an admitted primary animated mesh.
+/// The Engine derives clips from the admitted pack bytes, validates the exact
+/// assembled `AnimatedMeshAsset`, and only then retains the association.
+///
+/// Until importer work derives rig metadata, callers explicitly provide the
+/// rig plus the producer/license facts required by `AnimationClipPack`. The
+/// Engine derives the clip-pack asset identity and both provenance hashes from
+/// the two admitted resources; products do not repeat Engine-owned facts.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationClipPackAssociationRequest {
+    pub primary_mesh: NativeRenderResourceHandle,
+    pub clip_pack: NativeRenderResourceHandle,
+    pub joints: *const NativeAnimationRigJointRequest,
+    pub joints_len: usize,
+    pub bind_rest_hash: NativeUtf8Slice,
+    pub bind_rest_convention: NativeAnimationBindRestConvention,
+    pub root_convention: NativeAnimationRootConvention,
+    pub root_joint_id: NativeUtf8Slice,
+    pub producer: NativeUtf8Slice,
+    pub license: NativeUtf8Slice,
+}
+
 /// Adds an animated appearance to the ordinary Engine-owned appearance
 /// snapshot. Its associated render resource must have been opened through
 /// `OpenAnimatedMesh` during product Create.
@@ -246,6 +303,8 @@ pub struct NativeAnimationControllerReadout {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeAnimationReadout {
     pub admitted_meshes: u32,
+    pub admitted_clip_packs: u32,
+    pub retained_clip_pack_associations: u32,
     pub retained_instances: u32,
     pub retained_graphs: u32,
     pub retained_controllers: u32,
