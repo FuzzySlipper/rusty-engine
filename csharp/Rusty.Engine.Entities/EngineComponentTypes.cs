@@ -39,6 +39,14 @@ public static class EngineComponentTypes
         EngineComponentKeys.Create(4),
         validator: ValidateKinematic);
 
+    /// <summary>
+    /// The minimal copied motion facts returned by the retained Dynamics
+    /// owner. Product-side body bindings retain handle ownership; this value
+    /// carries no shape, mass, contact, or solver representation.
+    /// </summary>
+    public static ComponentType<DynamicsMotion> DynamicsMotion { get; } = ComponentType<DynamicsMotion>.CreateEngine(
+        EngineComponentKeys.Create(5));
+
     private static void ValidateTransform(in Transform value)
     {
         if (!IsFinite(value.Translation) || !IsFinite(value.Scale)

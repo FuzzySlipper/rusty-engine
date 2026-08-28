@@ -64,6 +64,7 @@ ExerciseAppearanceEntityComposition();
 ExerciseWorldOriginEntityComposition();
 ExerciseMotionEntityComposition();
 ExerciseKinematicEntityComposition();
+ExerciseDynamicsEntityComposition();
 
 static void Require(bool condition, string message)
 {
@@ -219,6 +220,50 @@ static void ExerciseKinematicEntityComposition()
         ReadOnlyMemory<EntityId>.Empty).Apply();
     Require(noOp.Managed.RevisionBefore == noOpBefore && noOp.Managed.RevisionAfter == noOpBefore,
         "Kinematic empty selected phase changed the managed world revision");
+}
+
+static void ExerciseDynamicsEntityComposition()
+{
+    using var entities = new EntityWorld([
+        EngineComponentTypes.Transform,
+        EngineComponentTypes.DynamicsMotion]);
+    EntityId entity = entities.Create();
+    entities.Set(entity, EngineComponentTypes.Transform, new Transform(Vector3.Zero, Quaternion.Identity, new Vector3(2.0f, 3.0f, 4.0f)));
+    entities.Set(entity, EngineComponentTypes.DynamicsMotion, new DynamicsMotion(Vector3.Zero, Vector3.Zero, false));
+    var service = new DynamicsServiceFake();
+    using var dynamicsWorld = new DynamicsWorld(new DynamicsWorldHandle(10), static () => { });
+    using var body = new DynamicsBody(new DynamicsBodyHandle(20), static () => { });
+    var adapter = new DynamicsEntityWorld(entities, service, dynamicsWorld);
+
+    ulong before = entities.Revision;
+    DynamicsEntityWorldReceipt receipt = adapter.Step(
+        stepSeconds: 1.0f / 60.0f,
+        steps: 1,
+        bindings: new[] { new DynamicsEntityBinding(entity, body) },
+        actions: new[] { new DynamicsEntityAction(entity, new Vector3(3.0f, 0.0f, 0.0f), Vector3.Zero, Vector3.Zero, Vector3.Zero, true) },
+        maximumBodies: 1,
+        maximumActions: 1);
+    Require(receipt.Native.Bodies.Length == 1
+        && receipt.Native.Bodies.Span[0].Body.Value == body.Handle.Value
+        && receipt.Managed.RevisionBefore == before
+        && receipt.Managed.RevisionAfter == before + 1
+        && entities.Get(entity, EngineComponentTypes.Transform).Translation == new Vector3(3.0f, 0.0f, 0.0f)
+        && entities.Get(entity, EngineComponentTypes.Transform).Scale == new Vector3(2.0f, 3.0f, 4.0f)
+        && entities.Get(entity, EngineComponentTypes.DynamicsMotion).LinearVelocity == new Vector3(3.0f, 0.0f, 0.0f),
+        "Dynamics adapter did not publish the one correlated native body readout in one managed batch");
+
+    int callsBeforeStale = service.StepAndReadCalls;
+    entities.Set(entity, EngineComponentTypes.DynamicsMotion, new DynamicsMotion(Vector3.One, Vector3.Zero, false));
+    Throws(
+        () => adapter.Step(1.0f / 60.0f, 1,
+            new[] { new DynamicsEntityBinding(entity, body) },
+            Array.Empty<DynamicsEntityAction>(),
+            maximumBodies: 1,
+            maximumActions: 0,
+            expectedGuard: receipt.Guard),
+        "Dynamics adapter did not reject stale managed state before its native crossing");
+    Require(service.StepAndReadCalls == callsBeforeStale,
+        "Dynamics stale managed state reached the generated step/read crossing");
 }
 
 static void ExerciseStateMachineEntityComposition()
@@ -2112,6 +2157,57 @@ sealed class MotionServiceFake : IMotionService
             mover.Transform.Translation,
             candidate.Translation,
             candidate);
+    }
+}
+
+sealed class DynamicsServiceFake : IDynamicsService
+{
+    public int StepAndReadCalls { get; private set; }
+
+    public DynamicsWorld CreateWorld(DynamicsWorldConfig request) => throw new NotSupportedException();
+    public DynamicsBody CreateBody(DynamicsCreateBodyRequest request) => throw new NotSupportedException();
+    public DynamicsBody CreateSphereBody(DynamicsCreateSphereBodyRequest request) => throw new NotSupportedException();
+    public DynamicsBody CreateCuboidBody(DynamicsCreateCuboidBodyRequest request) => throw new NotSupportedException();
+    public DynamicsBody CreateSphereBodyWithProperties(DynamicsCreateSphereBodyPropertiesRequest request) => throw new NotSupportedException();
+    public DynamicsBody CreateCapsuleBody(DynamicsCreateCapsuleBodyRequest request) => throw new NotSupportedException();
+    public void BindWorldCollision(DynamicsWorldCollisionBindingRequest request) => throw new NotSupportedException();
+    public DynamicsRebaseWorldOriginReceipt RebaseWorldOrigin(DynamicsRebaseWorldOriginRequest request) => throw new NotSupportedException();
+    public DynamicsStepReceipt Step(DynamicsStepRequest request) => throw new NotSupportedException();
+    public DynamicsReadout Read(DynamicsReadRequest request) => throw new NotSupportedException();
+    public void Reset(DynamicsResetRequest request) => throw new NotSupportedException();
+    public void UpdateBody(DynamicsUpdateBodyRequest request) => throw new NotSupportedException();
+    public DynamicsWorldReadout ReadWorld(DynamicsWorldReadRequest request) => throw new NotSupportedException();
+    public DynamicsBodyAtReceipt ReadBodyAt(DynamicsBodyAtRequest request) => throw new NotSupportedException();
+    public DynamicsContactAtReceipt ReadContactAt(DynamicsContactAtRequest request) => throw new NotSupportedException();
+    public DynamicsBody ReplaceBody(DynamicsReplaceBodyRequest request) => throw new NotSupportedException();
+    public DynamicsBody ReplaceCuboidBody(DynamicsReplaceCuboidBodyRequest request) => throw new NotSupportedException();
+    public DynamicsBody ReplaceSphereBody(DynamicsReplaceSphereBodyRequest request) => throw new NotSupportedException();
+    public DynamicsBody ReplaceCapsuleBody(DynamicsReplaceCapsuleBodyRequest request) => throw new NotSupportedException();
+
+    public DynamicsStepAndReadLeaseReceipt StepAndRead(DynamicsStepAndReadRequest request)
+    {
+        StepAndReadCalls++;
+        if (request.World.Handle.Value != 10 || request.Bodies.Length != 1 || request.Actions.Length > 1)
+        {
+            throw new InvalidOperationException("Dynamics adapter did not preserve its bounded typed request.");
+        }
+        DynamicsBody body = request.Bodies.Span[0];
+        Vector3 translation = request.Actions.Length == 0
+            ? Vector3.Zero
+            : request.Actions.Span[0].Force;
+        var readout = new DynamicsReadout(
+            new Transform(translation, Quaternion.Identity, Vector3.One),
+            translation,
+            Vector3.Zero,
+            false,
+            default,
+            0,
+            default);
+        return new DynamicsStepAndReadLeaseReceipt(
+            new[] { new DynamicsStepAndReadBody(new DynamicsBodyReference(body.Handle.Value), readout) },
+            4,
+            1,
+            0);
     }
 }
 

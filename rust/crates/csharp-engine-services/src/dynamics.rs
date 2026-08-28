@@ -24,6 +24,9 @@ use crate::composition::{
 };
 use crate::spatial::SpatialCollisionSource;
 
+const MAX_DYNAMICS_STEP_AND_READ_ACTIONS: usize = 1_024;
+const MAX_DYNAMICS_STEP_AND_READ_BODIES: usize = 1_024;
+
 /// A retained Engine dynamics world. The EntityState, collision scene and
 /// RigidBodyService remain one Engine-owned aggregate; C# receives only typed
 /// handles and stable readouts.
@@ -34,6 +37,8 @@ pub(crate) struct RuntimeDynamicsBridge {
     next_world: u64,
     next_body: u64,
     next_entity: u64,
+    step_and_read_leases: BTreeMap<u64, DynamicsStepAndReadLeaseBacking>,
+    next_step_and_read_lease: u64,
 }
 
 enum WorldSlot {
@@ -58,6 +63,10 @@ struct BodyContactSummary {
     latest: NativeDynamicsContactFact,
 }
 
+struct DynamicsStepAndReadLeaseBacking {
+    _bodies: Box<[NativeDynamicsStepAndReadBody]>,
+}
+
 enum BodySlot {
     Active { world: u64, entity: EntityId },
     Tombstoned,
@@ -72,6 +81,8 @@ impl RuntimeDynamicsBridge {
             next_world: 1,
             next_body: 1,
             next_entity: 1,
+            step_and_read_leases: BTreeMap::new(),
+            next_step_and_read_lease: 1,
         }
     }
 
@@ -330,16 +341,134 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: &NativeDynamicsStepRequest,
     ) -> Result<NativeDynamicsStepReceipt, CsharpEngineServicesError> {
-        let steps = u8::try_from(request.steps).map_err(|_| {
-            CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", "steps exceeded Engine u8 limit")
-        })?;
         let actions =
             unsafe { borrowed_slice(request.actions, request.actions_len, "dynamics actions") }?;
+        let active = self.validate_step_actions(request.world.value, request.steps, actions)?;
+        self.execute_step(
+            request.world.value,
+            request.step_seconds,
+            request.steps,
+            active,
+        )
+    }
+
+    /// Performs exactly one existing Dynamics step and returns copied facts in
+    /// the caller's explicit retained-body order. Every fallible request and
+    /// body validation happens before mutating the retained world.
+    fn step_and_read(
+        &mut self,
+        request: &NativeDynamicsStepAndReadRequest,
+    ) -> Result<NativeDynamicsStepAndReadLease, CsharpEngineServicesError> {
+        let actions = unsafe {
+            borrowed_slice(
+                request.actions,
+                request.actions_len,
+                "dynamics step/read actions",
+            )
+        }?;
+        if actions.len() > MAX_DYNAMICS_STEP_AND_READ_ACTIONS {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_DYNAMICS_STEP",
+                "step/read actions exceeded explicit Engine bound",
+            ));
+        }
+        let bodies = unsafe {
+            borrowed_slice(
+                request.bodies,
+                request.bodies_len,
+                "dynamics step/read bodies",
+            )
+        }?;
+        if bodies.len() > MAX_DYNAMICS_STEP_AND_READ_BODIES {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_DYNAMICS_READ",
+                "step/read bodies exceeded explicit Engine bound",
+            ));
+        }
+        let active = self.validate_step_actions(request.world.value, request.steps, actions)?;
+        let mut seen = BTreeSet::new();
+        let mut selected = Vec::with_capacity(bodies.len());
+        for body in bodies {
+            if !seen.insert(body.value) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_DYNAMICS_READ",
+                    "step/read bodies contained a duplicate retained body",
+                ));
+            }
+            let (world, entity) = self.active_body(body.value)?;
+            if world != request.world.value {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_DYNAMICS_BODY",
+                    "step/read body belonged to another world",
+                ));
+            }
+            selected.push((body.value, entity));
+        }
+        {
+            let world = self.active_world(request.world.value)?;
+            for (_, entity) in &selected {
+                // Validate that each selected body has a complete readable
+                // Dynamics state before the step commits.
+                read_entity(world, *entity)?;
+            }
+        }
+        let lease_handle = Self::allocate(&mut self.next_step_and_read_lease, "step/read lease")?;
+        let receipt = self.execute_step(
+            request.world.value,
+            request.step_seconds,
+            request.steps,
+            active,
+        )?;
+        let world = self.active_world(request.world.value)?;
+        let mut copied = Vec::with_capacity(selected.len());
+        for (body, entity) in selected {
+            copied.push(NativeDynamicsStepAndReadBody {
+                body: NativeDynamicsBodyReference { value: body },
+                readout: read_entity(world, entity)?,
+            });
+        }
+        let copied = copied.into_boxed_slice();
+        let lease = NativeDynamicsStepAndReadLease {
+            handle: NativeDynamicsStepAndReadLeaseHandle {
+                value: lease_handle,
+            },
+            bodies: copied.as_ptr(),
+            bodies_len: copied.len(),
+            generation: receipt.generation,
+            body_count: receipt.body_count,
+            contact_count: receipt.contact_count,
+        };
+        self.step_and_read_leases.insert(
+            lease_handle,
+            DynamicsStepAndReadLeaseBacking { _bodies: copied },
+        );
+        Ok(lease)
+    }
+
+    fn destroy_step_and_read_lease(
+        &mut self,
+        handle: NativeDynamicsStepAndReadLeaseHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if handle.value == 0 || self.step_and_read_leases.remove(&handle.value).is_none() {
+            return Err(unknown("step/read lease", handle.value));
+        }
+        Ok(())
+    }
+
+    fn validate_step_actions(
+        &self,
+        world_handle: u64,
+        steps: u32,
+        actions: &[NativeDynamicsAction],
+    ) -> Result<Vec<RigidBodyAction>, CsharpEngineServicesError> {
+        u8::try_from(steps).map_err(|_| {
+            CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", "steps exceeded Engine u8 limit")
+        })?;
         let active = actions
             .iter()
             .map(|action| {
                 let (world, entity) = self.active_body(action.body.value)?;
-                if world != request.world.value {
+                if world != world_handle {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_DYNAMICS_BODY",
                         "action body belonged to another world",
@@ -366,17 +495,28 @@ impl RuntimeDynamicsBridge {
                 "action contained a non-finite vector",
             ));
         }
-        let world = self.active_world_mut(request.world.value)?;
+        Ok(active)
+    }
+
+    fn execute_step(
+        &mut self,
+        world_handle: u64,
+        step_seconds: f32,
+        steps: u32,
+        actions: Vec<RigidBodyAction>,
+    ) -> Result<NativeDynamicsStepReceipt, CsharpEngineServicesError> {
+        let steps = u8::try_from(steps).expect("validated Dynamics step count");
+        let world = self.active_world_mut(world_handle)?;
         let receipt = world
             .service
             .step(
                 &mut world.entities,
                 world.scene.as_ref(),
                 RigidBodyStepRequest {
-                    step_seconds: request.step_seconds,
+                    step_seconds,
                     steps,
                     gravity: world.gravity,
-                    actions: active,
+                    actions,
                 },
             )
             .map_err(|error| {
@@ -384,7 +524,7 @@ impl RuntimeDynamicsBridge {
             })?;
         world.last_contacts = contacts_by_body(&receipt);
         world.last_contact_receipts = receipt.contacts.clone();
-        let output = NativeDynamicsStepReceipt {
+        Ok(NativeDynamicsStepReceipt {
             generation: receipt.generation,
             body_count: u32::try_from(receipt.bodies_considered).map_err(|_| {
                 CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", "body count exceeded u32")
@@ -392,8 +532,7 @@ impl RuntimeDynamicsBridge {
             contact_count: u32::try_from(receipt.contacts.len()).map_err(|_| {
                 CsharpEngineServicesError::new("CSHARP_DYNAMICS_STEP", "contact count exceeded u32")
             })?,
-        };
-        Ok(output)
+        })
     }
 
     fn read(
@@ -1389,6 +1528,40 @@ unsafe extern "C" fn step(
     }
 }
 
+unsafe extern "C" fn step_and_read(
+    context: *mut c_void,
+    request: *const NativeDynamicsStepAndReadRequest,
+    lease: *mut NativeDynamicsStepAndReadLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || lease.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+        .step_and_read(unsafe { &*request })
+    {
+        Ok(value) => {
+            unsafe { *lease = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn destroy_step_and_read_lease(
+    context: *mut c_void,
+    handle: NativeDynamicsStepAndReadLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }
+        .destroy_step_and_read_lease(handle)
+    {
+        Ok(()) => ABI_OK,
+        Err(_) => 0,
+    }
+}
+
 unsafe extern "C" fn read(
     context: *mut c_void,
     request: NativeDynamicsReadRequest,
@@ -1562,6 +1735,8 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         rebase_world_origin,
         destroy_body,
         step,
+        step_and_read,
+        destroy_step_and_read_lease,
         read,
         reset,
         update_body,
@@ -1758,6 +1933,101 @@ mod tests {
             .unwrap();
         bridge.destroy_world(parent_first_world).unwrap();
         bridge.destroy_body(parent_first_body).unwrap();
+    }
+
+    #[test]
+    fn step_and_read_preserves_explicit_body_order_releases_exactly_and_prevalidates() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        let first = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: body_config(NativeVec3::default()),
+            })
+            .unwrap();
+        let second = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: body_config(NativeVec3 {
+                    x: 2.0,
+                    y: 0.0,
+                    z: 0.0,
+                }),
+            })
+            .unwrap();
+        let actions = [NativeDynamicsAction {
+            body: first,
+            force: NativeVec3 {
+                x: 3.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            torque: NativeVec3::default(),
+            impulse: NativeVec3::default(),
+            torque_impulse: NativeVec3::default(),
+            wake: true,
+        }];
+        let selected = [second, first];
+        let lease = bridge
+            .step_and_read(&NativeDynamicsStepAndReadRequest {
+                world,
+                step_seconds: ONE_SIXTIETH_SECOND,
+                steps: 1,
+                actions: actions.as_ptr(),
+                actions_len: actions.len(),
+                bodies: selected.as_ptr(),
+                bodies_len: selected.len(),
+            })
+            .unwrap();
+        let copied = unsafe { std::slice::from_raw_parts(lease.bodies, lease.bodies_len) };
+        assert_eq!(copied.len(), 2);
+        assert_eq!(copied[0].body.value, second.value);
+        assert_eq!(copied[1].body.value, first.value);
+        assert!(copied[1].readout.linear_velocity.x > 0.0);
+        bridge.destroy_step_and_read_lease(lease.handle).unwrap();
+        assert!(bridge.destroy_step_and_read_lease(lease.handle).is_err());
+
+        let before = bridge
+            .read(NativeDynamicsReadRequest { body: first })
+            .unwrap();
+        let duplicate = [first, first];
+        assert!(bridge
+            .step_and_read(&NativeDynamicsStepAndReadRequest {
+                world,
+                step_seconds: ONE_SIXTIETH_SECOND,
+                steps: 1,
+                actions: std::ptr::null(),
+                actions_len: 0,
+                bodies: duplicate.as_ptr(),
+                bodies_len: duplicate.len(),
+            })
+            .is_err());
+        let unchanged = bridge
+            .read(NativeDynamicsReadRequest { body: first })
+            .unwrap();
+        assert_eq!(
+            [
+                unchanged.transform.translation.x,
+                unchanged.transform.translation.y,
+                unchanged.transform.translation.z,
+                unchanged.linear_velocity.x,
+                unchanged.linear_velocity.y,
+                unchanged.linear_velocity.z,
+            ],
+            [
+                before.transform.translation.x,
+                before.transform.translation.y,
+                before.transform.translation.z,
+                before.linear_velocity.x,
+                before.linear_velocity.y,
+                before.linear_velocity.z,
+            ],
+        );
     }
 
     #[test]

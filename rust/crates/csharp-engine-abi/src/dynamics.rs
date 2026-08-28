@@ -246,6 +246,50 @@ pub struct NativeDynamicsStepReceipt {
     pub contact_count: u32,
 }
 
+/// One explicit retained body selected for correlated post-step readout.
+/// Request order is preserved in the returned lease so product-side adapters
+/// can retain their own identity mapping without a native entity mirror.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsStepAndReadRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub step_seconds: f32,
+    pub steps: u32,
+    pub actions: *const NativeDynamicsAction,
+    pub actions_len: usize,
+    pub bodies: *const NativeDynamicsBodyHandle,
+    pub bodies_len: usize,
+}
+
+/// One copied post-step fact correlated with the requested retained body.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsStepAndReadBody {
+    pub body: NativeDynamicsBodyReference,
+    pub readout: NativeDynamicsReadout,
+}
+
+/// Typed owner for one bounded copied Dynamics step/read result.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeDynamicsStepAndReadLeaseHandle {
+    pub value: u64,
+}
+
+/// Temporary Engine-owned backing for one completed Dynamics step/read. The
+/// generated managed binding copies the ordered body facts and then releases
+/// this exact lease before returning to product code.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsStepAndReadLease {
+    pub handle: NativeDynamicsStepAndReadLeaseHandle,
+    pub bodies: *const NativeDynamicsStepAndReadBody,
+    pub bodies_len: usize,
+    pub generation: u64,
+    pub body_count: u32,
+    pub contact_count: u32,
+}
+
 /// One deterministic fact from the latest successful step for a body. It is
 /// intentionally not a contact enumeration: `contact_count` in the body
 /// readout reports the complete count while this exposes only the first fact.

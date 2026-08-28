@@ -54,6 +54,13 @@ pub type NativeStepDynamics = unsafe extern "C" fn(
     *const NativeDynamicsStepRequest,
     *mut NativeDynamicsStepReceipt,
 ) -> i32;
+pub type NativeStepAndReadDynamics = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsStepAndReadRequest,
+    *mut NativeDynamicsStepAndReadLease,
+) -> i32;
+pub type NativeDestroyDynamicsStepAndReadLease =
+    unsafe extern "C" fn(*mut c_void, NativeDynamicsStepAndReadLeaseHandle) -> i32;
 pub type NativeReadDynamics =
     unsafe extern "C" fn(*mut c_void, NativeDynamicsReadRequest, *mut NativeDynamicsReadout) -> i32;
 pub type NativeResetDynamics = unsafe extern "C" fn(*mut c_void, NativeDynamicsResetRequest) -> i32;
@@ -1408,6 +1415,8 @@ pub struct NativeDynamicsApi {
     pub rebase_world_origin: NativeRebaseDynamicsWorldOrigin,
     pub destroy_body: NativeDestroyDynamicsBody,
     pub step: NativeStepDynamics,
+    pub step_and_read: NativeStepAndReadDynamics,
+    pub destroy_step_and_read_lease: NativeDestroyDynamicsStepAndReadLease,
     pub read: NativeReadDynamics,
     pub reset: NativeResetDynamics,
     pub update_body: NativeUpdateDynamicsBody,
