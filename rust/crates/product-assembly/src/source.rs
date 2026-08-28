@@ -22,7 +22,11 @@ use crate::{
 };
 
 const MANIFEST_PATH: &str = "rusty.toml";
-const CONTENT_MANIFEST_PATH: &str = "content/manifest.json";
+// Legacy Product Assembly locates the shared content-manifest schema through
+// this product-root-relative source path. The active host-neutral ContentStore
+// owns `content_store::CONTENT_MANIFEST_PATH` instead; neither owner aliases or
+// probes the other's storage envelope.
+const LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH: &str = "content/manifest.json";
 const BROWSER_INDEX_PATH: &str = "index.html";
 const BROWSER_MAIN_PATH: &str = "main.js";
 const BROWSER_BRIDGE_PATH: &str = "bridge.js";
@@ -1245,7 +1249,8 @@ fn collect_content(
     manifest: &ProductManifest,
 ) -> Result<ContentClosure, ProductAssemblyError> {
     let tree = read_product_tree(root, manifest.content_root(), "content")?;
-    let manifest_path = ProductPath::parse(CONTENT_MANIFEST_PATH.to_owned()).expect("fixed path");
+    let manifest_path =
+        ProductPath::parse(LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH.to_owned()).expect("fixed path");
     let source_manifest = tree
         .iter()
         .find(|file| file.relative_path == manifest_path)
@@ -1262,15 +1267,17 @@ fn collect_content(
             let empty = encode_manifest(&ContentManifest::new(vec![])).map_err(|error| {
                 ProductAssemblyError::new(
                     "ASSEMBLY_CONTENT_MANIFEST",
-                    CONTENT_MANIFEST_PATH,
+                    LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH,
                     error.to_string(),
                 )
             })?;
             return Ok(ContentClosure {
                 manifest_source: None,
                 runtime_files: vec![ProductFile {
-                    relative_path: ProductPath::parse(CONTENT_MANIFEST_PATH.to_owned())
-                        .expect("fixed path"),
+                    relative_path: ProductPath::parse(
+                        LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH.to_owned(),
+                    )
+                    .expect("fixed path"),
                     bytes: empty.into_bytes(),
                 }],
                 runtime_json_content: Vec::new(),
@@ -1279,21 +1286,23 @@ fn collect_content(
         }
         return Err(ProductAssemblyError::new(
             "ASSEMBLY_CONTENT_MANIFEST_REQUIRED",
-            CONTENT_MANIFEST_PATH,
-            "non-empty content requires content/manifest.json with exact body identities",
+            LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH,
+            format!(
+                "non-empty content requires {LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH} with exact body identities"
+            ),
         ));
     };
     let text = std::str::from_utf8(&source_manifest.bytes).map_err(|error| {
         ProductAssemblyError::new(
             "ASSEMBLY_CONTENT_MANIFEST_UTF8",
-            CONTENT_MANIFEST_PATH,
+            LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH,
             error.to_string(),
         )
     })?;
     let decoded = decode_manifest(text).map_err(|error| {
         ProductAssemblyError::new(
             "ASSEMBLY_CONTENT_MANIFEST_ADMISSION",
-            CONTENT_MANIFEST_PATH,
+            LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH,
             error.to_string(),
         )
     })?;
@@ -1301,7 +1310,7 @@ fn collect_content(
     let encoded = encode_manifest(&canonical).map_err(|error| {
         ProductAssemblyError::new(
             "ASSEMBLY_CONTENT_MANIFEST",
-            CONTENT_MANIFEST_PATH,
+            LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH,
             error.to_string(),
         )
     })?;
@@ -1339,7 +1348,7 @@ fn collect_content(
         return Err(ProductAssemblyError::new(
             "ASSEMBLY_CONTENT_EXTRA_BODY",
             format!("content/{path}"),
-            "content body is not declared by content/manifest.json",
+            format!("content body is not declared by {LEGACY_ASSEMBLY_CONTENT_MANIFEST_PATH}"),
         ));
     }
     let by_path = body_files
