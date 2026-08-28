@@ -179,6 +179,26 @@ impl ContinuousExprRequirements {
     pub fn inputs(&self) -> &[ContinuousInputReference] {
         &self.inputs
     }
+
+    /// Inspects both operands with comparison semantics. Unlike wrapping the
+    /// operands in an artificial arithmetic node, this preserves the
+    /// comparison depth rule while still enforcing combined node and input
+    /// quotas.
+    pub fn inspect_comparison(
+        comparison: &ContinuousComparison,
+    ) -> Result<Self, ContinuousEvaluationError> {
+        ContinuousEvaluator::validate_comparison_structure(
+            comparison,
+            ContinuousExprLimits::default(),
+        )?;
+        let (left, right) = comparison_operands(comparison);
+        let mut inputs = BTreeSet::new();
+        collect_inputs(left, &mut inputs);
+        collect_inputs(right, &mut inputs);
+        Ok(Self {
+            inputs: inputs.into_iter().collect(),
+        })
+    }
 }
 /// The closed, static compilation seam for a downstream continuous product leaf.
 pub trait CompileContinuousExpr {
@@ -374,7 +394,27 @@ impl ContinuousEvaluator {
             work_used: work,
         })
     }
+
+    /// Checks the combined structural quota of both predicate operands without evaluating.
+    pub fn validate_comparison_structure(
+        predicate: &ContinuousComparison,
+        limits: ContinuousExprLimits,
+    ) -> Result<(), ContinuousEvaluationError> {
+        let (left, right) = comparison_operands(predicate);
+        validate_predicate(left, right, limits)
+    }
 }
+
+fn comparison_operands(comparison: &ContinuousComparison) -> (&ContinuousExpr, &ContinuousExpr) {
+    match comparison {
+        ContinuousComparison::Equal(left, right)
+        | ContinuousComparison::LessThan(left, right)
+        | ContinuousComparison::LessOrEqual(left, right)
+        | ContinuousComparison::GreaterThan(left, right)
+        | ContinuousComparison::GreaterOrEqual(left, right) => (left, right),
+    }
+}
+
 fn validate_predicate(
     left: &ContinuousExpr,
     right: &ContinuousExpr,
