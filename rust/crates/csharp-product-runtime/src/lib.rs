@@ -703,11 +703,14 @@ impl CsharpProductRuntime {
         }
 
         let fault_binding = input_binding(&self.lifecycle);
-        self.lifecycle_with_binding(
-            ProductDevLifecycleOperation::Restart,
-            Some(dev_binding_from_input(fault_binding)),
-        )
-        .map_err(exercise_runtime_error)?;
+        let restart = self
+            .lifecycle_with_binding(
+                ProductDevLifecycleOperation::Restart,
+                Some(dev_binding_from_input(fault_binding)),
+            )
+            .map_err(exercise_runtime_error)?;
+        let (_, outputs) = restart.into_parts();
+        assert_ui_projection_binding(&outputs, input_binding(&self.lifecycle))?;
         let restarted = self.lifecycle.readout();
         if restarted.state() != RuntimeState::Running
             || restarted.generation().value() != before_fault.generation().value() + 1
@@ -1143,11 +1146,15 @@ impl CsharpProductRuntime {
         self.turn(facts)
     }
 
-    fn action(
+    fn action<F, T>(
         &mut self,
         action: NativeProductAction,
         operation: ProductDevOperationKind,
-    ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
+        transition: F,
+    ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError>
+    where
+        F: FnOnce(&mut RuntimeLifecycle) -> Result<T, runtime_lifecycle::RuntimeLifecycleError>,
+    {
         self.services.begin_call(ui_binding(&self.lifecycle));
         match call_action(action, self.handle, operation) {
             Ok(()) => {}
@@ -1156,19 +1163,34 @@ impl CsharpProductRuntime {
                 return Err(error);
             }
         }
-        let staged = match self.services.take_call() {
+        let mut staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
                 self.services.discard_call();
                 return Err(error.into());
             }
         };
+        // Convert the complete staged output before the Rust lifecycle is
+        // changed. The later UI retag is infallible: it changes only the
+        // already-typed runtime binding of an already validated envelope.
+        if let Err(error) = service_outputs(self.services.outputs(&staged)) {
+            self.services.discard_call();
+            return Err(error);
+        }
+        if let Err(error) = transition(&mut self.lifecycle) {
+            self.services.discard_call();
+            return Err(lifecycle_error(error));
+        }
+        staged.rebind_ui_runtime(ui_binding(&self.lifecycle));
         let mut outputs = if matches!(operation, ProductDevOperationKind::Start) {
             std::mem::take(&mut self.initial_outputs)
         } else {
             Vec::new()
         };
-        outputs.extend(service_outputs(self.services.outputs(&staged))?);
+        outputs.extend(
+            service_outputs(self.services.outputs(&staged))
+                .expect("rebinding typed UI identity cannot invalidate prevalidated output"),
+        );
         self.services.commit_call(staged);
         Ok(outputs)
     }
@@ -1269,8 +1291,12 @@ impl CsharpProductRuntime {
     }
 
     fn start_for_exercise(&mut self) -> Result<(), CsharpProductRuntimeError> {
-        self.action(self.api.start, ProductDevOperationKind::Start)?;
-        self.lifecycle.start().map_err(lifecycle_error)?;
+        let outputs = self.action(
+            self.api.start,
+            ProductDevOperationKind::Start,
+            |lifecycle| lifecycle.start(),
+        )?;
+        assert_ui_projection_binding(&outputs, input_binding(&self.lifecycle))?;
         self.rebind_input(InputClearReason::Restart)
     }
 }
@@ -1292,9 +1318,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
         match operation {
             ProductDevLifecycleOperation::Start => {
                 let outputs = self
-                    .action(self.api.start, ProductDevOperationKind::Start)
+                    .action(
+                        self.api.start,
+                        ProductDevOperationKind::Start,
+                        |lifecycle| lifecycle.start(),
+                    )
                     .map_err(|error| self.runtime_error(error))?;
-                self.lifecycle.start().map_err(lifecycle_runtime_error)?;
                 self.rebind_input(InputClearReason::Restart)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
@@ -1304,9 +1333,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
             }
             ProductDevLifecycleOperation::Pause => {
                 let outputs = self
-                    .action(self.api.pause, ProductDevOperationKind::Pause)
+                    .action(
+                        self.api.pause,
+                        ProductDevOperationKind::Pause,
+                        |lifecycle| lifecycle.pause(),
+                    )
                     .map_err(|error| self.runtime_error(error))?;
-                self.lifecycle.pause().map_err(lifecycle_runtime_error)?;
                 self.rebind_input(InputClearReason::ControlRevisionChange)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
@@ -1316,9 +1348,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
             }
             ProductDevLifecycleOperation::Resume => {
                 let outputs = self
-                    .action(self.api.resume, ProductDevOperationKind::Resume)
+                    .action(
+                        self.api.resume,
+                        ProductDevOperationKind::Resume,
+                        |lifecycle| lifecycle.resume(),
+                    )
                     .map_err(|error| self.runtime_error(error))?;
-                self.lifecycle.resume().map_err(lifecycle_runtime_error)?;
                 self.rebind_input(InputClearReason::ControlRevisionChange)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
@@ -1333,9 +1368,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 // authoritative lifecycle binding and generation untouched.
                 self.require_restart_state()?;
                 let outputs = self
-                    .action(self.api.restart, ProductDevOperationKind::Restart)
+                    .action(
+                        self.api.restart,
+                        ProductDevOperationKind::Restart,
+                        |lifecycle| lifecycle.restart(),
+                    )
                     .map_err(|error| self.runtime_error(error))?;
-                self.lifecycle.restart().map_err(lifecycle_runtime_error)?;
                 self.rebind_input(InputClearReason::Restart)
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
@@ -1360,9 +1398,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
             }
             ProductDevLifecycleOperation::Shutdown => {
                 let outputs = self
-                    .action(self.api.shutdown, ProductDevOperationKind::Shutdown)
+                    .action(
+                        self.api.shutdown,
+                        ProductDevOperationKind::Shutdown,
+                        |lifecycle| lifecycle.shutdown(),
+                    )
                     .map_err(|error| self.runtime_error(error))?;
-                self.lifecycle.shutdown().map_err(lifecycle_runtime_error)?;
                 self.input_lane.dispose();
                 self.pending_inputs.clear();
                 let receipt = self.receipt(

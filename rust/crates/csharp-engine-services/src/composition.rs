@@ -405,6 +405,14 @@ impl EngineServiceSet {
     }
 }
 
+impl CsharpEngineCall {
+    /// Retags only staged UI envelopes after their owning lifecycle action has
+    /// actually succeeded. Other Engine service state stays staged unchanged.
+    pub fn rebind_ui_runtime(&mut self, binding: RuntimeUiRuntimeBinding) {
+        self.ui.rebind_runtime(binding);
+    }
+}
+
 /// Admits the optional retained-appearance catalog carried by product content.
 pub fn parse_runtime_appearance_catalog(
     bytes: Option<&[u8]>,

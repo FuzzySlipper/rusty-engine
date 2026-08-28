@@ -293,6 +293,15 @@ pub(crate) struct RuntimeUiCall {
     next_stream: u64,
 }
 
+impl RuntimeUiCall {
+    pub(crate) fn rebind_runtime(&mut self, binding: RuntimeUiRuntimeBinding) {
+        self.projections = std::mem::take(&mut self.projections)
+            .into_iter()
+            .map(|projection| projection.with_runtime(binding))
+            .collect();
+    }
+}
+
 unsafe extern "C" fn publish_ui_projection(
     context: *mut c_void,
     projection: *const NativeUiProjection,

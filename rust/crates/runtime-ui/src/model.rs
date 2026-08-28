@@ -132,6 +132,17 @@ impl RuntimeUiProjectionEnvelope {
         self.runtime
     }
 
+    /// Rebinds an already admitted projection to a newer Engine lifecycle
+    /// identity without changing its copied product payload or stream state.
+    ///
+    /// This is for Engine-owned staging when a callback runs before a
+    /// lifecycle action commits. `RuntimeUiRuntimeBinding` is already typed,
+    /// while the stream, contract, and value were validated by [`Self::new`].
+    pub fn with_runtime(mut self, runtime: RuntimeUiRuntimeBinding) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     pub const fn sequence(&self) -> u64 {
         self.sequence
     }

@@ -616,6 +616,7 @@ public sealed class Product : IEngineProduct
         _started = true;
         _paused = false;
         _shutdown = false;
+        PublishPresentation();
     }
     public void Shutdown()
     {
