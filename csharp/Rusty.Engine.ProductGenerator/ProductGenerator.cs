@@ -82,6 +82,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Voxel = new VoxelServiceImplementation(native.voxel);
                     VoxelContent = new VoxelContentServiceImplementation(native.voxel_content);
                     Content = new ContentServiceImplementation(native.content);
+                    AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
                     ContentStore = new ContentStoreServiceImplementation(native.content_store);
                     Appearance = new AppearanceServiceImplementation(native.appearance);
                     Presentation = new PresentationServiceImplementation(native.presentation);
@@ -109,6 +110,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IVoxelService Voxel { get; }
                 public IVoxelContentService VoxelContent { get; }
                 public IContentService Content { get; }
+                public IAuthoredContentService AuthoredContent { get; }
                 public IContentStoreService ContentStore { get; }
                 public IAppearanceService Appearance { get; }
                 public IPresentationService Presentation { get; }
