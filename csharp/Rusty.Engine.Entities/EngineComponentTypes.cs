@@ -30,6 +30,15 @@ public static class EngineComponentTypes
         EngineComponentKeys.Create(3),
         validator: ValidateSpatialCollider);
 
+    /// <summary>
+    /// Caller-owned velocity and bounds projected into the call-local generated
+    /// Kinematic motion phase. This is distinct from the generated detached
+    /// <c>KinematicBody</c> value used by direct Physics integration.
+    /// </summary>
+    public static ComponentType<Kinematic> Kinematic { get; } = ComponentType<Kinematic>.CreateEngine(
+        EngineComponentKeys.Create(4),
+        validator: ValidateKinematic);
+
     private static void ValidateTransform(in Transform value)
     {
         if (!IsFinite(value.Translation) || !IsFinite(value.Scale)
@@ -69,6 +78,16 @@ public static class EngineComponentTypes
             || value.Min.Z > value.Max.Z)
         {
             throw new ArgumentException("Spatial collider bounds must be finite and ordered.");
+        }
+    }
+
+    private static void ValidateKinematic(in Kinematic value)
+    {
+        if (!IsFinite(value.HalfExtents)
+            || value.HalfExtents.X <= 0 || value.HalfExtents.Y <= 0 || value.HalfExtents.Z <= 0
+            || !IsBounded(value.Velocity, MaxAbsVelocity))
+        {
+            throw new ArgumentException("Kinematic must have finite positive half extents and bounded velocity.");
         }
     }
 

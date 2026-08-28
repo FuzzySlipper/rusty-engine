@@ -61,6 +61,7 @@ ExerciseStateMachineEntityComposition();
 ExerciseSpatialEntityProjection();
 ExerciseWorldOriginEntityComposition();
 ExerciseMotionEntityComposition();
+ExerciseKinematicEntityComposition();
 
 static void Require(bool condition, string message)
 {
@@ -154,6 +155,68 @@ static void ExerciseMotionEntityComposition()
         "motion adapter did not reject stale managed projection evidence");
     Require(service.ResolveCount == 1,
         "stale managed motion state reached the pure generated service");
+}
+
+static void ExerciseKinematicEntityComposition()
+{
+    using var world = new EntityWorld([
+        EngineComponentTypes.Transform,
+        EngineComponentTypes.Kinematic,
+        EngineComponentTypes.SpatialCollider]);
+    EntityId mover = world.Create();
+    EntityId selectedPeer = world.Create();
+    EntityId blocker = world.Create();
+    world.Set(mover, EngineComponentTypes.Transform, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One));
+    world.Set(mover, EngineComponentTypes.Kinematic, new Kinematic(new Vector3(0.4f), new Vector3(2.0f, 0.0f, 2.0f)));
+    world.Set(mover, EngineComponentTypes.SpatialCollider, new SpatialCollider(new Vector3(-0.4f), new Vector3(0.4f), 0, 0, true, false, false));
+    world.Set(selectedPeer, EngineComponentTypes.Transform, new Transform(new Vector3(1.0f, 0.0f, 0.0f), Quaternion.Identity, Vector3.One));
+    world.Set(selectedPeer, EngineComponentTypes.Kinematic, new Kinematic(new Vector3(0.4f), Vector3.Zero));
+    world.Set(selectedPeer, EngineComponentTypes.SpatialCollider, new SpatialCollider(new Vector3(-0.4f), new Vector3(0.4f), 0, 0, true, false, false));
+    world.Set(blocker, EngineComponentTypes.Transform, new Transform(new Vector3(2.0f, 0.0f, 1.0f), Quaternion.Identity, Vector3.One));
+    world.Set(blocker, EngineComponentTypes.Kinematic, new Kinematic(new Vector3(0.4f), Vector3.Zero));
+    world.Set(blocker, EngineComponentTypes.SpatialCollider, new SpatialCollider(new Vector3(-0.4f), new Vector3(0.4f), 0, 0, true, false, false));
+    var service = new KinematicServiceFake();
+    var adapter = new KinematicEntityWorld(world, service, EngineComponentTypes.SpatialCollider);
+
+    ulong before = world.Revision;
+    KinematicEntityWorldPrepared prepared = adapter.Prepare(
+        service.Session,
+        deltaSeconds: 1.0f,
+        maximumEntities: 3,
+        selection: new EntityId[] { mover, selectedPeer });
+    Require(prepared.Motion.BodiesConsidered == 2
+        && prepared.Motion.Candidates.Span.Length == 1
+        && prepared.Motion.Facts.Span.Length == 2
+        && prepared.Motion.Facts.Span[0].Kind == KinematicMotionFactKind.Blocked
+        && prepared.Motion.Facts.Span[0].EntityId == mover.Value
+        && prepared.Motion.Facts.Span[1].Kind == KinematicMotionFactKind.Moved
+        && prepared.Motion.Facts.Span[1].EntityId == mover.Value,
+        "Kinematic prepare did not preserve deterministic selected blocked and moved facts");
+    KinematicEntityWorldReceipt applied = prepared.Apply();
+    Require(applied.Managed.RevisionBefore == before
+        && applied.Managed.RevisionAfter == before + 1
+        && world.Get(mover, EngineComponentTypes.Transform).Translation == new Vector3(2.0f, 0.0f, 0.0f)
+        && world.Get(mover, EngineComponentTypes.Kinematic).Velocity == new Vector3(2.0f, 0.0f, 0.0f)
+        && world.Get(blocker, EngineComponentTypes.Transform).Translation == new Vector3(2.0f, 0.0f, 1.0f)
+        && world.Get(blocker, EngineComponentTypes.Kinematic).Velocity == Vector3.Zero,
+        "Kinematic apply did not publish exactly one managed mover batch while retaining the blocker");
+
+    int callsBeforeStale = service.RunCount;
+    world.Set(selectedPeer, EngineComponentTypes.Kinematic, new Kinematic(new Vector3(0.4f), new Vector3(1.0f, 0.0f, 0.0f)));
+    Throws(
+        () => adapter.Prepare(service.Session, 1.0f, 3, new EntityId[] { mover }, applied.Guard),
+        "Kinematic stale managed guard was not rejected before native crossing");
+    Require(service.RunCount == callsBeforeStale,
+        "Kinematic stale managed guard reached the generated service");
+
+    ulong noOpBefore = world.Revision;
+    KinematicEntityWorldReceipt noOp = adapter.Prepare(
+        service.Session,
+        1.0f,
+        3,
+        ReadOnlyMemory<EntityId>.Empty).Apply();
+    Require(noOp.Managed.RevisionBefore == noOpBefore && noOp.Managed.RevisionAfter == noOpBefore,
+        "Kinematic empty selected phase changed the managed world revision");
 }
 
 static void ExerciseStateMachineEntityComposition()
@@ -1228,6 +1291,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public ILookService Look => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public IMotionService Motion => throw new NotSupportedException();
+    public IKinematicService Kinematic => throw new NotSupportedException();
     public ISpatialService Spatial => throw new NotSupportedException();
     public IWorldOriginService WorldOrigin => throw new NotSupportedException();
     public IVoxelService Voxel => throw new NotSupportedException();
@@ -1883,5 +1947,59 @@ sealed class MotionServiceFake : IMotionService
             mover.Transform.Translation,
             candidate.Translation,
             candidate);
+    }
+}
+
+sealed class KinematicServiceFake : IKinematicService
+{
+    public SpatialSession Session { get; } = new(new SpatialSessionHandle(1), () => { });
+    public int RunCount { get; private set; }
+
+    public IntegrationResult Integrate(KinematicIntegrationRequest request) => throw new NotSupportedException();
+
+    public IntegrationResult IntegrateSpatial(KinematicSpatialIntegrationRequest request) => throw new NotSupportedException();
+
+    public KinematicMotionLeaseReceipt RunMotion(KinematicMotionRequest request)
+    {
+        RunCount++;
+        if (!request.SelectionPresent)
+        {
+            throw new InvalidOperationException("example Kinematic test requires explicit selection");
+        }
+        if (request.SelectedEntityIds.Length == 0)
+        {
+            return new KinematicMotionLeaseReceipt(
+                ReadOnlyMemory<KinematicMotionCandidate>.Empty,
+                ReadOnlyMemory<KinematicMotionFact>.Empty,
+                0,
+                0,
+                0,
+                0,
+                0);
+        }
+        KinematicMotionEntityRow[] rows = request.Rows.ToArray();
+        if (rows.Length != 3 || !request.SelectedEntityIds.Span.SequenceEqual(new ulong[] { 1, 2 }))
+        {
+            throw new InvalidOperationException("Kinematic adapter did not project deterministic full rows and selection ids");
+        }
+        KinematicMotionEntityRow mover = rows.Single(row => row.EntityId == 1);
+        KinematicMotionEntityRow blocker = rows.Single(row => row.EntityId == 3);
+        if (!mover.CollisionEnabled || !blocker.CollisionEnabled)
+        {
+            throw new InvalidOperationException("Kinematic adapter did not retain active collider facts for dynamic blockers");
+        }
+        Transform after = mover.Transform with { Translation = new Vector3(2.0f, 0.0f, 0.0f) };
+        var candidate = new KinematicMotionCandidate(
+            mover.EntityId,
+            mover.Transform,
+            after,
+            mover.Velocity,
+            new Vector3(2.0f, 0.0f, 0.0f));
+        var facts = new[]
+        {
+            new KinematicMotionFact(mover.EntityId, KinematicMotionFactKind.Blocked, KinematicMotionAxis.Z, Vector3.Zero, Vector3.Zero, 2.0f),
+            new KinematicMotionFact(mover.EntityId, KinematicMotionFactKind.Moved, KinematicMotionAxis.X, mover.Transform.Translation, after.Translation, 0.0f),
+        };
+        return new KinematicMotionLeaseReceipt(new[] { candidate }, facts, 2, 1, 1, 0, 1);
     }
 }

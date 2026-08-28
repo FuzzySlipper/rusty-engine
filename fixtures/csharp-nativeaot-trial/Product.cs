@@ -345,6 +345,30 @@ public sealed class Product : IEngineProduct
         {
             // The named generated enum matches the discriminating ABI status.
         }
+        Transform motionTransform = new(new Vector3(10.0f, 10.0f, 10.0f), Quaternion.Identity, Vector3.One);
+        KinematicMotionLeaseReceipt motionPhase = _engine.Kinematic.RunMotion(new KinematicMotionRequest(
+            _spatial,
+            1.0f,
+            new[]
+            {
+                new KinematicMotionEntityRow(1, motionTransform, new Vector3(0.4f), new Vector3(2.0f, 0.0f, 2.0f), true, false),
+                new KinematicMotionEntityRow(2, new Transform(new Vector3(11.0f, 10.0f, 10.0f), Quaternion.Identity, Vector3.One), new Vector3(0.4f), Vector3.Zero, true, false),
+                new KinematicMotionEntityRow(3, new Transform(new Vector3(12.0f, 10.0f, 11.0f), Quaternion.Identity, Vector3.One), new Vector3(0.4f), Vector3.Zero, true, false),
+            },
+            true,
+            new ulong[] { 1, 2 }));
+        Require(motionPhase.BodiesConsidered == 2 && motionPhase.MovedBodies == 1 && motionPhase.BlockedAxes == 1
+            && motionPhase.RevisionBefore == 0 && motionPhase.RevisionAfter == 1
+            && motionPhase.Candidates.Span.Length == 1
+            && motionPhase.Candidates.Span[0].EntityId == 1
+            && motionPhase.Candidates.Span[0].AfterTransform.Translation == new Vector3(12.0f, 10.0f, 10.0f)
+            && motionPhase.Facts.Span.Length == 2
+            && motionPhase.Facts.Span[0].Kind == KinematicMotionFactKind.Blocked
+            && motionPhase.Facts.Span[0].EntityId == 1
+            && motionPhase.Facts.Span[0].Axis == KinematicMotionAxis.Z
+            && motionPhase.Facts.Span[1].Kind == KinematicMotionFactKind.Moved
+            && motionPhase.Facts.Span[1].EntityId == 1,
+            "generated Kinematic motion lease did not copy selected moved and blocked facts");
         VoxelChunkReadout exercisedChunk = _engine.Voxel.ReadChunk(new VoxelChunkReadRequest(
             _spatial,
             new VoxelChunkIdentity(0, 0, 0)));

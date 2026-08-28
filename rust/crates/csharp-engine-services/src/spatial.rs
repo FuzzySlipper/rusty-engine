@@ -51,6 +51,9 @@ pub(crate) struct RuntimeSpatialBridge {
     next_trigger_diagnostic_lease: u64,
     pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
     pub(crate) next_world_origin_prepared: u64,
+    pub(crate) kinematic_motion_leases:
+        BTreeMap<u64, crate::kinematic::KinematicMotionLeaseBacking>,
+    pub(crate) next_kinematic_motion_lease: u64,
 }
 
 pub(crate) struct SpatialSession {
@@ -193,6 +196,8 @@ impl RuntimeSpatialBridge {
             next_trigger_diagnostic_lease: 1,
             prepared_world_origins: BTreeMap::new(),
             next_world_origin_prepared: 1,
+            kinematic_motion_leases: BTreeMap::new(),
+            next_kinematic_motion_lease: 1,
         }
     }
 
