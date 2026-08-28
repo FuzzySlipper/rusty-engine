@@ -197,6 +197,39 @@ fn audio_batch_is_atomic_and_reset_clears_retained_and_impulse_state() {
 }
 
 #[test]
+fn audio_diagnostics_are_bounded_oldest_first_and_reset_eviction_state() {
+    let assets = assets();
+    let mut projector = AudioProjector::default();
+    let total = MAX_AUDIO_DIAGNOSTICS + 2;
+
+    for sequence in 0..total {
+        let diagnostic = projector
+            .project(
+                &assets,
+                PresentationOpMeta::new(sequence as u32),
+                AudioProjectionOp::Destroy {
+                    handle: AudioHandle::new(sequence as u64 + 1),
+                },
+            )
+            .expect_err("unknown handles produce retained diagnostics");
+        assert_eq!(diagnostic.code, AudioProjectionDiagnosticCode::UnknownHandle);
+    }
+
+    let readout = projector.readout();
+    assert_eq!(readout.retained_diagnostic_count, MAX_AUDIO_DIAGNOSTICS as u32);
+    assert_eq!(readout.evicted_diagnostic_count, 2);
+    assert_eq!(readout.diagnostics.len(), MAX_AUDIO_DIAGNOSTICS);
+    assert_eq!(readout.diagnostics.first().unwrap().sequence, 2);
+    assert_eq!(readout.diagnostics.last().unwrap().sequence, (total - 1) as u32);
+
+    projector.reset();
+    let readout = projector.readout();
+    assert_eq!(readout.retained_diagnostic_count, 0);
+    assert_eq!(readout.evicted_diagnostic_count, 0);
+    assert!(readout.diagnostics.is_empty());
+}
+
+#[test]
 fn audio_rejects_wrong_kind_and_content_identity() {
     let mut wrong_kind_assets = assets();
     wrong_kind_assets.get_mut("audio/pulse").unwrap().kind = RenderAssetKind::Font;

@@ -8,6 +8,11 @@ use crate::{
     PresentationOpMeta,
 };
 
+/// Maximum number of projector diagnostics retained for indexed inspection.
+/// Diagnostics are retained in oldest-to-newest order; entries beyond this
+/// bound evict the oldest entry.
+pub const MAX_AUDIO_DIAGNOSTICS: usize = 128;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AudioHandle(u64);
@@ -127,6 +132,8 @@ pub struct AudioProjectionReadout {
     pub active_sources: u32,
     pub referenced_clips: u32,
     pub emitted_signals: u64,
+    pub retained_diagnostic_count: u32,
+    pub evicted_diagnostic_count: u64,
     pub diagnostics: Vec<AudioProjectionDiagnostic>,
 }
 
@@ -137,6 +144,7 @@ pub struct AudioProjector {
     referenced_clips: BTreeSet<String>,
     emitted_signals: u64,
     diagnostics: Vec<AudioProjectionDiagnostic>,
+    evicted_diagnostic_count: u64,
 }
 
 impl AudioProjector {
@@ -167,7 +175,7 @@ impl AudioProjector {
                     handle: operation_handle(&op),
                     message: diagnostic_message(code).to_string(),
                 };
-                self.diagnostics.push(diagnostic.clone());
+                self.retain_diagnostic(diagnostic.clone());
                 return Err(diagnostic);
             }
             projected.push(PresentationOp::Audio { meta, op });
@@ -185,12 +193,22 @@ impl AudioProjector {
             active_sources: self.active.len() as u32,
             referenced_clips: self.referenced_clips.len() as u32,
             emitted_signals: self.emitted_signals,
+            retained_diagnostic_count: self.diagnostics.len() as u32,
+            evicted_diagnostic_count: self.evicted_diagnostic_count,
             diagnostics: self.diagnostics.clone(),
         }
     }
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    fn retain_diagnostic(&mut self, diagnostic: AudioProjectionDiagnostic) {
+        if self.diagnostics.len() == MAX_AUDIO_DIAGNOSTICS {
+            self.diagnostics.remove(0);
+            self.evicted_diagnostic_count = self.evicted_diagnostic_count.saturating_add(1);
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     fn validate_and_apply(
