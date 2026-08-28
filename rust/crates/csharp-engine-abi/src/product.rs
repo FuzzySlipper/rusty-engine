@@ -821,6 +821,38 @@ pub type NativeDestroyMechanicsWorldRestoreLease =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldRestoreLeaseHandle) -> i32;
 pub type NativePublishMechanicsWorldRestore =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldRestoreHandle) -> i32;
+pub type NativeExportMechanicsWorld = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsWorldExportLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsWorldExportLease =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldExportLeaseHandle) -> i32;
+pub type NativePrepareMechanicsWorldImport = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsWorldImportRequest,
+    *mut NativeMechanicsWorldImportHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsWorldImport =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldImportHandle) -> i32;
+pub type NativeReadMechanicsWorldImport = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsWorldImportHandle,
+    *mut NativeMechanicsWorldImportLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsWorldImportLease =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldImportLeaseHandle) -> i32;
+pub type NativePublishMechanicsWorldImport =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldImportHandle) -> i32;
+pub type NativeClaimMechanicsWorldImportEntity = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsWorldImportEntityClaimRequest,
+    *mut NativeMechanicsEntityHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeBindMechanicsEntity = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEntityBindRequest,
@@ -1335,6 +1367,14 @@ pub struct NativeMechanicsApi {
     pub read_world_restore: NativeReadMechanicsWorldRestore,
     pub destroy_world_restore_lease: NativeDestroyMechanicsWorldRestoreLease,
     pub publish_world_restore: NativePublishMechanicsWorldRestore,
+    pub export_world: NativeExportMechanicsWorld,
+    pub destroy_world_export_lease: NativeDestroyMechanicsWorldExportLease,
+    pub prepare_world_import: NativePrepareMechanicsWorldImport,
+    pub destroy_world_import: NativeDestroyMechanicsWorldImport,
+    pub read_world_import: NativeReadMechanicsWorldImport,
+    pub destroy_world_import_lease: NativeDestroyMechanicsWorldImportLease,
+    pub publish_world_import: NativePublishMechanicsWorldImport,
+    pub claim_world_import_entity: NativeClaimMechanicsWorldImportEntity,
     pub bind_entity: NativeBindMechanicsEntity,
     pub rebind_entity: NativeRebindMechanicsEntity,
     pub set_initial_stat: NativeSetMechanicsInitialStat,

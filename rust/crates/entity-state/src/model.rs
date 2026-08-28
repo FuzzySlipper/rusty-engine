@@ -314,11 +314,41 @@ impl EntityState {
         let entities = self.entities.keys().copied().collect();
         if !self
             .components
-            .rebase_revisions_from(&current.components, &entities)
+            .rebase_revisions_from(&current.components, &entities, &BTreeMap::new())
         {
             return false;
         }
         let Some(revision) = self.revision.max(current.revision).checked_add(1) else {
+            return false;
+        };
+        self.revision = revision;
+        true
+    }
+
+    /// Rebases a replacement candidate whose entity membership may differ from its live
+    /// predecessor. Each supplied component floor is durable evidence rather than a reusable
+    /// guard; every candidate slot, including absent slots, becomes strictly newer than the
+    /// candidate, predecessor, and persisted evidence.
+    pub fn rebase_replacement_revisions_after(
+        &mut self,
+        current: &Self,
+        persisted_state_revision: u64,
+        persisted_component_revisions: &BTreeMap<(EntityId, ComponentTypeId), u64>,
+    ) -> bool {
+        let entities = self.entities.keys().copied().collect();
+        if !self.components.rebase_revisions_from(
+            &current.components,
+            &entities,
+            persisted_component_revisions,
+        ) {
+            return false;
+        }
+        let Some(revision) = self
+            .revision
+            .max(current.revision)
+            .max(persisted_state_revision)
+            .checked_add(1)
+        else {
             return false;
         };
         self.revision = revision;

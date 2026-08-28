@@ -43,6 +43,7 @@ trait ErasedComponentTable: Send + Sync {
         &mut self,
         current: &dyn ErasedComponentTable,
         entities: &BTreeSet<EntityId>,
+        persisted_revisions: &BTreeMap<(EntityId, ComponentTypeId), u64>,
     ) -> bool;
     fn len(&self) -> usize;
     fn entity_sample(&self) -> Vec<EntityId>;
@@ -143,6 +144,7 @@ impl<T: EntityComponent> ErasedComponentTable for ComponentTable<T> {
         &mut self,
         current: &dyn ErasedComponentTable,
         entities: &BTreeSet<EntityId>,
+        persisted_revisions: &BTreeMap<(EntityId, ComponentTypeId), u64>,
     ) -> bool {
         let Some(current) = current.as_any().downcast_ref::<ComponentTable<T>>() else {
             return false;
@@ -150,7 +152,15 @@ impl<T: EntityComponent> ErasedComponentTable for ComponentTable<T> {
         for entity in entities {
             let snapshot_revision = self.revisions.get(entity).copied().unwrap_or(0);
             let current_revision = current.revisions.get(entity).copied().unwrap_or(0);
-            let Some(remapped) = snapshot_revision.max(current_revision).checked_add(1) else {
+            let persisted_revision = persisted_revisions
+                .get(&(*entity, self.registration.type_id().clone()))
+                .copied()
+                .unwrap_or(0);
+            let Some(remapped) = snapshot_revision
+                .max(current_revision)
+                .max(persisted_revision)
+                .checked_add(1)
+            else {
                 return false;
             };
             self.revisions.insert(*entity, remapped);
@@ -468,6 +478,7 @@ impl ComponentStore {
         &mut self,
         current: &Self,
         entities: &BTreeSet<EntityId>,
+        persisted_revisions: &BTreeMap<(EntityId, ComponentTypeId), u64>,
     ) -> bool {
         if self.tables.len() != current.tables.len() || self.tables.keys().ne(current.tables.keys())
         {
@@ -475,7 +486,7 @@ impl ComponentStore {
         }
         self.tables.iter_mut().all(|(type_id, table)| {
             current.tables.get(type_id).is_some_and(|current_table| {
-                table.rebase_revisions(current_table.as_ref(), entities)
+                table.rebase_revisions(current_table.as_ref(), entities, persisted_revisions)
             })
         })
     }

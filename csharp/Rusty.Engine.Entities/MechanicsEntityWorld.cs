@@ -12,7 +12,7 @@ public sealed class MechanicsEntityWorld : IDisposable
     private readonly EntityWorld _entities;
     private readonly IMechanicsService _mechanics;
     private readonly MechanicsCatalog _catalog;
-    private readonly Dictionary<EntityId, Binding> _bindings = [];
+    private Dictionary<EntityId, Binding> _bindings = [];
     private bool _disposed;
 
     public MechanicsEntityWorld(EntityWorld entities, IMechanicsService mechanics, MechanicsCatalog catalog)
@@ -20,6 +20,49 @@ public sealed class MechanicsEntityWorld : IDisposable
         _entities = entities ?? throw new ArgumentNullException(nameof(entities));
         _mechanics = mechanics ?? throw new ArgumentNullException(nameof(mechanics));
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+    }
+
+    /// <summary>
+    /// Exports the admitted Mechanics world through its typed Engine service. The returned receipt
+    /// is already copied by the generated binding and can therefore be handed to product-owned
+    /// persistence code without retaining a native lease.
+    /// </summary>
+    public MechanicsWorldExportLeaseReceipt Export()
+    {
+        ThrowIfDisposed();
+        RequireNoUncommittedBindings();
+        return _mechanics.ExportWorld(_catalog);
+    }
+
+    /// <summary>
+    /// Prepares one paired managed/native import from product-decoded semantic state. The caller
+    /// supplies the generated Mechanics request, but this adapter admits only its own catalog and
+    /// only when its canonical entity/lifecycle/containment facts exactly match the managed plan.
+    /// Neither side becomes visible until the returned candidate is published.
+    /// </summary>
+    public MechanicsEntityWorldImportCandidate PrepareImport(
+        EntityWorldRestorePlan plan,
+        MechanicsWorldImportRequest request,
+        ulong? expectedManagedRevision = null)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(plan);
+        RequireNoUncommittedBindings();
+
+        MechanicsWorldImportRequest admitted = AdmitImportRequest(plan, request);
+        MechanicsWorldImport native = _mechanics.PrepareWorldImport(admitted);
+        try
+        {
+            EntityWorldRestoreCandidate managed = _entities.PrepareRestore(plan, expectedManagedRevision);
+            MechanicsWorldImportLeaseReceipt receipt = _mechanics.ReadWorldImport(native);
+            ValidateImportReceipt(admitted, receipt);
+            return new MechanicsEntityWorldImportCandidate(this, native, managed, receipt);
+        }
+        catch
+        {
+            native.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -431,6 +474,192 @@ public sealed class MechanicsEntityWorld : IDisposable
             binding.Native.Dispose();
         }
         _bindings.Clear();
+    }
+
+    internal void PublishPreparedImport(
+        MechanicsWorldImport native,
+        EntityWorldRestoreCandidate managed,
+        MechanicsWorldImportLeaseReceipt receipt)
+    {
+        ThrowIfDisposed();
+
+        // ReadWorldImport proved this complete exact membership before either side was visible.
+        // Claim into an isolated map first, so the adapter never exposes a partly rebuilt map.
+        var replacement = new Dictionary<EntityId, Binding>(receipt.Entities.Length);
+        try
+        {
+            _mechanics.PublishWorldImport(native);
+            foreach (MechanicsWorldImportEntityRow row in receipt.Entities.Span)
+            {
+                MechanicsEntity entity = _mechanics.ClaimWorldImportEntity(
+                    new MechanicsWorldImportEntityClaimRequest(native, row.EntityId));
+                replacement.Add(new EntityId(row.EntityId), new Binding(entity)
+                {
+                    IsCommitted = true,
+                    LifecycleStamp = row.LifecycleStamp,
+                });
+            }
+
+            // The managed candidate has no remaining validation or product callback work.
+            managed.Publish();
+            Dictionary<EntityId, Binding> retired = _bindings;
+            _bindings = replacement;
+            replacement = [];
+            foreach (Binding binding in retired.Values)
+            {
+                binding.Native.Dispose();
+            }
+        }
+        finally
+        {
+            // On a failed claim, release only newly claimed wrappers. The prepared import itself
+            // is owned by the candidate and is always released by its finally path.
+            foreach (Binding binding in replacement.Values)
+            {
+                binding.Native.Dispose();
+            }
+        }
+    }
+
+    private MechanicsWorldImportRequest AdmitImportRequest(
+        EntityWorldRestorePlan plan,
+        MechanicsWorldImportRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request.Catalog);
+        if (request.Catalog.Handle != _catalog.Handle)
+        {
+            throw new InvalidOperationException("Mechanics import request must use this adapter's admitted catalog.");
+        }
+
+        EntityWorldEntityState[] managedEntities = plan.Entities.ToArray();
+        MechanicsWorldEntityRow[] nativeEntities = request.Entities.ToArray();
+        var managedById = new Dictionary<ulong, EntityWorldEntityState>(managedEntities.Length);
+        foreach (EntityWorldEntityState entity in managedEntities)
+        {
+            if (entity.Id.Value == 0 || !managedById.TryAdd(entity.Id.Value, entity))
+            {
+                throw new InvalidOperationException("Managed import plan has a duplicate or zero canonical entity identity.");
+            }
+        }
+
+        var nativeById = new Dictionary<ulong, MechanicsWorldEntityRow>(nativeEntities.Length);
+        foreach (MechanicsWorldEntityRow entity in nativeEntities)
+        {
+            if (entity.EntityId == 0 || !nativeById.TryAdd(entity.EntityId, entity)
+                || !managedById.TryGetValue(entity.EntityId, out EntityWorldEntityState managed)
+                || entity.Lifecycle != ToNative(managed.Lifecycle))
+            {
+                throw new InvalidOperationException("Mechanics import entity facts do not exactly correlate with the managed plan.");
+            }
+        }
+        if (nativeById.Count != managedById.Count)
+        {
+            throw new InvalidOperationException("Mechanics import membership does not exactly correlate with the managed plan.");
+        }
+
+        MechanicsWorldComponentPresenceRow[] presenceRows = request.ComponentPresence.ToArray();
+        MechanicsRevisionComponent[] components = Enum.GetValues<MechanicsRevisionComponent>();
+        var presence = new Dictionary<(ulong Entity, MechanicsRevisionComponent Component), MechanicsWorldComponentPresenceRow>(
+            presenceRows.Length);
+        foreach (MechanicsWorldComponentPresenceRow row in presenceRows)
+        {
+            if (!managedById.ContainsKey(row.EntityId)
+                || !components.Contains(row.Component)
+                || !presence.TryAdd((row.EntityId, row.Component), row))
+            {
+                throw new InvalidOperationException("Mechanics import component presence must contain one exact row per entity and component family.");
+            }
+        }
+        if (presence.Count != managedById.Count * components.Length
+            || managedById.Keys.Any(entity => components.Any(component => !presence.ContainsKey((entity, component)))))
+        {
+            throw new InvalidOperationException("Mechanics import component presence must cover every requested entity and component family exactly once.");
+        }
+
+        var managedContainment = new HashSet<(ulong Child, ulong Container)>(
+            plan.Containment.Select(row => (row.Child.Value, row.Container.Value)));
+        var nativeContainment = new HashSet<(ulong Child, ulong Container)>(
+            request.Containment.Span.ToArray().Select(row => (row.ChildEntityId, row.ContainerEntityId)));
+        if (managedContainment.Count != plan.Containment.Count
+            || nativeContainment.Count != request.Containment.Length
+            || !managedContainment.SetEquals(nativeContainment))
+        {
+            throw new InvalidOperationException("Mechanics import containment does not exactly correlate with the managed plan.");
+        }
+        if (nativeContainment.Any(edge => !managedById.ContainsKey(edge.Child) || !managedById.ContainsKey(edge.Container)))
+        {
+            throw new InvalidOperationException("Mechanics import containment references an entity outside the managed plan.");
+        }
+
+        return request with { Catalog = _catalog };
+    }
+
+    private static void ValidateImportReceipt(
+        MechanicsWorldImportRequest request,
+        MechanicsWorldImportLeaseReceipt receipt)
+    {
+        if (receipt.CatalogId != request.Catalog.Handle.Value
+            || receipt.StateRevisionAfter <= receipt.StateRevisionBefore
+            || receipt.StateRevisionAfter <= request.StateRevision)
+        {
+            throw new InvalidOperationException("Prepared Mechanics import returned an invalid catalog or state revision receipt.");
+        }
+
+        Dictionary<ulong, MechanicsWorldEntityRow> requested = request.Entities.Span.ToArray()
+            .ToDictionary(row => row.EntityId);
+        var observed = new HashSet<ulong>();
+        foreach (MechanicsWorldImportEntityRow row in receipt.Entities.Span)
+        {
+            if (!observed.Add(row.EntityId)
+                || !requested.TryGetValue(row.EntityId, out MechanicsWorldEntityRow expected)
+                || row.Identity != expected.Identity
+                || row.Lifecycle != expected.Lifecycle
+                || row.LifecycleStamp == 0)
+            {
+                throw new InvalidOperationException("Prepared Mechanics import receipt did not preserve exact entity/lifecycle facts.");
+            }
+        }
+        if (observed.Count != requested.Count)
+        {
+            throw new InvalidOperationException("Prepared Mechanics import receipt did not preserve exact entity membership.");
+        }
+
+        var lifecycleRows = new Dictionary<ulong, MechanicsLifecycleReceipt>();
+        foreach (MechanicsLifecycleReceipt lifecycle in receipt.Lifecycles.Span)
+        {
+            if (!lifecycleRows.TryAdd(lifecycle.EntityId, lifecycle)
+                || !requested.TryGetValue(lifecycle.EntityId, out MechanicsWorldEntityRow expected)
+                || lifecycle.Lifecycle != expected.Lifecycle
+                || lifecycle.Stamp == 0)
+            {
+                throw new InvalidOperationException("Prepared Mechanics import receipt did not preserve exact lifecycle rows.");
+            }
+        }
+        if (lifecycleRows.Count != requested.Count
+            || receipt.Entities.Span.ToArray().Any(row => lifecycleRows[row.EntityId].Stamp != row.LifecycleStamp))
+        {
+            throw new InvalidOperationException("Prepared Mechanics import receipt lifecycle stamps do not exactly correlate with entity rows.");
+        }
+
+        MechanicsWorldComponentPresenceRow[] presenceRows = request.ComponentPresence.ToArray();
+        var expectedRevisions = presenceRows.ToDictionary(row => (row.EntityId, row.Component));
+        var observedRevisions = new HashSet<(ulong Entity, MechanicsRevisionComponent Component)>();
+        foreach (MechanicsRevisionRemapRow revision in receipt.Revisions.Span)
+        {
+            if (!observedRevisions.Add((revision.EntityId, revision.Component))
+                || !expectedRevisions.TryGetValue((revision.EntityId, revision.Component), out MechanicsWorldComponentPresenceRow expected)
+                || revision.Present != expected.Present
+                || revision.SnapshotRevision != expected.Revision
+                || revision.RestoredRevision <= revision.SnapshotRevision
+                || revision.RestoredRevision <= revision.CurrentRevision)
+            {
+                throw new InvalidOperationException("Prepared Mechanics import receipt did not preserve exact component revision facts.");
+            }
+        }
+        if (observedRevisions.Count != expectedRevisions.Count)
+        {
+            throw new InvalidOperationException("Prepared Mechanics import receipt did not remap every component family exactly once.");
+        }
     }
 
     private Binding RequireBinding(EntityId entity)

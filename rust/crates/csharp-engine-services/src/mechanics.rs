@@ -345,6 +345,41 @@ struct PreparedMechanicsWorldRestore {
     published: bool,
 }
 
+/// One typed world-image lease owns all rows and their borrowed text until released.
+struct MechanicsWorldExportLease {
+    _text: Vec<String>,
+    entities: Vec<NativeMechanicsWorldEntityRow>,
+    containment: Vec<NativeMechanicsWorldContainmentRow>,
+    component_presence: Vec<NativeMechanicsWorldComponentPresenceRow>,
+    stats: Vec<NativeMechanicsWorldStatRow>,
+    tracks: Vec<NativeMechanicsWorldTrackRow>,
+    intrinsic_sources: Vec<NativeMechanicsWorldIntrinsicSourceRow>,
+    active_effects: Vec<NativeMechanicsWorldActiveEffectRow>,
+    inventory_stacks: Vec<NativeMechanicsWorldInventoryStackRow>,
+    inventory_capacity_limits: Vec<NativeMechanicsWorldInventoryCapacityLimitRow>,
+    items: Vec<NativeMechanicsWorldItemRow>,
+    equipment_assignments: Vec<NativeMechanicsWorldEquipmentAssignmentRow>,
+    catalog_version: NativeUtf8Slice,
+    catalog_fingerprint: NativeUtf8Slice,
+}
+
+/// A prepared durable replacement contains every map swap needed for one catalog. The fresh
+/// bindings have already been allocated before publication, so publication cannot fail midway.
+struct PreparedMechanicsWorldImport {
+    catalog: u64,
+    state_revision_before: u64,
+    candidate: Option<MechanicsWorld>,
+    canonical_membership: Option<BTreeMap<EntityId, u64>>,
+    bindings: Option<BTreeMap<u64, EntityBinding>>,
+    unclaimed_handles: BTreeMap<EntityId, u64>,
+    retired_handles: Vec<u64>,
+    entities: Vec<NativeMechanicsWorldImportEntityRow>,
+    _text: Vec<String>,
+    revisions: Vec<NativeMechanicsRevisionRemapRow>,
+    lifecycles: Vec<NativeMechanicsLifecycleReceipt>,
+    published: bool,
+}
+
 pub(crate) struct RuntimeMechanicsBridge {
     catalogs: BTreeMap<u64, CatalogSlot>,
     entities: BTreeMap<u64, EntityBinding>,
@@ -356,6 +391,10 @@ pub(crate) struct RuntimeMechanicsBridge {
     world_snapshot_leases: BTreeMap<u64, u64>,
     prepared_world_restores: BTreeMap<u64, Box<PreparedMechanicsWorldRestore>>,
     world_restore_leases: BTreeMap<u64, u64>,
+    world_export_leases: BTreeMap<u64, Box<MechanicsWorldExportLease>>,
+    prepared_world_imports: BTreeMap<u64, Box<PreparedMechanicsWorldImport>>,
+    world_import_leases: BTreeMap<u64, u64>,
+    retired_entities: std::collections::BTreeSet<u64>,
     operation_leases: BTreeMap<u64, Box<OperationLeaseBacking>>,
     diagnostic_leases: BTreeMap<u64, MechanicsOperationDiagnosticLease>,
     next_catalog: u64,
@@ -366,6 +405,9 @@ pub(crate) struct RuntimeMechanicsBridge {
     next_world_snapshot_lease: u64,
     next_world_restore: u64,
     next_world_restore_lease: u64,
+    next_world_export_lease: u64,
+    next_world_import: u64,
+    next_world_import_lease: u64,
     next_operation_lease: u64,
     next_diagnostic_lease: u64,
 }
@@ -382,6 +424,10 @@ impl RuntimeMechanicsBridge {
             world_snapshot_leases: BTreeMap::new(),
             prepared_world_restores: BTreeMap::new(),
             world_restore_leases: BTreeMap::new(),
+            world_export_leases: BTreeMap::new(),
+            prepared_world_imports: BTreeMap::new(),
+            world_import_leases: BTreeMap::new(),
+            retired_entities: std::collections::BTreeSet::new(),
             operation_leases: BTreeMap::new(),
             diagnostic_leases: BTreeMap::new(),
             next_catalog: 1,
@@ -392,6 +438,9 @@ impl RuntimeMechanicsBridge {
             next_world_snapshot_lease: 1,
             next_world_restore: 1,
             next_world_restore_lease: 1,
+            next_world_export_lease: 1,
+            next_world_import: 1,
+            next_world_import_lease: 1,
             next_operation_lease: 1,
             next_diagnostic_lease: 1,
         }
@@ -534,6 +583,14 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         read_world_restore: receipt_read_world_restore,
         destroy_world_restore_lease,
         publish_world_restore,
+        export_world: receipt_export_world,
+        destroy_world_export_lease,
+        prepare_world_import: receipt_prepare_world_import,
+        destroy_world_import,
+        read_world_import: receipt_read_world_import,
+        destroy_world_import_lease,
+        publish_world_import,
+        claim_world_import_entity: receipt_claim_world_import_entity,
         bind_entity: receipt_bind_entity,
         rebind_entity: receipt_rebind_entity,
         set_initial_stat: receipt_set_initial_stat,
@@ -939,6 +996,10 @@ mechanics_callback!(receipt_remove_effect(request: *const NativeMechanicsEffectR
 mechanics_callback!(receipt_expire_effect(request: *const NativeMechanicsEffectRemovalRequest, result: *mut NativeMechanicsEffectOperationLease) => expire_effect, b"ExpireEffect", String::new());
 mechanics_callback!(receipt_preview_damage(request: *const NativeMechanicsDamageRequest, result: *mut NativeMechanicsDamageLease) => preview_damage, b"PreviewDamage", String::new());
 mechanics_callback!(receipt_apply_damage(request: *const NativeMechanicsDamageRequest, result: *mut NativeMechanicsDamageLease) => apply_damage, b"ApplyDamage", String::new());
+mechanics_callback!(receipt_export_world(catalog: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsWorldExportLease) => export_world, b"ExportWorld", catalog_source(catalog));
+mechanics_callback!(receipt_prepare_world_import(request: *const NativeMechanicsWorldImportRequest, result: *mut NativeMechanicsWorldImportHandle) => prepare_world_import, b"PrepareWorldImport", String::new());
+mechanics_callback!(receipt_read_world_import(handle: NativeMechanicsWorldImportHandle, result: *mut NativeMechanicsWorldImportLease) => read_world_import, b"ReadWorldImport", String::new());
+mechanics_callback!(receipt_claim_world_import_entity(request: *const NativeMechanicsWorldImportEntityClaimRequest, result: *mut NativeMechanicsEntityHandle) => claim_world_import_entity, b"ClaimWorldImportEntity", String::new());
 
 unsafe extern "C" fn destroy_operation_diagnostic_lease(
     context: *mut c_void,
@@ -2906,6 +2967,1144 @@ unsafe extern "C" fn publish_world_restore(
     ABI_OK
 }
 
+fn world_component_presence(
+    state: &EntityState,
+    entity: EntityId,
+    component: NativeMechanicsRevisionComponent,
+) -> NativeMechanicsWorldComponentPresenceRow {
+    NativeMechanicsWorldComponentPresenceRow {
+        entity_id: entity.raw(),
+        component,
+        present: component_is_present(state, entity, component),
+        revision: component_read_revision(state, entity, component),
+    }
+}
+
+fn world_active_effect_row(
+    entity: EntityId,
+    effect: &ActiveEffectInstance,
+    text: &mut CatalogLeaseText,
+) -> NativeMechanicsWorldActiveEffectRow {
+    let component = native_active_effect_row(effect, text);
+    NativeMechanicsWorldActiveEffectRow {
+        entity_id: entity.raw(),
+        instance: component.instance,
+        definition: component.definition,
+        stacks: component.stacks,
+        provenance_kind: component.provenance_kind,
+        intrinsic_entity_id: component.intrinsic_entity_id,
+        intrinsic_instance: component.intrinsic_instance,
+        effect_entity_id: component.effect_entity_id,
+        effect_instance: component.effect_instance,
+        effect_stack: component.effect_stack,
+        effect_source: component.effect_source,
+        equipped_owner_entity_id: component.equipped_owner_entity_id,
+        equipped_item_entity_id: component.equipped_item_entity_id,
+        equipped_source: component.equipped_source,
+        request_operation: component.request_operation,
+        request_instance: component.request_instance,
+    }
+}
+
+unsafe extern "C" fn export_world(
+    context: *mut c_void,
+    catalog: NativeMechanicsCatalogHandle,
+    result: *mut NativeMechanicsWorldExportLease,
+) -> i32 {
+    if context.is_null() || result.is_null() || catalog.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    if bridge
+        .entities
+        .values()
+        .any(|binding| binding.catalog == catalog.value && !binding.committed)
+    {
+        return 0;
+    }
+    let Some(slot) = bridge.catalogs.get(&catalog.value) else {
+        return 0;
+    };
+    let Some(native_catalog) = slot.catalog.as_ref() else {
+        return 0;
+    };
+    let mut text = CatalogLeaseText::default();
+    let mut entities = Vec::new();
+    let mut containment = Vec::new();
+    let mut component_presence = Vec::new();
+    let mut stats = Vec::new();
+    let mut tracks = Vec::new();
+    let mut intrinsic_sources = Vec::new();
+    let mut active_effects = Vec::new();
+    let mut inventory_stacks = Vec::new();
+    let mut inventory_capacity_limits = Vec::new();
+    let mut items = Vec::new();
+    let mut equipment_assignments = Vec::new();
+    for (&entity, lifecycle) in &slot.world.lifecycle {
+        let Some(core) = slot.world.state.core(entity) else {
+            return 0;
+        };
+        entities.push(NativeMechanicsWorldEntityRow {
+            entity_id: entity.raw(),
+            identity: text.copy(&core.name),
+            lifecycle: lifecycle.lifecycle,
+            lifecycle_stamp: lifecycle.stamp,
+        });
+        for component in NativeMechanicsRevisionComponent::all() {
+            component_presence.push(world_component_presence(
+                &slot.world.state,
+                entity,
+                component,
+            ));
+        }
+        if lifecycle.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned {
+            continue;
+        }
+        let Ok(relationships) = slot.world.state.relationships(entity) else {
+            return 0;
+        };
+        if let Some(container) = relationships.contained_in {
+            containment.push(NativeMechanicsWorldContainmentRow {
+                child_entity_id: entity.raw(),
+                container_entity_id: container.raw(),
+            });
+        }
+        if let Ok(Some(component)) = slot.world.state.component::<StatsComponent>(entity) {
+            stats.extend(
+                component
+                    .values()
+                    .iter()
+                    .map(|value| NativeMechanicsWorldStatRow {
+                        entity_id: entity.raw(),
+                        stat: text.copy(value.stat().as_str()),
+                        base: value.base().get(),
+                    }),
+            );
+        }
+        if let Ok(Some(component)) = slot.world.state.component::<TracksComponent>(entity) {
+            tracks.extend(
+                component
+                    .values()
+                    .iter()
+                    .map(|value| NativeMechanicsWorldTrackRow {
+                        entity_id: entity.raw(),
+                        track: text.copy(value.track().as_str()),
+                        current: value.current().get(),
+                    }),
+            );
+        }
+        if let Ok(Some(component)) = slot
+            .world
+            .state
+            .component::<IntrinsicSourcesComponent>(entity)
+        {
+            intrinsic_sources.extend(component.bindings().iter().map(|value| {
+                NativeMechanicsWorldIntrinsicSourceRow {
+                    entity_id: entity.raw(),
+                    instance: text.copy(value.instance().as_str()),
+                    definition: text.copy(value.definition().as_str()),
+                }
+            }));
+        }
+        if let Ok(Some(component)) = slot.world.state.component::<ActiveEffectsComponent>(entity) {
+            active_effects.extend(
+                component
+                    .effects()
+                    .iter()
+                    .map(|effect| world_active_effect_row(entity, effect, &mut text)),
+            );
+        }
+        if let Ok(Some(component)) = slot.world.state.component::<InventoryComponent>(entity) {
+            inventory_stacks.extend(component.stacks().iter().map(|value| {
+                NativeMechanicsWorldInventoryStackRow {
+                    entity_id: entity.raw(),
+                    definition: text.copy(value.definition.as_str()),
+                    quantity: value.quantity,
+                }
+            }));
+            inventory_capacity_limits.extend(component.capacity_limits().iter().map(|value| {
+                NativeMechanicsWorldInventoryCapacityLimitRow {
+                    entity_id: entity.raw(),
+                    metric: text.copy(value.metric().as_str()),
+                    maximum: value.maximum(),
+                }
+            }));
+        }
+        if let Ok(Some(component)) = slot.world.state.component::<ItemComponent>(entity) {
+            items.push(NativeMechanicsWorldItemRow {
+                entity_id: entity.raw(),
+                definition: text.copy(component.definition().as_str()),
+            });
+        }
+        if let Ok(Some(component)) = slot.world.state.component::<EquipmentComponent>(entity) {
+            equipment_assignments.extend(component.assignments().iter().map(|value| {
+                NativeMechanicsWorldEquipmentAssignmentRow {
+                    entity_id: entity.raw(),
+                    slot: text.copy(value.slot.as_str()),
+                    item_entity_id: value.item.raw(),
+                }
+            }));
+        }
+    }
+    let catalog_version = text.copy(native_catalog.version().as_str());
+    let catalog_fingerprint = text.copy(native_catalog.fingerprint());
+    let lease_handle = bridge.next_world_export_lease;
+    let Some(next_lease) = lease_handle.checked_add(1) else {
+        return 0;
+    };
+    bridge.next_world_export_lease = next_lease;
+    let lease = Box::new(MechanicsWorldExportLease {
+        _text: text.values,
+        entities,
+        containment,
+        component_presence,
+        stats,
+        tracks,
+        intrinsic_sources,
+        active_effects,
+        inventory_stacks,
+        inventory_capacity_limits,
+        items,
+        equipment_assignments,
+        catalog_version,
+        catalog_fingerprint,
+    });
+    unsafe {
+        *result = NativeMechanicsWorldExportLease {
+            handle: NativeMechanicsWorldExportLeaseHandle {
+                value: lease_handle,
+            },
+            catalog_id: catalog.value,
+            state_revision: slot.world.state.revision(),
+            catalog_version: lease.catalog_version,
+            catalog_fingerprint: lease.catalog_fingerprint,
+            entities: lease.entities.as_ptr(),
+            entities_len: lease.entities.len(),
+            containment: lease.containment.as_ptr(),
+            containment_len: lease.containment.len(),
+            component_presence: lease.component_presence.as_ptr(),
+            component_presence_len: lease.component_presence.len(),
+            stats: lease.stats.as_ptr(),
+            stats_len: lease.stats.len(),
+            tracks: lease.tracks.as_ptr(),
+            tracks_len: lease.tracks.len(),
+            intrinsic_sources: lease.intrinsic_sources.as_ptr(),
+            intrinsic_sources_len: lease.intrinsic_sources.len(),
+            active_effects: lease.active_effects.as_ptr(),
+            active_effects_len: lease.active_effects.len(),
+            inventory_stacks: lease.inventory_stacks.as_ptr(),
+            inventory_stacks_len: lease.inventory_stacks.len(),
+            inventory_capacity_limits: lease.inventory_capacity_limits.as_ptr(),
+            inventory_capacity_limits_len: lease.inventory_capacity_limits.len(),
+            items: lease.items.as_ptr(),
+            items_len: lease.items.len(),
+            equipment_assignments: lease.equipment_assignments.as_ptr(),
+            equipment_assignments_len: lease.equipment_assignments.len(),
+        };
+    }
+    bridge.world_export_leases.insert(lease_handle, lease);
+    ABI_OK
+}
+
+unsafe extern "C" fn destroy_world_export_lease(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldExportLeaseHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    i32::from(bridge.world_export_leases.remove(&handle.value).is_some())
+}
+
+fn imported_component_type(
+    state: &EntityState,
+    component: NativeMechanicsRevisionComponent,
+) -> Option<entity_state::ComponentTypeId> {
+    match component {
+        NativeMechanicsRevisionComponent::Stats => {
+            state.component_type_id::<StatsComponent>().ok().cloned()
+        }
+        NativeMechanicsRevisionComponent::Tracks => {
+            state.component_type_id::<TracksComponent>().ok().cloned()
+        }
+        NativeMechanicsRevisionComponent::IntrinsicSources => state
+            .component_type_id::<IntrinsicSourcesComponent>()
+            .ok()
+            .cloned(),
+        NativeMechanicsRevisionComponent::ActiveEffects => state
+            .component_type_id::<ActiveEffectsComponent>()
+            .ok()
+            .cloned(),
+        NativeMechanicsRevisionComponent::Inventory => state
+            .component_type_id::<InventoryComponent>()
+            .ok()
+            .cloned(),
+        NativeMechanicsRevisionComponent::Item => {
+            state.component_type_id::<ItemComponent>().ok().cloned()
+        }
+        NativeMechanicsRevisionComponent::Equipment => state
+            .component_type_id::<EquipmentComponent>()
+            .ok()
+            .cloned(),
+    }
+}
+
+fn imported_effect(row: &NativeMechanicsWorldActiveEffectRow) -> Result<ActiveEffectInstance, ()> {
+    let provenance = match row.provenance_kind {
+        NativeMechanicsActiveEffectProvenanceKind::Intrinsic => SourceInstanceIdentity::Intrinsic {
+            entity: EntityId::new(row.intrinsic_entity_id),
+            instance: unsafe { text(row.intrinsic_instance, "world effect intrinsic instance") }
+                .and_then(parse::<SourceInstanceId>)?,
+        },
+        NativeMechanicsActiveEffectProvenanceKind::Effect => SourceInstanceIdentity::Effect {
+            entity: EntityId::new(row.effect_entity_id),
+            effect: unsafe { text(row.effect_instance, "world effect provenance instance") }
+                .and_then(parse::<gameplay_mechanics::EffectInstanceId>)?,
+            stack: row.effect_stack,
+            source: unsafe { text(row.effect_source, "world effect provenance source") }
+                .and_then(parse::<SourceDefinitionId>)?,
+        },
+        NativeMechanicsActiveEffectProvenanceKind::EquippedItem => {
+            SourceInstanceIdentity::EquippedItem {
+                owner: EntityId::new(row.equipped_owner_entity_id),
+                item: EntityId::new(row.equipped_item_entity_id),
+                source: unsafe { text(row.equipped_source, "world effect equipment source") }
+                    .and_then(parse::<SourceDefinitionId>)?,
+            }
+        }
+        NativeMechanicsActiveEffectProvenanceKind::Request => SourceInstanceIdentity::Request {
+            operation: unsafe { text(row.request_operation, "world effect request operation") }
+                .and_then(parse::<OperationId>)?,
+            instance: unsafe { text(row.request_instance, "world effect request instance") }
+                .and_then(parse::<SourceInstanceId>)?,
+        },
+    };
+    ActiveEffectInstance::new(
+        unsafe { text(row.instance, "world effect instance") }
+            .and_then(parse::<gameplay_mechanics::EffectInstanceId>)?,
+        unsafe { text(row.definition, "world effect definition") }
+            .and_then(parse::<gameplay_mechanics::EffectDefinitionId>)?,
+        provenance,
+        row.stacks,
+    )
+    .map_err(|_| ())
+}
+
+fn import_revision_row<T: entity_state::EntityComponent>(
+    saved: &BTreeMap<
+        (EntityId, NativeMechanicsRevisionComponent),
+        NativeMechanicsWorldComponentPresenceRow,
+    >,
+    current: &EntityState,
+    candidate: &EntityState,
+    entity: EntityId,
+    component: NativeMechanicsRevisionComponent,
+) -> Option<NativeMechanicsRevisionRemapRow> {
+    let saved = saved.get(&(entity, component))?;
+    Some(NativeMechanicsRevisionRemapRow {
+        entity_id: entity.raw(),
+        component,
+        present: candidate.has_component::<T>(entity).ok()?,
+        snapshot_revision: saved.revision,
+        current_revision: current.component_revision::<T>(entity).ok()?.revision(),
+        restored_revision: candidate.component_revision::<T>(entity).ok()?.revision(),
+    })
+}
+
+fn import_revision_rows(
+    saved: &BTreeMap<
+        (EntityId, NativeMechanicsRevisionComponent),
+        NativeMechanicsWorldComponentPresenceRow,
+    >,
+    current: &EntityState,
+    candidate: &EntityState,
+    entities: impl IntoIterator<Item = EntityId>,
+) -> Option<Vec<NativeMechanicsRevisionRemapRow>> {
+    let mut rows = Vec::new();
+    for entity in entities {
+        rows.push(import_revision_row::<StatsComponent>(
+            saved,
+            current,
+            candidate,
+            entity,
+            NativeMechanicsRevisionComponent::Stats,
+        )?);
+        rows.push(import_revision_row::<TracksComponent>(
+            saved,
+            current,
+            candidate,
+            entity,
+            NativeMechanicsRevisionComponent::Tracks,
+        )?);
+        rows.push(import_revision_row::<IntrinsicSourcesComponent>(
+            saved,
+            current,
+            candidate,
+            entity,
+            NativeMechanicsRevisionComponent::IntrinsicSources,
+        )?);
+        rows.push(import_revision_row::<ActiveEffectsComponent>(
+            saved,
+            current,
+            candidate,
+            entity,
+            NativeMechanicsRevisionComponent::ActiveEffects,
+        )?);
+        rows.push(import_revision_row::<InventoryComponent>(
+            saved,
+            current,
+            candidate,
+            entity,
+            NativeMechanicsRevisionComponent::Inventory,
+        )?);
+        rows.push(import_revision_row::<ItemComponent>(
+            saved,
+            current,
+            candidate,
+            entity,
+            NativeMechanicsRevisionComponent::Item,
+        )?);
+        rows.push(import_revision_row::<EquipmentComponent>(
+            saved,
+            current,
+            candidate,
+            entity,
+            NativeMechanicsRevisionComponent::Equipment,
+        )?);
+    }
+    Some(rows)
+}
+
+unsafe extern "C" fn prepare_world_import(
+    context: *mut c_void,
+    request: *const NativeMechanicsWorldImportRequest,
+    result: *mut NativeMechanicsWorldImportHandle,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    if bridge
+        .entities
+        .values()
+        .any(|binding| binding.catalog == request.catalog.value && !binding.committed)
+    {
+        return 0;
+    }
+    let Some(slot) = bridge.catalogs.get(&request.catalog.value) else {
+        return 0;
+    };
+    let Some(catalog) = slot.catalog.as_ref() else {
+        return 0;
+    };
+    if unsafe { text(request.catalog_version, "world catalog version") }
+        != Ok(catalog.version().as_str())
+        || unsafe { text(request.catalog_fingerprint, "world catalog fingerprint") }
+            != Ok(catalog.fingerprint())
+    {
+        return 0;
+    }
+    let (
+        Ok(entity_rows),
+        Ok(containment_rows),
+        Ok(presence_rows),
+        Ok(stats),
+        Ok(tracks),
+        Ok(intrinsic),
+        Ok(effects),
+        Ok(stacks),
+        Ok(limits),
+        Ok(items),
+        Ok(equipment),
+    ) = (unsafe {
+        (
+            borrowed_slice(request.entities, request.entities_len, "world entities"),
+            borrowed_slice(
+                request.containment,
+                request.containment_len,
+                "world containment",
+            ),
+            borrowed_slice(
+                request.component_presence,
+                request.component_presence_len,
+                "world component presence",
+            ),
+            borrowed_slice(request.stats, request.stats_len, "world stats"),
+            borrowed_slice(request.tracks, request.tracks_len, "world tracks"),
+            borrowed_slice(
+                request.intrinsic_sources,
+                request.intrinsic_sources_len,
+                "world intrinsic sources",
+            ),
+            borrowed_slice(
+                request.active_effects,
+                request.active_effects_len,
+                "world active effects",
+            ),
+            borrowed_slice(
+                request.inventory_stacks,
+                request.inventory_stacks_len,
+                "world inventory stacks",
+            ),
+            borrowed_slice(
+                request.inventory_capacity_limits,
+                request.inventory_capacity_limits_len,
+                "world inventory limits",
+            ),
+            borrowed_slice(request.items, request.items_len, "world items"),
+            borrowed_slice(
+                request.equipment_assignments,
+                request.equipment_assignments_len,
+                "world equipment",
+            ),
+        )
+    })
+    else {
+        return 0;
+    };
+    let mut identities = BTreeMap::new();
+    let mut lifecycles = BTreeMap::new();
+    for row in entity_rows {
+        if row.entity_id == 0 {
+            return 0;
+        }
+        let entity = EntityId::new(row.entity_id);
+        let Ok(identity) =
+            unsafe { text(row.identity, "world entity identity") }.map(str::to_owned)
+        else {
+            return 0;
+        };
+        if identity.trim().is_empty()
+            || identities.insert(entity, identity).is_some()
+            || lifecycles
+                .insert(entity, (row.lifecycle, row.lifecycle_stamp))
+                .is_some()
+        {
+            return 0;
+        }
+    }
+    let mut presence = BTreeMap::new();
+    for row in presence_rows {
+        let entity = EntityId::new(row.entity_id);
+        if !identities.contains_key(&entity)
+            || presence.insert((entity, row.component), *row).is_some()
+        {
+            return 0;
+        }
+    }
+    if presence.len() != identities.len() * NativeMechanicsRevisionComponent::all().len()
+        || identities.keys().any(|entity| {
+            NativeMechanicsRevisionComponent::all()
+                .into_iter()
+                .any(|component| !presence.contains_key(&(*entity, component)))
+        })
+    {
+        return 0;
+    }
+    let typed_rows_ok = |entity: EntityId, component| {
+        identities.contains_key(&entity)
+            && presence
+                .get(&(entity, component))
+                .is_some_and(|row| row.present)
+    };
+    if containment_rows.iter().any(|row| {
+        row.child_entity_id == 0
+            || row.container_entity_id == 0
+            || !identities.contains_key(&EntityId::new(row.child_entity_id))
+            || !identities.contains_key(&EntityId::new(row.container_entity_id))
+            || row.child_entity_id == row.container_entity_id
+    }) || stats.iter().any(|row| {
+        !typed_rows_ok(
+            EntityId::new(row.entity_id),
+            NativeMechanicsRevisionComponent::Stats,
+        )
+    }) || tracks.iter().any(|row| {
+        !typed_rows_ok(
+            EntityId::new(row.entity_id),
+            NativeMechanicsRevisionComponent::Tracks,
+        )
+    }) || intrinsic.iter().any(|row| {
+        !typed_rows_ok(
+            EntityId::new(row.entity_id),
+            NativeMechanicsRevisionComponent::IntrinsicSources,
+        )
+    }) || effects.iter().any(|row| {
+        !typed_rows_ok(
+            EntityId::new(row.entity_id),
+            NativeMechanicsRevisionComponent::ActiveEffects,
+        )
+    }) || stacks.iter().any(|row| {
+        !typed_rows_ok(
+            EntityId::new(row.entity_id),
+            NativeMechanicsRevisionComponent::Inventory,
+        )
+    }) || limits.iter().any(|row| {
+        !typed_rows_ok(
+            EntityId::new(row.entity_id),
+            NativeMechanicsRevisionComponent::Inventory,
+        )
+    }) || items.iter().any(|row| {
+        !typed_rows_ok(
+            EntityId::new(row.entity_id),
+            NativeMechanicsRevisionComponent::Item,
+        )
+    }) || equipment.iter().any(|row| {
+        !typed_rows_ok(
+            EntityId::new(row.entity_id),
+            NativeMechanicsRevisionComponent::Equipment,
+        )
+    }) {
+        return 0;
+    }
+    let mut containers = BTreeMap::new();
+    for row in containment_rows {
+        let child = EntityId::new(row.child_entity_id);
+        if containers
+            .insert(child, EntityId::new(row.container_entity_id))
+            .is_some()
+        {
+            return 0;
+        }
+    }
+    if lifecycles.iter().any(|(entity, (lifecycle, _))| {
+        *lifecycle == NativeMechanicsEntityLifecycle::Tombstoned
+            && (containers.contains_key(entity)
+                || NativeMechanicsRevisionComponent::all()
+                    .into_iter()
+                    .any(|component| presence[&(*entity, component)].present))
+    }) {
+        return 0;
+    }
+    let definitions = identities.iter().map(|(entity, identity)| {
+        let mut definition = EntityDefinition::new(*entity, identity.clone());
+        if let Some(container) = containers.get(entity) {
+            definition = definition.with_containment(*container);
+        }
+        definition
+    });
+    let Ok(registry) = gameplay_component_registry() else {
+        return 0;
+    };
+    let Ok(mut state) = EntityState::from_definitions_with_registry(registry, definitions) else {
+        return 0;
+    };
+    for entity in identities.keys().copied() {
+        if presence[&(entity, NativeMechanicsRevisionComponent::Stats)].present {
+            let values = stats
+                .iter()
+                .filter(|row| row.entity_id == entity.raw())
+                .map(|row| {
+                    Ok(StatValue::new(
+                        unsafe { text(row.stat, "world stat") }.and_then(parse::<StatId>)?,
+                        scalar(row.base)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ()>>();
+            let Ok(component) = values.and_then(|values| {
+                StatsComponent::new(catalog.version().clone(), values).map_err(|_| ())
+            }) else {
+                return 0;
+            };
+            let Ok(revision) = state.component_revision::<StatsComponent>(entity) else {
+                return 0;
+            };
+            if EntityAuthoringService
+                .attach_component(&mut state, revision, entity, component)
+                .is_err()
+            {
+                return 0;
+            }
+        }
+        if presence[&(entity, NativeMechanicsRevisionComponent::Tracks)].present {
+            let values = tracks
+                .iter()
+                .filter(|row| row.entity_id == entity.raw())
+                .map(|row| {
+                    Ok(TrackValue::new(
+                        unsafe { text(row.track, "world track") }
+                            .and_then(parse::<gameplay_mechanics::TrackId>)?,
+                        scalar(row.current)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ()>>();
+            let Ok(component) = values.and_then(|values| {
+                TracksComponent::new(catalog.version().clone(), values).map_err(|_| ())
+            }) else {
+                return 0;
+            };
+            let Ok(revision) = state.component_revision::<TracksComponent>(entity) else {
+                return 0;
+            };
+            if EntityAuthoringService
+                .attach_component(&mut state, revision, entity, component)
+                .is_err()
+            {
+                return 0;
+            }
+        }
+        if presence[&(entity, NativeMechanicsRevisionComponent::IntrinsicSources)].present {
+            let values = intrinsic
+                .iter()
+                .filter(|row| row.entity_id == entity.raw())
+                .map(|row| {
+                    Ok(IntrinsicSourceBinding::new(
+                        unsafe { text(row.instance, "world intrinsic instance") }
+                            .and_then(parse::<SourceInstanceId>)?,
+                        unsafe { text(row.definition, "world intrinsic definition") }
+                            .and_then(parse::<SourceDefinitionId>)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ()>>();
+            let Ok(component) = values.and_then(|values| {
+                IntrinsicSourcesComponent::new(catalog.version().clone(), values).map_err(|_| ())
+            }) else {
+                return 0;
+            };
+            let Ok(revision) = state.component_revision::<IntrinsicSourcesComponent>(entity) else {
+                return 0;
+            };
+            if EntityAuthoringService
+                .attach_component(&mut state, revision, entity, component)
+                .is_err()
+            {
+                return 0;
+            }
+        }
+        if presence[&(entity, NativeMechanicsRevisionComponent::ActiveEffects)].present {
+            let Ok(values) = effects
+                .iter()
+                .filter(|row| row.entity_id == entity.raw())
+                .map(imported_effect)
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                return 0;
+            };
+            let Ok(component) = ActiveEffectsComponent::new(catalog.version().clone(), values)
+            else {
+                return 0;
+            };
+            let Ok(revision) = state.component_revision::<ActiveEffectsComponent>(entity) else {
+                return 0;
+            };
+            if EntityAuthoringService
+                .attach_component(&mut state, revision, entity, component)
+                .is_err()
+            {
+                return 0;
+            }
+        }
+        if presence[&(entity, NativeMechanicsRevisionComponent::Inventory)].present {
+            let parsed_stacks = stacks
+                .iter()
+                .filter(|row| row.entity_id == entity.raw())
+                .map(|row| {
+                    Ok(ItemStack {
+                        definition: unsafe { text(row.definition, "world stack definition") }
+                            .and_then(parse::<gameplay_mechanics::ItemDefinitionId>)?,
+                        quantity: row.quantity,
+                    })
+                })
+                .collect::<Result<Vec<_>, ()>>();
+            let parsed_limits = limits
+                .iter()
+                .filter(|row| row.entity_id == entity.raw())
+                .map(|row| {
+                    Ok(InventoryCapacityLimit::new(
+                        unsafe { text(row.metric, "world capacity metric") }
+                            .and_then(parse::<gameplay_mechanics::CapacityMetricId>)?,
+                        row.maximum,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ()>>();
+            let Ok(component) = parsed_stacks.and_then(|values| {
+                parsed_limits.and_then(|limits| {
+                    InventoryComponent::with_capacity_limits(
+                        catalog.version().clone(),
+                        values,
+                        limits,
+                    )
+                    .map_err(|_| ())
+                })
+            }) else {
+                return 0;
+            };
+            let Ok(revision) = state.component_revision::<InventoryComponent>(entity) else {
+                return 0;
+            };
+            if EntityAuthoringService
+                .attach_component(&mut state, revision, entity, component)
+                .is_err()
+            {
+                return 0;
+            }
+        }
+        if presence[&(entity, NativeMechanicsRevisionComponent::Item)].present {
+            let rows = items
+                .iter()
+                .filter(|row| row.entity_id == entity.raw())
+                .collect::<Vec<_>>();
+            if rows.len() != 1 {
+                return 0;
+            }
+            let Ok(definition) = unsafe { text(rows[0].definition, "world item definition") }
+                .and_then(parse::<gameplay_mechanics::ItemDefinitionId>)
+            else {
+                return 0;
+            };
+            let Ok(revision) = state.component_revision::<ItemComponent>(entity) else {
+                return 0;
+            };
+            if EntityAuthoringService
+                .attach_component(
+                    &mut state,
+                    revision,
+                    entity,
+                    ItemComponent::new(catalog.version().clone(), definition),
+                )
+                .is_err()
+            {
+                return 0;
+            }
+        }
+        if presence[&(entity, NativeMechanicsRevisionComponent::Equipment)].present {
+            let values = equipment
+                .iter()
+                .filter(|row| row.entity_id == entity.raw())
+                .map(|row| {
+                    Ok(EquipmentAssignment {
+                        slot: unsafe { text(row.slot, "world equipment slot") }
+                            .and_then(parse::<gameplay_mechanics::EquipmentSlotId>)?,
+                        item: EntityId::new(row.item_entity_id),
+                    })
+                })
+                .collect::<Result<Vec<_>, ()>>();
+            let Ok(component) = values.and_then(|values| {
+                EquipmentComponent::new(catalog.version().clone(), values).map_err(|_| ())
+            }) else {
+                return 0;
+            };
+            let Ok(revision) = state.component_revision::<EquipmentComponent>(entity) else {
+                return 0;
+            };
+            if EntityAuthoringService
+                .attach_component(&mut state, revision, entity, component)
+                .is_err()
+            {
+                return 0;
+            }
+        }
+    }
+    if validate_state_against_catalog(&state, catalog).is_err() {
+        return 0;
+    }
+    for (entity, (lifecycle, _)) in &lifecycles {
+        let revision = state.revision();
+        let operation = match lifecycle {
+            NativeMechanicsEntityLifecycle::Active => continue,
+            NativeMechanicsEntityLifecycle::Disabled => {
+                EntityAuthoringService.disable(&mut state, revision, *entity)
+            }
+            NativeMechanicsEntityLifecycle::Tombstoned => {
+                EntityAuthoringService.destroy(&mut state, revision, *entity)
+            }
+        };
+        if operation.is_err() {
+            return 0;
+        }
+    }
+    let mut persisted_floors = BTreeMap::new();
+    for ((entity, component), row) in &presence {
+        let Some(type_id) = imported_component_type(&state, *component) else {
+            return 0;
+        };
+        persisted_floors.insert((*entity, type_id), row.revision);
+    }
+    if !state.rebase_replacement_revisions_after(
+        &slot.world.state,
+        request.state_revision,
+        &persisted_floors,
+    ) {
+        return 0;
+    }
+    let mut candidate = MechanicsWorld::new(state);
+    let mut highest_stamp = slot.world.next_stamp;
+    for (entity, (_, saved_stamp)) in &lifecycles {
+        highest_stamp = highest_stamp
+            .max(*saved_stamp)
+            .max(slot.world.lifecycle_receipt(*entity).stamp);
+    }
+    let Some(mut next_stamp) = highest_stamp.checked_add(1) else {
+        return 0;
+    };
+    for (entity, (lifecycle, saved_stamp)) in &lifecycles {
+        let stamp = next_stamp;
+        let Some(after) = next_stamp.checked_add(1) else {
+            return 0;
+        };
+        next_stamp = after;
+        if stamp <= *saved_stamp || stamp <= slot.world.lifecycle_receipt(*entity).stamp {
+            return 0;
+        }
+        candidate.lifecycle.insert(
+            *entity,
+            LifecycleRecord {
+                lifecycle: *lifecycle,
+                stamp,
+            },
+        );
+    }
+    candidate.next_stamp = next_stamp;
+    let Some(revisions) = import_revision_rows(
+        &presence,
+        &slot.world.state,
+        &candidate.state,
+        identities.keys().copied(),
+    ) else {
+        return 0;
+    };
+    let lifecycle_receipts = identities
+        .keys()
+        .map(|entity| candidate.lifecycle_receipt(*entity))
+        .collect::<Vec<_>>();
+    let old_handles = bridge
+        .entities
+        .iter()
+        .filter_map(|(handle, binding)| {
+            (binding.catalog == request.catalog.value).then_some(*handle)
+        })
+        .collect::<Vec<_>>();
+    let base_handle = bridge.next_entity;
+    let mut next_handle = base_handle;
+    let mut fresh_bindings = BTreeMap::new();
+    let mut unclaimed_handles = BTreeMap::new();
+    let mut import_rows = Vec::new();
+    let mut output_text = CatalogLeaseText::default();
+    for (entity, identity) in &identities {
+        let handle = next_handle;
+        let Some(after) = next_handle.checked_add(1) else {
+            return 0;
+        };
+        next_handle = after;
+        fresh_bindings.insert(
+            handle,
+            EntityBinding {
+                catalog: request.catalog.value,
+                entity: *entity,
+                identity: identity.clone(),
+                stats: None,
+                tracks: None,
+                intrinsic_sources: None,
+                active_effects: None,
+                inventory: None,
+                item: None,
+                equipment: None,
+                initial_containment: Vec::new(),
+                expected_state_revision: None,
+                initial_components_set: true,
+                committed: true,
+            },
+        );
+        unclaimed_handles.insert(*entity, handle);
+        let lifecycle = candidate.lifecycle_receipt(*entity);
+        import_rows.push(NativeMechanicsWorldImportEntityRow {
+            entity_id: entity.raw(),
+            identity: output_text.copy(identity),
+            lifecycle: lifecycle.lifecycle,
+            lifecycle_stamp: lifecycle.stamp,
+        });
+    }
+    let import_handle = bridge.next_world_import;
+    let (Some(after_import), Some(_)) = (
+        import_handle.checked_add(1),
+        next_handle.checked_sub(base_handle),
+    ) else {
+        return 0;
+    };
+    bridge.next_world_import = after_import;
+    bridge.next_entity = next_handle;
+    bridge.prepared_world_imports.insert(
+        import_handle,
+        Box::new(PreparedMechanicsWorldImport {
+            catalog: request.catalog.value,
+            state_revision_before: slot.world.state.revision(),
+            candidate: Some(candidate),
+            canonical_membership: Some(
+                identities
+                    .keys()
+                    .map(|entity| (*entity, request.catalog.value))
+                    .collect(),
+            ),
+            bindings: Some(fresh_bindings),
+            unclaimed_handles,
+            retired_handles: old_handles,
+            entities: import_rows,
+            _text: output_text.values,
+            revisions,
+            lifecycles: lifecycle_receipts,
+            published: false,
+        }),
+    );
+    *result = NativeMechanicsWorldImportHandle {
+        value: import_handle,
+    };
+    ABI_OK
+}
+
+unsafe extern "C" fn destroy_world_import(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldImportHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    if bridge
+        .world_import_leases
+        .values()
+        .any(|value| *value == handle.value)
+    {
+        return 0;
+    }
+    let Some(import) = bridge.prepared_world_imports.remove(&handle.value) else {
+        return 0;
+    };
+    if import.published {
+        for fresh_handle in import.unclaimed_handles.values() {
+            bridge.entities.remove(fresh_handle);
+        }
+    }
+    ABI_OK
+}
+
+unsafe extern "C" fn read_world_import(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldImportHandle,
+    result: *mut NativeMechanicsWorldImportLease,
+) -> i32 {
+    if context.is_null() || result.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    let Some(import) = bridge.prepared_world_imports.get(&handle.value) else {
+        return 0;
+    };
+    let lease = bridge.next_world_import_lease;
+    let Some(next_lease) = lease.checked_add(1) else {
+        return 0;
+    };
+    let Some(candidate) = import.candidate.as_ref() else {
+        return 0;
+    };
+    *result = NativeMechanicsWorldImportLease {
+        handle: NativeMechanicsWorldImportLeaseHandle { value: lease },
+        catalog_id: import.catalog,
+        state_revision_before: import.state_revision_before,
+        state_revision_after: candidate.state.revision(),
+        entities: import.entities.as_ptr(),
+        entities_len: import.entities.len(),
+        revisions: import.revisions.as_ptr(),
+        revisions_len: import.revisions.len(),
+        lifecycles: import.lifecycles.as_ptr(),
+        lifecycles_len: import.lifecycles.len(),
+    };
+    bridge.next_world_import_lease = next_lease;
+    bridge.world_import_leases.insert(lease, handle.value);
+    ABI_OK
+}
+
+unsafe extern "C" fn destroy_world_import_lease(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldImportLeaseHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    i32::from(bridge.world_import_leases.remove(&handle.value).is_some())
+}
+
+unsafe extern "C" fn publish_world_import(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldImportHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    let Some(catalog) = bridge
+        .prepared_world_imports
+        .get(&handle.value)
+        .map(|import| import.catalog)
+    else {
+        return 0;
+    };
+    if !bridge.catalogs.contains_key(&catalog) {
+        return 0;
+    }
+    let Some(import) = bridge.prepared_world_imports.get_mut(&handle.value) else {
+        return 0;
+    };
+    if import.published {
+        return 0;
+    }
+    let Some(candidate) = import.candidate.take() else {
+        return 0;
+    };
+    let Some(membership) = import.canonical_membership.take() else {
+        return 0;
+    };
+    let Some(bindings) = import.bindings.take() else {
+        return 0;
+    };
+    let Some(slot) = bridge.catalogs.get_mut(&catalog) else {
+        return 0;
+    };
+    slot.world = candidate;
+    bridge
+        .canonical_entities
+        .retain(|_, catalog| *catalog != import.catalog);
+    bridge.canonical_entities.extend(membership);
+    for retired in &import.retired_handles {
+        bridge.entities.remove(retired);
+        bridge.retired_entities.insert(*retired);
+    }
+    bridge.entities.extend(bindings);
+    import.published = true;
+    ABI_OK
+}
+
+unsafe extern "C" fn claim_world_import_entity(
+    context: *mut c_void,
+    request: *const NativeMechanicsWorldImportEntityClaimRequest,
+    result: *mut NativeMechanicsEntityHandle,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    if request.import.value == 0 || request.entity_id == 0 {
+        return 0;
+    }
+    let Some(import) = bridge.prepared_world_imports.get_mut(&request.import.value) else {
+        return 0;
+    };
+    if !import.published {
+        return 0;
+    }
+    let Some(fresh_handle) = import
+        .unclaimed_handles
+        .remove(&EntityId::new(request.entity_id))
+    else {
+        return 0;
+    };
+    if !bridge.entities.contains_key(&fresh_handle) {
+        return 0;
+    }
+    *result = NativeMechanicsEntityHandle {
+        value: fresh_handle,
+    };
+    ABI_OK
+}
+
 fn native_stacking(value: StackingPolicy) -> NativeMechanicsStackingPolicy {
     match value {
         StackingPolicy::Sum => NativeMechanicsStackingPolicy::Sum,
@@ -3525,7 +4724,7 @@ unsafe extern "C" fn destroy_entity(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
     let Some(binding) = bridge.entities.get(&handle.value).cloned() else {
-        return 0;
+        return i32::from(bridge.retired_entities.remove(&handle.value));
     };
     bridge.entities.remove(&handle.value);
     if !binding.committed {
@@ -7119,6 +8318,398 @@ mod tests {
             equipment_assignments: std::ptr::null(),
             equipment_assignments_len: 0,
         }
+    }
+
+    #[test]
+    fn typed_world_image_import_prepares_all_families_and_retires_only_replaced_handles() {
+        fn slice(value: &str) -> NativeUtf8Slice {
+            NativeUtf8Slice {
+                bytes: value.as_ptr(),
+                len: value.len(),
+            }
+        }
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let catalog = MechanicsCatalog::admit(MechanicsCatalogDefinition {
+            version: parse::<CatalogVersion>("image-v1").unwrap(),
+            stats: vec![StatDefinition {
+                id: parse("strength").unwrap(),
+                minimum: scalar(0).unwrap(),
+                maximum: scalar(100).unwrap(),
+            }],
+            tracks: vec![TrackDefinition {
+                id: parse("health").unwrap(),
+                minimum: scalar(0).unwrap(),
+                maximum: TrackMaximum::Fixed {
+                    value: scalar(100).unwrap(),
+                },
+            }],
+            sources: vec![SourceDefinition {
+                id: parse("aura").unwrap(),
+                priority: 0,
+                stat_contributions: vec![],
+                damage_responses: vec![],
+            }],
+            damage_kinds: vec![],
+            effects: vec![EffectDefinition {
+                id: parse("blessed").unwrap(),
+                stacking_group: parse("blessing").unwrap(),
+                stacking: EffectStackingPolicy::IndependentByProvenance {
+                    maximum_instances: 4,
+                },
+                maximum_stacks: 4,
+                sources: vec![parse("aura").unwrap()],
+            }],
+            capacity_metrics: vec![CapacityMetricDefinition {
+                id: parse("weight").unwrap(),
+            }],
+            items: vec![
+                ItemDefinition {
+                    id: parse("potion").unwrap(),
+                    kind: ItemKind::Fungible,
+                    maximum_quantity: 10,
+                    classifications: vec![],
+                    capacity_costs: vec![ItemCapacityCost {
+                        metric: parse("weight").unwrap(),
+                        units: 1,
+                    }],
+                    equipment: None,
+                    sources: vec![],
+                },
+                ItemDefinition {
+                    id: parse("sword").unwrap(),
+                    kind: ItemKind::Unique,
+                    maximum_quantity: 1,
+                    classifications: vec![parse("weapon").unwrap()],
+                    capacity_costs: vec![ItemCapacityCost {
+                        metric: parse("weight").unwrap(),
+                        units: 1,
+                    }],
+                    equipment: Some(ItemEquipmentPolicy {
+                        required_slots: 1,
+                        exclusive_group: None,
+                    }),
+                    sources: vec![parse("aura").unwrap()],
+                },
+            ],
+            equipment_slots: vec![EquipmentSlotDefinition {
+                id: parse("hand").unwrap(),
+                allowed_classifications: vec![parse("weapon").unwrap()],
+            }],
+        })
+        .unwrap();
+        let state =
+            EntityState::from_definitions_with_registry(gameplay_component_registry().unwrap(), [])
+                .unwrap();
+        bridge.catalogs.insert(
+            1,
+            CatalogSlot {
+                builder: None,
+                catalog: Some(catalog.clone()),
+                world: MechanicsWorld::new(state),
+            },
+        );
+        bridge.next_catalog = 2;
+        bridge.entities.insert(
+            77,
+            EntityBinding {
+                catalog: 1,
+                entity: EntityId::new(99),
+                identity: "retired".into(),
+                stats: None,
+                tracks: None,
+                intrinsic_sources: None,
+                active_effects: None,
+                inventory: None,
+                item: None,
+                equipment: None,
+                initial_containment: vec![],
+                expected_state_revision: None,
+                initial_components_set: true,
+                committed: true,
+            },
+        );
+
+        let entities = [
+            NativeMechanicsWorldEntityRow {
+                entity_id: 1,
+                identity: utf8("hero"),
+                lifecycle: NativeMechanicsEntityLifecycle::Active,
+                lifecycle_stamp: 7,
+            },
+            NativeMechanicsWorldEntityRow {
+                entity_id: 2,
+                identity: utf8("sword-instance"),
+                lifecycle: NativeMechanicsEntityLifecycle::Disabled,
+                lifecycle_stamp: 8,
+            },
+        ];
+        let mut presence = Vec::new();
+        for entity in [1, 2] {
+            for component in NativeMechanicsRevisionComponent::all() {
+                let present = matches!(
+                    (entity, component),
+                    (1, NativeMechanicsRevisionComponent::Stats)
+                        | (1, NativeMechanicsRevisionComponent::Tracks)
+                        | (1, NativeMechanicsRevisionComponent::IntrinsicSources)
+                        | (1, NativeMechanicsRevisionComponent::ActiveEffects)
+                        | (1, NativeMechanicsRevisionComponent::Inventory)
+                        | (1, NativeMechanicsRevisionComponent::Equipment)
+                        | (2, NativeMechanicsRevisionComponent::Item)
+                );
+                presence.push(NativeMechanicsWorldComponentPresenceRow {
+                    entity_id: entity,
+                    component,
+                    present,
+                    revision: 40 + component as u64,
+                });
+            }
+        }
+        let containment = [NativeMechanicsWorldContainmentRow {
+            child_entity_id: 2,
+            container_entity_id: 1,
+        }];
+        let stats = [NativeMechanicsWorldStatRow {
+            entity_id: 1,
+            stat: utf8("strength"),
+            base: 10,
+        }];
+        let tracks = [NativeMechanicsWorldTrackRow {
+            entity_id: 1,
+            track: utf8("health"),
+            current: 80,
+        }];
+        let intrinsic = [NativeMechanicsWorldIntrinsicSourceRow {
+            entity_id: 1,
+            instance: utf8("halo"),
+            definition: utf8("aura"),
+        }];
+        let effects = [NativeMechanicsWorldActiveEffectRow {
+            entity_id: 1,
+            instance: utf8("blessing-1"),
+            definition: utf8("blessed"),
+            stacks: 1,
+            provenance_kind: NativeMechanicsActiveEffectProvenanceKind::Intrinsic,
+            intrinsic_entity_id: 1,
+            intrinsic_instance: utf8("halo"),
+            effect_entity_id: 0,
+            effect_instance: utf8(""),
+            effect_stack: 0,
+            effect_source: utf8(""),
+            equipped_owner_entity_id: 0,
+            equipped_item_entity_id: 0,
+            equipped_source: utf8(""),
+            request_operation: utf8(""),
+            request_instance: utf8(""),
+        }];
+        let stacks = [NativeMechanicsWorldInventoryStackRow {
+            entity_id: 1,
+            definition: utf8("potion"),
+            quantity: 2,
+        }];
+        let limits = [NativeMechanicsWorldInventoryCapacityLimitRow {
+            entity_id: 1,
+            metric: utf8("weight"),
+            maximum: 10,
+        }];
+        let items = [NativeMechanicsWorldItemRow {
+            entity_id: 2,
+            definition: utf8("sword"),
+        }];
+        let equipment = [NativeMechanicsWorldEquipmentAssignmentRow {
+            entity_id: 1,
+            slot: utf8("hand"),
+            item_entity_id: 2,
+        }];
+        let fingerprint = catalog.fingerprint().to_owned();
+        let request = NativeMechanicsWorldImportRequest {
+            catalog: NativeMechanicsCatalogHandle { value: 1 },
+            state_revision: 91,
+            catalog_version: slice(catalog.version().as_str()),
+            catalog_fingerprint: slice(&fingerprint),
+            entities: entities.as_ptr(),
+            entities_len: entities.len(),
+            containment: containment.as_ptr(),
+            containment_len: containment.len(),
+            component_presence: presence.as_ptr(),
+            component_presence_len: presence.len(),
+            stats: stats.as_ptr(),
+            stats_len: stats.len(),
+            tracks: tracks.as_ptr(),
+            tracks_len: tracks.len(),
+            intrinsic_sources: intrinsic.as_ptr(),
+            intrinsic_sources_len: intrinsic.len(),
+            active_effects: effects.as_ptr(),
+            active_effects_len: effects.len(),
+            inventory_stacks: stacks.as_ptr(),
+            inventory_stacks_len: stacks.len(),
+            inventory_capacity_limits: limits.as_ptr(),
+            inventory_capacity_limits_len: limits.len(),
+            items: items.as_ptr(),
+            items_len: items.len(),
+            equipment_assignments: equipment.as_ptr(),
+            equipment_assignments_len: equipment.len(),
+        };
+        let malformed = NativeMechanicsWorldImportRequest {
+            catalog_fingerprint: utf8("wrong"),
+            ..request
+        };
+        let mut rejected = NativeMechanicsWorldImportHandle::default();
+        assert_eq!(
+            unsafe { prepare_world_import(context, &malformed, &mut rejected) },
+            0
+        );
+        assert!(bridge.prepared_world_imports.is_empty());
+        assert_eq!(bridge.catalogs[&1].world.state.revision(), 0);
+        let mut prepared = NativeMechanicsWorldImportHandle::default();
+        assert_eq!(
+            unsafe { prepare_world_import(context, &request, &mut prepared) },
+            ABI_OK
+        );
+        assert_eq!(bridge.catalogs[&1].world.state.revision(), 0);
+        let mut lease = NativeMechanicsWorldImportLease {
+            handle: NativeMechanicsWorldImportLeaseHandle::default(),
+            catalog_id: 0,
+            state_revision_before: 0,
+            state_revision_after: 0,
+            entities: std::ptr::null(),
+            entities_len: 0,
+            revisions: std::ptr::null(),
+            revisions_len: 0,
+            lifecycles: std::ptr::null(),
+            lifecycles_len: 0,
+        };
+        assert_eq!(
+            unsafe { read_world_import(context, prepared, &mut lease) },
+            ABI_OK
+        );
+        assert_eq!(lease.entities_len, 2);
+        assert_eq!(lease.revisions_len, 14);
+        assert!(lease.state_revision_after > 91);
+        let hero_claim = NativeMechanicsWorldImportEntityClaimRequest {
+            import: prepared,
+            entity_id: 1,
+        };
+        let mut before_publish_claim = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe { claim_world_import_entity(context, &hero_claim, &mut before_publish_claim) },
+            0
+        );
+        assert_eq!(unsafe { publish_world_import(context, prepared) }, ABI_OK);
+        let mut hero = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe { claim_world_import_entity(context, &hero_claim, &mut hero) },
+            ABI_OK
+        );
+        let mut duplicate_claim = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe { claim_world_import_entity(context, &hero_claim, &mut duplicate_claim) },
+            0
+        );
+        let mut stat = NativeMechanicsStatReadReceipt::default();
+        assert_eq!(
+            unsafe {
+                read_stat(
+                    context,
+                    &NativeMechanicsStatReadRequest {
+                        entity: hero,
+                        stat: utf8("strength"),
+                    },
+                    &mut stat,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(stat.base, 10);
+        let mut exported = NativeMechanicsWorldExportLease {
+            handle: NativeMechanicsWorldExportLeaseHandle::default(),
+            catalog_id: 0,
+            state_revision: 0,
+            catalog_version: NativeUtf8Slice::default(),
+            catalog_fingerprint: NativeUtf8Slice::default(),
+            entities: std::ptr::null(),
+            entities_len: 0,
+            containment: std::ptr::null(),
+            containment_len: 0,
+            component_presence: std::ptr::null(),
+            component_presence_len: 0,
+            stats: std::ptr::null(),
+            stats_len: 0,
+            tracks: std::ptr::null(),
+            tracks_len: 0,
+            intrinsic_sources: std::ptr::null(),
+            intrinsic_sources_len: 0,
+            active_effects: std::ptr::null(),
+            active_effects_len: 0,
+            inventory_stacks: std::ptr::null(),
+            inventory_stacks_len: 0,
+            inventory_capacity_limits: std::ptr::null(),
+            inventory_capacity_limits_len: 0,
+            items: std::ptr::null(),
+            items_len: 0,
+            equipment_assignments: std::ptr::null(),
+            equipment_assignments_len: 0,
+        };
+        assert_eq!(
+            unsafe {
+                export_world(
+                    context,
+                    NativeMechanicsCatalogHandle { value: 1 },
+                    &mut exported,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(exported.entities_len, 2);
+        assert_eq!(exported.component_presence_len, 14);
+        assert_eq!(exported.containment_len, 1);
+        assert_eq!(exported.stats_len, 1);
+        assert_eq!(exported.tracks_len, 1);
+        assert_eq!(exported.intrinsic_sources_len, 1);
+        assert_eq!(exported.active_effects_len, 1);
+        assert_eq!(exported.inventory_stacks_len, 1);
+        assert_eq!(exported.inventory_capacity_limits_len, 1);
+        assert_eq!(exported.items_len, 1);
+        assert_eq!(exported.equipment_assignments_len, 1);
+        assert_eq!(
+            unsafe { destroy_world_export_lease(context, exported.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_entity(context, NativeMechanicsEntityHandle { value: 77 }) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_entity(context, NativeMechanicsEntityHandle { value: 78 }) },
+            0
+        );
+        let sword_stamp =
+            unsafe { std::slice::from_raw_parts(lease.lifecycles, lease.lifecycles_len) }
+                .iter()
+                .find(|row| row.entity_id == 2)
+                .unwrap()
+                .stamp;
+        assert_eq!(
+            unsafe { destroy_world_import_lease(context, lease.handle) },
+            ABI_OK
+        );
+        assert_eq!(unsafe { destroy_world_import(context, prepared) }, ABI_OK);
+        let mut rebound_sword = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                rebind_entity(
+                    context,
+                    &NativeMechanicsEntityRebindRequest {
+                        catalog: NativeMechanicsCatalogHandle { value: 1 },
+                        entity_id: 2,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: sword_stamp,
+                    },
+                    &mut rebound_sword,
+                )
+            },
+            ABI_OK
+        );
     }
 
     #[test]

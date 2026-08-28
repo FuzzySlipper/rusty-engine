@@ -59,7 +59,7 @@ pub enum NativeMechanicsRevisionGuard {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NativeMechanicsRevisionComponent {
     #[default]
     Stats = 0,
@@ -69,6 +69,20 @@ pub enum NativeMechanicsRevisionComponent {
     Inventory = 4,
     Item = 5,
     Equipment = 6,
+}
+
+impl NativeMechanicsRevisionComponent {
+    pub const fn all() -> [Self; 7] {
+        [
+            Self::Stats,
+            Self::Tracks,
+            Self::IntrinsicSources,
+            Self::ActiveEffects,
+            Self::Inventory,
+            Self::Item,
+            Self::Equipment,
+        ]
+    }
 }
 
 #[repr(u32)]
@@ -698,6 +712,230 @@ pub struct NativeMechanicsWorldRestoreLease {
     pub handle: NativeMechanicsWorldRestoreLeaseHandle,
     pub state_revision_before: u64,
     pub state_revision_after: u64,
+    pub revisions: *const NativeMechanicsRevisionRemapRow,
+    pub revisions_len: usize,
+    pub lifecycles: *const NativeMechanicsLifecycleReceipt,
+    pub lifecycles_len: usize,
+}
+
+/// A borrowed, typed Mechanics world image. The image is semantic evidence owned by the
+/// Engine bridge for the duration of its export lease; it is deliberately not an Engine
+/// persistence schema or a codec boundary. Every collection is flat and sorted by the
+/// product's canonical entity/component identities.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldExportLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldEntityRow {
+    pub entity_id: u64,
+    pub identity: NativeUtf8Slice,
+    pub lifecycle: NativeMechanicsEntityLifecycle,
+    pub lifecycle_stamp: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldContainmentRow {
+    pub child_entity_id: u64,
+    pub container_entity_id: u64,
+}
+
+/// One independent component slot fact. A row is required for every admitted entity and each
+/// of the seven Mechanics families, including an explicit `present = false` slot.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldComponentPresenceRow {
+    pub entity_id: u64,
+    pub component: NativeMechanicsRevisionComponent,
+    pub present: bool,
+    pub revision: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldStatRow {
+    pub entity_id: u64,
+    pub stat: NativeUtf8Slice,
+    pub base: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldTrackRow {
+    pub entity_id: u64,
+    pub track: NativeUtf8Slice,
+    pub current: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldIntrinsicSourceRow {
+    pub entity_id: u64,
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsWorldActiveEffectRow {
+    pub entity_id: u64,
+    pub instance: NativeUtf8Slice,
+    pub definition: NativeUtf8Slice,
+    pub stacks: u16,
+    pub provenance_kind: NativeMechanicsActiveEffectProvenanceKind,
+    pub intrinsic_entity_id: u64,
+    pub intrinsic_instance: NativeUtf8Slice,
+    pub effect_entity_id: u64,
+    pub effect_instance: NativeUtf8Slice,
+    pub effect_stack: u16,
+    pub effect_source: NativeUtf8Slice,
+    pub equipped_owner_entity_id: u64,
+    pub equipped_item_entity_id: u64,
+    pub equipped_source: NativeUtf8Slice,
+    pub request_operation: NativeUtf8Slice,
+    pub request_instance: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldInventoryStackRow {
+    pub entity_id: u64,
+    pub definition: NativeUtf8Slice,
+    pub quantity: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldInventoryCapacityLimitRow {
+    pub entity_id: u64,
+    pub metric: NativeUtf8Slice,
+    pub maximum: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldItemRow {
+    pub entity_id: u64,
+    pub definition: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldEquipmentAssignmentRow {
+    pub entity_id: u64,
+    pub slot: NativeUtf8Slice,
+    pub item_entity_id: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldExportLease {
+    pub handle: NativeMechanicsWorldExportLeaseHandle,
+    pub catalog_id: u64,
+    pub state_revision: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub entities: *const NativeMechanicsWorldEntityRow,
+    pub entities_len: usize,
+    pub containment: *const NativeMechanicsWorldContainmentRow,
+    pub containment_len: usize,
+    pub component_presence: *const NativeMechanicsWorldComponentPresenceRow,
+    pub component_presence_len: usize,
+    pub stats: *const NativeMechanicsWorldStatRow,
+    pub stats_len: usize,
+    pub tracks: *const NativeMechanicsWorldTrackRow,
+    pub tracks_len: usize,
+    pub intrinsic_sources: *const NativeMechanicsWorldIntrinsicSourceRow,
+    pub intrinsic_sources_len: usize,
+    pub active_effects: *const NativeMechanicsWorldActiveEffectRow,
+    pub active_effects_len: usize,
+    pub inventory_stacks: *const NativeMechanicsWorldInventoryStackRow,
+    pub inventory_stacks_len: usize,
+    pub inventory_capacity_limits: *const NativeMechanicsWorldInventoryCapacityLimitRow,
+    pub inventory_capacity_limits_len: usize,
+    pub items: *const NativeMechanicsWorldItemRow,
+    pub items_len: usize,
+    pub equipment_assignments: *const NativeMechanicsWorldEquipmentAssignmentRow,
+    pub equipment_assignments_len: usize,
+}
+
+/// A product-owned request assembled from its own archive schema/codec. Rust only validates the
+/// typed semantic evidence and builds a detached candidate; it never decodes bytes here.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldImportRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub state_revision: u64,
+    pub catalog_version: NativeUtf8Slice,
+    pub catalog_fingerprint: NativeUtf8Slice,
+    pub entities: *const NativeMechanicsWorldEntityRow,
+    pub entities_len: usize,
+    pub containment: *const NativeMechanicsWorldContainmentRow,
+    pub containment_len: usize,
+    pub component_presence: *const NativeMechanicsWorldComponentPresenceRow,
+    pub component_presence_len: usize,
+    pub stats: *const NativeMechanicsWorldStatRow,
+    pub stats_len: usize,
+    pub tracks: *const NativeMechanicsWorldTrackRow,
+    pub tracks_len: usize,
+    pub intrinsic_sources: *const NativeMechanicsWorldIntrinsicSourceRow,
+    pub intrinsic_sources_len: usize,
+    pub active_effects: *const NativeMechanicsWorldActiveEffectRow,
+    pub active_effects_len: usize,
+    pub inventory_stacks: *const NativeMechanicsWorldInventoryStackRow,
+    pub inventory_stacks_len: usize,
+    pub inventory_capacity_limits: *const NativeMechanicsWorldInventoryCapacityLimitRow,
+    pub inventory_capacity_limits_len: usize,
+    pub items: *const NativeMechanicsWorldItemRow,
+    pub items_len: usize,
+    pub equipment_assignments: *const NativeMechanicsWorldEquipmentAssignmentRow,
+    pub equipment_assignments_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldImportHandle {
+    pub value: u64,
+}
+
+/// A shallow borrowed claim for one fresh binding staged by a published world import.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldImportEntityClaimRequest {
+    pub import: NativeMechanicsWorldImportHandle,
+    pub entity_id: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldImportLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldImportEntityRow {
+    pub entity_id: u64,
+    pub identity: NativeUtf8Slice,
+    pub lifecycle: NativeMechanicsEntityLifecycle,
+    pub lifecycle_stamp: u64,
+}
+
+/// Facts needed by a managed adapter to transfer the prepared fresh handles and the remapped
+/// exact guards into its own world. These are valid only until the import lease is destroyed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldImportLease {
+    pub handle: NativeMechanicsWorldImportLeaseHandle,
+    pub catalog_id: u64,
+    pub state_revision_before: u64,
+    pub state_revision_after: u64,
+    pub entities: *const NativeMechanicsWorldImportEntityRow,
+    pub entities_len: usize,
     pub revisions: *const NativeMechanicsRevisionRemapRow,
     pub revisions_len: usize,
     pub lifecycles: *const NativeMechanicsLifecycleReceipt,

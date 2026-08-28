@@ -51,6 +51,7 @@ ExerciseMechanicsLeaseRebind();
 ExerciseMechanicsUniqueItemTransfer();
 ExerciseMechanicsUniqueItemLifecycle();
 ExerciseMechanicsWorldRestore();
+ExerciseMechanicsWorldImport();
 
 static void Require(bool condition, string message)
 {
@@ -278,6 +279,95 @@ static void ExerciseMechanicsWorldRestore()
     Require(world.Create().Value != currentOnly.Value, "managed restore reused a current-only entity identity");
 }
 
+static void ExerciseMechanicsWorldImport()
+{
+    using var world = new EntityWorld();
+    EntityId retired = world.Create();
+    var service = new MechanicsAdapterFake();
+    using var mechanics = new MechanicsEntityWorld(world, service, service.Catalog);
+    mechanics.Bind(retired, "retired");
+    mechanics.Commit(retired);
+
+    EntityWorldRestorePlan plan = new(world.Revision, 4);
+    plan.AddEntity(new EntityWorldEntityState(new EntityId(2), EntityLifecycle.Disabled, 1));
+    plan.AddEntity(new EntityWorldEntityState(new EntityId(3), EntityLifecycle.Active, 1));
+    plan.AddContainment(new EntityWorldContainmentState(new EntityId(3), new EntityId(2)));
+    MechanicsWorldImportRequest request = ImportRequest(service.Catalog);
+
+    MechanicsWorldImportRequest malformed = request with { Entities = request.Entities[..1] };
+    Throws(() => mechanics.PrepareImport(plan, malformed, world.Revision),
+        "malformed managed/native import correlation was accepted");
+    Require(world.IsAlive(retired) && service.ImportPrepares == 0 && service.ActiveLeases == 1,
+        "malformed import correlation changed either live world");
+
+    service.ReturnMalformedImportRevisions = true;
+    Throws(() => mechanics.PrepareImport(plan, request, world.Revision),
+        "malformed native import revision receipt was accepted");
+    service.ReturnMalformedImportRevisions = false;
+    Require(world.IsAlive(retired) && service.ImportPrepares == 1 && service.ImportDisposals == 1
+        && service.ActiveLeases == 1,
+        "malformed native import receipt changed either live world");
+
+    using (MechanicsEntityWorldImportCandidate cancelled = mechanics.PrepareImport(plan, request, world.Revision))
+    {
+        cancelled.Dispose();
+        cancelled.Dispose();
+    }
+    Require(world.IsAlive(retired) && service.ImportPrepares == 2 && service.ImportPublishes == 0
+        && service.ImportDisposals == 2 && service.ActiveLeases == 1,
+        "cancelling a prepared import released more than its native preparation");
+
+    using MechanicsEntityWorldImportCandidate candidate = mechanics.PrepareImport(plan, request, world.Revision);
+    Require(service.ImportPrepares == 3 && service.ImportPublishes == 0 && service.ActiveLeases == 1,
+        "preparing an import changed live bindings or published native state");
+    candidate.Publish();
+    candidate.Publish();
+    candidate.Dispose();
+    candidate.Dispose();
+    Require(service.ImportPublishes == 1 && service.ImportClaims == 2 && service.ImportDisposals == 3,
+        "import candidate was not idempotent or did not retire its native handle");
+    Require(!world.IsAlive(retired) && world.GetLifecycle(new EntityId(2)) == EntityLifecycle.Disabled
+        && world.TryGetContainedIn(new EntityId(3), out EntityId owner) && owner.Value == 2,
+        "import did not replace managed membership, lifecycle, and containment together");
+    Require(service.ObservedPresentEmptyStats && service.ObservedAbsentStats,
+        "import request did not retain distinct present-empty and absent component facts");
+    mechanics.SetLifecycle(new EntityId(3), EntityLifecycle.Disabled, world.GetEntityRevision(new EntityId(3)));
+    Require(service.ActiveLeases == 2, "fresh native import bindings were not usable by the adapter");
+    Require(mechanics.Export().Entities.Length == 2, "typed Mechanics export did not return copied native facts");
+}
+
+static MechanicsWorldImportRequest ImportRequest(MechanicsCatalog catalog)
+    => new(
+        catalog,
+        40,
+        "example",
+        "example",
+        new MechanicsWorldEntityRow[]
+        {
+            new MechanicsWorldEntityRow(2, "pack", MechanicsEntityLifecycle.Disabled, 101),
+            new MechanicsWorldEntityRow(3, "item", MechanicsEntityLifecycle.Active, 102),
+        },
+        new MechanicsWorldContainmentRow[] { new(3, 2) },
+        ImportPresence(2, statsPresent: true)
+            .Concat(ImportPresence(3, statsPresent: false))
+            .ToArray(),
+        ReadOnlyMemory<MechanicsWorldStatRow>.Empty,
+        ReadOnlyMemory<MechanicsWorldTrackRow>.Empty,
+        ReadOnlyMemory<MechanicsWorldIntrinsicSourceRow>.Empty,
+        ReadOnlyMemory<MechanicsWorldActiveEffectRow>.Empty,
+        ReadOnlyMemory<MechanicsWorldInventoryStackRow>.Empty,
+        ReadOnlyMemory<MechanicsWorldInventoryCapacityLimitRow>.Empty,
+        ReadOnlyMemory<MechanicsWorldItemRow>.Empty,
+        ReadOnlyMemory<MechanicsWorldEquipmentAssignmentRow>.Empty);
+
+static IEnumerable<MechanicsWorldComponentPresenceRow> ImportPresence(ulong entity, bool statsPresent)
+    => Enum.GetValues<MechanicsRevisionComponent>()
+        .Select(component => new MechanicsWorldComponentPresenceRow(
+            entity,
+            component,
+            component == MechanicsRevisionComponent.Stats && statsPresent,
+            (ulong)component + 1));
+
 readonly record struct Health(int Current);
 
 readonly record struct Armor(int Current);
@@ -288,12 +378,22 @@ sealed class MechanicsAdapterFake : IMechanicsService
     private ulong _nextHandle = 1;
     private readonly Dictionary<ulong, ulong> _entityIds = [];
     private readonly HashSet<ulong> _materialized = [];
+    private MechanicsWorldImportRequest? _preparedImport;
+    private bool _importPublished;
+    private readonly HashSet<ulong> _claimedImportEntities = [];
     public int ReleasedLeases { get; private set; }
     public int Rebinds { get; private set; }
     public int UniqueTransfers { get; private set; }
     public int Materializations { get; private set; }
     public int UniqueDestroys { get; private set; }
     public int RestorePublishes { get; private set; }
+    public int ImportPrepares { get; private set; }
+    public int ImportPublishes { get; private set; }
+    public int ImportClaims { get; private set; }
+    public int ImportDisposals { get; private set; }
+    public bool ObservedPresentEmptyStats { get; private set; }
+    public bool ObservedAbsentStats { get; private set; }
+    public bool ReturnMalformedImportRevisions { get; set; }
     public int ActiveLeases => _entityIds.Count;
     public (ulong Item, ulong FromOwner, ulong ToOwner) LastUniqueTransfer { get; private set; }
     public MechanicsCatalog Catalog { get; } = new(new MechanicsCatalogHandle(1), static () => { });
@@ -354,6 +454,96 @@ sealed class MechanicsAdapterFake : IMechanicsService
         return new MechanicsWorldRestoreLeaseReceipt(revisions, lifecycles, 2, 3);
     }
     public void PublishWorldRestore(MechanicsWorldRestore arg0) => RestorePublishes++;
+    public MechanicsWorldExportLeaseReceipt ExportWorld(MechanicsCatalog arg0)
+    {
+        MechanicsWorldEntityRow[] entities = _entityIds.Values.Distinct()
+            .Order()
+            .Select(id => new MechanicsWorldEntityRow(id, $"entity-{id}", MechanicsEntityLifecycle.Active, 1))
+            .ToArray();
+        return new MechanicsWorldExportLeaseReceipt(
+            entities,
+            ReadOnlyMemory<MechanicsWorldContainmentRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldComponentPresenceRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldStatRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldTrackRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldIntrinsicSourceRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldActiveEffectRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldInventoryStackRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldInventoryCapacityLimitRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldItemRow>.Empty,
+            ReadOnlyMemory<MechanicsWorldEquipmentAssignmentRow>.Empty,
+            arg0.Handle.Value,
+            50,
+            "example",
+            "example");
+    }
+    public MechanicsWorldImport PrepareWorldImport(MechanicsWorldImportRequest arg0)
+    {
+        if (arg0.Catalog.Handle != Catalog.Handle)
+        {
+            throw new InvalidOperationException("import must use the admitted catalog");
+        }
+        _preparedImport = arg0;
+        _importPublished = false;
+        _claimedImportEntities.Clear();
+        ImportPrepares++;
+        ObservedPresentEmptyStats = arg0.ComponentPresence.Span.ToArray().Any(row => row.EntityId == 2
+            && row.Component == MechanicsRevisionComponent.Stats && row.Present && arg0.Stats.IsEmpty);
+        ObservedAbsentStats = arg0.ComponentPresence.Span.ToArray().Any(row => row.EntityId == 3
+            && row.Component == MechanicsRevisionComponent.Stats && !row.Present);
+        return new MechanicsWorldImport(new MechanicsWorldImportHandle(77), () =>
+        {
+            ImportDisposals++;
+            _preparedImport = null;
+        });
+    }
+    public MechanicsWorldImportLeaseReceipt ReadWorldImport(MechanicsWorldImport arg0)
+    {
+        MechanicsWorldImportRequest request = _preparedImport
+            ?? throw new InvalidOperationException("import was not prepared");
+        MechanicsWorldImportEntityRow[] entities = request.Entities.Span.ToArray()
+            .Select(row => new MechanicsWorldImportEntityRow(row.EntityId, row.Identity, row.Lifecycle, row.LifecycleStamp))
+            .ToArray();
+        MechanicsLifecycleReceipt[] lifecycles = entities
+            .Select(row => new MechanicsLifecycleReceipt(row.EntityId, row.Lifecycle, row.LifecycleStamp))
+            .ToArray();
+        MechanicsRevisionRemapRow[] revisions = request.ComponentPresence.Span.ToArray()
+            .Select(row => new MechanicsRevisionRemapRow(
+                row.EntityId,
+                row.Component,
+                row.Present,
+                row.Revision,
+                row.Revision + 1,
+                row.Revision + 2))
+            .ToArray();
+        return new MechanicsWorldImportLeaseReceipt(
+            entities,
+            ReturnMalformedImportRevisions ? revisions[..^1] : revisions,
+            lifecycles,
+            Catalog.Handle.Value,
+            request.StateRevision,
+            request.StateRevision + 1);
+    }
+    public void PublishWorldImport(MechanicsWorldImport arg0)
+    {
+        if (_preparedImport is null || _importPublished)
+        {
+            throw new InvalidOperationException("import must publish exactly once after preparation");
+        }
+        _importPublished = true;
+        ImportPublishes++;
+    }
+    public MechanicsEntity ClaimWorldImportEntity(MechanicsWorldImportEntityClaimRequest arg0)
+    {
+        if (!_importPublished || _preparedImport is not MechanicsWorldImportRequest request
+            || !request.Entities.Span.ToArray().Any(row => row.EntityId == arg0.EntityId)
+            || !_claimedImportEntities.Add(arg0.EntityId))
+        {
+            throw new InvalidOperationException("import entity claims must be fresh and exact");
+        }
+        ImportClaims++;
+        return Lease(arg0.EntityId);
+    }
     public MechanicsEntity BindEntity(MechanicsEntityBindRequest arg0) => Lease(arg0.EntityId);
     public MechanicsEntity RebindEntity(MechanicsEntityRebindRequest arg0)
     {
@@ -390,11 +580,12 @@ sealed class MechanicsAdapterFake : IMechanicsService
     }
     public MechanicsLifecycleReceipt SetEntityLifecycle(MechanicsLifecycleRequest arg0)
     {
-        if (arg0.Guard != MechanicsLifecycleGuard.Exact || arg0.ExpectedStamp != InitialLifecycleStamp)
+        if (arg0.Guard != MechanicsLifecycleGuard.Exact
+            || (arg0.ExpectedStamp != InitialLifecycleStamp && arg0.ExpectedStamp != 102))
         {
             throw new InvalidOperationException("lifecycle transition must retain the exact native stamp");
         }
-        return new MechanicsLifecycleReceipt(1, arg0.Lifecycle, InitialLifecycleStamp + 1);
+        return new MechanicsLifecycleReceipt(EntityId(arg0.Entity), arg0.Lifecycle, arg0.ExpectedStamp + 1);
     }
     public MechanicsStatReadReceipt ReadStat(MechanicsStatReadRequest arg0) => throw new NotSupportedException();
     public MechanicsStatEvaluationLeaseReceipt EvaluateStat(MechanicsStatOperationRequest arg0) => throw new NotSupportedException();

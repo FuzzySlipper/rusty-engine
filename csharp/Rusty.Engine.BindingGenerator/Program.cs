@@ -604,13 +604,17 @@ internal static class Emit
             (_, string destroyOperation) = DestroyLeaseFor(model, service, BindingModel.Bare(result));
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
             output.AppendLine($"        try {{ return NativeConversions.{(UsesLeaseReceipt(model, model.Structs[BindingModel.Bare(result)]) ? "CopyLeaseReceipt" : "CopyLease")}(ownedResult); }}");
-            output.AppendLine($"        finally {{ int disposeStatus = _native.{RawIdentifier(destroyOperation)}.Pointer(_native.context, ownedResult.handle); NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(destroyOperation)}\", disposeStatus); }}");
+            output.AppendLine("        finally").AppendLine("        {");
+            EmitDestroy(output, model, service, destroyOperation, "ownedResult.handle", "            ");
+            output.AppendLine("        }");
         }
         else if (returnType != SafeType(BindingModel.Bare(result)))
         {
-            (_, string destroyOperation) = DestroyFor(model, BindingModel.Bare(result));
+            (_, string destroyOperation) = DestroyFor(model, service, BindingModel.Bare(result));
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
-            output.AppendLine($"        return new {returnType}(NativeConversions.FromNative(ownedResult), () => {{ int disposeStatus = _native.{RawIdentifier(destroyOperation)}.Pointer(_native.context, ownedResult); NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(destroyOperation)}\", disposeStatus); }});");
+            output.AppendLine($"        return new {returnType}(NativeConversions.FromNative(ownedResult), () =>").AppendLine("        {");
+            EmitDestroy(output, model, service, destroyOperation, "ownedResult", "            ");
+            output.AppendLine("        });");
         }
         else output.AppendLine("        return NativeConversions.FromNative(rawResult);");
         output.AppendLine("    }").AppendLine();
@@ -713,13 +717,17 @@ internal static class Emit
             (_, string destroyOperation) = DestroyLeaseFor(model, service, BindingModel.Bare(result));
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
             output.AppendLine($"        try {{ return NativeConversions.{(UsesLeaseReceipt(model, model.Structs[BindingModel.Bare(result)]) ? "CopyLeaseReceipt" : "CopyLease")}(ownedResult); }}");
-            output.AppendLine($"        finally {{ int disposeStatus = _native.{RawIdentifier(destroyOperation)}.Pointer(_native.context, ownedResult.handle); NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(destroyOperation)}\", disposeStatus); }}");
+            output.AppendLine("        finally").AppendLine("        {");
+            EmitDestroy(output, model, service, destroyOperation, "ownedResult.handle", "            ");
+            output.AppendLine("        }");
         }
         else if (returnType != SafeType(BindingModel.Bare(result)))
         {
-            (_, string destroyOperation) = DestroyFor(model, BindingModel.Bare(result));
+            (_, string destroyOperation) = DestroyFor(model, service, BindingModel.Bare(result));
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
-            output.AppendLine($"        return new {returnType}(NativeConversions.FromNative(ownedResult), () => {{ int disposeStatus = _native.{RawIdentifier(destroyOperation)}.Pointer(_native.context, ownedResult); NativeCall.Require(\"{SafeServiceName(service.Name)}\", \"{Pascal(destroyOperation)}\", disposeStatus); }});");
+            output.AppendLine($"        return new {returnType}(NativeConversions.FromNative(ownedResult), () =>").AppendLine("        {");
+            EmitDestroy(output, model, service, destroyOperation, "ownedResult", "            ");
+            output.AppendLine("        });");
         }
         else output.AppendLine("        return NativeConversions.FromNative(rawResult);");
         for (int index = closers.Count - 1; index >= 0; index--) output.AppendLine(closers[index]);
@@ -793,17 +801,32 @@ internal static class Emit
         return $"NativeConversions.ToNative({values}[index].{property})";
     }
 
-    private static void EmitRequire(StringBuilder output, BindingModel model, Service service, string operation, bool hasErrorReadout, string indent)
+    private static void EmitDestroy(StringBuilder output, BindingModel model, Service service, string operation, string handle, string indent)
+    {
+        Callback callback = model.Callbacks[service.Operations.Single(candidate => candidate.Name == operation).Callback];
+        bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
+        if (hasErrorReadout)
+        {
+            output.AppendLine($"{indent}NativeOperationErrorReceipt rawDestroyError = default;");
+            output.AppendLine($"{indent}int disposeStatus = _native.{RawIdentifier(operation)}.Pointer(_native.context, {handle}, &rawDestroyError);");
+            EmitRequire(output, model, service, operation, hasErrorReadout, indent, status: "disposeStatus", errorReadout: "rawDestroyError");
+            return;
+        }
+        output.AppendLine($"{indent}int disposeStatus = _native.{RawIdentifier(operation)}.Pointer(_native.context, {handle});");
+        EmitRequire(output, model, service, operation, hasErrorReadout, indent, status: "disposeStatus");
+    }
+
+    private static void EmitRequire(StringBuilder output, BindingModel model, Service service, string operation, bool hasErrorReadout, string indent, string status = "status", string errorReadout = "rawError")
     {
         string safeService = SafeServiceName(service.Name);
         string safeOperation = Pascal(operation);
         if (!hasErrorReadout)
         {
-            output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", status);");
+            output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", {status});");
             return;
         }
         (_, string destroyOperation) = DestroyLeaseFor(model, service, "NativeEngineDiagnosticLease");
-        output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", status, rawError, _native.context, _native.{RawIdentifier(destroyOperation)}.Pointer);");
+        output.AppendLine($"{indent}NativeCall.Require(\"{safeService}\", \"{safeOperation}\", {status}, {errorReadout}, _native.context, _native.{RawIdentifier(destroyOperation)}.Pointer);");
     }
 
     private static string BorrowedFieldExpression(Field field, string requestArgument)
@@ -886,7 +909,11 @@ internal static class Emit
     private static bool IsSpanCall(string[] input) => input.Length == 2 && input[0].StartsWith("const ", StringComparison.Ordinal) && input[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(input[1]) == "size_t";
     private static bool HasBorrowedFields(Struct value) => value.Fields.Any(field => field.Type.Contains('*', StringComparison.Ordinal) || BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue");
     private static bool HasDisposableHandleField(BindingModel model, Struct value) => value.Fields.Any(field => IsDisposableHandle(model, BindingModel.Bare(field.Type)));
-    private static (string Service, string Operation) DestroyFor(BindingModel model, string handle) => model.Services.SelectMany(service => service.Operations.Select(operation => (service, operation))).First(pair => IsDestroy(model.Callbacks[pair.operation.Callback]) && BindingModel.Bare(model.Callbacks[pair.operation.Callback].Parameters[1]) == handle) is var found ? (found.service.Name, found.operation.Name) : throw new InvalidOperationException($"no destroy operation found for {handle}");
+    private static (string Service, string Operation) DestroyFor(BindingModel model, Service service, string handle) => service.Operations.First(operation =>
+        IsDestroy(model.Callbacks[operation.Callback])
+        && BindingModel.Bare(model.Callbacks[operation.Callback].Parameters[1]) == handle) is var found
+            ? (service.Name, found.Name)
+            : throw new InvalidOperationException($"no destroy operation found for {handle} in {service.Name}");
     private static (string Service, string Operation) DestroyLeaseFor(BindingModel model, Service service, string lease)
     {
         Struct value = model.Structs[lease];
