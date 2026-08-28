@@ -291,7 +291,23 @@ pub type NativeReplaceAudioVoice = unsafe extern "C" fn(
     *mut NativeAudioVoiceHandle,
 ) -> i32;
 pub type NativeDestroyAudioVoice = unsafe extern "C" fn(*mut c_void, NativeAudioVoiceHandle) -> i32;
+pub type NativeControlAudioVoice =
+    unsafe extern "C" fn(*mut c_void, *const NativeAudioVoiceControlRequest) -> i32;
+pub type NativeSetAudioBusVolume =
+    unsafe extern "C" fn(*mut c_void, *const NativeAudioBusVolumeRequest) -> i32;
+pub type NativeSetAudioBusMuted =
+    unsafe extern "C" fn(*mut c_void, *const NativeAudioBusMutedRequest) -> i32;
 pub type NativeReadAudio = unsafe extern "C" fn(*mut c_void, *mut NativeAudioReadout) -> i32;
+pub type NativeReadAudioVoice = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioVoiceReadRequest,
+    *mut NativeAudioVoiceReadout,
+) -> i32;
+pub type NativeReadAudioBus = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioBusReadRequest,
+    *mut NativeAudioBusReadout,
+) -> i32;
 pub type NativeReadAudioDiagnosticAt = unsafe extern "C" fn(
     *mut c_void,
     NativeAudioDiagnosticAtRequest,
@@ -1565,7 +1581,12 @@ pub struct NativeAudioApi {
     pub update_voice: NativeUpdateAudioVoice,
     pub replace_voice: NativeReplaceAudioVoice,
     pub destroy_voice: NativeDestroyAudioVoice,
+    pub control_voice: NativeControlAudioVoice,
+    pub set_bus_volume: NativeSetAudioBusVolume,
+    pub set_bus_muted: NativeSetAudioBusMuted,
     pub read: NativeReadAudio,
+    pub read_voice: NativeReadAudioVoice,
+    pub read_bus: NativeReadAudioBus,
     pub read_diagnostic_at: NativeReadAudioDiagnosticAt,
 }
 

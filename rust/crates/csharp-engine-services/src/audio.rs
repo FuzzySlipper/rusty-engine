@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
 use csharp_engine_abi::*;
 use render_model::{RenderAssetKind, ResolvedRenderAsset};
 use render_presentation::{
-    AudioBus, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode, AudioProjectionOp,
-    AudioProjector, AudioSourceDescriptor, PresentationOpMeta,
+    AudioBus, AudioBusControl, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode,
+    AudioProjectionOp, AudioProjector, AudioSourceDescriptor, AudioVoiceControl,
+    AudioVoiceDesiredState, PresentationOpMeta,
 };
 
 #[cfg(test)]
@@ -418,6 +419,53 @@ impl RuntimeAudioBridge {
         self.stage_op(AudioProjectionOp::Destroy { handle })
     }
 
+    fn control_voice(
+        &mut self,
+        voice: NativeAudioVoiceHandle,
+        control: NativeAudioVoiceControl,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let handle = self
+            .staged_mut()?
+            .state
+            .voices
+            .get(&voice.value)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_AUDIO_VOICE_HANDLE",
+                    "audio voice handle is not live",
+                )
+            })?;
+        let control = match control {
+            NativeAudioVoiceControl::Pause => AudioVoiceControl::Pause,
+            NativeAudioVoiceControl::Resume => AudioVoiceControl::Resume,
+            NativeAudioVoiceControl::Retrigger => AudioVoiceControl::Retrigger,
+        };
+        self.stage_op(AudioProjectionOp::VoiceControl { handle, control })
+    }
+
+    fn set_bus_volume(
+        &mut self,
+        bus: NativeAudioBus,
+        volume: f32,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.stage_op(AudioProjectionOp::BusControl {
+            bus: audio_bus(bus),
+            control: AudioBusControl::SetVolume { volume },
+        })
+    }
+
+    fn set_bus_muted(
+        &mut self,
+        bus: NativeAudioBus,
+        muted: bool,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.stage_op(AudioProjectionOp::BusControl {
+            bus: audio_bus(bus),
+            control: AudioBusControl::SetMuted { muted },
+        })
+    }
+
     fn read(&mut self) -> Result<NativeAudioReadout, CsharpEngineServicesError> {
         let staged = self.staged.as_ref().ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -428,10 +476,53 @@ impl RuntimeAudioBridge {
         let readout = staged.state.projector.readout();
         Ok(NativeAudioReadout {
             active_voices: readout.active_sources,
+            paused_voices: readout.paused_sources,
             admitted_clips: staged.state.clips.len() as u32,
             emitted_signals: readout.emitted_signals,
             retained_diagnostic_count: readout.retained_diagnostic_count,
             evicted_diagnostic_count: readout.evicted_diagnostic_count,
+        })
+    }
+
+    fn read_voice(
+        &mut self,
+        voice: NativeAudioVoiceHandle,
+    ) -> Result<NativeAudioVoiceReadout, CsharpEngineServicesError> {
+        let staged = self.staged.as_ref().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_CALL",
+                "audio service was called outside a product call",
+            )
+        })?;
+        Ok(staged
+            .state
+            .projector
+            .voice(AudioHandle::new(voice.value))
+            .map_or_else(NativeAudioVoiceReadout::default, |voice| {
+                NativeAudioVoiceReadout {
+                    present: true,
+                    desired_state: match voice.desired_state {
+                        AudioVoiceDesiredState::Playing => NativeAudioVoiceDesiredState::Playing,
+                        AudioVoiceDesiredState::Paused => NativeAudioVoiceDesiredState::Paused,
+                    },
+                }
+            }))
+    }
+
+    fn read_bus(
+        &mut self,
+        bus: NativeAudioBus,
+    ) -> Result<NativeAudioBusReadout, CsharpEngineServicesError> {
+        let staged = self.staged.as_ref().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_CALL",
+                "audio service was called outside a product call",
+            )
+        })?;
+        let readout = staged.state.projector.bus(audio_bus(bus));
+        Ok(NativeAudioBusReadout {
+            volume: readout.volume,
+            muted: readout.muted,
         })
     }
 
@@ -464,6 +555,14 @@ impl RuntimeAudioBridge {
     }
 }
 
+fn audio_bus(bus: NativeAudioBus) -> AudioBus {
+    match bus {
+        NativeAudioBus::Sfx => AudioBus::Sfx,
+        NativeAudioBus::Ambient => AudioBus::Ambient,
+        NativeAudioBus::Ui => AudioBus::Ui,
+    }
+}
+
 fn audio_error(error: render_presentation::AudioProjectionDiagnostic) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new("CSHARP_AUDIO_PROJECTION", error.message)
 }
@@ -486,6 +585,7 @@ fn diagnostic_code(code: AudioProjectionDiagnosticCode) -> NativeAudioDiagnostic
             NativeAudioDiagnosticCode::DuplicateHandle
         }
         AudioProjectionDiagnosticCode::UnknownHandle => NativeAudioDiagnosticCode::UnknownHandle,
+        AudioProjectionDiagnosticCode::InvalidControl => NativeAudioDiagnosticCode::InvalidControl,
         AudioProjectionDiagnosticCode::UnavailableHost => {
             NativeAudioDiagnosticCode::UnavailableHost
         }
@@ -612,6 +712,60 @@ pub(crate) unsafe extern "C" fn destroy_audio_voice(
         }
     }
 }
+
+pub(crate) unsafe extern "C" fn control_audio_voice(
+    context: *mut c_void,
+    request: *const NativeAudioVoiceControlRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    let request = unsafe { *request };
+    match bridge.control_voice(request.voice, request.control) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_audio_bus_volume(
+    context: *mut c_void,
+    request: *const NativeAudioBusVolumeRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    let request = unsafe { *request };
+    match bridge.set_bus_volume(request.bus, request.volume) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_audio_bus_muted(
+    context: *mut c_void,
+    request: *const NativeAudioBusMutedRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    let request = unsafe { *request };
+    match bridge.set_bus_muted(request.bus, request.muted) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
 pub(crate) unsafe extern "C" fn read_audio(
     context: *mut c_void,
     result: *mut NativeAudioReadout,
@@ -621,6 +775,52 @@ pub(crate) unsafe extern "C" fn read_audio(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
     match bridge.read() {
+        Ok(value) => {
+            unsafe {
+                *result = value;
+            }
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn read_audio_voice(
+    context: *mut c_void,
+    request: *const NativeAudioVoiceReadRequest,
+    result: *mut NativeAudioVoiceReadout,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.read_voice(unsafe { (*request).voice }) {
+        Ok(value) => {
+            unsafe {
+                *result = value;
+            }
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn read_audio_bus(
+    context: *mut c_void,
+    request: *const NativeAudioBusReadRequest,
+    result: *mut NativeAudioBusReadout,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.read_bus(unsafe { (*request).bus }) {
         Ok(value) => {
             unsafe {
                 *result = value;
@@ -665,7 +865,12 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
         update_voice: update_audio_voice,
         replace_voice: replace_audio_voice,
         destroy_voice: destroy_audio_voice,
+        control_voice: control_audio_voice,
+        set_bus_volume: set_audio_bus_volume,
+        set_bus_muted: set_audio_bus_muted,
         read: read_audio,
+        read_voice: read_audio_voice,
+        read_bus: read_audio_bus,
         read_diagnostic_at: read_audio_diagnostic_at,
     }
 }
@@ -806,5 +1011,87 @@ mod tests {
                 .expect("out-of-window diagnostic")
                 .present
         );
+    }
+
+    #[test]
+    fn stages_typed_voice_and_fixed_bus_controls_with_projector_readouts() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted WAV clip");
+        let voice = bridge
+            .create_voice(descriptor(clip, NativeAudioBus::Sfx))
+            .expect("retained voice");
+
+        bridge
+            .control_voice(voice, NativeAudioVoiceControl::Pause)
+            .expect("pause retained voice");
+        assert_eq!(bridge.read().expect("paused voice count").paused_voices, 1);
+        assert_eq!(
+            bridge
+                .read_voice(voice)
+                .expect("point voice readout")
+                .desired_state,
+            NativeAudioVoiceDesiredState::Paused
+        );
+        assert!(
+            bridge
+                .read_voice(voice)
+                .expect("live voice is present")
+                .present
+        );
+        assert!(
+            !bridge
+                .read_voice(NativeAudioVoiceHandle { value: 99 })
+                .expect("tombstone point readout")
+                .present
+        );
+
+        bridge
+            .control_voice(voice, NativeAudioVoiceControl::Resume)
+            .expect("resume retained voice");
+        bridge
+            .control_voice(voice, NativeAudioVoiceControl::Retrigger)
+            .expect("retrigger retained voice");
+        assert_eq!(bridge.read().expect("resumed voice count").paused_voices, 0);
+        assert_eq!(
+            bridge
+                .read_voice(voice)
+                .expect("resumed point readout")
+                .desired_state,
+            NativeAudioVoiceDesiredState::Playing
+        );
+
+        bridge
+            .set_bus_volume(NativeAudioBus::Ui, 0.25)
+            .expect("set fixed bus volume");
+        bridge
+            .set_bus_muted(NativeAudioBus::Ui, true)
+            .expect("set fixed bus mute");
+        assert_eq!(
+            bridge
+                .read_bus(NativeAudioBus::Ui)
+                .expect("fixed bus readout"),
+            NativeAudioBusReadout {
+                volume: 0.25,
+                muted: true,
+            }
+        );
+        assert_eq!(
+            diagnostic_code(AudioProjectionDiagnosticCode::InvalidControl),
+            NativeAudioDiagnosticCode::InvalidControl
+        );
+
+        let staged = bridge.take_staged_call().expect("staged controls");
+        assert_eq!(staged.frame.expect("audio frame").ops.len(), 6);
     }
 }

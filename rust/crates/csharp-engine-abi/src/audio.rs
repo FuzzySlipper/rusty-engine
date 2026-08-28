@@ -36,6 +36,21 @@ pub enum NativeAudioEmitterKind {
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAudioVoiceControl {
+    Pause = 1,
+    Resume = 2,
+    Retrigger = 3,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAudioVoiceDesiredState {
+    Playing = 1,
+    Paused = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioDiagnosticCode {
     None = 0,
     InvalidDescriptor = 1,
@@ -49,6 +64,7 @@ pub enum NativeAudioDiagnosticCode {
     AudioContextBlocked = 9,
     DecodeFailed = 10,
     HostFailure = 11,
+    InvalidControl = 12,
 }
 
 #[repr(C)]
@@ -104,16 +120,79 @@ pub struct NativeAudioVoiceReplaceRequest {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioVoiceControlRequest {
+    pub voice: NativeAudioVoiceHandle,
+    pub control: NativeAudioVoiceControl,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioBusVolumeRequest {
+    pub bus: NativeAudioBus,
+    pub volume: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioBusMutedRequest {
+    pub bus: NativeAudioBus,
+    pub muted: bool,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeAudioReadout {
     /// Engine projector state, not browser-realized playback state.
     pub active_voices: u32,
+    /// Retained voices whose Engine-owned desired state is paused. This is not
+    /// a host cursor or completion signal.
+    pub paused_voices: u32,
     pub admitted_clips: u32,
     pub emitted_signals: u64,
     /// Number of diagnostics currently retained for indexed readout.
     pub retained_diagnostic_count: u32,
     /// Cumulative number of diagnostics evicted from the retained readout.
     pub evicted_diagnostic_count: u64,
+}
+
+/// Point readout for a retained voice. It deliberately omits descriptor and
+/// browser-realization state; product code already owns the descriptor it
+/// published, while the Engine owner only exposes desired playback state here.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeAudioVoiceReadout {
+    pub present: bool,
+    pub desired_state: NativeAudioVoiceDesiredState,
+}
+
+impl Default for NativeAudioVoiceReadout {
+    fn default() -> Self {
+        Self {
+            present: false,
+            desired_state: NativeAudioVoiceDesiredState::Playing,
+        }
+    }
+}
+
+/// Fixed Engine-bus state. This is not browser realization feedback.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NativeAudioBusReadout {
+    pub volume: f32,
+    pub muted: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioVoiceReadRequest {
+    pub voice: NativeAudioVoiceHandle,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioBusReadRequest {
+    pub bus: NativeAudioBus,
 }
 
 #[repr(C)]
