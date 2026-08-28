@@ -23,7 +23,8 @@ use csharp_engine_services::{
 };
 use libloading::Library;
 use product_dev_host::{
-    CanonicalU64, ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult,
+    CanonicalU64, ProductDevAnimationCueDefinition, ProductDevAnimationCueSignalDomain,
+    ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult,
     ProductDevAudioCompletionSource, ProductDevAudioFeedback, ProductDevAudioFeedbackFact,
     ProductDevAudioFeedbackResult, ProductDevControlOperation, ProductDevInputBatch,
     ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
@@ -3066,6 +3067,16 @@ fn service_outputs(
             CsharpAppearanceCallOutput::Presentation(frame) => {
                 outputs.push(ProductDevRuntimeOutput::presentation(frame).map_err(host_error)?);
             }
+            CsharpAppearanceCallOutput::AnimationCueDefinitions(definitions) => {
+                let definitions = definitions
+                    .iter()
+                    .map(product_dev_animation_cue_definition)
+                    .collect::<Result<Vec<_>, _>>()?;
+                outputs.push(
+                    ProductDevRuntimeOutput::animation_cue_definitions(definitions)
+                        .map_err(host_error)?,
+                );
+            }
         }
     }
     for frame in &output.frames {
@@ -3081,6 +3092,28 @@ fn service_outputs(
         outputs.push(ProductDevRuntimeOutput::presentation(frame).map_err(host_error)?);
     }
     Ok(outputs)
+}
+
+fn product_dev_animation_cue_definition(
+    definition: &csharp_engine_services::AnimationCueDefinition,
+) -> Result<ProductDevAnimationCueDefinition, CsharpProductRuntimeError> {
+    let signal_domain = match definition.signal_domain {
+        csharp_engine_abi::NativeAnimationCueSignalDomain::Audio => {
+            ProductDevAnimationCueSignalDomain::Audio
+        }
+        csharp_engine_abi::NativeAnimationCueSignalDomain::Particle => {
+            ProductDevAnimationCueSignalDomain::Particle
+        }
+    };
+    ProductDevAnimationCueDefinition::new(
+        definition.cue_id.clone(),
+        definition.asset.clone(),
+        definition.clip.clone(),
+        definition.marker_millis,
+        signal_domain,
+        definition.signal_id.clone(),
+    )
+    .map_err(host_error)
 }
 
 fn assert_ui_projection_binding(
@@ -3153,6 +3186,42 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static CONTENT_FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn animation_cue_definition_output_maps_to_the_typed_product_dev_snapshot() {
+        let output = csharp_engine_services::CsharpEngineCallOutput {
+            appearance: vec![CsharpAppearanceCallOutput::AnimationCueDefinitions(vec![
+                csharp_engine_services::AnimationCueDefinition {
+                    cue_id: "footfall".to_owned(),
+                    asset: "animated-mesh-resource/test".to_owned(),
+                    clip: "run".to_owned(),
+                    marker_millis: 125,
+                    signal_domain: NativeAnimationCueSignalDomain::Particle,
+                    signal_id: "footfall.spark".to_owned(),
+                },
+            ])],
+            frames: Vec::new(),
+            view_composition: None,
+            ui: Vec::new(),
+            presentation: Vec::new(),
+        };
+        let values = service_outputs(output).expect("cue output maps");
+        assert_eq!(values.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&values[0]).expect("cue output encodes"),
+            serde_json::json!({
+                "kind": "animation-cue-definitions",
+                "definitions": [{
+                    "cueId": "footfall",
+                    "asset": "animated-mesh-resource/test",
+                    "clip": "run",
+                    "atSeconds": 0.125,
+                    "signalDomain": "particle",
+                    "signalId": "footfall.spark",
+                }],
+            })
+        );
+    }
 
     fn content_fixture_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

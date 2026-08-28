@@ -981,13 +981,90 @@ pub struct ProductDevRuntimeOutput {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ProductDevRuntimeOutputWire {
-    Binding { runtime: ProductDevRuntimeBinding },
-    CompleteBaseline { runtime: ProductDevRuntimeBinding },
-    Frame { frame: Value },
-    ViewComposition { composition: Value },
-    Presentation { frame: Value },
-    UiProjection { envelope: Value },
-    RuntimeReadout { readout: ProductDevRuntimeReadout },
+    Binding {
+        runtime: ProductDevRuntimeBinding,
+    },
+    CompleteBaseline {
+        runtime: ProductDevRuntimeBinding,
+    },
+    Frame {
+        frame: Value,
+    },
+    ViewComposition {
+        composition: Value,
+    },
+    Presentation {
+        frame: Value,
+    },
+    AnimationCueDefinitions {
+        definitions: Vec<ProductDevAnimationCueDefinition>,
+    },
+    UiProjection {
+        envelope: Value,
+    },
+    RuntimeReadout {
+        readout: ProductDevRuntimeReadout,
+    },
+}
+
+/// Closed renderer realization families for a sampled animation marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProductDevAnimationCueSignalDomain {
+    Audio,
+    Particle,
+}
+
+/// A copied animation cue declaration sent through the fixed renderer output
+/// stream. `at_seconds` is derived from an Engine-admitted millisecond marker,
+/// so it cannot borrow product memory or become non-finite in transit.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevAnimationCueDefinition {
+    pub cue_id: String,
+    pub asset: String,
+    pub clip: String,
+    pub at_seconds: f64,
+    pub signal_domain: ProductDevAnimationCueSignalDomain,
+    pub signal_id: String,
+}
+
+impl ProductDevAnimationCueDefinition {
+    pub const MAX_DEFINITIONS: usize = 128;
+    pub const MAX_TEXT_BYTES: usize = 96;
+
+    pub fn new(
+        cue_id: String,
+        asset: String,
+        clip: String,
+        marker_millis: u64,
+        signal_domain: ProductDevAnimationCueSignalDomain,
+        signal_id: String,
+    ) -> Result<Self, ProductDevHostError> {
+        for (field, value) in [
+            ("animation cue id", &cue_id),
+            ("animation cue asset", &asset),
+            ("animation cue clip", &clip),
+            ("animation cue signal id", &signal_id),
+        ] {
+            if value.is_empty() || value.len() > Self::MAX_TEXT_BYTES {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_ANIMATION_CUE",
+                    format!("{field} must be non-empty and no more than 96 UTF-8 bytes"),
+                ));
+            }
+        }
+        let at_seconds = marker_millis as f64 / 1_000.0;
+        debug_assert!(at_seconds.is_finite() && at_seconds >= 0.0);
+        Ok(Self {
+            cue_id,
+            asset,
+            clip,
+            at_seconds,
+            signal_domain,
+            signal_id,
+        })
+    }
 }
 
 impl ProductDevRuntimeOutput {
@@ -1034,6 +1111,51 @@ impl ProductDevRuntimeOutput {
         })?)?;
         Ok(Self {
             wire: ProductDevRuntimeOutputWire::Presentation { frame },
+        })
+    }
+    /// Replaces all active animation cue definitions in the generic renderer
+    /// host. This is a fixed typed output, not a product event stream.
+    pub fn animation_cue_definitions(
+        definitions: Vec<ProductDevAnimationCueDefinition>,
+    ) -> Result<Self, ProductDevHostError> {
+        if definitions.len() > ProductDevAnimationCueDefinition::MAX_DEFINITIONS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_ANIMATION_CUE",
+                "animation cue definition replacement exceeds the 128 definition bound",
+            ));
+        }
+        if definitions.iter().any(|definition| {
+            definition.cue_id.is_empty()
+                || definition.asset.is_empty()
+                || definition.clip.is_empty()
+                || definition.signal_id.is_empty()
+                || definition.cue_id.len() > ProductDevAnimationCueDefinition::MAX_TEXT_BYTES
+                || definition.asset.len() > ProductDevAnimationCueDefinition::MAX_TEXT_BYTES
+                || definition.clip.len() > ProductDevAnimationCueDefinition::MAX_TEXT_BYTES
+                || definition.signal_id.len() > ProductDevAnimationCueDefinition::MAX_TEXT_BYTES
+                || !definition.at_seconds.is_finite()
+                || definition.at_seconds < 0.0
+        }) {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_ANIMATION_CUE",
+                "animation cue definitions must use bounded non-empty text and finite non-negative markers",
+            ));
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        if definitions.iter().any(|definition| {
+            !keys.insert((
+                definition.asset.as_str(),
+                definition.clip.as_str(),
+                definition.cue_id.as_str(),
+            ))
+        }) {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_ANIMATION_CUE",
+                "animation cue definitions must not duplicate an asset, clip, and cue id",
+            ));
+        }
+        Ok(Self {
+            wire: ProductDevRuntimeOutputWire::AnimationCueDefinitions { definitions },
         })
     }
     pub fn ui_projection(

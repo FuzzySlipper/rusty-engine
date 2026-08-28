@@ -38,8 +38,8 @@ use crate::appearance::{
     read_presentation, replace_light, replace_material, replace_primitive_appearance,
     replace_sprite_appearance, replace_static_mesh_appearance,
     replace_static_mesh_from_content_appearance, update_light, update_material,
-    update_static_mesh_materials, CsharpRenderResource, RuntimeAppearanceBridge,
-    RuntimeAppearanceCall,
+    update_static_mesh_materials, AnimationCueDefinition, CsharpRenderResource,
+    RuntimeAppearanceBridge, RuntimeAppearanceCall,
 };
 
 fn engine_api(
@@ -253,6 +253,7 @@ pub struct CsharpEngineCallOutput {
 pub enum CsharpAppearanceCallOutput {
     Frame(render_model::RenderFrameDiff),
     Presentation(render_presentation::PresentationFrameDiff),
+    AnimationCueDefinitions(Vec<AnimationCueDefinition>),
 }
 
 /// Parsed optional appearance catalog retained with admitted product content.
@@ -431,6 +432,9 @@ impl EngineServiceSet {
                         crate::appearance::RuntimeAppearanceCallOutput::Presentation(frame) => {
                             CsharpAppearanceCallOutput::Presentation(frame)
                         }
+                        crate::appearance::RuntimeAppearanceCallOutput::AnimationCueDefinitions(
+                            definitions,
+                        ) => CsharpAppearanceCallOutput::AnimationCueDefinitions(definitions),
                     })
                     .collect::<Vec<_>>()
             })

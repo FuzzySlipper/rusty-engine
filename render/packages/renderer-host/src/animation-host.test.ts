@@ -167,15 +167,25 @@ void test('G1 controller sequence drives deterministic renderer-local blend and 
     assert.equal(projection.applyFrame(sceneFrame()).applied, true);
     const resource = ANIMATED_MANIFEST.resources[0];
     assert.ok(resource);
-    const host = new RendererAnimationHost(projection, {
-      cues: [{
-        cueId: 'locomotion.footfall',
-        asset: resource.asset,
-        clip: 'run',
-        atSeconds: 0.04,
-        signal: { domain: 'particle', id: 'locomotion.footfall.spark' },
-      }],
-    });
+    const host = new RendererAnimationHost(projection);
+    host.replaceCueDefinitions([
+      { cueId: 'd', asset: 'a:b', clip: 'c', atSeconds: 0, signal: { domain: 'audio', id: 'first' } },
+      { cueId: 'd', asset: 'a', clip: 'b:c', atSeconds: 0, signal: { domain: 'audio', id: 'second' } },
+    ]);
+    host.replaceCueDefinitions([{
+      cueId: 'locomotion.footfall',
+      asset: resource.asset,
+      clip: 'run',
+      atSeconds: 0.04,
+      signal: { domain: 'particle', id: 'locomotion.footfall.spark' },
+    }]);
+    assert.deepEqual(host.cueDefinitions(), [{
+      cueId: 'locomotion.footfall',
+      asset: resource.asset,
+      clip: 'run',
+      atSeconds: 0.04,
+      signal: { domain: 'particle', id: 'locomotion.footfall.spark' },
+    }]);
     assert.equal(host.applyPresentation(createFrame()).applied, 1);
     assert.deepEqual(projection.playback(renderHandle(4100)).controllerClips, [
       { clip: 'idle', weight: 1, speed: 1 },

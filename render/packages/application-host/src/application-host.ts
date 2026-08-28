@@ -10,6 +10,7 @@ import {
   type RendererSurface,
   type RendererSurfaceOptions,
   type RendererSurfaceResourceOptions,
+  type RendererAnimationClipCueDefinition,
 } from '@rusty-engine/renderer-host';
 import {
   RustyApplicationContentError,
@@ -59,6 +60,8 @@ export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
 export type RustyApplicationPresentationFrame = Readonly<Record<string, unknown>>;
 /** Typed Engine view composition, realized by the Engine renderer against its current surface. */
 export type RustyApplicationViewComposition = RendererViewComposition;
+/** A product-provided marker snapshot realized only by the Engine animation host. */
+export type RustyApplicationAnimationCueDefinition = RendererAnimationClipCueDefinition;
 
 export interface RustyApplicationCameraPose {
   readonly position: readonly [number, number, number];
@@ -478,6 +481,10 @@ export interface RustyApplicationRendererPort {
   readonly applyPresentation: (
     frame: RustyApplicationPresentationFrame,
   ) => Promise<RustyApplicationPresentationReceipt>;
+  /** Atomically replace marker definitions consumed by the existing animation host. */
+  readonly replaceAnimationCueDefinitions: (
+    definitions: readonly RustyApplicationAnimationCueDefinition[],
+  ) => RustyApplicationFrameReceipt;
   /** Read Engine-realized audio facts without exposing the browser audio owner. */
   readonly audioRealizedFacts: () => ReturnType<RendererSurface['audioRealizedFacts']>;
   readonly animationRealizedFacts: () => ReturnType<RendererSurface['animationRealizedFacts']>;
@@ -721,6 +728,7 @@ async function mountRustyApplicationWithEnvironment(
   let activeCanvas = layout.canvas;
   let activeContent: PreparedRustyApplicationContent | null = null;
   let activeAudio: RendererAudioHost | null = null;
+  let activeAnimation: RendererAnimationHost | null = null;
   let activeBillboard: RendererBillboardHost | null = null;
   let activeParticle: RendererParticleHost | null = null;
   let activeBillboardUrls = new Set<string>();
@@ -770,6 +778,7 @@ async function mountRustyApplicationWithEnvironment(
     content: PreparedRustyApplicationContent,
   ): Promise<{
     readonly audio: RendererAudioHost | null;
+    readonly animation: RendererAnimationHost;
     readonly billboard: RendererBillboardHost;
     readonly particle: RendererParticleHost;
     readonly billboardUrls: Set<string>;
@@ -854,6 +863,7 @@ async function mountRustyApplicationWithEnvironment(
       }));
       return {
         audio,
+        animation,
         billboard,
         billboardUrls: presentationUrls,
         particle,
@@ -878,6 +888,7 @@ async function mountRustyApplicationWithEnvironment(
     replacementQueue = replacementQueue.then(async () => {
       const oldSurface = surface;
       const oldAudio = activeAudio;
+      const oldAnimation = activeAnimation;
       const oldBillboard = activeBillboard;
       const oldParticle = activeParticle;
       const oldBillboardUrls = activeBillboardUrls;
@@ -901,6 +912,7 @@ async function mountRustyApplicationWithEnvironment(
         const mounted = await mountSurface(candidateCanvas, candidateContent);
         candidateSurface = mounted.surface;
         candidateAudio = mounted.audio;
+        mounted.animation.replaceCueDefinitions(oldAnimation?.cueDefinitions() ?? []);
         candidateBillboard = mounted.billboard;
         candidateParticle = mounted.particle;
         candidateBillboardUrls = mounted.billboardUrls;
@@ -923,6 +935,7 @@ async function mountRustyApplicationWithEnvironment(
         oldCanvas.replaceWith(candidateCanvas);
         surface = candidateSurface;
         activeAudio = candidateAudio;
+        activeAnimation = mounted.animation;
         activeBillboard = candidateBillboard;
         activeParticle = candidateParticle;
         activeBillboardUrls = candidateBillboardUrls;
@@ -1057,6 +1070,34 @@ async function mountRustyApplicationWithEnvironment(
           diagnostics: Object.freeze([Object.freeze({
             code: 'presentation_frame_rejected',
             domain: 'application',
+            message: cause instanceof Error ? cause.message : String(cause),
+          })]),
+        });
+      }
+    },
+    replaceAnimationCueDefinitions: (
+      definitions: readonly RustyApplicationAnimationCueDefinition[],
+    ) => {
+      if (replacementPending > 0) {
+        return Object.freeze({
+          applied: false,
+          diagnostics: Object.freeze([Object.freeze({
+            code: 'content_replacement_in_progress',
+            message: 'animation cue definitions are rejected while content replacement is pending',
+          })]),
+        });
+      }
+      try {
+        if (activeAnimation === null) {
+          throw new RustyApplicationHostError('disposed', 'Rusty Application animation host is unavailable');
+        }
+        activeAnimation.replaceCueDefinitions(definitions);
+        return Object.freeze({ applied: true, diagnostics: [] });
+      } catch (cause) {
+        return Object.freeze({
+          applied: false,
+          diagnostics: Object.freeze([Object.freeze({
+            code: 'animation_cue_definitions_rejected',
             message: cause instanceof Error ? cause.message : String(cause),
           })]),
         });
@@ -1199,6 +1240,7 @@ async function mountRustyApplicationWithEnvironment(
     const surfaceMount = await mountSurface(layout.canvas, initialContent);
     surface = surfaceMount.surface;
     activeAudio = surfaceMount.audio;
+    activeAnimation = surfaceMount.animation;
     activeBillboard = surfaceMount.billboard;
     activeParticle = surfaceMount.particle;
     activeBillboardUrls = surfaceMount.billboardUrls;
@@ -1327,6 +1369,7 @@ async function mountRustyApplicationWithEnvironment(
         input = null;
         surface = null;
         activeAudio = null;
+        activeAnimation = null;
         activeBillboard = null;
         activeParticle = null;
         activeBillboardUrls = new Set();

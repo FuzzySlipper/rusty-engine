@@ -26,7 +26,10 @@ mod voxel;
 mod voxel_content;
 mod world_origin;
 
-pub use appearance::{AnimationRealizationFact, CsharpRenderResource, CsharpRenderResourceKind};
+pub use appearance::{
+    AnimationCueDefinition, AnimationRealizationFact, CsharpRenderResource,
+    CsharpRenderResourceKind,
+};
 pub use audio::AudioRealizationFact;
 pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,

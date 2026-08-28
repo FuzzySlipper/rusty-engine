@@ -1,5 +1,6 @@
 import type {
   RustyApplicationFrame,
+  RustyApplicationAnimationCueDefinition,
   RustyApplicationControllerAxis,
   RustyApplicationControllerButton,
   RustyApplicationInputClearReason,
@@ -73,6 +74,8 @@ const UINT64_MAX_DECIMAL = '18446744073709551615';
 const MAXIMUM_INPUT_BATCH_LENGTH = 1_024;
 const MAXIMUM_AUDIO_FEEDBACK_FACTS = 128;
 const MAXIMUM_ANIMATION_FEEDBACK_FACTS = 128;
+const MAXIMUM_ANIMATION_CUE_DEFINITIONS = 128;
+const MAXIMUM_ANIMATION_CUE_TEXT_BYTES = 96;
 const MAXIMUM_JSON_DEPTH = 64;
 const MAXIMUM_JSON_ARRAY_LENGTH = 1_024;
 const MAXIMUM_JSON_OBJECT_KEYS = 256;
@@ -1359,6 +1362,9 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
     case 'view-composition':
       requireKnownFields(record, ['kind', 'composition'], 'view composition output');
       return { kind: 'view-composition', composition: decodeViewComposition(record.composition) };
+    case 'animation-cue-definitions':
+      requireKnownFields(record, ['kind', 'definitions'], 'animation cue definitions output');
+      return { kind: 'animation-cue-definitions', definitions: decodeAnimationCueDefinitions(record['definitions']) };
     case 'presentation':
       requireKnownFields(record, ['kind', 'frame'], 'presentation output');
       return { kind: 'presentation', frame: decodeFrame(record.frame, 'presentation') };
@@ -1371,6 +1377,65 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
     default:
       throw new TypeError('runtime output kind is not admitted');
   }
+}
+
+function decodeAnimationCueDefinitions(
+  value: unknown,
+): readonly RustyApplicationAnimationCueDefinition[] {
+  const values = requirePlainArray(value, 'animation cue definitions');
+  if (values.length > MAXIMUM_ANIMATION_CUE_DEFINITIONS) {
+    throw new TypeError('animation cue definition replacement exceeds 128 definitions');
+  }
+  const keys = new Set<string>();
+  return Object.freeze(values.map((value) => {
+    const record = requireRecord(value, 'animation cue definition');
+    requireKnownFields(
+      record,
+      ['cueId', 'asset', 'clip', 'atSeconds', 'signalDomain', 'signalId'],
+      'animation cue definition',
+    );
+    const cueId = requireBoundedString(
+      record['cueId'],
+      'animation cue id',
+      MAXIMUM_ANIMATION_CUE_TEXT_BYTES,
+    );
+    const asset = requireBoundedString(
+      record['asset'],
+      'animation cue asset',
+      MAXIMUM_ANIMATION_CUE_TEXT_BYTES,
+    );
+    const clip = requireBoundedString(
+      record['clip'],
+      'animation cue clip',
+      MAXIMUM_ANIMATION_CUE_TEXT_BYTES,
+    );
+    const signalId = requireBoundedString(
+      record['signalId'],
+      'animation cue signal id',
+      MAXIMUM_ANIMATION_CUE_TEXT_BYTES,
+    );
+    const signalDomain = requireCatalogValue<'audio' | 'particle'>(
+      record['signalDomain'],
+      'animation cue signal domain',
+      new Set(['audio', 'particle']),
+    );
+    const atSeconds = requireFiniteNumber(
+      record['atSeconds'],
+      'animation cue marker',
+      0,
+      Number.MAX_VALUE,
+    );
+    const key = JSON.stringify([asset, clip, cueId]);
+    if (keys.has(key)) throw new TypeError(`duplicate animation cue definition ${key}`);
+    keys.add(key);
+    return Object.freeze({
+      cueId,
+      asset,
+      clip,
+      atSeconds,
+      signal: Object.freeze({ domain: signalDomain, id: signalId }),
+    });
+  }));
 }
 
 function decodeViewComposition(value: unknown): RendererViewComposition {

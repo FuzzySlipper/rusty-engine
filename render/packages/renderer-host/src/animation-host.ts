@@ -134,7 +134,7 @@ interface AnimationWeightInterpolation {
 
 export class RendererAnimationHost {
   readonly #projection: RendererAnimatedMeshProjection;
-  readonly #cues: readonly RendererAnimationClipCueDefinition[];
+  #cues: readonly RendererAnimationClipCueDefinition[];
   readonly #controllers = new Map<AnimationProjectionHandle, AnimationControllerRealization>();
   readonly #diagnostics: AnimationProjectionDiagnostic[] = [];
   readonly #realizedFacts: RendererAnimationRealizedFact[] = [];
@@ -153,6 +153,26 @@ export class RendererAnimationHost {
     this.#projection = projection;
     this.#cues = validateCueDefinitions(options.cues ?? []);
     this.#maxRetainedFacts = 128;
+  }
+
+  /**
+   * Atomically replaces the Engine-owned cue definition snapshot. Sampling
+   * stays in this host; products never receive a renderer callback or event
+   * dispatch surface.
+   */
+  replaceCueDefinitions(definitions: readonly RendererAnimationClipCueDefinition[]): void {
+    this.#cues = validateCueDefinitions(definitions);
+    for (const realization of this.#controllers.values()) {
+      realization.emittedCueKeys.clear();
+    }
+  }
+
+  /** Snapshot for an Engine surface replacement; callers receive no mutable host state. */
+  cueDefinitions(): readonly RendererAnimationClipCueDefinition[] {
+    return this.#cues.map((definition) => Object.freeze({
+      ...definition,
+      signal: Object.freeze({ ...definition.signal }),
+    }));
   }
 
   applyPresentation(frame: PresentationFrameDiff): RendererAnimationFrameReceipt {
@@ -538,7 +558,7 @@ function sampleAnimationCues(
 }
 
 function animationCueKey(definition: RendererAnimationClipCueDefinition): string {
-  return `${definition.asset}:${definition.clip}:${definition.cueId}`;
+  return JSON.stringify([definition.asset, definition.clip, definition.cueId]);
 }
 
 function isMonotonicSameRevisionUpdate(

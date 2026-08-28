@@ -1,6 +1,7 @@
 import {
   mountRustyApplication,
   type RustyApplicationFrame,
+  type RustyApplicationAnimationCueDefinition,
   type RustyApplicationHost,
   type RustyApplicationHostReadout,
   type RustyApplicationPresentationFrame,
@@ -177,6 +178,10 @@ export type ProductBrowserRuntimeOutput =
   | { readonly kind: 'runtime-progress'; readonly owner: 'rust-host' }
   | { readonly kind: 'frame'; readonly frame: RustyApplicationFrame }
   | { readonly kind: 'view-composition'; readonly composition: RustyApplicationViewComposition }
+  | {
+      readonly kind: 'animation-cue-definitions';
+      readonly definitions: readonly RustyApplicationAnimationCueDefinition[];
+    }
   | {
       readonly kind: 'presentation';
       readonly frame: RustyApplicationPresentationFrame;
@@ -746,6 +751,19 @@ export async function mountProductBrowserHost(
               throw new ProductBrowserHostError(
                 'output_failed',
                 receipt.diagnostics.map((item) => item.message).join('; ') || 'view composition was rejected',
+              );
+            }
+          });
+          return;
+        }
+        case 'animation-cue-definitions': {
+          enqueueRendererOutput(() => {
+            const receipt = host.renderer.replaceAnimationCueDefinitions(output.definitions);
+            if (!receipt.applied) {
+              throw new ProductBrowserHostError(
+                'output_failed',
+                receipt.diagnostics.map((item) => item.message).join('; ')
+                  || 'animation cue definitions were rejected',
               );
             }
           });

@@ -44,6 +44,7 @@ export type {
 } from './developer-command-shell.js';
 export type {
   RustyApplicationAudioResumeReceipt,
+  RustyApplicationAnimationCueDefinition,
   RustyApplicationCameraPose,
   RustyApplicationFrame,
   RustyApplicationFrameDiagnostic,

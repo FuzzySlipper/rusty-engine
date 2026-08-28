@@ -50,6 +50,15 @@ pub enum NativeAnimationPlaybackKind {
     Resume = 5,
 }
 
+/// Closed renderer realization families that an animation marker may signal.
+/// This is intentionally not an extensible product event vocabulary.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAnimationCueSignalDomain {
+    Audio = 1,
+    Particle = 2,
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAnimationParameterKind {
@@ -239,6 +248,29 @@ pub struct NativeAnimatedMeshMaterialUpdateRequest {
 pub struct NativeAnimationInstanceRequest {
     pub appearance: NativeAppearanceHandle,
     pub object_id: u64,
+}
+
+/// One copied marker declaration for the Engine-owned animation host. The
+/// product supplies presentation facts only; renderer sampling and realized
+/// feedback remain owned by the existing animation host.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationCueDefinition {
+    pub cue_id: NativeUtf8Slice,
+    pub asset: NativeUtf8Slice,
+    pub clip: NativeUtf8Slice,
+    pub marker_millis: u64,
+    pub signal_domain: NativeAnimationCueSignalDomain,
+    pub signal_id: NativeUtf8Slice,
+}
+
+/// Replaces the complete current cue definition snapshot. The Engine copies
+/// all bounded text before this call returns, so no product memory is retained.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationCueDefinitionReplaceRequest {
+    pub definitions: *const NativeAnimationCueDefinition,
+    pub definitions_len: usize,
 }
 
 /// Direct playback command for one retained animation instance. `Sample`
