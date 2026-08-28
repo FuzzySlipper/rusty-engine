@@ -12,6 +12,7 @@ use entity_state::Quat;
 use crate::{
     audio::{RuntimeAudioBridge, RuntimeAudioCall},
     camera_view::RuntimeCameraViewBridge,
+    content::RuntimeContentBridge,
     dynamics::RuntimeDynamicsBridge,
     mechanics::RuntimeMechanicsBridge,
     persistence::RuntimePersistenceBridge,
@@ -39,6 +40,7 @@ use crate::appearance::{
 
 fn engine_api(
     appearance_bridge: &mut RuntimeAppearanceBridge,
+    content_bridge: &mut RuntimeContentBridge,
     audio_bridge: &mut RuntimeAudioBridge,
     camera_view_bridge: &mut RuntimeCameraViewBridge,
     dynamics_bridge: &mut RuntimeDynamicsBridge,
@@ -58,6 +60,7 @@ fn engine_api(
         spatial: crate::spatial::api(spatial_bridge),
         voxel: crate::voxel::api(spatial_bridge),
         voxel_content: crate::voxel_content::api(voxel_content_bridge, appearance_bridge),
+        content: crate::content::api(content_bridge),
         appearance: NativeAppearanceApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
@@ -173,6 +176,7 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 /// Engine-facing effects created through the generated function tables.
 pub struct EngineServiceSet {
     appearance: RuntimeAppearanceBridge,
+    content: RuntimeContentBridge,
     audio: RuntimeAudioBridge,
     camera_view: RuntimeCameraViewBridge,
     dynamics: RuntimeDynamicsBridge,
@@ -219,6 +223,7 @@ impl EngineServiceSet {
         let dynamics = crate::dynamics::RuntimeDynamicsBridge::new(spatial.collision_source());
         Self {
             appearance: crate::appearance::create(catalog.0, content_resources.clone()),
+            content: RuntimeContentBridge::new(content_resources.clone()),
             audio: RuntimeAudioBridge::new(content_resources),
             camera_view: RuntimeCameraViewBridge::new(),
             dynamics,
@@ -237,6 +242,7 @@ impl EngineServiceSet {
     pub fn api(&mut self) -> NativeEngineApi {
         engine_api(
             &mut self.appearance,
+            &mut self.content,
             &mut self.audio,
             &mut self.camera_view,
             &mut self.dynamics,

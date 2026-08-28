@@ -91,11 +91,16 @@ sealed class ExampleEngineContext : IEngineContext
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public ISpatialService Spatial => throw new NotSupportedException();
     public IVoxelService Voxel => throw new NotSupportedException();
+    public IVoxelContentService VoxelContent => throw new NotSupportedException();
+    public IContentService Content => throw new NotSupportedException();
     public IAppearanceService Appearance => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public IMechanicsService Mechanics => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();
     public IPersistenceService Persistence => throw new NotSupportedException();
+    public IRulesService Rules => throw new NotSupportedException();
+    public IStandardExactService StandardExact => throw new NotSupportedException();
+    public IStandardContinuousService StandardContinuous => throw new NotSupportedException();
     public IUiService Ui => throw new NotSupportedException();
 }

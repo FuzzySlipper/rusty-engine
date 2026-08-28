@@ -118,6 +118,21 @@ public sealed class Product : IEngineProduct
             Require(_engine.Persistence.ReadBlobBytes(loaded).Span.SequenceEqual(leasePayload),
                 "native byte lease did not copy and release its payload");
         }
+        using (ContentReference opened = _engine.Content.OpenReference(new ContentOpenRequest("trial.txt")))
+        {
+            ContentReferenceInfo reference = _engine.Content.ReadReferenceInfo(opened).Span[0];
+            Require(reference.Path == "trial.txt" && reference.ByteLength == 27,
+                "content reference did not report the admitted path and byte length");
+            Require(_engine.Content.ReadBytes(new ContentReadBytesRequest(opened, 0, 7)).Span.SequenceEqual("trusted"u8),
+                "content byte lease did not return the requested bounded range");
+            using ContentReference reopened = _engine.Content.ResolveReference(
+                new ContentResolveRequest(reference.Path, reference.Sha256));
+            Require(_engine.Content.ReadBytes(new ContentReadBytesRequest(reopened, 8, 2)).Span.SequenceEqual("C#"u8),
+                "content path plus SHA-256 did not reopen the exact admitted resource");
+            ExpectEngineFailure(() => _engine.Content.ResolveReference(new ContentResolveRequest(
+                reference.Path,
+                reference.Sha256 with { Word3 = reference.Sha256.Word3 ^ 1 })));
+        }
         using (RulesPackage rulesPackage = _engine.Rules.AdmitPackage(new RulesPackageAdmitRequest(
             """
             {"kind":"rusty.gameplay-rules.package","schemaVersion":1,"domain":"fixture","package":"nativeaot","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":{"machines":[{"output":10}]}}

@@ -1023,6 +1023,19 @@ pub struct NativeAppearanceApi {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeContentApi {
+    pub context: *mut c_void,
+    pub open_reference: NativeOpenContentReference,
+    pub resolve_reference: NativeResolveContentReference,
+    pub destroy_reference: NativeDestroyContentReference,
+    pub read_reference_info: NativeReadContentReferenceInfo,
+    pub destroy_reference_info_lease: NativeDestroyContentReferenceInfoLease,
+    pub read_bytes: NativeReadContentBytes,
+    pub destroy_byte_lease: NativeDestroyContentByteLease,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationApi {
     pub context: *mut c_void,
     pub open_animated_mesh: NativeOpenAnimatedMesh,
@@ -1250,6 +1263,7 @@ pub struct NativeEngineApi {
     pub spatial: NativeSpatialApi,
     pub voxel: NativeVoxelApi,
     pub voxel_content: NativeVoxelContentApi,
+    pub content: NativeContentApi,
     pub appearance: NativeAppearanceApi,
     pub animation: NativeAnimationApi,
     pub audio: NativeAudioApi,
