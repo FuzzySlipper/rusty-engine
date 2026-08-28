@@ -125,6 +125,7 @@ pub enum NativeRenderResourceKind {
     #[default]
     Texture = 1,
     StaticMesh = 2,
+    Font = 3,
 }
 
 #[repr(u32)]

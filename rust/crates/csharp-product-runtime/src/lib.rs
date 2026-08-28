@@ -2476,6 +2476,9 @@ fn admit_renderer_resource(
         CsharpRenderResourceKind::Mesh => {
             ProductDevRendererResource::admit_mesh(resource.path(), resource.bytes().to_vec())
         }
+        CsharpRenderResourceKind::Font => {
+            ProductDevRendererResource::admit_font(resource.path(), resource.bytes().to_vec())
+        }
         CsharpRenderResourceKind::Audio => {
             ProductDevRendererResource::admit_audio(resource.path(), resource.bytes().to_vec())
         }

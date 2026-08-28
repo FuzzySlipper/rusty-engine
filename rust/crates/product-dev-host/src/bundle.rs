@@ -31,6 +31,7 @@ pub struct ProductDevRendererResource {
 pub enum ProductDevRendererResourceKind {
     Texture,
     Mesh,
+    Font,
     Audio,
     AnimatedMesh,
 }
@@ -136,6 +137,39 @@ impl ProductDevRendererResource {
         })
     }
 
+    /// An immutable WOFF2 body selected by the Engine presentation service.
+    /// It is served through the normal Engine preload bundle; products never
+    /// obtain a browser-side resource loader from this admission.
+    pub fn admit_font(
+        path: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Result<Self, ProductDevHostError> {
+        use sha2::{Digest, Sha256};
+
+        let path = renderer_path(path.into(), ".woff2")?;
+        if bytes.len() < 4 || bytes.get(..4) != Some(b"wOF2") {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RENDERER_FONT",
+                "font resource is not an admitted WOFF2 body",
+            ));
+        }
+        ProductDevBundleEntry::new(path.clone(), "font/woff2", bytes.clone())?;
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let identity = format!(
+            "font/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: ProductDevRendererResourceKind::Font,
+            identity,
+            content_hash,
+            path,
+            bytes,
+        })
+    }
+
     /// The C# animation bridge has already admitted and inspected this exact
     /// immutable GLB. The dev host retains it as a separately typed preload so
     /// the browser can only realize it through the Engine animated-mesh host.
@@ -193,6 +227,7 @@ impl ProductDevRendererResource {
         match self.kind {
             ProductDevRendererResourceKind::Texture => "image/png",
             ProductDevRendererResourceKind::Mesh => "application/octet-stream",
+            ProductDevRendererResourceKind::Font => "font/woff2",
             ProductDevRendererResourceKind::Audio => "audio/wav",
             ProductDevRendererResourceKind::AnimatedMesh => "model/gltf-binary",
         }
@@ -416,6 +451,7 @@ fn is_allowed_content_type(value: &str) -> bool {
             | "image/svg+xml"
             | "image/png"
             | "image/jpeg"
+            | "font/woff2"
             | "audio/wav"
             | "model/gltf-binary"
             | "application/octet-stream"
@@ -456,6 +492,23 @@ mod tests {
         .expect("packed mesh content type is an admitted immutable bundle resource");
         assert_eq!(entry.path(), "content/renderer/packed.rmesh");
         assert_eq!(entry.content_type(), "application/octet-stream");
+    }
+
+    #[test]
+    fn admits_woff2_font_through_the_typed_renderer_preload_bundle() {
+        let font = ProductDevRendererResource::admit_font(
+            "content/fonts/ui.woff2",
+            b"wOF2font-body".to_vec(),
+        )
+        .expect("WOFF2 font resource");
+        let entries =
+            product_dev_renderer_preload_entries(&[font.clone()]).expect("font preload entries");
+        let body = entries
+            .iter()
+            .find(|entry| entry.path() == font.path())
+            .expect("font body");
+        assert_eq!(body.content_type(), "font/woff2");
+        assert_eq!(body.bytes(), b"wOF2font-body");
     }
 
     #[test]

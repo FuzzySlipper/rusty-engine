@@ -708,6 +708,7 @@ include = [
     "NativePresentationAnchor",
     "NativeBillboardContentKind",
     "NativePresentationBillboardLayer",
+    "NativePresentationFontKind",
     "NativePresentationBillboardDescriptor",
     "NativePresentationParticleVisual",
     "NativePresentationParticleScalarKey",

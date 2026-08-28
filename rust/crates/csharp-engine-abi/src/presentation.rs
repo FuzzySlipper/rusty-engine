@@ -50,9 +50,16 @@ pub enum NativePresentationBillboardLayer {
     Occluded = 3,
 }
 
-/// A complete replacement descriptor for one ordinary world indicator. Font
-/// assets are deliberately absent: the current selected-render-resource lane
-/// admits textures, while the Engine projection supports named system fonts.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationFontKind {
+    System = 1,
+    Asset = 2,
+}
+
+/// A complete replacement descriptor for one ordinary world indicator. Asset
+/// fonts name an already admitted Engine resource; raw asset paths and hashes
+/// never cross the product ABI.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePresentationBillboardDescriptor {
@@ -65,6 +72,8 @@ pub struct NativePresentationBillboardDescriptor {
     pub unit_key: NativeUtf8Slice,
     pub fallback_unit: NativeUtf8Slice,
     pub texture: NativeRenderResourceHandle,
+    pub font_kind: NativePresentationFontKind,
+    pub font_asset: NativeRenderResourceHandle,
     pub font_family: NativeUtf8Slice,
     pub height_pixels: f32,
     pub color: NativeColor,

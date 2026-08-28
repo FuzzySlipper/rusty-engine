@@ -47,6 +47,7 @@ pub struct CsharpRenderResource {
 pub enum CsharpRenderResourceKind {
     Texture,
     Mesh,
+    Font,
     Audio,
     AnimatedMesh,
 }
@@ -107,6 +108,34 @@ impl CsharpRenderResource {
         admit_bundle_resource(&path, &bytes)?;
         Ok(Self {
             kind: CsharpRenderResourceKind::Mesh,
+            identity,
+            content_hash,
+            path,
+            bytes,
+            animated_mesh: None,
+        })
+    }
+
+    fn admit_font(path: String, bytes: Vec<u8>) -> Result<Self, CsharpEngineServicesError> {
+        use sha2::{Digest, Sha256};
+
+        let path = renderer_path(path, ".woff2")?;
+        if bytes.len() < 4 || bytes.get(..4) != Some(b"wOF2") {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_FONT",
+                "font resource is not an admitted WOFF2 body",
+            ));
+        }
+        admit_bundle_resource(&path, &bytes)?;
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let identity = format!(
+            "font/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("SHA-256 prefix")
+        );
+        Ok(Self {
+            kind: CsharpRenderResourceKind::Font,
             identity,
             content_hash,
             path,
@@ -798,9 +827,11 @@ impl RuntimeAppearanceBridge {
         Ok(BillboardDescriptor {
             anchor: native_presentation_billboard_anchor(request.anchor),
             content,
-            font: BillboardFontRef::System {
-                family: native_presentation_text(request.font_family, "billboard system font")?,
-            },
+            font: self.presentation_font_ref(
+                request.font_kind,
+                request.font_asset,
+                request.font_family,
+            )?,
             height_pixels: request.height_pixels,
             color: native_color(request.color),
             background: native_color(request.background),
@@ -889,6 +920,32 @@ impl RuntimeAppearanceBridge {
             asset: resource.identity().to_owned(),
             content_hash: resource.content_hash().to_owned(),
         })
+    }
+
+    fn presentation_font_ref(
+        &self,
+        kind: NativePresentationFontKind,
+        asset: NativeRenderResourceHandle,
+        family: NativeUtf8Slice,
+    ) -> Result<BillboardFontRef, CsharpEngineServicesError> {
+        let family = native_presentation_text(family, "billboard font family")?;
+        match kind {
+            NativePresentationFontKind::System => Ok(BillboardFontRef::System { family }),
+            NativePresentationFontKind::Asset => {
+                let resource = self.resource(asset.value)?;
+                if resource.kind() != CsharpRenderResourceKind::Font {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_PRESENTATION_FONT",
+                        "asset billboard font requires an admitted WOFF2 font resource",
+                    ));
+                }
+                Ok(BillboardFontRef::Asset {
+                    asset: resource.identity().to_owned(),
+                    content_hash: resource.content_hash().to_owned(),
+                    family,
+                })
+            }
+        }
     }
 
     fn stage_billboard(
@@ -1009,11 +1066,14 @@ impl RuntimeAppearanceBridge {
             _ if relative_path.ends_with(".rmesh") => {
                 CsharpRenderResource::admit_mesh(browser_path.clone(), bytes.to_vec())
             }
+            _ if relative_path.ends_with(".woff2") => {
+                CsharpRenderResource::admit_font(browser_path.clone(), bytes.to_vec())
+            }
             _ => {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_RENDER_RESOURCE_KIND",
                     format!(
-                        "renderer resource `{requested_path}` must be an RGBA PNG or packed .rmesh file"
+                        "renderer resource `{requested_path}` must be an RGBA PNG, packed .rmesh, or WOFF2 file"
                     ),
                 ))
             }
@@ -1072,6 +1132,7 @@ impl RuntimeAppearanceBridge {
             kind: match resource.kind() {
                 CsharpRenderResourceKind::Texture => NativeRenderResourceKind::Texture,
                 CsharpRenderResourceKind::Mesh => NativeRenderResourceKind::StaticMesh,
+                CsharpRenderResourceKind::Font => NativeRenderResourceKind::Font,
                 CsharpRenderResourceKind::Audio => {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_RENDER_RESOURCE_KIND",
@@ -3169,13 +3230,22 @@ fn presentation_assets(
 ) -> BTreeMap<String, ResolvedRenderAsset> {
     resources
         .iter()
-        .filter(|resource| resource.kind() == CsharpRenderResourceKind::Texture)
+        .filter(|resource| {
+            matches!(
+                resource.kind(),
+                CsharpRenderResourceKind::Texture | CsharpRenderResourceKind::Font
+            )
+        })
         .map(|resource| {
             (
                 resource.identity().to_owned(),
                 ResolvedRenderAsset {
                     id: resource.identity().to_owned(),
-                    kind: RenderAssetKind::Texture,
+                    kind: match resource.kind() {
+                        CsharpRenderResourceKind::Texture => RenderAssetKind::Texture,
+                        CsharpRenderResourceKind::Font => RenderAssetKind::Font,
+                        _ => unreachable!("presentation assets only include textures and fonts"),
+                    },
                     content_hash: Some(resource.content_hash().to_owned()),
                     version: 0,
                 },
@@ -4908,6 +4978,8 @@ mod tests {
                 unit_key: empty,
                 fallback_unit: empty,
                 texture: NativeRenderResourceHandle::default(),
+                font_kind: NativePresentationFontKind::System,
+                font_asset: NativeRenderResourceHandle::default(),
                 font_family: slice(font),
                 height_pixels: 16.0,
                 color,
@@ -4969,6 +5041,8 @@ mod tests {
                     unit_key: empty,
                     fallback_unit: empty,
                     texture: NativeRenderResourceHandle::default(),
+                    font_kind: NativePresentationFontKind::System,
+                    font_asset: NativeRenderResourceHandle::default(),
                     font_family: slice(font),
                     height_pixels: 18.0,
                     color,
@@ -5052,6 +5126,8 @@ mod tests {
             unit_key: empty,
             fallback_unit: empty,
             texture: NativeRenderResourceHandle::default(),
+            font_kind: NativePresentationFontKind::System,
+            font_asset: NativeRenderResourceHandle::default(),
             font_family: slice(font),
             height_pixels: 16.0,
             color: NativeColor {
@@ -5088,5 +5164,70 @@ mod tests {
         );
         assert!(bridge.take_staged_call().is_err());
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
+    }
+
+    #[test]
+    fn admitted_woff2_font_is_resolved_by_asset_billboard_without_raw_asset_strings() {
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert("ui.woff2".to_owned(), Arc::from(&b"wOF2font-body"[..]));
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let key = b"status";
+        let text = b"Ready";
+        let family = b"Ui Font";
+        let empty = NativeUtf8Slice {
+            bytes: std::ptr::null(),
+            len: 0,
+        };
+        let slice = |value: &[u8]| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        bridge.begin_call();
+        let font = bridge
+            .open_resource(&resource_request("ui.woff2"))
+            .expect("admitted font");
+        assert_eq!(font.kind, NativeRenderResourceKind::Font);
+        bridge
+            .presentation_create_billboard(&NativePresentationBillboardDescriptor {
+                logical_id: 11,
+                anchor: NativePresentationAnchor {
+                    kind: NativePresentationAnchorKind::World,
+                    position: NativeVec3::default(),
+                    entity: 0,
+                    offset: NativeVec3::default(),
+                },
+                content_kind: NativeBillboardContentKind::Text,
+                localization_key: slice(key),
+                fallback_text: slice(text),
+                value: empty,
+                unit_key: empty,
+                fallback_unit: empty,
+                texture: NativeRenderResourceHandle::default(),
+                font_kind: NativePresentationFontKind::Asset,
+                font_asset: font.handle,
+                font_family: slice(family),
+                height_pixels: 16.0,
+                color: NativeColor {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                background: NativeColor::default(),
+                max_distance: 100.0,
+                layer: NativePresentationBillboardLayer::AlwaysOnTop,
+                visible: true,
+            })
+            .expect("asset-font billboard");
+        let call = bridge
+            .take_staged_call()
+            .expect("font call")
+            .expect("appearance call");
+        assert!(matches!(
+            &call.presentation[0].ops[0],
+            render_presentation::PresentationOp::Billboard { op: BillboardProjectionOp::Create { descriptor: BillboardDescriptor { font: BillboardFontRef::Asset { family: resolved_family, .. }, .. }, .. }, .. }
+                if resolved_family == "Ui Font"
+        ));
     }
 }
