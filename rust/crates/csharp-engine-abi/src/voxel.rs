@@ -1,4 +1,4 @@
-use crate::NativeSpatialSessionHandle;
+use crate::{NativeByteLease, NativeByteLeaseHandle, NativeByteSlice, NativeSpatialSessionHandle};
 use std::ffi::c_void;
 
 /// One signed voxel address in the session's canonical world grid.
@@ -338,6 +338,38 @@ pub struct NativeVoxelHistoryReceipt {
     pub changed_max_inclusive: NativeVoxelAddress,
 }
 
+/// Fixed facts of the Engine-owned voxel history document codec. Product code
+/// uses this readout to persist the exact owner schema rather than carrying a
+/// duplicate schema literal.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelHistoryCodecInfo {
+    pub schema_version: u32,
+    pub max_encoded_bytes: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelHistoryExportRequest {
+    pub session: NativeSpatialSessionHandle,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelHistoryRestoreRequest {
+    pub session: NativeSpatialSessionHandle,
+    /// Borrowed for this direct call only. Engine decodes and validates the
+    /// entire bounded document before replacing any live session state.
+    pub payload: NativeByteSlice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelHistoryRestoreReceipt {
+    pub cursor: NativeVoxelHistoryCursorReadout,
+    pub source_revision: u64,
+}
+
 pub type NativeReadVoxelScene = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelSceneReadRequest,
@@ -409,6 +441,17 @@ pub type NativeRedoVoxel = unsafe extern "C" fn(
     NativeVoxelHistoryActionRequest,
     *mut NativeVoxelHistoryReceipt,
 ) -> i32;
+pub type NativeReadVoxelHistoryCodecInfo =
+    unsafe extern "C" fn(*mut c_void, *mut NativeVoxelHistoryCodecInfo) -> i32;
+pub type NativeExportVoxelHistory =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelHistoryExportRequest, *mut NativeByteLease) -> i32;
+pub type NativeDestroyVoxelHistoryExportLease =
+    unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;
+pub type NativeRestoreVoxelHistory = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeVoxelHistoryRestoreRequest,
+    *mut NativeVoxelHistoryRestoreReceipt,
+) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -430,4 +473,8 @@ pub struct NativeVoxelApi {
     pub read_history_delta_at: NativeReadVoxelHistoryDeltaAt,
     pub undo: NativeUndoVoxel,
     pub redo: NativeRedoVoxel,
+    pub read_history_codec_info: NativeReadVoxelHistoryCodecInfo,
+    pub export_history: NativeExportVoxelHistory,
+    pub destroy_history_export_lease: NativeDestroyVoxelHistoryExportLease,
+    pub restore_history: NativeRestoreVoxelHistory,
 }

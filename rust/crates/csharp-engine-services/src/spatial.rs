@@ -38,8 +38,10 @@ const MAX_SPATIAL_QUERY_IGNORED_ENTITIES: usize = engine_spatial::MAX_OCCLUSION_
 /// live here: a character proposal builds its EntityState only for the call.
 pub(crate) struct RuntimeSpatialBridge {
     sessions: BTreeMap<u64, SpatialSession>,
+    pub(crate) voxel_history_exports: BTreeMap<u64, Arc<[u8]>>,
     collision_source: SpatialCollisionSource,
     next_session: u64,
+    pub(crate) next_voxel_history_export: u64,
 }
 
 pub(crate) struct SpatialSession {
@@ -135,8 +137,10 @@ impl RuntimeSpatialBridge {
     pub(crate) fn new() -> Self {
         Self {
             sessions: BTreeMap::new(),
+            voxel_history_exports: BTreeMap::new(),
             collision_source: SpatialCollisionSource::new(),
             next_session: 1,
+            next_voxel_history_export: 1,
         }
     }
 

@@ -48,6 +48,38 @@ pub struct VoxelEditHistoryRestore {
     pub scene: VoxelCollisionScene,
 }
 
+impl VoxelEditHistoryRestore {
+    /// Rebuild the decoded voxel history at its persisted cursor while retaining
+    /// the live scene's runtime-owned spatial context. History documents own
+    /// voxel authority only; static collision and world-origin rebasing remain
+    /// active Spatial mechanisms and must not be reset by a voxel restore.
+    pub fn scene_preserving_runtime_context(
+        &self,
+        live_scene: &VoxelCollisionScene,
+    ) -> Result<VoxelCollisionScene, VoxelEditHistoryCodecError> {
+        let materials = self
+            .history
+            .materials_at_cursor(self.history.cursor_index)
+            .map_err(VoxelEditHistoryCodecError::History)?;
+        let mut scene = VoxelCollisionScene::from_material_voxels_at_revision_with_residents(
+            self.history.base_voxel_size,
+            self.history.base_chunk_size,
+            material_voxels(&materials),
+            self.history.base_resident_chunks.iter().copied(),
+            crate::SceneBuildRevision {
+                source: self.history.source_revision,
+                world_origin: live_scene.world_origin,
+                rebase: live_scene.rebase_revision,
+            },
+            self.history.base_mesh_options,
+            None,
+        )
+        .map_err(VoxelEditHistoryCodecError::Scene)?;
+        scene.preserve_static_mesh_projection_from(live_scene);
+        Ok(scene)
+    }
+}
+
 #[derive(Debug)]
 pub enum VoxelEditHistoryCodecError {
     ResourceLimit {

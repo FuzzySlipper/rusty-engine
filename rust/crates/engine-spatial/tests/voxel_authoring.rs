@@ -1,5 +1,5 @@
 use core_math::Vec3;
-use core_space::Face;
+use core_space::{Face, WorldOrigin};
 use engine_spatial::{
     decode_voxel_edit_history, encode_voxel_edit_history, MaterialVoxel, StaticMeshAssetId,
     StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
@@ -8,10 +8,10 @@ use engine_spatial::{
     VoxelEditHistoryLimits, VoxelEditService, VoxelEditTransaction, VoxelPickError, VoxelPickHint,
     VoxelPickService, VoxelPrimitive, VoxelPrimitiveEditService, VoxelPrimitiveError,
     VoxelPrimitiveMaterial, VoxelPrimitiveRequest, VoxelTemplate, VoxelTemplateEditService,
-    VoxelTemplateError, VoxelTemplateRequest, MAX_VOXEL_EDITS_PER_TRANSACTION,
-    VOXEL_HOUSE_TEMPLATE_BOUNDS,
+    VoxelTemplateError, VoxelTemplateRequest, WorldOriginRebaseRequest, WorldOriginRebaseService,
+    WorldOriginState, MAX_VOXEL_EDITS_PER_TRANSACTION, VOXEL_HOUSE_TEMPLATE_BOUNDS,
 };
-use entity_state::{EntityTransform, Quat};
+use entity_state::{EntityState, EntityTransform, Quat};
 
 #[test]
 fn house_template_is_deterministic_bounded_and_preserves_openings() {
@@ -297,6 +297,58 @@ fn history_codec_preserves_redo_tail_and_rejects_corruption() {
         error,
         VoxelEditHistoryCodecError::InvalidContentHash
     ));
+}
+
+#[test]
+fn history_restore_keeps_live_static_collision_and_rebase_context() {
+    let mut scene = scene();
+    let mut history = VoxelEditHistory::new(&scene);
+    history
+        .apply(
+            &mut scene,
+            &[VoxelEdit::Set {
+                address: [4, 0, 0],
+                material_slot: 2,
+            }],
+        )
+        .unwrap();
+    let encoded = encode_voxel_edit_history(&history).unwrap();
+    let restored = decode_voxel_edit_history(&encoded, VoxelEditHistoryLimits::default()).unwrap();
+
+    install_static_mesh(&mut scene);
+    let static_revision = scene.static_mesh_collision_revision();
+    let static_assets = scene.projection_static_mesh_asset_count();
+    let static_instances = scene.projection_static_mesh_instance_count();
+    let mut origin = WorldOriginState::default();
+    let mut entities = EntityState::from_definitions([]).unwrap();
+    let rebase = WorldOriginRebaseRequest {
+        expected_origin_revision: origin.revision(),
+        expected_entity_revision: entities.revision(),
+        expected_voxel_source_revision: scene.source_revision().raw(),
+        expected_static_mesh_revision: static_revision,
+        target_origin: WorldOrigin::new([100_000, 0, 0]),
+        entities: Vec::new(),
+    };
+    WorldOriginRebaseService
+        .apply(&mut origin, &mut entities, &mut scene, rebase)
+        .unwrap();
+
+    let runtime_restored = restored.scene_preserving_runtime_context(&scene).unwrap();
+    assert_eq!(runtime_restored.world_origin(), scene.world_origin());
+    assert_eq!(runtime_restored.rebase_revision(), scene.rebase_revision());
+    assert_eq!(
+        runtime_restored.static_mesh_collision_revision(),
+        static_revision
+    );
+    assert_eq!(
+        runtime_restored.projection_static_mesh_asset_count(),
+        static_assets
+    );
+    assert_eq!(
+        runtime_restored.projection_static_mesh_instance_count(),
+        static_instances
+    );
+    assert!(has_voxel(&runtime_restored, [4, 0, 0]));
 }
 
 #[test]

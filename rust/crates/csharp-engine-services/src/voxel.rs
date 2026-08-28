@@ -8,9 +8,11 @@ use std::{ffi::c_void, sync::Arc};
 
 use csharp_engine_abi::*;
 use engine_spatial::{
-    VoxelChunkContentHash, VoxelChunkIdentity, VoxelChunkLeaseId, VoxelChunkPayload,
-    VoxelChunkResidencyOperation, VoxelChunkResidencyService, VoxelChunkResidencyTransaction,
-    VoxelEdit, VoxelEditHistoryRevertReceipt, VoxelResidencyHistoryPolicy,
+    decode_voxel_edit_history, encode_voxel_edit_history, VoxelChunkContentHash,
+    VoxelChunkIdentity, VoxelChunkLeaseId, VoxelChunkPayload, VoxelChunkResidencyOperation,
+    VoxelChunkResidencyService, VoxelChunkResidencyTransaction, VoxelEdit, VoxelEditHistoryLimits,
+    VoxelEditHistoryRevertReceipt, VoxelResidencyHistoryPolicy, MAX_VOXEL_EDIT_HISTORY_BYTES,
+    VOXEL_EDIT_HISTORY_SCHEMA_VERSION,
 };
 
 use crate::{
@@ -379,6 +381,112 @@ impl RuntimeSpatialBridge {
             (scene, native)
         };
         self.publish_scene(handle, scene);
+        Ok(receipt)
+    }
+
+    fn read_history_codec_info(&mut self) -> NativeVoxelHistoryCodecInfo {
+        NativeVoxelHistoryCodecInfo {
+            schema_version: VOXEL_EDIT_HISTORY_SCHEMA_VERSION,
+            max_encoded_bytes: MAX_VOXEL_EDIT_HISTORY_BYTES as u64,
+        }
+    }
+
+    fn export_history(
+        &mut self,
+        request: NativeVoxelHistoryExportRequest,
+    ) -> Result<NativeByteLease, CsharpEngineServicesError> {
+        let encoded = {
+            let session = self.session_mut(request.session)?;
+            let encoded = encode_voxel_edit_history(&session.voxel_history)
+                .map_err(|error| voxel_error("CSHARP_VOXEL_HISTORY_EXPORT", error.to_string()))?;
+            Arc::<[u8]>::from(encoded.into_bytes())
+        };
+        if encoded.len() > MAX_VOXEL_EDIT_HISTORY_BYTES {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_HISTORY_EXPORT",
+                "encoded history exceeded the owner byte limit",
+            ));
+        }
+        let handle = self.next_voxel_history_export;
+        self.next_voxel_history_export = self
+            .next_voxel_history_export
+            .checked_add(1)
+            .ok_or_else(|| voxel_error("CSHARP_VOXEL_HISTORY_EXPORT", "export leases exhausted"))?;
+        let replaced = self.voxel_history_exports.insert(handle, encoded);
+        debug_assert!(replaced.is_none());
+        let bytes: &[u8] = self
+            .voxel_history_exports
+            .get(&handle)
+            .expect("inserted history export");
+        Ok(NativeByteLease {
+            handle: NativeByteLeaseHandle { value: handle },
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        })
+    }
+
+    fn destroy_history_export(
+        &mut self,
+        handle: NativeByteLeaseHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if handle.value == 0 || self.voxel_history_exports.remove(&handle.value).is_none() {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_HISTORY_EXPORT",
+                "unknown or released history export lease",
+            ));
+        }
+        Ok(())
+    }
+
+    fn restore_history(
+        &mut self,
+        request: &NativeVoxelHistoryRestoreRequest,
+    ) -> Result<NativeVoxelHistoryRestoreReceipt, CsharpEngineServicesError> {
+        let payload = unsafe {
+            crate::composition::borrowed_slice(
+                request.payload.bytes,
+                request.payload.len,
+                "voxel history payload",
+            )
+        }?;
+        if payload.len() > MAX_VOXEL_EDIT_HISTORY_BYTES {
+            return Err(voxel_error(
+                "CSHARP_VOXEL_HISTORY_RESTORE",
+                "history payload exceeded the owner byte limit",
+            ));
+        }
+        let payload = std::str::from_utf8(payload).map_err(|_| {
+            voxel_error(
+                "CSHARP_VOXEL_HISTORY_RESTORE",
+                "history payload was not UTF-8",
+            )
+        })?;
+        let live_scene = Arc::clone(&self.session_mut(request.session)?.scene);
+        // Decode and rebuild before taking the mutable session so every codec
+        // failure leaves the live scene, history cursor, and published spatial
+        // projection intact. The owner-side rebuild retains static collision
+        // and rebase context from the live spatial scene.
+        let restored = decode_voxel_edit_history(payload, VoxelEditHistoryLimits::default())
+            .map_err(|error| voxel_error("CSHARP_VOXEL_HISTORY_RESTORE", error.to_string()))?;
+        let scene = Arc::new(
+            restored
+                .scene_preserving_runtime_context(&live_scene)
+                .map_err(|error| voxel_error("CSHARP_VOXEL_HISTORY_RESTORE", error.to_string()))?,
+        );
+        let receipt = {
+            let session = self.session_mut(request.session)?;
+            session.voxel_history = restored.history;
+            session.last_voxel_dirty_chunks = scene.mesh_update().dirty_chunks.clone();
+            session.scene = Arc::clone(&scene);
+            NativeVoxelHistoryRestoreReceipt {
+                cursor: native_history_cursor(
+                    &session.voxel_history.cursor(),
+                    session.voxel_history.entries().len(),
+                ),
+                source_revision: scene.source_revision().raw(),
+            }
+        };
+        self.publish_scene(request.session, scene);
         Ok(receipt)
     }
 }
@@ -859,6 +967,67 @@ unsafe extern "C" fn redo(
     }
 }
 
+unsafe extern "C" fn read_history_codec_info(
+    context: *mut c_void,
+    output: *mut NativeVoxelHistoryCodecInfo,
+) -> i32 {
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    unsafe { *output = bridge.read_history_codec_info() };
+    ABI_OK
+}
+
+unsafe extern "C" fn export_history(
+    context: *mut c_void,
+    request: NativeVoxelHistoryExportRequest,
+    output: *mut NativeByteLease,
+) -> i32 {
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.export_history(request) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn destroy_history_export_lease(
+    context: *mut c_void,
+    handle: NativeByteLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.destroy_history_export(handle) {
+        Ok(()) => ABI_OK,
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn restore_history(
+    context: *mut c_void,
+    request: *const NativeVoxelHistoryRestoreRequest,
+    output: *mut NativeVoxelHistoryRestoreReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .restore_history(unsafe { &*request })
+    {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
     NativeVoxelApi {
         context: (bridge as *mut RuntimeSpatialBridge).cast(),
@@ -878,5 +1047,252 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         read_history_delta_at,
         undo,
         redo,
+        read_history_codec_info,
+        export_history,
+        destroy_history_export_lease,
+        restore_history,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_session(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialSessionHandle {
+        let spatial = crate::spatial::api(bridge);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial.create_session)(
+                    spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        reserved: 0,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        session
+    }
+
+    fn set(address: NativeVoxelAddress, material_slot: u32) -> NativeVoxelEdit {
+        NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Set,
+            address,
+            material_slot,
+        }
+    }
+
+    #[test]
+    fn history_export_restore_releases_exact_bytes_and_retains_cursor_and_redo() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let first = [set(NativeVoxelAddress { x: 1, y: 0, z: 0 }, 2)];
+        let second = [set(NativeVoxelAddress { x: 2, y: 0, z: 0 }, 3)];
+        for (expected_revision, edits) in [(0, first.as_slice()), (1, second.as_slice())] {
+            bridge
+                .apply_voxel_edits(&NativeVoxelEditTransaction {
+                    session,
+                    expected_revision,
+                    edits: edits.as_ptr(),
+                    edits_len: edits.len(),
+                })
+                .unwrap();
+        }
+        bridge
+            .undo_voxel(NativeVoxelHistoryActionRequest { session })
+            .unwrap();
+
+        let codec = bridge.read_history_codec_info();
+        let cursor = bridge
+            .read_history_cursor(NativeVoxelHistoryCursorReadRequest { session })
+            .unwrap();
+        let export = bridge
+            .export_history(NativeVoxelHistoryExportRequest { session })
+            .unwrap();
+        assert_eq!(codec.schema_version, VOXEL_EDIT_HISTORY_SCHEMA_VERSION);
+        assert_eq!(codec.max_encoded_bytes, MAX_VOXEL_EDIT_HISTORY_BYTES as u64);
+        assert!(export.len <= MAX_VOXEL_EDIT_HISTORY_BYTES);
+        assert_eq!(cursor.index, 1);
+        assert_eq!(cursor.redo_depth, 1);
+        let bytes = unsafe { std::slice::from_raw_parts(export.bytes, export.len) }.to_vec();
+        bridge.destroy_history_export(export.handle).unwrap();
+        assert!(bridge.destroy_history_export(export.handle).is_err());
+
+        // This is the same direct composition used by the managed helper:
+        // product-selected scope/key and persistence revision carry opaque
+        // codec bytes, while Voxel remains the sole history owner.
+        let persistence_root = tempfile::tempdir().unwrap();
+        let mut persistence = crate::persistence::RuntimePersistenceBridge::new(Some(
+            persistence_root.path().to_path_buf(),
+        ));
+        let persistence_api = crate::persistence::api(&mut persistence);
+        let scope = b"runtime";
+        let key = b"voxel.history";
+        let mut store = NativePersistenceStoreHandle::default();
+        assert_eq!(
+            unsafe {
+                (persistence_api.open_store)(
+                    persistence_api.context,
+                    &NativePersistenceOpenRequest {
+                        scope: NativeUtf8Slice {
+                            bytes: scope.as_ptr(),
+                            len: scope.len(),
+                        },
+                    },
+                    &mut store,
+                )
+            },
+            ABI_OK
+        );
+        let mut save = NativePersistenceSaveReceipt::default();
+        assert_eq!(
+            unsafe {
+                (persistence_api.save)(
+                    persistence_api.context,
+                    &NativePersistenceSaveRequest {
+                        store,
+                        key: NativeUtf8Slice {
+                            bytes: key.as_ptr(),
+                            len: key.len(),
+                        },
+                        schema_version: codec.schema_version,
+                        revision_guard: NativePersistenceRevisionGuard::Absent,
+                        expected_revision: 0,
+                        payload: NativeByteSlice {
+                            bytes: bytes.as_ptr(),
+                            len: bytes.len(),
+                        },
+                    },
+                    &mut save,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(save.revision, 1);
+
+        let mutation = [set(NativeVoxelAddress { x: 9, y: 0, z: 0 }, 4)];
+        bridge
+            .apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                expected_revision: 3,
+                edits: mutation.as_ptr(),
+                edits_len: mutation.len(),
+            })
+            .unwrap();
+
+        let mut blob = NativePersistenceBlobHandle::default();
+        assert_eq!(
+            unsafe {
+                (persistence_api.load)(
+                    persistence_api.context,
+                    &NativePersistenceLoadRequest {
+                        store,
+                        key: NativeUtf8Slice {
+                            bytes: key.as_ptr(),
+                            len: key.len(),
+                        },
+                    },
+                    &mut blob,
+                )
+            },
+            ABI_OK
+        );
+        let mut blob_info = NativePersistenceBlobInfo {
+            present: false,
+            schema_version: 0,
+            revision: 0,
+            payload_len: 0,
+        };
+        assert_eq!(
+            unsafe {
+                (persistence_api.describe_blob)(persistence_api.context, blob, &mut blob_info)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            (
+                blob_info.present,
+                blob_info.schema_version,
+                blob_info.revision
+            ),
+            (true, codec.schema_version, 1)
+        );
+        let mut restored_bytes = vec![0; blob_info.payload_len];
+        assert_eq!(
+            unsafe {
+                (persistence_api.copy_blob)(
+                    persistence_api.context,
+                    &NativePersistenceCopyBlobRequest {
+                        blob,
+                        destination: NativeWritableByteSlice {
+                            bytes: restored_bytes.as_mut_ptr(),
+                            len: restored_bytes.len(),
+                        },
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (persistence_api.destroy_blob)(persistence_api.context, blob) },
+            ABI_OK
+        );
+
+        let restore = bridge
+            .restore_history(&NativeVoxelHistoryRestoreRequest {
+                session,
+                payload: NativeByteSlice {
+                    bytes: restored_bytes.as_ptr(),
+                    len: restored_bytes.len(),
+                },
+            })
+            .unwrap();
+        assert_eq!(restore.cursor.index, 1);
+        assert_eq!(restore.cursor.undo_depth, 1);
+        assert_eq!(restore.cursor.redo_depth, 1);
+        assert_eq!(restore.source_revision, 3);
+
+        let restored_scene = bridge
+            .read_voxel(NativeVoxelReadRequest {
+                session,
+                address: NativeVoxelAddress { x: 9, y: 0, z: 0 },
+            })
+            .unwrap();
+        assert!(!restored_scene.present);
+        bridge
+            .redo_voxel(NativeVoxelHistoryActionRequest { session })
+            .unwrap();
+        assert!(
+            bridge
+                .read_voxel(NativeVoxelReadRequest {
+                    session,
+                    address: NativeVoxelAddress { x: 2, y: 0, z: 0 },
+                })
+                .unwrap()
+                .present
+        );
+
+        let before_failure = bridge
+            .read_history_cursor(NativeVoxelHistoryCursorReadRequest { session })
+            .unwrap();
+        assert!(bridge
+            .restore_history(&NativeVoxelHistoryRestoreRequest {
+                session,
+                payload: NativeByteSlice {
+                    bytes: b"not voxel history".as_ptr(),
+                    len: b"not voxel history".len(),
+                },
+            })
+            .is_err());
+        assert_eq!(
+            bridge
+                .read_history_cursor(NativeVoxelHistoryCursorReadRequest { session })
+                .unwrap(),
+            before_failure
+        );
     }
 }
