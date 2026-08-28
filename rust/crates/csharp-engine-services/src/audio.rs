@@ -1422,7 +1422,9 @@ mod tests {
         bridge.reset_realized_feedback();
         bridge.begin_call();
         assert_eq!(
-            bridge.read_realization().expect("replacement owner readout"),
+            bridge
+                .read_realization()
+                .expect("replacement owner readout"),
             NativeAudioRealizationReadout::default()
         );
     }

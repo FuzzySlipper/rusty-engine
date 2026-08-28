@@ -214,15 +214,24 @@ fn audio_diagnostics_are_bounded_oldest_first_and_reset_eviction_state() {
                 },
             )
             .expect_err("unknown handles produce retained diagnostics");
-        assert_eq!(diagnostic.code, AudioProjectionDiagnosticCode::UnknownHandle);
+        assert_eq!(
+            diagnostic.code,
+            AudioProjectionDiagnosticCode::UnknownHandle
+        );
     }
 
     let readout = projector.readout();
-    assert_eq!(readout.retained_diagnostic_count, MAX_AUDIO_DIAGNOSTICS as u32);
+    assert_eq!(
+        readout.retained_diagnostic_count,
+        MAX_AUDIO_DIAGNOSTICS as u32
+    );
     assert_eq!(readout.evicted_diagnostic_count, 2);
     assert_eq!(readout.diagnostics.len(), MAX_AUDIO_DIAGNOSTICS);
     assert_eq!(readout.diagnostics.first().unwrap().sequence, 2);
-    assert_eq!(readout.diagnostics.last().unwrap().sequence, (total - 1) as u32);
+    assert_eq!(
+        readout.diagnostics.last().unwrap().sequence,
+        (total - 1) as u32
+    );
 
     projector.reset();
     let readout = projector.readout();
@@ -257,11 +266,23 @@ fn audio_retained_voice_controls_and_fixed_bus_state_are_owner_truth() {
         (1, AudioVoiceControl::Pause, AudioVoiceDesiredState::Paused),
         // Repeating the same desired state is intentionally idempotent.
         (2, AudioVoiceControl::Pause, AudioVoiceDesiredState::Paused),
-        (3, AudioVoiceControl::Resume, AudioVoiceDesiredState::Playing),
-        (4, AudioVoiceControl::Resume, AudioVoiceDesiredState::Playing),
+        (
+            3,
+            AudioVoiceControl::Resume,
+            AudioVoiceDesiredState::Playing,
+        ),
+        (
+            4,
+            AudioVoiceControl::Resume,
+            AudioVoiceDesiredState::Playing,
+        ),
         // Retrigger stays on the same retained handle and has the same
         // descriptor; the wire operation directs host realization to offset 0.
-        (5, AudioVoiceControl::Retrigger, AudioVoiceDesiredState::Playing),
+        (
+            5,
+            AudioVoiceControl::Retrigger,
+            AudioVoiceDesiredState::Playing,
+        ),
     ] {
         projector
             .project(
