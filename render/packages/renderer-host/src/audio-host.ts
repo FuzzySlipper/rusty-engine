@@ -70,7 +70,7 @@ interface RendererBufferSourceNode extends RendererAudioNode {
   loop: boolean;
   onended: (() => void) | null;
   readonly playbackRate: RendererAudioParam;
-  start(): void;
+  start(when?: number, offset?: number): void;
   stop(): void;
 }
 
@@ -110,11 +110,28 @@ interface RendererAudioSourceGraph {
   descriptor: AudioSourceDescriptor;
   sequence: number;
   readonly source: RendererBufferSourceNode;
+  readonly duration: number | null;
   readonly dryGain: RendererGainNode;
   readonly wetGain: RendererGainNode;
   readonly stereoPanner: RendererStereoPannerNode;
   readonly panner: RendererPannerNode | null;
+  startedAt: number;
+  startedOffset: number;
+  playbackRate: number;
   disposed: boolean;
+}
+
+interface RendererRetainedVoice {
+  descriptor: AudioSourceDescriptor;
+  sequence: number;
+  state: 'playing' | 'paused';
+  cursor: number;
+  graph: RendererAudioSourceGraph | null;
+}
+
+interface RendererAudioBusState {
+  volume: number;
+  muted: boolean;
 }
 
 export class RendererAudioHost {
@@ -122,8 +139,13 @@ export class RendererAudioHost {
   readonly #resolveEntityPosition: RendererAudioEntityPositionResolver;
   readonly #resolveResource: RendererAudioResourceResolver;
   readonly #buses: Readonly<Record<AudioBus, RendererGainNode>>;
+  readonly #busStates: Record<AudioBus, RendererAudioBusState> = {
+    sfx: { volume: 1, muted: false },
+    ambient: { volume: 1, muted: false },
+    ui: { volume: 1, muted: false },
+  };
   readonly #cache = new Map<string, Promise<unknown>>();
-  readonly #retained = new Map<number, RendererAudioSourceGraph>();
+  readonly #retained = new Map<number, RendererRetainedVoice>();
   readonly #oneShots = new Set<RendererAudioSourceGraph>();
   readonly #seenSignals = new Set<string>();
   readonly #diagnostics: AudioProjectionDiagnostic[] = [];
@@ -141,6 +163,9 @@ export class RendererAudioHost {
     ambient.connect(this.#context.destination);
     ui.connect(this.#context.destination);
     this.#buses = { sfx, ambient, ui };
+    for (const bus of ['sfx', 'ambient', 'ui'] as const) {
+      this.#applyBusGain(bus);
+    }
   }
 
   async resume(): Promise<readonly AudioProjectionDiagnostic[]> {
@@ -210,7 +235,11 @@ export class RendererAudioHost {
       return this.#recordHostDiagnostic('hostFailure', 'audio host is disposed');
     }
     const diagnostics: AudioProjectionDiagnostic[] = [];
-    for (const [handle, graph] of this.#retained) {
+    for (const [handle, voice] of this.#retained) {
+      const graph = voice.graph;
+      if (graph === null) {
+        continue;
+      }
       if (graph.descriptor.emitter.kind !== 'entityAttached' || graph.panner === null) {
         continue;
       }
@@ -235,7 +264,9 @@ export class RendererAudioHost {
       return;
     }
     this.#disposed = true;
-    for (const graph of [...this.#retained.values(), ...this.#oneShots]) {
+    const retainedGraphs = [...this.#retained.values()]
+      .flatMap((voice) => voice.graph === null ? [] : [voice.graph]);
+    for (const graph of [...retainedGraphs, ...this.#oneShots]) {
       disposeGraph(graph);
     }
     this.#retained.clear();
@@ -271,18 +302,31 @@ export class RendererAudioHost {
         if (this.#retained.has(op.handle as number)) {
           return operationDiagnostic('duplicateHandle', meta, op.handle, 'audio handle is active');
         }
-        const graph = await this.#createGraph(op.descriptor, meta.sequence);
-        this.#retained.set(op.handle as number, graph);
-        graph.source.start();
+        const voice: RendererRetainedVoice = {
+          descriptor: op.descriptor,
+          sequence: meta.sequence,
+          state: 'playing',
+          cursor: 0,
+          graph: null,
+        };
+        voice.graph = await this.#createAndStartGraph(voice, 0);
+        this.#retained.set(op.handle as number, voice);
         return null;
       }
       if (op.op === 'destroy') {
-        const graph = this.#retained.get(op.handle as number);
-        if (graph === undefined) {
+        const voice = this.#retained.get(op.handle as number);
+        if (voice === undefined) {
           return operationDiagnostic('unknownHandle', meta, op.handle, 'audio handle is unknown');
         }
         this.#retained.delete(op.handle as number);
-        disposeGraph(graph);
+        disposeGraph(voice.graph);
+        return null;
+      }
+      if (op.op === 'voiceControl') {
+        return await this.#applyVoiceControl(meta, op.handle, op.control);
+      }
+      if (op.op === 'busControl') {
+        this.#applyBusControl(op.bus, op.control);
         return null;
       }
       return await this.#updateGraph(meta, op.handle, op.patch);
@@ -301,22 +345,105 @@ export class RendererAudioHost {
     handle: AudioHandle,
     patch: AudioSourcePatch,
   ): Promise<AudioProjectionDiagnostic | null> {
-    const graph = this.#retained.get(handle as number);
-    if (graph === undefined) {
+    const voice = this.#retained.get(handle as number);
+    if (voice === undefined) {
       return operationDiagnostic('unknownHandle', meta, handle, 'audio handle is unknown');
     }
-    const next = patchedDescriptor(graph.descriptor, patch);
+    const next = patchedDescriptor(voice.descriptor, patch);
+    const graph = voice.graph;
+    if (graph === null) {
+      voice.descriptor = next;
+      voice.sequence = meta.sequence;
+      return null;
+    }
+    const cursor = playbackCursor(graph, this.#context.currentTime);
     if (patch.emitter !== null) {
       const replacement = await this.#createGraph(next, meta.sequence);
       disposeGraph(graph);
-      this.#retained.set(handle as number, replacement);
-      replacement.source.start();
+      startGraph(replacement, cursor, this.#context.currentTime);
+      voice.descriptor = next;
+      voice.sequence = meta.sequence;
+      voice.graph = replacement;
       return null;
     }
     graph.descriptor = next;
     graph.sequence = meta.sequence;
+    graph.startedAt = this.#context.currentTime;
+    graph.startedOffset = normalizeCursor(cursor, graph.duration, next.looping);
     applyGraphParameters(this.#context, graph, next, this.#resolveEntityPosition);
     return null;
+  }
+
+  async #applyVoiceControl(
+    meta: Extract<PresentationOp, { readonly domain: 'audio' }>['meta'],
+    handle: AudioHandle,
+    control: 'pause' | 'resume' | 'retrigger',
+  ): Promise<AudioProjectionDiagnostic | null> {
+    const voice = this.#retained.get(handle as number);
+    if (voice === undefined) {
+      return operationDiagnostic('unknownHandle', meta, handle, 'audio handle is unknown');
+    }
+    voice.sequence = meta.sequence;
+    if (control === 'pause') {
+      if (voice.state === 'paused') {
+        return null;
+      }
+      if (voice.graph !== null) {
+        voice.cursor = playbackCursor(voice.graph, this.#context.currentTime);
+        disposeGraph(voice.graph);
+        voice.graph = null;
+      }
+      voice.state = 'paused';
+      return null;
+    }
+    if (control === 'resume') {
+      if (voice.state === 'playing') {
+        return null;
+      }
+      voice.graph = await this.#createAndStartGraph(voice, voice.cursor);
+      voice.state = 'playing';
+      return null;
+    }
+    const replacement = await this.#createGraph(voice.descriptor, voice.sequence);
+    disposeGraph(voice.graph);
+    voice.cursor = 0;
+    startGraph(replacement, 0, this.#context.currentTime);
+    voice.graph = replacement;
+    voice.state = 'playing';
+    return null;
+  }
+
+  #applyBusControl(
+    bus: AudioBus,
+    control: Extract<AudioProjectionOp, { readonly op: 'busControl' }>['control'],
+  ): void {
+    const state = this.#busStates[bus];
+    if (control.kind === 'setVolume') {
+      if (!Number.isFinite(control.volume) || control.volume < 0 || control.volume > 1) {
+        throw new Error('audio bus volume must be finite and between 0 and 1');
+      }
+      state.volume = control.volume;
+    } else {
+      state.muted = control.muted;
+    }
+    this.#applyBusGain(bus);
+  }
+
+  #applyBusGain(bus: AudioBus): void {
+    const state = this.#busStates[bus];
+    this.#buses[bus].gain.setValueAtTime(
+      state.muted ? 0 : state.volume,
+      this.#context.currentTime,
+    );
+  }
+
+  async #createAndStartGraph(
+    voice: RendererRetainedVoice,
+    offset: number,
+  ): Promise<RendererAudioSourceGraph> {
+    const graph = await this.#createGraph(voice.descriptor, voice.sequence);
+    startGraph(graph, offset, this.#context.currentTime);
+    return graph;
   }
 
   async #createGraph(
@@ -324,15 +451,20 @@ export class RendererAudioHost {
     sequence: number,
   ): Promise<RendererAudioSourceGraph> {
     const source = this.#context.createBufferSource();
-    source.buffer = await this.#decodeClip(descriptor.clip);
+    const buffer = await this.#decodeClip(descriptor.clip);
+    source.buffer = buffer;
     const graph: RendererAudioSourceGraph = {
       descriptor,
       sequence,
       source,
+      duration: bufferDuration(buffer),
       dryGain: this.#context.createGain(),
       wetGain: this.#context.createGain(),
       stereoPanner: this.#context.createStereoPanner(),
       panner: descriptor.emitter.kind === 'global2d' ? null : this.#context.createPanner(),
+      startedAt: this.#context.currentTime,
+      startedOffset: 0,
+      playbackRate: descriptor.pitch,
       disposed: false,
     };
     source.connect(graph.stereoPanner);
@@ -433,6 +565,7 @@ function applyGraphParameters(
   const time = context.currentTime;
   graph.source.loop = descriptor.looping;
   graph.source.playbackRate.setValueAtTime(descriptor.pitch, time);
+  graph.playbackRate = descriptor.pitch;
   graph.stereoPanner.pan.setValueAtTime(descriptor.pan, time);
   const blend = descriptor.emitter.kind === 'global2d' ? 0 : descriptor.spatialBlend;
   graph.dryGain.gain.setValueAtTime(descriptor.volume * (1 - blend), time);
@@ -509,7 +642,51 @@ function patchedDescriptor(
   };
 }
 
-function disposeGraph(graph: RendererAudioSourceGraph): void {
+function startGraph(
+  graph: RendererAudioSourceGraph,
+  offset: number,
+  time: number,
+): void {
+  const normalizedOffset = normalizeCursor(offset, graph.duration, graph.descriptor.looping);
+  graph.startedAt = time;
+  graph.startedOffset = normalizedOffset;
+  graph.source.start(0, normalizedOffset);
+}
+
+function playbackCursor(graph: RendererAudioSourceGraph, time: number): number {
+  const elapsed = Math.max(0, time - graph.startedAt);
+  return normalizeCursor(
+    graph.startedOffset + elapsed * graph.playbackRate,
+    graph.duration,
+    graph.descriptor.looping,
+  );
+}
+
+function normalizeCursor(cursor: number, duration: number | null, looping: boolean): number {
+  if (duration === null) {
+    return cursor;
+  }
+  if (!looping) {
+    return Math.min(cursor, duration);
+  }
+  const remainder = cursor % duration;
+  return remainder < 0 ? remainder + duration : remainder;
+}
+
+function bufferDuration(buffer: unknown): number | null {
+  if (typeof buffer !== 'object' || buffer === null || !('duration' in buffer)) {
+    return null;
+  }
+  const duration = (buffer as { readonly duration: unknown }).duration;
+  return typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+    ? duration
+    : null;
+}
+
+function disposeGraph(graph: RendererAudioSourceGraph | null): void {
+  if (graph === null) {
+    return;
+  }
   if (graph.disposed) {
     return;
   }
@@ -528,7 +705,7 @@ function disposeGraph(graph: RendererAudioSourceGraph): void {
 }
 
 function operationHandle(op: AudioProjectionOp): AudioHandle | null {
-  return op.op === 'emit' ? null : op.handle;
+  return op.op === 'emit' || op.op === 'busControl' ? null : op.handle;
 }
 
 function operationDiagnostic(

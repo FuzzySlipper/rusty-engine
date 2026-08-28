@@ -76,11 +76,13 @@ class FakeSource extends FakeNode {
   loop = false;
   onended: (() => void) | null = null;
   readonly playbackRate = new FakeParam();
+  readonly starts: Array<{ readonly when: number | undefined; readonly offset: number | undefined }> = [];
   started = false;
   stopped = false;
 
-  start(): void {
+  start(when?: number, offset?: number): void {
     this.started = true;
+    this.starts.push({ when, offset });
   }
 
   stop(): void {
@@ -89,7 +91,7 @@ class FakeSource extends FakeNode {
 }
 
 class FakeContext {
-  readonly currentTime = 2;
+  currentTime = 2;
   readonly destination = new FakeNode();
   readonly listener = new FakeListener();
   state: AudioContextState = 'suspended';
@@ -132,7 +134,7 @@ class FakeContext {
 
   async decodeAudioData(): Promise<unknown> {
     this.decodeCount += 1;
-    return { decoded: true };
+    return { decoded: true, duration: 2 };
   }
 
   async resume(): Promise<void> {
@@ -272,6 +274,80 @@ void test('retained 2D/3D sources create update destroy and clean up independent
   assert.equal(context.sources.length, 2, 'emitter-mode update rebuilds the node graph');
   assert.equal(context.sources.every((source) => source.stopped), true);
   assert.deepEqual(context.panners[0]?.positionX.writes, [11]);
+});
+
+void test('retained voice controls retain logical state and reconstruct sources at the correct cursor', async () => {
+  const context = new FakeContext();
+  const audio = host(context);
+  const handle = audioHandle(31);
+  await audio.applyPresentation(frame([
+    operation(0, {
+      op: 'create',
+      handle,
+      descriptor: { ...descriptor(), looping: true, pitch: 1.5 },
+    }),
+  ]));
+  assert.deepEqual(context.sources[0]?.starts, [{ when: 0, offset: 0 }]);
+
+  context.currentTime = 4;
+  const paused = await audio.applyPresentation(frame([
+    operation(1, { op: 'voiceControl', handle, control: 'pause' }),
+    operation(2, { op: 'voiceControl', handle, control: 'pause' }),
+    operation(3, {
+      op: 'update',
+      handle,
+      patch: {
+        volume: null,
+        pitch: null,
+        looping: null,
+        spatialBlend: null,
+        attenuation: null,
+        pan: null,
+        emitter: { kind: 'global2d' },
+      },
+    }),
+  ]));
+  assert.equal(paused.applied, 3);
+  assert.equal(context.sources.length, 1, 'paused emitter replacement does not start a source');
+  assert.equal(context.sources[0]?.stopped, true);
+
+  const resumed = await audio.applyPresentation(frame([
+    operation(4, { op: 'voiceControl', handle, control: 'resume' }),
+    operation(5, { op: 'voiceControl', handle, control: 'resume' }),
+  ]));
+  assert.equal(resumed.applied, 2);
+  assert.equal(context.sources.length, 2, 'resume is idempotent after rebuilding the source once');
+  assert.deepEqual(context.sources[1]?.starts, [{ when: 0, offset: 1 }]);
+  assert.equal(context.panners.length, 1, 'the resumed graph uses the paused replacement emitter');
+
+  const retriggered = await audio.applyPresentation(frame([
+    operation(6, { op: 'voiceControl', handle, control: 'retrigger' }),
+  ]));
+  assert.equal(retriggered.applied, 1);
+  assert.equal(context.sources[1]?.stopped, true);
+  assert.deepEqual(context.sources[2]?.starts, [{ when: 0, offset: 0 }]);
+});
+
+void test('fixed bus controls own existing and future graph gain state', async () => {
+  const context = new FakeContext();
+  const audio = host(context);
+  const handle = audioHandle(32);
+  assert.deepEqual(context.gains.slice(0, 3).map((gain) => gain.gain.writes), [[1], [1], [1]]);
+
+  const receipt = await audio.applyPresentation(frame([
+    operation(0, { op: 'busControl', bus: 'sfx', control: { kind: 'setVolume', volume: 0.25 } }),
+    operation(1, { op: 'busControl', bus: 'sfx', control: { kind: 'setMuted', muted: true } }),
+    operation(2, {
+      op: 'create',
+      handle,
+      descriptor: descriptor(),
+    }),
+    operation(3, { op: 'busControl', bus: 'sfx', control: { kind: 'setMuted', muted: false } }),
+  ]));
+  assert.equal(receipt.applied, 4);
+  assert.deepEqual(context.gains[0]?.gain.writes, [1, 0.25, 0, 0.25]);
+  assert.equal(context.sources[0]?.connections.includes(context.stereoPanners[0]!), true);
+  assert.equal(context.gains[4]?.connections.includes(context.gains[0]!), true);
 });
 
 void test('retained entity-attached audio follows scene movement without descriptor updates', async () => {
