@@ -118,6 +118,38 @@ public sealed class Product : IEngineProduct
             Require(_engine.Persistence.ReadBlobBytes(loaded).Span.SequenceEqual(leasePayload),
                 "native byte lease did not copy and release its payload");
         }
+        using (RulesPackage rulesPackage = _engine.Rules.AdmitPackage(new RulesPackageAdmitRequest(
+            """
+            {"kind":"rusty.gameplay-rules.package","schemaVersion":1,"domain":"fixture","package":"nativeaot","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":{"machines":[{"output":10}]}}
+            """u8.ToArray())))
+        {
+            RulesPackageReadoutLeaseReceipt packageReadout = _engine.Rules.ReadPackage(rulesPackage);
+            RulesPackageReadoutRow parent = packageReadout.Packages.Span[0];
+            RulesResolvedPackageSetLeaseReceipt resolved = _engine.Rules.ResolvePackages(
+                new RulesResolvePackagesRequest(new RulesPackage[] { rulesPackage }));
+            Require(resolved.Packages.Length == 1
+                && resolved.Packages.Span[0].Package == "nativeaot"
+                && resolved.Aggregate.DependencyCount == 0,
+                "rules resolution did not copy deterministic package facts");
+            ReadOnlyMemory<RulesPayloadSelectionRow> selected = _engine.Rules.SelectPayload(
+                new RulesSelectPayloadRequest(
+                    rulesPackage,
+                    parent.Fingerprint,
+                    new RulesPayloadPathSegment[] {
+                        new RulesPayloadPathSegment(RulesPayloadPathSegmentKind.Field, "machines", 0),
+                        new RulesPayloadPathSegment(RulesPayloadPathSegmentKind.Index, string.Empty, 0),
+                        new RulesPayloadPathSegment(RulesPayloadPathSegmentKind.Field, "output", 0),
+                    }));
+            Require(selected.Length == 1 && selected.Span[0].ParentFingerprint == parent.Fingerprint
+                && selected.Span[0].CanonicalBytes.Span.SequenceEqual("10"u8),
+                "rules payload selection did not copy the requested field/index subtree");
+            ExpectEngineFailure(() => _engine.Rules.SelectPayload(new RulesSelectPayloadRequest(
+                rulesPackage,
+                new string('0', 64),
+                new RulesPayloadPathSegment[] {
+                    new RulesPayloadPathSegment(RulesPayloadPathSegmentKind.Field, "machines", 0),
+                })));
+        }
         _appearance = _engine.Appearance.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
         Material createdMaterial = _engine.Appearance.CreateMaterial(new MaterialRequest(
             new Color(0.25f, 0.75f, 1.0f, 1.0f),

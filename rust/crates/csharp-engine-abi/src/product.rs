@@ -431,6 +431,22 @@ pub type NativeReadRulesPackage = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyRulesPackageReadoutLease =
     unsafe extern "C" fn(*mut c_void, NativeRulesPackageReadoutLeaseHandle) -> i32;
+pub type NativeResolveRulesPackages = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeRulesResolvePackagesRequest,
+    *mut NativeRulesResolvedPackageSetLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyRulesResolvedPackageSetLease =
+    unsafe extern "C" fn(*mut c_void, NativeRulesResolvedPackageSetLeaseHandle) -> i32;
+pub type NativeSelectRulesPayload = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeRulesSelectPayloadRequest,
+    *mut NativeRulesPayloadSelectionLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyRulesPayloadSelectionLease =
+    unsafe extern "C" fn(*mut c_void, NativeRulesPayloadSelectionLeaseHandle) -> i32;
 pub type NativeDestroyRulesOperationDiagnosticLease =
     unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeDrawKeyedRng = unsafe extern "C" fn(
@@ -1082,6 +1098,10 @@ pub struct NativeRulesApi {
     pub destroy_package: NativeDestroyRulesPackage,
     pub read_package: NativeReadRulesPackage,
     pub destroy_package_readout_lease: NativeDestroyRulesPackageReadoutLease,
+    pub resolve_packages: NativeResolveRulesPackages,
+    pub destroy_resolved_package_set_lease: NativeDestroyRulesResolvedPackageSetLease,
+    pub select_payload: NativeSelectRulesPayload,
+    pub destroy_payload_selection_lease: NativeDestroyRulesPayloadSelectionLease,
     pub destroy_operation_diagnostic_lease: NativeDestroyRulesOperationDiagnosticLease,
 }
 
