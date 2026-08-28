@@ -5,6 +5,15 @@ pub struct NativeAppearanceHandle {
     pub value: u64,
 }
 
+/// An Engine-owned retained light definition. The generated C# owner must be
+/// disposed; a successful replacement intentionally leaves the prior owner a
+/// safe tombstone.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeLightHandle {
+    pub value: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeRenderResourceHandle {
@@ -32,6 +41,71 @@ pub struct NativeColor {
     pub g: f32,
     pub b: f32,
     pub a: f32,
+}
+
+/// Closed tagged representation of an Engine `LightDescriptor`. Fields not
+/// used by a kind are ignored; Rust validates the selected descriptor before
+/// it becomes retained renderer state.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeLightKind {
+    Ambient = 0,
+    Directional = 1,
+    Point = 2,
+    Spot = 3,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeLightShadowIntent {
+    Disabled = 0,
+    Requested = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLightDescriptor {
+    pub kind: NativeLightKind,
+    pub color: NativeVec3,
+    pub intensity: f32,
+    pub enabled: bool,
+    pub position: NativeVec3,
+    pub direction: NativeVec3,
+    pub has_range: bool,
+    pub range: f32,
+    pub decay: f32,
+    pub outer_angle_radians: f32,
+    pub penumbra: f32,
+    pub shadow_intent: NativeLightShadowIntent,
+}
+
+/// One requested runtime light fact. `logical_id` and `parent_object_id`
+/// identify product facts only; renderer handles never cross this boundary.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLightRequest {
+    pub logical_id: u64,
+    pub has_parent_object: bool,
+    pub parent_object_id: u64,
+    pub descriptor: NativeLightDescriptor,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLightUpdateRequest {
+    pub light: NativeLightHandle,
+    pub replacement: NativeLightRequest,
+}
+
+/// Requested facts retained by the Engine for one live light owner. This is
+/// deliberately not renderer or shadow realization feedback.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLightReadout {
+    pub logical_id: u64,
+    pub has_parent_object: bool,
+    pub parent_object_id: u64,
+    pub descriptor: NativeLightDescriptor,
 }
 
 /// Product-selected presentation layer. `Viewmodel` is renderer-relative;

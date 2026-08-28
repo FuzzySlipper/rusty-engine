@@ -12,6 +12,7 @@ use render_presentation::{
 };
 use render_projection::{
     Appearance, RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
+    RuntimeLightFact,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -271,11 +272,14 @@ pub(crate) struct RuntimeAppearanceState {
     projector: RuntimeAppearanceProjector,
     appearances: BTreeMap<u64, String>,
     next_appearance: u64,
+    lights: BTreeMap<u64, RuntimeLightFact>,
+    next_light: u64,
     materials: BTreeMap<u64, String>,
     appearance_materials: BTreeMap<u64, BTreeSet<u64>>,
     retained_appearances: BTreeMap<u64, u64>,
     next_material: u64,
     retained_object_count: u32,
+    retained_light_count: u32,
     pub(crate) render_resources: Vec<CsharpRenderResource>,
     resource_paths: BTreeMap<String, u64>,
     resource_identities: BTreeMap<String, u64>,
@@ -384,11 +388,14 @@ impl RuntimeAppearanceBridge {
                 projector: RuntimeAppearanceProjector::new(catalog),
                 appearances: BTreeMap::new(),
                 next_appearance: 1,
+                lights: BTreeMap::new(),
+                next_light: 1,
                 materials: BTreeMap::new(),
                 appearance_materials: BTreeMap::new(),
                 retained_appearances: BTreeMap::new(),
                 next_material: 1,
                 retained_object_count: 0,
+                retained_light_count: 0,
                 render_resources: Vec::new(),
                 resource_paths: BTreeMap::new(),
                 resource_identities: BTreeMap::new(),
@@ -652,6 +659,90 @@ impl RuntimeAppearanceBridge {
             .insert_appearance(identity.clone(), appearance);
         staged.state.appearances.insert(handle, identity);
         Ok(NativeAppearanceHandle { value: handle })
+    }
+
+    fn create_light(
+        &mut self,
+        request: NativeLightRequest,
+    ) -> Result<NativeLightHandle, CsharpEngineServicesError> {
+        let fact = runtime_light_fact(request)?;
+        let staged = self.staged_mut()?;
+        if staged
+            .state
+            .lights
+            .values()
+            .any(|candidate| candidate.light_id == fact.light_id)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_LIGHT_LOGICAL_ID",
+                "logical light id is already owned by a live light",
+            ));
+        }
+        let handle = staged.state.next_light;
+        staged.state.next_light = handle.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
+        })?;
+        staged.state.lights.insert(handle, fact);
+        project_staged_lights(staged)?;
+        Ok(NativeLightHandle { value: handle })
+    }
+
+    fn update_light(
+        &mut self,
+        request: NativeLightUpdateRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let replacement = runtime_light_fact(request.replacement)?;
+        let staged = self.staged_mut()?;
+        if !staged.state.lights.contains_key(&request.light.value) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_LIGHT_HANDLE",
+                "light handle is not live",
+            ));
+        }
+        if staged.state.lights.iter().any(|(handle, candidate)| {
+            *handle != request.light.value && candidate.light_id == replacement.light_id
+        }) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_LIGHT_LOGICAL_ID",
+                "logical light id is already owned by a different live light",
+            ));
+        }
+        staged.state.lights.insert(request.light.value, replacement);
+        project_staged_lights(staged)
+    }
+
+    fn replace_light(
+        &mut self,
+        request: NativeLightUpdateRequest,
+    ) -> Result<NativeLightHandle, CsharpEngineServicesError> {
+        self.destroy_light(request.light)?;
+        self.create_light(request.replacement)
+    }
+
+    fn destroy_light(&mut self, light: NativeLightHandle) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        if staged.state.lights.remove(&light.value).is_some() {
+            project_staged_lights(staged)?;
+        }
+        // A successful replacement turns the prior generated owner into a
+        // tombstone, so a later IDisposable release is ordinary teardown.
+        Ok(())
+    }
+
+    fn read_light(
+        &mut self,
+        light: NativeLightHandle,
+    ) -> Result<NativeLightReadout, CsharpEngineServicesError> {
+        let staged = self.staged.as_ref().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_LIGHT_CALL",
+                "light service was called outside a product call",
+            )
+        })?;
+        let fact = staged.state.lights.get(&light.value).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle is not live")
+        })?;
+        Ok(native_light_readout(fact))
     }
 
     fn create_material(
@@ -2569,15 +2660,16 @@ impl RuntimeAppearanceBridge {
         let projection = staged.state.projector.project(&owned).map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}"))
         })?;
-        staged.state.retained_object_count =
-            u32::try_from(projection.retained_objects).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_PRESENTATION_READOUT",
-                    "retained object count exceeded u32",
-                )
-            })?;
+        staged.state.retained_object_count = narrow_retained_count(
+            projection.retained_objects,
+            "retained object count exceeded u32",
+        )?;
+        staged.state.retained_light_count = narrow_retained_count(
+            projection.retained_lights,
+            "retained light count exceeded u32",
+        )?;
         staged.state.retained_appearances = retained_appearances;
-        staged.frame = Some(projection.frame);
+        append_projection_frame(staged, projection.frame)?;
         self.flush_all_animations()?;
         Ok(())
     }
@@ -2642,6 +2734,255 @@ fn native_render_layer(value: NativeRenderLayer) -> Result<RenderLayer, CsharpEn
         NativeRenderLayer::Debug => Ok(RenderLayer::Debug),
         NativeRenderLayer::Ui => Ok(RenderLayer::Ui),
         NativeRenderLayer::Viewmodel => Ok(RenderLayer::Viewmodel),
+    }
+}
+
+fn project_staged_lights(
+    staged: &mut RuntimeAppearanceCall,
+) -> Result<(), CsharpEngineServicesError> {
+    let facts: Vec<RuntimeLightFact> = staged.state.lights.values().cloned().collect();
+    let projection = staged
+        .state
+        .projector
+        .project_lights(&facts)
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_LIGHT_PROJECTION", format!("{error:?}"))
+        })?;
+    staged.state.retained_object_count = narrow_retained_count(
+        projection.retained_objects,
+        "retained object count exceeded u32",
+    )?;
+    staged.state.retained_light_count = narrow_retained_count(
+        projection.retained_lights,
+        "retained light count exceeded u32",
+    )?;
+    append_projection_frame(staged, projection.frame)
+}
+
+fn append_projection_frame(
+    staged: &mut RuntimeAppearanceCall,
+    next: render_model::RenderFrameDiff,
+) -> Result<(), CsharpEngineServicesError> {
+    let Some(previous) = staged.frame.take() else {
+        staged.frame = Some(next);
+        return Ok(());
+    };
+    let mut operations = previous.ops;
+    operations.extend(next.ops);
+    staged.frame = Some(
+        render_model::RenderFrameDiff::try_from_ops(operations).map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_APPEARANCE_FRAME",
+                format!("combined retained appearance/light frame is invalid: {error:?}"),
+            )
+        })?,
+    );
+    Ok(())
+}
+
+fn narrow_retained_count(
+    value: usize,
+    message: &'static str,
+) -> Result<u32, CsharpEngineServicesError> {
+    u32::try_from(value)
+        .map_err(|_| CsharpEngineServicesError::new("CSHARP_PRESENTATION_READOUT", message))
+}
+
+fn runtime_light_fact(
+    request: NativeLightRequest,
+) -> Result<RuntimeLightFact, CsharpEngineServicesError> {
+    let shadow_intent = match request.descriptor.shadow_intent {
+        NativeLightShadowIntent::Disabled => LightShadowIntent::Disabled,
+        NativeLightShadowIntent::Requested => LightShadowIntent::Requested,
+    };
+    let color = native_vec3_array(request.descriptor.color);
+    let position = native_vec3_array(request.descriptor.position);
+    let direction = native_vec3_array(request.descriptor.direction);
+    let range = request
+        .descriptor
+        .has_range
+        .then_some(request.descriptor.range);
+    let light = match request.descriptor.kind {
+        NativeLightKind::Ambient => LightDescriptor::Ambient {
+            color,
+            intensity: request.descriptor.intensity,
+            enabled: request.descriptor.enabled,
+            shadow_intent,
+        },
+        NativeLightKind::Directional => LightDescriptor::Directional {
+            color,
+            intensity: request.descriptor.intensity,
+            enabled: request.descriptor.enabled,
+            direction,
+            shadow_intent,
+        },
+        NativeLightKind::Point => LightDescriptor::Point {
+            color,
+            intensity: request.descriptor.intensity,
+            enabled: request.descriptor.enabled,
+            position,
+            range,
+            decay: request.descriptor.decay,
+            shadow_intent,
+        },
+        NativeLightKind::Spot => LightDescriptor::Spot {
+            color,
+            intensity: request.descriptor.intensity,
+            enabled: request.descriptor.enabled,
+            position,
+            direction,
+            range,
+            decay: request.descriptor.decay,
+            outer_angle_radians: request.descriptor.outer_angle_radians,
+            penumbra: request.descriptor.penumbra,
+            shadow_intent,
+        },
+    };
+    light.validate().map_err(|error| {
+        CsharpEngineServicesError::new(
+            "CSHARP_LIGHT_DESCRIPTOR",
+            format!("invalid light descriptor: {error:?}"),
+        )
+    })?;
+    Ok(RuntimeLightFact {
+        light_id: request.logical_id,
+        parent_object_id: request
+            .has_parent_object
+            .then_some(request.parent_object_id),
+        light,
+    })
+}
+
+fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
+    let (
+        kind,
+        color,
+        intensity,
+        enabled,
+        position,
+        direction,
+        range,
+        decay,
+        outer_angle_radians,
+        penumbra,
+        shadow_intent,
+    ) = match &fact.light {
+        LightDescriptor::Ambient {
+            color,
+            intensity,
+            enabled,
+            shadow_intent,
+        } => (
+            NativeLightKind::Ambient,
+            *color,
+            *intensity,
+            *enabled,
+            [0.0; 3],
+            [0.0; 3],
+            None,
+            0.0,
+            0.0,
+            0.0,
+            *shadow_intent,
+        ),
+        LightDescriptor::Directional {
+            color,
+            intensity,
+            enabled,
+            direction,
+            shadow_intent,
+        } => (
+            NativeLightKind::Directional,
+            *color,
+            *intensity,
+            *enabled,
+            [0.0; 3],
+            *direction,
+            None,
+            0.0,
+            0.0,
+            0.0,
+            *shadow_intent,
+        ),
+        LightDescriptor::Point {
+            color,
+            intensity,
+            enabled,
+            position,
+            range,
+            decay,
+            shadow_intent,
+        } => (
+            NativeLightKind::Point,
+            *color,
+            *intensity,
+            *enabled,
+            *position,
+            [0.0; 3],
+            *range,
+            *decay,
+            0.0,
+            0.0,
+            *shadow_intent,
+        ),
+        LightDescriptor::Spot {
+            color,
+            intensity,
+            enabled,
+            position,
+            direction,
+            range,
+            decay,
+            outer_angle_radians,
+            penumbra,
+            shadow_intent,
+        } => (
+            NativeLightKind::Spot,
+            *color,
+            *intensity,
+            *enabled,
+            *position,
+            *direction,
+            *range,
+            *decay,
+            *outer_angle_radians,
+            *penumbra,
+            *shadow_intent,
+        ),
+    };
+    NativeLightReadout {
+        logical_id: fact.light_id,
+        has_parent_object: fact.parent_object_id.is_some(),
+        parent_object_id: fact.parent_object_id.unwrap_or_default(),
+        descriptor: NativeLightDescriptor {
+            kind,
+            color: NativeVec3 {
+                x: color[0],
+                y: color[1],
+                z: color[2],
+            },
+            intensity,
+            enabled,
+            position: NativeVec3 {
+                x: position[0],
+                y: position[1],
+                z: position[2],
+            },
+            direction: NativeVec3 {
+                x: direction[0],
+                y: direction[1],
+                z: direction[2],
+            },
+            has_range: range.is_some(),
+            range: range.unwrap_or_default(),
+            decay,
+            outer_angle_radians,
+            penumbra,
+            shadow_intent: match shadow_intent {
+                LightShadowIntent::Disabled => NativeLightShadowIntent::Disabled,
+                LightShadowIntent::Requested => NativeLightShadowIntent::Requested,
+            },
+        },
     }
 }
 
@@ -2785,6 +3126,57 @@ pub(crate) unsafe extern "C" fn destroy_appearance(
     appearance_void(context, |bridge| bridge.destroy_appearance(appearance))
 }
 
+pub(crate) unsafe extern "C" fn create_light(
+    context: *mut c_void,
+    request: NativeLightRequest,
+    result: *mut NativeLightHandle,
+) -> i32 {
+    light_result(context, result, |bridge| bridge.create_light(request))
+}
+
+pub(crate) unsafe extern "C" fn update_light(
+    context: *mut c_void,
+    request: NativeLightUpdateRequest,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.update_light(request))
+}
+
+pub(crate) unsafe extern "C" fn replace_light(
+    context: *mut c_void,
+    request: NativeLightUpdateRequest,
+    result: *mut NativeLightHandle,
+) -> i32 {
+    light_result(context, result, |bridge| bridge.replace_light(request))
+}
+
+pub(crate) unsafe extern "C" fn destroy_light(
+    context: *mut c_void,
+    light: NativeLightHandle,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.destroy_light(light))
+}
+
+pub(crate) unsafe extern "C" fn read_light(
+    context: *mut c_void,
+    light: NativeLightHandle,
+    result: *mut NativeLightReadout,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match bridge.read_light(light) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
 pub(crate) unsafe extern "C" fn create_material(
     context: *mut c_void,
     request: NativeMaterialRequest,
@@ -2821,6 +3213,29 @@ fn appearance_result(
     action: impl FnOnce(
         &mut RuntimeAppearanceBridge,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError>,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match action(bridge) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+fn light_result(
+    context: *mut c_void,
+    result: *mut NativeLightHandle,
+    action: impl FnOnce(
+        &mut RuntimeAppearanceBridge,
+    ) -> Result<NativeLightHandle, CsharpEngineServicesError>,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
@@ -3341,6 +3756,36 @@ mod tests {
         }
     }
 
+    fn point_light_request(logical_id: u64, parent_object_id: Option<u64>) -> NativeLightRequest {
+        NativeLightRequest {
+            logical_id,
+            has_parent_object: parent_object_id.is_some(),
+            parent_object_id: parent_object_id.unwrap_or_default(),
+            descriptor: NativeLightDescriptor {
+                kind: NativeLightKind::Point,
+                color: NativeVec3 {
+                    x: 0.4,
+                    y: 0.5,
+                    z: 0.6,
+                },
+                intensity: 2.0,
+                enabled: true,
+                position: NativeVec3 {
+                    x: 2.0,
+                    y: 3.0,
+                    z: 4.0,
+                },
+                direction: NativeVec3::default(),
+                has_range: true,
+                range: 12.0,
+                decay: 2.0,
+                outer_angle_radians: 0.0,
+                penumbra: 0.0,
+                shadow_intent: NativeLightShadowIntent::Requested,
+            },
+        }
+    }
+
     #[test]
     fn retained_appearance_must_leave_the_complete_snapshot_before_disposal_or_replacement() {
         let mut bridge =
@@ -3360,6 +3805,87 @@ mod tests {
             })
             .unwrap();
         assert_ne!(replacement.value, appearance.value);
+    }
+
+    #[test]
+    fn lights_are_owned_readable_and_compose_with_the_retained_appearance_frame() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let appearance = bridge.create_primitive(primitive_request()).unwrap();
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        let light = bridge
+            .create_light(point_light_request(91, Some(7)))
+            .unwrap();
+        let readout = bridge.read_light(light).unwrap();
+        assert_eq!(readout.logical_id, 91);
+        assert!(readout.has_parent_object);
+        assert_eq!(readout.parent_object_id, 7);
+        assert_eq!(readout.descriptor.kind, NativeLightKind::Point);
+        let staged = bridge.take_staged_call().unwrap().unwrap();
+        assert_eq!(staged.state.retained_object_count, 1);
+        assert_eq!(staged.state.retained_light_count, 1);
+        assert!(matches!(
+            staged.frame.as_ref().unwrap().ops.as_slice(),
+            [
+                render_model::RenderDiff::Create { .. },
+                render_model::RenderDiff::CreateLight { .. }
+            ]
+        ));
+        bridge.commit(Some(staged));
+
+        bridge.begin_call();
+        let mut replacement = point_light_request(91, Some(7));
+        replacement.descriptor.intensity = 3.0;
+        bridge
+            .update_light(NativeLightUpdateRequest { light, replacement })
+            .unwrap();
+        let staged = bridge.take_staged_call().unwrap().unwrap();
+        assert!(matches!(
+            staged.frame.as_ref().unwrap().ops.as_slice(),
+            [render_model::RenderDiff::UpdateLight { .. }]
+        ));
+        bridge.commit(Some(staged));
+    }
+
+    #[test]
+    fn invalid_light_replacement_preserves_the_committed_owner_and_requested_facts() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let light = bridge.create_light(point_light_request(91, None)).unwrap();
+        let staged = bridge.take_staged_call().unwrap();
+        bridge.commit(staged);
+
+        bridge.begin_call();
+        let mut invalid = point_light_request(92, None);
+        invalid.descriptor.kind = NativeLightKind::Directional;
+        invalid.descriptor.direction = NativeVec3::default();
+        let error = bridge
+            .replace_light(NativeLightUpdateRequest {
+                light,
+                replacement: invalid,
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "CSHARP_LIGHT_DESCRIPTOR");
+        bridge.discard_call();
+
+        bridge.begin_call();
+        let retained = bridge.read_light(light).unwrap();
+        assert_eq!(retained.logical_id, 91);
+        assert_eq!(retained.descriptor.kind, NativeLightKind::Point);
+        bridge.destroy_light(light).unwrap();
+        let staged = bridge.take_staged_call().unwrap().unwrap();
+        assert!(matches!(
+            staged.frame.as_ref().unwrap().ops.as_slice(),
+            [render_model::RenderDiff::Destroy { .. }]
+        ));
+        bridge.commit(Some(staged));
+
+        bridge.begin_call();
+        bridge.destroy_light(light).unwrap();
+        assert!(bridge.take_staged_call().unwrap().unwrap().frame.is_none());
     }
 
     #[test]

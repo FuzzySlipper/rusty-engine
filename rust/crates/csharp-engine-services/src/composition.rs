@@ -31,11 +31,12 @@ use runtime_ui::RuntimeUiProjectionEnvelope;
 
 pub(crate) const ABI_OK: i32 = 1;
 use crate::appearance::{
-    create_material, create_primitive_appearance, create_sprite_appearance,
+    create_light, create_material, create_primitive_appearance, create_sprite_appearance,
     create_static_mesh_appearance, create_static_mesh_from_content_appearance, destroy_appearance,
-    destroy_material, open_render_resource, publish_appearance_snapshot, read_presentation,
-    replace_material, replace_primitive_appearance, replace_sprite_appearance,
-    replace_static_mesh_appearance, replace_static_mesh_from_content_appearance, update_material,
+    destroy_light, destroy_material, open_render_resource, publish_appearance_snapshot, read_light,
+    read_presentation, replace_light, replace_material, replace_primitive_appearance,
+    replace_sprite_appearance, replace_static_mesh_appearance,
+    replace_static_mesh_from_content_appearance, update_light, update_material,
     update_static_mesh_materials, CsharpRenderResource, RuntimeAppearanceBridge,
     RuntimeAppearanceCall,
 };
@@ -85,6 +86,11 @@ fn engine_api(
             replace_sprite: replace_sprite_appearance,
             destroy_appearance,
             publish_snapshot: publish_appearance_snapshot,
+            create_light,
+            update_light,
+            replace_light,
+            destroy_light,
+            read_light,
             read_presentation,
         },
         animation: crate::appearance::animation_api(appearance_bridge),

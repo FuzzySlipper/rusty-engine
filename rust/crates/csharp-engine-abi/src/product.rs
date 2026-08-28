@@ -317,6 +317,14 @@ pub type NativeReplaceSpriteAppearance = unsafe extern "C" fn(
 pub type NativeDestroyAppearance = unsafe extern "C" fn(*mut c_void, NativeAppearanceHandle) -> i32;
 pub type NativePublishAppearanceSnapshot =
     unsafe extern "C" fn(*mut c_void, *const NativeAppearanceFact, usize) -> i32;
+pub type NativeCreateLight =
+    unsafe extern "C" fn(*mut c_void, NativeLightRequest, *mut NativeLightHandle) -> i32;
+pub type NativeUpdateLight = unsafe extern "C" fn(*mut c_void, NativeLightUpdateRequest) -> i32;
+pub type NativeReplaceLight =
+    unsafe extern "C" fn(*mut c_void, NativeLightUpdateRequest, *mut NativeLightHandle) -> i32;
+pub type NativeDestroyLight = unsafe extern "C" fn(*mut c_void, NativeLightHandle) -> i32;
+pub type NativeReadLight =
+    unsafe extern "C" fn(*mut c_void, NativeLightHandle, *mut NativeLightReadout) -> i32;
 pub type NativeReadPresentation =
     unsafe extern "C" fn(*mut c_void, *mut NativePresentationReadout) -> i32;
 pub type NativeOpenAnimatedMesh = unsafe extern "C" fn(
@@ -1336,6 +1344,11 @@ pub struct NativeAppearanceApi {
     pub replace_sprite: NativeReplaceSpriteAppearance,
     pub destroy_appearance: NativeDestroyAppearance,
     pub publish_snapshot: NativePublishAppearanceSnapshot,
+    pub create_light: NativeCreateLight,
+    pub update_light: NativeUpdateLight,
+    pub replace_light: NativeReplaceLight,
+    pub destroy_light: NativeDestroyLight,
+    pub read_light: NativeReadLight,
     pub read_presentation: NativeReadPresentation,
 }
 
