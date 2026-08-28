@@ -147,6 +147,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     api->turn = &Turn;
                     api->pause = &Pause;
                     api->resume = &Resume;
+                    api->restart = &Restart;
                     api->shutdown = &Shutdown;
                     api->destroy = &Destroy;
                     return 1;
@@ -194,6 +195,9 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int Resume(void* handle) => Invoke(handle, static product => product.Resume());
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static int Restart(void* handle) => Invoke(handle, static product => product.Restart());
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int Shutdown(void* handle) => Invoke(handle, static product => product.Shutdown());

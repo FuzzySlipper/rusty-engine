@@ -372,6 +372,7 @@ internal static class Emit
         output.AppendLine("    void Update(ProductUpdate update);");
         output.AppendLine("    void Pause();");
         output.AppendLine("    void Resume();");
+        output.AppendLine("    void Restart();");
         output.AppendLine("    void Shutdown();");
         output.AppendLine("}");
         return output.ToString();

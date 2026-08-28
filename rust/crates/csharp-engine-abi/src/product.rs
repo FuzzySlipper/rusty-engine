@@ -1868,6 +1868,7 @@ pub struct NativeProductApi {
     pub turn: Option<unsafe extern "C" fn(*mut c_void, *const NativeTurnArgs) -> i32>,
     pub pause: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub resume: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+    pub restart: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub shutdown: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub destroy: Option<unsafe extern "C" fn(*mut c_void)>,
 }

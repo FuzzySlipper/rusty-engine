@@ -600,6 +600,12 @@ public sealed class Product : IEngineProduct
 
     public void Pause() => _paused = true;
     public void Resume() => _paused = false;
+    public void Restart()
+    {
+        _started = true;
+        _paused = false;
+        _shutdown = false;
+    }
     public void Shutdown()
     {
         Require(_updateFactsSeen, "typed lifecycle update facts never reached Product.Game");

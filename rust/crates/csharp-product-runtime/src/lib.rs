@@ -25,9 +25,9 @@ use product_dev_host::{
     CanonicalU64, ProductDevControlOperation, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevOperationResult,
     ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
-    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevRuntimeReadout,
-    ProductDevRuntimeReceipt, ProductDevRuntimeState, ProductDevTimelineCompletion,
-    ProductDevTimelineCompletionResult,
+    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeOutput,
+    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
+    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
 use product_model::{InputAxis, InputEdge, IntentValueKind};
 use runtime_input::{
@@ -169,6 +169,7 @@ struct LoadedProductApi {
     turn: NativeProductTurn,
     pause: NativeProductAction,
     resume: NativeProductAction,
+    restart: NativeProductAction,
     shutdown: NativeProductAction,
     destroy: NativeProductDestroy,
 }
@@ -216,6 +217,7 @@ impl LoadedProductApi {
             turn: required_function(product.turn, "turn")?,
             pause: required_function(product.pause, "pause")?,
             resume: required_function(product.resume, "resume")?,
+            restart: required_function(product.restart, "restart")?,
             shutdown: required_function(product.shutdown, "shutdown")?,
             destroy: required_function(product.destroy, "destroy")?,
             library: Some(library),
@@ -574,6 +576,94 @@ impl CsharpProductRuntime {
                 self.admit_external_step(CanonicalU64::new(step))
                     .map_err(exercise_runtime_error)?;
             }
+        }
+        self.exercise_fault_restart()?;
+        Ok(())
+    }
+
+    fn exercise_fault_restart(&mut self) -> Result<(), CsharpProductRuntimeError> {
+        let before_fault = self.lifecycle.readout();
+        let before_binding = input_binding(&self.lifecycle);
+        self.lifecycle_with_binding(
+            ProductDevLifecycleOperation::ReportFault,
+            Some(dev_binding_from_input(before_binding)),
+        )
+        .map_err(exercise_runtime_error)?;
+        let faulted = self.lifecycle.readout();
+        if faulted.state() != RuntimeState::Faulted
+            || faulted.fault() != Some(runtime_lifecycle::RuntimeFault::OwnerReported)
+            || faulted.generation() != before_fault.generation()
+            || faulted.admitted_simulation_steps() != before_fault.admitted_simulation_steps()
+            || faulted.admitted_presentations() != before_fault.admitted_presentations()
+        {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_FAULT",
+                "owner fault did not preserve lifecycle counters and typed fault state",
+            ));
+        }
+        if self
+            .input(ProductDevInputBatch::new(vec![key_press(
+                before_binding,
+                1,
+            )]))
+            .is_ok()
+        {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_FAULT",
+                "faulted lifecycle admitted input from its pre-fault binding",
+            ));
+        }
+
+        let fault_binding = input_binding(&self.lifecycle);
+        self.lifecycle_with_binding(
+            ProductDevLifecycleOperation::Restart,
+            Some(dev_binding_from_input(fault_binding)),
+        )
+        .map_err(exercise_runtime_error)?;
+        let restarted = self.lifecycle.readout();
+        if restarted.state() != RuntimeState::Running
+            || restarted.generation().value() != before_fault.generation().value() + 1
+            || restarted.admitted_simulation_steps() != 0
+            || restarted.admitted_presentations() != 0
+            || restarted.fault().is_some()
+        {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_RESTART",
+                "restart did not create a fresh running generation",
+            ));
+        }
+        if self
+            .input(ProductDevInputBatch::new(vec![key_press(
+                before_binding,
+                1,
+            )]))
+            .is_ok()
+        {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_RESTART",
+                "pre-restart input binding remained admitted after restart",
+            ));
+        }
+        match self.lifecycle.mode() {
+            RuntimeMode::Realtime => {
+                self.advance_realtime(CanonicalU64::new(0))
+                    .map_err(exercise_runtime_error)?;
+                self.advance_realtime(CanonicalU64::new(STANDARD_REALTIME_EXERCISE_ADMISSION_NS))
+                    .map_err(exercise_runtime_error)?;
+            }
+            RuntimeMode::Demand => {
+                self.admit_demand_step().map_err(exercise_runtime_error)?;
+            }
+            RuntimeMode::External => {
+                self.admit_external_step(CanonicalU64::new(0))
+                    .map_err(exercise_runtime_error)?;
+            }
+        }
+        if self.lifecycle.readout().admitted_simulation_steps() == 0 {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_RESTART",
+                "fresh restarted generation did not admit a product update",
+            ));
         }
         Ok(())
     }
@@ -1028,6 +1118,27 @@ impl CsharpProductRuntime {
         .expect("fixed control-binding diagnostic"))
     }
 
+    /// Checks restart's lifecycle state without advancing any Engine-owned
+    /// counter. The product callback must not run for an impossible host
+    /// transition, because the Rust lifecycle remains the authority that
+    /// decides whether a new generation can be admitted.
+    fn require_restart_state(&self) -> Result<(), ProductDevRuntimeError> {
+        if matches!(
+            self.lifecycle.state(),
+            RuntimeState::Running | RuntimeState::Paused | RuntimeState::Faulted
+        ) {
+            return Ok(());
+        }
+        Err(ProductDevRuntimeError::new(
+            "CSHARP_LIFECYCLE_ADMISSION",
+            format!(
+                "restart is not admitted from lifecycle state {:?}",
+                self.lifecycle.state()
+            ),
+        )
+        .expect("fixed lifecycle-state diagnostic"))
+    }
+
     fn tag_complete_baseline(
         &self,
         mut outputs: Vec<ProductDevRuntimeOutput>,
@@ -1108,6 +1219,38 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     self.tag_complete_baseline(outputs),
                 )
             }
+            ProductDevLifecycleOperation::Restart => {
+                // Keep the callback-first ordering used by the other product
+                // lifecycle actions, but validate the Rust-owned state before
+                // entering C#. A callback failure therefore leaves the
+                // authoritative lifecycle binding and generation untouched.
+                self.require_restart_state()?;
+                let outputs = self
+                    .action(self.api.restart, ProductDevOperationKind::Restart)
+                    .map_err(|error| self.runtime_error(error))?;
+                self.lifecycle.restart().map_err(lifecycle_runtime_error)?;
+                self.rebind_input(InputClearReason::Restart)
+                    .map_err(|error| self.runtime_error(error))?;
+                self.receipt(
+                    ProductDevOperationKind::Restart,
+                    self.tag_complete_baseline(outputs),
+                )
+            }
+            ProductDevLifecycleOperation::ReportFault => {
+                // Fault reporting is a host control, not a reentrant product
+                // callback. RuntimeLifecycle preserves its counters while
+                // advancing the control revision and recording the typed
+                // owner fault.
+                self.lifecycle
+                    .report_fault(runtime_lifecycle::RuntimeFault::OwnerReported)
+                    .map_err(lifecycle_runtime_error)?;
+                self.rebind_input(InputClearReason::ControlRevisionChange)
+                    .map_err(|error| self.runtime_error(error))?;
+                self.receipt(
+                    ProductDevOperationKind::ReportFault,
+                    self.tag_complete_baseline(Vec::new()),
+                )
+            }
             ProductDevLifecycleOperation::Shutdown => {
                 let outputs = self
                     .action(self.api.shutdown, ProductDevOperationKind::Shutdown)
@@ -1121,13 +1264,6 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 );
                 self.shutdown_called = receipt.is_ok();
                 receipt
-            }
-            ProductDevLifecycleOperation::Restart | ProductDevLifecycleOperation::ReportFault => {
-                Err(ProductDevRuntimeError::new(
-                    "CSHARP_UNSUPPORTED_LIFECYCLE",
-                    "this trusted NativeAOT trial exposes only start, pause, resume, and shutdown",
-                )
-                .expect("fixed error"))
             }
         }
     }
@@ -1419,7 +1555,7 @@ fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductDevRuntimeReadout {
         RuntimeState::Faulted => ProductDevRuntimeState::Faulted,
         RuntimeState::Shutdown => ProductDevRuntimeState::Shutdown,
     };
-    ProductDevRuntimeReadout::new(dev_binding(readout), mode, state)
+    let mut projected = ProductDevRuntimeReadout::new(dev_binding(readout), mode, state)
         .with_counters(
             readout.admitted_simulation_steps(),
             readout.admitted_presentations(),
@@ -1431,7 +1567,16 @@ fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductDevRuntimeReadout {
             readout
                 .last_observed_time()
                 .map(|value| value.nanoseconds()),
-        )
+        );
+    if let Some(fault) = readout.fault() {
+        projected = projected.with_fault(match fault {
+            runtime_lifecycle::RuntimeFault::OwnerReported => ProductDevRuntimeFault::OwnerReported,
+            runtime_lifecycle::RuntimeFault::CounterExhausted => {
+                ProductDevRuntimeFault::CounterExhausted
+            }
+        });
+    }
+    projected
 }
 
 fn update_facts(
@@ -1628,6 +1773,7 @@ fn operation_name(operation: ProductDevOperationKind) -> &'static str {
         ProductDevOperationKind::Start => "start",
         ProductDevOperationKind::Pause => "pause",
         ProductDevOperationKind::Resume => "resume",
+        ProductDevOperationKind::Restart => "restart",
         ProductDevOperationKind::Shutdown => "shutdown",
         _ => "operation",
     }
@@ -2701,6 +2847,47 @@ mod tests {
             let lifecycle = RuntimeLifecycle::new(RuntimeInstanceId::new(1), config);
             assert_eq!(dev_readout(lifecycle.readout()).mode(), expected_mode);
         }
+    }
+
+    #[test]
+    fn lifecycle_readout_projects_owner_fault_and_restart_reset() {
+        let mut lifecycle =
+            RuntimeLifecycle::new(RuntimeInstanceId::new(1), RuntimeLifecycleConfig::Demand);
+        lifecycle.start().expect("start lifecycle");
+        lifecycle.admit_demand_step().expect("admit one step");
+        let before_fault = lifecycle.readout();
+        lifecycle
+            .report_fault(runtime_lifecycle::RuntimeFault::OwnerReported)
+            .expect("report owner fault");
+
+        let faulted = lifecycle.readout();
+        let expected_faulted = ProductDevRuntimeReadout::new(
+            dev_binding(faulted),
+            product_dev_host::ProductDevRuntimeMode::Demand,
+            ProductDevRuntimeState::Faulted,
+        )
+        .with_counters(
+            before_fault.admitted_simulation_steps(),
+            before_fault.admitted_presentations(),
+            before_fault
+                .dropped_realtime_steps()
+                .min(u128::from(u64::MAX)) as u64,
+            before_fault.clock_regressions(),
+        )
+        .with_clock(None, None)
+        .with_fault(ProductDevRuntimeFault::OwnerReported);
+        assert_eq!(dev_readout(faulted), expected_faulted);
+
+        lifecycle.restart().expect("restart lifecycle");
+        let restarted = lifecycle.readout();
+        let expected_restarted = ProductDevRuntimeReadout::new(
+            dev_binding(restarted),
+            product_dev_host::ProductDevRuntimeMode::Demand,
+            ProductDevRuntimeState::Running,
+        )
+        .with_counters(0, 0, 0, 0)
+        .with_clock(None, None);
+        assert_eq!(dev_readout(restarted), expected_restarted);
     }
 
     #[test]
