@@ -435,6 +435,43 @@ impl Default for ExactExprLimits {
     }
 }
 pub struct ExactEvaluator;
+
+/// The deterministic result and work consumed by one exact expression evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExactEvaluationReceipt {
+    value: MechanicsScalar,
+    work_used: usize,
+}
+impl ExactEvaluationReceipt {
+    /// Returns the evaluated exact scalar.
+    pub fn value(self) -> MechanicsScalar {
+        self.value
+    }
+
+    /// Returns the evaluator work consumed while producing this result.
+    pub fn work_used(self) -> usize {
+        self.work_used
+    }
+}
+
+/// The deterministic result and work consumed by one exact predicate evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExactPredicateEvaluationReceipt {
+    value: bool,
+    work_used: usize,
+}
+impl ExactPredicateEvaluationReceipt {
+    /// Returns the evaluated predicate value.
+    pub fn value(self) -> bool {
+        self.value
+    }
+
+    /// Returns the evaluator work consumed while producing this result.
+    pub fn work_used(self) -> usize {
+        self.work_used
+    }
+}
+
 impl ExactEvaluator {
     /// Checks only deterministic tree quotas; it never gathers or evaluates inputs.
     pub fn validate_structure(
@@ -448,15 +485,38 @@ impl ExactEvaluator {
         inputs: &ExactInputBundle,
         limits: ExactExprLimits,
     ) -> Result<MechanicsScalar, ExactEvaluationError> {
+        Ok(Self::evaluate_with_receipt(expr, inputs, limits)?.value())
+    }
+
+    /// Evaluates an expression and reports the same work counter used to enforce its quota.
+    pub fn evaluate_with_receipt(
+        expr: &ExactExpr,
+        inputs: &ExactInputBundle,
+        limits: ExactExprLimits,
+    ) -> Result<ExactEvaluationReceipt, ExactEvaluationError> {
         Self::validate_structure(expr, limits)?;
         let mut work = 0;
-        eval(expr, inputs, limits, &mut work)
+        let value = eval(expr, inputs, limits, &mut work)?;
+        Ok(ExactEvaluationReceipt {
+            value,
+            work_used: work,
+        })
     }
+
     pub fn evaluate_predicate(
         predicate: &ExactComparison,
         inputs: &ExactInputBundle,
         limits: ExactExprLimits,
     ) -> Result<bool, ExactEvaluationError> {
+        Ok(Self::evaluate_predicate_with_receipt(predicate, inputs, limits)?.value())
+    }
+
+    /// Evaluates a predicate and reports the same work counter used to enforce its quota.
+    pub fn evaluate_predicate_with_receipt(
+        predicate: &ExactComparison,
+        inputs: &ExactInputBundle,
+        limits: ExactExprLimits,
+    ) -> Result<ExactPredicateEvaluationReceipt, ExactEvaluationError> {
         let (a, b, k) = match predicate {
             ExactComparison::Equal(a, b) => (a, b, 0),
             ExactComparison::LessThan(a, b) => (a, b, 1),
@@ -468,12 +528,16 @@ impl ExactEvaluator {
         let mut work = 0;
         let a = eval(a, inputs, limits, &mut work)?;
         let b = eval(b, inputs, limits, &mut work)?;
-        Ok(match k {
+        let value = match k {
             0 => a == b,
             1 => a < b,
             2 => a <= b,
             3 => a > b,
             _ => a >= b,
+        };
+        Ok(ExactPredicateEvaluationReceipt {
+            value,
+            work_used: work,
         })
     }
     /// Checks the combined structural quota of both predicate operands without evaluating.
