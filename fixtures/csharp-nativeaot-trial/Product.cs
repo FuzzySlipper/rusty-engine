@@ -434,6 +434,7 @@ public sealed class Product : IEngineProduct
         ExerciseCharacterController();
         ExerciseLook();
         ExerciseDynamics();
+        PublishPresentation();
     }
 
     public void Start()

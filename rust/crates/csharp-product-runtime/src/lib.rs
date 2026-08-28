@@ -17,8 +17,8 @@ use std::{
 };
 
 use csharp_engine_services::{
-    CsharpAppearanceCatalog, CsharpEngineServicesError, CsharpRenderResource,
-    CsharpRenderResourceKind, EngineServiceSet,
+    CsharpAppearanceCatalog, CsharpEngineCallOutput, CsharpEngineServicesError,
+    CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet,
 };
 use libloading::Library;
 use product_dev_host::{
@@ -244,7 +244,7 @@ pub struct CsharpProductRuntime {
     direct_intents: Vec<DirectInputIntentDescriptor>,
     pending_inputs: Vec<NativeInputOwned>,
     services: Box<EngineServiceSet>,
-    initial_outputs: Vec<ProductDevRuntimeOutput>,
+    initial_output: Option<CsharpEngineCallOutput>,
     render_resources: Vec<ProductDevRendererResource>,
     shutdown_called: bool,
 }
@@ -399,7 +399,12 @@ impl CsharpProductRuntime {
                 "rusty_product_create succeeded but returned a null product handle",
             ));
         }
-        let initial_outputs = service_outputs(services.outputs(&staged))?;
+        // Keep a typed snapshot for the first accepted Start, but prove the
+        // create output is serializable before committing its Engine state.
+        // Start has the authoritative post-transition binding needed to tag
+        // any create-time UI projection without holding this staged call open.
+        service_outputs(services.outputs(&staged))?;
+        let initial_output = Some(services.outputs(&staged));
         services.commit_call(staged);
         services.seal_resource_selection();
         let render_resources = match services
@@ -426,7 +431,7 @@ impl CsharpProductRuntime {
             direct_intents: config.direct_intents,
             pending_inputs: Vec::new(),
             services,
-            initial_outputs,
+            initial_output,
             render_resources,
             shutdown_called: false,
         })
@@ -572,7 +577,7 @@ impl CsharpProductRuntime {
                 .map_err(exercise_runtime_error)?,
         };
         let (_, outputs) = receipt.into_parts();
-        assert_ui_projection_binding(&outputs, expected)
+        assert_ui_projection_binding(&outputs, expected).map(|_| ())
     }
 
     fn exercise_pause_resume(&mut self) -> Result<(), CsharpProductRuntimeError> {
@@ -1181,9 +1186,18 @@ impl CsharpProductRuntime {
             self.services.discard_call();
             return Err(lifecycle_error(error));
         }
-        staged.rebind_ui_runtime(ui_binding(&self.lifecycle));
+        let binding = ui_binding(&self.lifecycle);
+        staged.rebind_ui_runtime(binding);
         let mut outputs = if matches!(operation, ProductDevOperationKind::Start) {
-            std::mem::take(&mut self.initial_outputs)
+            self.initial_output
+                .take()
+                .map(|mut output| {
+                    rebind_ui_output(&mut output, binding);
+                    service_outputs(output).expect(
+                        "rebinding typed create UI identity cannot invalidate prevalidated output",
+                    )
+                })
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -1296,7 +1310,12 @@ impl CsharpProductRuntime {
             ProductDevOperationKind::Start,
             |lifecycle| lifecycle.start(),
         )?;
-        assert_ui_projection_binding(&outputs, input_binding(&self.lifecycle))?;
+        if assert_ui_projection_binding(&outputs, input_binding(&self.lifecycle))? != 2 {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_UI_BINDING",
+                "Start did not expose one create-time and one Start UI projection",
+            ));
+        }
         self.rebind_input(InputClearReason::Restart)
     }
 }
@@ -2802,6 +2821,13 @@ fn admit_renderer_resource(
     .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))
 }
 
+fn rebind_ui_output(output: &mut CsharpEngineCallOutput, binding: RuntimeUiRuntimeBinding) {
+    output.ui = std::mem::take(&mut output.ui)
+        .into_iter()
+        .map(|projection| projection.with_runtime(binding))
+        .collect();
+}
+
 fn service_outputs(
     output: csharp_engine_services::CsharpEngineCallOutput,
 ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
@@ -2824,11 +2850,11 @@ fn service_outputs(
 fn assert_ui_projection_binding(
     outputs: &[ProductDevRuntimeOutput],
     expected: RuntimeInputBinding,
-) -> Result<(), CsharpProductRuntimeError> {
+) -> Result<usize, CsharpProductRuntimeError> {
     let expected_instance = expected.instance_id().value().to_string();
     let expected_generation = expected.generation().value().to_string();
     let expected_revision = expected.control_revision().value().to_string();
-    let mut found = false;
+    let mut count = 0;
     for output in outputs {
         let encoded = serde_json::to_value(output).map_err(|error| {
             CsharpProductRuntimeError::new(
@@ -2839,7 +2865,7 @@ fn assert_ui_projection_binding(
         if encoded.get("kind").and_then(serde_json::Value::as_str) != Some("ui-projection") {
             continue;
         }
-        found = true;
+        count += 1;
         let runtime = encoded
             .get("envelope")
             .and_then(|envelope| envelope.get("runtime"));
@@ -2867,8 +2893,8 @@ fn assert_ui_projection_binding(
             ));
         }
     }
-    if found {
-        Ok(())
+    if count != 0 {
+        Ok(count)
     } else {
         Err(CsharpProductRuntimeError::new(
             "CSHARP_EXERCISE_UI_BINDING",
