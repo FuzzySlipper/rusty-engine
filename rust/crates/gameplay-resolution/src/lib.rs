@@ -12,6 +12,7 @@ mod policy;
 mod program;
 mod receipt;
 mod resolver;
+mod structural;
 mod trace;
 mod transaction;
 
@@ -27,5 +28,10 @@ pub use receipt::{
     ResolutionRequest,
 };
 pub use resolver::StandardResolver;
+pub use structural::{
+    StructuralAttemptCounts, StructuralAttemptRow, StructuralAttemptStatus, StructuralBudget,
+    StructuralCommitStatus, StructuralResolutionError, StructuralResolutionSession,
+    StructuralTraceRow,
+};
 pub use trace::{ResolutionPhase, ResolutionTraceKind, ResolutionTraceRecord, ResolutionTraceSink};
 pub use transaction::ResolutionTransaction;

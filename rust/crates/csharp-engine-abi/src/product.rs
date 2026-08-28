@@ -1648,6 +1648,7 @@ pub struct NativeEngineApi {
     pub persistence: NativePersistenceApi,
     pub content_store: NativeContentStoreApi,
     pub rules: NativeRulesApi,
+    pub resolution: NativeResolutionApi,
     pub standard_exact: NativeStandardExactApi,
     pub standard_continuous: NativeStandardContinuousApi,
     pub continuous_mechanics: NativeContinuousMechanicsApi,

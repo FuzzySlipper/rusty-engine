@@ -10,6 +10,7 @@ mod dynamics;
 mod look;
 mod mechanics;
 mod persistence;
+mod resolution;
 mod rng;
 mod rules;
 mod spatial;

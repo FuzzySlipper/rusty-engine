@@ -544,6 +544,7 @@ dependencies = [
  "entity-state",
  "gameplay-continuous-mechanics",
  "gameplay-mechanics",
+ "gameplay-resolution",
  "gameplay-rules",
  "gameplay-standard",
  "render-host-contracts",

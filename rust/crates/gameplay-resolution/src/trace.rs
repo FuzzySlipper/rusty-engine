@@ -11,7 +11,7 @@ pub enum ResolutionPhase {
     Consequences,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionTraceKind {
     PhaseStarted,
     PhaseCompleted,
@@ -28,6 +28,7 @@ pub enum ResolutionTraceKind {
     Suspended,
     Faulted,
     LimitExceeded,
+    ChildFailed,
     TransactionFailed,
 }
 
