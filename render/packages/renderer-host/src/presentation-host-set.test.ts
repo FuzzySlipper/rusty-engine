@@ -112,15 +112,15 @@ void test('audio feedback acknowledgement remains separate from audio owner repl
         evictedFactCount: 0,
         facts: [],
       }),
-      resetRealizedFacts: () => { acknowledged += 1; },
+      acknowledgeRealizedFacts: (throughFactId) => { acknowledged += throughFactId; },
       reset: () => { ownerResets += 1; },
     },
   });
 
   assert.equal(hosts.readAudioRealizedFacts()?.retainedFactCount, 1);
-  assert.equal(hosts.resetAudioRealizedFacts(), true);
+  assert.equal(hosts.acknowledgeAudioRealizedFacts(7), true);
   assert.equal(ownerResets, 0);
   assert.equal(hosts.resetAudioRealizationOwner(), true);
-  assert.equal(acknowledged, 1);
+  assert.equal(acknowledged, 7);
   assert.equal(ownerResets, 1);
 });

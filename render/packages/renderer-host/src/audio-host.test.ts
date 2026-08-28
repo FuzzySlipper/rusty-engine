@@ -348,7 +348,9 @@ void test('audio realization and diagnostic retention are bounded while fact IDs
     evictedFactCount: 1,
     facts: [{ kind: 'diagnostic', factId: 2, diagnostic: audio.readout().diagnostics[0] }],
   });
-  audio.resetRealizedFacts();
+  audio.acknowledgeRealizedFacts(1);
+  assert.equal(audio.realizedFacts().retainedFactCount, 1, 'acknowledgement preserves later facts');
+  audio.acknowledgeRealizedFacts(2);
   assert.equal(audio.realizedFacts().retainedFactCount, 0);
   assert.equal(audio.realizedFacts().evictedFactCount, 1);
 });

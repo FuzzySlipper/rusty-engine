@@ -502,8 +502,8 @@ export interface RendererSurface {
   readonly projectionSnapshot: () => RenderProjectionSnapshot;
   /** Release pointer capture and clear transient physical input without disposing the surface. */
   readonly releaseInput: () => void;
-  /** Acknowledge audio facts after an attached product route has consumed them. */
-  readonly resetAudioRealizedFacts: () => boolean;
+  /** Acknowledge submitted audio facts while preserving facts that arrived in flight. */
+  readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
   /** Invalidate audio playback ownership when the runtime binding is replaced. */
   readonly resetAudioRealizationOwner: () => boolean;
   /** Submit one explicit frame and return its immutable renderer-owned sample. */
@@ -981,7 +981,8 @@ function mountPreparedRendererSurface(
     projectWorldPoint: backendSurface.projectWorldPoint,
     projectionSnapshot: () => projection.snapshot(),
     releaseInput: controls.releaseInput,
-    resetAudioRealizedFacts: () => presentationHosts?.resetAudioRealizedFacts() ?? false,
+    acknowledgeAudioRealizedFacts: (throughFactId) =>
+      presentationHosts?.acknowledgeAudioRealizedFacts(throughFactId) ?? false,
     resetAudioRealizationOwner: () => presentationHosts?.resetAudioRealizationOwner() ?? false,
     renderOnce,
     resetCamera: () => {

@@ -298,9 +298,17 @@ export class RendererAudioHost {
     };
   }
 
-  /** Acknowledge currently retained realization facts; fact IDs remain monotonic. */
-  resetRealizedFacts(): void {
-    this.#realizedFacts.length = 0;
+  /** Acknowledge submitted realization facts without erasing facts that arrived in flight. */
+  acknowledgeRealizedFacts(throughFactId: number): void {
+    if (!Number.isSafeInteger(throughFactId) || throughFactId < 0) {
+      throw new RangeError('throughFactId must be a non-negative safe integer');
+    }
+    const firstRetained = this.#realizedFacts.findIndex((fact) => fact.factId > throughFactId);
+    if (firstRetained < 0) {
+      this.#realizedFacts.length = 0;
+    } else if (firstRetained > 0) {
+      this.#realizedFacts.splice(0, firstRetained);
+    }
   }
 
   /** Invalidate current playback ownership so late Web Audio callbacks cannot leak forward. */

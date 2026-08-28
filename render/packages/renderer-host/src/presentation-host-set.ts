@@ -45,7 +45,7 @@ interface RendererAudioListenerPresentationHost extends RendererPresentationDoma
     pose: RendererAudioListenerPose,
   ) => readonly AudioProjectionDiagnostic[];
   readonly realizedFacts?: () => RendererAudioRealizedFactsReadout;
-  readonly resetRealizedFacts?: () => void;
+  readonly acknowledgeRealizedFacts?: (throughFactId: number) => void;
   readonly reset?: () => void;
 }
 
@@ -182,11 +182,11 @@ export class RendererPresentationHostSet {
     return host?.realizedFacts?.() ?? null;
   }
 
-  /** Acknowledge audio facts after the product-facing route has consumed them. */
-  resetAudioRealizedFacts(): boolean {
-    const reset = this.#hosts.audio?.resetRealizedFacts;
-    if (reset === undefined) return false;
-    reset();
+  /** Acknowledge audio facts through the submitted ID while preserving later arrivals. */
+  acknowledgeAudioRealizedFacts(throughFactId: number): boolean {
+    const acknowledge = this.#hosts.audio?.acknowledgeRealizedFacts;
+    if (acknowledge === undefined) return false;
+    acknowledge(throughFactId);
     return true;
   }
 
