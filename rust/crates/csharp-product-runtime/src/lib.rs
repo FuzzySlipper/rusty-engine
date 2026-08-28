@@ -8,9 +8,10 @@
 pub use csharp_engine_abi::*;
 
 use std::{
+    collections::BTreeSet,
     ffi::c_void,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     ptr,
     sync::Arc,
 };
@@ -54,6 +55,12 @@ const STANDARD_INPUT_CONTEXT: &str = "gameplay.default";
 const REALTIME_TURN_KIND: NativeProductTurnKind = NativeProductTurnKind::Realtime;
 const DEMAND_TURN_KIND: NativeProductTurnKind = NativeProductTurnKind::Demand;
 const EXTERNAL_TURN_KIND: NativeProductTurnKind = NativeProductTurnKind::External;
+// These are host admission bounds, before the immutable Content service owns
+// references. The per-file limit matches the Engine renderer resource limit;
+// the aggregate limit matches the existing product persistence payload limit.
+const MAX_CONTENT_FILES: usize = 8_192;
+const MAX_CONTENT_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_CONTENT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct CsharpProductRuntimeError {
@@ -1632,6 +1639,88 @@ struct ContentFile {
     bytes: Arc<[u8]>,
 }
 
+#[derive(Debug)]
+struct ContentCandidate {
+    host_path: PathBuf,
+    product_path: Vec<u8>,
+    byte_length: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ContentAdmissionLimits {
+    max_files: usize,
+    max_file_bytes: u64,
+    max_total_bytes: u64,
+}
+
+const CONTENT_ADMISSION_LIMITS: ContentAdmissionLimits = ContentAdmissionLimits {
+    max_files: MAX_CONTENT_FILES,
+    max_file_bytes: MAX_CONTENT_FILE_BYTES,
+    max_total_bytes: MAX_CONTENT_TOTAL_BYTES,
+};
+
+#[derive(Debug, Default)]
+struct ContentAdmissionQuota {
+    files: usize,
+    total_bytes: u64,
+}
+
+impl ContentAdmissionQuota {
+    fn admit(
+        &mut self,
+        path: &[u8],
+        byte_length: u64,
+        limits: ContentAdmissionLimits,
+    ) -> Result<(), CsharpProductRuntimeError> {
+        let files = self.files.checked_add(1).ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_LIMIT",
+                "content file count overflowed its admission limit",
+            )
+        })?;
+        if files > limits.max_files {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_LIMIT",
+                format!(
+                    "content contains more than {} files while admitting {}",
+                    limits.max_files,
+                    display_content_path(path)
+                ),
+            ));
+        }
+        if byte_length > limits.max_file_bytes {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_LIMIT",
+                format!(
+                    "content file {} has {} bytes, exceeding the {} byte limit",
+                    display_content_path(path),
+                    byte_length,
+                    limits.max_file_bytes
+                ),
+            ));
+        }
+        let total_bytes = self.total_bytes.checked_add(byte_length).ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_LIMIT",
+                "content byte total overflowed its admission limit",
+            )
+        })?;
+        if total_bytes > limits.max_total_bytes {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_LIMIT",
+                format!(
+                    "content bytes total {total_bytes} exceeds the {} byte limit while admitting {}",
+                    limits.max_total_bytes,
+                    display_content_path(path)
+                ),
+            ));
+        }
+        self.files = files;
+        self.total_bytes = total_bytes;
+        Ok(())
+    }
+}
+
 /// Exact product content collected once before the native runtime and immutable
 /// browser bundle are constructed. Renderer bytes stay inert until C# selects a
 /// supported resource through the generated appearance API during `Create`.
@@ -1643,14 +1732,43 @@ pub struct CsharpProductContent {
 impl CsharpProductContent {
     pub fn admit(root: impl AsRef<Path>) -> Result<Self, CsharpProductRuntimeError> {
         let root = root.as_ref();
-        if !root.is_dir() {
+        let root_metadata = fs::symlink_metadata(root).map_err(|error| {
+            CsharpProductRuntimeError::new("CSHARP_CONTENT_ROOT", error.to_string())
+        })?;
+        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_CONTENT_ROOT",
-                format!("content directory does not exist: {}", root.display()),
+                format!(
+                    "content root must be a directory, not a symlink: {}",
+                    root.display()
+                ),
             ));
         }
-        let mut files = Vec::new();
-        collect_content_inner(root, root, &mut files)?;
+        let candidates = discover_content(root, CONTENT_ADMISSION_LIMITS)?;
+        let mut files = Vec::with_capacity(candidates.len());
+        // The metadata pass establishes the advertised bounds before immutable
+        // content is retained. Recheck observed bytes after each read: a
+        // concurrent host change is rejected rather than retained over quota.
+        let mut observed_quota = ContentAdmissionQuota::default();
+        for candidate in candidates {
+            let bytes = fs::read(&candidate.host_path).map_err(|error| {
+                CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
+            })?;
+            observed_quota.admit(
+                &candidate.product_path,
+                u64::try_from(bytes.len()).map_err(|_| {
+                    CsharpProductRuntimeError::new(
+                        "CSHARP_CONTENT_LIMIT",
+                        "content file length cannot be represented for admission",
+                    )
+                })?,
+                CONTENT_ADMISSION_LIMITS,
+            )?;
+            files.push(ContentFile {
+                path: candidate.product_path,
+                bytes: Arc::from(bytes),
+            });
+        }
         let appearance_catalog = files
             .iter()
             .find(|file| file.path == b"runtime-appearances.json")
@@ -1664,10 +1782,36 @@ impl CsharpProductContent {
     }
 }
 
-fn collect_content_inner(
+fn discover_content(
+    root: &Path,
+    limits: ContentAdmissionLimits,
+) -> Result<Vec<ContentCandidate>, CsharpProductRuntimeError> {
+    let mut candidates = Vec::new();
+    discover_content_inner(root, root, limits, &mut candidates)?;
+    candidates.sort_by(|left, right| left.product_path.cmp(&right.product_path));
+
+    let mut paths = BTreeSet::new();
+    let mut quota = ContentAdmissionQuota::default();
+    for candidate in &candidates {
+        if !paths.insert(candidate.product_path.as_slice()) {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_PATH",
+                format!(
+                    "multiple host entries normalize to the product content path {}",
+                    display_content_path(&candidate.product_path)
+                ),
+            ));
+        }
+        quota.admit(&candidate.product_path, candidate.byte_length, limits)?;
+    }
+    Ok(candidates)
+}
+
+fn discover_content_inner(
     root: &Path,
     directory: &Path,
-    files: &mut Vec<ContentFile>,
+    limits: ContentAdmissionLimits,
+    candidates: &mut Vec<ContentCandidate>,
 ) -> Result<(), CsharpProductRuntimeError> {
     for entry in fs::read_dir(directory)
         .map_err(|error| CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string()))?
@@ -1676,21 +1820,89 @@ fn collect_content_inner(
             CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
         })?;
         let path = entry.path();
-        if path.is_dir() {
-            collect_content_inner(root, &path, files)?;
-        } else if path.is_file() {
-            let relative = path.strip_prefix(root).expect("walked below content root");
-            let path = relative.to_string_lossy().replace('\\', "/").into_bytes();
-            files.push(ContentFile {
-                path,
-                bytes: Arc::from(fs::read(entry.path()).map_err(|error| {
-                    CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
-                })?),
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
+        })?;
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_ENTRY",
+                format!("content traversal rejects symlink: {}", path.display()),
+            ));
+        }
+        if file_type.is_dir() {
+            discover_content_inner(root, &path, limits, candidates)?;
+        } else if file_type.is_file() {
+            if candidates.len() == limits.max_files {
+                return Err(CsharpProductRuntimeError::new(
+                    "CSHARP_CONTENT_LIMIT",
+                    format!("content contains more than {} files", limits.max_files),
+                ));
+            }
+            candidates.push(ContentCandidate {
+                product_path: canonical_content_path(root, &path)?,
+                host_path: path,
+                byte_length: metadata.len(),
             });
+        } else {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_ENTRY",
+                format!(
+                    "content traversal requires regular files: {}",
+                    path.display()
+                ),
+            ));
         }
     }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(())
+}
+
+fn canonical_content_path(root: &Path, path: &Path) -> Result<Vec<u8>, CsharpProductRuntimeError> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        CsharpProductRuntimeError::new(
+            "CSHARP_CONTENT_PATH",
+            format!("content path escaped its root: {}", path.display()),
+        )
+    })?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_PATH",
+                format!(
+                    "content path must be product-relative and normalized: {}",
+                    path.display()
+                ),
+            ));
+        };
+        let part = part.to_str().ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_PATH",
+                format!("content path must be valid UTF-8: {}", path.display()),
+            )
+        })?;
+        if part.is_empty() || part.contains('\\') {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CONTENT_PATH",
+                format!(
+                    "content path must use canonical forward-slash components: {}",
+                    path.display()
+                ),
+            ));
+        }
+        parts.push(part);
+    }
+    if parts.is_empty() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_CONTENT_PATH",
+            format!("content path must be product-relative: {}", path.display()),
+        ));
+    }
+    Ok(parts.join("/").into_bytes())
+}
+
+fn display_content_path(path: &[u8]) -> String {
+    String::from_utf8_lossy(path).into_owned()
 }
 
 struct NativeInputOwned {
@@ -2305,13 +2517,21 @@ fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static CONTENT_FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    fn content_fixture_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "csharp-product-runtime-{label}-{}-{}",
+            std::process::id(),
+            CONTENT_FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
 
     #[test]
     fn content_collection_leaves_unselected_png_bytes_unvalidated() {
-        let root = std::env::temp_dir().join(format!(
-            "csharp-product-runtime-content-{}",
-            std::process::id()
-        ));
+        let root = content_fixture_root("content");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("content root");
         fs::write(root.join("unrelated-ui.png"), b"not an RGBA PNG").expect("content file");
@@ -2321,6 +2541,141 @@ mod tests {
         fs::remove_dir_all(&root).expect("remove fixture");
 
         assert_eq!(content.files.len(), 1);
+    }
+
+    #[test]
+    fn content_admission_sorts_canonical_nested_paths() {
+        let root = content_fixture_root("sorted-content");
+        fs::create_dir_all(root.join("nested")).expect("nested content root");
+        fs::write(root.join("z-last.txt"), b"z").expect("last content file");
+        fs::write(root.join("nested").join("middle.txt"), b"middle").expect("nested content file");
+        fs::write(root.join("a-first.txt"), b"a").expect("first content file");
+
+        let content = CsharpProductContent::admit(&root).expect("admit valid content");
+        fs::remove_dir_all(&root).expect("remove fixture");
+
+        assert_eq!(
+            content
+                .files
+                .iter()
+                .map(|file| String::from_utf8(file.path.clone()).expect("UTF-8 path"))
+                .collect::<Vec<_>>(),
+            ["a-first.txt", "nested/middle.txt", "z-last.txt"]
+        );
+    }
+
+    #[test]
+    fn content_admission_rejects_legacy_normalization_collision() {
+        let root = content_fixture_root("noncanonical-content");
+        fs::create_dir_all(root.join("nested")).expect("content root");
+        fs::write(root.join("nested").join("file.txt"), b"canonical path")
+            .expect("canonical content path");
+        fs::write(root.join("nested\\file.txt"), b"ambiguous path")
+            .expect("noncanonical content path");
+
+        let error = CsharpProductContent::admit(&root)
+            .err()
+            .expect("reject backslash component");
+        fs::remove_dir_all(&root).expect("remove fixture");
+
+        assert_eq!(error.code(), "CSHARP_CONTENT_PATH");
+    }
+
+    #[test]
+    fn content_admission_quota_is_checked_without_retaining_fixture_bytes() {
+        let limits = ContentAdmissionLimits {
+            max_files: 2,
+            max_file_bytes: 3,
+            max_total_bytes: 5,
+        };
+        let mut quota = ContentAdmissionQuota::default();
+        quota.admit(b"a", 3, limits).expect("first file at limit");
+        quota.admit(b"b", 2, limits).expect("aggregate byte limit");
+        assert_eq!(quota.files, 2);
+        assert_eq!(quota.total_bytes, 5);
+
+        let aggregate = quota
+            .admit(b"c", 0, limits)
+            .expect_err("third file exceeds count");
+        assert_eq!(aggregate.code(), "CSHARP_CONTENT_LIMIT");
+
+        let mut per_file = ContentAdmissionQuota::default();
+        let error = per_file
+            .admit(b"oversize", 4, limits)
+            .expect_err("per-file byte limit");
+        assert_eq!(error.code(), "CSHARP_CONTENT_LIMIT");
+
+        let mut total = ContentAdmissionQuota::default();
+        total.admit(b"first", 3, limits).expect("first file");
+        let error = total
+            .admit(b"second", 3, limits)
+            .expect_err("aggregate byte limit");
+        assert_eq!(error.code(), "CSHARP_CONTENT_LIMIT");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn content_admission_rejects_symlinks_and_special_entries() {
+        use std::os::unix::{fs::symlink, net::UnixListener};
+
+        let root = content_fixture_root("symlink-content");
+        let outside = content_fixture_root("outside-content");
+        fs::create_dir_all(&root).expect("content root");
+        fs::write(&outside, b"outside content").expect("outside content file");
+        symlink(&outside, root.join("linked-file")).expect("symlink fixture");
+
+        let error = CsharpProductContent::admit(&root)
+            .err()
+            .expect("reject file symlink");
+        assert_eq!(error.code(), "CSHARP_CONTENT_ENTRY");
+        fs::remove_file(&outside).expect("remove outside content");
+        fs::remove_dir_all(&root).expect("remove symlink fixture");
+
+        let root = content_fixture_root("special-content");
+        fs::create_dir_all(&root).expect("content root");
+        let socket = UnixListener::bind(root.join("content.socket")).expect("socket fixture");
+
+        let error = CsharpProductContent::admit(&root)
+            .err()
+            .expect("reject socket entry");
+        assert_eq!(error.code(), "CSHARP_CONTENT_ENTRY");
+        drop(socket);
+        fs::remove_dir_all(&root).expect("remove special fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn content_admission_rejects_non_utf8_paths_and_symlink_roots() {
+        use std::{
+            ffi::OsString,
+            os::unix::{ffi::OsStringExt, fs::symlink},
+        };
+
+        let root = content_fixture_root("nonutf8-content");
+        fs::create_dir_all(&root).expect("content root");
+        fs::write(
+            root.join(OsString::from_vec(b"not-utf8-\xff.txt".to_vec())),
+            b"invalid name",
+        )
+        .expect("non-UTF-8 content file");
+
+        let error = CsharpProductContent::admit(&root)
+            .err()
+            .expect("reject non-UTF-8 path");
+        assert_eq!(error.code(), "CSHARP_CONTENT_PATH");
+        fs::remove_dir_all(&root).expect("remove non-UTF-8 fixture");
+
+        let target = content_fixture_root("symlink-root-target");
+        let root = content_fixture_root("symlink-root");
+        fs::create_dir_all(&target).expect("target content root");
+        symlink(&target, &root).expect("root symlink fixture");
+
+        let error = CsharpProductContent::admit(&root)
+            .err()
+            .expect("reject symlink root");
+        assert_eq!(error.code(), "CSHARP_CONTENT_ROOT");
+        fs::remove_file(&root).expect("remove root symlink");
+        fs::remove_dir_all(&target).expect("remove target root");
     }
 
     #[test]
