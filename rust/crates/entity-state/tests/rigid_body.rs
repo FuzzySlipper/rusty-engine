@@ -3,11 +3,12 @@ use core_math::Vec3;
 use entity_state::{
     decode_snapshot, encode_snapshot, validate_rigid_body, ComponentPersistence,
     EntityAuthoringError, EntityAuthoringService, EntityDefinition, EntityState,
-    EntityStateSnapshotError, KinematicComponent, KinematicSnapshot, RigidBodyComponent,
-    RigidBodyShape, RigidBodyStatePublicationError, RigidBodyStateReplacement,
-    RigidBodyValidationError, TransformComponent, MAX_RIGID_BODY_MASS, RIGID_BODY_CODEC_VERSION,
-    RIGID_BODY_COMPONENT_TYPE_ID,
+    EntityStateSnapshotError, KinematicComponent, KinematicSnapshot, Quat, RigidBodyComponent,
+    RigidBodyInertiaPolicy, RigidBodyShape, RigidBodyStatePublicationError,
+    RigidBodyStateReplacement, RigidBodyValidationError, TransformComponent, MAX_RIGID_BODY_MASS,
+    RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
 };
+use serde_json::json;
 
 #[test]
 fn rigid_body_is_a_durable_revision_guarded_component() {
@@ -62,6 +63,64 @@ fn rigid_body_is_a_durable_revision_guarded_component() {
         Err(EntityAuthoringError::StaleComponentRevision { .. })
     ));
     assert_eq!(state.rigid_body(entity), Some(&body));
+}
+
+#[test]
+fn explicit_mass_properties_round_trip_and_legacy_schema_migrates() {
+    let entity = EntityId::new(70);
+    let mut state =
+        EntityState::from_definitions([
+            EntityDefinition::new(entity, "explicit crate").with_transform(Vec3::ZERO)
+        ])
+        .expect("entity fixture");
+    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 4.0)
+        .with_explicit_inertia(
+            Vec3::new(0.2, -0.1, 0.0),
+            Vec3::new(0.5, 1.0, 2.0),
+            Quat::IDENTITY,
+        );
+    let slot = state
+        .component_revision::<RigidBodyComponent>(entity)
+        .expect("built-in registration");
+    EntityAuthoringService
+        .attach_component(&mut state, slot, entity, body)
+        .expect("explicit body");
+
+    let encoded = encode_snapshot(&state).expect("encode explicit body");
+    let reopened = decode_snapshot(&encoded).expect("reopen explicit body");
+    assert_eq!(reopened.rigid_body(entity), Some(&body));
+    assert!(matches!(
+        reopened.rigid_body(entity).unwrap().inertia,
+        RigidBodyInertiaPolicy::Explicit { .. }
+    ));
+
+    let legacy_entity = EntityId::new(69);
+    let mut legacy_state =
+        EntityState::from_definitions([
+            EntityDefinition::new(legacy_entity, "legacy crate").with_transform(Vec3::ZERO)
+        ])
+        .expect("legacy fixture");
+    let legacy_body = RigidBodyComponent::dynamic(
+        RigidBodyShape::Cuboid {
+            half_extents: Vec3::new(0.5, 1.0, 1.5),
+        },
+        3.0,
+    );
+    let legacy_slot = legacy_state
+        .component_revision::<RigidBodyComponent>(legacy_entity)
+        .unwrap();
+    EntityAuthoringService
+        .attach_component(&mut legacy_state, legacy_slot, legacy_entity, legacy_body)
+        .unwrap();
+    let mut legacy: serde_json::Value =
+        serde_json::from_str(&encode_snapshot(&legacy_state).expect("encode legacy fixture"))
+            .unwrap();
+    legacy["registeredComponents"][0]["version"] = json!(1);
+    legacy["registeredComponents"][0]["values"][0]["value"]["inertia"] =
+        json!("deriveFromShapeAndMass");
+
+    let migrated = decode_snapshot(&legacy.to_string()).expect("migrate schema one body");
+    assert_eq!(migrated.rigid_body(legacy_entity), Some(&legacy_body));
 }
 
 #[test]

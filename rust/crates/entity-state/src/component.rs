@@ -215,7 +215,9 @@ impl<T: EntityComponent> ErasedComponentTable for ComponentTable<T> {
         let RegistrationPersistence::Durable(codec) = &self.registration.persistence else {
             return Err(RegisteredComponentSnapshotError::PersistenceMismatch { component });
         };
-        if snapshot.codec != codec.identity || snapshot.version != codec.version {
+        let version_is_current = snapshot.version == codec.version;
+        let version_is_migratable = snapshot.version < codec.version && codec.migrate.is_some();
+        if snapshot.codec != codec.identity || (!version_is_current && !version_is_migratable) {
             return Err(RegisteredComponentSnapshotError::CodecMismatch {
                 component,
                 expected_codec: codec.identity.to_string(),
@@ -246,12 +248,21 @@ impl<T: EntityComponent> ErasedComponentTable for ComponentTable<T> {
                     entity,
                 });
             }
-            let value = (codec.decode)(item.value.clone()).map_err(|reason| {
-                RegisteredComponentSnapshotError::DecodeFailed {
-                    component: component.clone(),
-                    entity,
-                    reason,
-                }
+            let value = if version_is_current {
+                (codec.decode)(item.value.clone())
+            } else {
+                // The version check above guarantees a migrator exists here.
+                (codec
+                    .migrate
+                    .expect("migratable codec has a migration hook"))(
+                    snapshot.version,
+                    item.value.clone(),
+                )
+            }
+            .map_err(|reason| RegisteredComponentSnapshotError::DecodeFailed {
+                component: component.clone(),
+                entity,
+                reason,
             })?;
             (self.registration.validator)(&value).map_err(|reason| {
                 RegisteredComponentSnapshotError::InvalidValue {

@@ -67,10 +67,12 @@ pub use relationship::{
     TransformParentMode,
 };
 pub use rigid_body::{
-    validate_rigid_body, RigidBodyValidationError, MAX_RIGID_BODY_DAMPING, MAX_RIGID_BODY_FRICTION,
-    MAX_RIGID_BODY_GRAVITY_SCALE, MAX_RIGID_BODY_MASS, MAX_RIGID_BODY_RESTITUTION,
+    validate_rigid_body, RigidBodyValidationError, MAX_RIGID_BODY_CENTER_OF_MASS,
+    MAX_RIGID_BODY_DAMPING, MAX_RIGID_BODY_FRICTION, MAX_RIGID_BODY_GRAVITY_SCALE,
+    MAX_RIGID_BODY_MASS, MAX_RIGID_BODY_PRINCIPAL_INERTIA, MAX_RIGID_BODY_RESTITUTION,
     MAX_RIGID_BODY_SHAPE_EXTENT, MAX_RIGID_BODY_SPEED, RIGID_BODY_CODEC_ID,
     RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
+    RIGID_BODY_INERTIA_FRAME_NORMALIZATION_TOLERANCE,
 };
 pub use rigid_body_publication::{
     replace_rigid_body_states, RigidBodyStatePublicationError, RigidBodyStateReceipt,

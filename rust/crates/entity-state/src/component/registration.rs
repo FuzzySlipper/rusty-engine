@@ -91,6 +91,10 @@ pub struct ComponentCodec<T: EntityComponent> {
     pub(super) version: u32,
     pub(super) encode: fn(&T) -> Value,
     pub(super) decode: fn(Value) -> Result<T, String>,
+    /// Optional narrow compatibility hook for older versions of this same
+    /// codec. Newer snapshots are never accepted, and a codec without this
+    /// hook remains exact-version only.
+    pub(super) migrate: Option<fn(u32, Value) -> Result<T, String>>,
 }
 
 impl<T: EntityComponent> fmt::Debug for ComponentCodec<T> {
@@ -124,7 +128,19 @@ impl<T: EntityComponent> ComponentCodec<T> {
             version,
             encode,
             decode,
+            migrate: None,
         })
+    }
+
+    /// Add a compatibility decoder for older versions of this codec.
+    ///
+    /// The callback owns the version transition and must reject versions it
+    /// does not understand. It is intentionally separate from the current
+    /// decoder so current snapshots remain exact and newer snapshots never
+    /// get guessed at.
+    pub fn with_migration(mut self, migrate: fn(u32, Value) -> Result<T, String>) -> Self {
+        self.migrate = Some(migrate);
+        self
     }
 
     pub const fn identity(&self) -> &'static str {

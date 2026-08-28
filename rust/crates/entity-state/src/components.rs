@@ -145,14 +145,19 @@ pub enum RigidBodyShape {
     CapsuleY { half_height: f32, radius: f32 },
 }
 
-/// Solver-owned inertia derived from one admitted shape and the authored mass.
+/// Solver-owned inertia policy for one admitted dynamic body.
 ///
-/// Custom tensors are intentionally not part of schema 1. This keeps invalid or
-/// non-positive inertia out of durable state while still making the policy
-/// explicit and forward-versionable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `mass` on [`RigidBodyComponent`] is always the authoritative total mass.
+/// The explicit branch supplies the remaining mass properties in the body's
+/// local space; it does not add another mass value or a second collider mass.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RigidBodyInertiaPolicy {
     DeriveFromShapeAndMass,
+    Explicit {
+        center_of_mass: Vec3,
+        principal_inertia: Vec3,
+        principal_inertia_local_frame: Quat,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -203,6 +208,22 @@ impl RigidBodyComponent {
             sleeping: false,
             continuous_collision: false,
         }
+    }
+
+    /// Select authored local mass properties while preserving this body's
+    /// authoritative total mass and every other dynamic-body default.
+    pub const fn with_explicit_inertia(
+        mut self,
+        center_of_mass: Vec3,
+        principal_inertia: Vec3,
+        principal_inertia_local_frame: Quat,
+    ) -> Self {
+        self.inertia = RigidBodyInertiaPolicy::Explicit {
+            center_of_mass,
+            principal_inertia,
+            principal_inertia_local_frame,
+        };
+        self
     }
 }
 

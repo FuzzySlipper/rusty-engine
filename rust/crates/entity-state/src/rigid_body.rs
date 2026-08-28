@@ -5,12 +5,16 @@ use crate::component::{ComponentCodec, ComponentRegistration, ComponentTypeId};
 use crate::components::{
     RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyMode, RigidBodyShape,
 };
+use crate::value::Quat;
 
 pub const RIGID_BODY_COMPONENT_TYPE_ID: &str = "rusty.entity.rigid-body";
 pub const RIGID_BODY_CODEC_ID: &str = "rusty.entity.rigid-body.json";
-pub const RIGID_BODY_CODEC_VERSION: u32 = 1;
+pub const RIGID_BODY_CODEC_VERSION: u32 = 2;
 pub const MAX_RIGID_BODY_MASS: f32 = 1_000_000.0;
 pub const MAX_RIGID_BODY_SHAPE_EXTENT: f32 = 10_000.0;
+pub const MAX_RIGID_BODY_CENTER_OF_MASS: f32 = MAX_RIGID_BODY_SHAPE_EXTENT;
+pub const MAX_RIGID_BODY_PRINCIPAL_INERTIA: f32 = f32::MAX;
+pub const RIGID_BODY_INERTIA_FRAME_NORMALIZATION_TOLERANCE: f32 = 0.001;
 pub const MAX_RIGID_BODY_DAMPING: f32 = 1_000.0;
 pub const MAX_RIGID_BODY_GRAVITY_SCALE: f32 = 100.0;
 pub const MAX_RIGID_BODY_FRICTION: f32 = 10.0;
@@ -23,6 +27,9 @@ pub enum RigidBodyValidationError {
     InvalidShape,
     InvalidMass,
     UnsupportedInertiaPolicy,
+    InvalidCenterOfMass,
+    InvalidPrincipalInertia,
+    InvalidPrincipalInertiaFrame,
     InvalidLinearVelocity,
     InvalidAngularVelocity,
     LockedTranslationAxisVelocity,
@@ -42,6 +49,9 @@ impl RigidBodyValidationError {
             Self::InvalidShape => "invalid-rigid-body-shape",
             Self::InvalidMass => "invalid-rigid-body-mass",
             Self::UnsupportedInertiaPolicy => "unsupported-rigid-body-inertia-policy",
+            Self::InvalidCenterOfMass => "invalid-rigid-body-center-of-mass",
+            Self::InvalidPrincipalInertia => "invalid-rigid-body-principal-inertia",
+            Self::InvalidPrincipalInertiaFrame => "invalid-rigid-body-inertia-frame",
             Self::InvalidLinearVelocity => "invalid-rigid-body-linear-velocity",
             Self::InvalidAngularVelocity => "invalid-rigid-body-angular-velocity",
             Self::LockedTranslationAxisVelocity => "locked-rigid-body-translation-axis-velocity",
@@ -74,8 +84,23 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
     if !value.mass.is_finite() || value.mass <= 0.0 || value.mass > MAX_RIGID_BODY_MASS {
         return Err(RigidBodyValidationError::InvalidMass);
     }
-    if value.inertia != RigidBodyInertiaPolicy::DeriveFromShapeAndMass {
-        return Err(RigidBodyValidationError::UnsupportedInertiaPolicy);
+    match value.inertia {
+        RigidBodyInertiaPolicy::DeriveFromShapeAndMass => {}
+        RigidBodyInertiaPolicy::Explicit {
+            center_of_mass,
+            principal_inertia,
+            principal_inertia_local_frame,
+        } => {
+            if !bounded_vector(center_of_mass, MAX_RIGID_BODY_CENTER_OF_MASS) {
+                return Err(RigidBodyValidationError::InvalidCenterOfMass);
+            }
+            if !bounded_positive_vector(principal_inertia, MAX_RIGID_BODY_PRINCIPAL_INERTIA) {
+                return Err(RigidBodyValidationError::InvalidPrincipalInertia);
+            }
+            if !normalized_quaternion(principal_inertia_local_frame) {
+                return Err(RigidBodyValidationError::InvalidPrincipalInertiaFrame);
+            }
+        }
     }
     if !bounded_vector(value.linear_velocity, MAX_RIGID_BODY_SPEED) {
         return Err(RigidBodyValidationError::InvalidLinearVelocity);
@@ -140,6 +165,20 @@ fn bounded_vector(value: Vec3, maximum: f32) -> bool {
         .all(|component| component.is_finite() && component.abs() <= maximum)
 }
 
+fn bounded_positive_vector(value: Vec3, maximum: f32) -> bool {
+    [value.x, value.y, value.z]
+        .into_iter()
+        .all(|component| component.is_finite() && component > 0.0 && component <= maximum)
+}
+
+fn normalized_quaternion(value: Quat) -> bool {
+    value.x.is_finite()
+        && value.y.is_finite()
+        && value.z.is_finite()
+        && value.w.is_finite()
+        && (value.norm_squared() - 1.0).abs() <= RIGID_BODY_INERTIA_FRAME_NORMALIZATION_TOLERANCE
+}
+
 fn has_velocity_on_locked_axis(velocity: Vec3, locked_axes: [bool; 3]) -> bool {
     locked_axes
         .into_iter()
@@ -156,7 +195,8 @@ pub(crate) fn rigid_body_registration() -> ComponentRegistration<RigidBodyCompon
         encode,
         decode,
     )
-    .expect("built-in rigid-body codec identity and version are valid");
+    .expect("built-in rigid-body codec identity and version are valid")
+    .with_migration(migrate);
     ComponentRegistration::durable(type_id, codec).with_validator(|value| {
         validate_rigid_body(value).map_err(|error| error.code().to_string())
     })
@@ -207,17 +247,6 @@ enum RigidBodyInertiaPolicyV1 {
     DeriveFromShapeAndMass,
 }
 
-fn encode(value: &RigidBodyComponent) -> serde_json::Value {
-    serde_json::to_value(RigidBodySnapshotV1::from(*value))
-        .expect("rigid-body schema-1 values always encode")
-}
-
-fn decode(value: serde_json::Value) -> Result<RigidBodyComponent, String> {
-    serde_json::from_value::<RigidBodySnapshotV1>(value)
-        .map(RigidBodyComponent::from)
-        .map_err(|error| error.to_string())
-}
-
 impl From<RigidBodyComponent> for RigidBodySnapshotV1 {
     fn from(value: RigidBodyComponent) -> Self {
         Self {
@@ -239,6 +268,188 @@ impl From<RigidBodyComponent> for RigidBodySnapshotV1 {
             inertia: RigidBodyInertiaPolicyV1::DeriveFromShapeAndMass,
             linear_velocity: value.linear_velocity.to_array(),
             angular_velocity: value.angular_velocity.to_array(),
+            linear_damping: value.linear_damping,
+            angular_damping: value.angular_damping,
+            gravity_scale: value.gravity_scale,
+            friction: value.friction,
+            restitution: value.restitution,
+            collision_groups: value.collision_groups,
+            collision_mask: value.collision_mask,
+            enabled: value.enabled,
+            sleeping: value.sleeping,
+            continuous_collision: value.continuous_collision,
+            locked_translation_axes: value.locked_translation_axes,
+            locked_rotation_axes: value.locked_rotation_axes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RigidBodySnapshotV2 {
+    mode: RigidBodyModeV1,
+    shape: RigidBodyShapeV1,
+    mass: f32,
+    inertia: RigidBodyInertiaPolicyV2,
+    linear_velocity: [f32; 3],
+    angular_velocity: [f32; 3],
+    linear_damping: f32,
+    angular_damping: f32,
+    gravity_scale: f32,
+    friction: f32,
+    restitution: f32,
+    collision_groups: u32,
+    collision_mask: u32,
+    enabled: bool,
+    sleeping: bool,
+    continuous_collision: bool,
+    #[serde(default)]
+    locked_translation_axes: [bool; 3],
+    #[serde(default)]
+    locked_rotation_axes: [bool; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum RigidBodyInertiaPolicyV2 {
+    DeriveFromShapeAndMass,
+    Explicit {
+        center_of_mass: [f32; 3],
+        principal_inertia: [f32; 3],
+        principal_inertia_local_frame: [f32; 4],
+    },
+}
+
+fn encode(value: &RigidBodyComponent) -> serde_json::Value {
+    serde_json::to_value(RigidBodySnapshotV2::from(*value))
+        .expect("rigid-body schema-2 values always encode")
+}
+
+fn decode(value: serde_json::Value) -> Result<RigidBodyComponent, String> {
+    serde_json::from_value::<RigidBodySnapshotV2>(value)
+        .map(RigidBodyComponent::from)
+        .map_err(|error| error.to_string())
+}
+
+fn migrate(version: u32, value: serde_json::Value) -> Result<RigidBodyComponent, String> {
+    match version {
+        1 => serde_json::from_value::<RigidBodySnapshotV1>(value)
+            .map(RigidBodyComponent::from)
+            .map_err(|error| error.to_string()),
+        version => Err(format!("unsupported rigid-body codec version {version}")),
+    }
+}
+
+impl From<RigidBodyComponent> for RigidBodySnapshotV2 {
+    fn from(value: RigidBodyComponent) -> Self {
+        Self {
+            mode: RigidBodyModeV1::Dynamic,
+            shape: match value.shape {
+                RigidBodyShape::Sphere { radius } => RigidBodyShapeV1::Sphere { radius },
+                RigidBodyShape::Cuboid { half_extents } => RigidBodyShapeV1::Cuboid {
+                    half_extents: half_extents.to_array(),
+                },
+                RigidBodyShape::CapsuleY {
+                    half_height,
+                    radius,
+                } => RigidBodyShapeV1::CapsuleY {
+                    half_height,
+                    radius,
+                },
+            },
+            mass: value.mass,
+            inertia: match value.inertia {
+                RigidBodyInertiaPolicy::DeriveFromShapeAndMass => {
+                    RigidBodyInertiaPolicyV2::DeriveFromShapeAndMass
+                }
+                RigidBodyInertiaPolicy::Explicit {
+                    center_of_mass,
+                    principal_inertia,
+                    principal_inertia_local_frame,
+                } => RigidBodyInertiaPolicyV2::Explicit {
+                    center_of_mass: center_of_mass.to_array(),
+                    principal_inertia: principal_inertia.to_array(),
+                    principal_inertia_local_frame: [
+                        principal_inertia_local_frame.x,
+                        principal_inertia_local_frame.y,
+                        principal_inertia_local_frame.z,
+                        principal_inertia_local_frame.w,
+                    ],
+                },
+            },
+            linear_velocity: value.linear_velocity.to_array(),
+            angular_velocity: value.angular_velocity.to_array(),
+            linear_damping: value.linear_damping,
+            angular_damping: value.angular_damping,
+            gravity_scale: value.gravity_scale,
+            friction: value.friction,
+            restitution: value.restitution,
+            collision_groups: value.collision_groups,
+            collision_mask: value.collision_mask,
+            enabled: value.enabled,
+            sleeping: value.sleeping,
+            continuous_collision: value.continuous_collision,
+            locked_translation_axes: value.locked_translation_axes,
+            locked_rotation_axes: value.locked_rotation_axes,
+        }
+    }
+}
+
+impl From<RigidBodySnapshotV2> for RigidBodyComponent {
+    fn from(value: RigidBodySnapshotV2) -> Self {
+        Self {
+            mode: RigidBodyMode::Dynamic,
+            shape: match value.shape {
+                RigidBodyShapeV1::Sphere { radius } => RigidBodyShape::Sphere { radius },
+                RigidBodyShapeV1::Cuboid { half_extents } => RigidBodyShape::Cuboid {
+                    half_extents: Vec3::new(half_extents[0], half_extents[1], half_extents[2]),
+                },
+                RigidBodyShapeV1::CapsuleY {
+                    half_height,
+                    radius,
+                } => RigidBodyShape::CapsuleY {
+                    half_height,
+                    radius,
+                },
+            },
+            mass: value.mass,
+            inertia: match value.inertia {
+                RigidBodyInertiaPolicyV2::DeriveFromShapeAndMass => {
+                    RigidBodyInertiaPolicy::DeriveFromShapeAndMass
+                }
+                RigidBodyInertiaPolicyV2::Explicit {
+                    center_of_mass,
+                    principal_inertia,
+                    principal_inertia_local_frame,
+                } => RigidBodyInertiaPolicy::Explicit {
+                    center_of_mass: Vec3::new(
+                        center_of_mass[0],
+                        center_of_mass[1],
+                        center_of_mass[2],
+                    ),
+                    principal_inertia: Vec3::new(
+                        principal_inertia[0],
+                        principal_inertia[1],
+                        principal_inertia[2],
+                    ),
+                    principal_inertia_local_frame: Quat::new(
+                        principal_inertia_local_frame[0],
+                        principal_inertia_local_frame[1],
+                        principal_inertia_local_frame[2],
+                        principal_inertia_local_frame[3],
+                    ),
+                },
+            },
+            linear_velocity: Vec3::new(
+                value.linear_velocity[0],
+                value.linear_velocity[1],
+                value.linear_velocity[2],
+            ),
+            angular_velocity: Vec3::new(
+                value.angular_velocity[0],
+                value.angular_velocity[1],
+                value.angular_velocity[2],
+            ),
             linear_damping: value.linear_damping,
             angular_damping: value.angular_damping,
             gravity_scale: value.gravity_scale,
@@ -305,7 +516,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_one_round_trips_and_rejects_unknown_fields() {
+    fn schema_two_round_trips_and_rejects_unknown_fields() {
         let body = RigidBodyComponent::dynamic(
             RigidBodyShape::Cuboid {
                 half_extents: Vec3::new(0.5, 1.0, 1.5),
@@ -321,6 +532,63 @@ mod tests {
             .expect("object")
             .insert("unknown".to_string(), serde_json::Value::Bool(true));
         assert!(decode(invalid).is_err());
+    }
+
+    #[test]
+    fn explicit_mass_properties_round_trip_and_validate_without_physics_assumptions() {
+        let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 4.0)
+            .with_explicit_inertia(
+                Vec3::new(0.2, -0.1, 0.0),
+                Vec3::new(0.5, 1.0, 2.0),
+                Quat::IDENTITY,
+            );
+        assert_eq!(decode(encode(&body)), Ok(body));
+        assert_eq!(validate_rigid_body(&body), Ok(()));
+
+        let mut invalid = body;
+        invalid.inertia = RigidBodyInertiaPolicy::Explicit {
+            center_of_mass: Vec3::new(f32::INFINITY, 0.0, 0.0),
+            principal_inertia: Vec3::ONE,
+            principal_inertia_local_frame: Quat::IDENTITY,
+        };
+        assert_eq!(
+            validate_rigid_body(&invalid),
+            Err(RigidBodyValidationError::InvalidCenterOfMass)
+        );
+
+        invalid.inertia = RigidBodyInertiaPolicy::Explicit {
+            center_of_mass: Vec3::ZERO,
+            principal_inertia: Vec3::new(0.0, 1.0, 1.0),
+            principal_inertia_local_frame: Quat::IDENTITY,
+        };
+        assert_eq!(
+            validate_rigid_body(&invalid),
+            Err(RigidBodyValidationError::InvalidPrincipalInertia)
+        );
+
+        invalid.inertia = RigidBodyInertiaPolicy::Explicit {
+            center_of_mass: Vec3::ZERO,
+            principal_inertia: Vec3::ONE,
+            principal_inertia_local_frame: Quat::new(0.0, 0.0, 0.0, 2.0),
+        };
+        assert_eq!(
+            validate_rigid_body(&invalid),
+            Err(RigidBodyValidationError::InvalidPrincipalInertiaFrame)
+        );
+    }
+
+    #[test]
+    fn schema_one_derive_payload_migrates_to_schema_two() {
+        let body = RigidBodyComponent::dynamic(
+            RigidBodyShape::Cuboid {
+                half_extents: Vec3::new(0.5, 1.0, 1.5),
+            },
+            3.0,
+        );
+        let old = serde_json::to_value(RigidBodySnapshotV1::from(body)).expect("schema one value");
+
+        assert_eq!(migrate(1, old), Ok(body));
+        assert!(migrate(0, serde_json::Value::Null).is_err());
     }
 
     #[test]
