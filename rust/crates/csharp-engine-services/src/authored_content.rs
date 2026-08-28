@@ -8,7 +8,14 @@ use asset_catalog::{
     StructuralClass, TextureDefinition, TextureFilter, TextureWrap, UvStrategy, VoxelAlphaMode,
     VoxelAtlasDefinition, VoxelSurfaceBinding, VoxelSurfaceMapping, VoxelSurfaceResolutionError,
 };
+use content_store::{
+    decode_prefab_registry, resolve_prefab as resolve_prefab_owner, PrefabDefinition,
+    PrefabDiagnostic, PrefabOverride, PrefabOverrideValue, PrefabPart, PrefabPartRoleBinding,
+    PrefabPartSource, PrefabRegistry, PrefabRegistryValidationContext, PrefabTransform,
+    PrefabVariantDelta, ValidatedPrefabRegistry,
+};
 use core_assets::{AssetHash, AssetId, AssetKind, AssetReference, AssetVersionReq};
+use core_ids::{PrefabId, PrefabPartId};
 use csharp_engine_abi::*;
 
 use crate::{
@@ -22,6 +29,9 @@ const MAX_DEPENDENCIES: usize = 16384;
 const MAX_PAYLOAD_ROWS: usize = 16384;
 const MAX_TEXT: usize = 4096;
 const MAX_DIAGNOSTICS: usize = 128;
+const MAX_PREFAB_DEFINITIONS: usize = 4096;
+const MAX_PREFAB_ROWS: usize = 16384;
+const MAX_ENTITY_DEFINITION_IDS: usize = 16384;
 
 pub(crate) struct RuntimeAuthoredContentBridge {
     catalogs: BTreeMap<u64, AdmittedAssetCatalog>,
@@ -38,6 +48,12 @@ pub(crate) struct RuntimeAuthoredContentBridge {
     next_surface_lease: u64,
     fallback_leases: BTreeMap<u64, FallbackLease>,
     next_fallback_lease: u64,
+    prefab_registries: BTreeMap<u64, ValidatedPrefabRegistry>,
+    next_prefab_registry: u64,
+    prefab_leases: BTreeMap<u64, PrefabRegistryLease>,
+    next_prefab_lease: u64,
+    resolved_prefab_leases: BTreeMap<u64, ResolvedPrefabLease>,
+    next_resolved_prefab_lease: u64,
     content: Option<*const RuntimeContentBridge>,
 }
 struct Text {
@@ -52,6 +68,137 @@ impl Text {
             len: value.len(),
         }
     }
+}
+
+#[test]
+fn admits_prefab_registry_content_inside_the_owner() {
+    use std::{collections::BTreeMap, sync::Arc};
+
+    fn slice(value: &'static [u8]) -> NativeUtf8Slice {
+        NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        }
+    }
+
+    let source = PrefabRegistry {
+        schema_version: 1,
+        definitions: vec![PrefabDefinition {
+            id: PrefabId::new(1),
+            schema_version: 1,
+            display_name: "Base".into(),
+            parts: vec![PrefabPart {
+                id: PrefabPartId::new(10),
+                namespace: "body/root".into(),
+                display_name: "Body".into(),
+                parent: None,
+                transform: PrefabTransform::IDENTITY,
+                source: PrefabPartSource::Scene {
+                    asset: "scene/test".into(),
+                },
+            }],
+            part_roles: vec![PrefabPartRoleBinding {
+                role: "body/root".into(),
+                part: PrefabPartId::new(10),
+            }],
+            variant: None,
+        }],
+    };
+    let source_context = PrefabRegistryValidationContext::from_asset_ids(
+        [AssetId::parse("scene/test").unwrap()],
+        [] as [String; 0],
+    );
+    let encoded = content_store::encode_prefab_registry(
+        &ValidatedPrefabRegistry::new(source, &source_context).unwrap(),
+    )
+    .unwrap();
+    let mut resources = BTreeMap::new();
+    resources.insert("prefabs.json".to_owned(), Arc::from(encoded.into_bytes()));
+    let mut content = RuntimeContentBridge::new(resources);
+    let content_api = crate::content::api(&mut content);
+    let mut reference = NativeContentReferenceHandle::default();
+    assert_eq!(
+        unsafe {
+            (content_api.open_reference)(
+                content_api.context,
+                &NativeContentOpenRequest {
+                    path: slice(b"prefabs.json"),
+                },
+                &mut reference,
+            )
+        },
+        ABI_OK
+    );
+    let mut bridge = RuntimeAuthoredContentBridge::new();
+    bridge.bind_content(&content);
+    let api = api(&mut bridge);
+    let entries = [NativeAuthoredCatalogEntryInput {
+        id: slice(b"scene/test"),
+        version: 1,
+        has_hash: false,
+        hash: slice(b""),
+        has_source_path: false,
+        source_path: slice(b""),
+        has_label: false,
+        label: slice(b""),
+    }];
+    let mut catalog = NativeAuthoredCatalogHandle::default();
+    let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            (api.admit_catalog)(
+                api.context,
+                &NativeAuthoredCatalogAdmitRequest {
+                    entries: entries.as_ptr(),
+                    entries_len: entries.len(),
+                    dependencies: std::ptr::null(),
+                    dependencies_len: 0,
+                },
+                &mut catalog,
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    let mut registry = NativeAuthoredPrefabRegistryHandle::default();
+    assert_eq!(
+        unsafe {
+            (api.admit_prefab_registry_from_content)(
+                api.context,
+                &NativeAuthoredPrefabRegistryFromContentRequest {
+                    content: reference,
+                    catalog,
+                    entity_definition_ids: std::ptr::null(),
+                    entity_definition_ids_len: 0,
+                },
+                &mut registry,
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    let mut readout: NativeAuthoredPrefabRegistryReadoutLease = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { (api.read_prefab_registry)(api.context, registry, &mut readout) },
+        ABI_OK
+    );
+    assert_eq!((readout.definitions_len, readout.parts_len), (1, 1));
+    assert_eq!(
+        unsafe { (api.destroy_prefab_registry_readout_lease)(api.context, readout.handle) },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe { (api.destroy_prefab_registry)(api.context, registry) },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe { (api.destroy_catalog)(api.context, catalog) },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe { (content_api.destroy_reference)(content_api.context, reference) },
+        ABI_OK
+    );
 }
 struct CatalogLease {
     _text: Text,
@@ -98,9 +245,24 @@ struct DiagnosticLease {
     _text: Text,
     values: Vec<NativeEngineDiagnostic>,
 }
+struct PrefabRegistryLease {
+    _text: Text,
+    definitions: Vec<NativeAuthoredPrefabDefinitionReadout>,
+    parts: Vec<NativeAuthoredPrefabPartReadout>,
+    roles: Vec<NativeAuthoredPrefabRoleReadout>,
+    removed_roles: Vec<NativeAuthoredPrefabRemovedRoleReadout>,
+    overrides: Vec<NativeAuthoredPrefabOverrideReadout>,
+}
+struct ResolvedPrefabLease {
+    _text: Text,
+    variant_id: String,
+    parts: Vec<NativeAuthoredPrefabPartReadout>,
+    roles: Vec<NativeAuthoredPrefabRoleReadout>,
+}
 #[derive(Debug)]
 enum AuthoredError {
     Validation(Vec<CatalogDiagnostic>),
+    PrefabValidation(Vec<PrefabDiagnostic>),
     Simple {
         code: &'static str,
         message: String,
@@ -134,6 +296,12 @@ impl RuntimeAuthoredContentBridge {
             next_surface_lease: 1,
             fallback_leases: BTreeMap::new(),
             next_fallback_lease: 1,
+            prefab_registries: BTreeMap::new(),
+            next_prefab_registry: 1,
+            prefab_leases: BTreeMap::new(),
+            next_prefab_lease: 1,
+            resolved_prefab_leases: BTreeMap::new(),
+            next_resolved_prefab_lease: 1,
             content: None,
         }
     }
@@ -440,6 +608,268 @@ impl RuntimeAuthoredContentBridge {
             .map_err(|_| AuthoredError::simple("catalog content was not UTF-8"))?;
         self.retain(AdmittedAssetCatalog::reopen(text).map_err(admission_error)?)
     }
+    fn prefab_context(
+        &self,
+        catalog: NativeAuthoredCatalogHandle,
+        entity_definition_ids: &[NativeAuthoredPrefabEntityDefinitionInput],
+    ) -> Result<PrefabRegistryValidationContext, AuthoredError> {
+        if entity_definition_ids.len() > MAX_ENTITY_DEFINITION_IDS {
+            return Err(AuthoredError::simple(
+                "prefab entity-definition input exceeds engine bounds",
+            ));
+        }
+        let catalog = self
+            .catalogs
+            .get(&catalog.value)
+            .ok_or_else(|| AuthoredError::simple("unknown catalog handle"))?;
+        let entity_definition_ids = entity_definition_ids
+            .iter()
+            .map(|row| parse_text(row.stable_id, "entity definition id"))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AuthoredError::simple)?;
+        Ok(PrefabRegistryValidationContext::from_asset_ids(
+            catalog.catalog().iter().map(|entry| entry.id.clone()),
+            entity_definition_ids,
+        ))
+    }
+    fn retain_prefab_registry(
+        &mut self,
+        registry: ValidatedPrefabRegistry,
+    ) -> Result<NativeAuthoredPrefabRegistryHandle, AuthoredError> {
+        let value = self.next_prefab_registry;
+        self.next_prefab_registry = value
+            .checked_add(1)
+            .ok_or_else(|| AuthoredError::simple("prefab registry handle exhausted"))?;
+        self.prefab_registries.insert(value, registry);
+        Ok(NativeAuthoredPrefabRegistryHandle { value })
+    }
+    fn admit_prefab_rows(
+        &mut self,
+        request: NativeAuthoredPrefabRegistryAdmitRequest,
+        definitions: &[NativeAuthoredPrefabDefinitionInput],
+        parts: &[NativeAuthoredPrefabPartInput],
+        roles: &[NativeAuthoredPrefabRoleInput],
+        removed_roles: &[NativeAuthoredPrefabRemovedRoleInput],
+        overrides: &[NativeAuthoredPrefabOverrideInput],
+        entity_definition_ids: &[NativeAuthoredPrefabEntityDefinitionInput],
+    ) -> Result<NativeAuthoredPrefabRegistryHandle, AuthoredError> {
+        if definitions.len() > MAX_PREFAB_DEFINITIONS
+            || [
+                parts.len(),
+                roles.len(),
+                removed_roles.len(),
+                overrides.len(),
+            ]
+            .into_iter()
+            .any(|count| count > MAX_PREFAB_ROWS)
+        {
+            return Err(AuthoredError::simple("prefab input exceeds engine bounds"));
+        }
+        let context = self.prefab_context(request.catalog, entity_definition_ids)?;
+        let mut registry = PrefabRegistry {
+            schema_version: request.schema_version,
+            definitions: definitions
+                .iter()
+                .map(prefab_definition)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(AuthoredError::simple)?,
+        };
+        for row in parts {
+            let definition = find_prefab_definition_mut(&mut registry, row.prefab_id)?;
+            definition
+                .parts
+                .push(prefab_part(row).map_err(AuthoredError::simple)?);
+        }
+        for row in roles {
+            let definition = find_prefab_definition_mut(&mut registry, row.prefab_id)?;
+            definition.part_roles.push(PrefabPartRoleBinding {
+                role: parse_text(row.role, "prefab role").map_err(AuthoredError::simple)?,
+                part: PrefabPartId::new(row.part_id),
+            });
+        }
+        for row in removed_roles {
+            let definition = find_prefab_definition_mut(&mut registry, row.prefab_id)?;
+            let variant = definition.variant.as_mut().ok_or_else(|| {
+                AuthoredError::simple("removed role belongs to a non-variant prefab")
+            })?;
+            variant
+                .removed_roles
+                .push(parse_text(row.role, "removed prefab role").map_err(AuthoredError::simple)?);
+        }
+        for row in overrides {
+            let definition = find_prefab_definition_mut(&mut registry, row.prefab_id)?;
+            let variant = definition
+                .variant
+                .as_mut()
+                .ok_or_else(|| AuthoredError::simple("override belongs to a non-variant prefab"))?;
+            variant
+                .overrides
+                .push(prefab_override(row).map_err(AuthoredError::simple)?);
+        }
+        self.retain_prefab_registry(
+            ValidatedPrefabRegistry::new(registry, &context)
+                .map_err(|report| AuthoredError::PrefabValidation(report.diagnostics))?,
+        )
+    }
+    fn admit_prefab_content(
+        &mut self,
+        request: NativeAuthoredPrefabRegistryFromContentRequest,
+        entity_definition_ids: &[NativeAuthoredPrefabEntityDefinitionInput],
+    ) -> Result<NativeAuthoredPrefabRegistryHandle, AuthoredError> {
+        let context = self.prefab_context(request.catalog, entity_definition_ids)?;
+        let content = unsafe {
+            self.content
+                .ok_or_else(|| AuthoredError::simple("authored content is not composed"))?
+                .as_ref()
+        }
+        .ok_or_else(|| AuthoredError::simple("authored content is not composed"))?;
+        let bytes = content
+            .retained_bytes(request.content)
+            .ok_or_else(|| AuthoredError::simple("unknown content reference"))?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| AuthoredError::simple("prefab registry content was not UTF-8"))?;
+        self.retain_prefab_registry(decode_prefab_registry(text, &context).map_err(|error| {
+            AuthoredError::Simple {
+                code: "AUTHORED_PREFAB_CONTENT",
+                message: error.message,
+                source: error.path,
+            }
+        })?)
+    }
+    fn read_prefab_registry(
+        &mut self,
+        handle: NativeAuthoredPrefabRegistryHandle,
+    ) -> Option<NativeAuthoredPrefabRegistryReadoutLease> {
+        let registry = self.prefab_registries.get(&handle.value)?.clone();
+        let value = self.next_prefab_lease;
+        self.next_prefab_lease = value.checked_add(1)?;
+        let mut text = Text { values: vec![] };
+        let mut definitions = vec![];
+        let mut parts = vec![];
+        let mut roles = vec![];
+        let mut removed_roles = vec![];
+        let mut overrides = vec![];
+        for definition in &registry.as_registry().definitions {
+            definitions.push(prefab_definition_row(&mut text, definition));
+            for part in &definition.parts {
+                parts.push(prefab_part_row(&mut text, definition.id, part, None, true));
+            }
+            for role in &definition.part_roles {
+                roles.push(prefab_role_row(
+                    &mut text,
+                    definition.id,
+                    role.part,
+                    &role.role,
+                ));
+            }
+            if let Some(variant) = &definition.variant {
+                for role in &variant.removed_roles {
+                    removed_roles.push(NativeAuthoredPrefabRemovedRoleReadout {
+                        prefab_id: definition.id.raw(),
+                        role: text.copy(role),
+                    });
+                }
+                for item in &variant.overrides {
+                    overrides.push(prefab_override_row(&mut text, definition.id, item));
+                }
+            }
+        }
+        let lease = PrefabRegistryLease {
+            _text: text,
+            definitions,
+            parts,
+            roles,
+            removed_roles,
+            overrides,
+        };
+        let result = NativeAuthoredPrefabRegistryReadoutLease {
+            handle: NativeAuthoredPrefabRegistryReadoutLeaseHandle { value },
+            schema_version: registry.as_registry().schema_version,
+            definitions: lease.definitions.as_ptr(),
+            definitions_len: lease.definitions.len(),
+            parts: lease.parts.as_ptr(),
+            parts_len: lease.parts.len(),
+            roles: lease.roles.as_ptr(),
+            roles_len: lease.roles.len(),
+            removed_roles: lease.removed_roles.as_ptr(),
+            removed_roles_len: lease.removed_roles.len(),
+            overrides: lease.overrides.as_ptr(),
+            overrides_len: lease.overrides.len(),
+        };
+        self.prefab_leases.insert(value, lease);
+        Some(result)
+    }
+    fn resolve_prefab_registry(
+        &mut self,
+        request: NativeAuthoredPrefabResolveRequest,
+        instance_overrides: &[NativeAuthoredPrefabInstanceOverrideInput],
+    ) -> Result<NativeAuthoredResolvedPrefabLease, AuthoredError> {
+        if instance_overrides.len() > MAX_PREFAB_ROWS {
+            return Err(AuthoredError::simple(
+                "prefab instance overrides exceed engine bounds",
+            ));
+        }
+        let registry = self
+            .prefab_registries
+            .get(&request.registry.value)
+            .ok_or_else(|| AuthoredError::simple("unknown prefab registry handle"))?;
+        let overrides = instance_overrides
+            .iter()
+            .map(prefab_instance_override)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AuthoredError::simple)?;
+        let resolved = resolve_prefab_owner(registry, PrefabId::new(request.prefab_id), &overrides)
+            .map_err(|error| AuthoredError::Simple {
+                code: "AUTHORED_PREFAB_RESOLUTION",
+                message: error.to_string(),
+                source: request.prefab_id.to_string(),
+            })?;
+        let value = self.next_resolved_prefab_lease;
+        self.next_resolved_prefab_lease = value
+            .checked_add(1)
+            .ok_or_else(|| AuthoredError::simple("resolved prefab lease exhausted"))?;
+        let mut text = Text { values: vec![] };
+        let mut parts = vec![];
+        let mut roles = vec![];
+        for part in &resolved.parts {
+            parts.push(resolved_prefab_part_row(
+                &mut text,
+                resolved.requested,
+                part,
+            ));
+            for role in &part.roles {
+                roles.push(prefab_role_row(
+                    &mut text,
+                    resolved.requested,
+                    part.id,
+                    role,
+                ));
+            }
+        }
+        let variant_id = resolved.variant_id.unwrap_or_default();
+        let lease = ResolvedPrefabLease {
+            _text: text,
+            variant_id,
+            parts,
+            roles,
+        };
+        let result = NativeAuthoredResolvedPrefabLease {
+            handle: NativeAuthoredResolvedPrefabLeaseHandle { value },
+            requested_id: resolved.requested.raw(),
+            base_id: resolved.base.raw(),
+            has_variant: !lease.variant_id.is_empty(),
+            variant_id: NativeUtf8Slice {
+                bytes: lease.variant_id.as_ptr(),
+                len: lease.variant_id.len(),
+            },
+            parts: lease.parts.as_ptr(),
+            parts_len: lease.parts.len(),
+            roles: lease.roles.as_ptr(),
+            roles_len: lease.roles.len(),
+        };
+        self.resolved_prefab_leases.insert(value, lease);
+        Ok(result)
+    }
     fn read_catalog(
         &mut self,
         handle: NativeAuthoredCatalogHandle,
@@ -708,6 +1138,11 @@ impl RuntimeAuthoredContentBridge {
                 .into_iter()
                 .take(MAX_DIAGNOSTICS)
                 .map(|value| (value.code, value.message, value.path))
+                .collect(),
+            AuthoredError::PrefabValidation(values) => values
+                .into_iter()
+                .take(MAX_DIAGNOSTICS)
+                .map(|value| (value.code.as_str().to_owned(), value.message, value.path))
                 .collect(),
             AuthoredError::Simple {
                 code,
@@ -1340,6 +1775,268 @@ fn parse_reference_parts(
         },
     ))
 }
+fn prefab_definition(
+    row: &NativeAuthoredPrefabDefinitionInput,
+) -> Result<PrefabDefinition, String> {
+    Ok(PrefabDefinition {
+        id: PrefabId::new(row.id),
+        schema_version: row.schema_version,
+        display_name: parse_text(row.display_name, "prefab display name")?,
+        parts: vec![],
+        part_roles: vec![],
+        variant: if row.has_variant {
+            Some(PrefabVariantDelta {
+                variant_id: parse_text(row.variant_id, "prefab variant id")?,
+                base: PrefabId::new(row.variant_base),
+                removed_roles: vec![],
+                overrides: vec![],
+            })
+        } else {
+            None
+        },
+    })
+}
+fn find_prefab_definition_mut(
+    registry: &mut PrefabRegistry,
+    id: u64,
+) -> Result<&mut PrefabDefinition, AuthoredError> {
+    registry
+        .definitions
+        .iter_mut()
+        .find(|definition| definition.id.raw() == id)
+        .ok_or_else(|| AuthoredError::simple("prefab row refers to an absent definition"))
+}
+fn prefab_part(row: &NativeAuthoredPrefabPartInput) -> Result<PrefabPart, String> {
+    Ok(PrefabPart {
+        id: PrefabPartId::new(row.id),
+        namespace: parse_text(row.namespace, "prefab part namespace")?,
+        display_name: parse_text(row.display_name, "prefab part display name")?,
+        parent: row.has_parent.then(|| PrefabPartId::new(row.parent_id)),
+        transform: prefab_transform(row.transform),
+        source: prefab_source(row.source_kind, row.source)?,
+    })
+}
+fn prefab_source(
+    kind: NativeAuthoredPrefabPartSourceKind,
+    source: NativeUtf8Slice,
+) -> Result<PrefabPartSource, String> {
+    let source = parse_text(source, "prefab part source")?;
+    Ok(match kind {
+        NativeAuthoredPrefabPartSourceKind::Scene => PrefabPartSource::Scene { asset: source },
+        NativeAuthoredPrefabPartSourceKind::EntityDefinition => {
+            PrefabPartSource::EntityDefinition { stable_id: source }
+        }
+        NativeAuthoredPrefabPartSourceKind::VoxelObject => {
+            PrefabPartSource::VoxelObject { asset: source }
+        }
+    })
+}
+fn prefab_transform(value: NativeTransform) -> PrefabTransform {
+    PrefabTransform {
+        translation: [
+            value.translation.x,
+            value.translation.y,
+            value.translation.z,
+        ],
+        rotation: [
+            value.rotation.x,
+            value.rotation.y,
+            value.rotation.z,
+            value.rotation.w,
+        ],
+        scale: [value.scale.x, value.scale.y, value.scale.z],
+    }
+}
+fn native_prefab_transform(value: PrefabTransform) -> NativeTransform {
+    NativeTransform {
+        translation: NativeVec3 {
+            x: value.translation[0],
+            y: value.translation[1],
+            z: value.translation[2],
+        },
+        rotation: NativeQuat {
+            x: value.rotation[0],
+            y: value.rotation[1],
+            z: value.rotation[2],
+            w: value.rotation[3],
+        },
+        scale: NativeVec3 {
+            x: value.scale[0],
+            y: value.scale[1],
+            z: value.scale[2],
+        },
+    }
+}
+fn prefab_override(row: &NativeAuthoredPrefabOverrideInput) -> Result<PrefabOverride, String> {
+    Ok(PrefabOverride {
+        target_role: parse_text(row.target_role, "prefab override target role")?,
+        value: prefab_override_value(row.kind, row.transform, row.value, row.active)?,
+    })
+}
+fn prefab_instance_override(
+    row: &NativeAuthoredPrefabInstanceOverrideInput,
+) -> Result<PrefabOverride, String> {
+    Ok(PrefabOverride {
+        target_role: parse_text(row.target_role, "prefab override target role")?,
+        value: prefab_override_value(row.kind, row.transform, row.value, row.active)?,
+    })
+}
+fn prefab_override_value(
+    kind: NativeAuthoredPrefabOverrideKind,
+    transform: NativeTransform,
+    value: NativeUtf8Slice,
+    active: bool,
+) -> Result<PrefabOverrideValue, String> {
+    Ok(match kind {
+        NativeAuthoredPrefabOverrideKind::Transform => PrefabOverrideValue::Transform {
+            transform: prefab_transform(transform),
+        },
+        NativeAuthoredPrefabOverrideKind::EntityDefinition => {
+            PrefabOverrideValue::EntityDefinition {
+                stable_id: parse_text(value, "entity-definition override value")?,
+            }
+        }
+        NativeAuthoredPrefabOverrideKind::Asset => PrefabOverrideValue::Asset {
+            asset: parse_text(value, "asset override value")?,
+        },
+        NativeAuthoredPrefabOverrideKind::Material => PrefabOverrideValue::Material {
+            asset: parse_text(value, "material override value")?,
+        },
+        NativeAuthoredPrefabOverrideKind::Activation => PrefabOverrideValue::Activation { active },
+    })
+}
+fn native_prefab_source(source: &PrefabPartSource) -> (NativeAuthoredPrefabPartSourceKind, &str) {
+    match source {
+        PrefabPartSource::Scene { asset } => (NativeAuthoredPrefabPartSourceKind::Scene, asset),
+        PrefabPartSource::EntityDefinition { stable_id } => (
+            NativeAuthoredPrefabPartSourceKind::EntityDefinition,
+            stable_id,
+        ),
+        PrefabPartSource::VoxelObject { asset } => {
+            (NativeAuthoredPrefabPartSourceKind::VoxelObject, asset)
+        }
+    }
+}
+fn prefab_definition_row(
+    text: &mut Text,
+    definition: &PrefabDefinition,
+) -> NativeAuthoredPrefabDefinitionReadout {
+    let (has_variant, variant_id, variant_base) = definition
+        .variant
+        .as_ref()
+        .map(|variant| (true, variant.variant_id.as_str(), variant.base.raw()))
+        .unwrap_or((false, "", 0));
+    NativeAuthoredPrefabDefinitionReadout {
+        id: definition.id.raw(),
+        schema_version: definition.schema_version,
+        display_name: text.copy(&definition.display_name),
+        has_variant,
+        variant_id: text.copy(variant_id),
+        variant_base,
+    }
+}
+fn prefab_part_row(
+    text: &mut Text,
+    prefab: PrefabId,
+    part: &PrefabPart,
+    material: Option<&str>,
+    active: bool,
+) -> NativeAuthoredPrefabPartReadout {
+    let (source_kind, source) = native_prefab_source(&part.source);
+    NativeAuthoredPrefabPartReadout {
+        prefab_id: prefab.raw(),
+        id: part.id.raw(),
+        namespace: text.copy(&part.namespace),
+        display_name: text.copy(&part.display_name),
+        has_parent: part.parent.is_some(),
+        parent_id: part.parent.map(PrefabPartId::raw).unwrap_or_default(),
+        transform: native_prefab_transform(part.transform),
+        source_kind,
+        source: text.copy(source),
+        has_material: material.is_some(),
+        material: text.copy(material.unwrap_or("")),
+        active,
+    }
+}
+fn prefab_role_row(
+    text: &mut Text,
+    prefab: PrefabId,
+    part: PrefabPartId,
+    role: &str,
+) -> NativeAuthoredPrefabRoleReadout {
+    NativeAuthoredPrefabRoleReadout {
+        prefab_id: prefab.raw(),
+        part_id: part.raw(),
+        role: text.copy(role),
+    }
+}
+fn prefab_override_row(
+    text: &mut Text,
+    prefab: PrefabId,
+    item: &PrefabOverride,
+) -> NativeAuthoredPrefabOverrideReadout {
+    let (kind, transform, value, active) = match &item.value {
+        PrefabOverrideValue::Transform { transform } => (
+            NativeAuthoredPrefabOverrideKind::Transform,
+            native_prefab_transform(*transform),
+            "",
+            false,
+        ),
+        PrefabOverrideValue::EntityDefinition { stable_id } => (
+            NativeAuthoredPrefabOverrideKind::EntityDefinition,
+            native_prefab_transform(PrefabTransform::IDENTITY),
+            stable_id.as_str(),
+            false,
+        ),
+        PrefabOverrideValue::Asset { asset } => (
+            NativeAuthoredPrefabOverrideKind::Asset,
+            native_prefab_transform(PrefabTransform::IDENTITY),
+            asset.as_str(),
+            false,
+        ),
+        PrefabOverrideValue::Material { asset } => (
+            NativeAuthoredPrefabOverrideKind::Material,
+            native_prefab_transform(PrefabTransform::IDENTITY),
+            asset.as_str(),
+            false,
+        ),
+        PrefabOverrideValue::Activation { active } => (
+            NativeAuthoredPrefabOverrideKind::Activation,
+            native_prefab_transform(PrefabTransform::IDENTITY),
+            "",
+            *active,
+        ),
+    };
+    NativeAuthoredPrefabOverrideReadout {
+        prefab_id: prefab.raw(),
+        target_role: text.copy(&item.target_role),
+        kind,
+        transform,
+        value: text.copy(value),
+        active,
+    }
+}
+fn resolved_prefab_part_row(
+    text: &mut Text,
+    prefab: PrefabId,
+    part: &content_store::ResolvedPrefabPart,
+) -> NativeAuthoredPrefabPartReadout {
+    let (source_kind, source) = native_prefab_source(&part.source);
+    NativeAuthoredPrefabPartReadout {
+        prefab_id: prefab.raw(),
+        id: part.id.raw(),
+        namespace: text.copy(&part.namespace),
+        display_name: text.copy(&part.display_name),
+        has_parent: part.parent.is_some(),
+        parent_id: part.parent.map(PrefabPartId::raw).unwrap_or_default(),
+        transform: native_prefab_transform(part.transform),
+        source_kind,
+        source: text.copy(source),
+        has_material: part.material.is_some(),
+        material: text.copy(part.material.as_deref().unwrap_or("")),
+        active: part.active,
+    }
+}
 pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredContentApi {
     NativeAuthoredContentApi {
         context: (bridge as *mut RuntimeAuthoredContentBridge).cast(),
@@ -1357,6 +2054,13 @@ pub(crate) fn api(bridge: &mut RuntimeAuthoredContentBridge) -> NativeAuthoredCo
         destroy_voxel_surface_resolution_lease,
         resolve_fallback,
         destroy_fallback_lease,
+        admit_prefab_registry,
+        admit_prefab_registry_from_content,
+        destroy_prefab_registry,
+        read_prefab_registry,
+        destroy_prefab_registry_readout_lease,
+        resolve_prefab,
+        destroy_resolved_prefab_lease,
         destroy_operation_diagnostic_lease,
     }
 }
@@ -1657,6 +2361,209 @@ unsafe extern "C" fn destroy_fallback_lease(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
     i32::from(handle.value != 0 && bridge.fallback_leases.remove(&handle.value).is_some())
+}
+unsafe extern "C" fn admit_prefab_registry(
+    context: *mut c_void,
+    request: *const NativeAuthoredPrefabRegistryAdmitRequest,
+    result: *mut NativeAuthoredPrefabRegistryHandle,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    let definitions = match unsafe {
+        borrowed_slice(
+            request.definitions,
+            request.definitions_len,
+            "prefab definitions",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let parts = match unsafe { borrowed_slice(request.parts, request.parts_len, "prefab parts") } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let roles = match unsafe { borrowed_slice(request.roles, request.roles_len, "prefab roles") } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let removed_roles = match unsafe {
+        borrowed_slice(
+            request.removed_roles,
+            request.removed_roles_len,
+            "prefab removed roles",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let overrides = match unsafe {
+        borrowed_slice(request.overrides, request.overrides_len, "prefab overrides")
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let entity_definition_ids = match unsafe {
+        borrowed_slice(
+            request.entity_definition_ids,
+            request.entity_definition_ids_len,
+            "prefab entity definition ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.admit_prefab_rows(
+        request,
+        definitions,
+        parts,
+        roles,
+        removed_roles,
+        overrides,
+        entity_definition_ids,
+    ) {
+        Ok(handle) => {
+            unsafe { *result = handle };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"AdmitPrefabRegistry", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn admit_prefab_registry_from_content(
+    context: *mut c_void,
+    request: *const NativeAuthoredPrefabRegistryFromContentRequest,
+    result: *mut NativeAuthoredPrefabRegistryHandle,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    let entity_definition_ids = match unsafe {
+        borrowed_slice(
+            request.entity_definition_ids,
+            request.entity_definition_ids_len,
+            "prefab entity definition ids",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.admit_prefab_content(request, entity_definition_ids) {
+        Ok(handle) => {
+            unsafe { *result = handle };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"AdmitPrefabRegistryFromContent", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn destroy_prefab_registry(
+    context: *mut c_void,
+    handle: NativeAuthoredPrefabRegistryHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    i32::from(handle.value != 0 && bridge.prefab_registries.remove(&handle.value).is_some())
+}
+unsafe extern "C" fn read_prefab_registry(
+    context: *mut c_void,
+    handle: NativeAuthoredPrefabRegistryHandle,
+    result: *mut NativeAuthoredPrefabRegistryReadoutLease,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.read_prefab_registry(handle) {
+        Some(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+unsafe extern "C" fn destroy_prefab_registry_readout_lease(
+    context: *mut c_void,
+    handle: NativeAuthoredPrefabRegistryReadoutLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    i32::from(handle.value != 0 && bridge.prefab_leases.remove(&handle.value).is_some())
+}
+unsafe extern "C" fn resolve_prefab(
+    context: *mut c_void,
+    request: *const NativeAuthoredPrefabResolveRequest,
+    result: *mut NativeAuthoredResolvedPrefabLease,
+    receipt_out: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt_out.is_null() {
+        return 0;
+    }
+    unsafe { *receipt_out = std::mem::zeroed() };
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    let instance_overrides = match unsafe {
+        borrowed_slice(
+            request.instance_overrides,
+            request.instance_overrides_len,
+            "prefab instance overrides",
+        )
+    } {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    match bridge.resolve_prefab_registry(request, instance_overrides) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            unsafe { *receipt_out = receipt(bridge, b"ResolvePrefab", error) };
+            0
+        }
+    }
+}
+unsafe extern "C" fn destroy_resolved_prefab_lease(
+    context: *mut c_void,
+    handle: NativeAuthoredResolvedPrefabLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAuthoredContentBridge>() };
+    i32::from(
+        handle.value != 0
+            && bridge
+                .resolved_prefab_leases
+                .remove(&handle.value)
+                .is_some(),
+    )
 }
 unsafe extern "C" fn destroy_operation_diagnostic_lease(
     context: *mut c_void,
@@ -2205,6 +3112,218 @@ mod tests {
         );
         assert_eq!(
             unsafe { (api.destroy_fallback_lease)(api.context, fallback.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_catalog)(api.context, catalog) },
+            ABI_OK
+        );
+    }
+
+    #[test]
+    fn admits_and_resolves_typed_prefab_registry_through_authored_content() {
+        fn transform(x: f32) -> NativeTransform {
+            NativeTransform {
+                translation: NativeVec3 { x, y: 0.0, z: 0.0 },
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            }
+        }
+        let mut bridge = RuntimeAuthoredContentBridge::new();
+        let api = super::api(&mut bridge);
+        let mut receipt = NativeOperationErrorReceipt {
+            service: slice(b""),
+            operation: slice(b""),
+            status: 0,
+            diagnostics: NativeEngineDiagnosticLease {
+                handle: NativeEngineDiagnosticLeaseHandle::default(),
+                diagnostics: std::ptr::null(),
+                diagnostics_len: 0,
+            },
+        };
+        let catalog_rows = [NativeAuthoredCatalogEntryInput {
+            id: slice(b"scene/test"),
+            version: 1,
+            has_hash: false,
+            hash: slice(b""),
+            has_source_path: false,
+            source_path: slice(b""),
+            has_label: false,
+            label: slice(b""),
+        }];
+        let mut catalog = NativeAuthoredCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.admit_catalog)(
+                    api.context,
+                    &NativeAuthoredCatalogAdmitRequest {
+                        entries: catalog_rows.as_ptr(),
+                        entries_len: catalog_rows.len(),
+                        dependencies: std::ptr::null(),
+                        dependencies_len: 0,
+                    },
+                    &mut catalog,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        let definitions = [
+            NativeAuthoredPrefabDefinitionInput {
+                id: 1,
+                schema_version: 1,
+                display_name: slice(b"Base"),
+                has_variant: false,
+                variant_id: slice(b""),
+                variant_base: 0,
+            },
+            NativeAuthoredPrefabDefinitionInput {
+                id: 2,
+                schema_version: 1,
+                display_name: slice(b"Night"),
+                has_variant: true,
+                variant_id: slice(b"night"),
+                variant_base: 1,
+            },
+        ];
+        let parts = [NativeAuthoredPrefabPartInput {
+            prefab_id: 1,
+            id: 10,
+            namespace: slice(b"body/root"),
+            display_name: slice(b"Body"),
+            has_parent: false,
+            parent_id: 0,
+            transform: transform(0.0),
+            source_kind: NativeAuthoredPrefabPartSourceKind::Scene,
+            source: slice(b"scene/test"),
+        }];
+        let roles = [NativeAuthoredPrefabRoleInput {
+            prefab_id: 1,
+            role: slice(b"body/root"),
+            part_id: 10,
+        }];
+        let variant_overrides = [NativeAuthoredPrefabOverrideInput {
+            prefab_id: 2,
+            target_role: slice(b"body/root"),
+            kind: NativeAuthoredPrefabOverrideKind::Activation,
+            transform: transform(0.0),
+            value: slice(b""),
+            active: false,
+        }];
+        let request = NativeAuthoredPrefabRegistryAdmitRequest {
+            schema_version: 1,
+            catalog,
+            definitions: definitions.as_ptr(),
+            definitions_len: definitions.len(),
+            parts: parts.as_ptr(),
+            parts_len: parts.len(),
+            roles: roles.as_ptr(),
+            roles_len: roles.len(),
+            removed_roles: std::ptr::null(),
+            removed_roles_len: 0,
+            overrides: variant_overrides.as_ptr(),
+            overrides_len: variant_overrides.len(),
+            entity_definition_ids: std::ptr::null(),
+            entity_definition_ids_len: 0,
+        };
+        let mut registry = NativeAuthoredPrefabRegistryHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.admit_prefab_registry)(api.context, &request, &mut registry, &mut receipt)
+            },
+            ABI_OK
+        );
+        let mut inspection: NativeAuthoredPrefabRegistryReadoutLease =
+            unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.read_prefab_registry)(api.context, registry, &mut inspection) },
+            ABI_OK
+        );
+        assert_eq!(
+            (
+                inspection.definitions_len,
+                inspection.parts_len,
+                inspection.roles_len,
+                inspection.overrides_len
+            ),
+            (2, 1, 1, 1)
+        );
+        assert_eq!(
+            unsafe { (api.destroy_prefab_registry_readout_lease)(api.context, inspection.handle) },
+            ABI_OK
+        );
+        let instance_overrides = [NativeAuthoredPrefabInstanceOverrideInput {
+            target_role: slice(b"body/root"),
+            kind: NativeAuthoredPrefabOverrideKind::Transform,
+            transform: transform(3.0),
+            value: slice(b""),
+            active: false,
+        }];
+        let mut resolved: NativeAuthoredResolvedPrefabLease = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.resolve_prefab)(
+                    api.context,
+                    &NativeAuthoredPrefabResolveRequest {
+                        registry,
+                        prefab_id: 2,
+                        instance_overrides: instance_overrides.as_ptr(),
+                        instance_overrides_len: instance_overrides.len(),
+                    },
+                    &mut resolved,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            (resolved.requested_id, resolved.base_id, resolved.parts_len),
+            (2, 1, 1)
+        );
+        assert!(resolved.has_variant);
+        assert_eq!(unsafe { (*resolved.parts).transform.translation.x }, 3.0);
+        assert!(!unsafe { (*resolved.parts).active });
+        assert_eq!(
+            unsafe { (api.destroy_resolved_prefab_lease)(api.context, resolved.handle) },
+            ABI_OK
+        );
+        let bad_parts = [NativeAuthoredPrefabPartInput {
+            source: slice(b"scene/missing"),
+            ..parts[0]
+        }];
+        let mut rejected = NativeAuthoredPrefabRegistryHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.admit_prefab_registry)(
+                    api.context,
+                    &NativeAuthoredPrefabRegistryAdmitRequest {
+                        parts: bad_parts.as_ptr(),
+                        ..request
+                    },
+                    &mut rejected,
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_ne!(receipt.diagnostics.handle.value, 0);
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_prefab_registry)(api.context, registry) },
             ABI_OK
         );
         assert_eq!(

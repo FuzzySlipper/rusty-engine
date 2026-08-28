@@ -1504,6 +1504,13 @@ pub struct NativeAuthoredContentApi {
     pub destroy_voxel_surface_resolution_lease: NativeDestroyAuthoredVoxelSurfaceResolutionLease,
     pub resolve_fallback: NativeResolveAuthoredFallback,
     pub destroy_fallback_lease: NativeDestroyAuthoredFallbackLease,
+    pub admit_prefab_registry: NativeAdmitAuthoredPrefabRegistry,
+    pub admit_prefab_registry_from_content: NativeAdmitAuthoredPrefabRegistryFromContent,
+    pub destroy_prefab_registry: NativeDestroyAuthoredPrefabRegistry,
+    pub read_prefab_registry: NativeReadAuthoredPrefabRegistry,
+    pub destroy_prefab_registry_readout_lease: NativeDestroyAuthoredPrefabRegistryReadoutLease,
+    pub resolve_prefab: NativeResolveAuthoredPrefab,
+    pub destroy_resolved_prefab_lease: NativeDestroyAuthoredResolvedPrefabLease,
     pub destroy_operation_diagnostic_lease: NativeDestroyAuthoredContentOperationDiagnosticLease,
 }
 

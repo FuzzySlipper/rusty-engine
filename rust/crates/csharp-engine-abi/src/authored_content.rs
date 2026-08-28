@@ -2,7 +2,7 @@
 
 use crate::{
     NativeColor, NativeContentReferenceHandle, NativeEngineDiagnosticLeaseHandle,
-    NativeOperationErrorReceipt, NativeUtf8Slice,
+    NativeOperationErrorReceipt, NativeTransform, NativeUtf8Slice,
 };
 use std::ffi::c_void;
 
@@ -14,6 +14,23 @@ pub struct NativeAuthoredCatalogHandle {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeAuthoredCatalogReadoutLeaseHandle {
+    pub value: u64,
+}
+/// Retained, immutable prefab registry owned by the shared AuthoredContent
+/// service. A registry is explicitly validated against one admitted catalog.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAuthoredPrefabRegistryHandle {
+    pub value: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAuthoredPrefabRegistryReadoutLeaseHandle {
+    pub value: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAuthoredResolvedPrefabLeaseHandle {
     pub value: u64,
 }
 
@@ -39,6 +56,22 @@ pub enum NativeAssetVersionRequirementKind {
     Any = 1,
     Exact = 2,
     AtLeast = 3,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredPrefabPartSourceKind {
+    Scene = 1,
+    EntityDefinition = 2,
+    VoxelObject = 3,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredPrefabOverrideKind {
+    Transform = 1,
+    EntityDefinition = 2,
+    Asset = 3,
+    Material = 4,
+    Activation = 5,
 }
 
 #[repr(C)]
@@ -261,6 +294,109 @@ pub struct NativeAuthoredCatalogPayloadAdmitRequest {
 pub struct NativeAuthoredCatalogFromContentRequest {
     pub content: NativeContentReferenceHandle,
 }
+/// A complete prefab definition header. Parts, roles, removed roles, and
+/// overrides are grouped in the surrounding flat request by `prefab_id`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabDefinitionInput {
+    pub id: u64,
+    pub schema_version: u32,
+    pub display_name: NativeUtf8Slice,
+    pub has_variant: bool,
+    pub variant_id: NativeUtf8Slice,
+    pub variant_base: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabPartInput {
+    pub prefab_id: u64,
+    pub id: u64,
+    pub namespace: NativeUtf8Slice,
+    pub display_name: NativeUtf8Slice,
+    pub has_parent: bool,
+    pub parent_id: u64,
+    pub transform: NativeTransform,
+    pub source_kind: NativeAuthoredPrefabPartSourceKind,
+    /// Asset id for Scene/VoxelObject or stable entity-definition id.
+    pub source: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabRoleInput {
+    pub prefab_id: u64,
+    pub role: NativeUtf8Slice,
+    pub part_id: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabRemovedRoleInput {
+    pub prefab_id: u64,
+    pub role: NativeUtf8Slice,
+}
+/// `value` is used by entity-definition, asset, and material overrides;
+/// `transform` is used only by Transform and `active` only by Activation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabOverrideInput {
+    pub prefab_id: u64,
+    pub target_role: NativeUtf8Slice,
+    pub kind: NativeAuthoredPrefabOverrideKind,
+    pub transform: NativeTransform,
+    pub value: NativeUtf8Slice,
+    pub active: bool,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabInstanceOverrideInput {
+    pub target_role: NativeUtf8Slice,
+    pub kind: NativeAuthoredPrefabOverrideKind,
+    pub transform: NativeTransform,
+    pub value: NativeUtf8Slice,
+    pub active: bool,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabEntityDefinitionInput {
+    pub stable_id: NativeUtf8Slice,
+}
+/// Every row is direct and flat. Rust copies and validates values before
+/// retaining a registry handle; no input span survives the call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabRegistryAdmitRequest {
+    pub schema_version: u32,
+    pub catalog: NativeAuthoredCatalogHandle,
+    pub definitions: *const NativeAuthoredPrefabDefinitionInput,
+    pub definitions_len: usize,
+    pub parts: *const NativeAuthoredPrefabPartInput,
+    pub parts_len: usize,
+    pub roles: *const NativeAuthoredPrefabRoleInput,
+    pub roles_len: usize,
+    pub removed_roles: *const NativeAuthoredPrefabRemovedRoleInput,
+    pub removed_roles_len: usize,
+    pub overrides: *const NativeAuthoredPrefabOverrideInput,
+    pub overrides_len: usize,
+    pub entity_definition_ids: *const NativeAuthoredPrefabEntityDefinitionInput,
+    pub entity_definition_ids_len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabRegistryFromContentRequest {
+    pub content: NativeContentReferenceHandle,
+    pub catalog: NativeAuthoredCatalogHandle,
+    pub entity_definition_ids: *const NativeAuthoredPrefabEntityDefinitionInput,
+    pub entity_definition_ids_len: usize,
+}
+/// Instance overrides are intentionally separate from retained registry
+/// definitions: resolution is a pure, non-mutating owner operation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabResolveRequest {
+    pub registry: NativeAuthoredPrefabRegistryHandle,
+    pub prefab_id: u64,
+    pub instance_overrides: *const NativeAuthoredPrefabInstanceOverrideInput,
+    pub instance_overrides_len: usize,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAuthoredCatalogResolveRequest {
@@ -482,6 +618,86 @@ pub struct NativeAuthoredFallbackLease {
     pub outcomes: *const NativeAuthoredFallbackReadout,
     pub outcomes_len: usize,
 }
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabDefinitionReadout {
+    pub id: u64,
+    pub schema_version: u32,
+    pub display_name: NativeUtf8Slice,
+    pub has_variant: bool,
+    pub variant_id: NativeUtf8Slice,
+    pub variant_base: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabPartReadout {
+    pub prefab_id: u64,
+    pub id: u64,
+    pub namespace: NativeUtf8Slice,
+    pub display_name: NativeUtf8Slice,
+    pub has_parent: bool,
+    pub parent_id: u64,
+    pub transform: NativeTransform,
+    pub source_kind: NativeAuthoredPrefabPartSourceKind,
+    pub source: NativeUtf8Slice,
+    pub has_material: bool,
+    /// Empty unless `has_material` is true. Base registry parts have no
+    /// material override, while resolved parts may carry one.
+    pub material: NativeUtf8Slice,
+    pub active: bool,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabRoleReadout {
+    pub prefab_id: u64,
+    pub part_id: u64,
+    pub role: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabRemovedRoleReadout {
+    pub prefab_id: u64,
+    pub role: NativeUtf8Slice,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabOverrideReadout {
+    pub prefab_id: u64,
+    pub target_role: NativeUtf8Slice,
+    pub kind: NativeAuthoredPrefabOverrideKind,
+    pub transform: NativeTransform,
+    pub value: NativeUtf8Slice,
+    pub active: bool,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredPrefabRegistryReadoutLease {
+    pub handle: NativeAuthoredPrefabRegistryReadoutLeaseHandle,
+    pub schema_version: u32,
+    pub definitions: *const NativeAuthoredPrefabDefinitionReadout,
+    pub definitions_len: usize,
+    pub parts: *const NativeAuthoredPrefabPartReadout,
+    pub parts_len: usize,
+    pub roles: *const NativeAuthoredPrefabRoleReadout,
+    pub roles_len: usize,
+    pub removed_roles: *const NativeAuthoredPrefabRemovedRoleReadout,
+    pub removed_roles_len: usize,
+    pub overrides: *const NativeAuthoredPrefabOverrideReadout,
+    pub overrides_len: usize,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredResolvedPrefabLease {
+    pub handle: NativeAuthoredResolvedPrefabLeaseHandle,
+    pub requested_id: u64,
+    pub base_id: u64,
+    pub has_variant: bool,
+    pub variant_id: NativeUtf8Slice,
+    pub parts: *const NativeAuthoredPrefabPartReadout,
+    pub parts_len: usize,
+    pub roles: *const NativeAuthoredPrefabRoleReadout,
+    pub roles_len: usize,
+}
 
 pub type NativeAdmitAuthoredCatalog = unsafe extern "C" fn(
     *mut c_void,
@@ -542,5 +758,34 @@ pub type NativeResolveAuthoredFallback = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyAuthoredFallbackLease =
     unsafe extern "C" fn(*mut c_void, NativeAuthoredFallbackLeaseHandle) -> i32;
+pub type NativeAdmitAuthoredPrefabRegistry = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredPrefabRegistryAdmitRequest,
+    *mut NativeAuthoredPrefabRegistryHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeAdmitAuthoredPrefabRegistryFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredPrefabRegistryFromContentRequest,
+    *mut NativeAuthoredPrefabRegistryHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyAuthoredPrefabRegistry =
+    unsafe extern "C" fn(*mut c_void, NativeAuthoredPrefabRegistryHandle) -> i32;
+pub type NativeReadAuthoredPrefabRegistry = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAuthoredPrefabRegistryHandle,
+    *mut NativeAuthoredPrefabRegistryReadoutLease,
+) -> i32;
+pub type NativeDestroyAuthoredPrefabRegistryReadoutLease =
+    unsafe extern "C" fn(*mut c_void, NativeAuthoredPrefabRegistryReadoutLeaseHandle) -> i32;
+pub type NativeResolveAuthoredPrefab = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredPrefabResolveRequest,
+    *mut NativeAuthoredResolvedPrefabLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyAuthoredResolvedPrefabLease =
+    unsafe extern "C" fn(*mut c_void, NativeAuthoredResolvedPrefabLeaseHandle) -> i32;
 pub type NativeDestroyAuthoredContentOperationDiagnosticLease =
     unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
