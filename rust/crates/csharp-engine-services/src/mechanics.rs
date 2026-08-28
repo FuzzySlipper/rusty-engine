@@ -103,6 +103,44 @@ struct OperationLeaseBacking {
     rows: OperationLeaseRows,
 }
 
+/// One bounded diagnostic is retained per failed Mechanics ABI callback until
+/// the generated facade copies it and invokes `destroy_operation_diagnostic_lease`.
+/// This deliberately shares the engine-wide receipt contract rather than
+/// introducing ambient Mechanics error state.
+struct MechanicsOperationDiagnosticLease {
+    _code: Box<[u8]>,
+    _message: Box<[u8]>,
+    _source: Box<[u8]>,
+    diagnostics: Box<[NativeEngineDiagnostic]>,
+}
+
+impl MechanicsOperationDiagnosticLease {
+    fn new(code: &'static [u8], message: &'static [u8], source: &str) -> Self {
+        let code: Box<[u8]> = code.into();
+        let message: Box<[u8]> = message.into();
+        let source: Box<[u8]> = source.as_bytes().into();
+        let diagnostics = vec![NativeEngineDiagnostic {
+            code: native_utf8(&code),
+            message: native_utf8(&message),
+            source: native_utf8(&source),
+        }]
+        .into_boxed_slice();
+        Self {
+            _code: code,
+            _message: message,
+            _source: source,
+            diagnostics,
+        }
+    }
+}
+
+fn native_utf8(bytes: &[u8]) -> NativeUtf8Slice {
+    NativeUtf8Slice {
+        bytes: bytes.as_ptr(),
+        len: bytes.len(),
+    }
+}
+
 enum OperationLeaseRows {
     StatEvaluation {
         decisions: Vec<NativeMechanicsStatDecisionRow>,
@@ -291,11 +329,13 @@ pub(crate) struct RuntimeMechanicsBridge {
     catalog_leases: BTreeMap<u64, Box<CatalogLeaseBacking>>,
     component_leases: BTreeMap<u64, Box<ComponentLeaseBacking>>,
     operation_leases: BTreeMap<u64, Box<OperationLeaseBacking>>,
+    diagnostic_leases: BTreeMap<u64, MechanicsOperationDiagnosticLease>,
     next_catalog: u64,
     next_entity: u64,
     next_catalog_lease: u64,
     next_component_lease: u64,
     next_operation_lease: u64,
+    next_diagnostic_lease: u64,
 }
 
 impl RuntimeMechanicsBridge {
@@ -307,11 +347,13 @@ impl RuntimeMechanicsBridge {
             catalog_leases: BTreeMap::new(),
             component_leases: BTreeMap::new(),
             operation_leases: BTreeMap::new(),
+            diagnostic_leases: BTreeMap::new(),
             next_catalog: 1,
             next_entity: 1,
             next_catalog_lease: 1,
             next_component_lease: 1,
             next_operation_lease: 1,
+            next_diagnostic_lease: 1,
         }
     }
 
@@ -373,89 +415,493 @@ impl RuntimeMechanicsBridge {
         self.operation_leases.insert(value, Box::new(backing));
         Some(NativeMechanicsOperationLeaseHandle { value })
     }
+
+    fn retain_operation_diagnostic(
+        &mut self,
+        code: &'static [u8],
+        message: &'static [u8],
+        source: &str,
+    ) -> Option<NativeEngineDiagnosticLease> {
+        let value = self.next_diagnostic_lease;
+        self.next_diagnostic_lease = value.checked_add(1)?;
+        let lease = MechanicsOperationDiagnosticLease::new(code, message, source);
+        let diagnostics = NativeEngineDiagnosticLease {
+            handle: NativeEngineDiagnosticLeaseHandle { value },
+            diagnostics: lease.diagnostics.as_ptr(),
+            diagnostics_len: lease.diagnostics.len(),
+        };
+        self.diagnostic_leases.insert(value, lease);
+        Some(diagnostics)
+    }
+
+    fn destroy_operation_diagnostic_lease(
+        &mut self,
+        handle: NativeEngineDiagnosticLeaseHandle,
+    ) -> bool {
+        handle.value != 0 && self.diagnostic_leases.remove(&handle.value).is_some()
+    }
 }
 
 pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
     NativeMechanicsApi {
         context: (bridge as *mut RuntimeMechanicsBridge).cast(),
-        create_catalog,
-        define_stat,
-        define_track,
-        define_contribution,
-        define_source,
-        define_damage_kind,
-        define_damage_response,
-        define_effect,
-        define_capacity_metric,
-        define_item,
-        define_equipment_slot,
-        admit_catalog,
-        destroy_catalog,
-        read_catalog_identity,
-        read_catalog_stats,
-        read_catalog_tracks,
-        read_catalog_sources,
-        read_catalog_stat_contributions,
-        read_catalog_damage_kinds,
-        read_catalog_damage_responses,
-        read_catalog_effects,
-        read_catalog_effect_sources,
-        read_catalog_capacity_metrics,
-        read_catalog_items,
-        read_catalog_item_classifications,
-        read_catalog_item_capacity_costs,
-        read_catalog_item_equipment_policies,
-        read_catalog_item_sources,
-        read_catalog_equipment_slots,
-        read_catalog_slot_classifications,
+        create_catalog: receipt_create_catalog,
+        define_stat: receipt_define_stat,
+        define_track: receipt_define_track,
+        define_contribution: receipt_define_contribution,
+        define_source: receipt_define_source,
+        define_damage_kind: receipt_define_damage_kind,
+        define_damage_response: receipt_define_damage_response,
+        define_effect: receipt_define_effect,
+        define_capacity_metric: receipt_define_capacity_metric,
+        define_item: receipt_define_item,
+        define_equipment_slot: receipt_define_equipment_slot,
+        admit_catalog: receipt_admit_catalog,
+        destroy_catalog: receipt_destroy_catalog,
+        read_catalog_identity: receipt_read_catalog_identity,
+        read_catalog_stats: receipt_read_catalog_stats,
+        read_catalog_tracks: receipt_read_catalog_tracks,
+        read_catalog_sources: receipt_read_catalog_sources,
+        read_catalog_stat_contributions: receipt_read_catalog_stat_contributions,
+        read_catalog_damage_kinds: receipt_read_catalog_damage_kinds,
+        read_catalog_damage_responses: receipt_read_catalog_damage_responses,
+        read_catalog_effects: receipt_read_catalog_effects,
+        read_catalog_effect_sources: receipt_read_catalog_effect_sources,
+        read_catalog_capacity_metrics: receipt_read_catalog_capacity_metrics,
+        read_catalog_items: receipt_read_catalog_items,
+        read_catalog_item_classifications: receipt_read_catalog_item_classifications,
+        read_catalog_item_capacity_costs: receipt_read_catalog_item_capacity_costs,
+        read_catalog_item_equipment_policies: receipt_read_catalog_item_equipment_policies,
+        read_catalog_item_sources: receipt_read_catalog_item_sources,
+        read_catalog_equipment_slots: receipt_read_catalog_equipment_slots,
+        read_catalog_slot_classifications: receipt_read_catalog_slot_classifications,
         destroy_catalog_lease,
-        read_stat_component,
-        read_track_component,
-        read_intrinsic_source_component,
-        read_active_effect_component,
-        read_inventory_stack_component,
-        read_inventory_capacity_limit_component,
-        read_item_component,
-        read_equipment_assignment_component,
+        read_stat_component: receipt_read_stat_component,
+        read_track_component: receipt_read_track_component,
+        read_intrinsic_source_component: receipt_read_intrinsic_source_component,
+        read_active_effect_component: receipt_read_active_effect_component,
+        read_inventory_stack_component: receipt_read_inventory_stack_component,
+        read_inventory_capacity_limit_component: receipt_read_inventory_capacity_limit_component,
+        read_item_component: receipt_read_item_component,
+        read_equipment_assignment_component: receipt_read_equipment_assignment_component,
         destroy_component_lease,
-        bind_entity,
-        rebind_entity,
-        set_initial_stat,
-        set_initial_track,
-        bind_intrinsic_source,
-        set_initial_components,
-        stage_initial_containment,
-        read_containment,
-        commit_entity,
-        set_entity_lifecycle,
-        destroy_entity,
-        read_stat,
-        evaluate_stat,
-        read_track,
-        read_inventory_view,
-        grant_inventory,
-        consume_inventory,
-        transfer_inventory,
-        transfer_unique_item,
-        materialize_unique_item,
-        destroy_unique_item,
-        equip_equipment,
-        unequip_equipment,
-        swap_equipment,
-        set_stat_base,
+        bind_entity: receipt_bind_entity,
+        rebind_entity: receipt_rebind_entity,
+        set_initial_stat: receipt_set_initial_stat,
+        set_initial_track: receipt_set_initial_track,
+        bind_intrinsic_source: receipt_bind_intrinsic_source,
+        set_initial_components: receipt_set_initial_components,
+        stage_initial_containment: receipt_stage_initial_containment,
+        read_containment: receipt_read_containment,
+        commit_entity: receipt_commit_entity,
+        set_entity_lifecycle: receipt_set_entity_lifecycle,
+        destroy_entity: receipt_destroy_entity,
+        read_stat: receipt_read_stat,
+        evaluate_stat: receipt_evaluate_stat,
+        read_track: receipt_read_track,
+        read_inventory_view: receipt_read_inventory_view,
+        grant_inventory: receipt_grant_inventory,
+        consume_inventory: receipt_consume_inventory,
+        transfer_inventory: receipt_transfer_inventory,
+        transfer_unique_item: receipt_transfer_unique_item,
+        materialize_unique_item: receipt_materialize_unique_item,
+        destroy_unique_item: receipt_destroy_unique_item,
+        equip_equipment: receipt_equip_equipment,
+        unequip_equipment: receipt_unequip_equipment,
+        swap_equipment: receipt_swap_equipment,
+        set_stat_base: receipt_set_stat_base,
         destroy_operation_lease,
-        set_track,
-        spend_track,
-        restore_track,
-        reconcile_track,
-        apply_effect,
-        refresh_effect,
-        replace_effect,
-        remove_effect,
-        expire_effect,
-        preview_damage,
-        apply_damage,
+        set_track: receipt_set_track,
+        spend_track: receipt_spend_track,
+        restore_track: receipt_restore_track,
+        reconcile_track: receipt_reconcile_track,
+        apply_effect: receipt_apply_effect,
+        refresh_effect: receipt_refresh_effect,
+        replace_effect: receipt_replace_effect,
+        remove_effect: receipt_remove_effect,
+        expire_effect: receipt_expire_effect,
+        preview_damage: receipt_preview_damage,
+        apply_damage: receipt_apply_damage,
+        destroy_operation_diagnostic_lease,
     }
+}
+
+unsafe fn invoke_with_operation_diagnostic(
+    context: *mut c_void,
+    receipt: *mut NativeOperationErrorReceipt,
+    operation: &'static [u8],
+    callback: impl FnOnce() -> i32,
+    diagnostic: impl FnOnce(&RuntimeMechanicsBridge) -> (&'static [u8], &'static [u8], String),
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: receipt is borrowed only for this direct callback and starts with
+    // no retained diagnostic on every observable path.
+    unsafe { *receipt = std::mem::zeroed() };
+    let status = callback();
+    if status != ABI_OK && !context.is_null() {
+        // SAFETY: every Mechanics callback uses the stable bridge context for
+        // the product lifetime. The inner callback has returned before this
+        // independent diagnostic lease is retained.
+        let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+        let (code, message, source) = diagnostic(bridge);
+        if let Some(diagnostics) = bridge.retain_operation_diagnostic(code, message, &source) {
+            // SAFETY: receipt remains valid for this direct callback.
+            unsafe {
+                *receipt = NativeOperationErrorReceipt {
+                    service: native_utf8(b"Mechanics"),
+                    operation: native_utf8(operation),
+                    status: 0,
+                    diagnostics,
+                };
+            }
+        }
+    }
+    status
+}
+
+macro_rules! mechanics_callback {
+    ($name:ident($($argument:ident : $ty:ty),*) => $inner:path, $operation:literal, $source:expr) => {
+        unsafe extern "C" fn $name(
+            context: *mut c_void,
+            $($argument: $ty,)*
+            receipt: *mut NativeOperationErrorReceipt,
+        ) -> i32 {
+            // SAFETY: the ABI callback forwards its direct-call borrows to the
+            // pre-existing Mechanics implementation before retaining a copied
+            // diagnostic only on failure.
+            unsafe {
+                invoke_with_operation_diagnostic(
+                    context,
+                    receipt,
+                    $operation,
+                    || $inner(context, $($argument),*),
+                    |_| (
+                        b"MECHANICS_OPERATION_FAILED",
+                        b"Mechanics operation failed.",
+                        $source,
+                    ),
+                )
+            }
+        }
+    };
+}
+
+fn catalog_source(handle: NativeMechanicsCatalogHandle) -> String {
+    format!("catalog:{}", handle.value)
+}
+
+unsafe fn bind_request_source(request: *const NativeMechanicsEntityBindRequest) -> String {
+    // SAFETY: the pointer is borrowed by the direct callback; avoid
+    // dereferencing null so malformed pointer calls retain a bounded generic
+    // diagnostic instead of a new validation taxonomy.
+    unsafe {
+        request
+            .as_ref()
+            .map(|value| format!("catalog:{} entity:{}", value.catalog.value, value.entity_id))
+            .unwrap_or_default()
+    }
+}
+
+unsafe fn rebind_request_source(request: *const NativeMechanicsEntityRebindRequest) -> String {
+    unsafe {
+        request
+            .as_ref()
+            .map(|value| {
+                format!(
+                    "catalog:{} entity:{} stamp:{}",
+                    value.catalog.value, value.entity_id, value.expected_stamp
+                )
+            })
+            .unwrap_or_default()
+    }
+}
+
+unsafe fn lifecycle_failure_diagnostic(
+    bridge: &RuntimeMechanicsBridge,
+    request: *const NativeMechanicsLifecycleRequest,
+) -> (&'static [u8], &'static [u8], String) {
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return (
+            b"MECHANICS_OPERATION_FAILED",
+            b"Mechanics operation failed.",
+            String::new(),
+        );
+    };
+    let Some(binding) = bridge.binding(request.entity) else {
+        return (
+            b"MECHANICS_ENTITY_NOT_FOUND",
+            b"Mechanics entity was not found.",
+            format!("entity-handle:{}", request.entity.value),
+        );
+    };
+    let Some(slot) = bridge.catalogs.get(&binding.catalog) else {
+        return (
+            b"MECHANICS_CATALOG_NOT_FOUND",
+            b"Mechanics catalog was not found.",
+            format!(
+                "catalog:{} entity:{}",
+                binding.catalog,
+                binding.entity.raw()
+            ),
+        );
+    };
+    let observed = slot.world.lifecycle_receipt(binding.entity);
+    if matches!(request.guard, NativeMechanicsLifecycleGuard::Exact)
+        && request.expected_stamp != observed.stamp
+    {
+        return (
+            b"MECHANICS_LIFECYCLE_STALE",
+            b"Mechanics entity lifecycle stamp was stale.",
+            format!(
+                "entity:{} expected-stamp:{} observed-stamp:{}",
+                binding.entity.raw(),
+                request.expected_stamp,
+                observed.stamp,
+            ),
+        );
+    }
+    (
+        b"MECHANICS_OPERATION_FAILED",
+        b"Mechanics operation failed.",
+        format!(
+            "entity:{} lifecycle:{:?}",
+            binding.entity.raw(),
+            observed.lifecycle
+        ),
+    )
+}
+
+unsafe fn track_set_failure_diagnostic(
+    bridge: &RuntimeMechanicsBridge,
+    request: *const NativeMechanicsTrackSetRequest,
+) -> (&'static [u8], &'static [u8], String) {
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return (
+            b"MECHANICS_OPERATION_FAILED",
+            b"Mechanics operation failed.",
+            String::new(),
+        );
+    };
+    let Some(binding) = bridge.binding(request.entity) else {
+        return (
+            b"MECHANICS_ENTITY_NOT_FOUND",
+            b"Mechanics entity was not found.",
+            format!("entity-handle:{}", request.entity.value),
+        );
+    };
+    let Some(slot) = bridge.catalogs.get(&binding.catalog) else {
+        return (
+            b"MECHANICS_CATALOG_NOT_FOUND",
+            b"Mechanics catalog was not found.",
+            format!(
+                "catalog:{} entity:{}",
+                binding.catalog,
+                binding.entity.raw()
+            ),
+        );
+    };
+    if let Ok(actual) = slot
+        .world
+        .state
+        .component_revision::<TracksComponent>(binding.entity)
+    {
+        if matches!(request.revision_guard, NativeMechanicsRevisionGuard::Exact)
+            && (request.expected_revision.entity_id != binding.entity.raw()
+                || request.expected_revision.component != NativeMechanicsRevisionComponent::Tracks
+                || request.expected_revision.revision != actual.revision())
+        {
+            return (
+                b"MECHANICS_REVISION_STALE",
+                b"Mechanics component revision was stale.",
+                format!(
+                    "entity:{} component:Tracks expected-revision:{} observed-revision:{}",
+                    binding.entity.raw(),
+                    request.expected_revision.revision,
+                    actual.revision(),
+                ),
+            );
+        }
+    }
+    (
+        b"MECHANICS_OPERATION_FAILED",
+        b"Mechanics operation failed.",
+        format!("entity:{} component:Tracks", binding.entity.raw()),
+    )
+}
+
+mechanics_callback!(receipt_create_catalog(request: *const NativeMechanicsCatalogCreateRequest, result: *mut NativeMechanicsCatalogHandle) => create_catalog, b"CreateCatalog", String::new());
+mechanics_callback!(receipt_define_stat(request: *const NativeMechanicsStatDefinitionRequest) => define_stat, b"DefineStat", String::new());
+mechanics_callback!(receipt_define_track(request: *const NativeMechanicsTrackDefinitionRequest) => define_track, b"DefineTrack", String::new());
+mechanics_callback!(receipt_define_contribution(request: *const NativeMechanicsContributionDefinitionRequest) => define_contribution, b"DefineContribution", String::new());
+mechanics_callback!(receipt_define_source(request: *const NativeMechanicsSourceDefinitionRequest) => define_source, b"DefineSource", String::new());
+mechanics_callback!(receipt_define_damage_kind(request: *const NativeMechanicsDamageKindDefinitionRequest) => define_damage_kind, b"DefineDamageKind", String::new());
+mechanics_callback!(receipt_define_damage_response(request: *const NativeMechanicsDamageResponseDefinitionRequest) => define_damage_response, b"DefineDamageResponse", String::new());
+mechanics_callback!(receipt_define_effect(request: *const NativeMechanicsEffectDefinitionRequest) => define_effect, b"DefineEffect", String::new());
+mechanics_callback!(receipt_define_capacity_metric(request: *const NativeMechanicsCapacityMetricDefinitionRequest) => define_capacity_metric, b"DefineCapacityMetric", String::new());
+mechanics_callback!(receipt_define_item(request: *const NativeMechanicsItemDefinitionRequest) => define_item, b"DefineItem", String::new());
+mechanics_callback!(receipt_define_equipment_slot(request: *const NativeMechanicsEquipmentSlotDefinitionRequest) => define_equipment_slot, b"DefineEquipmentSlot", String::new());
+unsafe extern "C" fn receipt_admit_catalog(
+    context: *mut c_void,
+    handle: NativeMechanicsCatalogHandle,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        invoke_with_operation_diagnostic(
+            context,
+            receipt,
+            b"AdmitCatalog",
+            || admit_catalog(context, handle),
+            |bridge| {
+                let (code, message) = if bridge.catalogs.contains_key(&handle.value) {
+                    (
+                        b"MECHANICS_CATALOG_REJECTED".as_slice(),
+                        b"Mechanics catalog admission was rejected.".as_slice(),
+                    )
+                } else {
+                    (
+                        b"MECHANICS_CATALOG_NOT_FOUND".as_slice(),
+                        b"Mechanics catalog was not found.".as_slice(),
+                    )
+                };
+                (code, message, catalog_source(handle))
+            },
+        )
+    }
+}
+mechanics_callback!(receipt_destroy_catalog(handle: NativeMechanicsCatalogHandle) => destroy_catalog, b"DestroyCatalog", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_identity(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsCatalogIdentityLease) => read_catalog_identity, b"ReadCatalogIdentity", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_stats(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsStatCatalogLease) => read_catalog_stats, b"ReadCatalogStats", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_tracks(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsTrackCatalogLease) => read_catalog_tracks, b"ReadCatalogTracks", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_sources(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsSourceCatalogLease) => read_catalog_sources, b"ReadCatalogSources", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_stat_contributions(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsStatContributionCatalogLease) => read_catalog_stat_contributions, b"ReadCatalogStatContributions", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_damage_kinds(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsDamageKindCatalogLease) => read_catalog_damage_kinds, b"ReadCatalogDamageKinds", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_damage_responses(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsDamageResponseCatalogLease) => read_catalog_damage_responses, b"ReadCatalogDamageResponses", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_effects(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsEffectCatalogLease) => read_catalog_effects, b"ReadCatalogEffects", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_effect_sources(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsEffectSourceCatalogLease) => read_catalog_effect_sources, b"ReadCatalogEffectSources", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_capacity_metrics(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsCapacityMetricCatalogLease) => read_catalog_capacity_metrics, b"ReadCatalogCapacityMetrics", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_items(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsItemCatalogLease) => read_catalog_items, b"ReadCatalogItems", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_item_classifications(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsItemClassificationCatalogLease) => read_catalog_item_classifications, b"ReadCatalogItemClassifications", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_item_capacity_costs(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsItemCapacityCostCatalogLease) => read_catalog_item_capacity_costs, b"ReadCatalogItemCapacityCosts", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_item_equipment_policies(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsItemEquipmentPolicyCatalogLease) => read_catalog_item_equipment_policies, b"ReadCatalogItemEquipmentPolicies", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_item_sources(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsItemSourceCatalogLease) => read_catalog_item_sources, b"ReadCatalogItemSources", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_equipment_slots(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsEquipmentSlotCatalogLease) => read_catalog_equipment_slots, b"ReadCatalogEquipmentSlots", catalog_source(handle));
+mechanics_callback!(receipt_read_catalog_slot_classifications(handle: NativeMechanicsCatalogHandle, result: *mut NativeMechanicsSlotClassificationCatalogLease) => read_catalog_slot_classifications, b"ReadCatalogSlotClassifications", catalog_source(handle));
+unsafe extern "C" fn receipt_read_stat_component(
+    context: *mut c_void,
+    handle: NativeMechanicsEntityHandle,
+    result: *mut NativeMechanicsStatComponentLease,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        invoke_with_operation_diagnostic(
+            context,
+            receipt,
+            b"ReadStatComponent",
+            || read_stat_component(context, handle, result),
+            |bridge| {
+                let (code, message) = if bridge.binding(handle).is_some() {
+                    (
+                        b"MECHANICS_COMPONENT_UNAVAILABLE".as_slice(),
+                        b"Mechanics component was unavailable for the entity.".as_slice(),
+                    )
+                } else {
+                    (
+                        b"MECHANICS_ENTITY_NOT_FOUND".as_slice(),
+                        b"Mechanics entity was not found.".as_slice(),
+                    )
+                };
+                (code, message, format!("entity-handle:{}", handle.value))
+            },
+        )
+    }
+}
+mechanics_callback!(receipt_read_track_component(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsTrackComponentLease) => read_track_component, b"ReadTrackComponent", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_read_intrinsic_source_component(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsIntrinsicSourceComponentLease) => read_intrinsic_source_component, b"ReadIntrinsicSourceComponent", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_read_active_effect_component(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsActiveEffectComponentLease) => read_active_effect_component, b"ReadActiveEffectComponent", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_read_inventory_stack_component(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsInventoryStackComponentLease) => read_inventory_stack_component, b"ReadInventoryStackComponent", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_read_inventory_capacity_limit_component(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsInventoryCapacityLimitComponentLease) => read_inventory_capacity_limit_component, b"ReadInventoryCapacityLimitComponent", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_read_item_component(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsItemComponentLease) => read_item_component, b"ReadItemComponent", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_read_equipment_assignment_component(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsEquipmentAssignmentComponentLease) => read_equipment_assignment_component, b"ReadEquipmentAssignmentComponent", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_bind_entity(request: *const NativeMechanicsEntityBindRequest, result: *mut NativeMechanicsEntityHandle) => bind_entity, b"BindEntity", bind_request_source(request));
+mechanics_callback!(receipt_rebind_entity(request: *const NativeMechanicsEntityRebindRequest, result: *mut NativeMechanicsEntityHandle) => rebind_entity, b"RebindEntity", rebind_request_source(request));
+mechanics_callback!(receipt_set_initial_stat(request: *const NativeMechanicsInitialStatRequest) => set_initial_stat, b"SetInitialStat", String::new());
+mechanics_callback!(receipt_set_initial_track(request: *const NativeMechanicsInitialTrackRequest) => set_initial_track, b"SetInitialTrack", String::new());
+mechanics_callback!(receipt_bind_intrinsic_source(request: *const NativeMechanicsIntrinsicSourceRequest) => bind_intrinsic_source, b"BindIntrinsicSource", String::new());
+mechanics_callback!(receipt_set_initial_components(request: *const NativeMechanicsInitialComponentsRequest) => set_initial_components, b"SetInitialComponents", String::new());
+mechanics_callback!(receipt_stage_initial_containment(request: *const NativeMechanicsInitialContainmentRequest) => stage_initial_containment, b"StageInitialContainment", String::new());
+mechanics_callback!(receipt_read_containment(request: *const NativeMechanicsContainmentReadRequest, result: *mut NativeMechanicsContainmentReceipt) => read_containment, b"ReadContainment", String::new());
+mechanics_callback!(receipt_commit_entity(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsEntityReceipt) => commit_entity, b"CommitEntity", format!("entity-handle:{}", handle.value));
+unsafe extern "C" fn receipt_set_entity_lifecycle(
+    context: *mut c_void,
+    request: *const NativeMechanicsLifecycleRequest,
+    result: *mut NativeMechanicsLifecycleReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        invoke_with_operation_diagnostic(
+            context,
+            receipt,
+            b"SetEntityLifecycle",
+            || set_entity_lifecycle(context, request, result),
+            |bridge| lifecycle_failure_diagnostic(bridge, request),
+        )
+    }
+}
+mechanics_callback!(receipt_destroy_entity(handle: NativeMechanicsEntityHandle) => destroy_entity, b"DestroyEntity", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_read_stat(request: *const NativeMechanicsStatReadRequest, result: *mut NativeMechanicsStatReadReceipt) => read_stat, b"ReadStat", String::new());
+mechanics_callback!(receipt_evaluate_stat(request: *const NativeMechanicsStatOperationRequest, result: *mut NativeMechanicsStatEvaluationLease) => evaluate_stat, b"EvaluateStat", String::new());
+mechanics_callback!(receipt_read_track(request: *const NativeMechanicsTrackReadRequest, result: *mut NativeMechanicsTrackReadLease) => read_track, b"ReadTrack", String::new());
+mechanics_callback!(receipt_read_inventory_view(handle: NativeMechanicsEntityHandle, result: *mut NativeMechanicsInventoryViewLease) => read_inventory_view, b"ReadInventoryView", format!("entity-handle:{}", handle.value));
+mechanics_callback!(receipt_grant_inventory(request: *const NativeMechanicsInventoryMutationRequest, result: *mut NativeMechanicsInventoryMutationLease) => grant_inventory, b"GrantInventory", String::new());
+mechanics_callback!(receipt_consume_inventory(request: *const NativeMechanicsInventoryMutationRequest, result: *mut NativeMechanicsInventoryMutationLease) => consume_inventory, b"ConsumeInventory", String::new());
+mechanics_callback!(receipt_transfer_inventory(request: *const NativeMechanicsInventoryTransferRequest, result: *mut NativeMechanicsInventoryTransferLease) => transfer_inventory, b"TransferInventory", String::new());
+mechanics_callback!(receipt_transfer_unique_item(request: *const NativeMechanicsUniqueItemTransferRequest, result: *mut NativeMechanicsUniqueItemTransferLease) => transfer_unique_item, b"TransferUniqueItem", String::new());
+mechanics_callback!(receipt_materialize_unique_item(request: *const NativeMechanicsUniqueItemMaterializationRequest, result: *mut NativeMechanicsUniqueItemMaterializationLease) => materialize_unique_item, b"MaterializeUniqueItem", String::new());
+mechanics_callback!(receipt_destroy_unique_item(request: *const NativeMechanicsUniqueItemDestroyRequest, result: *mut NativeMechanicsUniqueItemDestroyLease) => destroy_unique_item, b"DestroyUniqueItem", String::new());
+mechanics_callback!(receipt_equip_equipment(request: *const NativeMechanicsEquipmentEquipRequest, result: *mut NativeMechanicsEquipmentMutationLease) => equip_equipment, b"EquipEquipment", String::new());
+mechanics_callback!(receipt_unequip_equipment(request: *const NativeMechanicsEquipmentUnequipRequest, result: *mut NativeMechanicsEquipmentMutationLease) => unequip_equipment, b"UnequipEquipment", String::new());
+mechanics_callback!(receipt_swap_equipment(request: *const NativeMechanicsEquipmentSwapRequest, result: *mut NativeMechanicsEquipmentMutationLease) => swap_equipment, b"SwapEquipment", String::new());
+mechanics_callback!(receipt_set_stat_base(request: *const NativeMechanicsStatBaseMutationRequest, result: *mut NativeMechanicsStatMutationLease) => set_stat_base, b"SetStatBase", String::new());
+unsafe extern "C" fn receipt_set_track(
+    context: *mut c_void,
+    request: *const NativeMechanicsTrackSetRequest,
+    result: *mut NativeMechanicsTrackSetLease,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        invoke_with_operation_diagnostic(
+            context,
+            receipt,
+            b"SetTrack",
+            || set_track(context, request, result),
+            |bridge| track_set_failure_diagnostic(bridge, request),
+        )
+    }
+}
+mechanics_callback!(receipt_spend_track(request: *const NativeMechanicsTrackMutationRequest, result: *mut NativeMechanicsTrackMutationLease) => spend_track, b"SpendTrack", String::new());
+mechanics_callback!(receipt_restore_track(request: *const NativeMechanicsTrackMutationRequest, result: *mut NativeMechanicsTrackMutationLease) => restore_track, b"RestoreTrack", String::new());
+mechanics_callback!(receipt_reconcile_track(request: *const NativeMechanicsTrackReconciliationRequest, result: *mut NativeMechanicsTrackReconciliationLease) => reconcile_track, b"ReconcileTrack", String::new());
+mechanics_callback!(receipt_apply_effect(request: *const NativeMechanicsEffectMutationRequest, result: *mut NativeMechanicsEffectOperationLease) => apply_effect, b"ApplyEffect", String::new());
+mechanics_callback!(receipt_refresh_effect(request: *const NativeMechanicsEffectRefreshRequest, result: *mut NativeMechanicsEffectOperationLease) => refresh_effect, b"RefreshEffect", String::new());
+mechanics_callback!(receipt_replace_effect(request: *const NativeMechanicsEffectMutationRequest, result: *mut NativeMechanicsEffectOperationLease) => replace_effect, b"ReplaceEffect", String::new());
+mechanics_callback!(receipt_remove_effect(request: *const NativeMechanicsEffectRemovalRequest, result: *mut NativeMechanicsEffectOperationLease) => remove_effect, b"RemoveEffect", String::new());
+mechanics_callback!(receipt_expire_effect(request: *const NativeMechanicsEffectRemovalRequest, result: *mut NativeMechanicsEffectOperationLease) => expire_effect, b"ExpireEffect", String::new());
+mechanics_callback!(receipt_preview_damage(request: *const NativeMechanicsDamageRequest, result: *mut NativeMechanicsDamageLease) => preview_damage, b"PreviewDamage", String::new());
+mechanics_callback!(receipt_apply_damage(request: *const NativeMechanicsDamageRequest, result: *mut NativeMechanicsDamageLease) => apply_damage, b"ApplyDamage", String::new());
+
+unsafe extern "C" fn destroy_operation_diagnostic_lease(
+    context: *mut c_void,
+    handle: NativeEngineDiagnosticLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: context is the stable Mechanics bridge for the product lifetime.
+    i32::from(unsafe {
+        (&mut *context.cast::<RuntimeMechanicsBridge>()).destroy_operation_diagnostic_lease(handle)
+    })
 }
 
 unsafe extern "C" fn create_catalog(
@@ -7164,6 +7610,198 @@ mod tests {
                 )
             },
             0
+        );
+    }
+
+    fn copied_diagnostic(value: NativeUtf8Slice) -> String {
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(value.bytes, value.len)) }
+            .to_owned()
+    }
+
+    fn assert_operation_diagnostic(
+        api: &NativeMechanicsApi,
+        receipt: NativeOperationErrorReceipt,
+        code: &str,
+        source_fragment: &str,
+    ) {
+        assert_eq!(copied_diagnostic(receipt.service), "Mechanics");
+        assert_eq!(receipt.status, 0);
+        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
+        assert_eq!(copied_diagnostic(diagnostic.code), code);
+        assert!(copied_diagnostic(diagnostic.source).contains(source_fragment));
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            0
+        );
+    }
+
+    #[test]
+    fn generated_mechanics_callbacks_copy_and_release_typed_owner_diagnostics() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let api = api(&mut bridge);
+
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.admit_catalog)(
+                    api.context,
+                    NativeMechanicsCatalogHandle { value: 999 },
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_operation_diagnostic(&api, receipt, "MECHANICS_CATALOG_NOT_FOUND", "catalog:999");
+
+        let mut component = unsafe { std::mem::zeroed::<NativeMechanicsStatComponentLease>() };
+        receipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.read_stat_component)(
+                    api.context,
+                    NativeMechanicsEntityHandle { value: 888 },
+                    &mut component,
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_operation_diagnostic(
+            &api,
+            receipt,
+            "MECHANICS_ENTITY_NOT_FOUND",
+            "entity-handle:888",
+        );
+
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    api.context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("diagnostic_fixture"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                define_track(
+                    api.context,
+                    &NativeMechanicsTrackDefinitionRequest {
+                        catalog,
+                        id: utf8("stamina"),
+                        minimum: 0,
+                        maximum_kind: NativeMechanicsTrackMaximumKind::Fixed,
+                        fixed_maximum: 10,
+                        maximum_stat: utf8(""),
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(api.context, catalog) }, ABI_OK);
+        let mut entity = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    api.context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 77,
+                        identity: utf8("diagnostic_entity"),
+                    },
+                    &mut entity,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                set_initial_track(
+                    api.context,
+                    &NativeMechanicsInitialTrackRequest {
+                        entity,
+                        track: utf8("stamina"),
+                        current: 5,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut committed = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(api.context, entity, &mut committed) },
+            ABI_OK
+        );
+
+        let mut lifecycle = NativeMechanicsLifecycleReceipt::default();
+        receipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.set_entity_lifecycle)(
+                    api.context,
+                    &NativeMechanicsLifecycleRequest {
+                        entity,
+                        lifecycle: NativeMechanicsEntityLifecycle::Disabled,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: committed.lifecycle.stamp + 1,
+                    },
+                    &mut lifecycle,
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_operation_diagnostic(
+            &api,
+            receipt,
+            "MECHANICS_LIFECYCLE_STALE",
+            "entity:77 expected-stamp:",
+        );
+
+        let mut track = NativeMechanicsTrackSetLease::default();
+        receipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.set_track)(
+                    api.context,
+                    &NativeMechanicsTrackSetRequest {
+                        entity,
+                        operation: utf8("diagnostic_set_track"),
+                        source: utf8("diagnostic_source"),
+                        track: utf8("stamina"),
+                        value: 4,
+                        policy: NativeMechanicsTrackSetPolicy::RejectOutOfBounds,
+                        revision_guard: NativeMechanicsRevisionGuard::Exact,
+                        expected_revision: NativeMechanicsTracksRevision {
+                            entity_id: 77,
+                            revision: 999,
+                            component: NativeMechanicsRevisionComponent::Tracks,
+                        },
+                    },
+                    &mut track,
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_operation_diagnostic(
+            &api,
+            receipt,
+            "MECHANICS_REVISION_STALE",
+            "entity:77 component:Tracks expected-revision:999",
         );
     }
 

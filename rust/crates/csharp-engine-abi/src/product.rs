@@ -571,115 +571,169 @@ pub type NativeCreateMechanicsCatalog = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsCatalogCreateRequest,
     *mut NativeMechanicsCatalogHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDefineMechanicsStat =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsStatDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsTrack =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsTrackDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsContribution =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsContributionDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsSource =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsSourceDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsDamageKind =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsDamageKindDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsDamageResponse =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsDamageResponseDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsEffect =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsEffectDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsCapacityMetric =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsCapacityMetricDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsItem =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsItemDefinitionRequest) -> i32;
-pub type NativeDefineMechanicsEquipmentSlot =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsEquipmentSlotDefinitionRequest) -> i32;
-pub type NativeAdmitMechanicsCatalog =
-    unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogHandle) -> i32;
-pub type NativeDestroyMechanicsCatalog =
-    unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogHandle) -> i32;
+pub type NativeDefineMechanicsStat = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsStatDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsTrackDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsContribution = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsContributionDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsSource = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsSourceDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsDamageKind = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsDamageKindDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsDamageResponse = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsDamageResponseDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsEffect = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEffectDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsCapacityMetric = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsCapacityMetricDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsItem = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsItemDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDefineMechanicsEquipmentSlot = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsEquipmentSlotDefinitionRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeAdmitMechanicsCatalog = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsCatalog = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadMechanicsCatalogIdentity = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsCatalogIdentityLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogStats = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsStatCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogTracks = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsTrackCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogSources = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsSourceCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogStatContributions = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsStatContributionCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogDamageKinds = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsDamageKindCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogDamageResponses = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsDamageResponseCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogEffects = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsEffectCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogEffectSources = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsEffectSourceCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogCapacityMetrics = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsCapacityMetricCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogItems = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsItemCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogItemClassifications = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsItemClassificationCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogItemCapacityCosts = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsItemCapacityCostCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogItemEquipmentPolicies = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsItemEquipmentPolicyCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogItemSources = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsItemSourceCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogEquipmentSlots = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsEquipmentSlotCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsCatalogSlotClassifications = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsCatalogHandle,
     *mut NativeMechanicsSlotClassificationCatalogLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyMechanicsCatalogLease =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsCatalogLeaseHandle) -> i32;
@@ -687,41 +741,49 @@ pub type NativeReadMechanicsStatComponent = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsStatComponentLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsTrackComponent = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsTrackComponentLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsIntrinsicSourceComponent = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsIntrinsicSourceComponentLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsActiveEffectComponent = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsActiveEffectComponentLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsInventoryStackComponent = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsInventoryStackComponentLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsInventoryCapacityLimitComponent = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsInventoryCapacityLimitComponentLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsItemComponent = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsItemComponentLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsEquipmentAssignmentComponent = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsEquipmentAssignmentComponentLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyMechanicsComponentLease =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsComponentLeaseHandle) -> i32;
@@ -729,165 +791,215 @@ pub type NativeBindMechanicsEntity = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEntityBindRequest,
     *mut NativeMechanicsEntityHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRebindMechanicsEntity = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEntityRebindRequest,
     *mut NativeMechanicsEntityHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeSetMechanicsInitialStat =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialStatRequest) -> i32;
-pub type NativeSetMechanicsInitialTrack =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialTrackRequest) -> i32;
-pub type NativeBindMechanicsIntrinsicSource =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsIntrinsicSourceRequest) -> i32;
-pub type NativeSetMechanicsInitialComponents =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialComponentsRequest) -> i32;
-pub type NativeStageMechanicsInitialContainment =
-    unsafe extern "C" fn(*mut c_void, *const NativeMechanicsInitialContainmentRequest) -> i32;
+pub type NativeSetMechanicsInitialStat = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsInitialStatRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetMechanicsInitialTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsInitialTrackRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeBindMechanicsIntrinsicSource = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsIntrinsicSourceRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetMechanicsInitialComponents = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsInitialComponentsRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeStageMechanicsInitialContainment = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsInitialContainmentRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadMechanicsContainment = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsContainmentReadRequest,
     *mut NativeMechanicsContainmentReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeCommitMechanicsEntity = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsEntityReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
-pub type NativeDestroyMechanicsEntity =
-    unsafe extern "C" fn(*mut c_void, NativeMechanicsEntityHandle) -> i32;
+pub type NativeDestroyMechanicsEntity = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsEntityHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSetMechanicsEntityLifecycle = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsLifecycleRequest,
     *mut NativeMechanicsLifecycleReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsStat = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsStatReadRequest,
     *mut NativeMechanicsStatReadReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeEvaluateMechanicsStat = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsStatOperationRequest,
     *mut NativeMechanicsStatEvaluationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsTrack = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsTrackReadRequest,
     *mut NativeMechanicsTrackReadLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadMechanicsInventoryView = unsafe extern "C" fn(
     *mut c_void,
     NativeMechanicsEntityHandle,
     *mut NativeMechanicsInventoryViewLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeGrantMechanicsInventory = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsInventoryMutationRequest,
     *mut NativeMechanicsInventoryMutationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeConsumeMechanicsInventory = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsInventoryMutationRequest,
     *mut NativeMechanicsInventoryMutationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeTransferMechanicsInventory = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsInventoryTransferRequest,
     *mut NativeMechanicsInventoryTransferLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeTransferMechanicsUniqueItem = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsUniqueItemTransferRequest,
     *mut NativeMechanicsUniqueItemTransferLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeMaterializeMechanicsUniqueItem = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsUniqueItemMaterializationRequest,
     *mut NativeMechanicsUniqueItemMaterializationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyMechanicsUniqueItem = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsUniqueItemDestroyRequest,
     *mut NativeMechanicsUniqueItemDestroyLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeEquipMechanicsEquipment = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEquipmentEquipRequest,
     *mut NativeMechanicsEquipmentMutationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeUnequipMechanicsEquipment = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEquipmentUnequipRequest,
     *mut NativeMechanicsEquipmentMutationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSwapMechanicsEquipment = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEquipmentSwapRequest,
     *mut NativeMechanicsEquipmentMutationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSetMechanicsStatBase = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsStatBaseMutationRequest,
     *mut NativeMechanicsStatMutationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeDestroyMechanicsOperationLease =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsOperationLeaseHandle) -> i32;
+pub type NativeDestroyMechanicsOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeSetMechanicsTrack = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsTrackSetRequest,
     *mut NativeMechanicsTrackSetLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeSpendMechanicsTrack = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsTrackMutationRequest,
     *mut NativeMechanicsTrackMutationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRestoreMechanicsTrack = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsTrackMutationRequest,
     *mut NativeMechanicsTrackMutationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReconcileMechanicsTrack = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsTrackReconciliationRequest,
     *mut NativeMechanicsTrackReconciliationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeApplyMechanicsEffect = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEffectMutationRequest,
     *mut NativeMechanicsEffectOperationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRefreshMechanicsEffect = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEffectRefreshRequest,
     *mut NativeMechanicsEffectOperationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReplaceMechanicsEffect = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEffectMutationRequest,
     *mut NativeMechanicsEffectOperationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRemoveMechanicsEffect = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEffectRemovalRequest,
     *mut NativeMechanicsEffectOperationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeExpireMechanicsEffect = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEffectRemovalRequest,
     *mut NativeMechanicsEffectOperationLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativePreviewMechanicsDamage = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsDamageRequest,
     *mut NativeMechanicsDamageLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeApplyMechanicsDamage = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsDamageRequest,
     *mut NativeMechanicsDamageLease,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 
 pub type NativeOpenPersistenceStore = unsafe extern "C" fn(
@@ -1206,6 +1318,7 @@ pub struct NativeMechanicsApi {
     pub swap_equipment: NativeSwapMechanicsEquipment,
     pub set_stat_base: NativeSetMechanicsStatBase,
     pub destroy_operation_lease: NativeDestroyMechanicsOperationLease,
+    pub destroy_operation_diagnostic_lease: NativeDestroyMechanicsOperationDiagnosticLease,
     pub set_track: NativeSetMechanicsTrack,
     pub spend_track: NativeSpendMechanicsTrack,
     pub restore_track: NativeRestoreMechanicsTrack,

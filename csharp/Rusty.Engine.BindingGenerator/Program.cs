@@ -970,7 +970,14 @@ internal static class Emit
     };
     private static string RawIdentifier(string value) => CSharpKeywords.Contains(value) ? $"@{value}" : value;
     private static string SafeServiceName(string service) => service == "Rng" ? "Random" : service;
-    private static bool IsDestroy(Callback callback) => callback.Parameters.Count == 2 && BindingModel.Bare(callback.Parameters[1]).EndsWith("Handle", StringComparison.Ordinal) && callback.Name.Contains("Destroy", StringComparison.Ordinal);
+    private static bool IsDestroy(Callback callback)
+    {
+        int parameterCount = callback.Parameters.Count;
+        if (BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray())) parameterCount--;
+        return parameterCount == 2
+            && BindingModel.Bare(callback.Parameters[1]).EndsWith("Handle", StringComparison.Ordinal)
+            && callback.Name.Contains("Destroy", StringComparison.Ordinal);
+    }
     private static IEnumerable<string> LeaseHandleTypes(BindingModel model) => model.Structs.Values.Where(value => BindingModel.IsLeaseResult(value.Name, model.Structs)).Select(value => BindingModel.Bare(value.Fields.Single(field => field.Name == "handle").Type)).Distinct(StringComparer.Ordinal);
     private static IEnumerable<string> DisposableHandleTypes(BindingModel model) => model.Services.SelectMany(service => service.Operations.Select(operation => model.Callbacks[operation.Callback])).Where(IsDestroy).Select(callback => BindingModel.Bare(callback.Parameters[1])).Where(handle => !LeaseHandleTypes(model).Contains(handle, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal);
     private static bool IsDisposableHandle(BindingModel model, string handle) => DisposableHandleTypes(model).Contains(handle, StringComparer.Ordinal);
