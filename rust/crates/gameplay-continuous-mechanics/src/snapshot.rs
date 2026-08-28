@@ -1,4 +1,6 @@
 use core_ids::EntityId;
+use std::collections::BTreeSet;
+
 use entity_state::{decode_snapshot_with_registry, ComponentRegistry, EntityState};
 
 use crate::{
@@ -49,7 +51,30 @@ pub fn validate_state_against_continuous_catalog(
     state: &EntityState,
     catalog: &ContinuousMechanicsCatalog,
 ) -> Result<(), ContinuousMechanicsError> {
+    validate_state_continuous_components(state, catalog, |_| true)
+}
+
+/// Validates only the continuous component facts belonging to the supplied
+/// exact-world entity subset.  Multi-catalog composition keeps catalog
+/// association outside the component payload, so validating an entire shared
+/// world against one catalog would reject valid facts owned by another one.
+pub fn validate_state_entities_against_continuous_catalog(
+    state: &EntityState,
+    catalog: &ContinuousMechanicsCatalog,
+    entities: &BTreeSet<EntityId>,
+) -> Result<(), ContinuousMechanicsError> {
+    validate_state_continuous_components(state, catalog, |entity| entities.contains(&entity))
+}
+
+fn validate_state_continuous_components(
+    state: &EntityState,
+    catalog: &ContinuousMechanicsCatalog,
+    included: impl Fn(EntityId) -> bool,
+) -> Result<(), ContinuousMechanicsError> {
     for (entity, component) in state.components::<ContinuousStatsComponent>()? {
+        if !included(entity) {
+            continue;
+        }
         ensure_version(
             catalog,
             entity,
@@ -71,6 +96,9 @@ pub fn validate_state_against_continuous_catalog(
         }
     }
     for (entity, component) in state.components::<crate::ContinuousIntrinsicSourcesComponent>()? {
+        if !included(entity) {
+            continue;
+        }
         ensure_version(
             catalog,
             entity,
@@ -86,6 +114,9 @@ pub fn validate_state_against_continuous_catalog(
         }
     }
     for (entity, component) in state.components::<ContinuousActiveEffectsComponent>()? {
+        if !included(entity) {
+            continue;
+        }
         ensure_version(
             catalog,
             entity,
@@ -101,6 +132,9 @@ pub fn validate_state_against_continuous_catalog(
         }
     }
     for (entity, component) in state.components::<ContinuousTracksComponent>()? {
+        if !included(entity) {
+            continue;
+        }
         ensure_version(
             catalog,
             entity,

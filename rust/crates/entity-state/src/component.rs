@@ -491,6 +491,30 @@ impl ComponentStore {
         })
     }
 
+    /// Rebases only the supplied component slots.  Unlike the whole-world
+    /// restore path, this preserves revision evidence for unrelated component
+    /// families and entities while still treating absence as a guarded slot.
+    pub(crate) fn rebase_component_revisions_from(
+        &mut self,
+        current: &Self,
+        persisted_revisions: &BTreeMap<(EntityId, ComponentTypeId), u64>,
+    ) -> bool {
+        if self.tables.len() != current.tables.len() || self.tables.keys().ne(current.tables.keys())
+        {
+            return false;
+        }
+        self.tables.iter_mut().all(|(type_id, table)| {
+            let entities = persisted_revisions
+                .keys()
+                .filter_map(|(entity, component)| (component == type_id).then_some(*entity))
+                .collect::<BTreeSet<_>>();
+            entities.is_empty()
+                || current.tables.get(type_id).is_some_and(|current_table| {
+                    table.rebase_revisions(current_table.as_ref(), &entities, persisted_revisions)
+                })
+        })
+    }
+
     pub(crate) fn remove_entity(&mut self, entity: EntityId) {
         for table in self.tables.values_mut() {
             table.remove_entity(entity);

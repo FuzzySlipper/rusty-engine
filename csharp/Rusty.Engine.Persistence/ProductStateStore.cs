@@ -442,3 +442,130 @@ public sealed class ContinuousMechanicsEntityWorldProductStateLoad<TState> : IDi
         candidate?.Dispose();
     }
 }
+
+/// <summary>
+/// Product-mapped transient restore facts for one exact Mechanics image and an ordered, explicit
+/// list of runtime adapter/image pairs. Durable product state remains handle-free; the product
+/// maps it to these adapters before preparation.
+/// </summary>
+public sealed class ContinuousMechanicsEntityWorldCompositionProductStateRestorePlan
+{
+    public ContinuousMechanicsEntityWorldCompositionProductStateRestorePlan(
+        EntityWorldRestorePlan entities,
+        MechanicsWorldImportRequest mechanics,
+        IReadOnlyList<ContinuousMechanicsEntityWorldImportPart> continuous)
+    {
+        Entities = entities ?? throw new ArgumentNullException(nameof(entities));
+        Mechanics = mechanics;
+        ArgumentNullException.ThrowIfNull(continuous);
+        Continuous = Array.AsReadOnly(continuous.ToArray());
+    }
+
+    public EntityWorldRestorePlan Entities { get; }
+    public MechanicsWorldImportRequest Mechanics { get; }
+    public IReadOnlyList<ContinuousMechanicsEntityWorldImportPart> Continuous { get; }
+}
+
+/// <summary>
+/// Product-owned persistence composition for a selected ordered list of continuous catalogs over
+/// one exact Mechanics world. It adds no archive schema, migration, or publication owner.
+/// </summary>
+public sealed class ContinuousMechanicsEntityWorldCompositionProductStateStore<TState> : IDisposable
+{
+    private readonly ContinuousMechanicsEntityWorldComposition _world;
+    private readonly ProductStateStore<TState> _state;
+    private readonly Func<ContinuousMechanicsEntityWorldCompositionExport, TState> _capture;
+    private readonly Func<TState, ContinuousMechanicsEntityWorldCompositionProductStateRestorePlan> _restore;
+
+    public ContinuousMechanicsEntityWorldCompositionProductStateStore(
+        ContinuousMechanicsEntityWorldComposition world,
+        IEngineContext engine,
+        string scope,
+        IProductStateCodec<TState> codec,
+        Func<ContinuousMechanicsEntityWorldCompositionExport, TState> capture,
+        Func<TState, ContinuousMechanicsEntityWorldCompositionProductStateRestorePlan> restore,
+        IReadOnlyList<IProductStateMigration>? migrations = null)
+    {
+        _world = world ?? throw new ArgumentNullException(nameof(world));
+        ArgumentNullException.ThrowIfNull(engine);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        ArgumentNullException.ThrowIfNull(codec);
+        _capture = capture ?? throw new ArgumentNullException(nameof(capture));
+        _restore = restore ?? throw new ArgumentNullException(nameof(restore));
+        _state = new ProductStateStore<TState>(engine, scope, codec, migrations);
+    }
+
+    public PersistenceSaveReceipt Save(
+        string key,
+        PersistenceRevisionGuard guard = PersistenceRevisionGuard.Any,
+        ulong expectedRevision = 0)
+    {
+        ContinuousMechanicsEntityWorldCompositionExport export = _world.Export();
+        return _state.Save(key, _capture(export), guard, expectedRevision);
+    }
+
+    public ContinuousMechanicsEntityWorldCompositionProductStateLoad<TState> LoadPrepared(
+        string key,
+        ulong? expectedManagedRevision = null)
+    {
+        ProductStateLoad<TState> loaded = _state.Load(key);
+        if (!loaded.Present)
+        {
+            return new ContinuousMechanicsEntityWorldCompositionProductStateLoad<TState>(loaded, null);
+        }
+
+        ContinuousMechanicsEntityWorldCompositionProductStateRestorePlan plan = _restore(loaded.State!)
+            ?? throw new InvalidOperationException("The product restore mapper returned no continuous Mechanics composition plan.");
+        ContinuousMechanicsEntityWorldCompositionImportCandidate candidate = _world.PrepareImport(
+            plan.Entities, plan.Mechanics, plan.Continuous, expectedManagedRevision);
+        return new ContinuousMechanicsEntityWorldCompositionProductStateLoad<TState>(loaded, candidate);
+    }
+
+    public ProductStateLoad<TState> LoadAndPublish(string key, ulong? expectedManagedRevision = null)
+    {
+        using var loaded = LoadPrepared(key, expectedManagedRevision);
+        loaded.Publish();
+        return new ProductStateLoad<TState>(loaded.Present, loaded.PersistenceRevision, loaded.State);
+    }
+
+    public void Dispose() => _state.Dispose();
+}
+
+/// <summary>A present decoded product state and its one prepared exact composition candidate.</summary>
+public sealed class ContinuousMechanicsEntityWorldCompositionProductStateLoad<TState> : IDisposable
+{
+    private ContinuousMechanicsEntityWorldCompositionImportCandidate? _candidate;
+    private int _published;
+
+    internal ContinuousMechanicsEntityWorldCompositionProductStateLoad(
+        ProductStateLoad<TState> loaded,
+        ContinuousMechanicsEntityWorldCompositionImportCandidate? candidate)
+    {
+        Present = loaded.Present;
+        PersistenceRevision = loaded.Revision;
+        State = loaded.State;
+        _candidate = candidate;
+    }
+
+    public bool Present { get; }
+    public ulong PersistenceRevision { get; }
+    public TState? State { get; }
+    public MechanicsWorldImportLeaseReceipt? PreparedExactImport => _candidate?.ExactReceipt;
+    public IReadOnlyList<ContinuousMechanicsWorldImportLeaseReceipt>? PreparedContinuousImports
+        => _candidate?.ContinuousReceipts;
+
+    public void Publish()
+    {
+        if (!Present || Interlocked.Exchange(ref _published, 1) != 0)
+        {
+            return;
+        }
+        (_candidate ?? throw new ObjectDisposedException(nameof(ContinuousMechanicsEntityWorldCompositionProductStateLoad<TState>))).Publish();
+    }
+
+    public void Dispose()
+    {
+        ContinuousMechanicsEntityWorldCompositionImportCandidate? candidate = Interlocked.Exchange(ref _candidate, null);
+        candidate?.Dispose();
+    }
+}

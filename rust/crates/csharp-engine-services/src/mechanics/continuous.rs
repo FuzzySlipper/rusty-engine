@@ -12,7 +12,7 @@ use entity_state::{
     ComponentRevision, EntityAuthoringService, EntityComponent, EntityLifecycle, EntityState,
 };
 use gameplay_continuous_mechanics::{
-    validate_state_against_continuous_catalog, ContinuousActiveEffectInstance,
+    validate_state_entities_against_continuous_catalog, ContinuousActiveEffectInstance,
     ContinuousActiveEffectsComponent, ContinuousCatalogVersion, ContinuousDecisionOutcome,
     ContinuousEffectApplyRequest, ContinuousEffectDefinition, ContinuousEffectDefinitionId,
     ContinuousEffectRemoveRequest, ContinuousEffectService, ContinuousIntrinsicSourceBinding,
@@ -248,9 +248,9 @@ unsafe extern "C" fn destroy_catalog(
     }
     if bridge.prepared_world_imports.values().any(|import| {
         import
-            .continuous_stage
-            .as_ref()
-            .is_some_and(|stage| stage.catalog == handle.value)
+            .continuous_stages
+            .iter()
+            .any(|stage| stage.catalog == handle.value)
     }) {
         return 0;
     }
@@ -495,23 +495,24 @@ unsafe extern "C" fn export_world(
     let mut intrinsic_sources = Vec::new();
     let mut active_effects = Vec::new();
     for (&entity, _) in &slot.world.lifecycle {
-        let lifecycle = slot.world.native_lifecycle(entity);
         let association = bridge.continuous.associations.get(&entity).copied();
-        if association.is_some_and(|value| value != catalog.value) {
-            return 0;
+        if association != Some(catalog.value) {
+            let present = NativeContinuousMechanicsComponentKind::all()
+                .into_iter()
+                .any(|component| component_present(&slot.world.state, entity, component));
+            if association.is_none() && present {
+                return 0;
+            }
+            continue;
         }
+        let lifecycle = slot.world.native_lifecycle(entity);
         let present = NativeContinuousMechanicsComponentKind::all().map(|component| {
             (
                 component,
                 component_present(&slot.world.state, entity, component),
             )
         });
-        if lifecycle == NativeMechanicsEntityLifecycle::Tombstoned
-            && (association.is_some() || present.into_iter().any(|(_, present)| present))
-        {
-            return 0;
-        }
-        if association.is_none() && present.into_iter().any(|(_, present)| present) {
+        if lifecycle == NativeMechanicsEntityLifecycle::Tombstoned {
             return 0;
         }
         for (component, present) in present {
@@ -666,7 +667,6 @@ unsafe extern "C" fn stage_world_import(
     if import.published
         || import.catalog != request.mechanics_catalog.value
         || import.saved_state_revision != request.mechanics_state_revision
-        || import.continuous_stage.is_some()
     {
         return 0;
     }
@@ -689,6 +689,15 @@ unsafe extern "C" fn stage_world_import(
     let Ok(rows) = (unsafe { parse_world_stage_rows(request, &membership, &lifecycles) }) else {
         return 0;
     };
+    if import.continuous_stages.iter().any(|stage| {
+        stage.catalog == request.continuous_catalog.value
+            || stage
+                .associations
+                .keys()
+                .any(|entity| rows.contains_entity(*entity))
+    }) {
+        return 0;
+    }
     let Ok((candidate, stage)) = build_world_stage(
         candidate,
         &current,
@@ -725,7 +734,7 @@ unsafe extern "C" fn stage_world_import(
     };
     import.candidate = Some(candidate);
     import.revisions = exact_revisions;
-    import.continuous_stage = Some(stage);
+    import.continuous_stages.push(stage);
     bridge
         .continuous
         .world_import_leases
@@ -758,6 +767,18 @@ struct ParsedWorldStageRows {
     tracks: Vec<NativeContinuousMechanicsWorldTrackRow>,
     intrinsic_sources: Vec<NativeContinuousMechanicsWorldIntrinsicSourceRow>,
     active_effects: Vec<NativeContinuousMechanicsWorldActiveEffectRow>,
+}
+
+impl ParsedWorldStageRows {
+    fn entities(&self) -> std::collections::BTreeSet<EntityId> {
+        self.presence.keys().map(|(entity, _)| *entity).collect()
+    }
+
+    fn contains_entity(&self, entity: EntityId) -> bool {
+        self.presence
+            .keys()
+            .any(|(candidate, _)| *candidate == entity)
+    }
 }
 
 unsafe fn parse_world_stage_rows(
@@ -825,8 +846,12 @@ unsafe fn parse_world_stage_rows(
             return Err(());
         }
     }
-    if presence.len() != members.len() * NativeContinuousMechanicsComponentKind::all().len()
-        || members.iter().any(|entity| {
+    let represented = presence
+        .keys()
+        .map(|(entity, _)| *entity)
+        .collect::<std::collections::BTreeSet<_>>();
+    if represented.iter().any(|entity| !members.contains(entity))
+        || represented.iter().any(|entity| {
             NativeContinuousMechanicsComponentKind::all()
                 .into_iter()
                 .any(|component| !presence.contains_key(&(*entity, component)))
@@ -864,12 +889,8 @@ unsafe fn parse_world_stage_rows(
     {
         return Err(());
     }
-    for entity in &members {
-        if lifecycle[entity] == NativeMechanicsEntityLifecycle::Tombstoned
-            && NativeContinuousMechanicsComponentKind::all()
-                .into_iter()
-                .any(|component| presence[&(*entity, component)].present)
-        {
+    for entity in &represented {
+        if lifecycle[entity] == NativeMechanicsEntityLifecycle::Tombstoned {
             return Err(());
         }
     }
@@ -896,11 +917,7 @@ fn build_world_stage(
     ),
     (),
 > {
-    let entities = rows
-        .presence
-        .keys()
-        .map(|(entity, _)| *entity)
-        .collect::<std::collections::BTreeSet<_>>();
+    let entities = rows.entities();
     let mut associations = BTreeMap::new();
     for entity in entities.iter().copied() {
         let stats = rows.presence[&(entity, NativeContinuousMechanicsComponentKind::Stats)]
@@ -982,14 +999,10 @@ fn build_world_stage(
         replace_optional(&mut candidate.state, entity, tracks)?;
         replace_optional(&mut candidate.state, entity, intrinsic)?;
         replace_optional(&mut candidate.state, entity, effects)?;
-        if NativeContinuousMechanicsComponentKind::all()
-            .into_iter()
-            .any(|component| rows.presence[&(entity, component)].present)
-        {
-            associations.insert(entity, catalog_id);
-        }
+        associations.insert(entity, catalog_id);
     }
-    validate_state_against_continuous_catalog(&candidate.state, catalog).map_err(|_| ())?;
+    validate_state_entities_against_continuous_catalog(&candidate.state, catalog, &entities)
+        .map_err(|_| ())?;
     let mut floors = BTreeMap::new();
     for ((entity, component), row) in &rows.presence {
         let type_id = continuous_component_type(&candidate.state, *component)?;
@@ -997,7 +1010,7 @@ fn build_world_stage(
     }
     if !candidate
         .state
-        .rebase_replacement_revisions_after(current, saved_state_revision, &floors)
+        .rebase_replacement_component_revisions_after(current, saved_state_revision, &floors)
     {
         return Err(());
     }
@@ -2753,13 +2766,18 @@ mod tests {
         })
         .unwrap();
         let entity = EntityId::new(7439);
+        let companion = EntityId::new(7440);
         let state = EntityState::from_definitions_with_registry(
             gameplay_continuous_mechanics::combined_gameplay_component_registry().unwrap(),
-            [EntityDefinition::new(entity, "continuous-hero")],
+            [
+                EntityDefinition::new(entity, "continuous-hero"),
+                EntityDefinition::new(companion, "continuous-companion"),
+            ],
         )
         .unwrap();
         let mut world = MechanicsWorld::new(state);
         world.admit(entity).unwrap();
+        world.admit(companion).unwrap();
         bridge.catalogs.insert(
             1,
             CatalogSlot {
@@ -3117,27 +3135,84 @@ mod tests {
             ABI_OK
         );
 
-        let entities = [NativeMechanicsWorldEntityRow {
-            entity_id: 7439,
-            identity: utf8("continuous-hero"),
-            lifecycle: NativeMechanicsEntityLifecycle::Active,
-            lifecycle_stamp: 1,
-        }];
-        let exact_presence = NativeMechanicsRevisionComponent::all().map(|component| {
-            NativeMechanicsWorldComponentPresenceRow {
+        let create_second = NativeContinuousMechanicsCatalogCreateRequest {
+            version: utf8("continuous-v2"),
+            ..create
+        };
+        let mut second_catalog = NativeContinuousMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe { create_catalog(context, &create_second, &mut second_catalog) },
+            ABI_OK
+        );
+        let companion = EntityId::new(7440);
+        bridge
+            .continuous
+            .associations
+            .insert(companion, second_catalog.value);
+        let second_export_request = NativeContinuousMechanicsWorldExportRequest {
+            mechanics_catalog: NativeMechanicsCatalogHandle { value: 1 },
+            continuous_catalog: second_catalog,
+        };
+        let mut second_exported =
+            std::mem::MaybeUninit::<NativeContinuousMechanicsWorldExportLease>::uninit();
+        assert_eq!(
+            unsafe {
+                export_world(
+                    context,
+                    &second_export_request,
+                    second_exported.as_mut_ptr(),
+                )
+            },
+            ABI_OK
+        );
+        let second_exported = unsafe { second_exported.assume_init() };
+        let second_presence = unsafe {
+            std::slice::from_raw_parts(
+                second_exported.component_presence,
+                second_exported.component_presence_len,
+            )
+        };
+        assert_eq!(second_presence.len(), 4, "catalog exports only its subset");
+        assert!(second_presence.iter().all(|row| !row.present));
+        assert_eq!(
+            unsafe { destroy_world_export_lease(context, second_exported.handle) },
+            ABI_OK
+        );
+
+        let entities = [
+            NativeMechanicsWorldEntityRow {
                 entity_id: 7439,
-                component,
-                present: false,
-                revision: 0,
-            }
-        });
+                identity: utf8("continuous-hero"),
+                lifecycle: NativeMechanicsEntityLifecycle::Active,
+                lifecycle_stamp: 1,
+            },
+            NativeMechanicsWorldEntityRow {
+                entity_id: companion.raw(),
+                identity: utf8("continuous-companion"),
+                lifecycle: NativeMechanicsEntityLifecycle::Active,
+                lifecycle_stamp: 1,
+            },
+        ];
+        let exact_presence = entities
+            .iter()
+            .flat_map(|entity| {
+                NativeMechanicsRevisionComponent::all().map(move |component| {
+                    NativeMechanicsWorldComponentPresenceRow {
+                        entity_id: entity.entity_id,
+                        component,
+                        present: false,
+                        revision: 0,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
         let exact_import = NativeMechanicsWorldImportRequest {
             catalog: NativeMechanicsCatalogHandle { value: 1 },
             state_revision: exported.mechanics_state_revision,
             catalog_version: utf8("exact-v1"),
             catalog_fingerprint: utf8(bridge.catalogs[&1].catalog.as_ref().unwrap().fingerprint()),
             entities: entities.as_ptr(),
-            entities_len: 1,
+            entities_len: entities.len(),
             containment: std::ptr::null(),
             containment_len: 0,
             component_presence: exact_presence.as_ptr(),
@@ -3214,6 +3289,36 @@ mod tests {
                 active_effects: stage_effects.as_ptr(),
                 active_effects_len: 1,
             };
+        let second_stage_presence =
+            NativeContinuousMechanicsComponentKind::all().map(|component| {
+                NativeContinuousMechanicsWorldComponentPresenceRow {
+                    entity_id: companion.raw(),
+                    component,
+                    present: false,
+                    revision: 0,
+                }
+            });
+        let stage_second =
+            |import, mechanics_state_revision| NativeContinuousMechanicsWorldImportStageRequest {
+                import,
+                mechanics_catalog: NativeMechanicsCatalogHandle { value: 1 },
+                mechanics_state_revision,
+                continuous_catalog: second_catalog,
+                continuous_catalog_version: utf8("continuous-v2"),
+                continuous_catalog_fingerprint: utf8(
+                    bridge.continuous.catalogs[&second_catalog.value].fingerprint(),
+                ),
+                component_presence: second_stage_presence.as_ptr(),
+                component_presence_len: second_stage_presence.len(),
+                stats: std::ptr::null(),
+                stats_len: 0,
+                tracks: std::ptr::null(),
+                tracks_len: 0,
+                intrinsic_sources: std::ptr::null(),
+                intrinsic_sources_len: 0,
+                active_effects: std::ptr::null(),
+                active_effects_len: 0,
+            };
         let mut rejected =
             std::mem::MaybeUninit::<NativeContinuousMechanicsWorldImportLease>::uninit();
         let mut catalog_mismatch = stage(import, exported.mechanics_state_revision);
@@ -3253,8 +3358,59 @@ mod tests {
             .iter()
             .all(|row| row.restored_revision > row.snapshot_revision
                 && row.restored_revision > row.current_revision));
+        let first_remaps = remaps.to_vec();
+        assert_eq!(
+            unsafe {
+                stage_world_import(
+                    context,
+                    &stage(import, exported.mechanics_state_revision),
+                    rejected.as_mut_ptr(),
+                )
+            },
+            0,
+            "one catalog cannot be staged twice"
+        );
+        let mut overlap = stage_second(import, exported.mechanics_state_revision);
+        overlap.component_presence = presence.as_ptr();
+        overlap.component_presence_len = presence.len();
+        assert_eq!(
+            unsafe { stage_world_import(context, &overlap, rejected.as_mut_ptr()) },
+            0,
+            "catalog stages cannot overlap represented exact entities"
+        );
+        let mut staged_second =
+            std::mem::MaybeUninit::<NativeContinuousMechanicsWorldImportLease>::uninit();
+        assert_eq!(
+            unsafe {
+                stage_world_import(
+                    context,
+                    &stage_second(import, exported.mechanics_state_revision),
+                    staged_second.as_mut_ptr(),
+                )
+            },
+            ABI_OK
+        );
+        let staged_second = unsafe { staged_second.assume_init() };
+        let second_remaps = unsafe {
+            std::slice::from_raw_parts(staged_second.revisions, staged_second.revisions_len)
+        };
+        assert_eq!(second_remaps.len(), 4);
+        assert!(second_remaps.iter().all(|row| {
+            !row.present
+                && row.restored_revision > row.snapshot_revision
+                && row.restored_revision > row.current_revision
+        }));
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(staged.revisions, staged.revisions_len) },
+            first_remaps.as_slice(),
+            "later disjoint staging never changes an earlier receipt"
+        );
         assert_eq!(
             unsafe { destroy_world_import_lease(context, staged.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { destroy_world_import_lease(context, staged_second.handle) },
             ABI_OK
         );
         assert_eq!(
@@ -3264,6 +3420,11 @@ mod tests {
         assert_eq!(
             bridge.continuous.associations.get(&EntityId::new(7439)),
             Some(&continuous_catalog.value)
+        );
+        assert_eq!(
+            bridge.continuous.associations.get(&companion),
+            Some(&second_catalog.value),
+            "an all-absent represented entity keeps its catalog association"
         );
         assert_eq!(
             bridge.catalogs[&1]

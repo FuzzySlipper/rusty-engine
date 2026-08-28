@@ -375,7 +375,9 @@ struct PreparedMechanicsWorldImport {
     _text: Vec<String>,
     revisions: Vec<NativeMechanicsRevisionRemapRow>,
     lifecycles: Vec<NativeMechanicsLifecycleReceipt>,
-    continuous_stage: Option<continuous::PreparedContinuousMechanicsWorldImportStage>,
+    /// Ordered continuous images share this one detached exact candidate and
+    /// become visible together at exact-world publication.
+    continuous_stages: Vec<continuous::PreparedContinuousMechanicsWorldImportStage>,
     published: bool,
 }
 
@@ -3935,7 +3937,7 @@ unsafe extern "C" fn prepare_world_import(
             _text: output_text.values,
             revisions,
             lifecycles: lifecycle_receipts,
-            continuous_stage: None,
+            continuous_stages: Vec::new(),
             published: false,
         }),
     );
@@ -4067,14 +4069,13 @@ unsafe extern "C" fn publish_world_import(
         .continuous
         .associations
         .retain(|entity, _| bridge.canonical_entities.get(entity) != Some(&catalog));
-    if let Some(stage) = import.continuous_stage.as_ref() {
-        bridge.continuous.associations.extend(
-            stage
-                .associations
-                .iter()
-                .map(|(entity, catalog)| (*entity, *catalog)),
-        );
-    }
+    bridge.continuous.associations.extend(
+        import
+            .continuous_stages
+            .iter()
+            .flat_map(|stage| stage.associations.iter())
+            .map(|(entity, catalog)| (*entity, *catalog)),
+    );
     bridge
         .canonical_entities
         .retain(|_, catalog| *catalog != import.catalog);

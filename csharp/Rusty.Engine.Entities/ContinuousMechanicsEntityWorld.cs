@@ -210,6 +210,39 @@ public sealed class ContinuousMechanicsEntityWorld
 
     private MechanicsEntity Native(EntityId entity) => _mechanicsWorld.RequireCommittedNativeEntity(entity);
 
+    // These narrow seams let a product-selected composition borrow this adapter without
+    // introducing a second exact-world owner or a catalog lookup mechanism.
+    internal MechanicsEntityWorld ExactWorld => _mechanicsWorld;
+    internal IContinuousMechanicsService ContinuousService => _continuous;
+    internal ContinuousMechanicsCatalog ContinuousCatalog => _catalog;
+
+    internal ContinuousMechanicsWorldExportLeaseReceipt ExportContinuous(
+        MechanicsWorldExportLeaseReceipt exact)
+    {
+        ContinuousMechanicsWorldExportLeaseReceipt continuous = _continuous.ExportWorld(
+            new ContinuousMechanicsWorldExportRequest(_mechanicsWorld.Catalog, _catalog));
+        ValidateExportCorrelation(exact, continuous, _continuous.ReadCatalog(_catalog));
+        return continuous;
+    }
+
+    internal ContinuousMechanicsWorldImportLeaseReceipt StageImport(
+        MechanicsWorldImport import,
+        MechanicsWorldImportRequest admitted,
+        ContinuousMechanicsWorldImportImage image)
+    {
+        ValidateImage(admitted, image);
+        ContinuousMechanicsCatalogLeaseReceipt catalog = _continuous.ReadCatalog(_catalog);
+        ValidateCurrentCatalog(catalog, image);
+        var request = new ContinuousMechanicsWorldImportStageRequest(
+            import, _mechanicsWorld.Catalog, image.MechanicsStateRevision, _catalog,
+            image.ContinuousCatalogVersion, image.ContinuousCatalogFingerprint,
+            image.ComponentPresence, image.Stats, image.Tracks, image.IntrinsicSources,
+            image.ActiveEffects);
+        ContinuousMechanicsWorldImportLeaseReceipt receipt = _continuous.StageWorldImport(request);
+        ValidateStageReceipt(admitted, image, catalog, receipt);
+        return receipt;
+    }
+
     private void ValidateExportCorrelation(
         MechanicsWorldExportLeaseReceipt exact,
         ContinuousMechanicsWorldExportLeaseReceipt continuous,
@@ -227,7 +260,7 @@ public sealed class ContinuousMechanicsEntityWorld
         }
     }
 
-    private static void ValidateImage(
+    internal static HashSet<ulong> ValidateImage(
         MechanicsWorldImportRequest mechanics,
         ContinuousMechanicsWorldImportImage image)
     {
@@ -257,16 +290,18 @@ public sealed class ContinuousMechanicsEntityWorld
                 throw new InvalidOperationException("Continuous import presence must contain one valid row per exact entity and component family.");
             }
         }
-        if (presence.Count != entitySet.Count * components.Length
-            || entitySet.Any(entity => components.Any(component => !presence.ContainsKey((entity, component)))))
+        var imageEntities = presenceRows.Select(row => row.EntityId).ToHashSet();
+        if (presence.Count != imageEntities.Count * components.Length
+            || imageEntities.Any(entity => components.Any(component => !presence.ContainsKey((entity, component)))))
         {
-            throw new InvalidOperationException("Continuous import presence must cover every exact entity and component family.");
+            throw new InvalidOperationException("Continuous import presence must cover exactly four component families per selected entity.");
         }
 
-        ValidateStats(image.Stats.Span, entitySet, presence);
-        ValidateTracks(image.Tracks.Span, entitySet, presence);
-        ValidateIntrinsicSources(image.IntrinsicSources.Span, entitySet, presence);
-        ValidateActiveEffects(image.ActiveEffects.Span, entitySet, presence);
+        ValidateStats(image.Stats.Span, imageEntities, presence);
+        ValidateTracks(image.Tracks.Span, imageEntities, presence);
+        ValidateIntrinsicSources(image.IntrinsicSources.Span, imageEntities, presence);
+        ValidateActiveEffects(image.ActiveEffects.Span, imageEntities, presence);
+        return imageEntities;
     }
 
     private void ValidateCurrentCatalog(

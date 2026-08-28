@@ -355,6 +355,35 @@ impl EntityState {
         true
     }
 
+    /// Rebases a detached replacement's selected component slots while keeping
+    /// every unrelated slot's revision evidence intact.  This is useful for
+    /// composing independently persisted service families into one exact
+    /// candidate: the candidate's global revision is still advanced for every
+    /// successful stage, but only the new family slots are remapped.
+    pub fn rebase_replacement_component_revisions_after(
+        &mut self,
+        current: &Self,
+        persisted_state_revision: u64,
+        persisted_component_revisions: &BTreeMap<(EntityId, ComponentTypeId), u64>,
+    ) -> bool {
+        if !self
+            .components
+            .rebase_component_revisions_from(&current.components, persisted_component_revisions)
+        {
+            return false;
+        }
+        let Some(revision) = self
+            .revision
+            .max(current.revision)
+            .max(persisted_state_revision)
+            .checked_add(1)
+        else {
+            return false;
+        };
+        self.revision = revision;
+        true
+    }
+
     pub fn contains(&self, entity: EntityId) -> bool {
         self.entities.contains_key(&entity)
     }
