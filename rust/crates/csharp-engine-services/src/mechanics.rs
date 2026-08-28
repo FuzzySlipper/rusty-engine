@@ -33,6 +33,8 @@ use gameplay_mechanics::{
 
 use crate::composition::{borrowed_utf8, ABI_OK};
 
+pub(crate) mod continuous;
+
 #[derive(Clone)]
 struct CatalogBuilder {
     version: CatalogVersion,
@@ -47,10 +49,10 @@ struct CatalogBuilder {
 }
 
 #[derive(Clone)]
-struct CatalogSlot {
+pub(crate) struct CatalogSlot {
     builder: Option<CatalogBuilder>,
-    catalog: Option<MechanicsCatalog>,
-    world: MechanicsWorld,
+    pub(crate) catalog: Option<MechanicsCatalog>,
+    pub(crate) world: MechanicsWorld,
 }
 
 /// The rows and every UTF-8 allocation returned from catalog inspection live in one
@@ -137,7 +139,7 @@ impl MechanicsOperationDiagnosticLease {
     }
 }
 
-fn native_utf8(bytes: &[u8]) -> NativeUtf8Slice {
+pub(crate) fn native_utf8(bytes: &[u8]) -> NativeUtf8Slice {
     NativeUtf8Slice {
         bytes: bytes.as_ptr(),
         len: bytes.len(),
@@ -220,8 +222,8 @@ impl CatalogLeaseText {
 /// Catalog-scoped mechanism storage keyed by the product's canonical EntityWorld identity.
 /// The bridge never allocates product entity identifiers: it only mirrors supplied ones.
 #[derive(Clone)]
-struct MechanicsWorld {
-    state: EntityState,
+pub(crate) struct MechanicsWorld {
+    pub(crate) state: EntityState,
     lifecycle: BTreeMap<EntityId, LifecycleRecord>,
     next_stamp: u64,
 }
@@ -263,7 +265,7 @@ impl MechanicsWorld {
         }
     }
 
-    fn is_active(&self, entity: EntityId) -> bool {
+    pub(crate) fn is_active(&self, entity: EntityId) -> bool {
         self.state.lifecycle(entity) == Some(EntityLifecycle::Active)
     }
 
@@ -298,9 +300,9 @@ impl MechanicsWorld {
 }
 
 #[derive(Clone)]
-struct EntityBinding {
-    catalog: u64,
-    entity: EntityId,
+pub(crate) struct EntityBinding {
+    pub(crate) catalog: u64,
+    pub(crate) entity: EntityId,
     identity: String,
     stats: Option<Vec<StatValue>>,
     tracks: Option<Vec<TrackValue>>,
@@ -373,8 +375,9 @@ struct PreparedMechanicsWorldImport {
 }
 
 pub(crate) struct RuntimeMechanicsBridge {
-    catalogs: BTreeMap<u64, CatalogSlot>,
-    entities: BTreeMap<u64, EntityBinding>,
+    pub(crate) catalogs: BTreeMap<u64, CatalogSlot>,
+    pub(crate) entities: BTreeMap<u64, EntityBinding>,
+    pub(crate) continuous: continuous::ContinuousMechanicsBridgeState,
     /// A product canonical entity is admitted into at most one mechanics catalog world.
     canonical_entities: BTreeMap<EntityId, u64>,
     catalog_leases: BTreeMap<u64, Box<CatalogLeaseBacking>>,
@@ -409,6 +412,7 @@ impl RuntimeMechanicsBridge {
         Self {
             catalogs: BTreeMap::new(),
             entities: BTreeMap::new(),
+            continuous: continuous::ContinuousMechanicsBridgeState::default(),
             canonical_entities: BTreeMap::new(),
             catalog_leases: BTreeMap::new(),
             component_leases: BTreeMap::new(),
@@ -445,7 +449,7 @@ impl RuntimeMechanicsBridge {
         self.catalogs.get_mut(&handle.value)
     }
 
-    fn binding(&self, handle: NativeMechanicsEntityHandle) -> Option<&EntityBinding> {
+    pub(crate) fn binding(&self, handle: NativeMechanicsEntityHandle) -> Option<&EntityBinding> {
         self.entities
             .get(&handle.value)
             .filter(|binding| binding.committed)
@@ -515,7 +519,7 @@ impl RuntimeMechanicsBridge {
         Some(diagnostics)
     }
 
-    fn destroy_operation_diagnostic_lease(
+    pub(crate) fn destroy_operation_diagnostic_lease(
         &mut self,
         handle: NativeEngineDiagnosticLeaseHandle,
     ) -> bool {
@@ -624,7 +628,7 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
     }
 }
 
-unsafe fn invoke_with_operation_diagnostic(
+pub(crate) unsafe fn invoke_with_operation_diagnostic(
     context: *mut c_void,
     receipt: *mut NativeOperationErrorReceipt,
     operation: &'static [u8],
@@ -8225,7 +8229,7 @@ fn component_is_present(
 unsafe fn text<'a>(value: NativeUtf8Slice, field: &'static str) -> Result<&'a str, ()> {
     unsafe { borrowed_utf8(value.bytes, value.len, field) }.map_err(|_| ())
 }
-unsafe fn bridge_request<'a, T>(
+pub(crate) unsafe fn bridge_request<'a, T>(
     context: *mut c_void,
     request: *const T,
 ) -> Option<(&'a mut RuntimeMechanicsBridge, &'a T)> {
@@ -8235,7 +8239,7 @@ unsafe fn bridge_request<'a, T>(
         Some((unsafe { &mut *context.cast() }, unsafe { &*request }))
     }
 }
-unsafe fn bridge_request_result<'a, T, R>(
+pub(crate) unsafe fn bridge_request_result<'a, T, R>(
     context: *mut c_void,
     request: *const T,
     result: *mut R,

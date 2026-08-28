@@ -547,6 +547,90 @@ pub type NativeDestroyStandardContinuousPredicateEvaluationLease = unsafe extern
     *mut c_void,
     NativeStandardContinuousPredicateEvaluationLeaseHandle,
 ) -> i32;
+pub type NativeCreateContinuousMechanicsCatalog = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsCatalogCreateRequest,
+    *mut NativeContinuousMechanicsCatalogHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyContinuousMechanicsCatalog = unsafe extern "C" fn(
+    *mut c_void,
+    NativeContinuousMechanicsCatalogHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadContinuousMechanicsCatalog = unsafe extern "C" fn(
+    *mut c_void,
+    NativeContinuousMechanicsCatalogHandle,
+    *mut NativeContinuousMechanicsCatalogLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyContinuousMechanicsCatalogLease =
+    unsafe extern "C" fn(*mut c_void, NativeContinuousMechanicsCatalogLeaseHandle) -> i32;
+pub type NativeSetContinuousMechanicsInitialComponents = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsInitialComponentsRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadContinuousMechanicsComponents = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsComponentReadRequest,
+    *mut NativeContinuousMechanicsComponentLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyContinuousMechanicsComponentLease =
+    unsafe extern "C" fn(*mut c_void, NativeContinuousMechanicsComponentLeaseHandle) -> i32;
+pub type NativeEvaluateContinuousMechanicsStat = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsStatEvaluateRequest,
+    *mut NativeContinuousMechanicsStatEvaluationLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetContinuousMechanicsStatBase = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsStatBaseMutationRequest,
+    *mut NativeContinuousMechanicsStatMutationLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadContinuousMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsTrackReadRequest,
+    *mut NativeContinuousMechanicsTrackLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetContinuousMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsTrackSetRequest,
+    *mut NativeContinuousMechanicsTrackLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSpendContinuousMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsTrackAdjustmentRequest,
+    *mut NativeContinuousMechanicsTrackLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRestoreContinuousMechanicsTrack = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsTrackAdjustmentRequest,
+    *mut NativeContinuousMechanicsTrackLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeApplyContinuousMechanicsEffect = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsEffectApplyRequest,
+    *mut NativeContinuousMechanicsEffectLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRemoveContinuousMechanicsEffect = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContinuousMechanicsEffectRemoveRequest,
+    *mut NativeContinuousMechanicsEffectLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyContinuousMechanicsOperationLease =
+    unsafe extern "C" fn(*mut c_void, NativeContinuousMechanicsOperationLeaseHandle) -> i32;
+pub type NativeDestroyContinuousMechanicsOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeDrawKeyedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKeyedRngRequest,
@@ -1498,6 +1582,33 @@ pub struct NativeStandardContinuousApi {
     pub destroy_predicate_evaluation_lease: NativeDestroyStandardContinuousPredicateEvaluationLease,
 }
 
+/// Typed continuous gameplay facts over the existing product entity binding.
+/// The catalog has independent lifetime; entities and lifecycle remain owned by
+/// the ordinary Mechanics/EntityWorld bridge.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContinuousMechanicsApi {
+    pub context: *mut c_void,
+    pub create_catalog: NativeCreateContinuousMechanicsCatalog,
+    pub destroy_catalog: NativeDestroyContinuousMechanicsCatalog,
+    pub read_catalog: NativeReadContinuousMechanicsCatalog,
+    pub destroy_catalog_lease: NativeDestroyContinuousMechanicsCatalogLease,
+    pub set_initial_components: NativeSetContinuousMechanicsInitialComponents,
+    pub read_components: NativeReadContinuousMechanicsComponents,
+    pub destroy_component_lease: NativeDestroyContinuousMechanicsComponentLease,
+    pub evaluate_stat: NativeEvaluateContinuousMechanicsStat,
+    pub set_stat_base: NativeSetContinuousMechanicsStatBase,
+    pub read_track: NativeReadContinuousMechanicsTrack,
+    pub set_track: NativeSetContinuousMechanicsTrack,
+    pub spend_track: NativeSpendContinuousMechanicsTrack,
+    pub restore_track: NativeRestoreContinuousMechanicsTrack,
+    pub apply_effect: NativeApplyContinuousMechanicsEffect,
+    pub remove_effect: NativeRemoveContinuousMechanicsEffect,
+    pub destroy_operation_lease: NativeDestroyContinuousMechanicsOperationLease,
+    pub destroy_operation_diagnostic_lease:
+        NativeDestroyContinuousMechanicsOperationDiagnosticLease,
+}
+
 /// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1519,6 +1630,7 @@ pub struct NativeEngineApi {
     pub rules: NativeRulesApi,
     pub standard_exact: NativeStandardExactApi,
     pub standard_continuous: NativeStandardContinuousApi,
+    pub continuous_mechanics: NativeContinuousMechanicsApi,
     pub ui: NativeUiApi,
 }
 

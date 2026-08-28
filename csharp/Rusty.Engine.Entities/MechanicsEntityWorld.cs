@@ -462,6 +462,17 @@ public sealed class MechanicsEntityWorld : IDisposable
         return receipt;
     }
 
+    /// <summary>
+    /// Returns the sole native entity lease for a committed, live canonical entity.
+    /// Sibling Mechanics service adapters may borrow this exact lease for a named Engine
+    /// capability, but never own, dispose, rebind, or mirror it.
+    /// </summary>
+    internal MechanicsEntity RequireCommittedNativeEntity(EntityId entity)
+    {
+        ThrowIfDisposed();
+        return RequireCommitted(entity).Native;
+    }
+
     public void Dispose()
     {
         if (_disposed)

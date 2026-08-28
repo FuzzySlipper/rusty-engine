@@ -98,6 +98,7 @@ sealed class ExampleEngineContext : IEngineContext
     public IAnimationService Animation => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public IMechanicsService Mechanics => throw new NotSupportedException();
+    public IContinuousMechanicsService ContinuousMechanics => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();
     public IPersistenceService Persistence => throw new NotSupportedException();
     public IRulesService Rules => throw new NotSupportedException();

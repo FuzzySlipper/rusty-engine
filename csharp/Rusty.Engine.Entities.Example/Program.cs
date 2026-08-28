@@ -54,6 +54,7 @@ ExerciseMechanicsUniqueItemLifecycle();
 ExerciseMechanicsWorldRestore();
 ExerciseMechanicsWorldImport();
 ExerciseMechanicsWorldPersistenceComposition();
+ExerciseContinuousMechanicsSibling();
 
 static void Require(bool condition, string message)
 {
@@ -418,6 +419,58 @@ static void ExerciseMechanicsWorldPersistenceComposition()
         "paired persistence publication invoked product callbacks or failed to replace live state");
 }
 
+static void ExerciseContinuousMechanicsSibling()
+{
+    const ulong SubnormalBits = 0x0000_0000_0000_0001;
+    const ulong NegativeZeroBits = 0x8000_0000_0000_0000;
+    using var world = new EntityWorld();
+    EntityId actor = world.Create();
+    var exactService = new MechanicsAdapterFake();
+    var continuousService = new ContinuousMechanicsAdapterFake();
+    using var mechanics = new MechanicsEntityWorld(world, exactService, exactService.Catalog);
+    using ContinuousMechanicsCatalog catalog = continuousService.CreateCatalog(new ContinuousMechanicsCatalogCreateRequest(
+        "example", ReadOnlyMemory<ContinuousMechanicsCatalogStatRow>.Empty,
+        ReadOnlyMemory<ContinuousMechanicsCatalogTrackRow>.Empty,
+        ReadOnlyMemory<ContinuousMechanicsCatalogSourceRow>.Empty,
+        ReadOnlyMemory<ContinuousMechanicsCatalogContributionRow>.Empty,
+        ReadOnlyMemory<ContinuousMechanicsCatalogEffectRow>.Empty,
+        ReadOnlyMemory<ContinuousMechanicsCatalogEffectSourceRow>.Empty));
+    var continuous = new ContinuousMechanicsEntityWorld(mechanics, continuousService, catalog);
+
+    mechanics.Bind(actor, "continuous-actor");
+    mechanics.Commit(actor);
+    continuous.Initialize(actor, new ContinuousMechanicsInitialComponents(
+        HasStats: true,
+        Stats: new[] { new ContinuousMechanicsInitialStatRow("strength", SubnormalBits) },
+        HasTracks: true,
+        Tracks: new[] { new ContinuousMechanicsInitialTrackRow("health", SubnormalBits) },
+        HasIntrinsicSources: true,
+        IntrinsicSources: new[] { new ContinuousMechanicsInitialIntrinsicSourceRow("body", "body-source") },
+        HasActiveEffects: true,
+        ActiveEffects: new[] { new ContinuousMechanicsInitialActiveEffectRow("blessing", "blessing-effect") }));
+
+    ContinuousMechanicsComponentLeaseReceipt components = continuous.Read(actor);
+    Require(components.Components.Length == 4 && components.Components.Span.ToArray().All(row => row.Present)
+        && components.Stats.Length == 1 && components.Tracks.Length == 1
+        && components.IntrinsicSources.Length == 1 && components.ActiveEffects.Length == 1,
+        "continuous sibling did not retain all four component families");
+    ContinuousMechanicsStatEvaluationLeaseReceipt initial = continuous.EvaluateStat(actor, "strength");
+    Require(initial.ValueBits == SubnormalBits && continuousService.LastEntityHandle == exactService.LastBoundHandle,
+        "continuous evaluation did not use the exact existing native entity lease bit-for-bit");
+
+    ContinuousMechanicsStatMutationLeaseReceipt mutation = continuous.SetStatBase(
+        actor, "normalize-zero", "strength", NegativeZeroBits);
+    Require(mutation.AfterBits == 0 && continuous.EvaluateStat(actor, "strength").ValueBits == 0,
+        "continuous mutation did not preserve Engine binary64 normalization through the same lease");
+
+    mechanics.SetLifecycle(actor, EntityLifecycle.Tombstoned, world.GetEntityRevision(actor));
+    int evaluationsBeforeFence = continuousService.Evaluations;
+    Throws(() => continuous.EvaluateStat(actor, "strength"),
+        "continuous sibling bypassed the exact Mechanics lifecycle fence");
+    Require(continuousService.Evaluations == evaluationsBeforeFence,
+        "continuous service was called after the exact binding had been retired");
+}
+
 static MechanicsWorldImportRequest ImportRequest(MechanicsCatalog catalog)
     => new(
         catalog,
@@ -493,6 +546,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public ICameraViewService CameraView => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public IMechanicsService Mechanics => throw new NotSupportedException();
+    public IContinuousMechanicsService ContinuousMechanics => throw new NotSupportedException();
     public IPersistenceService Persistence { get; } = persistence;
     public IContentStoreService ContentStore => throw new NotSupportedException();
     public IRulesService Rules => throw new NotSupportedException();
@@ -549,6 +603,114 @@ sealed class InMemoryPersistenceService : IPersistenceService
         => _blobs[blob.Handle.Value].Payload;
 }
 
+sealed class ContinuousMechanicsAdapterFake : IContinuousMechanicsService
+{
+    private readonly Dictionary<(ulong Entity, string Stat), ulong> _stats = [];
+    private ContinuousMechanicsInitialComponentsRequest? _initial;
+
+    public ContinuousMechanicsCatalog Catalog { get; } = new(new ContinuousMechanicsCatalogHandle(1), static () => { });
+    public ulong LastEntityHandle { get; private set; }
+    public int Evaluations { get; private set; }
+
+    public ContinuousMechanicsCatalog CreateCatalog(ContinuousMechanicsCatalogCreateRequest arg0) => Catalog;
+
+    public ContinuousMechanicsCatalogLeaseReceipt ReadCatalog(ContinuousMechanicsCatalog arg0)
+        => new(
+            ReadOnlyMemory<ContinuousMechanicsCatalogStatRow>.Empty,
+            ReadOnlyMemory<ContinuousMechanicsCatalogTrackRow>.Empty,
+            ReadOnlyMemory<ContinuousMechanicsCatalogSourceRow>.Empty,
+            ReadOnlyMemory<ContinuousMechanicsCatalogContributionRow>.Empty,
+            ReadOnlyMemory<ContinuousMechanicsCatalogEffectRow>.Empty,
+            ReadOnlyMemory<ContinuousMechanicsCatalogEffectSourceRow>.Empty,
+            arg0.Handle.Value,
+            "example",
+            "example");
+
+    public void SetInitialComponents(ContinuousMechanicsInitialComponentsRequest arg0)
+    {
+        LastEntityHandle = arg0.Entity.Handle.Value;
+        _initial = arg0;
+        foreach (ContinuousMechanicsInitialStatRow stat in arg0.Stats.Span)
+        {
+            _stats[(LastEntityHandle, stat.Stat)] = Normalize(stat.BaseBits);
+        }
+    }
+
+    public ContinuousMechanicsComponentLeaseReceipt ReadComponents(ContinuousMechanicsComponentReadRequest arg0)
+    {
+        LastEntityHandle = arg0.Entity.Handle.Value;
+        ContinuousMechanicsInitialComponentsRequest initial = _initial
+            ?? throw new InvalidOperationException("continuous components were not initialized");
+        return new ContinuousMechanicsComponentLeaseReceipt(
+            new[]
+            {
+                new ContinuousMechanicsComponentPresenceRow(ContinuousMechanicsComponentKind.Stats, initial.HasStats, 1),
+                new ContinuousMechanicsComponentPresenceRow(ContinuousMechanicsComponentKind.Tracks, initial.HasTracks, 1),
+                new ContinuousMechanicsComponentPresenceRow(ContinuousMechanicsComponentKind.IntrinsicSources, initial.HasIntrinsicSources, 1),
+                new ContinuousMechanicsComponentPresenceRow(ContinuousMechanicsComponentKind.ActiveEffects, initial.HasActiveEffects, 1),
+            },
+            initial.Stats,
+            initial.Tracks,
+            initial.IntrinsicSources,
+            initial.ActiveEffects,
+            arg0.Catalog.Handle.Value,
+            "example",
+            "example",
+            LastEntityHandle);
+    }
+
+    public ContinuousMechanicsStatEvaluationLeaseReceipt EvaluateStat(ContinuousMechanicsStatEvaluateRequest arg0)
+    {
+        LastEntityHandle = arg0.Entity.Handle.Value;
+        Evaluations++;
+        ulong value = _stats[(LastEntityHandle, arg0.Stat)];
+        return new ContinuousMechanicsStatEvaluationLeaseReceipt(
+            ReadOnlyMemory<ContinuousMechanicsStatDecisionRow>.Empty,
+            arg0.Catalog.Handle.Value,
+            "example",
+            "example",
+            LastEntityHandle,
+            arg0.Stat,
+            value,
+            value,
+            value,
+            0,
+            ulong.MaxValue,
+            value,
+            default);
+    }
+
+    public ContinuousMechanicsStatMutationLeaseReceipt SetStatBase(ContinuousMechanicsStatBaseMutationRequest arg0)
+    {
+        LastEntityHandle = arg0.Entity.Handle.Value;
+        ulong before = _stats[(LastEntityHandle, arg0.Stat)];
+        ulong after = Normalize(arg0.BaseBits);
+        _stats[(LastEntityHandle, arg0.Stat)] = after;
+        return new ContinuousMechanicsStatMutationLeaseReceipt(
+            arg0.Catalog.Handle.Value,
+            "example",
+            "example",
+            arg0.Operation,
+            LastEntityHandle,
+            arg0.Stat,
+            before,
+            after,
+            0,
+            ulong.MaxValue,
+            1,
+            2);
+    }
+
+    public ContinuousMechanicsTrackLeaseReceipt ReadTrack(ContinuousMechanicsTrackReadRequest arg0) => throw new NotSupportedException();
+    public ContinuousMechanicsTrackLeaseReceipt SetTrack(ContinuousMechanicsTrackSetRequest arg0) => throw new NotSupportedException();
+    public ContinuousMechanicsTrackLeaseReceipt SpendTrack(ContinuousMechanicsTrackAdjustmentRequest arg0) => throw new NotSupportedException();
+    public ContinuousMechanicsTrackLeaseReceipt RestoreTrack(ContinuousMechanicsTrackAdjustmentRequest arg0) => throw new NotSupportedException();
+    public ContinuousMechanicsEffectLeaseReceipt ApplyEffect(ContinuousMechanicsEffectApplyRequest arg0) => throw new NotSupportedException();
+    public ContinuousMechanicsEffectLeaseReceipt RemoveEffect(ContinuousMechanicsEffectRemoveRequest arg0) => throw new NotSupportedException();
+
+    private static ulong Normalize(ulong bits) => bits == 0x8000_0000_0000_0000 ? 0 : bits;
+}
+
 sealed class MechanicsAdapterFake : IMechanicsService
 {
     public const ulong InitialLifecycleStamp = 11;
@@ -568,6 +730,7 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public int ImportPublishes { get; private set; }
     public int ImportClaims { get; private set; }
     public int ImportDisposals { get; private set; }
+    public ulong LastBoundHandle { get; private set; }
     public bool ObservedPresentEmptyStats { get; private set; }
     public bool ObservedAbsentStats { get; private set; }
     public bool ReturnMalformedImportRevisions { get; set; }
@@ -849,6 +1012,7 @@ sealed class MechanicsAdapterFake : IMechanicsService
     private MechanicsEntity Lease(ulong entityId = 0)
     {
         MechanicsEntityHandle handle = new(_nextHandle++);
+        LastBoundHandle = handle.Value;
         _entityIds.Add(handle.Value, entityId);
         return new MechanicsEntity(handle, () =>
         {

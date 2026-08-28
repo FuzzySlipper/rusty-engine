@@ -98,6 +98,7 @@ fn engine_api(
         },
         rng: crate::rng::api(rng_bridge),
         mechanics: crate::mechanics::api(mechanics_bridge),
+        continuous_mechanics: crate::mechanics::continuous::api(mechanics_bridge),
         persistence: crate::persistence::api(persistence_bridge),
         rules: crate::rules::api(rules_bridge),
         standard_exact: crate::standard_exact::api(standard_exact_bridge),

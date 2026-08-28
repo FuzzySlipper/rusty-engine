@@ -85,6 +85,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     CameraView = new CameraViewServiceImplementation(native.camera_view);
                     Random = new RngServiceImplementation(native.rng);
                     Mechanics = new MechanicsServiceImplementation(native.mechanics);
+                    ContinuousMechanics = new ContinuousMechanicsServiceImplementation(native.continuous_mechanics);
                     Persistence = new PersistenceServiceImplementation(native.persistence);
                     Rules = new RulesServiceImplementation(native.rules);
                     StandardExact = new StandardExactServiceImplementation(native.standard_exact);
@@ -105,6 +106,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public ICameraViewService CameraView { get; }
                 public IRandomService Random { get; }
                 public IMechanicsService Mechanics { get; }
+                public IContinuousMechanicsService ContinuousMechanics { get; }
                 public IPersistenceService Persistence { get; }
                 public IRulesService Rules { get; }
                 public IStandardExactService StandardExact { get; }
