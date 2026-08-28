@@ -542,6 +542,7 @@ dependencies = [
  "csharp-engine-abi",
  "engine-spatial",
  "entity-state",
+ "gameplay-continuous-mechanics",
  "gameplay-mechanics",
  "gameplay-rules",
  "gameplay-standard",

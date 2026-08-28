@@ -3,28 +3,30 @@ use std::{collections::BTreeMap, ffi::c_void};
 use core_ids::EntityId;
 use csharp_engine_abi::*;
 use entity_state::{
-    ComponentRevision, EntityAuthoringService, EntityDefinition, EntityState, RelationshipCommand,
+    ComponentRevision, EntityAuthoringService, EntityDefinition, EntityLifecycle, EntityState,
+    RelationshipCommand,
 };
+use gameplay_continuous_mechanics::combined_gameplay_component_registry;
 use gameplay_mechanics::{
-    gameplay_component_registry, validate_state_against_catalog, ActiveEffectInstance,
-    ActiveEffectsComponent, CapacityMetricDefinition, CatalogVersion, DamageFact,
-    DamageKindDefinition, DamageKindSelector, DamagePart, DamagePartReceipt, DamageReceipt,
-    DamageRequest, DamageResponseDefinition, DamageService, DecisionOutcome, EffectApplyRequest,
-    EffectDefinition, EffectMutationKind, EffectRefreshRequest, EffectRemovalRequest,
-    EffectReplaceRequest, EffectService, EffectSourceActivation, EffectStackingPolicy,
-    EquipmentAssignment, EquipmentComponent, EquipmentEquipRequest, EquipmentMutationKind,
-    EquipmentService, EquipmentSlotChange, EquipmentSlotDefinition, EquipmentSwapRequest,
-    EquipmentUnequipRequest, ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent,
-    InventoryCapacityLimit, InventoryComponent, InventoryMutationKind, InventoryMutationRequest,
-    InventoryReadCost, InventoryService, InventoryTransferRequest, ItemCapacityCost, ItemComponent,
-    ItemDefinition, ItemDestroyRequest, ItemEquipmentPolicy, ItemKind, ItemService, ItemStack,
-    ItemTransferRequest, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
-    MechanicsScalar, ObservedComponentRevision, OperationId, RequestSource, ResponseDecision,
-    ResponseDecisionKind, RoundingPolicy, SourceCollectionCost, SourceDefinition,
-    SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
-    StatBaseMutationRequest, StatContribution, StatContributionDefinition, StatDecision,
-    StatDefinition, StatId, StatService, StatValue, StatsComponent, TrackAdjustmentKind,
-    TrackDamageChange, TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
+    validate_state_against_catalog, ActiveEffectInstance, ActiveEffectsComponent,
+    CapacityMetricDefinition, CatalogVersion, DamageFact, DamageKindDefinition, DamageKindSelector,
+    DamagePart, DamagePartReceipt, DamageReceipt, DamageRequest, DamageResponseDefinition,
+    DamageService, DecisionOutcome, EffectApplyRequest, EffectDefinition, EffectMutationKind,
+    EffectRefreshRequest, EffectRemovalRequest, EffectReplaceRequest, EffectService,
+    EffectSourceActivation, EffectStackingPolicy, EquipmentAssignment, EquipmentComponent,
+    EquipmentEquipRequest, EquipmentMutationKind, EquipmentService, EquipmentSlotChange,
+    EquipmentSlotDefinition, EquipmentSwapRequest, EquipmentUnequipRequest, ExactRatio,
+    IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit, InventoryComponent,
+    InventoryMutationKind, InventoryMutationRequest, InventoryReadCost, InventoryService,
+    InventoryTransferRequest, ItemCapacityCost, ItemComponent, ItemDefinition, ItemDestroyRequest,
+    ItemEquipmentPolicy, ItemKind, ItemService, ItemStack, ItemTransferRequest, MechanicsCatalog,
+    MechanicsCatalogDefinition, MechanicsComponentKind, MechanicsScalar, ObservedComponentRevision,
+    OperationId, RequestSource, ResponseDecision, ResponseDecisionKind, RoundingPolicy,
+    SourceCollectionCost, SourceDefinition, SourceDefinitionId, SourceInstanceId,
+    SourceInstanceIdentity, StackingGroupId, StackingPolicy, StatBaseMutationRequest,
+    StatContribution, StatContributionDefinition, StatDecision, StatDefinition, StatId,
+    StatService, StatValue, StatsComponent, TrackAdjustmentKind, TrackDamageChange,
+    TrackDefinition, TrackMaximum, TrackMutationRequest, TrackReadReceipt,
     TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackSetPolicy,
     TrackSetRequest, TrackValue, TracksComponent, UniqueItemMaterializationRequest,
 };
@@ -226,7 +228,6 @@ struct MechanicsWorld {
 
 #[derive(Clone, Copy)]
 struct LifecycleRecord {
-    lifecycle: NativeMechanicsEntityLifecycle,
     stamp: u64,
 }
 
@@ -242,36 +243,28 @@ impl MechanicsWorld {
     fn admit(&mut self, entity: EntityId) -> Option<NativeMechanicsLifecycleReceipt> {
         let stamp = self.next_stamp;
         self.next_stamp = self.next_stamp.checked_add(1)?;
-        self.lifecycle.insert(
-            entity,
-            LifecycleRecord {
-                lifecycle: NativeMechanicsEntityLifecycle::Active,
-                stamp,
-            },
-        );
+        self.lifecycle.insert(entity, LifecycleRecord { stamp });
         Some(self.lifecycle_receipt(entity))
     }
 
+    fn native_lifecycle(&self, entity: EntityId) -> NativeMechanicsEntityLifecycle {
+        match self.state.lifecycle(entity) {
+            Some(EntityLifecycle::Active) => NativeMechanicsEntityLifecycle::Active,
+            Some(EntityLifecycle::Disabled) => NativeMechanicsEntityLifecycle::Disabled,
+            Some(EntityLifecycle::Tombstoned) | None => NativeMechanicsEntityLifecycle::Tombstoned,
+        }
+    }
+
     fn lifecycle_receipt(&self, entity: EntityId) -> NativeMechanicsLifecycleReceipt {
-        let record = self
-            .lifecycle
-            .get(&entity)
-            .copied()
-            .unwrap_or(LifecycleRecord {
-                lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
-                stamp: 0,
-            });
         NativeMechanicsLifecycleReceipt {
             entity_id: entity.raw(),
-            lifecycle: record.lifecycle,
-            stamp: record.stamp,
+            lifecycle: self.native_lifecycle(entity),
+            stamp: self.lifecycle.get(&entity).map_or(0, |record| record.stamp),
         }
     }
 
     fn is_active(&self, entity: EntityId) -> bool {
-        self.lifecycle
-            .get(&entity)
-            .is_some_and(|record| record.lifecycle == NativeMechanicsEntityLifecycle::Active)
+        self.state.lifecycle(entity) == Some(EntityLifecycle::Active)
     }
 
     fn set_lifecycle(
@@ -279,8 +272,8 @@ impl MechanicsWorld {
         entity: EntityId,
         lifecycle: NativeMechanicsEntityLifecycle,
     ) -> Option<NativeMechanicsLifecycleReceipt> {
-        let before = self.lifecycle.get(&entity).copied()?;
-        if before.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned {
+        self.lifecycle.get(&entity)?;
+        if self.state.lifecycle(entity) == Some(EntityLifecycle::Tombstoned) {
             return None;
         }
         let next_stamp = self.next_stamp.checked_add(1)?;
@@ -299,8 +292,7 @@ impl MechanicsWorld {
         changed.ok()?;
         let stamp = self.next_stamp;
         self.next_stamp = next_stamp;
-        self.lifecycle
-            .insert(entity, LifecycleRecord { lifecycle, stamp });
+        self.lifecycle.insert(entity, LifecycleRecord { stamp });
         Some(self.lifecycle_receipt(entity))
     }
 }
@@ -1027,7 +1019,7 @@ unsafe extern "C" fn create_catalog(
     else {
         return 0;
     };
-    let Ok(registry) = gameplay_component_registry() else {
+    let Ok(registry) = combined_gameplay_component_registry() else {
         return 0;
     };
     let Ok(state) = EntityState::from_definitions_with_registry(registry, []) else {
@@ -1600,9 +1592,7 @@ unsafe extern "C" fn destroy_catalog(
     };
     if bridge.canonical_entities.iter().any(|(entity, catalog)| {
         *catalog == handle.value
-            && slot.world.lifecycle.get(entity).is_some_and(|record| {
-                record.lifecycle != NativeMechanicsEntityLifecycle::Tombstoned
-            })
+            && slot.world.native_lifecycle(*entity) != NativeMechanicsEntityLifecycle::Tombstoned
     }) {
         return 0;
     }
@@ -2166,7 +2156,7 @@ where
 {
     let binding = bridge.binding(handle)?.clone();
     let slot = bridge.catalogs.get(&binding.catalog)?;
-    let lifecycle = slot.world.lifecycle.get(&binding.entity)?.lifecycle;
+    let lifecycle = slot.world.native_lifecycle(binding.entity);
     if !matches!(
         lifecycle,
         NativeMechanicsEntityLifecycle::Active | NativeMechanicsEntityLifecycle::Disabled
@@ -2747,17 +2737,15 @@ unsafe extern "C" fn prepare_world_restore(
         || canonical_identity(&slot.world).as_ref() != Some(&snapshot.canonical_identity)
         || slot.world.state.revision() != request.expected_state_revision
         || snapshot.world.lifecycle.len() != slot.world.lifecycle.len()
-        || snapshot
-            .world
-            .lifecycle
-            .iter()
-            .any(|(entity, snapshot_record)| {
-                let Some(current_record) = slot.world.lifecycle.get(entity) else {
-                    return true;
-                };
-                (snapshot_record.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned)
-                    != (current_record.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned)
-            })
+        || snapshot.world.lifecycle.keys().any(|entity| {
+            matches!(
+                snapshot.world.state.lifecycle(*entity),
+                Some(EntityLifecycle::Tombstoned)
+            ) != matches!(
+                slot.world.state.lifecycle(*entity),
+                Some(EntityLifecycle::Tombstoned)
+            )
+        })
     {
         return 0;
     }
@@ -3047,7 +3035,7 @@ unsafe extern "C" fn export_world(
         entities.push(NativeMechanicsWorldEntityRow {
             entity_id: entity.raw(),
             identity: text.copy(&core.name),
-            lifecycle: lifecycle.lifecycle,
+            lifecycle: slot.world.native_lifecycle(entity),
             lifecycle_stamp: lifecycle.stamp,
         });
         for component in NativeMechanicsRevisionComponent::all() {
@@ -3057,7 +3045,7 @@ unsafe extern "C" fn export_world(
                 component,
             ));
         }
-        if lifecycle.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned {
+        if slot.world.native_lifecycle(entity) == NativeMechanicsEntityLifecycle::Tombstoned {
             continue;
         }
         let Ok(relationships) = slot.world.state.relationships(entity) else {
@@ -3582,7 +3570,7 @@ unsafe extern "C" fn prepare_world_import(
         }
         definition
     });
-    let Ok(registry) = gameplay_component_registry() else {
+    let Ok(registry) = combined_gameplay_component_registry() else {
         return 0;
     };
     let Ok(mut state) = EntityState::from_definitions_with_registry(registry, definitions) else {
@@ -3836,7 +3824,7 @@ unsafe extern "C" fn prepare_world_import(
     let Some(mut next_stamp) = highest_stamp.checked_add(1) else {
         return 0;
     };
-    for (entity, (lifecycle, saved_stamp)) in &lifecycles {
+    for (entity, (_, saved_stamp)) in &lifecycles {
         let stamp = next_stamp;
         let Some(after) = next_stamp.checked_add(1) else {
             return 0;
@@ -3845,13 +3833,9 @@ unsafe extern "C" fn prepare_world_import(
         if stamp <= *saved_stamp || stamp <= slot.world.lifecycle_receipt(*entity).stamp {
             return 0;
         }
-        candidate.lifecycle.insert(
-            *entity,
-            LifecycleRecord {
-                lifecycle: *lifecycle,
-                stamp,
-            },
-        );
+        candidate
+            .lifecycle
+            .insert(*entity, LifecycleRecord { stamp });
     }
     candidate.next_stamp = next_stamp;
     let Some(revisions) = import_revision_rows(
@@ -5584,18 +5568,10 @@ unsafe extern "C" fn materialize_unique_item(
         let stamp = slot.world.next_stamp;
         slot.world.next_stamp += 1;
         slot.world.state = candidate;
-        let lifecycle = NativeMechanicsLifecycleReceipt {
-            entity_id: item_binding.entity.raw(),
-            lifecycle: NativeMechanicsEntityLifecycle::Active,
-            stamp,
-        };
-        slot.world.lifecycle.insert(
-            item_binding.entity,
-            LifecycleRecord {
-                lifecycle: NativeMechanicsEntityLifecycle::Active,
-                stamp,
-            },
-        );
+        slot.world
+            .lifecycle
+            .insert(item_binding.entity, LifecycleRecord { stamp });
+        let lifecycle = slot.world.lifecycle_receipt(item_binding.entity);
         (receipt, lifecycle)
     };
     bridge
@@ -5689,18 +5665,10 @@ unsafe extern "C" fn destroy_unique_item(
         let stamp = slot.world.next_stamp;
         slot.world.next_stamp += 1;
         slot.world.state = candidate;
-        let lifecycle = NativeMechanicsLifecycleReceipt {
-            entity_id: item_binding.entity.raw(),
-            lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
-            stamp,
-        };
-        slot.world.lifecycle.insert(
-            item_binding.entity,
-            LifecycleRecord {
-                lifecycle: NativeMechanicsEntityLifecycle::Tombstoned,
-                stamp,
-            },
-        );
+        slot.world
+            .lifecycle
+            .insert(item_binding.entity, LifecycleRecord { stamp });
+        let lifecycle = slot.world.lifecycle_receipt(item_binding.entity);
         (receipt, lifecycle)
     };
 
@@ -8321,6 +8289,108 @@ mod tests {
     }
 
     #[test]
+    fn exact_mechanics_world_shares_lifecycle_and_continuous_components() {
+        use gameplay_continuous_mechanics::{
+            ContinuousCatalogVersion, ContinuousMechanicsCatalog,
+            ContinuousMechanicsCatalogDefinition, ContinuousStatDefinition, ContinuousStatId,
+            ContinuousStatService, ContinuousStatValue, ContinuousStatsComponent, ContinuousValue,
+        };
+
+        let entity = EntityId::new(7406);
+        let continuous_version =
+            ContinuousCatalogVersion::parse("continuous-v1".to_owned()).unwrap();
+        let stat = ContinuousStatId::parse("focus".to_owned()).unwrap();
+        let continuous_catalog =
+            ContinuousMechanicsCatalog::admit(ContinuousMechanicsCatalogDefinition {
+                version: continuous_version.clone(),
+                stats: vec![ContinuousStatDefinition::new(
+                    stat.clone(),
+                    ContinuousValue::new(0.0).unwrap(),
+                    ContinuousValue::new(10.0).unwrap(),
+                )
+                .unwrap()],
+                tracks: vec![],
+                sources: vec![],
+                effects: vec![],
+            })
+            .unwrap();
+        let state = EntityState::from_definitions_with_registry(
+            combined_gameplay_component_registry().unwrap(),
+            [EntityDefinition::new(entity, "exact-and-continuous")],
+        )
+        .unwrap();
+        let mut world = MechanicsWorld::new(state);
+
+        let admitted = world.admit(entity).unwrap();
+        assert_eq!(admitted.lifecycle, NativeMechanicsEntityLifecycle::Active);
+        let exact_revision = world
+            .state
+            .component_revision::<StatsComponent>(entity)
+            .unwrap();
+        EntityAuthoringService
+            .attach_component(
+                &mut world.state,
+                exact_revision,
+                entity,
+                StatsComponent::new(parse::<CatalogVersion>("exact-v1").unwrap(), vec![]).unwrap(),
+            )
+            .unwrap();
+        let continuous_revision = world
+            .state
+            .component_revision::<ContinuousStatsComponent>(entity)
+            .unwrap();
+        EntityAuthoringService
+            .attach_component(
+                &mut world.state,
+                continuous_revision,
+                entity,
+                ContinuousStatsComponent::new(
+                    continuous_version,
+                    vec![ContinuousStatValue::new(
+                        stat.clone(),
+                        ContinuousValue::new(2.5).unwrap(),
+                    )],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let evaluated =
+            ContinuousStatService::evaluate(&world.state, &continuous_catalog, entity, &stat)
+                .unwrap();
+        assert_eq!(
+            evaluated.value.bits(),
+            ContinuousValue::new(2.5).unwrap().bits()
+        );
+        assert!(world
+            .state
+            .component::<StatsComponent>(entity)
+            .unwrap()
+            .is_some());
+
+        let disabled = world
+            .set_lifecycle(entity, NativeMechanicsEntityLifecycle::Disabled)
+            .unwrap();
+        assert_eq!(disabled.lifecycle, NativeMechanicsEntityLifecycle::Disabled);
+        assert_eq!(
+            world.state.lifecycle(entity),
+            Some(EntityLifecycle::Disabled)
+        );
+        assert!(!world.is_active(entity));
+        assert_eq!(
+            world.lifecycle_receipt(entity).lifecycle,
+            NativeMechanicsEntityLifecycle::Disabled
+        );
+        assert_eq!(
+            ContinuousStatService::evaluate(&world.state, &continuous_catalog, entity, &stat)
+                .unwrap()
+                .value
+                .bits(),
+            ContinuousValue::new(2.5).unwrap().bits()
+        );
+    }
+
+    #[test]
     fn typed_world_image_import_prepares_all_families_and_retires_only_replaced_handles() {
         fn slice(value: &str) -> NativeUtf8Slice {
             NativeUtf8Slice {
@@ -8398,9 +8468,11 @@ mod tests {
             }],
         })
         .unwrap();
-        let state =
-            EntityState::from_definitions_with_registry(gameplay_component_registry().unwrap(), [])
-                .unwrap();
+        let state = EntityState::from_definitions_with_registry(
+            combined_gameplay_component_registry().unwrap(),
+            [],
+        )
+        .unwrap();
         bridge.catalogs.insert(
             1,
             CatalogSlot {
