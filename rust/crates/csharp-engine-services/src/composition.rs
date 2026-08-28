@@ -28,7 +28,7 @@ use crate::{
     voxel_content::RuntimeVoxelContentBridge,
 };
 use render_projection::RuntimeAppearanceCatalog;
-use runtime_ui::RuntimeUiProjectionEnvelope;
+use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
 
 pub(crate) const ABI_OK: i32 = 1;
 use crate::appearance::{
@@ -313,11 +313,11 @@ impl EngineServiceSet {
         )
     }
 
-    pub fn begin_call(&mut self) {
+    pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
         self.appearance.begin_call();
         self.audio.begin_call();
         self.camera_view.begin_call();
-        self.ui.begin_call();
+        self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
     }
 

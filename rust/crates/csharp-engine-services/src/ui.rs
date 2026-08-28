@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, ffi::c_void};
 
 use csharp_engine_abi::*;
-use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
 use serde_json::{Map, Number, Value};
 
@@ -10,13 +9,10 @@ use crate::{
     composition::{borrowed_utf8, CsharpEngineServicesError},
 };
 
-const INSTANCE_ID: u64 = 1;
-const GENERATION: u64 = 1;
-const CONTROL_REVISION: u64 = 1;
-
 /// Callback state remains Engine-owned for the complete NativeAOT runtime lifetime.
 pub(crate) struct RuntimeUiBridge {
     staged: Vec<RuntimeUiProjectionEnvelope>,
+    staged_binding: Option<RuntimeUiRuntimeBinding>,
     streams: BTreeMap<u64, RuntimeUiStream>,
     staged_streams: Option<BTreeMap<u64, RuntimeUiStream>>,
     next_stream: u64,
@@ -72,6 +68,7 @@ impl RuntimeUiBridge {
     pub(crate) fn new() -> Self {
         Self {
             staged: Vec::new(),
+            staged_binding: None,
             streams: BTreeMap::new(),
             staged_streams: None,
             next_stream: 1,
@@ -82,8 +79,9 @@ impl RuntimeUiBridge {
         }
     }
 
-    pub(crate) fn begin_call(&mut self) {
+    pub(crate) fn begin_call(&mut self, binding: RuntimeUiRuntimeBinding) {
         self.staged.clear();
+        self.staged_binding = Some(binding);
         self.staged_streams = Some(self.streams.clone());
         self.staged_next_stream = Some(self.next_stream);
         self.callback_error = None;
@@ -91,6 +89,7 @@ impl RuntimeUiBridge {
 
     pub(crate) fn discard_call(&mut self) {
         self.staged.clear();
+        self.staged_binding = None;
         self.staged_streams = None;
         self.staged_next_stream = None;
         self.callback_error = None;
@@ -101,6 +100,9 @@ impl RuntimeUiBridge {
             self.discard_call();
             return Err(error);
         }
+        self.staged_binding
+            .take()
+            .expect("every native call starts a UI stage with a runtime binding");
         Ok(RuntimeUiCall {
             projections: std::mem::take(&mut self.staged),
             streams: self
@@ -269,11 +271,8 @@ impl RuntimeUiBridge {
         // SAFETY: pointer/null and range checks occur in the decoder before every slice.
         let value = unsafe { decode_structured_value(projection.value) }?;
         let envelope = RuntimeUiProjectionEnvelope::new(
-            RuntimeUiRuntimeBinding::new(
-                RuntimeInstanceId::new(INSTANCE_ID),
-                RuntimeGeneration::new(GENERATION),
-                RuntimeControlRevision::new(CONTROL_REVISION),
-            ),
+            self.staged_binding
+                .expect("publish only during a native call with a UI binding"),
             projection.sequence,
             &stream.stream,
             &stream.contract,
@@ -552,6 +551,15 @@ fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
+
+    fn binding(control_revision: u64) -> RuntimeUiRuntimeBinding {
+        RuntimeUiRuntimeBinding::new(
+            RuntimeInstanceId::new(7),
+            RuntimeGeneration::new(11),
+            RuntimeControlRevision::new(control_revision),
+        )
+    }
 
     fn stream_request() -> NativeUiStreamRequest {
         NativeUiStreamRequest {
@@ -569,7 +577,7 @@ mod tests {
     #[test]
     fn publish_projection_returns_owned_error_diagnostic_and_releases_it_once() {
         let mut bridge = RuntimeUiBridge::new();
-        bridge.begin_call();
+        bridge.begin_call(binding(13));
         let api = api(&mut bridge);
         let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
 
@@ -637,7 +645,7 @@ mod tests {
         let api = api(&mut bridge);
         let mut stream = NativeUiStreamHandle::default();
 
-        bridge.begin_call();
+        bridge.begin_call(binding(13));
         assert_eq!(
             unsafe { (api.open_stream)(api.context, &stream_request(), &mut stream) },
             ABI_OK
@@ -656,7 +664,7 @@ mod tests {
             first_edge: 0,
             child_count: 0,
         }];
-        let projection = NativeUiProjection {
+        let mut projection = NativeUiProjection {
             stream,
             sequence: 1,
             value: NativeStructuredValue {
@@ -669,7 +677,7 @@ mod tests {
                 utf8_len: 0,
             },
         };
-        bridge.begin_call();
+        bridge.begin_call(binding(13));
         let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
@@ -678,9 +686,22 @@ mod tests {
         );
         let published_call = bridge.take_staged_call().expect("published projection");
         assert_eq!(published_call.projections.len(), 1);
+        assert_eq!(published_call.projections[0].runtime(), binding(13));
         bridge.commit(published_call);
 
-        bridge.begin_call();
+        projection.sequence = 2;
+        bridge.begin_call(binding(14));
+        assert_eq!(
+            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
+            ABI_OK,
+            "the next call accepts an advancing stream sequence"
+        );
+        let replaced_binding_call = bridge.take_staged_call().expect("rebound projection");
+        assert_eq!(replaced_binding_call.projections.len(), 1);
+        assert_eq!(replaced_binding_call.projections[0].runtime(), binding(14));
+        bridge.commit(replaced_binding_call);
+
+        bridge.begin_call(binding(14));
         assert_eq!(unsafe { (api.destroy_stream)(api.context, stream) }, ABI_OK);
         assert_eq!(
             unsafe { (api.destroy_stream)(api.context, stream) },
@@ -703,13 +724,13 @@ mod tests {
             "duplicate committed teardown is rejected"
         );
 
-        bridge.begin_call();
+        bridge.begin_call(binding(14));
         assert!(
             bridge.take_staged_call().is_ok(),
             "out-of-call close failure does not poison the next call"
         );
 
-        bridge.begin_call();
+        bridge.begin_call(binding(14));
         let mut stale_receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
         assert_eq!(
             unsafe { (api.publish_projection)(api.context, &projection, &mut stale_receipt) },

@@ -41,6 +41,7 @@ use runtime_lifecycle::{
     RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig, RuntimeLifecycleReadout,
     RuntimeMode, RuntimeState,
 };
+use runtime_ui::RuntimeUiRuntimeBinding;
 
 const ABI_OK: i32 = 1;
 const RUNTIME_INSTANCE_ID: u64 = 1;
@@ -365,7 +366,7 @@ impl CsharpProductRuntime {
             engine: services.api(),
         };
         let mut handle = ptr::null_mut();
-        services.begin_call();
+        services.begin_call(ui_binding(&lifecycle));
         match call_create(&api, &args, &mut handle) {
             Ok(()) => {}
             Err(error) => {
@@ -446,6 +447,7 @@ impl CsharpProductRuntime {
     pub fn exercise_turns(&mut self) -> Result<(), CsharpProductRuntimeError> {
         self.start_for_exercise()?;
         let started_binding = input_binding(&self.lifecycle);
+        self.exercise_ui_projection_binding(started_binding)?;
         self.input(ProductDevInputBatch::new(vec![key_press(
             started_binding,
             1,
@@ -485,6 +487,7 @@ impl CsharpProductRuntime {
                 "stale input was admitted after a control revision",
             ));
         }
+        self.exercise_ui_projection_binding(replaced_binding)?;
         self.input(ProductDevInputBatch::new(vec![key_press(
             replaced_binding,
             1,
@@ -533,6 +536,43 @@ impl CsharpProductRuntime {
         self.exercise_selected_mode()?;
         self.exercise_pause_resume()?;
         Ok(())
+    }
+
+    fn exercise_ui_projection_binding(
+        &mut self,
+        expected: RuntimeInputBinding,
+    ) -> Result<(), CsharpProductRuntimeError> {
+        let receipt = match self.lifecycle.mode() {
+            RuntimeMode::Realtime => {
+                let baseline = self
+                    .lifecycle
+                    .readout()
+                    .last_observed_time()
+                    .map(|value| value.nanoseconds())
+                    .unwrap_or(0);
+                self.advance_realtime(CanonicalU64::new(baseline))
+                    .map_err(exercise_runtime_error)?;
+                self.advance_realtime(CanonicalU64::new(
+                    baseline
+                        .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
+                        .ok_or_else(|| {
+                            CsharpProductRuntimeError::new(
+                                "CSHARP_EXERCISE_UI_BINDING",
+                                "realtime UI projection observation overflowed",
+                            )
+                        })?,
+                ))
+                .map_err(exercise_runtime_error)?
+            }
+            RuntimeMode::Demand => self.admit_demand_step().map_err(exercise_runtime_error)?,
+            RuntimeMode::External => self
+                .admit_external_step(CanonicalU64::new(
+                    self.lifecycle.readout().admitted_simulation_steps(),
+                ))
+                .map_err(exercise_runtime_error)?,
+        };
+        let (_, outputs) = receipt.into_parts();
+        assert_ui_projection_binding(&outputs, expected)
     }
 
     fn exercise_pause_resume(&mut self) -> Result<(), CsharpProductRuntimeError> {
@@ -1009,7 +1049,7 @@ impl CsharpProductRuntime {
             .iter()
             .map(NativeInputOwned::as_native)
             .collect();
-        self.services.begin_call();
+        self.services.begin_call(ui_binding(&self.lifecycle));
         let request = match call_turn(
             &self.api,
             self.handle,
@@ -1108,7 +1148,7 @@ impl CsharpProductRuntime {
         action: NativeProductAction,
         operation: ProductDevOperationKind,
     ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
-        self.services.begin_call();
+        self.services.begin_call(ui_binding(&self.lifecycle));
         match call_action(action, self.handle, operation) {
             Ok(()) => {}
             Err(error) => {
@@ -1487,6 +1527,10 @@ fn input_binding(lifecycle: &RuntimeLifecycle) -> RuntimeInputBinding {
         readout.generation(),
         readout.control_revision(),
     )
+}
+
+fn ui_binding(lifecycle: &RuntimeLifecycle) -> RuntimeUiRuntimeBinding {
+    RuntimeUiRuntimeBinding::from(lifecycle)
 }
 
 fn dev_binding_from_input(binding: RuntimeInputBinding) -> ProductDevRuntimeBinding {
@@ -2734,6 +2778,62 @@ fn service_outputs(
         outputs.push(ProductDevRuntimeOutput::presentation(frame).map_err(host_error)?);
     }
     Ok(outputs)
+}
+
+fn assert_ui_projection_binding(
+    outputs: &[ProductDevRuntimeOutput],
+    expected: RuntimeInputBinding,
+) -> Result<(), CsharpProductRuntimeError> {
+    let expected_instance = expected.instance_id().value().to_string();
+    let expected_generation = expected.generation().value().to_string();
+    let expected_revision = expected.control_revision().value().to_string();
+    let mut found = false;
+    for output in outputs {
+        let encoded = serde_json::to_value(output).map_err(|error| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_UI_BINDING",
+                format!("could not inspect UI projection output: {error}"),
+            )
+        })?;
+        if encoded.get("kind").and_then(serde_json::Value::as_str) != Some("ui-projection") {
+            continue;
+        }
+        found = true;
+        let runtime = encoded
+            .get("envelope")
+            .and_then(|envelope| envelope.get("runtime"));
+        let matches_expected = runtime.is_some_and(|runtime| {
+            runtime
+                .get("instanceId")
+                .and_then(serde_json::Value::as_str)
+                == Some(expected_instance.as_str())
+                && runtime
+                    .get("generation")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(expected_generation.as_str())
+                && runtime
+                    .get("controlRevision")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(expected_revision.as_str())
+        });
+        if !matches_expected {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_UI_BINDING",
+                format!(
+                    "UI projection runtime identity did not match {}:{}:{}",
+                    expected_instance, expected_generation, expected_revision
+                ),
+            ));
+        }
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(CsharpProductRuntimeError::new(
+            "CSHARP_EXERCISE_UI_BINDING",
+            "admitted product update did not publish a UI projection",
+        ))
+    }
 }
 
 fn host_error(error: product_dev_host::ProductDevHostError) -> CsharpProductRuntimeError {
