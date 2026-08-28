@@ -121,6 +121,16 @@ pub type NativeReplaceVoxelNavigation = unsafe extern "C" fn(
     *const NativeNavigationVoxelReplaceRequest,
     *mut NativeNavigationReplaceReceipt,
 ) -> i32;
+pub type NativeReplaceNavigationTraversal = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeNavigationTraversalReplaceRequest,
+    *mut NativeNavigationTraversalReplaceReceipt,
+) -> i32;
+pub type NativeClearNavigationTraversal = unsafe extern "C" fn(
+    *mut c_void,
+    NativeNavigationTraversalClearRequest,
+    *mut NativeNavigationTraversalReplaceReceipt,
+) -> i32;
 pub type NativeReadNavigationProjection = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationProjectionReadRequest,
@@ -130,6 +140,11 @@ pub type NativeRequestNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationPathRequest,
     *mut NativeNavigationPathReadout,
+) -> i32;
+pub type NativeRequestWeightedNavigationPath = unsafe extern "C" fn(
+    *mut c_void,
+    NativeNavigationWeightedPathRequest,
+    *mut NativeNavigationWeightedPathReadout,
 ) -> i32;
 pub type NativeReadNavigationPathCellAt = unsafe extern "C" fn(
     *mut c_void,
@@ -1421,8 +1436,11 @@ pub struct NativeSpatialApi {
     pub replace_collision: NativeReplaceCollision,
     pub replace_navigation: NativeReplaceNavigation,
     pub replace_voxel_navigation: NativeReplaceVoxelNavigation,
+    pub replace_navigation_traversal: NativeReplaceNavigationTraversal,
+    pub clear_navigation_traversal: NativeClearNavigationTraversal,
     pub read_navigation_projection: NativeReadNavigationProjection,
     pub request_navigation_path: NativeRequestNavigationPath,
+    pub request_weighted_navigation_path: NativeRequestWeightedNavigationPath,
     pub read_navigation_path_cell_at: NativeReadNavigationPathCellAt,
     pub request_volumetric_navigation_path: NativeRequestVolumetricNavigationPath,
     pub clear_navigation: NativeClearNavigation,

@@ -398,6 +398,40 @@ pub struct NativeNavigationReplaceReceipt {
     pub navigation_revision: u64,
 }
 
+/// One bounded purpose-neutral traversal rule. `allowed == false` prevents
+/// entry; omitted cells remain allowed with traversal cost one.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationTraversalCell {
+    pub cell: NativePlanarNavCell,
+    pub allowed: bool,
+    pub traversal_cost: u64,
+}
+
+/// Replaces the retained traversal overlay for the session's existing planar
+/// navigation projection. The records are borrowed only for this call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationTraversalReplaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub cells: *const NativeNavigationTraversalCell,
+    pub cells_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationTraversalReplaceReceipt {
+    pub traversal_cell_count: u64,
+    pub traversal_overlay_hash: u64,
+    pub navigation_revision: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationTraversalClearRequest {
+    pub session: NativeSpatialSessionHandle,
+}
+
 /// The admitted Engine-owned substrate for a navigation projection. Host cells
 /// are already-walkable facts; voxel-derived projections remain derived by the
 /// pathfinding owner from admitted solid voxels and agent dimensions.
@@ -429,6 +463,9 @@ pub enum NativeNavigationPathOutcome {
     NonFinitePosition = 10,
     ProjectionUnavailable = 11,
     InvalidAgentHeight = 12,
+    StartBlocked = 13,
+    GoalBlocked = 14,
+    CostOverflow = 15,
 }
 
 #[repr(C)]
@@ -459,6 +496,8 @@ pub struct NativeNavigationProjectionReadout {
     pub agent_height_voxels: u32,
     pub require_solid_floor: bool,
     pub max_step_cells: u32,
+    pub traversal_cell_count: u64,
+    pub traversal_overlay_hash: u64,
 }
 
 /// A bounded, full planar path request over the session's admitted projection.
@@ -481,6 +520,31 @@ pub struct NativeNavigationPathReadout {
     pub path_len: u32,
     pub navigation_revision: u64,
     pub projection_hash: u64,
+    pub path_hash: u64,
+}
+
+/// A bounded full planar minimum-cost path request over the session's
+/// projection and retained traversal overlay.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationWeightedPathRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub start: NativePlanarNavCell,
+    pub goal: NativePlanarNavCell,
+    pub max_visited: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationWeightedPathReadout {
+    pub outcome: NativeNavigationPathOutcome,
+    pub kind: NativeNavigationProjectionKind,
+    pub visited: u32,
+    pub path_len: u32,
+    pub total_traversal_cost: u64,
+    pub navigation_revision: u64,
+    pub projection_hash: u64,
+    pub traversal_overlay_hash: u64,
     pub path_hash: u64,
 }
 

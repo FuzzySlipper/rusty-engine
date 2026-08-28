@@ -19,11 +19,13 @@ use entity_state::{
     EntityState, EntityTransform, Quat,
 };
 use svc_pathfinding::{
-    build_nav_projection, find_path_with_policy, find_volumetric_path, propose_direct_nav_movement,
-    DirectNavMovementRequest, NavError, NavPathOutcome, NavPathQuery, NavProjection,
-    NavProjectionConfig, PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig,
+    build_nav_projection, find_path_with_policy, find_volumetric_path,
+    find_weighted_path_with_policy, propose_direct_nav_movement, DirectNavMovementRequest,
+    NavError, NavPathOutcome, NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell,
+    NavTraversalOverlay, PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig,
     VolumetricNavError, VolumetricNavOutcome, VolumetricNavQuery, VolumetricNeighborSet,
-    VolumetricTraversalRule, VolumetricVerticalPolicy,
+    VolumetricTraversalRule, VolumetricVerticalPolicy, WeightedNavPathError,
+    WeightedNavPathOutcome,
 };
 
 use crate::composition::{
@@ -122,6 +124,7 @@ struct NavigationState {
     policy: PlanarNavNeighborPolicy,
     agent_height_voxels: u32,
     require_solid_floor: bool,
+    traversal: NavTraversalOverlay,
     revision: u64,
     last_path: Vec<VoxelCoord>,
 }
@@ -411,6 +414,7 @@ impl RuntimeSpatialBridge {
                 )
             })?,
         };
+        let traversal = NavTraversalOverlay::empty(&projection);
         let session = self.session_mut(request.session)?;
         session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
         let navigation_revision = session.navigation_revision;
@@ -425,6 +429,7 @@ impl RuntimeSpatialBridge {
             policy,
             agent_height_voxels: 0,
             require_solid_floor: false,
+            traversal,
             revision: navigation_revision,
             last_path: Vec::new(),
         });
@@ -473,6 +478,7 @@ impl RuntimeSpatialBridge {
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_NAVIGATION_CONFIG", error.label())
         })?;
+        let traversal = NavTraversalOverlay::empty(&projection);
         let session = self.session_mut(request.session)?;
         session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
         let navigation_revision = session.navigation_revision;
@@ -487,10 +493,83 @@ impl RuntimeSpatialBridge {
             policy: PlanarNavNeighborPolicy { max_step_cells },
             agent_height_voxels: request.agent_height_voxels,
             require_solid_floor: request.require_solid_floor,
+            traversal,
             revision: navigation_revision,
             last_path: Vec::new(),
         });
         Ok(receipt)
+    }
+
+    fn replace_navigation_traversal(
+        &mut self,
+        request: &NativeNavigationTraversalReplaceRequest,
+    ) -> Result<NativeNavigationTraversalReplaceReceipt, CsharpEngineServicesError> {
+        let cells = unsafe {
+            borrowed_slice(
+                request.cells,
+                request.cells_len,
+                "navigation traversal cells",
+            )
+        }?;
+        let session = self.session_mut(request.session)?;
+        let traversal = NavTraversalOverlay::from_cells(
+            &session
+                .navigation
+                .as_ref()
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_NAVIGATION_TRAVERSAL",
+                        "navigation projection is unavailable",
+                    )
+                })?
+                .projection,
+            cells.iter().map(|cell| NavTraversalCell {
+                coord: nav_cell(cell.cell),
+                allowed: cell.allowed,
+                cost: cell.traversal_cost,
+            }),
+        )
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_NAVIGATION_TRAVERSAL", error.label())
+        })?;
+        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        let navigation_revision = session.navigation_revision;
+        let navigation = session
+            .navigation
+            .as_mut()
+            .expect("navigation checked above");
+        navigation.traversal = traversal;
+        navigation.revision = navigation_revision;
+        navigation.last_path.clear();
+        Ok(NativeNavigationTraversalReplaceReceipt {
+            traversal_cell_count: navigation.traversal.len() as u64,
+            traversal_overlay_hash: navigation.traversal.overlay_hash(),
+            navigation_revision,
+        })
+    }
+
+    fn clear_navigation_traversal(
+        &mut self,
+        request: NativeNavigationTraversalClearRequest,
+    ) -> Result<NativeNavigationTraversalReplaceReceipt, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let navigation = session.navigation.as_mut().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_NAVIGATION_TRAVERSAL",
+                "navigation projection is unavailable",
+            )
+        })?;
+        let traversal = NavTraversalOverlay::empty(&navigation.projection);
+        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        let navigation_revision = session.navigation_revision;
+        navigation.traversal = traversal;
+        navigation.revision = navigation_revision;
+        navigation.last_path.clear();
+        Ok(NativeNavigationTraversalReplaceReceipt {
+            traversal_cell_count: 0,
+            traversal_overlay_hash: navigation.traversal.overlay_hash(),
+            navigation_revision,
+        })
     }
 
     fn read_navigation_projection(
@@ -513,6 +592,8 @@ impl RuntimeSpatialBridge {
             agent_height_voxels: navigation.agent_height_voxels,
             require_solid_floor: navigation.require_solid_floor,
             max_step_cells: u32::from(navigation.policy.max_step_cells),
+            traversal_cell_count: navigation.traversal.len() as u64,
+            traversal_overlay_hash: navigation.traversal.overlay_hash(),
         })
     }
 
@@ -556,6 +637,57 @@ impl RuntimeSpatialBridge {
             path_len: u32::try_from(navigation.last_path.len()).unwrap_or(u32::MAX),
             navigation_revision: navigation.revision,
             projection_hash: navigation.projection.projection_hash(),
+            path_hash,
+        })
+    }
+
+    fn request_weighted_navigation_path(
+        &mut self,
+        request: NativeNavigationWeightedPathRequest,
+    ) -> Result<NativeNavigationWeightedPathReadout, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let Some(navigation) = session.navigation.as_mut() else {
+            return Ok(NativeNavigationWeightedPathReadout {
+                outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
+                ..Default::default()
+            });
+        };
+        let result = find_weighted_path_with_policy(
+            &navigation.projection,
+            &navigation.traversal,
+            NavPathQuery {
+                start: nav_cell(request.start),
+                goal: nav_cell(request.goal),
+                max_visited: request.max_visited as usize,
+            },
+            navigation.policy,
+        );
+        let (outcome, visited, total_traversal_cost, path, path_hash) = match result {
+            Ok(result) => (
+                match result.outcome {
+                    WeightedNavPathOutcome::Reached => NativeNavigationPathOutcome::Reached,
+                    WeightedNavPathOutcome::NoPath => NativeNavigationPathOutcome::NoPath,
+                    WeightedNavPathOutcome::BudgetExhausted => {
+                        NativeNavigationPathOutcome::BudgetExhausted
+                    }
+                },
+                result.visited,
+                result.total_cost,
+                result.path,
+                result.path_hash,
+            ),
+            Err(error) => (weighted_navigation_outcome(error), 0, 0, Vec::new(), 0),
+        };
+        navigation.last_path = path;
+        Ok(NativeNavigationWeightedPathReadout {
+            outcome,
+            kind: navigation.kind(),
+            visited: u32::try_from(visited).unwrap_or(u32::MAX),
+            path_len: u32::try_from(navigation.last_path.len()).unwrap_or(u32::MAX),
+            total_traversal_cost,
+            navigation_revision: navigation.revision,
+            projection_hash: navigation.projection.projection_hash(),
+            traversal_overlay_hash: navigation.traversal.overlay_hash(),
             path_hash,
         })
     }
@@ -2055,6 +2187,44 @@ unsafe extern "C" fn replace_spatial_voxel_navigation(
     }
 }
 
+unsafe extern "C" fn replace_spatial_navigation_traversal(
+    context: *mut c_void,
+    request: *const NativeNavigationTraversalReplaceRequest,
+    receipt: *mut NativeNavigationTraversalReplaceReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || receipt.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .replace_navigation_traversal(unsafe { &*request })
+    {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn clear_spatial_navigation_traversal(
+    context: *mut c_void,
+    request: NativeNavigationTraversalClearRequest,
+    receipt: *mut NativeNavigationTraversalReplaceReceipt,
+) -> i32 {
+    if context.is_null() || receipt.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .clear_navigation_traversal(request)
+    {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 unsafe extern "C" fn read_navigation_projection(
     context: *mut c_void,
     request: NativeNavigationProjectionReadRequest,
@@ -2083,6 +2253,25 @@ unsafe extern "C" fn request_navigation_path(
         return 0;
     }
     match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.request_navigation_path(request) {
+        Ok(value) => {
+            unsafe { *readout = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn request_weighted_navigation_path(
+    context: *mut c_void,
+    request: NativeNavigationWeightedPathRequest,
+    readout: *mut NativeNavigationWeightedPathReadout,
+) -> i32 {
+    if context.is_null() || readout.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .request_weighted_navigation_path(request)
+    {
         Ok(value) => {
             unsafe { *readout = value };
             ABI_OK
@@ -2500,8 +2689,11 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         replace_collision: replace_spatial_collision,
         replace_navigation: replace_spatial_navigation,
         replace_voxel_navigation: replace_spatial_voxel_navigation,
+        replace_navigation_traversal: replace_spatial_navigation_traversal,
+        clear_navigation_traversal: clear_spatial_navigation_traversal,
         read_navigation_projection,
         request_navigation_path,
+        request_weighted_navigation_path,
         read_navigation_path_cell_at,
         request_volumetric_navigation_path,
         clear_navigation,
@@ -2597,6 +2789,21 @@ fn navigation_outcome(error: NavError) -> NativeNavigationPathOutcome {
         NavError::InvalidQueryBudget => NativeNavigationPathOutcome::InvalidQueryBudget,
         NavError::StartNotWalkable { .. } => NativeNavigationPathOutcome::StartNotWalkable,
         NavError::GoalNotWalkable { .. } => NativeNavigationPathOutcome::GoalNotWalkable,
+    }
+}
+
+fn weighted_navigation_outcome(error: WeightedNavPathError) -> NativeNavigationPathOutcome {
+    match error {
+        WeightedNavPathError::InvalidQueryBudget => NativeNavigationPathOutcome::InvalidQueryBudget,
+        WeightedNavPathError::StartNotWalkable { .. } => {
+            NativeNavigationPathOutcome::StartNotWalkable
+        }
+        WeightedNavPathError::GoalNotWalkable { .. } => {
+            NativeNavigationPathOutcome::GoalNotWalkable
+        }
+        WeightedNavPathError::StartBlocked { .. } => NativeNavigationPathOutcome::StartBlocked,
+        WeightedNavPathError::GoalBlocked { .. } => NativeNavigationPathOutcome::GoalBlocked,
+        WeightedNavPathError::CostOverflow => NativeNavigationPathOutcome::CostOverflow,
     }
 }
 

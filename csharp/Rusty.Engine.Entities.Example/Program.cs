@@ -59,6 +59,8 @@ ExerciseContinuousMechanicsSibling();
 ExerciseContinuousMechanicsComposition();
 ExerciseStateMachineEntityComposition();
 ExerciseSpatialEntityProjection();
+ExerciseCharacterEntityComposition();
+ExerciseAppearanceEntityComposition();
 ExerciseWorldOriginEntityComposition();
 ExerciseMotionEntityComposition();
 ExerciseKinematicEntityComposition();
@@ -371,6 +373,98 @@ static void ExerciseSpatialEntityProjection()
         () => adapter.ReconcileTriggers(8, SpatialTriggerCause.Movement, 4, 1, staleComponentGuard),
         "stale spatial component guard was accepted");
     Require(spatial.ReconcileCalls == 1, "stale spatial projection crossed into the generated service");
+}
+
+static void ExerciseCharacterEntityComposition()
+{
+    using var world = new EntityWorld([EngineComponentTypes.Transform, EngineComponentTypes.CharacterMotion]);
+    _ = world.Create();
+    EntityId actor = world.Create();
+    Quaternion actorRotation = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2.0f);
+    Vector3 actorScale = new(2.0f, 3.0f, 4.0f);
+    world.Set(actor, EngineComponentTypes.Transform, new Transform(Vector3.Zero, actorRotation, actorScale));
+    world.Set(actor, EngineComponentTypes.CharacterMotion, new CharacterMotion(
+        Vector3.Zero,
+        Vector3.Zero,
+        false,
+        CharacterStance.Standing,
+        0,
+        0,
+        0,
+        false,
+        0,
+        Vector3.Zero,
+        Vector3.Zero,
+        Quaternion.Identity,
+        Vector3.Zero,
+        0,
+        0,
+        0,
+        0));
+    var spatial = new SpatialServiceFake();
+    var adapter = new CharacterEntityWorld(world, spatial);
+    var command = new CharacterControllerCommand(
+        Vector2.Zero, 0, false, false, false, Vector3.Zero, Vector3.Zero, 1.0f / 60.0f, 7);
+
+    ulong before = world.Revision;
+    CharacterEntityWorldReceipt receipt = adapter.Step(
+        actor,
+        spatial.Session,
+        default,
+        default,
+        command);
+    Require(receipt.Entity == actor
+        && receipt.Native.Entity == 1
+        && receipt.Managed.RevisionBefore == before
+        && receipt.Managed.RevisionAfter == before + 1
+        && world.Get(actor, EngineComponentTypes.Transform).Translation == Vector3.UnitX
+        && world.Get(actor, EngineComponentTypes.Transform).Rotation == actorRotation
+        && world.Get(actor, EngineComponentTypes.Transform).Scale == actorScale
+        && world.Get(actor, EngineComponentTypes.CharacterMotion).LastCommandSequence == command.Sequence,
+        "character adapter did not preserve a non-native managed identity and transform shape while publishing its returned state");
+
+    int callsBeforeStale = spatial.CharacterStepCalls;
+    CharacterMotion stale = world.Get(actor, EngineComponentTypes.CharacterMotion) with { LastCommandSequence = 8 };
+    world.Set(actor, EngineComponentTypes.CharacterMotion, stale);
+    Throws(
+        () => adapter.Step(actor, spatial.Session, default, default, command, receipt.Guard),
+        "character adapter accepted a stale managed projection");
+    Require(spatial.CharacterStepCalls == callsBeforeStale,
+        "stale character managed state reached the generated service");
+}
+
+static void ExerciseAppearanceEntityComposition()
+{
+    using var world = new EntityWorld([EngineComponentTypes.Transform]);
+    EntityId first = world.Create();
+    EntityId second = world.Create();
+    world.Set(first, EngineComponentTypes.Transform, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One));
+    world.Set(second, EngineComponentTypes.Transform, new Transform(new Vector3(2, 0, 0), Quaternion.Identity, Vector3.One));
+    var appearance = new AppearanceServiceFake();
+    using var firstHandle = new Appearance(new AppearanceHandle(10), () => { });
+    using var secondHandle = new Appearance(new AppearanceHandle(20), () => { });
+    var adapter = new AppearanceEntityWorld(world, appearance);
+    AppearanceEntityWorldEntry[] entries =
+    [
+        new(second, secondHandle, true, RenderLayer.Debug),
+        new(first, firstHandle, true, RenderLayer.Scene),
+    ];
+
+    AppearanceEntityWorldReceipt receipt = adapter.Publish(entries, maximumEntities: 2);
+    Require(appearance.PublishCalls == 1
+        && receipt.Facts.Span.Length == 2
+        && appearance.LastSnapshot.Span[0].ObjectId == first.Value
+        && appearance.LastSnapshot.Span[0].Appearance == firstHandle
+        && appearance.LastSnapshot.Span[1].ObjectId == second.Value
+        && appearance.LastSnapshot.Span[1].Appearance == secondHandle,
+        "appearance adapter did not publish caller-owned handles in deterministic managed entity order");
+
+    world.Set(first, EngineComponentTypes.Transform, new Transform(Vector3.UnitY, Quaternion.Identity, Vector3.One));
+    Throws(
+        () => adapter.Publish(entries, maximumEntities: 2, receipt.Guard),
+        "appearance adapter accepted a stale managed transform projection");
+    Require(appearance.PublishCalls == 1,
+        "stale appearance managed state reached the generated service");
 }
 
 static void ExerciseManagedRestorePlan(
@@ -1173,19 +1267,54 @@ sealed class InMemoryContinuousCheckpointMigration : IProductStateMigration
 sealed class SpatialServiceFake : ISpatialService
 {
     public int ReconcileCalls { get; private set; }
+    public int CharacterStepCalls { get; private set; }
+    public SpatialSession Session { get; } = new(new SpatialSessionHandle(2), () => { });
     private SpatialEntityCollider[] _entities = [];
 
     public SpatialSession CreateSession(SpatialSessionConfig arg0) => throw new NotSupportedException();
     public CollisionReplaceReceipt ReplaceCollision(CollisionReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationReplaceReceipt ReplaceNavigation(NavigationReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationReplaceReceipt ReplaceVoxelNavigation(NavigationVoxelReplaceRequest arg0) => throw new NotSupportedException();
+    public NavigationTraversalReplaceReceipt ReplaceNavigationTraversal(NavigationTraversalReplaceRequest arg0) => throw new NotSupportedException();
+    public NavigationTraversalReplaceReceipt ClearNavigationTraversal(NavigationTraversalClearRequest arg0) => throw new NotSupportedException();
     public NavigationProjectionReadout ReadNavigationProjection(NavigationProjectionReadRequest arg0) => throw new NotSupportedException();
     public NavigationPathReadout RequestNavigationPath(NavigationPathRequest arg0) => throw new NotSupportedException();
+    public NavigationWeightedPathReadout RequestWeightedNavigationPath(NavigationWeightedPathRequest arg0) => throw new NotSupportedException();
     public NavigationPathCellAtReceipt ReadNavigationPathCellAt(NavigationPathCellAtRequest arg0) => throw new NotSupportedException();
     public NavigationPathReadout RequestVolumetricNavigationPath(NavigationVolumetricPathRequest arg0) => throw new NotSupportedException();
     public void ClearNavigation(NavigationClearRequest arg0) => throw new NotSupportedException();
-    public CharacterControllerConfig DefaultCharacterControllerConfig() => throw new NotSupportedException();
-    public CharacterStepReceipt ProposeCharacterStep(CharacterStepRequest arg0) => throw new NotSupportedException();
+    public CharacterControllerConfig DefaultCharacterControllerConfig() => default;
+
+    public CharacterStepReceipt ProposeCharacterStep(CharacterStepRequest request)
+    {
+        CharacterStepCalls++;
+        Transform before = new(request.Position, Quaternion.Identity, Vector3.One);
+        Transform after = before with { Translation = before.Translation + Vector3.UnitX };
+        CharacterMotion motion = request.Motion with { LastCommandSequence = request.Command.Sequence };
+        return new CharacterStepReceipt(
+            1,
+            0,
+            1,
+            1,
+            request.Command.Sequence,
+            before,
+            after,
+            motion,
+            Vector3.UnitX,
+            Vector3.UnitX,
+            default,
+            default,
+            default,
+            default,
+            default,
+            default,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0);
+    }
     public CharacterControllerReadout ReadCharacterController(CharacterControllerReadRequest arg0) => throw new NotSupportedException();
     public CharacterContactAtReceipt ReadCharacterContactAt(CharacterContactAtRequest arg0) => throw new NotSupportedException();
     public CharacterDynamicImpulseAtReceipt ReadCharacterDynamicImpulseAt(CharacterDynamicImpulseAtRequest arg0) => throw new NotSupportedException();
@@ -1222,6 +1351,41 @@ sealed class SpatialServiceFake : ISpatialService
         => request.Index == 0 && _entities.Length != 0
             ? new SpatialTriggerFactAtReceipt(true, true, _entities[0].Entity, _entities[0].Entity, 7, SpatialTriggerCause.Movement)
             : default;
+}
+
+sealed class AppearanceServiceFake : IAppearanceService
+{
+    private AppearanceFact[] _lastSnapshot = [];
+
+    public int PublishCalls { get; private set; }
+
+    public ReadOnlyMemory<AppearanceFact> LastSnapshot => _lastSnapshot;
+
+    public RenderResourceInfo OpenResource(RenderResourceRequest arg0) => throw new NotSupportedException();
+    public Material CreateMaterial(MaterialRequest arg0) => throw new NotSupportedException();
+    public void UpdateMaterial(MaterialUpdateRequest arg0) => throw new NotSupportedException();
+    public Material ReplaceMaterial(MaterialUpdateRequest arg0) => throw new NotSupportedException();
+    public Appearance CreatePrimitive(PrimitiveAppearanceRequest arg0) => throw new NotSupportedException();
+    public Appearance ReplacePrimitive(PrimitiveAppearanceReplaceRequest arg0) => throw new NotSupportedException();
+    public Appearance CreateStaticMesh(StaticMeshAppearanceRequest arg0) => throw new NotSupportedException();
+    public Appearance CreateStaticMeshFromContent(StaticMeshContentAppearanceRequest arg0) => throw new NotSupportedException();
+    public Appearance ReplaceStaticMesh(Appearance arg0, StaticMeshAppearanceRequest arg1) => throw new NotSupportedException();
+    public Appearance ReplaceStaticMeshFromContent(Appearance arg0, StaticMeshContentAppearanceRequest arg1) => throw new NotSupportedException();
+    public void UpdateStaticMeshMaterials(StaticMeshMaterialUpdateRequest arg0) => throw new NotSupportedException();
+    public Appearance CreateSprite(SpriteAppearanceRequest arg0) => throw new NotSupportedException();
+    public Appearance ReplaceSprite(SpriteAppearanceReplaceRequest arg0) => throw new NotSupportedException();
+
+    public void PublishSnapshot(ReadOnlySpan<AppearanceFact> values)
+    {
+        PublishCalls++;
+        _lastSnapshot = values.ToArray();
+    }
+
+    public Light CreateLight(LightRequest arg0) => throw new NotSupportedException();
+    public void UpdateLight(LightUpdateRequest arg0) => throw new NotSupportedException();
+    public Light ReplaceLight(LightUpdateRequest arg0) => throw new NotSupportedException();
+    public LightReadout ReadLight(Light arg0) => throw new NotSupportedException();
+    public PresentationReadout ReadPresentation() => throw new NotSupportedException();
 }
 
 sealed class StateMachineServiceFake : IStateMachineService
@@ -1297,6 +1461,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IVoxelService Voxel => throw new NotSupportedException();
     public IVoxelContentService VoxelContent => throw new NotSupportedException();
     public IContentService Content => throw new NotSupportedException();
+    public IAuthoredContentService AuthoredContent => throw new NotSupportedException();
     public IAppearanceService Appearance => throw new NotSupportedException();
     public IPresentationService Presentation => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
