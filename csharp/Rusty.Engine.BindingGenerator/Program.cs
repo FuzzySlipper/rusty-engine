@@ -12,7 +12,8 @@ File.WriteAllText(args[2], Emit.Values(model));
 File.WriteAllText(Path.Combine(args[3], "Interop.g.cs"), Emit.Interop(model));
 File.WriteAllText(Path.Combine(args[3], "EngineServiceImplementations.g.cs"), Emit.Implementations(model));
 
-internal sealed record Field(string Name, string Type);
+internal sealed record FixedArray(string ElementType, long Length);
+internal sealed record Field(string Name, string Type, FixedArray? Array = null);
 internal sealed record LeaseCollection(Field Pointer, Field Count);
 internal sealed record Struct(string Name, IReadOnlyList<Field> Fields);
 internal sealed record EnumMember(string Name, long Value);
@@ -34,7 +35,7 @@ internal sealed class BindingModel
             ["-x", "c", "-std=c11", "--target=x86_64-unknown-linux-gnu", $"-resource-dir={clangResourceDirectory}"], [], CXTranslationUnit_Flags.CXTranslationUnit_None);
         List<CXCursor> declarations = Children(unit.Cursor);
         Dictionary<string, Struct> structs = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_StructDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
-            .Select(cursor => new Struct(cursor.Spelling.ToString(), Children(cursor).Where(field => field.Kind == CXCursorKind.CXCursor_FieldDecl).Select(field => new Field(field.Spelling.ToString(), field.Type.Spelling.ToString())).ToArray()))
+            .Select(cursor => new Struct(cursor.Spelling.ToString(), Children(cursor).Where(field => field.Kind == CXCursorKind.CXCursor_FieldDecl).Select(ParseField).ToArray()))
             .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, Enum> enums = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_EnumDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
             .Select(cursor => new Enum(cursor.Spelling.ToString(), Children(cursor).Where(member => member.Kind == CXCursorKind.CXCursor_EnumConstantDecl).Select(member => new EnumMember(member.Spelling.ToString(), member.EnumConstantDeclValue)).ToArray()))
@@ -56,6 +57,27 @@ internal sealed class BindingModel
             return new Service(table["Native".Length..^"Api".Length], operations);
         }).ToArray();
         return new BindingModel { Structs = structs, Enums = enums, Callbacks = callbacks, Services = services };
+    }
+
+    private static Field ParseField(CXCursor cursor)
+    {
+        CXType type = cursor.Type;
+        FixedArray? array = null;
+        if (type.kind == CXTypeKind.CXType_ConstantArray)
+        {
+            long length = type.ArraySize;
+            CXType element = type.ArrayElementType;
+            if (length <= 0 || length > int.MaxValue)
+            {
+                throw new InvalidOperationException($"Native field {cursor.Spelling} has unsupported fixed-array length {length}.");
+            }
+            if (element.kind == CXTypeKind.CXType_ConstantArray)
+            {
+                throw new InvalidOperationException($"Native field {cursor.Spelling} has an unsupported nested fixed array.");
+            }
+            array = new FixedArray(element.Spelling.ToString(), length);
+        }
+        return new Field(cursor.Spelling.ToString(), type.Spelling.ToString(), array);
     }
 
     private static void Validate(string family, string method, Callback callback, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
@@ -136,7 +158,11 @@ internal sealed class BindingModel
         foreach (Field field in value.Fields)
         {
             if (field.Type.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) is borrowed and cannot be emitted by-value");
-            if (field.Type is "uint8_t[96]" or "unsigned char[96]") continue;
+            if (field.Array is FixedArray array)
+            {
+                ValidateFixedType(family, method, signature, Bare(array.ElementType), structs, enums, seen, $"{role} fixed-array element {type}.{field.Name}");
+                continue;
+            }
             string nested = Bare(field.Type);
             if (nested is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) requires request-only marshalling");
             ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"{role} field {type}.{field.Name}");
@@ -428,7 +454,21 @@ internal static class Emit
     public static string Interop(BindingModel model)
     {
         StringBuilder output = Header("internal NativeProduct ABI input");
-        output.AppendLine("using System.Runtime.InteropServices;").AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
+        output.AppendLine("using System.Runtime.CompilerServices;").AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
+        foreach (FixedArray array in model.Structs.Values
+                     .SelectMany(value => value.Fields)
+                     .Where(field => field.Array is not null)
+                     .Select(field => field.Array!)
+                     .DistinctBy(InlineArrayType)
+                     .OrderBy(InlineArrayType, StringComparer.Ordinal))
+        {
+            output.AppendLine($"[InlineArray({array.Length})]")
+                .AppendLine($"internal struct {InlineArrayType(array)}")
+                .AppendLine("{")
+                .AppendLine($"    internal {RawType(array.ElementType)} e0;")
+                .AppendLine("}")
+                .AppendLine();
+        }
         foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
         {
             output.AppendLine($"internal enum {value.Name} : uint").AppendLine("{");
@@ -993,6 +1033,7 @@ internal static class Emit
     }
     private static string RawFieldDeclaration(Field field)
     {
+        if (field.Array is FixedArray array) return $"internal {InlineArrayType(array)} {RawIdentifier(field.Name)};";
         const string marker = " (*)(";
         if (!field.Type.Contains(marker, StringComparison.Ordinal)) return $"internal {RawType(field.Type)} {RawIdentifier(field.Name)};";
         int markerIndex = field.Type.IndexOf(marker, StringComparison.Ordinal);
@@ -1000,6 +1041,11 @@ internal static class Emit
         string parameters = field.Type[(markerIndex + marker.Length)..^1];
         string[] rawParameters = parameters == "void" ? [] : parameters.Split(", ", StringSplitOptions.TrimEntries);
         return $"internal delegate* unmanaged[Cdecl]<{string.Join(", ", rawParameters.Select(RawType).Append(RawType(returnType)))}> {RawIdentifier(field.Name)};";
+    }
+    private static string InlineArrayType(FixedArray array)
+    {
+        string element = new(RawType(array.ElementType).Select(character => char.IsLetterOrDigit(character) ? character : '_').ToArray());
+        return $"NativeInlineArray_{element}_{array.Length}";
     }
     private static string Pascal(string value) => string.Concat(value.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
     private static readonly HashSet<string> CSharpKeywords = new(StringComparer.Ordinal)
