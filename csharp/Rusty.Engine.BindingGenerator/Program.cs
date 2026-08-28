@@ -502,7 +502,7 @@ internal static class Emit
                 }
                 continue;
             }
-            if (HasBorrowedFields(value)) continue;
+            if (HasBorrowedFields(model, value)) continue;
             string assignments = string.Join(", ", value.Fields.Select(field => $"{RawIdentifier(field.Name)} = {ToNativeExpression(field, $"value.{Pascal(field.Name)}")}"));
             string arguments = string.Join(", ", value.Fields.Select(field => FromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
             output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => new() {{ {assignments} }};");
@@ -908,7 +908,18 @@ internal static class Emit
         return BindingModel.HasOperationErrorReceipt(args) ? args[..^1] : args;
     }
     private static bool IsSpanCall(string[] input) => input.Length == 2 && input[0].StartsWith("const ", StringComparison.Ordinal) && input[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(input[1]) == "size_t";
-    private static bool HasBorrowedFields(Struct value) => value.Fields.Any(field => field.Type.Contains('*', StringComparison.Ordinal) || BindingModel.Bare(field.Type) is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue");
+    private static bool HasBorrowedFields(BindingModel model, Struct value) => HasBorrowedFields(model, value, new HashSet<string>(StringComparer.Ordinal));
+    private static bool HasBorrowedFields(BindingModel model, Struct value, HashSet<string> seen)
+    {
+        if (!seen.Add(value.Name)) return false;
+        foreach (Field field in value.Fields)
+        {
+            string type = BindingModel.Bare(field.Type);
+            if (field.Type.Contains('*', StringComparison.Ordinal) || type is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") return true;
+            if (model.Structs.TryGetValue(type, out Struct? nested) && nested is not null && HasBorrowedFields(model, nested, seen)) return true;
+        }
+        return false;
+    }
     private static bool HasDisposableHandleField(BindingModel model, Struct value) => value.Fields.Any(field => IsDisposableHandle(model, BindingModel.Bare(field.Type)));
     private static (string Service, string Operation) DestroyFor(BindingModel model, Service service, string handle) => service.Operations.First(operation =>
         IsDestroy(model.Callbacks[operation.Callback])
