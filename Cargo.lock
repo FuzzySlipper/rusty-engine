@@ -539,6 +539,7 @@ dependencies = [
  "core-ids",
  "core-math",
  "core-space",
+ "core-time",
  "csharp-engine-abi",
  "engine-spatial",
  "entity-state",

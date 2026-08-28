@@ -64,6 +64,7 @@ fn engine_api(
         look: crate::look::api(),
         dynamics: crate::dynamics::api(dynamics_bridge),
         motion: crate::motion::api(),
+        kinematic: crate::kinematic::api(spatial_bridge),
         spatial: crate::spatial::api(spatial_bridge),
         world_origin: crate::world_origin::api(spatial_bridge),
         voxel: crate::voxel::api(spatial_bridge),

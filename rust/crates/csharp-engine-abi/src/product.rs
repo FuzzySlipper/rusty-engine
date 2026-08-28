@@ -1777,6 +1777,7 @@ pub struct NativeEngineApi {
     pub look: NativeLookApi,
     pub dynamics: NativeDynamicsApi,
     pub motion: NativeMotionApi,
+    pub kinematic: NativeKinematicApi,
     pub spatial: NativeSpatialApi,
     pub world_origin: NativeWorldOriginApi,
     pub voxel: NativeVoxelApi,

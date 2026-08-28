@@ -75,12 +75,16 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Look = new LookServiceImplementation(native.look);
                     Audio = new AudioServiceImplementation(native.audio);
                     Dynamics = new DynamicsServiceImplementation(native.dynamics);
+                    Motion = new MotionServiceImplementation(native.motion);
+                    Kinematic = new KinematicServiceImplementation(native.kinematic);
                     Spatial = new SpatialServiceImplementation(native.spatial);
+                    WorldOrigin = new WorldOriginServiceImplementation(native.world_origin);
                     Voxel = new VoxelServiceImplementation(native.voxel);
                     VoxelContent = new VoxelContentServiceImplementation(native.voxel_content);
                     Content = new ContentServiceImplementation(native.content);
                     ContentStore = new ContentStoreServiceImplementation(native.content_store);
                     Appearance = new AppearanceServiceImplementation(native.appearance);
+                    Presentation = new PresentationServiceImplementation(native.presentation);
                     Animation = new AnimationServiceImplementation(native.animation);
                     CameraView = new CameraViewServiceImplementation(native.camera_view);
                     Random = new RngServiceImplementation(native.rng);
@@ -98,12 +102,16 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public ILookService Look { get; }
                 public IAudioService Audio { get; }
                 public IDynamicsService Dynamics { get; }
+                public IMotionService Motion { get; }
+                public IKinematicService Kinematic { get; }
                 public ISpatialService Spatial { get; }
+                public IWorldOriginService WorldOrigin { get; }
                 public IVoxelService Voxel { get; }
                 public IVoxelContentService VoxelContent { get; }
                 public IContentService Content { get; }
                 public IContentStoreService ContentStore { get; }
                 public IAppearanceService Appearance { get; }
+                public IPresentationService Presentation { get; }
                 public IAnimationService Animation { get; }
                 public ICameraViewService CameraView { get; }
                 public IRandomService Random { get; }

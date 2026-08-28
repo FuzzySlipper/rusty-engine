@@ -305,6 +305,46 @@ public sealed class Product : IEngineProduct
         VoxelHistoryReceipt voxelRedo = _engine.Voxel.Redo(new VoxelHistoryActionRequest(_spatial));
         Require(voxelRedo.Applied && _engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel)).MaterialSlot == 3,
             "voxel redo did not restore the accepted authority");
+        IntegrationResult pureKinematic = _engine.Kinematic.Integrate(new KinematicIntegrationRequest(
+            new KinematicBody(
+                new Vector3(1, 2, 3),
+                new Vector3(2, 0, -1),
+                new Vector3(0, 4, 0),
+                0,
+                KinematicCollisionMode.None),
+            new PhysicsWorld(Vector3.Zero),
+            new PhysicsStep(2, 0.25f)));
+        Require(pureKinematic.NextPosition == new Vector3(2, 3, 2.5f)
+            && pureKinematic.NextVelocity == new Vector3(2, 2, -1)
+            && !pureKinematic.BlockedX && !pureKinematic.BlockedY && !pureKinematic.BlockedZ,
+            "generated Kinematic no-collision integration did not return complete caller-owned facts");
+        IntegrationResult blockedKinematic = _engine.Kinematic.IntegrateSpatial(new KinematicSpatialIntegrationRequest(
+            _spatial,
+            new KinematicBody(
+                new Vector3(3, 0.5f, 4.5f),
+                new Vector3(2, 0, 0),
+                Vector3.Zero,
+                1,
+                KinematicCollisionMode.SpatialSession),
+            new PhysicsWorld(Vector3.Zero),
+            new PhysicsStep(1, 0.5f),
+            new KinematicShape(new Vector3(0.4f))));
+        Require(blockedKinematic.BlockedX && !blockedKinematic.BlockedY && !blockedKinematic.BlockedZ
+            && blockedKinematic.NextPosition == new Vector3(3, 0.5f, 4.5f)
+            && blockedKinematic.NextVelocity == Vector3.Zero,
+            "generated Kinematic Spatial-session integration did not report its blocked axis");
+        try
+        {
+            _engine.Kinematic.Integrate(new KinematicIntegrationRequest(
+                new KinematicBody(Vector3.Zero, Vector3.Zero, Vector3.Zero, 1, KinematicCollisionMode.SpatialSession),
+                new PhysicsWorld(Vector3.Zero),
+                new PhysicsStep(1, 1)));
+            throw new InvalidOperationException("no-collision Kinematic integration accepted a Spatial-session collision mode");
+        }
+        catch (EngineCallException error) when (error.Status == (int)KinematicErrorStatus.CollisionQueryRequired)
+        {
+            // The named generated enum matches the discriminating ABI status.
+        }
         VoxelChunkReadout exercisedChunk = _engine.Voxel.ReadChunk(new VoxelChunkReadRequest(
             _spatial,
             new VoxelChunkIdentity(0, 0, 0)));

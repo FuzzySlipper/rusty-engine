@@ -7,6 +7,7 @@ mod composition;
 mod content;
 mod content_store;
 mod dynamics;
+mod kinematic;
 mod look;
 mod mechanics;
 mod motion;

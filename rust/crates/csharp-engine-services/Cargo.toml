@@ -10,6 +10,7 @@ content-store.workspace = true
 core-ids.workspace = true
 core-math.workspace = true
 core-space.workspace = true
+core-time.workspace = true
 engine-spatial.workspace = true
 entity-state.workspace = true
 gameplay-mechanics.workspace = true
