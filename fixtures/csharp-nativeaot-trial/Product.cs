@@ -417,6 +417,36 @@ public sealed class Product : IEngineProduct
                 && exactResult.Span[0].WorkUsed == 1,
                 "StandardExact definition did not retain canonical identity, empty role, and measured evaluation work");
         }
+        using (StandardContinuousDefinition continuous = _engine.StandardContinuous.Admit(new StandardContinuousAdmitRequest(
+            "fixture",
+            "nativeaot-continuous",
+            1,
+            "trial.rate",
+            "trial-source",
+            "rules/trial.continuous",
+            false,
+            0,
+            false,
+            0,
+            new StandardContinuousRole[] { new("self", 0, 0) },
+            Array.Empty<StandardContinuousCapability>(),
+            new StandardContinuousNode[] {
+                new(StandardContinuousNodeKind.Literal, 1UL, StandardContinuousInputKind.Parameter, string.Empty, string.Empty, 0, 0, 0, 0),
+            },
+            Array.Empty<uint>(),
+            0)))
+        {
+            StandardContinuousReadoutLeaseReceipt continuousReadout = _engine.StandardContinuous.ReadDefinition(continuous);
+            ReadOnlyMemory<StandardContinuousEvaluationRow> continuousResult = _engine.StandardContinuous.Evaluate(
+                new StandardContinuousEvaluateRequest(continuous, Array.Empty<StandardContinuousEvidence>()));
+            Require(continuousReadout.Definitions.Length == 1
+                && continuousReadout.Definitions.Span[0].Family == "continuous"
+                && continuousReadout.Roles.Span[0].CapabilitiesLen == 0
+                && continuousResult.Length == 1
+                && continuousResult.Span[0].ValueBits == 1UL
+                && continuousResult.Span[0].WorkUsed == 1,
+                "StandardContinuous definition did not preserve its finite binary64 value and measured work");
+        }
         if (_mappingReleasePending && !releaseObservedThisTurn)
         {
             Require(!mappedHeldThisTurn, "released physical mapping remained Held on the next admitted turn");

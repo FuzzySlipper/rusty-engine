@@ -497,6 +497,56 @@ pub type NativeEvaluateStandardExactPredicate = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyStandardExactPredicateEvaluationLease =
     unsafe extern "C" fn(*mut c_void, NativeStandardExactPredicateEvaluationLeaseHandle) -> i32;
+pub type NativeAdmitStandardContinuous = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStandardContinuousAdmitRequest,
+    *mut NativeStandardContinuousDefinitionHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyStandardContinuousDefinition =
+    unsafe extern "C" fn(*mut c_void, NativeStandardContinuousDefinitionHandle) -> i32;
+pub type NativeReadStandardContinuousDefinition = unsafe extern "C" fn(
+    *mut c_void,
+    NativeStandardContinuousDefinitionHandle,
+    *mut NativeStandardContinuousReadoutLease,
+) -> i32;
+pub type NativeDestroyStandardContinuousReadoutLease =
+    unsafe extern "C" fn(*mut c_void, NativeStandardContinuousReadoutLeaseHandle) -> i32;
+pub type NativeEvaluateStandardContinuous = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStandardContinuousEvaluateRequest,
+    *mut NativeStandardContinuousEvaluationLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyStandardContinuousEvaluationLease =
+    unsafe extern "C" fn(*mut c_void, NativeStandardContinuousEvaluationLeaseHandle) -> i32;
+pub type NativeDestroyStandardContinuousOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
+pub type NativeAdmitStandardContinuousPredicate = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStandardContinuousPredicateAdmitRequest,
+    *mut NativeStandardContinuousPredicateHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyStandardContinuousPredicate =
+    unsafe extern "C" fn(*mut c_void, NativeStandardContinuousPredicateHandle) -> i32;
+pub type NativeReadStandardContinuousPredicate = unsafe extern "C" fn(
+    *mut c_void,
+    NativeStandardContinuousPredicateHandle,
+    *mut NativeStandardContinuousPredicateReadoutLease,
+) -> i32;
+pub type NativeDestroyStandardContinuousPredicateReadoutLease =
+    unsafe extern "C" fn(*mut c_void, NativeStandardContinuousPredicateReadoutLeaseHandle) -> i32;
+pub type NativeEvaluateStandardContinuousPredicate = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStandardContinuousEvaluatePredicateRequest,
+    *mut NativeStandardContinuousPredicateEvaluationLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyStandardContinuousPredicateEvaluationLease = unsafe extern "C" fn(
+    *mut c_void,
+    NativeStandardContinuousPredicateEvaluationLeaseHandle,
+) -> i32;
 pub type NativeDrawKeyedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKeyedRngRequest,
@@ -1172,6 +1222,25 @@ pub struct NativeStandardExactApi {
     pub destroy_predicate_evaluation_lease: NativeDestroyStandardExactPredicateEvaluationLease,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStandardContinuousApi {
+    pub context: *mut c_void,
+    pub admit: NativeAdmitStandardContinuous,
+    pub destroy_definition: NativeDestroyStandardContinuousDefinition,
+    pub read_definition: NativeReadStandardContinuousDefinition,
+    pub destroy_readout_lease: NativeDestroyStandardContinuousReadoutLease,
+    pub evaluate: NativeEvaluateStandardContinuous,
+    pub destroy_evaluation_lease: NativeDestroyStandardContinuousEvaluationLease,
+    pub destroy_operation_diagnostic_lease: NativeDestroyStandardContinuousOperationDiagnosticLease,
+    pub admit_predicate: NativeAdmitStandardContinuousPredicate,
+    pub destroy_predicate: NativeDestroyStandardContinuousPredicate,
+    pub read_predicate: NativeReadStandardContinuousPredicate,
+    pub destroy_predicate_readout_lease: NativeDestroyStandardContinuousPredicateReadoutLease,
+    pub evaluate_predicate: NativeEvaluateStandardContinuousPredicate,
+    pub destroy_predicate_evaluation_lease: NativeDestroyStandardContinuousPredicateEvaluationLease,
+}
+
 /// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1190,6 +1259,7 @@ pub struct NativeEngineApi {
     pub persistence: NativePersistenceApi,
     pub rules: NativeRulesApi,
     pub standard_exact: NativeStandardExactApi,
+    pub standard_continuous: NativeStandardContinuousApi,
     pub ui: NativeUiApi,
 }
 

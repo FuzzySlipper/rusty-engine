@@ -86,6 +86,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Persistence = new PersistenceServiceImplementation(native.persistence);
                     Rules = new RulesServiceImplementation(native.rules);
                     StandardExact = new StandardExactServiceImplementation(native.standard_exact);
+                    StandardContinuous = new StandardContinuousServiceImplementation(native.standard_continuous);
                     Ui = new UiServiceImplementation(native.ui);
                 }
 
@@ -103,6 +104,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IPersistenceService Persistence { get; }
                 public IRulesService Rules { get; }
                 public IStandardExactService StandardExact { get; }
+                public IStandardContinuousService StandardContinuous { get; }
                 public IUiService Ui { get; }
             }
 
