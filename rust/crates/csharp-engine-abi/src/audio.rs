@@ -110,7 +110,10 @@ pub struct NativeAudioReadout {
     pub active_voices: u32,
     pub admitted_clips: u32,
     pub emitted_signals: u64,
-    pub diagnostic_count: u32,
+    /// Number of diagnostics currently retained for indexed readout.
+    pub retained_diagnostic_count: u32,
+    /// Cumulative number of diagnostics evicted from the retained readout.
+    pub evicted_diagnostic_count: u64,
 }
 
 #[repr(C)]

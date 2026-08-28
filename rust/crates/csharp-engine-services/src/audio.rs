@@ -7,6 +7,9 @@ use render_presentation::{
     AudioProjector, AudioSourceDescriptor, PresentationOpMeta,
 };
 
+#[cfg(test)]
+use render_presentation::MAX_AUDIO_DIAGNOSTICS;
+
 use crate::{
     appearance::CsharpRenderResource,
     composition::{borrowed_utf8, ABI_OK},
@@ -427,7 +430,8 @@ impl RuntimeAudioBridge {
             active_voices: readout.active_sources,
             admitted_clips: staged.state.clips.len() as u32,
             emitted_signals: readout.emitted_signals,
-            diagnostic_count: readout.diagnostics.len() as u32,
+            retained_diagnostic_count: readout.retained_diagnostic_count,
+            evicted_diagnostic_count: readout.evicted_diagnostic_count,
         })
     }
 
@@ -750,5 +754,57 @@ mod tests {
             .destroy_voice(replacement)
             .expect("replacement release");
         assert_eq!(bridge.read().expect("post-stop readout").active_voices, 0);
+    }
+
+    #[test]
+    fn exposes_retained_and_evicted_projector_diagnostic_counts() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted WAV clip");
+        let request = NativeAudioEmitRequest {
+            signal_id: NativeUtf8Slice {
+                bytes: b"duplicate-signal".as_ptr(),
+                len: b"duplicate-signal".len(),
+            },
+            descriptor: descriptor(clip, NativeAudioBus::Ui),
+        };
+        bridge.emit(request).expect("initial one-shot");
+        for _ in 0..MAX_AUDIO_DIAGNOSTICS + 2 {
+            assert!(
+                bridge.emit(request).is_err(),
+                "duplicate signal is diagnostic"
+            );
+        }
+
+        let readout = bridge.read().expect("diagnostic readout");
+        assert_eq!(
+            readout.retained_diagnostic_count,
+            MAX_AUDIO_DIAGNOSTICS as u32
+        );
+        assert_eq!(readout.evicted_diagnostic_count, 2);
+        assert!(
+            bridge
+                .read_diagnostic_at(NativeAudioDiagnosticAtRequest { index: 0 })
+                .expect("oldest retained diagnostic")
+                .present
+        );
+        assert!(
+            !bridge
+                .read_diagnostic_at(NativeAudioDiagnosticAtRequest {
+                    index: MAX_AUDIO_DIAGNOSTICS as u32,
+                })
+                .expect("out-of-window diagnostic")
+                .present
+        );
     }
 }
