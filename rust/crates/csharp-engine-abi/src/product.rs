@@ -101,6 +101,11 @@ pub type NativeCreateSpatialSession = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroySpatialSession =
     unsafe extern "C" fn(*mut c_void, NativeSpatialSessionHandle) -> i32;
+pub type NativeMotionResolve = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMotionResolveRequest,
+    *mut NativeMotionResolveReceipt,
+) -> i32;
 pub type NativeReplaceCollision = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCollisionReplaceRequest,
@@ -1356,6 +1361,13 @@ pub struct NativeDynamicsApi {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeMotionApi {
+    pub context: *mut c_void,
+    pub resolve: NativeMotionResolve,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeSpatialApi {
     pub context: *mut c_void,
     pub create_session: NativeCreateSpatialSession,
@@ -1764,6 +1776,7 @@ pub struct NativeContinuousMechanicsApi {
 pub struct NativeEngineApi {
     pub look: NativeLookApi,
     pub dynamics: NativeDynamicsApi,
+    pub motion: NativeMotionApi,
     pub spatial: NativeSpatialApi,
     pub world_origin: NativeWorldOriginApi,
     pub voxel: NativeVoxelApi,

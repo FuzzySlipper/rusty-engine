@@ -9,6 +9,7 @@ mod content_store;
 mod dynamics;
 mod look;
 mod mechanics;
+mod motion;
 mod persistence;
 mod presentation;
 mod resolution;

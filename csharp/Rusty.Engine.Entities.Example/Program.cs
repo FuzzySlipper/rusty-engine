@@ -60,6 +60,7 @@ ExerciseContinuousMechanicsComposition();
 ExerciseStateMachineEntityComposition();
 ExerciseSpatialEntityProjection();
 ExerciseWorldOriginEntityComposition();
+ExerciseMotionEntityComposition();
 
 static void Require(bool condition, string message)
 {
@@ -119,6 +120,40 @@ static void ExerciseWorldOriginEntityComposition()
     Throws(() => stale.Commit(), "world-origin candidate did not reject stale managed transform state");
     Require(service.CommitCount == 1,
         "stale managed world state crossed into the native world-origin commit");
+}
+
+static void ExerciseMotionEntityComposition()
+{
+    using var world = new EntityWorld([EngineComponentTypes.Transform, EngineComponentTypes.SpatialCollider]);
+    EntityId mover = world.Create();
+    EntityId wall = world.Create();
+    world.Set(mover, EngineComponentTypes.Transform, new Transform(
+        Vector3.Zero, Quaternion.Identity, Vector3.One));
+    world.Set(mover, EngineComponentTypes.SpatialCollider, new SpatialCollider(
+        new Vector3(-0.5f), new Vector3(0.5f), 0, 0, true, false, false));
+    world.Set(wall, EngineComponentTypes.Transform, new Transform(
+        new Vector3(2.0f, 0.0f, 0.0f), Quaternion.Identity, Vector3.One));
+    world.Set(wall, EngineComponentTypes.SpatialCollider, new SpatialCollider(
+        new Vector3(-0.5f), new Vector3(0.5f), 0, 0, true, true, false));
+    var service = new MotionServiceFake();
+    var adapter = new MotionEntityWorld(world, service, EngineComponentTypes.SpatialCollider);
+
+    MotionEntityWorldReceipt moved = adapter.Resolve(mover, new Vector3(1.0f, 0.0f, 0.0f), maximumEntities: 2);
+    Require(moved.Resolution.Outcome == MotionOutcome.Moved
+        && moved.Managed.MutationCount == 1
+        && world.Get(mover, EngineComponentTypes.Transform).Translation.X == 1.0f,
+        "motion adapter did not apply the pure candidate transform in one managed batch");
+
+    world.Set(mover, EngineComponentTypes.Transform, new Transform(
+        Vector3.Zero, Quaternion.Identity, Vector3.One));
+    Throws(() => adapter.Resolve(
+        mover,
+        new Vector3(1.0f, 0.0f, 0.0f),
+        maximumEntities: 2,
+        expectedGuard: moved.Guard),
+        "motion adapter did not reject stale managed projection evidence");
+    Require(service.ResolveCount == 1,
+        "stale managed motion state reached the pure generated service");
 }
 
 static void ExerciseStateMachineEntityComposition()
@@ -1192,6 +1227,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
 {
     public ILookService Look => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
+    public IMotionService Motion => throw new NotSupportedException();
     public ISpatialService Spatial => throw new NotSupportedException();
     public IWorldOriginService WorldOrigin => throw new NotSupportedException();
     public IVoxelService Voxel => throw new NotSupportedException();
@@ -1821,4 +1857,31 @@ sealed class WorldOriginServiceFake : IWorldOriginService
             : throw new InvalidOperationException("world-origin prepared handle was unavailable");
 
     private sealed record Prepared(WorldOriginPrepareRequest Request, WorldOriginAffectedAtReceipt[] Facts);
+}
+
+sealed class MotionServiceFake : IMotionService
+{
+    public int ResolveCount { get; private set; }
+
+    public MotionResolveReceipt Resolve(MotionResolveRequest request)
+    {
+        ResolveCount++;
+        MotionEntityRow mover = request.Entities.Span
+            .ToArray()
+            .Single(row => row.EntityId == request.TargetEntityId);
+        Transform candidate = mover.Transform with
+        {
+            Translation = mover.Transform.Translation + request.Delta,
+        };
+        return new MotionResolveReceipt(
+            MotionOutcome.Moved,
+            false,
+            false,
+            false,
+            false,
+            0,
+            mover.Transform.Translation,
+            candidate.Translation,
+            candidate);
+    }
 }
