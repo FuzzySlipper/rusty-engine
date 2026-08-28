@@ -764,6 +764,7 @@ public sealed class Product : IEngineProduct
                 new Transform(new Vector3(0.0f, 2.0f, 0.0f), Quaternion.Identity, Vector3.One),
                 new Vector3(0.5f),
                 2.0f,
+                new DynamicsMassPolicy(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default),
                 new AxisLocks(false, false, false, false, false, false),
                 0.0f)));
         DynamicsReadout initial = _engine.Dynamics.Read(new DynamicsReadRequest(body));
@@ -790,6 +791,7 @@ public sealed class Product : IEngineProduct
                 new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One),
                 new Vector3(1.0f, 0.5f, 0.25f),
                 3.0f,
+                new DynamicsMassPolicy(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default),
                 new AxisLocks(false, true, false, true, false, true),
                 0.0f)));
         ExpectEngineFailure(() => _engine.Dynamics.Read(new DynamicsReadRequest(body)));
@@ -798,6 +800,7 @@ public sealed class Product : IEngineProduct
 
         DynamicsBodyProperties configured = new(
             4.0f,
+            new DynamicsMassPolicy(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default),
             Vector3.Zero,
             Vector3.Zero,
             new AxisLocks(true, false, false, false, true, false),
@@ -841,6 +844,67 @@ public sealed class Product : IEngineProduct
         configuredBody.Dispose();
         sphereReplacement.Dispose();
         capsule.Dispose();
+
+        Quaternion explicitFrame = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 4.0f);
+        DynamicsMassPolicy explicitPolicy = new(
+            DynamicsMassPolicyKind.Explicit,
+            new DynamicsExplicitMassProperties(
+                new Vector3(0.2f, -0.1f, 0.0f),
+                new Vector3(1.0f, 2.0f, 4.0f),
+                explicitFrame));
+        DynamicsBodyProperties explicitProperties = configured with
+        {
+            MassPolicy = explicitPolicy,
+            AxisLocks = new AxisLocks(false, false, false, false, false, false),
+            Sleeping = false,
+        };
+        DynamicsBody explicitBody = _engine.Dynamics.CreateSphereBodyWithProperties(
+            new DynamicsCreateSphereBodyPropertiesRequest(
+                world,
+                new DynamicsSphereBodyPropertiesConfig(
+                    new Transform(new Vector3(-2.0f, 3.0f, 0.0f), Quaternion.Identity, Vector3.One),
+                    0.5f,
+                    explicitProperties)));
+        DynamicsReadout explicitCreated = _engine.Dynamics.Read(new DynamicsReadRequest(explicitBody));
+        Require(
+            explicitCreated.MassProperties.Policy == DynamicsMassPolicyKind.Explicit
+            && explicitCreated.MassProperties.Mass == explicitProperties.Mass
+            && explicitCreated.MassProperties.CenterOfMass == explicitPolicy.Explicit.CenterOfMass
+            && explicitCreated.MassProperties.PrincipalInertia == explicitPolicy.Explicit.PrincipalInertia
+            && explicitCreated.MassProperties.PrincipalInertiaLocalFrame == explicitFrame,
+            "explicit mass properties did not survive generated create/read");
+
+        DynamicsMassPolicy updatedExplicitPolicy = new(
+            DynamicsMassPolicyKind.Explicit,
+            new DynamicsExplicitMassProperties(
+                new Vector3(-0.3f, 0.1f, 0.2f),
+                new Vector3(2.0f, 3.0f, 5.0f),
+                Quaternion.Identity));
+        DynamicsBodyProperties updatedExplicitProperties = explicitProperties with { MassPolicy = updatedExplicitPolicy };
+        _engine.Dynamics.UpdateBody(new DynamicsUpdateBodyRequest(explicitBody, updatedExplicitProperties));
+        DynamicsReadout explicitUpdated = _engine.Dynamics.Read(new DynamicsReadRequest(explicitBody));
+        Require(
+            explicitUpdated.MassProperties.CenterOfMass == updatedExplicitPolicy.Explicit.CenterOfMass
+            && explicitUpdated.MassProperties.PrincipalInertia == updatedExplicitPolicy.Explicit.PrincipalInertia
+            && explicitUpdated.MassProperties.PrincipalInertiaLocalFrame == Quaternion.Identity,
+            "explicit mass properties did not survive generated update/read");
+
+        DynamicsBody explicitReplacement = _engine.Dynamics.ReplaceCuboidBody(
+            new DynamicsReplaceCuboidBodyRequest(
+                explicitBody,
+                new DynamicsCuboidBodyConfig(
+                    new Transform(new Vector3(-1.0f, 3.0f, 0.0f), Quaternion.Identity, Vector3.One),
+                    new Vector3(0.5f, 0.75f, 1.0f),
+                    updatedExplicitProperties)));
+        ExpectEngineFailure(() => _engine.Dynamics.Read(new DynamicsReadRequest(explicitBody)));
+        DynamicsReadout explicitReplaced = _engine.Dynamics.Read(new DynamicsReadRequest(explicitReplacement));
+        Require(
+            explicitReplaced.MassProperties.Policy == DynamicsMassPolicyKind.Explicit
+            && explicitReplaced.MassProperties.CenterOfMass == updatedExplicitPolicy.Explicit.CenterOfMass
+            && explicitReplaced.MassProperties.PrincipalInertia == updatedExplicitPolicy.Explicit.PrincipalInertia,
+            "explicit mass properties did not survive generated replace/read");
+        explicitBody.Dispose();
+        explicitReplacement.Dispose();
         world.Dispose();
 
         _engine.Spatial.ReplaceCollision(new CollisionReplaceRequest(
@@ -863,6 +927,7 @@ public sealed class Product : IEngineProduct
                 new Transform(new Vector3(0.0f, 0.4f, 0.0f), Quaternion.Identity, Vector3.One),
                 0.5f,
                 2.0f,
+                new DynamicsMassPolicy(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default),
                 new AxisLocks(false, false, false, false, false, false),
                 0.0f)));
         DynamicsReadout sphereInitial = _engine.Dynamics.Read(new DynamicsReadRequest(sphere));
@@ -887,7 +952,7 @@ public sealed class Product : IEngineProduct
         DynamicsWorld parentFirstWorld = _engine.Dynamics.CreateWorld(new DynamicsWorldConfig(Vector3.Zero));
         DynamicsBody parentFirstBody = _engine.Dynamics.CreateBody(new DynamicsCreateBodyRequest(
             parentFirstWorld,
-            new DynamicsBodyConfig(new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One), new Vector3(0.5f), 1.0f, new AxisLocks(false, false, false, false, false, false), 0.0f)));
+            new DynamicsBodyConfig(new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One), new Vector3(0.5f), 1.0f, new DynamicsMassPolicy(DynamicsMassPolicyKind.DeriveFromShapeAndMass, default), new AxisLocks(false, false, false, false, false, false), 0.0f)));
         parentFirstWorld.Dispose(); // world disposal tombstones children.
         parentFirstBody.Dispose(); // parent-first disposal order is safe and idempotent.
     }
