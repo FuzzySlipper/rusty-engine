@@ -1,14 +1,14 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use engine_spatial::{
-    RigidBodyAction, RigidBodyService, RigidBodyStepError, RigidBodyStepRequest, StaticMeshAssetId,
-    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    VoxelCollisionScene,
+    rigid_body_component_mass_properties, RigidBodyAction, RigidBodyService, RigidBodyStepError,
+    RigidBodyStepRequest, StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
+    StaticMeshInstanceId, StaticMeshTransform, VoxelCollisionScene,
 };
 use entity_state::{
     decode_snapshot, encode_snapshot, EntityAuthoringService, EntityDefinition, EntityState,
-    EntityTransform, RelationshipCommand, RigidBodyComponent, RigidBodyShape,
-    RigidBodyStatePublicationError, TransformComponent, TransformParentMode,
+    EntityTransform, Quat, RelationshipCommand, RigidBodyComponent, RigidBodyInertiaPolicy,
+    RigidBodyShape, RigidBodyStatePublicationError, TransformComponent, TransformParentMode,
 };
 
 fn body_state(
@@ -48,6 +48,49 @@ fn no_gravity() -> RigidBodyStepRequest {
         gravity: Vec3::ZERO,
         actions: Vec::new(),
     }
+}
+
+#[test]
+fn explicit_mass_policy_maps_through_spatial_step_and_survives_publication() {
+    let entity = EntityId::new(5);
+    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 2.0)
+        .with_explicit_inertia(
+            Vec3::new(0.2, -0.1, 0.0),
+            Vec3::new(1.0, 2.0, 4.0),
+            Quat::IDENTITY,
+        );
+    let properties = rigid_body_component_mass_properties(body).expect("explicit readout");
+    assert_eq!(properties.mass, 2.0);
+    assert_eq!(properties.center_of_mass, Vec3::new(0.2, -0.1, 0.0));
+    assert_eq!(properties.principal_inertia, Vec3::new(1.0, 2.0, 4.0));
+    assert_eq!(properties.principal_inertia_local_frame, Quat::IDENTITY);
+
+    let mut state = body_state([(entity, Vec3::ZERO, body)]);
+    let mut service = RigidBodyService::default();
+    let receipt = service
+        .step(
+            &mut state,
+            &empty_scene(),
+            RigidBodyStepRequest {
+                actions: vec![RigidBodyAction {
+                    entity,
+                    force: Vec3::new(2.0, 0.0, 0.0),
+                    torque: Vec3::new(0.0, 1.0, 0.0),
+                    impulse: Vec3::ZERO,
+                    torque_impulse: Vec3::ZERO,
+                    wake: true,
+                }],
+                ..no_gravity()
+            },
+        )
+        .expect("explicit body step");
+    assert!((receipt.facts[0].linear_velocity_after.x - (1.0 / 60.0)).abs() < 1.0e-6);
+    assert!((receipt.facts[0].angular_velocity_after.y - (1.0 / 120.0)).abs() < 1.0e-6);
+    assert_eq!(state.rigid_body(entity).unwrap().inertia, body.inertia);
+    assert!(matches!(
+        state.rigid_body(entity).unwrap().inertia,
+        RigidBodyInertiaPolicy::Explicit { .. }
+    ));
 }
 
 #[test]

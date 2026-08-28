@@ -9,7 +9,7 @@ use entity_state::{
 };
 use svc_collision::{
     simulate_dynamics, DynamicsAction, DynamicsBodyId, DynamicsBodyInput, DynamicsContact,
-    DynamicsError, DynamicsShape, DynamicsStepInput, DynamicsStepOutput,
+    DynamicsError, DynamicsMassProperties, DynamicsShape, DynamicsStepInput, DynamicsStepOutput,
 };
 
 use crate::VoxelCollisionScene;
@@ -20,7 +20,9 @@ use crate::VoxelCollisionScene;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RigidBodyMassProperties {
     pub mass: f32,
+    pub center_of_mass: Vec3,
     pub principal_inertia: Vec3,
+    pub principal_inertia_local_frame: Quat,
 }
 
 pub fn rigid_body_mass_properties(
@@ -49,8 +51,37 @@ pub fn rigid_body_mass_properties(
     };
     Some(RigidBodyMassProperties {
         mass,
+        center_of_mass: Vec3::ZERO,
         principal_inertia,
+        principal_inertia_local_frame: Quat::IDENTITY,
     })
+}
+
+/// Return the exact mass-property tuple selected by an authored body.
+///
+/// The shape/mass helper above remains the compatibility entry point for
+/// callers that want Engine's derived defaults. This body-oriented readout
+/// preserves an explicit policy without asking a downstream caller to repeat
+/// the policy selection.
+pub fn rigid_body_component_mass_properties(
+    body: RigidBodyComponent,
+) -> Option<RigidBodyMassProperties> {
+    entity_state::validate_rigid_body(&body).ok()?;
+    match body.inertia {
+        entity_state::RigidBodyInertiaPolicy::DeriveFromShapeAndMass => {
+            rigid_body_mass_properties(body.shape, body.mass)
+        }
+        entity_state::RigidBodyInertiaPolicy::Explicit {
+            center_of_mass,
+            principal_inertia,
+            principal_inertia_local_frame,
+        } => Some(RigidBodyMassProperties {
+            mass: body.mass,
+            center_of_mass,
+            principal_inertia,
+            principal_inertia_local_frame,
+        }),
+    }
 }
 
 /// Compatibility helper for existing cuboid callers.
@@ -500,6 +531,23 @@ fn body_input(body: &CanonicalBody) -> DynamicsBodyInput {
             },
         },
         mass: f64::from(body.body.mass),
+        mass_properties: match body.body.inertia {
+            entity_state::RigidBodyInertiaPolicy::DeriveFromShapeAndMass => None,
+            entity_state::RigidBodyInertiaPolicy::Explicit {
+                center_of_mass,
+                principal_inertia,
+                principal_inertia_local_frame,
+            } => Some(DynamicsMassProperties {
+                center_of_mass: vec3_f64(center_of_mass),
+                principal_inertia: vec3_f64(principal_inertia),
+                principal_inertia_local_frame: [
+                    f64::from(principal_inertia_local_frame.x),
+                    f64::from(principal_inertia_local_frame.y),
+                    f64::from(principal_inertia_local_frame.z),
+                    f64::from(principal_inertia_local_frame.w),
+                ],
+            }),
+        },
         linear_velocity: vec3_f64(body.body.linear_velocity),
         angular_velocity: vec3_f64(body.body.angular_velocity),
         locked_translation_axes: body.body.locked_translation_axes,

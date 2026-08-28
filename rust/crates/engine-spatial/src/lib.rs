@@ -56,9 +56,10 @@ pub use physics::{
     PhysicsStep, PhysicsWorld,
 };
 pub use rigid_body::{
-    cuboid_mass_properties, rigid_body_mass_properties, PreparedRigidBodyStep, RigidBodyAction,
-    RigidBodyContactReadout, RigidBodyMassProperties, RigidBodyMotionFact, RigidBodyService,
-    RigidBodyStepError, RigidBodyStepReceipt, RigidBodyStepRequest, RigidBodyWorldReadout,
+    cuboid_mass_properties, rigid_body_component_mass_properties, rigid_body_mass_properties,
+    PreparedRigidBodyStep, RigidBodyAction, RigidBodyContactReadout, RigidBodyMassProperties,
+    RigidBodyMotionFact, RigidBodyService, RigidBodyStepError, RigidBodyStepReceipt,
+    RigidBodyStepRequest, RigidBodyWorldReadout,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,

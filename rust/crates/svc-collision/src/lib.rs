@@ -41,10 +41,10 @@ mod static_mesh;
 
 pub use dynamics::{
     simulate_dynamics, DynamicsAction, DynamicsBodyId, DynamicsBodyInput, DynamicsBodyOutput,
-    DynamicsContact, DynamicsError, DynamicsShape, DynamicsStepInput, DynamicsStepOutput,
-    MAX_CCD_TRANSLATION_PER_STEP, MAX_DISCRETE_TRANSLATION_PER_STEP, MAX_DYNAMICS_ACTIONS,
-    MAX_DYNAMICS_BODIES, MAX_DYNAMICS_CONTACTS, MAX_DYNAMICS_STEPS, MAX_DYNAMICS_STEP_SECONDS,
-    MIN_DYNAMICS_STEP_SECONDS,
+    DynamicsContact, DynamicsError, DynamicsMassProperties, DynamicsShape, DynamicsStepInput,
+    DynamicsStepOutput, MAX_CCD_TRANSLATION_PER_STEP, MAX_DISCRETE_TRANSLATION_PER_STEP,
+    MAX_DYNAMICS_ACTIONS, MAX_DYNAMICS_BODIES, MAX_DYNAMICS_CONTACTS, MAX_DYNAMICS_STEPS,
+    MAX_DYNAMICS_STEP_SECONDS, MIN_DYNAMICS_STEP_SECONDS,
 };
 
 pub use static_mesh::{

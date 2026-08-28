@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rapier3d_f64::prelude::{
     ColliderBuilder, Group, IntegrationParameters, InteractionGroups, InteractionTestMode,
-    PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Rotation, SharedShape, Vector,
+    MassProperties, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle, Rotation, SharedShape, Vector,
 };
 
 use crate::CollisionProjection;
@@ -17,6 +17,7 @@ pub const MIN_DYNAMICS_STEP_SECONDS: f64 = (1.0_f32 / 1_000.0) as f64;
 pub const MAX_DYNAMICS_STEP_SECONDS: f64 = (1.0_f32 / 15.0) as f64;
 pub const MAX_DISCRETE_TRANSLATION_PER_STEP: f64 = 1.0;
 pub const MAX_CCD_TRANSLATION_PER_STEP: f64 = 100.0;
+const MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE: f64 = 1.0e-3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DynamicsBodyId(pub u64);
@@ -28,6 +29,18 @@ pub enum DynamicsShape {
     CapsuleY { half_height: f64, radius: f64 },
 }
 
+/// Authored mass properties for one dynamics body.
+///
+/// The body's `mass` remains the sole authoritative total mass. This tuple
+/// supplies the local center of mass, principal inertia, and the frame in
+/// which that diagonal inertia is expressed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DynamicsMassProperties {
+    pub center_of_mass: [f64; 3],
+    pub principal_inertia: [f64; 3],
+    pub principal_inertia_local_frame: [f64; 4],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DynamicsBodyInput {
     pub id: DynamicsBodyId,
@@ -36,6 +49,7 @@ pub struct DynamicsBodyInput {
     pub rotation: [f64; 4],
     pub shape: DynamicsShape,
     pub mass: f64,
+    pub mass_properties: Option<DynamicsMassProperties>,
     pub linear_velocity: [f64; 3],
     pub angular_velocity: [f64; 3],
     /// `true` locks the corresponding world-space X/Y/Z translation axis.
@@ -270,16 +284,25 @@ pub fn simulate_dynamics(
         if !body.sleeping {
             builder = builder.can_sleep(true);
         }
-        let collider = ColliderBuilder::new(shared_shape(body.shape))
-            .mass(body.mass)
-            .friction(body.friction)
-            .restitution(body.restitution)
-            .collision_groups(InteractionGroups::new(
-                Group::from_bits_retain(body.collision_groups),
-                Group::from_bits_retain(body.collision_mask),
-                InteractionTestMode::And,
+        let collider = ColliderBuilder::new(shared_shape(body.shape));
+        let collider = if let Some(properties) = body.mass_properties {
+            collider.mass_properties(MassProperties::with_principal_inertia_frame(
+                vector(properties.center_of_mass),
+                body.mass,
+                vector(properties.principal_inertia),
+                rotation(properties.principal_inertia_local_frame),
             ))
-            .user_data(u128::from(body.id.0) + 1);
+        } else {
+            collider.mass(body.mass)
+        }
+        .friction(body.friction)
+        .restitution(body.restitution)
+        .collision_groups(InteractionGroups::new(
+            Group::from_bits_retain(body.collision_groups),
+            Group::from_bits_retain(body.collision_mask),
+            InteractionTestMode::And,
+        ))
+        .user_data(u128::from(body.id.0) + 1);
         let (handle, _) = world.insert(builder, collider);
         handles.insert(body.id, handle);
     }
@@ -407,6 +430,7 @@ fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
             radius,
         } => positive(half_height) && positive(radius),
     };
+    let mass_properties_valid = body.mass_properties.map_or(true, valid_mass_properties);
     let rotation_norm = body
         .rotation
         .into_iter()
@@ -414,6 +438,7 @@ fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
         .sum::<f64>();
     if !finite
         || !shape_valid
+        || !mass_properties_valid
         || body.mass <= 0.0
         || body.linear_damping < 0.0
         || body.angular_damping < 0.0
@@ -431,6 +456,26 @@ fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
         return Err(DynamicsError::LockedRotationAxisVelocity { body: body.id });
     }
     Ok(())
+}
+
+fn valid_mass_properties(properties: DynamicsMassProperties) -> bool {
+    let center_of_mass_valid = properties.center_of_mass.into_iter().all(f64::is_finite);
+    let principal_inertia_valid = properties
+        .principal_inertia
+        .into_iter()
+        .all(|value| positive(value));
+    let frame_norm = properties
+        .principal_inertia_local_frame
+        .into_iter()
+        .map(|value| value * value)
+        .sum::<f64>();
+    center_of_mass_valid
+        && principal_inertia_valid
+        && properties
+            .principal_inertia_local_frame
+            .into_iter()
+            .all(f64::is_finite)
+        && (frame_norm - 1.0).abs() <= MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE
 }
 
 fn has_velocity_on_locked_axis(velocity: [f64; 3], locked_axes: [bool; 3]) -> bool {
@@ -550,8 +595,12 @@ fn vector(value: [f64; 3]) -> Vector {
 }
 
 fn vector3(value: [f64; 4]) -> Vector {
-    let rotation = Rotation::from_xyzw(value[0], value[1], value[2], value[3]);
+    let rotation = rotation(value);
     rotation.to_scaled_axis()
+}
+
+fn rotation(value: [f64; 4]) -> Rotation {
+    Rotation::from_xyzw(value[0], value[1], value[2], value[3])
 }
 
 fn positive(value: f64) -> bool {
@@ -596,6 +645,7 @@ mod tests {
             rotation: [0.0, 0.0, 0.0, 1.0],
             shape: DynamicsShape::Sphere { radius: 0.5 },
             mass: 1.0,
+            mass_properties: None,
             linear_velocity: [0.0; 3],
             angular_velocity: [0.0; 3],
             locked_translation_axes: [false; 3],
@@ -613,6 +663,17 @@ mod tests {
         }
     }
 
+    fn explicit_body() -> DynamicsBodyInput {
+        let mut body = body();
+        body.mass = 2.0;
+        body.mass_properties = Some(DynamicsMassProperties {
+            center_of_mass: [0.2, -0.1, 0.0],
+            principal_inertia: [1.0, 2.0, 4.0],
+            principal_inertia_local_frame: [0.0, 0.0, 0.0, 1.0],
+        });
+        body
+    }
+
     fn input(body: DynamicsBodyInput) -> DynamicsStepInput {
         DynamicsStepInput {
             step_seconds: 1.0 / 60.0,
@@ -621,6 +682,50 @@ mod tests {
             bodies: vec![body],
             actions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn explicit_mass_properties_use_authored_total_once_and_preserve_asymmetry() {
+        let mut step = input(explicit_body());
+        step.actions = vec![DynamicsAction {
+            body: DynamicsBodyId(1),
+            force: [2.0, 0.0, 0.0],
+            torque: [0.0, 1.0, 0.0],
+            impulse: [0.0; 3],
+            torque_impulse: [0.0; 3],
+            wake: true,
+        }];
+
+        let output = simulate_dynamics(&empty_projection(), step)
+            .expect("explicit mass properties are a valid dynamics body");
+        let body = output.bodies[0];
+
+        // Force / authored total mass, not force / (collider mass + authored mass).
+        assert!((body.linear_velocity[0] - (1.0 / 60.0)).abs() < 1.0e-6);
+        // The Y principal inertia is 2, so the unit torque produces half the
+        // angular velocity of a unit inertia axis.
+        assert!((body.angular_velocity[1] - (1.0 / 120.0)).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn explicit_mass_properties_reject_nonfinite_or_nonpositive_values() {
+        let mut body = explicit_body();
+        body.mass_properties.as_mut().unwrap().principal_inertia[0] = 0.0;
+        assert_eq!(
+            simulate_dynamics(&empty_projection(), input(body)),
+            Err(DynamicsError::InvalidBody {
+                body: DynamicsBodyId(1)
+            })
+        );
+
+        let mut body = explicit_body();
+        body.mass_properties.as_mut().unwrap().center_of_mass[0] = f64::NAN;
+        assert_eq!(
+            simulate_dynamics(&empty_projection(), input(body)),
+            Err(DynamicsError::InvalidBody {
+                body: DynamicsBodyId(1)
+            })
+        );
     }
 
     fn action(body: DynamicsBodyId, value: f64) -> DynamicsAction {
