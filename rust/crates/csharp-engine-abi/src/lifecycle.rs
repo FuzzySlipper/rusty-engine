@@ -8,6 +8,18 @@ pub enum NativeProductTurnKind {
     External = 3,
 }
 
+/// One typed request a trusted product may return after an admitted update.
+///
+/// The request is copied across the product callback boundary and applied by
+/// the Rust runtime only after the completed turn has been staged and
+/// committed. It is deliberately not a general command or event channel.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeProductTurnRequest {
+    None = 0,
+    ReportFault = 1,
+}
+
 /// Lifecycle state accompanying a product update.
 ///
 /// This is a snapshot of the Rust-owned lifecycle at the point a turn was

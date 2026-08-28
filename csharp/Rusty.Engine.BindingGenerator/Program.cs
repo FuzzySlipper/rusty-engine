@@ -369,7 +369,7 @@ internal static class Emit
         output.AppendLine("    public Type ProductType { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public interface IEngineProduct : IDisposable").AppendLine("{");
         output.AppendLine("    void Start();");
-        output.AppendLine("    void Update(ProductUpdate update);");
+        output.AppendLine("    ProductTurnRequest Update(ProductUpdate update);");
         output.AppendLine("    void Pause();");
         output.AppendLine("    void Resume();");
         output.AppendLine("    void Restart();");

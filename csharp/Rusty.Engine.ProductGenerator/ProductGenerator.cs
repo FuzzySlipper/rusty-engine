@@ -179,12 +179,19 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 private static int Start(void* handle) => Invoke(handle, static product => product.Start());
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Turn(void* handle, NativeTurnArgs* args)
+                private static int Turn(void* handle, NativeTurnArgs* args, NativeProductTurnRequest* request)
                 {
                     try
                     {
-                        if (args is null || (args->event_count != 0 && args->events is null)) return 2;
-                        Get(handle).Product.Update(new ProductUpdate(NativeConversions.FromNative(args->facts), CopyInput(args->events, args->event_count)));
+                        if (args is null || request is null || (args->event_count != 0 && args->events is null)) return 2;
+                        *request = NativeProductTurnRequest.NativeProductTurnRequest_None;
+                        ProductTurnRequest productRequest = Get(handle).Product.Update(new ProductUpdate(NativeConversions.FromNative(args->facts), CopyInput(args->events, args->event_count)));
+                        *request = productRequest switch
+                        {
+                            ProductTurnRequest.None => NativeProductTurnRequest.NativeProductTurnRequest_None,
+                            ProductTurnRequest.ReportFault => NativeProductTurnRequest.NativeProductTurnRequest_ReportFault,
+                            _ => throw new ArgumentOutOfRangeException(nameof(productRequest)),
+                        };
                         return 1;
                     }
                     catch { return 99; }

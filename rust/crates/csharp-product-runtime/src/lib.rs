@@ -584,21 +584,69 @@ impl CsharpProductRuntime {
     fn exercise_fault_restart(&mut self) -> Result<(), CsharpProductRuntimeError> {
         let before_fault = self.lifecycle.readout();
         let before_binding = input_binding(&self.lifecycle);
-        self.lifecycle_with_binding(
-            ProductDevLifecycleOperation::ReportFault,
-            Some(dev_binding_from_input(before_binding)),
-        )
+        let fault_sequence = self
+            .input_lane
+            .last_sequence()
+            .and_then(|sequence| sequence.checked_add(1))
+            .ok_or_else(|| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_EXERCISE_FAULT",
+                    "fault input sequence overflowed",
+                )
+            })?;
+        self.input(ProductDevInputBatch::new(vec![fault_key_press(
+            before_binding,
+            fault_sequence,
+        )]))
         .map_err(exercise_runtime_error)?;
+        match self.lifecycle.mode() {
+            RuntimeMode::Realtime => {
+                let baseline = self
+                    .lifecycle
+                    .readout()
+                    .last_observed_time()
+                    .map(|value| value.nanoseconds())
+                    .unwrap_or(0);
+                self.advance_realtime(CanonicalU64::new(
+                    baseline
+                        .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
+                        .ok_or_else(|| {
+                            CsharpProductRuntimeError::new(
+                                "CSHARP_EXERCISE_FAULT",
+                                "fault exercise observation overflowed",
+                            )
+                        })?,
+                ))
+                .map_err(exercise_runtime_error)?;
+            }
+            RuntimeMode::Demand => {
+                self.admit_demand_step().map_err(exercise_runtime_error)?;
+            }
+            RuntimeMode::External => {
+                let step = self.lifecycle.readout().admitted_simulation_steps();
+                self.admit_external_step(CanonicalU64::new(step))
+                    .map_err(exercise_runtime_error)?;
+            }
+        }
         let faulted = self.lifecycle.readout();
         if faulted.state() != RuntimeState::Faulted
             || faulted.fault() != Some(runtime_lifecycle::RuntimeFault::OwnerReported)
             || faulted.generation() != before_fault.generation()
-            || faulted.admitted_simulation_steps() != before_fault.admitted_simulation_steps()
+            || faulted.admitted_simulation_steps()
+                != before_fault
+                    .admitted_simulation_steps()
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        CsharpProductRuntimeError::new(
+                            "CSHARP_EXERCISE_FAULT",
+                            "fault exercise simulation counter overflowed",
+                        )
+                    })?
             || faulted.admitted_presentations() != before_fault.admitted_presentations()
         {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_FAULT",
-                "owner fault did not preserve lifecycle counters and typed fault state",
+                "product fault request did not preserve the completed turn counters and typed fault state",
             ));
         }
         if self
@@ -962,7 +1010,7 @@ impl CsharpProductRuntime {
             .map(NativeInputOwned::as_native)
             .collect();
         self.services.begin_call();
-        match call_turn(
+        let request = match call_turn(
             &self.api,
             self.handle,
             NativeTurnArgs {
@@ -971,12 +1019,12 @@ impl CsharpProductRuntime {
                 event_count: events.len(),
             },
         ) {
-            Ok(()) => {}
+            Ok(request) => request,
             Err(error) => {
                 self.services.discard_call();
                 return Err(error);
             }
-        }
+        };
         let staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
@@ -984,11 +1032,30 @@ impl CsharpProductRuntime {
                 return Err(error.into());
             }
         };
-        // The C# call has accepted the batch. Do not replay already-applied
-        // product input on a later timing turn.
+        let mut outputs = match service_outputs(self.services.outputs(&staged)) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                self.services.discard_call();
+                return Err(error);
+            }
+        };
+        // Clear only after staged Engine output has been converted. A failed
+        // conversion must preserve the input for the caller's failure path.
         self.pending_inputs.clear();
-        let outputs = service_outputs(self.services.outputs(&staged))?;
         self.services.commit_call(staged);
+
+        if request == NativeProductTurnRequest::ReportFault {
+            // Product requests are intentionally deferred until the completed
+            // Engine service turn is committed. This is a typed lifecycle
+            // signal, not a reentrant service call or a general event bus.
+            self.lifecycle
+                .report_fault(runtime_lifecycle::RuntimeFault::OwnerReported)
+                .map_err(lifecycle_error)?;
+            self.rebind_input(InputClearReason::ControlRevisionChange)?;
+            let binding = self.binding();
+            outputs.push(ProductDevRuntimeOutput::binding(binding));
+            outputs.push(ProductDevRuntimeOutput::complete_baseline(binding));
+        }
         Ok(outputs)
     }
 
@@ -1453,6 +1520,18 @@ fn key_press(binding: RuntimeInputBinding, sequence: u64) -> RuntimeInputEvent {
     ))
 }
 
+fn fault_key_press(binding: RuntimeInputBinding, sequence: u64) -> RuntimeInputEvent {
+    RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+        binding,
+        sequence,
+        standard_input_context(),
+        RuntimeInputFact::Key {
+            code: product_model::KeyboardControl::KeyF,
+            edge: runtime_input::PhysicalEdge::Pressed,
+        },
+    ))
+}
+
 fn key_release(binding: RuntimeInputBinding, sequence: u64) -> RuntimeInputEvent {
     RuntimeInputEvent::Physical(RuntimeInputIngress::new(
         binding,
@@ -1751,11 +1830,13 @@ fn call_turn(
     api: &LoadedProductApi,
     handle: *mut c_void,
     args: NativeTurnArgs,
-) -> Result<(), CsharpProductRuntimeError> {
+) -> Result<NativeProductTurnRequest, CsharpProductRuntimeError> {
+    let mut request = NativeProductTurnRequest::None;
     // SAFETY: event label pointers borrow local strings that remain alive for
     // the call; the C# product is required to copy anything it retains.
-    let status = unsafe { (api.turn)(handle, &args) };
-    checked_status(status, "turn")
+    let status = unsafe { (api.turn)(handle, &args, &mut request) };
+    checked_status(status, "turn")?;
+    Ok(request)
 }
 
 fn checked_status(status: i32, operation: &str) -> Result<(), CsharpProductRuntimeError> {

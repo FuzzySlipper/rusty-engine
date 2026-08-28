@@ -1856,7 +1856,8 @@ pub struct NativeProductCreateArgs {
 pub type NativeProductCreate =
     unsafe extern "C" fn(*const NativeProductCreateArgs, *mut *mut c_void) -> i32;
 pub type NativeProductAction = unsafe extern "C" fn(*mut c_void) -> i32;
-pub type NativeProductTurn = unsafe extern "C" fn(*mut c_void, *const NativeTurnArgs) -> i32;
+pub type NativeProductTurn =
+    unsafe extern "C" fn(*mut c_void, *const NativeTurnArgs, *mut NativeProductTurnRequest) -> i32;
 pub type NativeProductDestroy = unsafe extern "C" fn(*mut c_void);
 
 /// Product functions supplied to Rust by the one NativeAOT bootstrap export.
@@ -1867,7 +1868,13 @@ pub struct NativeProductApi {
     pub create:
         Option<unsafe extern "C" fn(*const NativeProductCreateArgs, *mut *mut c_void) -> i32>,
     pub start: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
-    pub turn: Option<unsafe extern "C" fn(*mut c_void, *const NativeTurnArgs) -> i32>,
+    pub turn: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *const NativeTurnArgs,
+            *mut NativeProductTurnRequest,
+        ) -> i32,
+    >,
     pub pause: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub resume: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub restart: Option<unsafe extern "C" fn(*mut c_void) -> i32>,

@@ -389,6 +389,7 @@ include = [
     "NativeUiProjection",
     "NativeUiStreamRequest",
     "NativeProductTurnKind",
+    "NativeProductTurnRequest",
     "NativeProductLifecycleState",
     "NativeProductUpdateFacts",
     "NativeKeyedRngRequest",

@@ -28,6 +28,7 @@ public sealed class Product : IEngineProduct
     private ulong _lastRandom;
     private LookState _look;
     private bool _physicalMappingConfigured;
+    private bool _faultRequestReturned;
     private InputBinding? _mappedBinding;
     private int _mappedHeldTurns;
     private bool _mappingReleasePending;
@@ -444,7 +445,7 @@ public sealed class Product : IEngineProduct
         Require(presentation.RetainedObjectCount == 1 && presentation.AppearanceCount == 1 && presentation.MaterialCount == 1, "appearance readout did not report retained Engine presentation facts");
     }
 
-    public void Update(ProductUpdate update)
+    public ProductTurnRequest Update(ProductUpdate update)
     {
         if (!_started || _paused || _shutdown)
         {
@@ -467,6 +468,7 @@ public sealed class Product : IEngineProduct
         _updateFactsSeen = true;
         _lastUpdateGeneration = facts.Generation;
         _lastUpdateControlRevision = facts.ControlRevision;
+        bool reportFaultThisTurn = false;
         bool releaseObservedThisTurn = false;
         bool mappedHeldThisTurn = false;
         foreach (ProductInputEvent input in update.Input)
@@ -480,6 +482,14 @@ public sealed class Product : IEngineProduct
                 Require(input.Context.Value.Span.SequenceEqual("gameplay.default"u8), "input event context did not reach Product.Game");
                 Require(input.Sequence.Value != 0, "input event sequence did not reach Product.Game");
                 _x += 1.0f;
+            }
+            if (input.Kind == InputEventKind.Key
+                && input.Keyboard == KeyboardControl.KeyF
+                && input.Edge == InputEdge.Pressed
+                && !_faultRequestReturned)
+            {
+                _faultRequestReturned = true;
+                reportFaultThisTurn = true;
             }
             if (input.Kind == InputEventKind.Key && input.Keyboard == KeyboardControl.KeyW && input.Edge == InputEdge.Released && _physicalMappingConfigured)
             {
@@ -596,6 +606,7 @@ public sealed class Product : IEngineProduct
         _turns++;
         _lastRandom = _engine.Random.NextBoundedU32(new ScopedRngBoundedRequest(_rng, 100)).Value;
         PublishPresentation();
+        return reportFaultThisTurn ? ProductTurnRequest.ReportFault : ProductTurnRequest.None;
     }
 
     public void Pause() => _paused = true;
