@@ -787,6 +787,40 @@ pub type NativeReadMechanicsEquipmentAssignmentComponent = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyMechanicsComponentLease =
     unsafe extern "C" fn(*mut c_void, NativeMechanicsComponentLeaseHandle) -> i32;
+pub type NativeCaptureMechanicsWorldSnapshot = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsCatalogHandle,
+    *mut NativeMechanicsWorldSnapshotHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsWorldSnapshot =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldSnapshotHandle) -> i32;
+pub type NativeReadMechanicsWorldSnapshot = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsWorldSnapshotHandle,
+    *mut NativeMechanicsWorldSnapshotLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsWorldSnapshotLease =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldSnapshotLeaseHandle) -> i32;
+pub type NativePrepareMechanicsWorldRestore = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMechanicsWorldRestoreRequest,
+    *mut NativeMechanicsWorldRestoreHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsWorldRestore =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldRestoreHandle) -> i32;
+pub type NativeReadMechanicsWorldRestore = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMechanicsWorldRestoreHandle,
+    *mut NativeMechanicsWorldRestoreLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyMechanicsWorldRestoreLease =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldRestoreLeaseHandle) -> i32;
+pub type NativePublishMechanicsWorldRestore =
+    unsafe extern "C" fn(*mut c_void, NativeMechanicsWorldRestoreHandle) -> i32;
 pub type NativeBindMechanicsEntity = unsafe extern "C" fn(
     *mut c_void,
     *const NativeMechanicsEntityBindRequest,
@@ -1292,6 +1326,15 @@ pub struct NativeMechanicsApi {
     pub read_item_component: NativeReadMechanicsItemComponent,
     pub read_equipment_assignment_component: NativeReadMechanicsEquipmentAssignmentComponent,
     pub destroy_component_lease: NativeDestroyMechanicsComponentLease,
+    pub capture_world_snapshot: NativeCaptureMechanicsWorldSnapshot,
+    pub destroy_world_snapshot: NativeDestroyMechanicsWorldSnapshot,
+    pub read_world_snapshot: NativeReadMechanicsWorldSnapshot,
+    pub destroy_world_snapshot_lease: NativeDestroyMechanicsWorldSnapshotLease,
+    pub prepare_world_restore: NativePrepareMechanicsWorldRestore,
+    pub destroy_world_restore: NativeDestroyMechanicsWorldRestore,
+    pub read_world_restore: NativeReadMechanicsWorldRestore,
+    pub destroy_world_restore_lease: NativeDestroyMechanicsWorldRestoreLease,
+    pub publish_world_restore: NativePublishMechanicsWorldRestore,
     pub bind_entity: NativeBindMechanicsEntity,
     pub rebind_entity: NativeRebindMechanicsEntity,
     pub set_initial_stat: NativeSetMechanicsInitialStat,

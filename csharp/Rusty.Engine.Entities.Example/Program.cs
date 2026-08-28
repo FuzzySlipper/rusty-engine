@@ -49,6 +49,7 @@ Require(world.Diagnostics().Components.Single(component => component.Key == heal
 ExerciseMechanicsLeaseRebind();
 ExerciseMechanicsUniqueItemTransfer();
 ExerciseMechanicsUniqueItemLifecycle();
+ExerciseMechanicsWorldRestore();
 
 static void Require(bool condition, string message)
 {
@@ -197,6 +198,31 @@ static void ExerciseMechanicsUniqueItemLifecycle()
         "destroyed item retained a dangling Mechanics binding");
 }
 
+static void ExerciseMechanicsWorldRestore()
+{
+    var health = ComponentType<Health>.Create(ProductComponentKeys.Create(31));
+    using var world = new EntityWorld([health]);
+    EntityId actor = world.Create();
+    world.Set(actor, health, new Health(10));
+    ComponentRevision before = world.GetComponentRevision(actor, health);
+    var service = new MechanicsAdapterFake();
+    using var mechanics = new MechanicsEntityWorld(world, service, service.Catalog);
+    mechanics.Bind(actor, "restore-actor");
+    mechanics.Commit(actor);
+    using MechanicsEntityWorldSnapshot snapshot = mechanics.Capture();
+    mechanics.SetLifecycle(actor, EntityLifecycle.Disabled, world.GetEntityRevision(actor));
+    EntityId currentOnly = world.Create();
+    world.Set(actor, health, new Health(3));
+    MechanicsWorldRestoreLeaseReceipt receipt = mechanics.Restore(snapshot, expectedManagedRevision: world.Revision);
+    Require(world.Get(actor, health).Current == 10 && world.GetLifecycle(actor) == EntityLifecycle.Active,
+        "paired Mechanics restore did not publish active snapshot state");
+    Require(receipt.Revisions.Length == 7 && receipt.Revisions.ToArray().All(row => row.RestoredRevision > row.CurrentRevision),
+        "paired Mechanics restore did not remap all seven Mechanics guard families");
+    Require(service.RestorePublishes == 1, "paired Mechanics restore did not publish its prepared native candidate");
+    Throws(() => world.Set(actor, health, new Health(9), before), "paired restore retained a stale managed component guard");
+    Require(world.Create().Value != currentOnly.Value, "managed restore reused a current-only entity identity");
+}
+
 readonly record struct Health(int Current);
 
 readonly record struct Armor(int Current);
@@ -212,6 +238,7 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public int UniqueTransfers { get; private set; }
     public int Materializations { get; private set; }
     public int UniqueDestroys { get; private set; }
+    public int RestorePublishes { get; private set; }
     public int ActiveLeases => _entityIds.Count;
     public (ulong Item, ulong FromOwner, ulong ToOwner) LastUniqueTransfer { get; private set; }
     public MechanicsCatalog Catalog { get; } = new(new MechanicsCatalogHandle(1), static () => { });
@@ -253,6 +280,25 @@ sealed class MechanicsAdapterFake : IMechanicsService
     public MechanicsInventoryCapacityLimitComponentLeaseReceipt ReadInventoryCapacityLimitComponent(MechanicsEntity arg0) => throw new NotSupportedException();
     public MechanicsItemComponentLeaseReceipt ReadItemComponent(MechanicsEntity arg0) => throw new NotSupportedException();
     public MechanicsEquipmentAssignmentComponentLeaseReceipt ReadEquipmentAssignmentComponent(MechanicsEntity arg0) => throw new NotSupportedException();
+    public MechanicsWorldSnapshot CaptureWorldSnapshot(MechanicsCatalog arg0)
+        => new(new MechanicsWorldSnapshotHandle(1), static () => { });
+    public MechanicsWorldSnapshotLeaseReceipt ReadWorldSnapshot(MechanicsWorldSnapshot arg0)
+        => new(2);
+    public MechanicsWorldRestore PrepareWorldRestore(MechanicsWorldRestoreRequest arg0)
+        => new(new MechanicsWorldRestoreHandle(1), static () => { });
+    public MechanicsWorldRestoreLeaseReceipt ReadWorldRestore(MechanicsWorldRestore arg0)
+    {
+        MechanicsRevisionRemapRow[] revisions = _entityIds.Values.Distinct()
+            .SelectMany(entity => Enum.GetValues<MechanicsRevisionComponent>()
+                .Select(component => new MechanicsRevisionRemapRow(entity, component, component is MechanicsRevisionComponent.Stats or MechanicsRevisionComponent.Tracks,
+                    1, 2, 3)))
+            .ToArray();
+        MechanicsLifecycleReceipt[] lifecycles = _entityIds.Values.Distinct()
+            .Select(entity => new MechanicsLifecycleReceipt(entity, MechanicsEntityLifecycle.Active, 20))
+            .ToArray();
+        return new MechanicsWorldRestoreLeaseReceipt(revisions, lifecycles, 2, 3);
+    }
+    public void PublishWorldRestore(MechanicsWorldRestore arg0) => RestorePublishes++;
     public MechanicsEntity BindEntity(MechanicsEntityBindRequest arg0) => Lease(arg0.EntityId);
     public MechanicsEntity RebindEntity(MechanicsEntityRebindRequest arg0)
     {

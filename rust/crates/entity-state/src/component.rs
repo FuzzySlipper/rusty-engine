@@ -36,6 +36,14 @@ trait ErasedComponentTable: Send + Sync {
     fn contains_entity(&self, entity: EntityId) -> bool;
     fn remove_entity(&mut self, entity: EntityId) -> bool;
     fn clear_revisions(&mut self);
+    /// Rebase every entity slot, including absent values, past both this table's and the
+    /// supplied live table's observed revisions. This is used by an in-process restore: a
+    /// restored value must never make either a snapshot-era or pre-restore exact guard valid.
+    fn rebase_revisions(
+        &mut self,
+        current: &dyn ErasedComponentTable,
+        entities: &BTreeSet<EntityId>,
+    ) -> bool;
     fn len(&self) -> usize;
     fn entity_sample(&self) -> Vec<EntityId>;
     fn durable_snapshot(
@@ -129,6 +137,25 @@ impl<T: EntityComponent> ErasedComponentTable for ComponentTable<T> {
 
     fn clear_revisions(&mut self) {
         self.revisions.clear();
+    }
+
+    fn rebase_revisions(
+        &mut self,
+        current: &dyn ErasedComponentTable,
+        entities: &BTreeSet<EntityId>,
+    ) -> bool {
+        let Some(current) = current.as_any().downcast_ref::<ComponentTable<T>>() else {
+            return false;
+        };
+        for entity in entities {
+            let snapshot_revision = self.revisions.get(entity).copied().unwrap_or(0);
+            let current_revision = current.revisions.get(entity).copied().unwrap_or(0);
+            let Some(remapped) = snapshot_revision.max(current_revision).checked_add(1) else {
+                return false;
+            };
+            self.revisions.insert(*entity, remapped);
+        }
+        true
     }
 
     fn len(&self) -> usize {
@@ -433,6 +460,24 @@ impl ComponentStore {
         for table in self.tables.values_mut() {
             table.clear_revisions();
         }
+    }
+
+    /// Moves every known entity/component slot to a revision strictly newer than either input.
+    /// Component absence is a guarded fact, so absent slots are deliberately seeded too.
+    pub(crate) fn rebase_revisions_from(
+        &mut self,
+        current: &Self,
+        entities: &BTreeSet<EntityId>,
+    ) -> bool {
+        if self.tables.len() != current.tables.len() || self.tables.keys().ne(current.tables.keys())
+        {
+            return false;
+        }
+        self.tables.iter_mut().all(|(type_id, table)| {
+            current.tables.get(type_id).is_some_and(|current_table| {
+                table.rebase_revisions(current_table.as_ref(), entities)
+            })
+        })
     }
 
     pub(crate) fn remove_entity(&mut self, entity: EntityId) {

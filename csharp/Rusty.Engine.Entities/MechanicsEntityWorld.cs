@@ -22,6 +22,68 @@ public sealed class MechanicsEntityWorld : IDisposable
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     }
 
+    /// <summary>
+    /// Captures a retained, process-local typed checkpoint. Product persistence deliberately owns
+    /// any schema, encoding, migration, and durable storage outside this Engine mechanism.
+    /// </summary>
+    public MechanicsEntityWorldSnapshot Capture()
+    {
+        ThrowIfDisposed();
+        RequireNoUncommittedBindings();
+        MechanicsWorldSnapshot native = _mechanics.CaptureWorldSnapshot(_catalog);
+        try
+        {
+            MechanicsWorldSnapshotLeaseReceipt metadata = _mechanics.ReadWorldSnapshot(native);
+            Dictionary<EntityId, MechanicsBindingSnapshot> bindings = _bindings.ToDictionary(
+                entry => entry.Key,
+                entry => new MechanicsBindingSnapshot(
+                    entry.Value.Native.Handle.Value,
+                    entry.Value.IsCommitted,
+                    entry.Value.LifecycleStamp));
+            return new MechanicsEntityWorldSnapshot(_entities.Snapshot(), native, metadata.StateRevision, bindings);
+        }
+        catch
+        {
+            native.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Restores one paired managed/native in-process checkpoint. Both candidates are prepared and
+    /// fully validated before native publication; managed publication is then an assignment only.
+    /// Every component and lifecycle guard is explicitly remapped, including absent component
+    /// slots, so neither snapshot-era nor pre-restore guards can pass after this method returns.
+    /// </summary>
+    public MechanicsWorldRestoreLeaseReceipt Restore(
+        MechanicsEntityWorldSnapshot snapshot,
+        ulong? expectedNativeStateRevision = null,
+        ulong? expectedManagedRevision = null)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(snapshot);
+        RequireNoUncommittedBindings();
+        RequireMatchingBindingTopology(snapshot);
+        ulong managedRevision = expectedManagedRevision ?? _entities.Revision;
+        ulong nativeRevision = expectedNativeStateRevision ?? snapshot.NativeStateRevision;
+
+        using MechanicsWorldRestore native = _mechanics.PrepareWorldRestore(
+            new MechanicsWorldRestoreRequest(_catalog, snapshot.Mechanics, nativeRevision));
+        MechanicsWorldRestoreLeaseReceipt receipt = _mechanics.ReadWorldRestore(native);
+        Dictionary<EntityId, ulong> lifecycleStamps = ValidateRestoreReceipt(receipt);
+        EntityWorldRestoreCandidate managed = _entities.PrepareRestore(snapshot.Entities, managedRevision);
+
+        // Native publication has no remaining fallible work after prepare/read validation. The
+        // managed candidate is already validated and publishes through one field assignment.
+        _mechanics.PublishWorldRestore(native);
+        managed.Publish();
+        foreach ((EntityId entity, Binding binding) in _bindings)
+        {
+            binding.LifecycleStamp = lifecycleStamps[entity];
+        }
+        return receipt;
+    }
+
     /// <summary>Creates the native lease for an already-active canonical product entity.</summary>
     public void Bind(EntityId entity, string identity)
     {
@@ -375,6 +437,63 @@ public sealed class MechanicsEntityWorld : IDisposable
         => _bindings.TryGetValue(entity, out Binding? binding)
             ? binding
             : throw new InvalidOperationException($"Entity {entity.Value} is not bound to this Mechanics world.");
+
+    private void RequireNoUncommittedBindings()
+    {
+        if (_bindings.Any(entry => !entry.Value.IsCommitted))
+        {
+            throw new InvalidOperationException("Mechanics world capture and restore require every bound entity to be committed.");
+        }
+    }
+
+    private void RequireMatchingBindingTopology(MechanicsEntityWorldSnapshot snapshot)
+    {
+        if (_bindings.Count != snapshot.Bindings.Count
+            || _bindings.Any(entry => !snapshot.Bindings.TryGetValue(entry.Key, out MechanicsBindingSnapshot captured)
+                || captured.NativeHandle != entry.Value.Native.Handle.Value
+                || captured.Committed != entry.Value.IsCommitted))
+        {
+            throw new InvalidOperationException("Mechanics restore requires the same local canonical binding topology as its snapshot.");
+        }
+    }
+
+    private Dictionary<EntityId, ulong> ValidateRestoreReceipt(MechanicsWorldRestoreLeaseReceipt receipt)
+    {
+        if (receipt.StateRevisionAfter <= receipt.StateRevisionBefore)
+        {
+            throw new InvalidOperationException("Prepared Mechanics restore did not advance its state revision.");
+        }
+        const int MechanicsFamilyCount = 7;
+        MechanicsLifecycleReceipt[] lifecycleRows = receipt.Lifecycles.ToArray();
+        MechanicsRevisionRemapRow[] revisionRows = receipt.Revisions.ToArray();
+        var lifecycleStamps = new Dictionary<EntityId, ulong>();
+        foreach ((EntityId entity, Binding binding) in _bindings)
+        {
+            if (!binding.IsCommitted)
+            {
+                throw new InvalidOperationException("Prepared Mechanics restore observed an uncommitted binding.");
+            }
+            MechanicsLifecycleReceipt[] lifecycles = lifecycleRows
+                .Where(row => row.EntityId == entity.Value)
+                .ToArray();
+            if (lifecycles.Length != 1 || lifecycles[0].Stamp <= binding.LifecycleStamp)
+            {
+                throw new InvalidOperationException($"Prepared Mechanics restore did not remap lifecycle guard for entity {entity.Value}.");
+            }
+            lifecycleStamps.Add(entity, lifecycles[0].Stamp);
+            MechanicsRevisionRemapRow[] revisions = revisionRows
+                .Where(row => row.EntityId == entity.Value)
+                .ToArray();
+            if (revisions.Length != MechanicsFamilyCount
+                || revisions.Select(row => row.Component).Distinct().Count() != MechanicsFamilyCount
+                || revisions.Any(row => row.RestoredRevision <= row.SnapshotRevision
+                    || row.RestoredRevision <= row.CurrentRevision))
+            {
+                throw new InvalidOperationException($"Prepared Mechanics restore did not remap all component guards for entity {entity.Value}.");
+            }
+        }
+        return lifecycleStamps;
+    }
 
     private Binding RequireUncommitted(EntityId entity)
     {

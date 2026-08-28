@@ -303,6 +303,28 @@ impl EntityState {
         self.revision
     }
 
+    /// Rebase this candidate's whole-world and per-component exact guards past both the
+    /// captured candidate and its currently published predecessor. This is intentionally an
+    /// in-process restore primitive, not a durable snapshot decoder: registrations must already
+    /// match and every entity/component slot (including absent components) is remapped.
+    pub fn rebase_revisions_after(&mut self, current: &Self) -> bool {
+        if self.entities.keys().ne(current.entities.keys()) {
+            return false;
+        }
+        let entities = self.entities.keys().copied().collect();
+        if !self
+            .components
+            .rebase_revisions_from(&current.components, &entities)
+        {
+            return false;
+        }
+        let Some(revision) = self.revision.max(current.revision).checked_add(1) else {
+            return false;
+        };
+        self.revision = revision;
+        true
+    }
+
     pub fn contains(&self, entity: EntityId) -> bool {
         self.entities.contains_key(&entity)
     }

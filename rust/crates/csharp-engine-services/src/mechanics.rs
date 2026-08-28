@@ -44,6 +44,7 @@ struct CatalogBuilder {
     equipment_slots: Vec<EquipmentSlotDefinition>,
 }
 
+#[derive(Clone)]
 struct CatalogSlot {
     builder: Option<CatalogBuilder>,
     catalog: Option<MechanicsCatalog>,
@@ -216,6 +217,7 @@ impl CatalogLeaseText {
 
 /// Catalog-scoped mechanism storage keyed by the product's canonical EntityWorld identity.
 /// The bridge never allocates product entity identifiers: it only mirrors supplied ones.
+#[derive(Clone)]
 struct MechanicsWorld {
     state: EntityState,
     lifecycle: BTreeMap<EntityId, LifecycleRecord>,
@@ -321,6 +323,28 @@ struct EntityBinding {
     committed: bool,
 }
 
+/// The in-process checkpoint deliberately retains typed Engine state. It is not a persistence
+/// format and therefore carries no schema/migration contract.
+struct MechanicsWorldSnapshot {
+    catalog: u64,
+    catalog_fingerprint: String,
+    world: MechanicsWorld,
+    canonical_membership: BTreeMap<EntityId, u64>,
+    canonical_identity: BTreeMap<EntityId, String>,
+    binding_topology: BTreeMap<u64, (u64, EntityId, bool)>,
+}
+
+/// A validated native candidate plus the bounded facts the managed composition needs before its
+/// own non-fallible assignment. Rows borrow only from this owner until publish/destroy.
+struct PreparedMechanicsWorldRestore {
+    catalog: u64,
+    state_revision_before: u64,
+    candidate: Option<MechanicsWorld>,
+    revisions: Vec<NativeMechanicsRevisionRemapRow>,
+    lifecycles: Vec<NativeMechanicsLifecycleReceipt>,
+    published: bool,
+}
+
 pub(crate) struct RuntimeMechanicsBridge {
     catalogs: BTreeMap<u64, CatalogSlot>,
     entities: BTreeMap<u64, EntityBinding>,
@@ -328,12 +352,20 @@ pub(crate) struct RuntimeMechanicsBridge {
     canonical_entities: BTreeMap<EntityId, u64>,
     catalog_leases: BTreeMap<u64, Box<CatalogLeaseBacking>>,
     component_leases: BTreeMap<u64, Box<ComponentLeaseBacking>>,
+    world_snapshots: BTreeMap<u64, Box<MechanicsWorldSnapshot>>,
+    world_snapshot_leases: BTreeMap<u64, u64>,
+    prepared_world_restores: BTreeMap<u64, Box<PreparedMechanicsWorldRestore>>,
+    world_restore_leases: BTreeMap<u64, u64>,
     operation_leases: BTreeMap<u64, Box<OperationLeaseBacking>>,
     diagnostic_leases: BTreeMap<u64, MechanicsOperationDiagnosticLease>,
     next_catalog: u64,
     next_entity: u64,
     next_catalog_lease: u64,
     next_component_lease: u64,
+    next_world_snapshot: u64,
+    next_world_snapshot_lease: u64,
+    next_world_restore: u64,
+    next_world_restore_lease: u64,
     next_operation_lease: u64,
     next_diagnostic_lease: u64,
 }
@@ -346,12 +378,20 @@ impl RuntimeMechanicsBridge {
             canonical_entities: BTreeMap::new(),
             catalog_leases: BTreeMap::new(),
             component_leases: BTreeMap::new(),
+            world_snapshots: BTreeMap::new(),
+            world_snapshot_leases: BTreeMap::new(),
+            prepared_world_restores: BTreeMap::new(),
+            world_restore_leases: BTreeMap::new(),
             operation_leases: BTreeMap::new(),
             diagnostic_leases: BTreeMap::new(),
             next_catalog: 1,
             next_entity: 1,
             next_catalog_lease: 1,
             next_component_lease: 1,
+            next_world_snapshot: 1,
+            next_world_snapshot_lease: 1,
+            next_world_restore: 1,
+            next_world_restore_lease: 1,
             next_operation_lease: 1,
             next_diagnostic_lease: 1,
         }
@@ -485,6 +525,15 @@ pub(crate) fn api(bridge: &mut RuntimeMechanicsBridge) -> NativeMechanicsApi {
         read_item_component: receipt_read_item_component,
         read_equipment_assignment_component: receipt_read_equipment_assignment_component,
         destroy_component_lease,
+        capture_world_snapshot: receipt_capture_world_snapshot,
+        destroy_world_snapshot,
+        read_world_snapshot: receipt_read_world_snapshot,
+        destroy_world_snapshot_lease,
+        prepare_world_restore: receipt_prepare_world_restore,
+        destroy_world_restore,
+        read_world_restore: receipt_read_world_restore,
+        destroy_world_restore_lease,
+        publish_world_restore,
         bind_entity: receipt_bind_entity,
         rebind_entity: receipt_rebind_entity,
         set_initial_stat: receipt_set_initial_stat,
@@ -2338,6 +2387,523 @@ unsafe extern "C" fn destroy_component_lease(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
     i32::from(bridge.component_leases.remove(&handle.value).is_some())
+}
+
+fn catalog_membership(bridge: &RuntimeMechanicsBridge, catalog: u64) -> BTreeMap<EntityId, u64> {
+    bridge
+        .canonical_entities
+        .iter()
+        .filter_map(|(entity, mapped_catalog)| {
+            (*mapped_catalog == catalog).then_some((*entity, *mapped_catalog))
+        })
+        .collect()
+}
+
+fn canonical_identity(world: &MechanicsWorld) -> Option<BTreeMap<EntityId, String>> {
+    world
+        .lifecycle
+        .keys()
+        .map(|entity| Some((*entity, world.state.core(*entity)?.name.clone())))
+        .collect()
+}
+
+fn binding_topology(
+    bridge: &RuntimeMechanicsBridge,
+    catalog: u64,
+) -> BTreeMap<u64, (u64, EntityId, bool)> {
+    bridge
+        .entities
+        .iter()
+        .filter_map(|(handle, binding)| {
+            (binding.catalog == catalog).then_some((
+                *handle,
+                (binding.catalog, binding.entity, binding.committed),
+            ))
+        })
+        .collect()
+}
+
+fn remap_component_revision<T: entity_state::EntityComponent>(
+    snapshot: &EntityState,
+    current: &EntityState,
+    restored: &EntityState,
+    entity: EntityId,
+    component: NativeMechanicsRevisionComponent,
+) -> Option<NativeMechanicsRevisionRemapRow> {
+    let snapshot_revision = snapshot.component_revision::<T>(entity).ok()?.revision();
+    let current_revision = current.component_revision::<T>(entity).ok()?.revision();
+    let restored_revision = restored.component_revision::<T>(entity).ok()?.revision();
+    let present = restored.has_component::<T>(entity).ok()?;
+    Some(NativeMechanicsRevisionRemapRow {
+        entity_id: entity.raw(),
+        component,
+        present,
+        snapshot_revision,
+        current_revision,
+        restored_revision,
+    })
+}
+
+fn revision_remaps(
+    snapshot: &EntityState,
+    current: &EntityState,
+    restored: &EntityState,
+    entities: impl IntoIterator<Item = EntityId>,
+) -> Option<Vec<NativeMechanicsRevisionRemapRow>> {
+    let mut rows = Vec::new();
+    // EntityState's restore primitive has already verified the exact entity set. The seven
+    // Mechanics families are intentionally enumerated here so the generated receipt remains a
+    // stable product API rather than an erased component registry.
+    for entity in entities {
+        rows.push(remap_component_revision::<StatsComponent>(
+            snapshot,
+            current,
+            restored,
+            entity,
+            NativeMechanicsRevisionComponent::Stats,
+        )?);
+        rows.push(remap_component_revision::<TracksComponent>(
+            snapshot,
+            current,
+            restored,
+            entity,
+            NativeMechanicsRevisionComponent::Tracks,
+        )?);
+        rows.push(remap_component_revision::<IntrinsicSourcesComponent>(
+            snapshot,
+            current,
+            restored,
+            entity,
+            NativeMechanicsRevisionComponent::IntrinsicSources,
+        )?);
+        rows.push(remap_component_revision::<ActiveEffectsComponent>(
+            snapshot,
+            current,
+            restored,
+            entity,
+            NativeMechanicsRevisionComponent::ActiveEffects,
+        )?);
+        rows.push(remap_component_revision::<InventoryComponent>(
+            snapshot,
+            current,
+            restored,
+            entity,
+            NativeMechanicsRevisionComponent::Inventory,
+        )?);
+        rows.push(remap_component_revision::<ItemComponent>(
+            snapshot,
+            current,
+            restored,
+            entity,
+            NativeMechanicsRevisionComponent::Item,
+        )?);
+        rows.push(remap_component_revision::<EquipmentComponent>(
+            snapshot,
+            current,
+            restored,
+            entity,
+            NativeMechanicsRevisionComponent::Equipment,
+        )?);
+    }
+    Some(rows)
+}
+
+unsafe extern "C" fn capture_world_snapshot(
+    context: *mut c_void,
+    catalog: NativeMechanicsCatalogHandle,
+    result: *mut NativeMechanicsWorldSnapshotHandle,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    if bridge
+        .entities
+        .values()
+        .any(|binding| binding.catalog == catalog.value && !binding.committed)
+    {
+        return 0;
+    }
+    let Some(slot) = bridge.catalogs.get(&catalog.value) else {
+        return 0;
+    };
+    let Some(native_catalog) = slot.catalog.as_ref() else {
+        return 0;
+    };
+    let handle = bridge.next_world_snapshot;
+    let Some(next_handle) = handle.checked_add(1) else {
+        return 0;
+    };
+    let snapshot = MechanicsWorldSnapshot {
+        catalog: catalog.value,
+        catalog_fingerprint: native_catalog.fingerprint().to_owned(),
+        world: slot.world.clone(),
+        canonical_membership: catalog_membership(bridge, catalog.value),
+        canonical_identity: match canonical_identity(&slot.world) {
+            Some(identity) => identity,
+            None => return 0,
+        },
+        binding_topology: binding_topology(bridge, catalog.value),
+    };
+    bridge.next_world_snapshot = next_handle;
+    bridge.world_snapshots.insert(handle, Box::new(snapshot));
+    unsafe { *result = NativeMechanicsWorldSnapshotHandle { value: handle } };
+    ABI_OK
+}
+
+unsafe extern "C" fn receipt_capture_world_snapshot(
+    context: *mut c_void,
+    catalog: NativeMechanicsCatalogHandle,
+    result: *mut NativeMechanicsWorldSnapshotHandle,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        invoke_with_operation_diagnostic(
+            context,
+            receipt,
+            b"CaptureWorldSnapshot",
+            || capture_world_snapshot(context, catalog, result),
+            |_bridge| {
+                (
+                    b"MECHANICS_SNAPSHOT_REJECTED".as_slice(),
+                    b"Mechanics world snapshot requires one admitted catalog and committed bindings."
+                        .as_slice(),
+                    catalog_source(catalog),
+                )
+            },
+        )
+    }
+}
+
+unsafe extern "C" fn destroy_world_snapshot(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldSnapshotHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    if bridge
+        .world_snapshot_leases
+        .values()
+        .any(|snapshot| *snapshot == handle.value)
+    {
+        return 0;
+    }
+    i32::from(bridge.world_snapshots.remove(&handle.value).is_some())
+}
+
+unsafe extern "C" fn read_world_snapshot(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldSnapshotHandle,
+    result: *mut NativeMechanicsWorldSnapshotLease,
+) -> i32 {
+    if context.is_null() || result.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    let Some(snapshot) = bridge.world_snapshots.get(&handle.value) else {
+        return 0;
+    };
+    let lease = bridge.next_world_snapshot_lease;
+    let Some(next_lease) = lease.checked_add(1) else {
+        return 0;
+    };
+    bridge.next_world_snapshot_lease = next_lease;
+    bridge.world_snapshot_leases.insert(lease, handle.value);
+    *result = NativeMechanicsWorldSnapshotLease {
+        handle: NativeMechanicsWorldSnapshotLeaseHandle { value: lease },
+        state_revision: snapshot.world.state.revision(),
+    };
+    ABI_OK
+}
+
+unsafe extern "C" fn receipt_read_world_snapshot(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldSnapshotHandle,
+    result: *mut NativeMechanicsWorldSnapshotLease,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        invoke_with_operation_diagnostic(
+            context,
+            receipt,
+            b"ReadWorldSnapshot",
+            || read_world_snapshot(context, handle, result),
+            |_bridge| {
+                (
+                    b"MECHANICS_SNAPSHOT_NOT_FOUND".as_slice(),
+                    b"Mechanics world snapshot was not found.".as_slice(),
+                    String::new(),
+                )
+            },
+        )
+    }
+}
+
+unsafe extern "C" fn destroy_world_snapshot_lease(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldSnapshotLeaseHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    i32::from(bridge.world_snapshot_leases.remove(&handle.value).is_some())
+}
+
+unsafe extern "C" fn prepare_world_restore(
+    context: *mut c_void,
+    request: *const NativeMechanicsWorldRestoreRequest,
+    result: *mut NativeMechanicsWorldRestoreHandle,
+) -> i32 {
+    let Some((bridge, request, result)) = bridge_request_result(context, request, result) else {
+        return 0;
+    };
+    if bridge
+        .entities
+        .values()
+        .any(|binding| binding.catalog == request.catalog.value && !binding.committed)
+    {
+        return 0;
+    }
+    let Some(snapshot) = bridge.world_snapshots.get(&request.snapshot.value) else {
+        return 0;
+    };
+    if snapshot.catalog != request.catalog.value
+        || snapshot.canonical_membership != catalog_membership(bridge, request.catalog.value)
+        || snapshot.binding_topology != binding_topology(bridge, request.catalog.value)
+    {
+        return 0;
+    }
+    let Some(slot) = bridge.catalogs.get(&request.catalog.value) else {
+        return 0;
+    };
+    let Some(catalog) = slot.catalog.as_ref() else {
+        return 0;
+    };
+    if catalog.fingerprint() != snapshot.catalog_fingerprint
+        || canonical_identity(&slot.world).as_ref() != Some(&snapshot.canonical_identity)
+        || slot.world.state.revision() != request.expected_state_revision
+        || snapshot.world.lifecycle.len() != slot.world.lifecycle.len()
+        || snapshot
+            .world
+            .lifecycle
+            .iter()
+            .any(|(entity, snapshot_record)| {
+                let Some(current_record) = slot.world.lifecycle.get(entity) else {
+                    return true;
+                };
+                (snapshot_record.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned)
+                    != (current_record.lifecycle == NativeMechanicsEntityLifecycle::Tombstoned)
+            })
+    {
+        return 0;
+    }
+
+    let mut candidate = snapshot.world.clone();
+    if !candidate.state.rebase_revisions_after(&slot.world.state)
+        || validate_state_against_catalog(&candidate.state, catalog).is_err()
+    {
+        return 0;
+    }
+    let mut highest_stamp = candidate.next_stamp.max(slot.world.next_stamp);
+    for (entity, record) in &mut candidate.lifecycle {
+        let Some(current_record) = slot.world.lifecycle.get(entity) else {
+            return 0;
+        };
+        let Some(stamp) = record.stamp.max(current_record.stamp).checked_add(1) else {
+            return 0;
+        };
+        record.stamp = stamp;
+        highest_stamp = highest_stamp.max(stamp);
+    }
+    let Some(next_stamp) = highest_stamp.checked_add(1) else {
+        return 0;
+    };
+    candidate.next_stamp = next_stamp;
+
+    let entities: Vec<_> = snapshot.canonical_membership.keys().copied().collect();
+    let Some(revisions) = revision_remaps(
+        &snapshot.world.state,
+        &slot.world.state,
+        &candidate.state,
+        entities,
+    ) else {
+        return 0;
+    };
+    let lifecycles = candidate
+        .lifecycle
+        .keys()
+        .copied()
+        .map(|entity| candidate.lifecycle_receipt(entity))
+        .collect();
+    let handle = bridge.next_world_restore;
+    let Some(next_handle) = handle.checked_add(1) else {
+        return 0;
+    };
+    bridge.next_world_restore = next_handle;
+    bridge.prepared_world_restores.insert(
+        handle,
+        Box::new(PreparedMechanicsWorldRestore {
+            catalog: request.catalog.value,
+            state_revision_before: slot.world.state.revision(),
+            candidate: Some(candidate),
+            revisions,
+            lifecycles,
+            published: false,
+        }),
+    );
+    *result = NativeMechanicsWorldRestoreHandle { value: handle };
+    ABI_OK
+}
+
+unsafe extern "C" fn receipt_prepare_world_restore(
+    context: *mut c_void,
+    request: *const NativeMechanicsWorldRestoreRequest,
+    result: *mut NativeMechanicsWorldRestoreHandle,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        invoke_with_operation_diagnostic(
+            context,
+            receipt,
+            b"PrepareWorldRestore",
+            || prepare_world_restore(context, request, result),
+            |_bridge| {
+                (
+                    b"MECHANICS_RESTORE_REJECTED".as_slice(),
+                    b"Mechanics restore requires matching catalog, topology, and current revision."
+                        .as_slice(),
+                    String::new(),
+                )
+            },
+        )
+    }
+}
+
+unsafe extern "C" fn destroy_world_restore(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldRestoreHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    if bridge
+        .world_restore_leases
+        .values()
+        .any(|prepared| *prepared == handle.value)
+    {
+        return 0;
+    }
+    i32::from(
+        bridge
+            .prepared_world_restores
+            .remove(&handle.value)
+            .is_some(),
+    )
+}
+
+unsafe extern "C" fn read_world_restore(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldRestoreHandle,
+    result: *mut NativeMechanicsWorldRestoreLease,
+) -> i32 {
+    if context.is_null() || result.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    let Some(prepared) = bridge
+        .prepared_world_restores
+        .get(&handle.value)
+        .filter(|prepared| !prepared.published)
+    else {
+        return 0;
+    };
+    let lease = bridge.next_world_restore_lease;
+    let Some(next_lease) = lease.checked_add(1) else {
+        return 0;
+    };
+    let value = NativeMechanicsWorldRestoreLease {
+        handle: NativeMechanicsWorldRestoreLeaseHandle { value: lease },
+        state_revision_before: prepared.state_revision_before,
+        state_revision_after: prepared
+            .candidate
+            .as_ref()
+            .expect("unpublished mechanics restore has a candidate")
+            .state
+            .revision(),
+        revisions: prepared.revisions.as_ptr(),
+        revisions_len: prepared.revisions.len(),
+        lifecycles: prepared.lifecycles.as_ptr(),
+        lifecycles_len: prepared.lifecycles.len(),
+    };
+    bridge.next_world_restore_lease = next_lease;
+    bridge.world_restore_leases.insert(lease, handle.value);
+    *result = value;
+    ABI_OK
+}
+
+unsafe extern "C" fn receipt_read_world_restore(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldRestoreHandle,
+    result: *mut NativeMechanicsWorldRestoreLease,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        invoke_with_operation_diagnostic(
+            context,
+            receipt,
+            b"ReadWorldRestore",
+            || read_world_restore(context, handle, result),
+            |_bridge| {
+                (
+                    b"MECHANICS_RESTORE_NOT_FOUND".as_slice(),
+                    b"Prepared Mechanics restore was not found.".as_slice(),
+                    String::new(),
+                )
+            },
+        )
+    }
+}
+
+unsafe extern "C" fn destroy_world_restore_lease(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldRestoreLeaseHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    i32::from(bridge.world_restore_leases.remove(&handle.value).is_some())
+}
+
+unsafe extern "C" fn publish_world_restore(
+    context: *mut c_void,
+    handle: NativeMechanicsWorldRestoreHandle,
+) -> i32 {
+    if context.is_null() || handle.value == 0 {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeMechanicsBridge>() };
+    let Some(prepared) = bridge.prepared_world_restores.get_mut(&handle.value) else {
+        return 0;
+    };
+    if prepared.published {
+        return 0;
+    }
+    let Some(slot) = bridge.catalogs.get_mut(&prepared.catalog) else {
+        return 0;
+    };
+    // Both candidate construction and all observable failure paths are complete before this
+    // assignment. The synchronous ABI has no concurrent mutation path between prepare/publish.
+    slot.world = prepared
+        .candidate
+        .take()
+        .expect("unpublished mechanics restore has a candidate");
+    prepared.published = true;
+    ABI_OK
 }
 
 fn native_stacking(value: StackingPolicy) -> NativeMechanicsStackingPolicy {
@@ -8101,6 +8667,188 @@ mod tests {
             unsafe { destroy_component_lease(context, item_lease.handle) },
             ABI_OK
         );
+    }
+
+    #[test]
+    fn prepared_world_restore_remaps_all_families_and_preserves_failed_candidates() {
+        let mut bridge = RuntimeMechanicsBridge::new();
+        let context = (&mut bridge as *mut RuntimeMechanicsBridge).cast::<c_void>();
+        let mut catalog = NativeMechanicsCatalogHandle::default();
+        assert_eq!(
+            unsafe {
+                create_catalog(
+                    context,
+                    &NativeMechanicsCatalogCreateRequest {
+                        version: utf8("restore-components"),
+                    },
+                    &mut catalog,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                define_stat(
+                    context,
+                    &NativeMechanicsStatDefinitionRequest {
+                        catalog,
+                        id: utf8("strength"),
+                        minimum: 0,
+                        maximum: 20,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(unsafe { admit_catalog(context, catalog) }, ABI_OK);
+        let mut entity = NativeMechanicsEntityHandle::default();
+        assert_eq!(
+            unsafe {
+                bind_entity(
+                    context,
+                    &NativeMechanicsEntityBindRequest {
+                        catalog,
+                        entity_id: 501,
+                        identity: utf8("restore-actor"),
+                    },
+                    &mut entity,
+                )
+            },
+            ABI_OK
+        );
+        let stats = [NativeMechanicsInitialStatValue {
+            stat: utf8("strength"),
+            base: 12,
+        }];
+        assert_eq!(
+            unsafe {
+                set_initial_components(
+                    context,
+                    &NativeMechanicsInitialComponentsRequest {
+                        entity,
+                        has_stats: true,
+                        stats: stats.as_ptr(),
+                        stats_len: stats.len(),
+                        // An empty Tracks component is distinct from the five absent families.
+                        has_tracks: true,
+                        tracks: std::ptr::null(),
+                        tracks_len: 0,
+                        has_intrinsic_sources: false,
+                        intrinsic_sources: std::ptr::null(),
+                        intrinsic_sources_len: 0,
+                        has_active_effects: false,
+                        active_effects: std::ptr::null(),
+                        active_effects_len: 0,
+                        has_inventory: false,
+                        inventory_stacks: std::ptr::null(),
+                        inventory_stacks_len: 0,
+                        inventory_capacity_limits: std::ptr::null(),
+                        inventory_capacity_limits_len: 0,
+                        has_item: false,
+                        item_definition: utf8(""),
+                        has_equipment: false,
+                        equipment_assignments: std::ptr::null(),
+                        equipment_assignments_len: 0,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut committed = NativeMechanicsEntityReceipt::default();
+        assert_eq!(
+            unsafe { commit_entity(context, entity, &mut committed) },
+            ABI_OK
+        );
+
+        let mut snapshot = NativeMechanicsWorldSnapshotHandle::default();
+        assert_eq!(
+            unsafe { capture_world_snapshot(context, catalog, &mut snapshot) },
+            ABI_OK
+        );
+        let mut disabled = NativeMechanicsLifecycleReceipt::default();
+        assert_eq!(
+            unsafe {
+                set_entity_lifecycle(
+                    context,
+                    &NativeMechanicsLifecycleRequest {
+                        entity,
+                        lifecycle: NativeMechanicsEntityLifecycle::Disabled,
+                        guard: NativeMechanicsLifecycleGuard::Exact,
+                        expected_stamp: committed.lifecycle.stamp,
+                    },
+                    &mut disabled,
+                )
+            },
+            ABI_OK
+        );
+        let current_revision = bridge.catalogs[&catalog.value].world.state.revision();
+        let before_failed_prepare = bridge.catalogs[&catalog.value].world.clone();
+        let invalid_request = NativeMechanicsWorldRestoreRequest {
+            catalog: NativeMechanicsCatalogHandle {
+                value: catalog.value + 1,
+            },
+            snapshot,
+            expected_state_revision: current_revision,
+        };
+        let mut rejected = NativeMechanicsWorldRestoreHandle::default();
+        assert_eq!(
+            unsafe { prepare_world_restore(context, &invalid_request, &mut rejected) },
+            0
+        );
+        assert_eq!(
+            bridge.catalogs[&catalog.value].world.state.revision(),
+            before_failed_prepare.state.revision()
+        );
+        assert_eq!(
+            bridge.catalogs[&catalog.value]
+                .world
+                .lifecycle_receipt(EntityId::new(501))
+                .lifecycle,
+            NativeMechanicsEntityLifecycle::Disabled
+        );
+
+        let request = NativeMechanicsWorldRestoreRequest {
+            catalog,
+            snapshot,
+            expected_state_revision: current_revision,
+        };
+        let mut prepared = NativeMechanicsWorldRestoreHandle::default();
+        assert_eq!(
+            unsafe { prepare_world_restore(context, &request, &mut prepared) },
+            ABI_OK
+        );
+        let mut lease = std::mem::MaybeUninit::<NativeMechanicsWorldRestoreLease>::uninit();
+        assert_eq!(
+            unsafe { read_world_restore(context, prepared, lease.as_mut_ptr()) },
+            ABI_OK
+        );
+        let lease = unsafe { lease.assume_init() };
+        let remaps = unsafe { std::slice::from_raw_parts(lease.revisions, lease.revisions_len) };
+        assert_eq!(remaps.len(), 7);
+        assert!(remaps
+            .iter()
+            .all(|row| row.restored_revision > row.snapshot_revision
+                && row.restored_revision > row.current_revision));
+        assert!(remaps
+            .iter()
+            .any(|row| row.component == NativeMechanicsRevisionComponent::Tracks && row.present));
+        assert!(remaps.iter().any(|row| row.component
+            == NativeMechanicsRevisionComponent::Inventory
+            && !row.present));
+        assert_eq!(
+            unsafe { destroy_world_restore_lease(context, lease.handle) },
+            ABI_OK
+        );
+        assert_eq!(unsafe { publish_world_restore(context, prepared) }, ABI_OK);
+        assert_eq!(
+            bridge.catalogs[&catalog.value]
+                .world
+                .lifecycle_receipt(EntityId::new(501))
+                .lifecycle,
+            NativeMechanicsEntityLifecycle::Active
+        );
+        assert_eq!(unsafe { destroy_world_restore(context, prepared) }, ABI_OK);
+        assert_eq!(unsafe { destroy_world_snapshot(context, snapshot) }, ABI_OK);
     }
 
     #[test]

@@ -200,6 +200,34 @@ pub struct NativeMechanicsOperationLeaseHandle {
     pub value: u64,
 }
 
+/// An owned, process-local typed Mechanics checkpoint. It intentionally has no byte codec:
+/// product persistence schemas remain outside the Engine Mechanics bridge.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldSnapshotHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldSnapshotLeaseHandle {
+    pub value: u64,
+}
+
+/// An owned, fully validated restore candidate. Publishing this handle only swaps already
+/// prepared native state; it does not replay mutations or perform further validation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldRestoreHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMechanicsWorldRestoreLeaseHandle {
+    pub value: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMechanicsComponentReadMetadata {
@@ -632,6 +660,48 @@ pub struct NativeMechanicsLifecycleReceipt {
     pub entity_id: u64,
     pub lifecycle: NativeMechanicsEntityLifecycle,
     pub stamp: u64,
+}
+
+/// Exact component-guard facts for an in-process restore. `snapshot_revision` and
+/// `current_revision` are both invalid after publication; `restored_revision` is the only
+/// accepted successor, including when `present` is false.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMechanicsRevisionRemapRow {
+    pub entity_id: u64,
+    pub component: NativeMechanicsRevisionComponent,
+    pub present: bool,
+    pub snapshot_revision: u64,
+    pub current_revision: u64,
+    pub restored_revision: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldRestoreRequest {
+    pub catalog: NativeMechanicsCatalogHandle,
+    pub snapshot: NativeMechanicsWorldSnapshotHandle,
+    pub expected_state_revision: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldSnapshotLease {
+    pub handle: NativeMechanicsWorldSnapshotLeaseHandle,
+    pub state_revision: u64,
+}
+
+/// The borrowed rows live in `handle` until the matching restore lease is destroyed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMechanicsWorldRestoreLease {
+    pub handle: NativeMechanicsWorldRestoreLeaseHandle,
+    pub state_revision_before: u64,
+    pub state_revision_after: u64,
+    pub revisions: *const NativeMechanicsRevisionRemapRow,
+    pub revisions_len: usize,
+    pub lifecycles: *const NativeMechanicsLifecycleReceipt,
+    pub lifecycles_len: usize,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

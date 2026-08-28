@@ -350,6 +350,16 @@ public sealed class EntityWorld : IDisposable
 
     public void Restore(EntityWorldSnapshot snapshot, ulong? expectedRevision = null)
     {
+        PrepareRestore(snapshot, expectedRevision).Publish();
+    }
+
+    /// <summary>
+    /// Builds a fully validated in-process restore candidate. This lets a narrow composition
+    /// surface coordinate managed validation with an Engine-owned prepared candidate before either
+    /// world is published.
+    /// </summary>
+    internal EntityWorldRestoreCandidate PrepareRestore(EntityWorldSnapshot snapshot, ulong? expectedRevision)
+    {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(snapshot);
         if (expectedRevision is ulong expected && expected != _state.Revision)
@@ -357,16 +367,11 @@ public sealed class EntityWorld : IDisposable
             throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
         }
         EnsureSameRegistrations(snapshot.State);
-        ulong revisionBefore = _state.Revision;
         WorldState restored = snapshot.State.Clone(forSnapshot: true);
         restored.ValidateComponents();
         restored.ValidateContainment();
-        restored.InvalidateRevisions();
-        _state = restored;
-        if (!_staging)
-        {
-            _state.Revision = checked(revisionBefore + 1);
-        }
+        restored.RebaseRevisionsAfter(_state);
+        return new EntityWorldRestoreCandidate(this, restored);
     }
 
     public EntityWorldDiagnostics Diagnostics(int maxEntitySample = MaximumDiagnosticSample)
@@ -535,6 +540,8 @@ public sealed class EntityWorld : IDisposable
         }
     }
 
+    internal void PublishPreparedRestore(WorldState restored) => _state = restored;
+
     internal sealed class WorldState
     {
         internal ulong Revision;
@@ -566,16 +573,25 @@ public sealed class EntityWorld : IDisposable
             return result;
         }
 
-        internal void InvalidateRevisions()
+        internal void RebaseRevisionsAfter(WorldState current)
         {
-            foreach (EntityRecord entity in Entities.Values)
+            // Entity identities are monotonic across an in-process restore. A captured next-id
+            // cursor must never roll back below a current-only entity and permit ABA reuse.
+            NextEntityValue = Math.Max(NextEntityValue, current.NextEntityValue);
+            foreach ((ulong id, EntityRecord entity) in Entities)
             {
-                entity.Revision = checked(entity.Revision + 1);
+                ulong currentRevision = current.Entities.TryGetValue(id, out EntityRecord? value) ? value.Revision : 0;
+                entity.Revision = checked(Math.Max(entity.Revision, currentRevision) + 1);
             }
             foreach (ComponentTable table in Tables.Values)
             {
-                table.InvalidateRevisions();
+                if (!current.Tables.TryGetValue(table.Descriptor.Key, out ComponentTable? currentTable))
+                {
+                    throw new InvalidOperationException("Component registrations changed while a restore was prepared.");
+                }
+                table.RebaseRevisionsAfter(currentTable, Entities.Keys.Select(value => new EntityId(value)));
             }
+            Revision = checked(Math.Max(Revision, current.Revision) + 1);
         }
 
         internal void ValidateComponents()
@@ -634,6 +650,7 @@ public sealed class EntityWorld : IDisposable
         internal abstract ComponentTable Clone(bool forSnapshot);
         internal abstract bool Remove(EntityId entity);
         internal abstract void InvalidateRevisions();
+        internal abstract void RebaseRevisionsAfter(ComponentTable current, IEnumerable<EntityId> entities);
         internal abstract void ValidateValues();
         internal abstract ComponentTypeDiagnostics Diagnostics(int maxEntitySample);
     }
@@ -691,6 +708,18 @@ public sealed class EntityWorld : IDisposable
             foreach (ulong entity in _revisions.Keys.ToArray())
             {
                 _revisions[entity] = checked(_revisions[entity] + 1);
+            }
+        }
+
+        internal override void RebaseRevisionsAfter(ComponentTable current, IEnumerable<EntityId> entities)
+        {
+            if (current is not ComponentTable<T> typedCurrent)
+            {
+                throw new InvalidOperationException("Component registrations changed while a restore was prepared.");
+            }
+            foreach (EntityId entity in entities)
+            {
+                _revisions[entity.Value] = checked(Math.Max(RevisionFor(entity), typedCurrent.RevisionFor(entity)) + 1);
             }
         }
 
