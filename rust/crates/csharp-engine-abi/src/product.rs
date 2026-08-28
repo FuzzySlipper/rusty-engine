@@ -42,6 +42,11 @@ pub type NativeCreateDynamicsCapsuleBody = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeBindDynamicsWorldCollision =
     unsafe extern "C" fn(*mut c_void, NativeDynamicsWorldCollisionBindingRequest) -> i32;
+pub type NativeRebaseDynamicsWorldOrigin = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsRebaseWorldOriginRequest,
+    *mut NativeDynamicsRebaseWorldOriginReceipt,
+) -> i32;
 pub type NativeDestroyDynamicsBody =
     unsafe extern "C" fn(*mut c_void, NativeDynamicsBodyHandle) -> i32;
 pub type NativeStepDynamics = unsafe extern "C" fn(
@@ -1334,6 +1339,7 @@ pub struct NativeDynamicsApi {
     pub create_sphere_body_with_properties: NativeCreateDynamicsSphereBodyWithProperties,
     pub create_capsule_body: NativeCreateDynamicsCapsuleBody,
     pub bind_world_collision: NativeBindDynamicsWorldCollision,
+    pub rebase_world_origin: NativeRebaseDynamicsWorldOrigin,
     pub destroy_body: NativeDestroyDynamicsBody,
     pub step: NativeStepDynamics,
     pub read: NativeReadDynamics,

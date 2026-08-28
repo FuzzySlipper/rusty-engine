@@ -155,6 +155,33 @@ pub struct NativeDynamicsWorldCollisionBindingRequest {
     pub spatial_session: NativeSpatialSessionHandle,
 }
 
+/// Applies one already-committed Spatial world-origin rebase to a Dynamics
+/// world explicitly bound to that Spatial session. The receipt is copied in
+/// full so the bridge can verify the before/after collision snapshots rather
+/// than infer product rebase policy.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRebaseWorldOriginRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub spatial_session: NativeSpatialSessionHandle,
+    pub receipt: NativeWorldOriginCommitReceipt,
+    pub expected_entity_revision: u64,
+    pub expected_solver_generation: u64,
+}
+
+/// Exact Dynamics facts after one successful explicit world-origin rebase.
+/// This supplies the next guards without requiring C# to issue a speculative
+/// read immediately after a committed rebase.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsRebaseWorldOriginReceipt {
+    pub entity_revision_before: u64,
+    pub entity_revision_after: u64,
+    pub solver_generation: u64,
+    pub body_count: u32,
+    pub contact_count: u32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsAction {
