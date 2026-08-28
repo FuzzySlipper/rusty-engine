@@ -51,10 +51,10 @@ pub use composed::{
 };
 pub use continuous::{
     compile_continuous_expr, CompileContinuousExpr, ContinuousComparison, ContinuousCompileError,
-    ContinuousEvaluationError, ContinuousEvaluator, ContinuousExpr, ContinuousExprLimits,
-    ContinuousExprRequirements, ContinuousInputBundle, ContinuousInputBundleError,
-    ContinuousInputReference, ContinuousValue, ContinuousValueError,
-    CONTINUOUS_EVALUATOR_SEMANTICS_VERSION,
+    ContinuousEvaluationError, ContinuousEvaluationReceipt, ContinuousEvaluator, ContinuousExpr,
+    ContinuousExprLimits, ContinuousExprRequirements, ContinuousInputBundle,
+    ContinuousInputBundleError, ContinuousInputReference, ContinuousPredicateEvaluationReceipt,
+    ContinuousValue, ContinuousValueError, CONTINUOUS_EVALUATOR_SEMANTICS_VERSION,
 };
 pub use contract::encode_standard_contract_descriptor;
 pub use exact::{

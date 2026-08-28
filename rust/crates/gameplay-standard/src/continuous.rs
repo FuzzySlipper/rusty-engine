@@ -269,6 +269,43 @@ impl Default for ContinuousExprLimits {
 }
 
 pub struct ContinuousEvaluator;
+
+/// The deterministic result and work consumed by one continuous expression evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContinuousEvaluationReceipt {
+    value: ContinuousValue,
+    work_used: usize,
+}
+impl ContinuousEvaluationReceipt {
+    /// Returns the evaluated finite binary64 value.
+    pub fn value(self) -> ContinuousValue {
+        self.value
+    }
+
+    /// Returns the evaluator work consumed while producing this result.
+    pub fn work_used(self) -> usize {
+        self.work_used
+    }
+}
+
+/// The deterministic result and work consumed by one continuous predicate evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContinuousPredicateEvaluationReceipt {
+    value: bool,
+    work_used: usize,
+}
+impl ContinuousPredicateEvaluationReceipt {
+    /// Returns the evaluated predicate value.
+    pub fn value(self) -> bool {
+        self.value
+    }
+
+    /// Returns the evaluator work consumed while producing this result.
+    pub fn work_used(self) -> usize {
+        self.work_used
+    }
+}
+
 impl ContinuousEvaluator {
     /// Checks only deterministic tree quotas; it never gathers or evaluates inputs.
     pub fn validate_structure(
@@ -282,15 +319,38 @@ impl ContinuousEvaluator {
         inputs: &ContinuousInputBundle,
         limits: ContinuousExprLimits,
     ) -> Result<ContinuousValue, ContinuousEvaluationError> {
+        Ok(Self::evaluate_with_receipt(expr, inputs, limits)?.value())
+    }
+
+    /// Evaluates an expression and reports the same work counter used to enforce its quota.
+    pub fn evaluate_with_receipt(
+        expr: &ContinuousExpr,
+        inputs: &ContinuousInputBundle,
+        limits: ContinuousExprLimits,
+    ) -> Result<ContinuousEvaluationReceipt, ContinuousEvaluationError> {
         Self::validate_structure(expr, limits)?;
         let mut work = 0;
-        eval(expr, inputs, limits, &mut work)
+        let value = eval(expr, inputs, limits, &mut work)?;
+        Ok(ContinuousEvaluationReceipt {
+            value,
+            work_used: work,
+        })
     }
+
     pub fn evaluate_predicate(
         predicate: &ContinuousComparison,
         inputs: &ContinuousInputBundle,
         limits: ContinuousExprLimits,
     ) -> Result<bool, ContinuousEvaluationError> {
+        Ok(Self::evaluate_predicate_with_receipt(predicate, inputs, limits)?.value())
+    }
+
+    /// Evaluates a predicate and reports the same work counter used to enforce its quota.
+    pub fn evaluate_predicate_with_receipt(
+        predicate: &ContinuousComparison,
+        inputs: &ContinuousInputBundle,
+        limits: ContinuousExprLimits,
+    ) -> Result<ContinuousPredicateEvaluationReceipt, ContinuousEvaluationError> {
         let (left, right, comparison) = match predicate {
             ContinuousComparison::Equal(a, b) => (a, b, 0),
             ContinuousComparison::LessThan(a, b) => (a, b, 1),
@@ -302,12 +362,16 @@ impl ContinuousEvaluator {
         let mut work = 0;
         let left = eval(left, inputs, limits, &mut work)?;
         let right = eval(right, inputs, limits, &mut work)?;
-        Ok(match comparison {
+        let value = match comparison {
             0 => left == right,
             1 => left < right,
             2 => left <= right,
             3 => left > right,
             _ => left >= right,
+        };
+        Ok(ContinuousPredicateEvaluationReceipt {
+            value,
+            work_used: work,
         })
     }
 }
