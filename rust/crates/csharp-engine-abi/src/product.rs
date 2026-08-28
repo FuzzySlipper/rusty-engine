@@ -327,6 +327,39 @@ pub type NativeReadLight =
     unsafe extern "C" fn(*mut c_void, NativeLightHandle, *mut NativeLightReadout) -> i32;
 pub type NativeReadPresentation =
     unsafe extern "C" fn(*mut c_void, *mut NativePresentationReadout) -> i32;
+pub type NativeCreatePresentationBillboard = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePresentationBillboardDescriptor,
+    *mut NativePresentationBillboardHandle,
+) -> i32;
+pub type NativeUpdatePresentationBillboard = unsafe extern "C" fn(
+    *mut c_void,
+    NativePresentationBillboardHandle,
+    *const NativePresentationBillboardDescriptor,
+) -> i32;
+pub type NativeDestroyPresentationBillboard =
+    unsafe extern "C" fn(*mut c_void, NativePresentationBillboardHandle) -> i32;
+pub type NativeEmitPresentationParticles =
+    unsafe extern "C" fn(*mut c_void, *const NativePresentationParticleDescriptor) -> i32;
+pub type NativeCreatePresentationEmitter = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePresentationParticleDescriptor,
+    *mut NativePresentationEmitterHandle,
+) -> i32;
+pub type NativeUpdatePresentationEmitter = unsafe extern "C" fn(
+    *mut c_void,
+    NativePresentationEmitterHandle,
+    *const NativePresentationParticleDescriptor,
+) -> i32;
+pub type NativeDestroyPresentationEmitter =
+    unsafe extern "C" fn(*mut c_void, NativePresentationEmitterHandle) -> i32;
+pub type NativeReadPresentationFacts =
+    unsafe extern "C" fn(*mut c_void, *mut NativePresentationFactsReadout) -> i32;
+pub type NativeReadPresentationDiagnosticAt = unsafe extern "C" fn(
+    *mut c_void,
+    NativePresentationDiagnosticAtRequest,
+    *mut NativePresentationDiagnosticAtReceipt,
+) -> i32;
 pub type NativeOpenAnimatedMesh = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimatedMeshResourceRequest,
@@ -1352,6 +1385,23 @@ pub struct NativeAppearanceApi {
     pub read_presentation: NativeReadPresentation,
 }
 
+/// Named renderer-neutral facts. Handles identify product-owned billboard and
+/// particle facts only; renderer resource/frame ownership remains in Engine.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationApi {
+    pub context: *mut c_void,
+    pub create_billboard: NativeCreatePresentationBillboard,
+    pub update_billboard: NativeUpdatePresentationBillboard,
+    pub destroy_billboard: NativeDestroyPresentationBillboard,
+    pub emit_particles: NativeEmitPresentationParticles,
+    pub create_emitter: NativeCreatePresentationEmitter,
+    pub update_emitter: NativeUpdatePresentationEmitter,
+    pub destroy_emitter: NativeDestroyPresentationEmitter,
+    pub read: NativeReadPresentationFacts,
+    pub read_diagnostic_at: NativeReadPresentationDiagnosticAt,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeContentApi {
@@ -1660,6 +1710,7 @@ pub struct NativeEngineApi {
     pub voxel_content: NativeVoxelContentApi,
     pub content: NativeContentApi,
     pub appearance: NativeAppearanceApi,
+    pub presentation: NativePresentationApi,
     pub animation: NativeAnimationApi,
     pub audio: NativeAudioApi,
     pub camera_view: NativeCameraViewApi,

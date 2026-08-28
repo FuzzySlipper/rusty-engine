@@ -7,7 +7,12 @@ use render_presentation::{
     AnimationControllerService, AnimationGraphDefinition, AnimationMotionDefinition,
     AnimationParameterDefinition, AnimationParameterKind, AnimationParameterValue,
     AnimationProjectionTarget, AnimationProjector, AnimationStateDefinition,
-    AnimationTransitionDefinition, AnimationTransitionFactMoment, PresentationFrameDiff,
+    AnimationTransitionDefinition, AnimationTransitionFactMoment, BillboardAnchor,
+    BillboardContent, BillboardDescriptor, BillboardFontRef, BillboardHandle, BillboardLayer,
+    BillboardPatch, BillboardProjectionDiagnosticCode, BillboardProjectionOp, BillboardProjector,
+    BillboardTextureRef, ParticleAnchor, ParticleEmitterDescriptor, ParticleEmitterHandle,
+    ParticleEmitterPatch, ParticleProjectionDiagnosticCode, ParticleProjectionOp,
+    ParticleProjector, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff,
     PresentationOpMeta,
 };
 use render_projection::{
@@ -292,6 +297,10 @@ pub(crate) struct RuntimeAppearanceState {
     next_animation_graph: u64,
     next_animation_transition: u64,
     next_animation_controller: u64,
+    billboard_projector: BillboardProjector,
+    particle_projector: ParticleProjector,
+    billboards: BTreeMap<u64, BillboardHandle>,
+    emitters: BTreeMap<u64, ParticleEmitterHandle>,
 }
 
 pub(crate) struct RuntimeAppearanceCall {
@@ -300,6 +309,14 @@ pub(crate) struct RuntimeAppearanceCall {
     pub(crate) extra_frames: Vec<render_model::RenderFrameDiff>,
     pub(crate) presentation: Vec<PresentationFrameDiff>,
     animation_teardown_staged: bool,
+}
+
+const MAX_PRESENTATION_DIAGNOSTICS: usize = 128;
+
+#[derive(Clone, Copy)]
+struct StoredPresentationDiagnostic {
+    domain: NativePresentationDiagnosticDomain,
+    receipt: NativePresentationDiagnosticAtReceipt,
 }
 
 #[derive(Clone)]
@@ -376,6 +393,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     selection_sealed: bool,
     staged: Option<RuntimeAppearanceCall>,
     callback_error: Option<CsharpEngineServicesError>,
+    presentation_diagnostics: Vec<StoredPresentationDiagnostic>,
 }
 
 impl RuntimeAppearanceBridge {
@@ -408,11 +426,16 @@ impl RuntimeAppearanceBridge {
                 next_animation_graph: 1,
                 next_animation_transition: 1,
                 next_animation_controller: 1,
+                billboard_projector: BillboardProjector::default(),
+                particle_projector: ParticleProjector::default(),
+                billboards: BTreeMap::new(),
+                emitters: BTreeMap::new(),
             },
             content_resources,
             selection_sealed: false,
             staged: None,
             callback_error: None,
+            presentation_diagnostics: Vec::new(),
         }
     }
 
@@ -453,6 +476,257 @@ impl RuntimeAppearanceBridge {
         self.content_resources.clear();
     }
 
+    pub(crate) fn presentation_create_billboard(
+        &mut self,
+        request: &NativePresentationBillboardDescriptor,
+    ) -> Result<NativePresentationBillboardHandle, CsharpEngineServicesError> {
+        if request.logical_id == 0 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_PRESENTATION_BILLBOARD",
+                "billboard logical id must be nonzero",
+            ));
+        }
+        let descriptor = self.presentation_billboard_descriptor(request)?;
+        let handle = BillboardHandle::new(request.logical_id);
+        self.stage_billboard(BillboardProjectionOp::Create { handle, descriptor })?;
+        self.staged_mut()?
+            .state
+            .billboards
+            .insert(handle.raw(), handle);
+        Ok(NativePresentationBillboardHandle {
+            value: request.logical_id,
+        })
+    }
+
+    pub(crate) fn presentation_update_billboard(
+        &mut self,
+        owner: NativePresentationBillboardHandle,
+        request: &NativePresentationBillboardDescriptor,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let descriptor = self.presentation_billboard_descriptor(request)?;
+        let handle = self
+            .staged_mut()?
+            .state
+            .billboards
+            .get(&owner.value)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_PRESENTATION_BILLBOARD",
+                    "billboard owner is not live",
+                )
+            })?;
+        if request.logical_id != owner.value {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_PRESENTATION_BILLBOARD",
+                "full billboard update must retain its logical id",
+            ));
+        }
+        let patch = BillboardPatch {
+            anchor: Some(descriptor.anchor),
+            content: Some(descriptor.content),
+            font: Some(descriptor.font),
+            height_pixels: Some(descriptor.height_pixels),
+            color: Some(descriptor.color),
+            background: Some(descriptor.background),
+            max_distance: Some(descriptor.max_distance),
+            layer: Some(descriptor.layer),
+            visible: Some(descriptor.visible),
+            layout: descriptor.layout,
+        };
+        self.stage_billboard(BillboardProjectionOp::Update { handle, patch })
+    }
+
+    pub(crate) fn presentation_destroy_billboard(
+        &mut self,
+        owner: NativePresentationBillboardHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let handle = self
+            .staged_mut()?
+            .state
+            .billboards
+            .get(&owner.value)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_PRESENTATION_BILLBOARD",
+                    "billboard owner is not live",
+                )
+            })?;
+        self.stage_billboard(BillboardProjectionOp::Destroy { handle })?;
+        self.staged_mut()?.state.billboards.remove(&owner.value);
+        Ok(())
+    }
+
+    pub(crate) fn presentation_emit_particles(
+        &mut self,
+        signal_id: NativeUtf8Slice,
+        request: &NativePresentationParticleDescriptor,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let signal_id =
+            unsafe { borrowed_utf8(signal_id.bytes, signal_id.len, "particle signal id")? }
+                .to_owned();
+        let descriptor = self.presentation_particle_descriptor(request)?;
+        self.stage_particle(ParticleProjectionOp::Emit {
+            signal_id,
+            descriptor,
+        })
+    }
+
+    pub(crate) fn presentation_create_emitter(
+        &mut self,
+        request: &NativePresentationParticleDescriptor,
+    ) -> Result<NativePresentationEmitterHandle, CsharpEngineServicesError> {
+        if request.logical_id == 0 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_PRESENTATION_PARTICLE",
+                "particle emitter logical id must be nonzero",
+            ));
+        }
+        let descriptor = self.presentation_particle_descriptor(request)?;
+        let handle = ParticleEmitterHandle::new(request.logical_id);
+        self.stage_particle(ParticleProjectionOp::Create { handle, descriptor })?;
+        self.staged_mut()?
+            .state
+            .emitters
+            .insert(handle.raw(), handle);
+        Ok(NativePresentationEmitterHandle {
+            value: request.logical_id,
+        })
+    }
+
+    pub(crate) fn presentation_update_emitter(
+        &mut self,
+        owner: NativePresentationEmitterHandle,
+        request: &NativePresentationParticleDescriptor,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let descriptor = self.presentation_particle_descriptor(request)?;
+        let handle = self
+            .staged_mut()?
+            .state
+            .emitters
+            .get(&owner.value)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_PRESENTATION_PARTICLE",
+                    "emitter owner is not live",
+                )
+            })?;
+        if request.logical_id != owner.value {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_PRESENTATION_PARTICLE",
+                "full particle update must retain its logical id",
+            ));
+        }
+        let patch = ParticleEmitterPatch {
+            anchor: Some(descriptor.anchor),
+            visual: Some(descriptor.visual),
+            sprite: None,
+            rate_per_second: Some(descriptor.rate_per_second),
+            burst_count: Some(descriptor.burst_count),
+            lifetime_seconds: Some(descriptor.lifetime_seconds),
+            velocity_min: Some(descriptor.velocity_min),
+            velocity_max: Some(descriptor.velocity_max),
+            acceleration: Some(descriptor.acceleration),
+            size_curve: Some(descriptor.size_curve),
+            color_curve: Some(descriptor.color_curve),
+            flipbook_frames_per_second: Some(descriptor.flipbook_frames_per_second),
+            max_particles: Some(descriptor.max_particles),
+            visible: Some(descriptor.visible),
+            collision: Some(descriptor.collision),
+        };
+        self.stage_particle(ParticleProjectionOp::Update { handle, patch })
+    }
+
+    pub(crate) fn presentation_destroy_emitter(
+        &mut self,
+        owner: NativePresentationEmitterHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let handle = self
+            .staged_mut()?
+            .state
+            .emitters
+            .get(&owner.value)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_PRESENTATION_PARTICLE",
+                    "emitter owner is not live",
+                )
+            })?;
+        self.stage_particle(ParticleProjectionOp::Destroy { handle })?;
+        self.staged_mut()?.state.emitters.remove(&owner.value);
+        Ok(())
+    }
+
+    pub(crate) fn presentation_readout(&self) -> NativePresentationFactsReadout {
+        let state = self
+            .staged
+            .as_ref()
+            .map(|call| &call.state)
+            .unwrap_or(&self.state);
+        let billboards = state.billboard_projector.readout();
+        let particles = state.particle_projector.readout();
+        NativePresentationFactsReadout {
+            active_billboards: billboards.active_billboards,
+            active_emitters: particles.active_emitters,
+            reserved_particles: particles.reserved_particles,
+            emitted_bursts: particles.emitted_bursts,
+            billboard_diagnostic_count: self
+                .presentation_diagnostic_count(NativePresentationDiagnosticDomain::Billboard),
+            particle_diagnostic_count: self
+                .presentation_diagnostic_count(NativePresentationDiagnosticDomain::Particle),
+        }
+    }
+
+    pub(crate) fn presentation_diagnostic(
+        &self,
+        request: NativePresentationDiagnosticAtRequest,
+    ) -> NativePresentationDiagnosticAtReceipt {
+        self.presentation_diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.domain == request.domain)
+            .nth(request.index as usize)
+            .map(|diagnostic| diagnostic.receipt)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn record_callback_error(&mut self, error: CsharpEngineServicesError) {
+        self.callback_error = Some(error);
+    }
+
+    fn presentation_diagnostic_count(&self, domain: NativePresentationDiagnosticDomain) -> u32 {
+        self.presentation_diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.domain == domain)
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX)
+    }
+
+    fn record_presentation_diagnostic(
+        &mut self,
+        domain: NativePresentationDiagnosticDomain,
+        code: NativePresentationDiagnosticCode,
+        sequence: u32,
+        logical_id: u64,
+    ) {
+        if self.presentation_diagnostics.len() == MAX_PRESENTATION_DIAGNOSTICS {
+            self.presentation_diagnostics.remove(0);
+        }
+        self.presentation_diagnostics
+            .push(StoredPresentationDiagnostic {
+                domain,
+                receipt: NativePresentationDiagnosticAtReceipt {
+                    present: true,
+                    code,
+                    sequence,
+                    logical_id,
+                },
+            });
+    }
+
     /// Resolves one live C# material into an Engine-owned descriptor for a
     /// separate retained presentation family. The caller copies the returned
     /// value; it never retains this Appearance handle or any product pointer.
@@ -490,6 +764,203 @@ impl RuntimeAppearanceBridge {
                 "appearance service was called outside a product call",
             )
         })
+    }
+
+    fn presentation_billboard_descriptor(
+        &self,
+        request: &NativePresentationBillboardDescriptor,
+    ) -> Result<BillboardDescriptor, CsharpEngineServicesError> {
+        let key = native_presentation_text(request.localization_key, "billboard localization key")?;
+        let fallback = native_presentation_text(request.fallback_text, "billboard fallback text")?;
+        let value = native_presentation_text(request.value, "billboard value")?;
+        let unit_key = native_presentation_optional_text(request.unit_key, "billboard unit key")?;
+        let fallback_unit =
+            native_presentation_optional_text(request.fallback_unit, "billboard fallback unit")?;
+        let content = match request.content_kind {
+            NativeBillboardContentKind::Text => BillboardContent::Text {
+                localization_key: key,
+                fallback_text: fallback,
+                arguments: Vec::new(),
+            },
+            NativeBillboardContentKind::Value => BillboardContent::Value {
+                label_key: key,
+                fallback_label: fallback,
+                value,
+                unit_key,
+                fallback_unit,
+            },
+            NativeBillboardContentKind::Icon => BillboardContent::Icon {
+                texture: self.presentation_texture_ref(request.texture)?,
+                alt_key: key,
+                fallback_alt: fallback,
+            },
+        };
+        Ok(BillboardDescriptor {
+            anchor: native_presentation_billboard_anchor(request.anchor),
+            content,
+            font: BillboardFontRef::System {
+                family: native_presentation_text(request.font_family, "billboard system font")?,
+            },
+            height_pixels: request.height_pixels,
+            color: native_color(request.color),
+            background: native_color(request.background),
+            max_distance: request.max_distance,
+            layer: match request.layer {
+                NativePresentationBillboardLayer::AlwaysOnTop => BillboardLayer::AlwaysOnTop,
+                NativePresentationBillboardLayer::DepthTested => BillboardLayer::DepthTested,
+                NativePresentationBillboardLayer::Occluded => BillboardLayer::Occluded,
+            },
+            visible: request.visible,
+            layout: None,
+        })
+    }
+
+    fn presentation_particle_descriptor(
+        &self,
+        request: &NativePresentationParticleDescriptor,
+    ) -> Result<ParticleEmitterDescriptor, CsharpEngineServicesError> {
+        let visual = match request.visual {
+            NativePresentationParticleVisual::Billboard => ParticleVisual::Billboard {
+                sprite: ParticleSpriteRef {
+                    asset: self.presentation_texture_ref(request.sprite)?.asset,
+                    content_hash: self.presentation_texture_ref(request.sprite)?.content_hash,
+                    frame_count: request.sprite_frame_count,
+                },
+            },
+            NativePresentationParticleVisual::Cube => ParticleVisual::Cube,
+        };
+        let size_curve = unsafe {
+            borrowed_slice(
+                request.size_curve,
+                request.size_curve_len,
+                "particle size curve",
+            )?
+        }
+        .iter()
+        .map(|key| render_presentation::ParticleScalarKey {
+            age: key.age,
+            value: key.value,
+        })
+        .collect();
+        let color_curve = unsafe {
+            borrowed_slice(
+                request.color_curve,
+                request.color_curve_len,
+                "particle color curve",
+            )?
+        }
+        .iter()
+        .map(|key| render_presentation::ParticleColorKey {
+            age: key.age,
+            color: native_color(key.color),
+        })
+        .collect();
+        Ok(ParticleEmitterDescriptor {
+            anchor: native_presentation_particle_anchor(request.anchor),
+            visual,
+            rate_per_second: request.rate_per_second,
+            burst_count: request.burst_count,
+            lifetime_seconds: [request.lifetime_min_seconds, request.lifetime_max_seconds],
+            velocity_min: native_vec3_array(request.velocity_min),
+            velocity_max: native_vec3_array(request.velocity_max),
+            acceleration: native_vec3_array(request.acceleration),
+            size_curve,
+            color_curve,
+            flipbook_frames_per_second: request.flipbook_frames_per_second,
+            seed: request.seed,
+            max_particles: request.max_particles,
+            visible: request.visible,
+            collision: None,
+        })
+    }
+
+    fn presentation_texture_ref(
+        &self,
+        resource: NativeRenderResourceHandle,
+    ) -> Result<BillboardTextureRef, CsharpEngineServicesError> {
+        let resource = self.resource(resource.value)?;
+        if resource.kind() != CsharpRenderResourceKind::Texture {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_PRESENTATION_TEXTURE",
+                "billboard and particle sprites require an admitted texture resource",
+            ));
+        }
+        Ok(BillboardTextureRef {
+            asset: resource.identity().to_owned(),
+            content_hash: resource.content_hash().to_owned(),
+        })
+    }
+
+    fn stage_billboard(
+        &mut self,
+        op: BillboardProjectionOp,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let logical_id = billboard_operation_handle(&op).map_or(0, BillboardHandle::raw);
+        let result = {
+            let staged = self.staged_mut()?;
+            let assets = presentation_assets(&staged.state.render_resources);
+            staged
+                .state
+                .billboard_projector
+                .project(&assets, PresentationOpMeta::new(0), op)
+        };
+        match result {
+            Ok(projected) => {
+                let mut frame = PresentationFrameDiff::new();
+                frame.ops.push(projected);
+                self.staged_mut()?.presentation.push(frame);
+                Ok(())
+            }
+            Err(diagnostic) => {
+                self.record_presentation_diagnostic(
+                    NativePresentationDiagnosticDomain::Billboard,
+                    native_billboard_diagnostic_code(diagnostic.code),
+                    diagnostic.sequence,
+                    diagnostic.handle.map_or(logical_id, BillboardHandle::raw),
+                );
+                Err(CsharpEngineServicesError::new(
+                    "CSHARP_PRESENTATION_BILLBOARD",
+                    diagnostic.message,
+                ))
+            }
+        }
+    }
+
+    fn stage_particle(
+        &mut self,
+        op: ParticleProjectionOp,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let logical_id = particle_operation_handle(&op).map_or(0, ParticleEmitterHandle::raw);
+        let result = {
+            let staged = self.staged_mut()?;
+            let assets = presentation_assets(&staged.state.render_resources);
+            staged
+                .state
+                .particle_projector
+                .project(&assets, PresentationOpMeta::new(0), op)
+        };
+        match result {
+            Ok(projected) => {
+                let mut frame = PresentationFrameDiff::new();
+                frame.ops.push(projected);
+                self.staged_mut()?.presentation.push(frame);
+                Ok(())
+            }
+            Err(diagnostic) => {
+                self.record_presentation_diagnostic(
+                    NativePresentationDiagnosticDomain::Particle,
+                    native_particle_diagnostic_code(diagnostic.code),
+                    diagnostic.sequence,
+                    diagnostic
+                        .handle
+                        .map_or(logical_id, ParticleEmitterHandle::raw),
+                );
+                Err(CsharpEngineServicesError::new(
+                    "CSHARP_PRESENTATION_PARTICLE",
+                    diagnostic.message,
+                ))
+            }
+        }
     }
 
     fn open_resource(
@@ -2693,6 +3164,167 @@ fn animation_assets(resources: &[CsharpRenderResource]) -> BTreeMap<String, Reso
         .collect()
 }
 
+fn presentation_assets(
+    resources: &[CsharpRenderResource],
+) -> BTreeMap<String, ResolvedRenderAsset> {
+    resources
+        .iter()
+        .filter(|resource| resource.kind() == CsharpRenderResourceKind::Texture)
+        .map(|resource| {
+            (
+                resource.identity().to_owned(),
+                ResolvedRenderAsset {
+                    id: resource.identity().to_owned(),
+                    kind: RenderAssetKind::Texture,
+                    content_hash: Some(resource.content_hash().to_owned()),
+                    version: 0,
+                },
+            )
+        })
+        .collect()
+}
+
+fn native_presentation_billboard_anchor(value: NativePresentationAnchor) -> BillboardAnchor {
+    match value.kind {
+        NativePresentationAnchorKind::World => BillboardAnchor::World {
+            position: native_vec3_array(value.position),
+        },
+        NativePresentationAnchorKind::EntityAttached => BillboardAnchor::EntityAttached {
+            entity: value.entity,
+            offset: native_vec3_array(value.offset),
+        },
+    }
+}
+
+fn native_presentation_particle_anchor(value: NativePresentationAnchor) -> ParticleAnchor {
+    match value.kind {
+        NativePresentationAnchorKind::World => ParticleAnchor::World {
+            position: native_vec3_array(value.position),
+        },
+        NativePresentationAnchorKind::EntityAttached => ParticleAnchor::EntityAttached {
+            entity: value.entity,
+            offset: native_vec3_array(value.offset),
+        },
+    }
+}
+
+fn billboard_operation_handle(operation: &BillboardProjectionOp) -> Option<BillboardHandle> {
+    match operation {
+        BillboardProjectionOp::Create { handle, .. }
+        | BillboardProjectionOp::Update { handle, .. }
+        | BillboardProjectionOp::Destroy { handle } => Some(*handle),
+    }
+}
+
+fn particle_operation_handle(operation: &ParticleProjectionOp) -> Option<ParticleEmitterHandle> {
+    match operation {
+        ParticleProjectionOp::Emit { .. } => None,
+        ParticleProjectionOp::Create { handle, .. }
+        | ParticleProjectionOp::Update { handle, .. }
+        | ParticleProjectionOp::Destroy { handle } => Some(*handle),
+    }
+}
+
+fn native_presentation_text(
+    value: NativeUtf8Slice,
+    field: &'static str,
+) -> Result<String, CsharpEngineServicesError> {
+    Ok(unsafe { borrowed_utf8(value.bytes, value.len, field)? }.to_owned())
+}
+
+fn native_presentation_optional_text(
+    value: NativeUtf8Slice,
+    field: &'static str,
+) -> Result<Option<String>, CsharpEngineServicesError> {
+    if value.len == 0 {
+        return Ok(None);
+    }
+    native_presentation_text(value, field).map(Some)
+}
+
+fn native_billboard_diagnostic_code(
+    value: BillboardProjectionDiagnosticCode,
+) -> NativePresentationDiagnosticCode {
+    match value {
+        BillboardProjectionDiagnosticCode::InvalidDescriptor => {
+            NativePresentationDiagnosticCode::InvalidDescriptor
+        }
+        BillboardProjectionDiagnosticCode::AssetMissing => {
+            NativePresentationDiagnosticCode::AssetMissing
+        }
+        BillboardProjectionDiagnosticCode::AssetKindMismatch => {
+            NativePresentationDiagnosticCode::AssetKindMismatch
+        }
+        BillboardProjectionDiagnosticCode::ContentHashMismatch => {
+            NativePresentationDiagnosticCode::ContentHashMismatch
+        }
+        BillboardProjectionDiagnosticCode::DuplicateHandle => {
+            NativePresentationDiagnosticCode::DuplicateHandle
+        }
+        BillboardProjectionDiagnosticCode::UnknownHandle => {
+            NativePresentationDiagnosticCode::UnknownHandle
+        }
+        BillboardProjectionDiagnosticCode::AnchorMissing => {
+            NativePresentationDiagnosticCode::AnchorMissing
+        }
+        BillboardProjectionDiagnosticCode::UnavailableHost => {
+            NativePresentationDiagnosticCode::UnavailableHost
+        }
+        BillboardProjectionDiagnosticCode::FontLoadFailed => {
+            NativePresentationDiagnosticCode::FontLoadFailed
+        }
+        BillboardProjectionDiagnosticCode::IconLoadFailed => {
+            NativePresentationDiagnosticCode::IconOrSpriteLoadFailed
+        }
+        BillboardProjectionDiagnosticCode::HostFailure => {
+            NativePresentationDiagnosticCode::HostFailure
+        }
+    }
+}
+
+fn native_particle_diagnostic_code(
+    value: ParticleProjectionDiagnosticCode,
+) -> NativePresentationDiagnosticCode {
+    match value {
+        ParticleProjectionDiagnosticCode::InvalidDescriptor => {
+            NativePresentationDiagnosticCode::InvalidDescriptor
+        }
+        ParticleProjectionDiagnosticCode::AssetMissing => {
+            NativePresentationDiagnosticCode::AssetMissing
+        }
+        ParticleProjectionDiagnosticCode::AssetKindMismatch => {
+            NativePresentationDiagnosticCode::AssetKindMismatch
+        }
+        ParticleProjectionDiagnosticCode::ContentHashMismatch => {
+            NativePresentationDiagnosticCode::ContentHashMismatch
+        }
+        ParticleProjectionDiagnosticCode::DuplicateSignal => {
+            NativePresentationDiagnosticCode::DuplicateSignal
+        }
+        ParticleProjectionDiagnosticCode::DuplicateHandle => {
+            NativePresentationDiagnosticCode::DuplicateHandle
+        }
+        ParticleProjectionDiagnosticCode::UnknownHandle => {
+            NativePresentationDiagnosticCode::UnknownHandle
+        }
+        ParticleProjectionDiagnosticCode::AnchorMissing => {
+            NativePresentationDiagnosticCode::AnchorMissing
+        }
+        ParticleProjectionDiagnosticCode::BudgetExceeded => {
+            NativePresentationDiagnosticCode::BudgetExceeded
+        }
+        ParticleProjectionDiagnosticCode::UnavailableHost => {
+            NativePresentationDiagnosticCode::UnavailableHost
+        }
+        ParticleProjectionDiagnosticCode::SpriteLoadFailed => {
+            NativePresentationDiagnosticCode::IconOrSpriteLoadFailed
+        }
+        ParticleProjectionDiagnosticCode::HostFailure => {
+            NativePresentationDiagnosticCode::HostFailure
+        }
+    }
+}
+
 fn animation_asset_clips(resources: &[CsharpRenderResource], asset: &str) -> Vec<String> {
     resources
         .iter()
@@ -4235,5 +4867,226 @@ mod tests {
                 .code(),
             "CSHARP_ANIMATION_SNAPSHOT_ORDER"
         );
+    }
+
+    #[test]
+    fn presentation_facts_stage_projected_billboard_and_particle_frames() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let key = b"status";
+        let text = b"Ready";
+        let font = b"sans-serif";
+        let empty = NativeUtf8Slice {
+            bytes: std::ptr::null(),
+            len: 0,
+        };
+        let slice = |value: &[u8]| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        let anchor = NativePresentationAnchor {
+            kind: NativePresentationAnchorKind::World,
+            position: NativeVec3::default(),
+            entity: 0,
+            offset: NativeVec3::default(),
+        };
+        let color = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        bridge.begin_call();
+        let billboard = bridge
+            .presentation_create_billboard(&NativePresentationBillboardDescriptor {
+                logical_id: 7,
+                anchor,
+                content_kind: NativeBillboardContentKind::Text,
+                localization_key: slice(key),
+                fallback_text: slice(text),
+                value: empty,
+                unit_key: empty,
+                fallback_unit: empty,
+                texture: NativeRenderResourceHandle::default(),
+                font_family: slice(font),
+                height_pixels: 16.0,
+                color,
+                background: NativeColor::default(),
+                max_distance: 100.0,
+                layer: NativePresentationBillboardLayer::AlwaysOnTop,
+                visible: true,
+            })
+            .expect("text billboard");
+        let size_curve = [
+            NativePresentationParticleScalarKey {
+                age: 0.0,
+                value: 1.0,
+            },
+            NativePresentationParticleScalarKey {
+                age: 1.0,
+                value: 0.0,
+            },
+        ];
+        let color_curve = [
+            NativePresentationParticleColorKey { age: 0.0, color },
+            NativePresentationParticleColorKey { age: 1.0, color },
+        ];
+        let emitter = bridge
+            .presentation_create_emitter(&NativePresentationParticleDescriptor {
+                logical_id: 8,
+                signal_id: empty,
+                anchor,
+                visual: NativePresentationParticleVisual::Cube,
+                sprite: NativeRenderResourceHandle::default(),
+                sprite_frame_count: 0,
+                rate_per_second: 1.0,
+                burst_count: 1,
+                lifetime_min_seconds: 0.1,
+                lifetime_max_seconds: 1.0,
+                velocity_min: NativeVec3::default(),
+                velocity_max: NativeVec3::default(),
+                acceleration: NativeVec3::default(),
+                size_curve: size_curve.as_ptr(),
+                size_curve_len: size_curve.len(),
+                color_curve: color_curve.as_ptr(),
+                color_curve_len: color_curve.len(),
+                flipbook_frames_per_second: 0.0,
+                seed: 3,
+                max_particles: 4,
+                visible: true,
+            })
+            .expect("cube emitter");
+        bridge
+            .presentation_update_billboard(
+                billboard,
+                &NativePresentationBillboardDescriptor {
+                    logical_id: 7,
+                    anchor,
+                    content_kind: NativeBillboardContentKind::Text,
+                    localization_key: slice(key),
+                    fallback_text: slice(text),
+                    value: empty,
+                    unit_key: empty,
+                    fallback_unit: empty,
+                    texture: NativeRenderResourceHandle::default(),
+                    font_family: slice(font),
+                    height_pixels: 18.0,
+                    color,
+                    background: NativeColor::default(),
+                    max_distance: 100.0,
+                    layer: NativePresentationBillboardLayer::AlwaysOnTop,
+                    visible: true,
+                },
+            )
+            .expect("full billboard update");
+        bridge
+            .presentation_emit_particles(
+                slice(b"burst-1"),
+                &NativePresentationParticleDescriptor {
+                    logical_id: 9,
+                    signal_id: slice(b"burst-1"),
+                    anchor,
+                    visual: NativePresentationParticleVisual::Cube,
+                    sprite: NativeRenderResourceHandle::default(),
+                    sprite_frame_count: 0,
+                    rate_per_second: 0.0,
+                    burst_count: 1,
+                    lifetime_min_seconds: 0.1,
+                    lifetime_max_seconds: 1.0,
+                    velocity_min: NativeVec3::default(),
+                    velocity_max: NativeVec3::default(),
+                    acceleration: NativeVec3::default(),
+                    size_curve: size_curve.as_ptr(),
+                    size_curve_len: size_curve.len(),
+                    color_curve: color_curve.as_ptr(),
+                    color_curve_len: color_curve.len(),
+                    flipbook_frames_per_second: 0.0,
+                    seed: 4,
+                    max_particles: 4,
+                    visible: true,
+                },
+            )
+            .expect("direct burst");
+        assert_eq!(bridge.presentation_readout().active_billboards, 1);
+        assert_eq!(bridge.presentation_readout().active_emitters, 1);
+        assert_eq!(bridge.presentation_readout().emitted_bursts, 1);
+        let call = bridge
+            .take_staged_call()
+            .expect("staged presentation call")
+            .expect("appearance call");
+        assert_eq!(call.presentation.len(), 4);
+        assert!(call
+            .presentation
+            .iter()
+            .all(|frame| frame.validate().is_ok()));
+        let _ = emitter;
+    }
+
+    #[test]
+    fn rejected_presentation_fact_keeps_bounded_diagnostic_after_call_discard() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let key = b"status";
+        let text = b"Ready";
+        let font = b"sans-serif";
+        let empty = NativeUtf8Slice {
+            bytes: std::ptr::null(),
+            len: 0,
+        };
+        let slice = |value: &[u8]| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        let descriptor = NativePresentationBillboardDescriptor {
+            logical_id: 7,
+            anchor: NativePresentationAnchor {
+                kind: NativePresentationAnchorKind::World,
+                position: NativeVec3::default(),
+                entity: 0,
+                offset: NativeVec3::default(),
+            },
+            content_kind: NativeBillboardContentKind::Text,
+            localization_key: slice(key),
+            fallback_text: slice(text),
+            value: empty,
+            unit_key: empty,
+            fallback_unit: empty,
+            texture: NativeRenderResourceHandle::default(),
+            font_family: slice(font),
+            height_pixels: 16.0,
+            color: NativeColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            background: NativeColor::default(),
+            max_distance: 100.0,
+            layer: NativePresentationBillboardLayer::AlwaysOnTop,
+            visible: true,
+        };
+        bridge.begin_call();
+        bridge
+            .presentation_create_billboard(&descriptor)
+            .expect("initial billboard");
+        let initial_call = bridge.take_staged_call().expect("initial call");
+        bridge.commit(initial_call);
+        bridge.begin_call();
+        let error = bridge
+            .presentation_create_billboard(&descriptor)
+            .expect_err("duplicate billboard");
+        bridge.record_callback_error(error);
+        assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
+        assert_eq!(
+            bridge
+                .presentation_diagnostic(NativePresentationDiagnosticAtRequest {
+                    domain: NativePresentationDiagnosticDomain::Billboard,
+                    index: 0
+                })
+                .logical_id,
+            7
+        );
+        assert!(bridge.take_staged_call().is_err());
+        assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
     }
 }

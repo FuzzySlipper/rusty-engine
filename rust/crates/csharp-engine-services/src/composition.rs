@@ -93,6 +93,18 @@ fn engine_api(
             read_light,
             read_presentation,
         },
+        presentation: NativePresentationApi {
+            context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
+            create_billboard: crate::presentation::create_billboard,
+            update_billboard: crate::presentation::update_billboard,
+            destroy_billboard: crate::presentation::destroy_billboard,
+            emit_particles: crate::presentation::emit_particles,
+            create_emitter: crate::presentation::create_emitter,
+            update_emitter: crate::presentation::update_emitter,
+            destroy_emitter: crate::presentation::destroy_emitter,
+            read: crate::presentation::read,
+            read_diagnostic_at: crate::presentation::read_diagnostic_at,
+        },
         animation: crate::appearance::animation_api(appearance_bridge),
         audio: crate::audio::api(audio_bridge),
         camera_view: NativeCameraViewApi {
