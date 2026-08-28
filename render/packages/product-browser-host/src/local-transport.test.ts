@@ -105,6 +105,17 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
             }],
           });
           return response({ accepted: true, runtime: RUNTIME, acceptedThroughFactId: '7' });
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}animation-feedback`:
+          assert.deepEqual(body, {
+            runtime: RUNTIME,
+            replaceOwner: true,
+            evictedFactCount: '0',
+            facts: [{
+              kind: 'diagnostic', factId: '8', objectId: null, generation: null,
+              code: 'assetMissing', sequence: 4,
+            }],
+          });
+          return response({ accepted: true, runtime: RUNTIME, acceptedThroughFactId: '8' });
         default:
           return response({ error: 'missing route' }, 404);
       }
@@ -149,6 +160,15 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
       kind: 'naturalCompletion', source: 'oneShot', factId: '7', sequence: 3, signalHandle: '11',
     }],
   }), { accepted: true, runtime: RUNTIME, acceptedThroughFactId: '7' });
+  assert.deepEqual(await adapter.reportAnimationFeedback({
+    runtime: RUNTIME,
+    replaceOwner: true,
+    evictedFactCount: '0',
+    facts: [{
+      kind: 'diagnostic', factId: '8', objectId: null, generation: null,
+      code: 'assetMissing', sequence: 4,
+    }],
+  }), { accepted: true, runtime: RUNTIME, acceptedThroughFactId: '8' });
   assert.throws(
     () => adapter.completeTimeline?.({
       ticket: '01',
@@ -188,6 +208,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     'POST /__rusty/product/runtime/admit-external-step',
     'POST /__rusty/product/runtime/timeline-completion',
     'POST /__rusty/product/runtime/audio-feedback',
+    'POST /__rusty/product/runtime/animation-feedback',
   ]);
   assert.equal(batches.length, 1);
   unsubscribe();

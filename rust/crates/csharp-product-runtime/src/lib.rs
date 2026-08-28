@@ -17,17 +17,18 @@ use std::{
 };
 
 use csharp_engine_services::{
-    AudioRealizationFact, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
-    CsharpEngineCallOutput, CsharpEngineServicesError, CsharpRenderResource,
-    CsharpRenderResourceKind, EngineServiceSet,
+    AnimationRealizationFact, AudioRealizationFact, CsharpAppearanceCallOutput,
+    CsharpAppearanceCatalog, CsharpEngineCallOutput, CsharpEngineServicesError,
+    CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet,
 };
 use libloading::Library;
 use product_dev_host::{
-    CanonicalU64, ProductDevAudioCompletionSource, ProductDevAudioFeedback,
-    ProductDevAudioFeedbackFact, ProductDevAudioFeedbackResult, ProductDevControlOperation,
-    ProductDevInputBatch, ProductDevInputResult, ProductDevLifecycleOperation,
-    ProductDevOperationKind, ProductDevOperationResult, ProductDevRendererResource,
-    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
+    CanonicalU64, ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult,
+    ProductDevAudioCompletionSource, ProductDevAudioFeedback, ProductDevAudioFeedbackFact,
+    ProductDevAudioFeedbackResult, ProductDevControlOperation, ProductDevInputBatch,
+    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
+    ProductDevOperationResult, ProductDevRendererResource, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
@@ -1302,6 +1303,7 @@ impl CsharpProductRuntime {
             .rebind(binding, standard_input_context(), reason)
             .map_err(input_error)?;
         self.services.reset_audio_realization_owner();
+        self.services.reset_animation_realization_owner();
         self.pending_inputs.clear();
         self.pending_inputs.push(clear_input_owned(binding, reason));
         Ok(())
@@ -1579,6 +1581,112 @@ impl ProductDevRuntime for CsharpProductRuntime {
             ProductDevAudioFeedbackResult::accepted(self.binding(), accepted_through_fact_id);
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
+
+    fn report_animation_feedback(
+        &mut self,
+        feedback: ProductDevAnimationFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAnimationFeedbackResult>, ProductDevRuntimeError>
+    {
+        self.require_current_control_binding(Some(feedback.runtime))?;
+        feedback.validate().map_err(host_runtime_error)?;
+        let accepted_through_fact_id = feedback.facts.last().map(|fact| fact.fact_id());
+        let facts = feedback
+            .facts
+            .into_iter()
+            .map(animation_realization_fact)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.services.ingest_animation_realization_feedback(
+            feedback.replace_owner,
+            feedback.evicted_fact_count.get(),
+            facts,
+        );
+        let result =
+            ProductDevAnimationFeedbackResult::accepted(self.binding(), accepted_through_fact_id);
+        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
+    }
+}
+
+fn animation_realization_fact(
+    fact: product_dev_host::ProductDevAnimationFeedbackFact,
+) -> Result<AnimationRealizationFact, ProductDevRuntimeError> {
+    use product_dev_host::ProductDevAnimationFeedbackFact as Fact;
+    let millis = |seconds: f64| -> Result<u64, ProductDevRuntimeError> {
+        if !seconds.is_finite() || seconds < 0.0 || seconds * 1000.0 > u64::MAX as f64 {
+            Err(ProductDevRuntimeError::new(
+                "CSHARP_ANIMATION_FEEDBACK",
+                "animation feedback time is invalid",
+            )
+            .expect("fixed"))
+        } else {
+            Ok((seconds * 1000.0).round() as u64)
+        }
+    };
+    Ok(match fact {
+        Fact::PlaybackObservation {
+            fact_id,
+            object_id,
+            generation,
+            sequence,
+            status,
+            selected_clip,
+            sampled_at_seconds,
+        } => AnimationRealizationFact::Playback {
+            fact_id: fact_id.get(),
+            object_id: object_id.get(),
+            generation: generation.get(),
+            sequence,
+            status,
+            clip: selected_clip,
+            sampled_millis: sampled_at_seconds.map(millis).transpose()?,
+        },
+        Fact::Diagnostic {
+            fact_id,
+            object_id,
+            generation,
+            code,
+            sequence,
+        } => AnimationRealizationFact::Diagnostic {
+            fact_id: fact_id.get(),
+            object_id: object_id.map(CanonicalU64::get),
+            generation: generation.map(CanonicalU64::get),
+            code,
+            sequence,
+        },
+        Fact::Cue {
+            fact_id,
+            object_id,
+            generation,
+            cue_id,
+            clip,
+            marker_seconds,
+            sampled_at_seconds,
+            signal_domain,
+            signal_id,
+        } => AnimationRealizationFact::Cue {
+            fact_id: fact_id.get(),
+            object_id: object_id.get(),
+            generation: generation.get(),
+            cue_id,
+            clip,
+            marker_millis: millis(marker_seconds)?,
+            sampled_millis: millis(sampled_at_seconds)?,
+            signal_domain,
+            signal_id,
+        },
+        Fact::Stopped {
+            fact_id,
+            object_id,
+            generation,
+            sequence,
+            reason,
+        } => AnimationRealizationFact::Stopped {
+            fact_id: fact_id.get(),
+            object_id: object_id.get(),
+            generation: generation.get(),
+            sequence,
+            reason,
+        },
+    })
 }
 
 fn audio_realization_fact(

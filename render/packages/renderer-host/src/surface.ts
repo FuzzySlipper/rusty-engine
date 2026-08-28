@@ -484,6 +484,8 @@ export interface RendererSurface {
   ) => Promise<RendererPresentationFrameReceipt>;
   /** Read renderer-realized audio facts without exposing a projector readout. */
   readonly audioRealizedFacts: () => RendererAudioRealizedFactsReadout | null;
+  /** Read renderer-observed animation facts without exposing backend handles. */
+  readonly animationRealizedFacts: () => import('./animation-host.js').RendererAnimationRealizedFactsReadout | null;
   readonly automaticSubmissionPacing: () => RendererSurfaceAutomaticSubmissionPacingSample;
   readonly cameraPose: () => RendererSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
@@ -504,8 +506,12 @@ export interface RendererSurface {
   readonly releaseInput: () => void;
   /** Acknowledge submitted audio facts while preserving facts that arrived in flight. */
   readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
+  /** Acknowledge submitted animation facts while preserving later observations. */
+  readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;
   /** Invalidate audio playback ownership when the runtime binding is replaced. */
   readonly resetAudioRealizationOwner: () => boolean;
+  /** Invalidate animation feedback ownership for a replaced runtime binding. */
+  readonly resetAnimationRealizationOwner: () => boolean;
   /** Submit one explicit frame and return its immutable renderer-owned sample. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceSubmissionSample;
   readonly resetCamera: () => void;
@@ -951,6 +957,7 @@ function mountPreparedRendererSurface(
       return receipt;
     },
     audioRealizedFacts: () => presentationHosts?.readAudioRealizedFacts() ?? null,
+    animationRealizedFacts: () => presentationHosts?.readAnimationRealizedFacts() ?? null,
     automaticSubmissionPacing: () => Object.freeze({
       ...backendSurface.automaticSubmissionPacing(),
       hostAdmission: automaticSubmissionAdmission.sample(),
@@ -983,7 +990,10 @@ function mountPreparedRendererSurface(
     releaseInput: controls.releaseInput,
     acknowledgeAudioRealizedFacts: (throughFactId) =>
       presentationHosts?.acknowledgeAudioRealizedFacts(throughFactId) ?? false,
+    acknowledgeAnimationRealizedFacts: (throughFactId) =>
+      presentationHosts?.acknowledgeAnimationRealizedFacts(throughFactId) ?? false,
     resetAudioRealizationOwner: () => presentationHosts?.resetAudioRealizationOwner() ?? false,
+    resetAnimationRealizationOwner: () => presentationHosts?.resetAnimationRealizationOwner() ?? false,
     renderOnce,
     resetCamera: () => {
       controls.resetCamera();

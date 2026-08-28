@@ -53,10 +53,70 @@ export interface RendererAnimationFrameReceipt {
   readonly readout: AnimationProjectionReadout;
 }
 
+/**
+ * Renderer-realized animation observations for the fixed product feedback
+ * lane. `objectId` is product logical identity; `generation` is assigned by
+ * this host whenever that object receives a new realization. Neither value is
+ * a renderer or projection handle.
+ */
+export type RendererAnimationRealizedFact =
+  | {
+    readonly kind: 'playbackObservation';
+    readonly factId: number;
+    readonly objectId: number;
+    readonly generation: number;
+    readonly sequence: number;
+    readonly status: 'unavailable' | 'not_started' | 'playing' | 'paused' | 'sampled' | 'stopped';
+    readonly selectedClip: string | null;
+    readonly sampledAtSeconds: number | null;
+  }
+  | {
+    readonly kind: 'diagnostic';
+    readonly factId: number;
+    readonly objectId: number | null;
+    readonly generation: number | null;
+    readonly diagnostic: AnimationProjectionDiagnostic;
+  }
+  | {
+    readonly kind: 'cue';
+    readonly factId: number;
+    readonly objectId: number;
+    readonly generation: number;
+    readonly cueId: string;
+    readonly clip: string;
+    readonly markerSeconds: number;
+    readonly sampledAtSeconds: number;
+    readonly signal: RendererAnimationClipCueDefinition['signal'];
+  }
+  | {
+    readonly kind: 'stopped';
+    readonly factId: number;
+    readonly objectId: number;
+    readonly generation: number;
+    readonly sequence: number;
+    readonly reason: 'destroyed' | 'teardown';
+  };
+
+export interface RendererAnimationRealizedFactsReadout {
+  readonly retainedFactCount: number;
+  readonly evictedFactCount: number;
+  readonly facts: readonly RendererAnimationRealizedFact[];
+}
+
+type RendererAnimationRealizedFactInput =
+  | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'playbackObservation' }>, 'factId'>
+  | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'diagnostic' }>, 'factId'>
+  | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'cue' }>, 'factId'>
+  | Omit<Extract<RendererAnimationRealizedFact, { readonly kind: 'stopped' }>, 'factId'>;
+
 interface AnimationControllerRealization {
   readonly handle: AnimationProjectionHandle;
   readonly target: RenderHandle;
   readonly asset: string;
+  readonly objectId: number;
+  readonly generation: number;
+  feedbackEpoch: number;
+  lastPlaybackObservation: string | null;
   readonly tickDurationSeconds: number;
   controller: AnimationControllerProjectionState;
   presented: readonly RendererAnimationControllerClip[];
@@ -77,6 +137,12 @@ export class RendererAnimationHost {
   readonly #cues: readonly RendererAnimationClipCueDefinition[];
   readonly #controllers = new Map<AnimationProjectionHandle, AnimationControllerRealization>();
   readonly #diagnostics: AnimationProjectionDiagnostic[] = [];
+  readonly #realizedFacts: RendererAnimationRealizedFact[] = [];
+  readonly #nextGenerationByObject = new Map<number, number>();
+  readonly #maxRetainedFacts: number;
+  #evictedFactCount = 0;
+  #nextFactId = 1;
+  #epoch = 1;
   #sampledFrames = 0;
   #compatibilityFallbacks = 0;
 
@@ -86,6 +152,7 @@ export class RendererAnimationHost {
   ) {
     this.#projection = projection;
     this.#cues = validateCueDefinitions(options.cues ?? []);
+    this.#maxRetainedFacts = 128;
   }
 
   applyPresentation(frame: PresentationFrameDiff): RendererAnimationFrameReceipt {
@@ -100,7 +167,7 @@ export class RendererAnimationHost {
         applied += 1;
       } else {
         diagnostics.push(diagnostic);
-        this.#diagnostics.push(diagnostic);
+        this.#recordDiagnostic(diagnostic, operation);
       }
     }
     return { applied, diagnostics, cues: [], readout: this.readout() };
@@ -137,15 +204,20 @@ export class RendererAnimationHost {
             errorMessage(cause),
           );
           diagnostics.push(diagnostic);
-          this.#diagnostics.push(diagnostic);
+          this.#recordDiagnostic(diagnostic, realization);
         }
         if (progress === 1) {
           realization.interpolation = null;
         }
       }
-      cues.push(...sampleAnimationCues(realization, this.#cues, deltaSeconds));
+      const sampled = sampleAnimationCues(realization, this.#cues, deltaSeconds);
+      cues.push(...sampled);
+      for (const cue of sampled) this.#appendCue(realization, cue);
     }
     this.#projection.advance(deltaSeconds);
+    for (const realization of this.#controllers.values()) {
+      this.#appendPlaybackObservation(realization, 0);
+    }
     this.#sampledFrames += 1;
     return { applied: this.#controllers.size, diagnostics, cues, readout: this.readout() };
   }
@@ -161,6 +233,38 @@ export class RendererAnimationHost {
       compatibilityFallbacks: this.#compatibilityFallbacks,
       diagnostics: [...this.#diagnostics],
     };
+  }
+
+  /** Read bounded renderer observations, separate from presentation admission. */
+  realizedFacts(): RendererAnimationRealizedFactsReadout {
+    return {
+      retainedFactCount: this.#realizedFacts.length,
+      evictedFactCount: this.#evictedFactCount,
+      facts: [...this.#realizedFacts],
+    };
+  }
+
+  /** Acknowledge through a submitted fact boundary without losing later facts. */
+  acknowledgeRealizedFacts(throughFactId: number): void {
+    if (!Number.isSafeInteger(throughFactId) || throughFactId < 0) {
+      throw new RangeError('throughFactId must be a non-negative safe integer');
+    }
+    const firstLater = this.#realizedFacts.findIndex((fact) => fact.factId > throughFactId);
+    if (firstLater < 0) this.#realizedFacts.length = 0;
+    else if (firstLater > 0) this.#realizedFacts.splice(0, firstLater);
+  }
+
+  /** Reset renderer feedback ownership. Fact ids never reset across epochs. */
+  reset(): void {
+    this.#epoch += 1;
+    this.#realizedFacts.length = 0;
+    this.#evictedFactCount = 0;
+    // The realization remains renderer-owned; retag its next observation for
+    // the new feedback owner rather than reusing product replacement state.
+    for (const realization of this.#controllers.values()) {
+      realization.feedbackEpoch = this.#epoch;
+      realization.lastPlaybackObservation = null;
+    }
   }
 
   cleanup(): RendererAnimationFrameReceipt {
@@ -179,8 +283,14 @@ export class RendererAnimationHost {
           errorMessage(cause),
         );
         diagnostics.push(diagnostic);
-        this.#diagnostics.push(diagnostic);
+        this.#recordDiagnostic(diagnostic, realization);
       }
+    }
+    for (const realization of this.#controllers.values()) {
+      this.#appendFact({
+        kind: 'stopped', objectId: realization.objectId, generation: realization.generation,
+        sequence: 0, reason: 'teardown',
+      });
     }
     this.#controllers.clear();
     return { applied, diagnostics, cues: [], readout: this.readout() };
@@ -228,6 +338,10 @@ export class RendererAnimationHost {
         handle: op.handle,
         target: op.descriptor.target,
         asset: op.descriptor.asset,
+        objectId: op.descriptor.controller.entity,
+        generation: this.#nextGeneration(op.descriptor.controller.entity),
+        feedbackEpoch: this.#epoch,
+        lastPlaybackObservation: null,
         tickDurationSeconds: op.descriptor.tickDurationMillis / 1_000,
         controller: op.descriptor.controller,
         presented: weights,
@@ -235,6 +349,7 @@ export class RendererAnimationHost {
         clipSampleSeconds: new Map(),
         emittedCueKeys: new Set(),
       });
+      this.#appendPlaybackObservation(this.#controllers.get(op.handle)!, meta.sequence, true);
       return null;
     }
     const realization = this.#controllers.get(op.handle);
@@ -247,12 +362,19 @@ export class RendererAnimationHost {
       } catch (cause) {
         return hostDiagnostic(cause, meta.sequence, op.handle, realization.target);
       }
+      this.#appendFact({
+        kind: 'stopped', objectId: realization.objectId, generation: realization.generation,
+        sequence: meta.sequence, reason: 'destroyed',
+      });
       this.#controllers.delete(op.handle);
       return null;
     }
     const validation = validateController(op.controller);
     if (validation !== null) {
       return animationDiagnostic('invalidDescriptor', meta.sequence, op.handle, realization.target, validation);
+    }
+    if (op.controller.entity !== realization.objectId) {
+      return animationDiagnostic('staleRevision', meta.sequence, op.handle, realization.target, 'controller object identity changed without replacement');
     }
     if (op.controller.revision < realization.controller.revision) {
       return animationDiagnostic('staleRevision', meta.sequence, op.handle, realization.target, 'controller revision moved backward');
@@ -274,7 +396,65 @@ export class RendererAnimationHost {
       durationSeconds: realization.tickDurationSeconds,
       elapsedSeconds: 0,
     };
+    this.#appendPlaybackObservation(realization, meta.sequence, true);
     return null;
+  }
+
+  #nextGeneration(objectId: number): number {
+    const generation = this.#nextGenerationByObject.get(objectId) ?? 1;
+    this.#nextGenerationByObject.set(objectId, generation + 1);
+    return generation;
+  }
+
+  #recordDiagnostic(
+    diagnostic: AnimationProjectionDiagnostic,
+    realizationOrOperation?: AnimationControllerRealization | AnimationPresentationOp,
+  ): void {
+    this.#diagnostics.push(diagnostic);
+    const realization = realizationOrOperation !== undefined && 'objectId' in realizationOrOperation
+      ? realizationOrOperation
+      : undefined;
+    this.#appendFact({
+      kind: 'diagnostic',
+      objectId: realization?.objectId ?? null,
+      generation: realization?.generation ?? null,
+      diagnostic,
+    });
+  }
+
+  #appendPlaybackObservation(
+    realization: AnimationControllerRealization,
+    sequence: number,
+    force = false,
+  ): void {
+    const playback = this.#projection.playback(realization.target);
+    const observation = JSON.stringify([
+      realization.feedbackEpoch, playback.status, playback.selectedClip,
+      playback.actionTimeSeconds, playback.heldSample?.normalizedTime ?? null,
+    ]);
+    if (!force && observation === realization.lastPlaybackObservation) return;
+    realization.lastPlaybackObservation = observation;
+    this.#appendFact({
+      kind: 'playbackObservation', objectId: realization.objectId, generation: realization.generation,
+      sequence, status: playback.status, selectedClip: playback.selectedClip,
+      sampledAtSeconds: playback.actionTimeSeconds,
+    });
+  }
+
+  #appendCue(realization: AnimationControllerRealization, cue: RendererAnimationSampledCue): void {
+    this.#appendFact({
+      kind: 'cue', objectId: realization.objectId, generation: realization.generation,
+      cueId: cue.cueId, clip: cue.clip, markerSeconds: cue.markerSeconds,
+      sampledAtSeconds: cue.sampledAtSeconds, signal: cue.signal,
+    });
+  }
+
+  #appendFact(fact: RendererAnimationRealizedFactInput): void {
+    if (this.#realizedFacts.length === this.#maxRetainedFacts) {
+      this.#realizedFacts.shift();
+      this.#evictedFactCount += 1;
+    }
+    this.#realizedFacts.push({ ...fact, factId: this.#nextFactId++ } as RendererAnimationRealizedFact);
   }
 }
 

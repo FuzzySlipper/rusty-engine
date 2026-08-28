@@ -156,6 +156,7 @@ pub enum ProductDevOperationKind {
     AdmitDemandStep,
     AdmitExternalStep,
     ReportAudioFeedback,
+    ReportAnimationFeedback,
 }
 
 /// Bounded, host-realized audio facts. These are observations from the
@@ -346,6 +347,203 @@ impl ProductDevAudioFeedbackResult {
         }
     }
 
+    pub fn rejected(
+        runtime: ProductDevRuntimeBinding,
+        diagnostic: impl Into<String>,
+    ) -> Result<Self, ProductDevHostError> {
+        Ok(Self {
+            accepted: false,
+            runtime,
+            accepted_through_fact_id: None,
+            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+        })
+    }
+}
+
+/// Copied browser-renderer animation observations. Playback is deliberately an
+/// observation, never a claim that a one-shot completed naturally.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ProductDevAnimationFeedbackFact {
+    PlaybackObservation {
+        fact_id: CanonicalU64,
+        object_id: CanonicalU64,
+        generation: CanonicalU64,
+        sequence: u32,
+        status: String,
+        selected_clip: Option<String>,
+        sampled_at_seconds: Option<f64>,
+    },
+    Diagnostic {
+        fact_id: CanonicalU64,
+        object_id: Option<CanonicalU64>,
+        generation: Option<CanonicalU64>,
+        code: String,
+        sequence: u32,
+    },
+    Cue {
+        fact_id: CanonicalU64,
+        object_id: CanonicalU64,
+        generation: CanonicalU64,
+        cue_id: String,
+        clip: String,
+        marker_seconds: f64,
+        sampled_at_seconds: f64,
+        signal_domain: String,
+        signal_id: String,
+    },
+    Stopped {
+        fact_id: CanonicalU64,
+        object_id: CanonicalU64,
+        generation: CanonicalU64,
+        sequence: u32,
+        reason: String,
+    },
+}
+
+impl ProductDevAnimationFeedbackFact {
+    pub const fn fact_id(&self) -> CanonicalU64 {
+        match self {
+            Self::PlaybackObservation { fact_id, .. }
+            | Self::Diagnostic { fact_id, .. }
+            | Self::Cue { fact_id, .. }
+            | Self::Stopped { fact_id, .. } => *fact_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevAnimationFeedback {
+    pub runtime: ProductDevRuntimeBinding,
+    pub replace_owner: bool,
+    pub evicted_fact_count: CanonicalU64,
+    pub facts: Vec<ProductDevAnimationFeedbackFact>,
+}
+
+impl ProductDevAnimationFeedback {
+    pub const MAX_FACTS: usize = 128;
+    /// Matches `NativeAnimationFeedbackText`; values cross the ABI inline.
+    pub const MAX_INLINE_TEXT_BYTES: usize = 96;
+    pub fn validate(&self) -> Result<(), ProductDevHostError> {
+        if self.facts.len() > Self::MAX_FACTS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_ANIMATION_FEEDBACK_BOUNDS",
+                "animation feedback exceeds the 128 fact host bound",
+            ));
+        }
+        if self
+            .facts
+            .windows(2)
+            .any(|facts| facts[0].fact_id() >= facts[1].fact_id())
+        {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_ANIMATION_FEEDBACK_ORDER",
+                "animation feedback fact ids must be strictly increasing",
+            ));
+        }
+        for fact in &self.facts {
+            match fact {
+                ProductDevAnimationFeedbackFact::PlaybackObservation {
+                    status,
+                    selected_clip,
+                    sampled_at_seconds,
+                    ..
+                } => {
+                    if !matches!(
+                        status.as_str(),
+                        "unavailable"
+                            | "not_started"
+                            | "playing"
+                            | "paused"
+                            | "sampled"
+                            | "stopped"
+                    ) || !animation_feedback_text_fits(status)
+                        || selected_clip
+                            .as_ref()
+                            .is_some_and(|clip| !animation_feedback_text_fits(clip))
+                        || sampled_at_seconds.is_some_and(|time| !time.is_finite() || time < 0.0)
+                    {
+                        return Err(ProductDevHostError::new(
+                            "DEV_HOST_ANIMATION_FEEDBACK_FACT",
+                            "animation playback observation is invalid",
+                        ));
+                    }
+                }
+                ProductDevAnimationFeedbackFact::Diagnostic { code, .. }
+                    if !animation_feedback_text_fits(code) =>
+                {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
+                        "animation diagnostic code is empty",
+                    ))
+                }
+                ProductDevAnimationFeedbackFact::Cue {
+                    cue_id,
+                    clip,
+                    marker_seconds,
+                    sampled_at_seconds,
+                    signal_domain,
+                    signal_id,
+                    ..
+                } if !animation_feedback_text_fits(cue_id)
+                    || !animation_feedback_text_fits(clip)
+                    || !animation_feedback_text_fits(signal_id)
+                    || !animation_feedback_text_fits(signal_domain)
+                    || !matches!(signal_domain.as_str(), "audio" | "particle")
+                    || !marker_seconds.is_finite()
+                    || !sampled_at_seconds.is_finite()
+                    || *marker_seconds < 0.0
+                    || *sampled_at_seconds < 0.0 =>
+                {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
+                        "animation cue observation is invalid",
+                    ))
+                }
+                ProductDevAnimationFeedbackFact::Stopped { reason, .. }
+                    if !animation_feedback_text_fits(reason)
+                        || !matches!(reason.as_str(), "destroyed" | "teardown") =>
+                {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_ANIMATION_FEEDBACK_FACT",
+                        "animation stop observation is invalid",
+                    ))
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+fn animation_feedback_text_fits(value: &str) -> bool {
+    !value.is_empty() && value.len() <= ProductDevAnimationFeedback::MAX_INLINE_TEXT_BYTES
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevAnimationFeedbackResult {
+    pub accepted: bool,
+    pub runtime: ProductDevRuntimeBinding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_through_fact_id: Option<CanonicalU64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
+impl ProductDevAnimationFeedbackResult {
+    pub fn accepted(
+        runtime: ProductDevRuntimeBinding,
+        accepted_through_fact_id: Option<CanonicalU64>,
+    ) -> Self {
+        Self {
+            accepted: true,
+            runtime,
+            accepted_through_fact_id,
+            diagnostic: None,
+        }
+    }
     pub fn rejected(
         runtime: ProductDevRuntimeBinding,
         diagnostic: impl Into<String>,
@@ -1052,5 +1250,17 @@ pub trait ProductDevRuntime: Send + 'static {
             "audio feedback is not supported by this runtime",
         )
         .expect("fixed audio-feedback diagnostic"))
+    }
+
+    fn report_animation_feedback(
+        &mut self,
+        _feedback: ProductDevAnimationFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAnimationFeedbackResult>, ProductDevRuntimeError>
+    {
+        Err(ProductDevRuntimeError::new(
+            "DEV_HOST_ANIMATION_FEEDBACK_UNSUPPORTED",
+            "animation feedback is not supported by this runtime",
+        )
+        .expect("fixed animation-feedback diagnostic"))
     }
 }

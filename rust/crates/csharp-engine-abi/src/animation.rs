@@ -83,6 +83,69 @@ pub enum NativeAnimationTransitionMoment {
     Completed = 2,
 }
 
+/// Inline copied UTF-8 identity used by animation feedback reads. It never
+/// borrows browser or Rust storage; overlong ingress values are rejected.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeAnimationFeedbackText {
+    pub len: u32,
+    pub bytes: [u8; 96],
+}
+
+impl Default for NativeAnimationFeedbackText {
+    fn default() -> Self {
+        Self {
+            len: 0,
+            bytes: [0; 96],
+        }
+    }
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeAnimationRealizationFactKind {
+    #[default]
+    None = 0,
+    PlaybackObservation = 1,
+    Diagnostic = 2,
+    Cue = 3,
+    Stopped = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAnimationRealizationReadout {
+    pub retained_fact_count: u32,
+    pub evicted_fact_count: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationRealizationFactAtRequest {
+    pub index: u32,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAnimationRealizationFactAtReceipt {
+    pub present: bool,
+    pub kind: NativeAnimationRealizationFactKind,
+    pub fact_id: u64,
+    pub object_id: u64,
+    pub generation: u64,
+    pub has_object_id: bool,
+    pub has_generation: bool,
+    pub sequence: u32,
+    pub status: NativeAnimationFeedbackText,
+    pub clip: NativeAnimationFeedbackText,
+    pub cue_id: NativeAnimationFeedbackText,
+    pub signal_domain: NativeAnimationFeedbackText,
+    pub signal_id: NativeAnimationFeedbackText,
+    pub diagnostic_code: NativeAnimationFeedbackText,
+    pub reason: NativeAnimationFeedbackText,
+    pub marker_millis: u64,
+    pub sampled_millis: u64,
+    pub has_sampled_millis: bool,
+}
+
 /// Immutable GLB selected from admitted product content during Create. The
 /// Engine copies and validates its bytes before this direct call returns.
 #[repr(C)]

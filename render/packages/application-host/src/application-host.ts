@@ -1,5 +1,6 @@
 import type { PresentationFrameDiff, RenderFrameDiff, RendererViewComposition } from '@rusty-engine/render-contracts';
 import {
+  RendererAnimationHost,
   RendererAudioHost,
   RendererBillboardHost,
   RendererParticleHost,
@@ -479,10 +480,13 @@ export interface RustyApplicationRendererPort {
   ) => Promise<RustyApplicationPresentationReceipt>;
   /** Read Engine-realized audio facts without exposing the browser audio owner. */
   readonly audioRealizedFacts: () => ReturnType<RendererSurface['audioRealizedFacts']>;
+  readonly animationRealizedFacts: () => ReturnType<RendererSurface['animationRealizedFacts']>;
   /** Acknowledge only the submitted Engine-realized audio fact range. */
   readonly acknowledgeAudioRealizedFacts: RendererSurface['acknowledgeAudioRealizedFacts'];
+  readonly acknowledgeAnimationRealizedFacts: RendererSurface['acknowledgeAnimationRealizedFacts'];
   /** Invalidate the realized-audio owner when a product runtime binding changes. */
   readonly resetAudioRealizationOwner: RendererSurface['resetAudioRealizationOwner'];
+  readonly resetAnimationRealizationOwner: RendererSurface['resetAnimationRealizationOwner'];
   readonly configureViews: (
     composition: RustyApplicationViewComposition,
   ) => ReturnType<RendererSurface['configureViews']>;
@@ -803,6 +807,10 @@ async function mountRustyApplicationWithEnvironment(
       const audio = resolveAudio === null
         ? null
         : new RendererAudioHost({ resolveResource: resolveAudio });
+      // The generic application host owns the renderer animation mechanism as
+      // well as audio. Product Browser therefore observes only fixed typed
+      // renderer facts, never a downstream animation substitute.
+      const animation = new RendererAnimationHost(mounted.animationProjection);
       const resources = new Map(content.resources.map((resource) => [resource.identity, resource]));
       const resourcesByHash = new Map(
         content.resources.map((resource) => [resource.contentHash, resource]),
@@ -839,6 +847,7 @@ async function mountRustyApplicationWithEnvironment(
         sink: mounted.createParticleSink(),
       });
       mounted.setPresentationHosts(new RendererPresentationHostSet({
+        animation,
         ...(audio === null ? {} : { audio }),
         billboard,
         particle,
@@ -1147,8 +1156,12 @@ async function mountRustyApplicationWithEnvironment(
       });
     },
     audioRealizedFacts: () => requireActive().audioRealizedFacts(),
+    animationRealizedFacts: () => requireActive().animationRealizedFacts(),
     acknowledgeAudioRealizedFacts: (throughFactId: number) =>
       requireActive().acknowledgeAudioRealizedFacts(throughFactId),
+    acknowledgeAnimationRealizedFacts: (throughFactId: number) =>
+      requireActive().acknowledgeAnimationRealizedFacts(throughFactId),
+    resetAnimationRealizationOwner: () => requireActive().resetAnimationRealizationOwner(),
     resetAudioRealizationOwner: () => requireActive().resetAudioRealizationOwner(),
     setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
     configureViews: (composition: RustyApplicationViewComposition) => requireActive().configureViews(composition),

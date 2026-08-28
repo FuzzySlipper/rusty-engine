@@ -107,6 +107,27 @@ export interface ProductBrowserAudioFeedbackResult {
   readonly diagnostic?: string;
 }
 
+/** Closed renderer-observation feedback; this is not an animation command route. */
+export type ProductBrowserAnimationFeedbackFact =
+  | { readonly kind: 'playbackObservation'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly sequence: number; readonly status: string; readonly selectedClip: string | null; readonly sampledAtSeconds: number | null }
+  | { readonly kind: 'diagnostic'; readonly factId: string; readonly objectId: string | null; readonly generation: string | null; readonly code: string; readonly sequence: number }
+  | { readonly kind: 'cue'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly cueId: string; readonly clip: string; readonly markerSeconds: number; readonly sampledAtSeconds: number; readonly signalDomain: 'audio' | 'particle'; readonly signalId: string }
+  | { readonly kind: 'stopped'; readonly factId: string; readonly objectId: string; readonly generation: string; readonly sequence: number; readonly reason: 'destroyed' | 'teardown' };
+
+export interface ProductBrowserAnimationFeedback {
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly replaceOwner: boolean;
+  readonly evictedFactCount: string;
+  readonly facts: readonly ProductBrowserAnimationFeedbackFact[];
+}
+
+export interface ProductBrowserAnimationFeedbackResult {
+  readonly accepted: boolean;
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly acceptedThroughFactId?: string;
+  readonly diagnostic?: string;
+}
+
 export interface ProductBrowserTimelineCompletion {
   /** Canonical decimal u64 ticket issued by runtime-timeline. */
   readonly ticket: string;
@@ -201,6 +222,9 @@ export interface ProductBrowserRuntimeAdapter {
   readonly reportAudioFeedback: (
     feedback: ProductBrowserAudioFeedback,
   ) => Promise<ProductBrowserAudioFeedbackResult>;
+  readonly reportAnimationFeedback: (
+    feedback: ProductBrowserAnimationFeedback,
+  ) => Promise<ProductBrowserAnimationFeedbackResult>;
   readonly advanceRealtime: (
     observedTimeNs: string,
   ) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -225,6 +249,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
   readonly input: ProductBrowserRuntimeAdapter['input'];
   readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
+  readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
   readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
   readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
   readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -243,6 +268,7 @@ export function createProductBrowserRuntimeTransport(
   requireFunction(adapter.lifecycle, 'lifecycle');
   requireFunction(adapter.input, 'input');
   requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
+  requireFunction(adapter.reportAnimationFeedback, 'reportAnimationFeedback');
   requireFunction(adapter.advanceRealtime, 'advanceRealtime');
   if (adapter.completeTimeline !== undefined) {
     requireFunction(adapter.completeTimeline, 'completeTimeline');
@@ -256,6 +282,7 @@ export function createProductBrowserRuntimeTransport(
     lifecycle: adapter.lifecycle,
     input: adapter.input,
     reportAudioFeedback: adapter.reportAudioFeedback,
+    reportAnimationFeedback: adapter.reportAnimationFeedback,
     advanceRealtime: adapter.advanceRealtime,
     ...(adapter.admitDemandStep === undefined ? {} : { admitDemandStep: adapter.admitDemandStep }),
     ...(adapter.admitExternalStep === undefined ? {} : { admitExternalStep: adapter.admitExternalStep }),
@@ -371,6 +398,11 @@ interface ProductBrowserAudioFeedbackReporter {
   readonly flush: () => Promise<void>;
 }
 
+interface ProductBrowserAnimationFeedbackReporter {
+  readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
+  readonly flush: () => Promise<void>;
+}
+
 /** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
 export function createProductBrowserAudioFeedbackReporter(options: {
   readonly renderer: Pick<RustyApplicationHost['renderer'],
@@ -447,10 +479,66 @@ export function createProductBrowserAudioFeedbackReporter(options: {
   return Object.freeze({ bindRuntime, flush });
 }
 
+/** @internal Fixed animation observation coordinator, intentionally parallel to audio. */
+export function createProductBrowserAnimationFeedbackReporter(options: {
+  readonly renderer: Pick<RustyApplicationHost['renderer'],
+    'animationRealizedFacts' | 'acknowledgeAnimationRealizedFacts' | 'resetAnimationRealizationOwner'>;
+  readonly report: ProductBrowserRuntimeTransport['reportAnimationFeedback'];
+  readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+}): ProductBrowserAnimationFeedbackReporter {
+  let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
+  let replaceOwnerPending = currentBinding !== null;
+  let lastReportedEvictionCount = 0;
+  const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
+    if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) {
+      options.renderer.resetAnimationRealizationOwner();
+      replaceOwnerPending = true;
+    }
+    currentBinding = runtime;
+  };
+  const flush = async (): Promise<void> => {
+    const binding = currentBinding;
+    if (binding === null) return;
+    const readout = options.renderer.animationRealizedFacts();
+    const realizedFacts = readout?.facts ?? [];
+    const facts = realizedFacts.map(snapshotAnimationFeedbackFact);
+    const evictedFactCount = readout?.evictedFactCount ?? 0;
+    if (!replaceOwnerPending && facts.length === 0 && evictedFactCount === lastReportedEvictionCount) return;
+    const submittedThrough = realizedFacts.at(-1)?.factId;
+    const result = await options.report(Object.freeze({
+      runtime: binding,
+      replaceOwner: replaceOwnerPending,
+      evictedFactCount: canonicalSafeU64(evictedFactCount, 'animation feedback evictedFactCount'),
+      facts: Object.freeze(facts),
+    }));
+    if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
+      throw new ProductBrowserHostError('transport_failed', 'animation feedback result did not match the current Product runtime binding');
+    }
+    if (!result.accepted) throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'animation feedback was rejected by the runtime');
+    if (result.diagnostic !== undefined) throw new ProductBrowserHostError('transport_failed', 'accepted animation feedback cannot include a diagnostic');
+    const expectedThrough = submittedThrough === undefined ? undefined : canonicalSafeU64(submittedThrough, 'animation feedback factId');
+    if (result.acceptedThroughFactId !== expectedThrough) {
+      throw new ProductBrowserHostError('transport_failed', 'animation feedback acknowledgement boundary did not match submitted facts');
+    }
+    if (submittedThrough !== undefined) options.renderer.acknowledgeAnimationRealizedFacts(submittedThrough);
+    replaceOwnerPending = false;
+    lastReportedEvictionCount = evictedFactCount;
+  };
+  return Object.freeze({ bindRuntime, flush });
+}
+
 /** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
 export async function flushProductBrowserAudioFeedbackBeforeUpdate<T>(
   flush: () => Promise<void>,
   update: () => Promise<T>,
+): Promise<T> {
+  await flush();
+  return update();
+}
+
+/** @internal Flushes both fixed renderer feedback families before C# update work. */
+export async function flushProductBrowserRendererFeedbackBeforeUpdate<T>(
+  flush: () => Promise<void>, update: () => Promise<T>,
 ): Promise<T> {
   await flush();
   return update();
@@ -483,6 +571,7 @@ export async function mountProductBrowserHost(
   let transportClosed = false;
   let runtimeProgress = 0;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
+  let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   // Renderer calls can be asynchronous (notably presentation realization),
   // while the retained runtime output port is synchronous. Keep their typed
   // realization order private to this host so a later frame cannot overtake a
@@ -568,11 +657,14 @@ export async function mountProductBrowserHost(
     return error;
   };
 
-  const flushAudioFeedback = (): Promise<void> => audioFeedbackReporter?.flush() ?? Promise.resolve();
+  const flushRendererFeedback = async (): Promise<void> => {
+    await audioFeedbackReporter?.flush();
+    await animationFeedbackReporter?.flush();
+  };
 
-  const scheduleAudioFeedbackFlush = (): void => {
+  const scheduleRendererFeedbackFlush = (): void => {
     if (state !== 'ready') return;
-    void queue.enqueue(flushAudioFeedback).catch((cause: unknown) => {
+    void queue.enqueue(flushRendererFeedback).catch((cause: unknown) => {
       failAndClose(cause, 'transport_failed');
     });
   };
@@ -612,6 +704,7 @@ export async function mountProductBrowserHost(
       switch (output.kind) {
         case 'binding':
           audioFeedbackReporter?.bindRuntime(output.runtime);
+          animationFeedbackReporter?.bindRuntime(output.runtime);
           host.input?.bindRuntime({
             runtime: output.runtime,
             context: options.inputContext ?? 'gameplay.default',
@@ -670,14 +763,14 @@ export async function mountProductBrowserHost(
               // the fixed audio-feedback lane one serialized attempt first so
               // a just-realized audio diagnostic reaches its C# readout.
               try {
-                await queue.enqueue(flushAudioFeedback);
+                await queue.enqueue(flushRendererFeedback);
               } catch (cause) {
                 failAndClose(cause, 'transport_failed');
                 return;
               }
               throw presentationFailure;
             }
-            scheduleAudioFeedbackFlush();
+            scheduleRendererFeedbackFlush();
           });
           return;
         case 'ui-projection':
@@ -748,8 +841,8 @@ export async function mountProductBrowserHost(
       applyInputResult(await transport.input(batch));
     },
     advanceRealtime: async (observedTimeNs) => {
-      applyOperationResult(await flushProductBrowserAudioFeedbackBeforeUpdate(
-        flushAudioFeedback,
+      applyOperationResult(await flushProductBrowserRendererFeedbackBeforeUpdate(
+        flushRendererFeedback,
         () => transport.advanceRealtime(observedTimeNs),
       ));
       if (options.lifecycleMode === 'realtime' && realtimeAdvanceOwner === 'browser') {
@@ -820,6 +913,13 @@ export async function mountProductBrowserHost(
         ? {}
         : { initialRuntime: options.runtimeInput.binding }),
     });
+    animationFeedbackReporter = createProductBrowserAnimationFeedbackReporter({
+      renderer: application.renderer,
+      report: transport.reportAnimationFeedback,
+      ...(options.runtimeInput?.binding === undefined
+        ? {}
+        : { initialRuntime: options.runtimeInput.binding }),
+    });
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
     for (const output of bufferedOutputs) applyOutput(output);
     await rendererOutputTail;
@@ -832,7 +932,7 @@ export async function mountProductBrowserHost(
     started = true;
     state = 'ready';
     publishHealth();
-    scheduleAudioFeedbackFlush();
+    scheduleRendererFeedbackFlush();
   } catch (cause) {
     const error = reportFailure(cause, 'startup_failed');
     unsubscribeTerminalFailures?.();
@@ -913,8 +1013,8 @@ export async function mountProductBrowserHost(
       host.input?.sampleController();
       const batch = host.input?.drain() ?? [];
       if (batch.length > 0) applyInputResult(await transport.input(batch));
-      const result = await flushProductBrowserAudioFeedbackBeforeUpdate(
-        flushAudioFeedback,
+      const result = await flushProductBrowserRendererFeedbackBeforeUpdate(
+        flushRendererFeedback,
         () => transport.admitDemandStep!(),
       );
       applyOperationResult(result);
@@ -943,8 +1043,8 @@ export async function mountProductBrowserHost(
       host.input?.sampleController();
       const batch = host.input?.drain() ?? [];
       if (batch.length > 0) applyInputResult(await transport.input(batch));
-      const result = await flushProductBrowserAudioFeedbackBeforeUpdate(
-        flushAudioFeedback,
+      const result = await flushProductBrowserRendererFeedbackBeforeUpdate(
+        flushRendererFeedback,
         () => transport.admitExternalStep!(step),
       );
       applyOperationResult(result);
@@ -1029,6 +1129,38 @@ function snapshotAudioFeedbackFact(
     voiceHandle: value.diagnostic.handle === null
       ? null
       : canonicalSafeU64(value.diagnostic.handle, 'audio feedback diagnostic voiceHandle'),
+  });
+}
+
+function snapshotAnimationFeedbackFact(
+  value: NonNullable<ReturnType<RustyApplicationHost['renderer']['animationRealizedFacts']>>['facts'][number],
+): ProductBrowserAnimationFeedbackFact {
+  if (value.kind === 'playbackObservation') return Object.freeze({
+    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
+    objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),
+    generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
+    sequence: requireAudioFeedbackSequence(value.sequence), status: value.status,
+    selectedClip: value.selectedClip, sampledAtSeconds: value.sampledAtSeconds,
+  });
+  if (value.kind === 'diagnostic') return Object.freeze({
+    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
+    objectId: value.objectId === null ? null : canonicalSafeU64(value.objectId, 'animation feedback objectId'),
+    generation: value.generation === null ? null : canonicalSafeU64(value.generation, 'animation feedback generation'),
+    code: value.diagnostic.code, sequence: requireAudioFeedbackSequence(value.diagnostic.sequence),
+  });
+  if (value.kind === 'cue') return Object.freeze({
+    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
+    objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),
+    generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
+    cueId: value.cueId, clip: value.clip, markerSeconds: value.markerSeconds,
+    sampledAtSeconds: value.sampledAtSeconds, signalDomain: value.signal.domain,
+    signalId: value.signal.id,
+  });
+  return Object.freeze({
+    kind: value.kind, factId: canonicalSafeU64(value.factId, 'animation feedback factId'),
+    objectId: canonicalSafeU64(value.objectId, 'animation feedback objectId'),
+    generation: canonicalSafeU64(value.generation, 'animation feedback generation'),
+    sequence: requireAudioFeedbackSequence(value.sequence), reason: value.reason,
   });
 }
 

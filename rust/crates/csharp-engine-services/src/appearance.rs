@@ -23,7 +23,7 @@ use render_projection::{
     RuntimeLightFact,
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::c_void,
     sync::Arc,
 };
@@ -33,6 +33,45 @@ use std::{
 // boundary so a successful product call is already host-admissible.
 const MAX_RENDER_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_INLINE_MESH_RESOURCE_BYTES: u32 = MAX_RENDER_RESOURCE_BYTES as u32;
+const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
+
+#[derive(Clone)]
+pub enum AnimationRealizationFact {
+    Playback {
+        fact_id: u64,
+        object_id: u64,
+        generation: u64,
+        sequence: u32,
+        status: String,
+        clip: Option<String>,
+        sampled_millis: Option<u64>,
+    },
+    Diagnostic {
+        fact_id: u64,
+        object_id: Option<u64>,
+        generation: Option<u64>,
+        code: String,
+        sequence: u32,
+    },
+    Cue {
+        fact_id: u64,
+        object_id: u64,
+        generation: u64,
+        cue_id: String,
+        clip: String,
+        marker_millis: u64,
+        sampled_millis: u64,
+        signal_domain: String,
+        signal_id: String,
+    },
+    Stopped {
+        fact_id: u64,
+        object_id: u64,
+        generation: u64,
+        sequence: u32,
+        reason: String,
+    },
+}
 
 /// Immutable renderer content selected through the Engine appearance API.
 /// Host bundle realization remains the runtime's responsibility.
@@ -502,6 +541,8 @@ pub(crate) struct RuntimeAppearanceBridge {
     staged: Option<RuntimeAppearanceCall>,
     callback_error: Option<CsharpEngineServicesError>,
     presentation_diagnostics: Vec<StoredPresentationDiagnostic>,
+    animation_realization_facts: VecDeque<AnimationRealizationFact>,
+    animation_realization_evicted: u64,
 }
 
 impl RuntimeAppearanceBridge {
@@ -544,6 +585,8 @@ impl RuntimeAppearanceBridge {
             staged: None,
             callback_error: None,
             presentation_diagnostics: Vec::new(),
+            animation_realization_facts: VecDeque::new(),
+            animation_realization_evicted: 0,
         }
     }
 
@@ -556,6 +599,60 @@ impl RuntimeAppearanceBridge {
             presentation: Vec::new(),
         });
         self.callback_error = None;
+    }
+
+    pub(crate) fn ingest_animation_realization_feedback(
+        &mut self,
+        replace_owner: bool,
+        evicted_fact_count: u64,
+        facts: impl IntoIterator<Item = AnimationRealizationFact>,
+    ) {
+        if replace_owner {
+            self.animation_realization_facts.clear();
+            self.animation_realization_evicted = evicted_fact_count;
+        }
+        self.animation_realization_evicted =
+            self.animation_realization_evicted.max(evicted_fact_count);
+        for fact in facts {
+            if self.animation_realization_facts.len() == MAX_ANIMATION_REALIZATION_FACTS {
+                self.animation_realization_facts.pop_front();
+                self.animation_realization_evicted =
+                    self.animation_realization_evicted.saturating_add(1);
+            }
+            self.animation_realization_facts.push_back(fact);
+        }
+    }
+
+    fn read_animation_realization(
+        &self,
+    ) -> Result<NativeAnimationRealizationReadout, CsharpEngineServicesError> {
+        if self.staged.is_none() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CALL",
+                "animation service was called outside a product call",
+            ));
+        }
+        Ok(NativeAnimationRealizationReadout {
+            retained_fact_count: self.animation_realization_facts.len() as u32,
+            evicted_fact_count: self.animation_realization_evicted,
+        })
+    }
+
+    fn read_animation_realization_fact_at(
+        &self,
+        request: NativeAnimationRealizationFactAtRequest,
+    ) -> Result<NativeAnimationRealizationFactAtReceipt, CsharpEngineServicesError> {
+        if self.staged.is_none() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CALL",
+                "animation service was called outside a product call",
+            ));
+        }
+        Ok(self
+            .animation_realization_facts
+            .get(request.index as usize)
+            .map(animation_realization_receipt)
+            .unwrap_or_default())
     }
 
     pub(crate) fn discard_call(&mut self) {
@@ -5079,6 +5176,24 @@ pub(crate) unsafe extern "C" fn read_animation(
     animation_result(context, result, RuntimeAppearanceBridge::read_animation)
 }
 
+pub(crate) unsafe extern "C" fn read_animation_realization(
+    context: *mut c_void,
+    result: *mut NativeAnimationRealizationReadout,
+) -> i32 {
+    animation_result(context, result, |bridge| {
+        bridge.read_animation_realization()
+    })
+}
+pub(crate) unsafe extern "C" fn read_animation_realization_fact_at(
+    context: *mut c_void,
+    request: NativeAnimationRealizationFactAtRequest,
+    result: *mut NativeAnimationRealizationFactAtReceipt,
+) -> i32 {
+    animation_result(context, result, |bridge| {
+        bridge.read_animation_realization_fact_at(request)
+    })
+}
+
 pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnimationApi {
     NativeAnimationApi {
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
@@ -5107,7 +5222,105 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         tick: tick_animation,
         read_controller: read_animation_controller,
         read: read_animation,
+        read_realization: read_animation_realization,
+        read_realization_fact_at: read_animation_realization_fact_at,
     }
+}
+
+fn animation_feedback_text(value: &str) -> NativeAnimationFeedbackText {
+    let bytes = value.as_bytes();
+    debug_assert!(
+        bytes.len() <= 96,
+        "ProductDev ingress bounds inline animation text"
+    );
+    let mut out = NativeAnimationFeedbackText::default();
+    let length = bytes.len();
+    out.len = length as u32;
+    out.bytes[..length].copy_from_slice(&bytes[..length]);
+    out
+}
+fn animation_realization_receipt(
+    fact: &AnimationRealizationFact,
+) -> NativeAnimationRealizationFactAtReceipt {
+    let mut out = NativeAnimationRealizationFactAtReceipt {
+        present: true,
+        ..Default::default()
+    };
+    match fact {
+        AnimationRealizationFact::Playback {
+            fact_id,
+            object_id,
+            generation,
+            sequence,
+            status,
+            clip,
+            sampled_millis,
+        } => {
+            out.kind = NativeAnimationRealizationFactKind::PlaybackObservation;
+            out.fact_id = *fact_id;
+            out.object_id = *object_id;
+            out.generation = *generation;
+            out.sequence = *sequence;
+            out.status = animation_feedback_text(status);
+            out.clip = animation_feedback_text(clip.as_deref().unwrap_or(""));
+            out.has_sampled_millis = sampled_millis.is_some();
+            out.sampled_millis = sampled_millis.unwrap_or(0);
+        }
+        AnimationRealizationFact::Diagnostic {
+            fact_id,
+            object_id,
+            generation,
+            code,
+            sequence,
+        } => {
+            out.kind = NativeAnimationRealizationFactKind::Diagnostic;
+            out.fact_id = *fact_id;
+            out.object_id = object_id.unwrap_or(0);
+            out.generation = generation.unwrap_or(0);
+            out.has_object_id = object_id.is_some();
+            out.has_generation = generation.is_some();
+            out.sequence = *sequence;
+            out.diagnostic_code = animation_feedback_text(code);
+        }
+        AnimationRealizationFact::Cue {
+            fact_id,
+            object_id,
+            generation,
+            cue_id,
+            clip,
+            marker_millis,
+            sampled_millis,
+            signal_domain,
+            signal_id,
+        } => {
+            out.kind = NativeAnimationRealizationFactKind::Cue;
+            out.fact_id = *fact_id;
+            out.object_id = *object_id;
+            out.generation = *generation;
+            out.cue_id = animation_feedback_text(cue_id);
+            out.clip = animation_feedback_text(clip);
+            out.marker_millis = *marker_millis;
+            out.sampled_millis = *sampled_millis;
+            out.has_sampled_millis = true;
+            out.signal_domain = animation_feedback_text(signal_domain);
+            out.signal_id = animation_feedback_text(signal_id);
+        }
+        AnimationRealizationFact::Stopped {
+            fact_id,
+            object_id,
+            generation,
+            sequence,
+            reason,
+        } => {
+            out.kind = NativeAnimationRealizationFactKind::Stopped;
+            out.fact_id = *fact_id;
+            out.object_id = *object_id;
+            out.generation = *generation;
+            out.sequence = *sequence;
+            out.reason = animation_feedback_text(reason);
+        }
+    };
+    out
 }
 
 fn borrowed_request_utf8(

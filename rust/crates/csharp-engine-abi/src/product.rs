@@ -514,6 +514,13 @@ pub type NativeReadAnimationController = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeReadAnimation =
     unsafe extern "C" fn(*mut c_void, *mut NativeAnimationReadout) -> i32;
+pub type NativeReadAnimationRealization =
+    unsafe extern "C" fn(*mut c_void, *mut NativeAnimationRealizationReadout) -> i32;
+pub type NativeReadAnimationRealizationFactAt = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAnimationRealizationFactAtRequest,
+    *mut NativeAnimationRealizationFactAtReceipt,
+) -> i32;
 pub type NativeCreateCamera = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCameraDescriptor,
@@ -1592,6 +1599,8 @@ pub struct NativeAnimationApi {
     pub tick: NativeTickAnimation,
     pub read_controller: NativeReadAnimationController,
     pub read: NativeReadAnimation,
+    pub read_realization: NativeReadAnimationRealization,
+    pub read_realization_fact_at: NativeReadAnimationRealizationFactAt,
 }
 
 #[repr(C)]

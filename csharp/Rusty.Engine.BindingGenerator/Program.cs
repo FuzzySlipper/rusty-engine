@@ -136,6 +136,7 @@ internal sealed class BindingModel
         foreach (Field field in value.Fields)
         {
             if (field.Type.Contains('*', StringComparison.Ordinal)) Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) is borrowed and cannot be emitted by-value");
+            if (field.Type is "uint8_t[96]" or "unsigned char[96]") continue;
             string nested = Bare(field.Type);
             if (nested is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type}.{field.Name} ({field.Type}) requires request-only marshalling");
             ValidateFixedType(family, method, signature, nested, structs, enums, seen, $"{role} field {type}.{field.Name}");
@@ -475,6 +476,8 @@ internal static class Emit
         output.AppendLine("    private const nuint MaxOwnedLeaseBytes = 256u * 1024u * 1024u;");
         output.AppendLine("    private const nuint MaxOwnedLeaseItems = 1_000_000u;");
         output.AppendLine("    private static readonly UTF8Encoding StrictUtf8 = new(false, true);");
+        output.AppendLine("    internal static string FromNative(NativeAnimationFeedbackText value) { if (value.len > 96) throw new InvalidOperationException(\"Inline animation feedback text exceeded its ABI bound.\"); return StrictUtf8.GetString(MemoryMarshal.CreateReadOnlySpan(ref value.bytes.e0, checked((int)value.len))); }");
+        output.AppendLine("    internal static NativeAnimationFeedbackText ToNative(string value) => throw new NotSupportedException(\"Animation feedback text is observation-only.\");");
         output.AppendLine("    internal static string CopyUtf8(NativeUtf8Slice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native UTF-8 lease exceeded the supported copy bound.\"); if (value.len == 0) return string.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native UTF-8 lease had length without bytes.\"); return StrictUtf8.GetString(new ReadOnlySpan<byte>(value.bytes, checked((int)value.len))); }");
         output.AppendLine("    private static ReadOnlyMemory<byte> CopyBytes(NativeByteSlice value) { if (value.len > MaxOwnedLeaseBytes) throw new InvalidOperationException(\"Native byte lease exceeded the supported copy bound.\"); if (value.len == 0) return ReadOnlyMemory<byte>.Empty; if (value.bytes is null) throw new InvalidOperationException(\"Native byte lease had length without bytes.\"); byte[] copy = new byte[checked((int)value.len)]; new ReadOnlySpan<byte>(value.bytes, copy.Length).CopyTo(copy); return copy; }");
         output.AppendLine("    internal static NativeVec2 ToNative(Vector2 value) => new() { x = value.X, y = value.Y };");
@@ -937,7 +940,7 @@ internal static class Emit
         return (service.Name, operation.Name);
     }
 
-    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
+    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" and not "NativeAnimationFeedbackText" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
     private static IReadOnlyList<(Field Field, string Type)> SafeFields(Struct value, BindingModel model)
     {
         List<(Field, string)> fields = [];
@@ -979,7 +982,7 @@ internal static class Emit
         if (args.Length == 2 && args[0].StartsWith("const ", StringComparison.Ordinal) && args[0].Contains('*', StringComparison.Ordinal) && BindingModel.Bare(args[1]) == "size_t") return $"ReadOnlySpan<{SafeType(model, BindingModel.Bare(args[0]))}> values";
         return string.Join(", ", args.Select((type, index) => $"{SafeType(model, BindingModel.Bare(type))} arg{index}"));
     }
-    private static string SafeType(string native) => native switch { "bool" or "_Bool" => "bool", "int16_t" => "short", "int" or "int32_t" => "int", "int64_t" => "long", "uint16_t" => "ushort", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
+    private static string SafeType(string native) => native switch { "bool" or "_Bool" => "bool", "int16_t" => "short", "int" or "int32_t" => "int", "int64_t" => "long", "uint16_t" => "ushort", "uint32_t" => "uint", "uint64_t" => "ulong", "size_t" => "nuint", "float" => "float", "double" => "double", "uint8_t" => "byte", "NativeVec2" => "Vector2", "NativeVec3" => "Vector3", "NativeQuat" => "Quaternion", "NativeStructuredValue" => "UiValue", "NativeAnimationFeedbackText" => "string", _ when native.StartsWith("Native", StringComparison.Ordinal) => native["Native".Length..], _ => native };
     private static string SafeEnumMember(string enumName, string member) => RawIdentifier(member.StartsWith($"{enumName}_", StringComparison.Ordinal) ? member[(enumName.Length + 1)..] : member);
     private static string SafeType(BindingModel model, string native) => IsDisposableHandle(model, native) ? OwnerType(native) : SafeType(native);
     private static string RawType(string type)
@@ -1032,5 +1035,5 @@ internal static class Emit
     private static bool HasLeaseMetadata(BindingModel model, Struct lease) => lease.Name != "NativeByteLease" && BindingModel.IsLeaseResult(lease.Name, model.Structs) && LeaseMetadataFields(lease).Any();
     private static bool UsesLeaseReceipt(BindingModel model, Struct lease) => lease.Name != "NativeByteLease" && BindingModel.IsLeaseResult(lease.Name, model.Structs) && (LeasePointers(lease).Skip(1).Any() || HasLeaseMetadata(model, lease));
     private static string LeaseReceiptType(Struct lease) => $"{SafeType(lease.Name)}Receipt";
-    private static StringBuilder Header(string purpose) => new($"// <auto-generated />{Environment.NewLine}// Generated from csharp-engine-abi through the ClangSharp AST: {purpose}.{Environment.NewLine}// Do not edit.{Environment.NewLine}#nullable enable{Environment.NewLine}using System;{Environment.NewLine}using System.Numerics;{Environment.NewLine}{Environment.NewLine}");
+    private static StringBuilder Header(string purpose) => new($"// <auto-generated />{Environment.NewLine}// Generated from csharp-engine-abi through the ClangSharp AST: {purpose}.{Environment.NewLine}// Do not edit.{Environment.NewLine}#nullable enable{Environment.NewLine}using System;{Environment.NewLine}using System.Numerics;{Environment.NewLine}using System.Runtime.InteropServices;{Environment.NewLine}{Environment.NewLine}");
 }

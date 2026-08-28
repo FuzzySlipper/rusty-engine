@@ -211,6 +211,17 @@ void test('G1 controller sequence drives deterministic renderer-local blend and 
     }]);
     assert.deepEqual(host.advance(0.025).cues, []);
     assert.equal(host.readout().sampledFrames, 3);
+    const observed = host.realizedFacts();
+    assert.ok(observed.facts.length >= 2);
+    const firstFactId = observed.facts[0]!.factId;
+    const lastFactId = observed.facts[observed.facts.length - 1]!.factId;
+    host.acknowledgeRealizedFacts(firstFactId);
+    assert.ok(host.realizedFacts().facts.every((fact) => fact.factId > firstFactId));
+    host.reset();
+    assert.equal(host.realizedFacts().facts.length, 0);
+    assert.equal(host.realizedFacts().evictedFactCount, 0);
+    host.advance(0);
+    assert.ok(host.realizedFacts().facts[0]!.factId > lastFactId);
     const cleanup = host.cleanup();
     assert.equal(cleanup.applied, 1);
     assert.equal(cleanup.readout.activeControllers, 0);

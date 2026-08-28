@@ -18,6 +18,9 @@ import type {
   ProductBrowserAudioFeedback,
   ProductBrowserAudioFeedbackFact,
   ProductBrowserAudioFeedbackResult,
+  ProductBrowserAnimationFeedback,
+  ProductBrowserAnimationFeedbackFact,
+  ProductBrowserAnimationFeedbackResult,
   ProductBrowserRuntimeAdapter,
   ProductBrowserRuntimeInputResult,
   ProductBrowserRuntimeOperationKind,
@@ -57,6 +60,7 @@ const ROUTES = Object.freeze({
   admitExternalStep: 'admit-external-step',
   completeTimeline: 'timeline-completion',
   audioFeedback: 'audio-feedback',
+  animationFeedback: 'animation-feedback',
   outputs: 'outputs',
 });
 
@@ -68,6 +72,7 @@ const MAXIMUM_CONFIGURED_BYTES = 16 * 1024 * 1024;
 const UINT64_MAX_DECIMAL = '18446744073709551615';
 const MAXIMUM_INPUT_BATCH_LENGTH = 1_024;
 const MAXIMUM_AUDIO_FEEDBACK_FACTS = 128;
+const MAXIMUM_ANIMATION_FEEDBACK_FACTS = 128;
 const MAXIMUM_JSON_DEPTH = 64;
 const MAXIMUM_JSON_ARRAY_LENGTH = 1_024;
 const MAXIMUM_JSON_OBJECT_KEYS = 256;
@@ -380,6 +385,17 @@ export function createProductBrowserLocalHttpAdapter(
     );
   };
 
+  const reportAnimationFeedback = (
+    feedback: ProductBrowserAnimationFeedback,
+  ): Promise<ProductBrowserAnimationFeedbackResult> => {
+    const snapshot = snapshotAnimationFeedback(feedback);
+    return post(
+      ROUTES.animationFeedback,
+      snapshot,
+      (value) => decodeAnimationFeedbackResult(value, snapshot.runtime, snapshot.facts),
+    );
+  };
+
   const advanceRealtime = (observedTimeNs: string): Promise<ProductBrowserRuntimeOperationResult> =>
     post(
       ROUTES.advanceRealtime,
@@ -565,6 +581,7 @@ export function createProductBrowserLocalHttpAdapter(
     lifecycle,
     input,
     reportAudioFeedback,
+    reportAnimationFeedback,
     advanceRealtime,
     admitDemandStep,
     admitExternalStep,
@@ -906,6 +923,58 @@ function snapshotAudioFeedbackFact(value: unknown): ProductBrowserAudioFeedbackF
   throw new TypeError('audio feedback fact kind is not admitted');
 }
 
+function snapshotAnimationFeedback(value: ProductBrowserAnimationFeedback): ProductBrowserAnimationFeedback {
+  const record = requireRecord(value, 'animation feedback');
+  requireKnownFields(record, ['runtime', 'replaceOwner', 'evictedFactCount', 'facts'], 'animation feedback');
+  if (typeof record.replaceOwner !== 'boolean') throw new TypeError('animation feedback replaceOwner must be boolean');
+  const facts = requirePlainArray(record.facts, 'animation feedback facts');
+  if (facts.length > MAXIMUM_ANIMATION_FEEDBACK_FACTS) throw new ProductBrowserLocalTransportError('invalid_options', 'animation feedback exceeds 128 facts');
+  return Object.freeze({
+    runtime: decodeRuntimeIdentity(record.runtime), replaceOwner: record.replaceOwner,
+    evictedFactCount: requireU64Text(record.evictedFactCount, 'animation feedback evictedFactCount'),
+    facts: Object.freeze(facts.map((fact) => snapshotAnimationFeedbackFact(fact))),
+  });
+}
+
+function snapshotAnimationFeedbackFact(value: unknown): ProductBrowserAnimationFeedbackFact {
+  const record = requireRecord(value, 'animation feedback fact');
+  const factId = requireU64Text(record['factId'], 'animation feedback factId');
+  if (record.kind === 'playbackObservation') {
+    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'sequence', 'status', 'selectedClip', 'sampledAtSeconds'], 'animation playback observation');
+    return Object.freeze({ kind: 'playbackObservation', factId,
+      objectId: requireU64Text(record['objectId'], 'animation feedback objectId'),
+      generation: requireU64Text(record['generation'], 'animation feedback generation'),
+      sequence: requireU32(record['sequence'], 'animation feedback sequence'), status: requireBoundedString(record['status'], 'animation playback status'),
+      selectedClip: record['selectedClip'] === null ? null : requireBoundedString(record['selectedClip'], 'animation selected clip'),
+      sampledAtSeconds: record['sampledAtSeconds'] === null ? null : requireFiniteNumber(record['sampledAtSeconds'], 'animation sample seconds', 0, Number.MAX_VALUE),
+    });
+  }
+  if (record.kind === 'cue') {
+    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'cueId', 'clip', 'markerSeconds', 'sampledAtSeconds', 'signalDomain', 'signalId'], 'animation cue');
+    const signalDomain = requireCatalogValue<'audio' | 'particle'>(record['signalDomain'], 'animation cue signal domain', new Set(['audio', 'particle']));
+    return Object.freeze({ kind: 'cue', factId,
+      objectId: requireU64Text(record['objectId'], 'animation feedback objectId'),
+      generation: requireU64Text(record['generation'], 'animation feedback generation'),
+      cueId: requireBoundedString(record['cueId'], 'animation cue id'), clip: requireBoundedString(record['clip'], 'animation cue clip'),
+      markerSeconds: requireFiniteNumber(record['markerSeconds'], 'animation cue marker', 0, Number.MAX_VALUE), sampledAtSeconds: requireFiniteNumber(record['sampledAtSeconds'], 'animation cue sample', 0, Number.MAX_VALUE), signalDomain, signalId: requireBoundedString(record['signalId'], 'animation cue signal id') });
+  }
+  if (record.kind === 'stopped') {
+    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'sequence', 'reason'], 'animation stopped observation');
+    return Object.freeze({ kind: 'stopped', factId,
+      objectId: requireU64Text(record['objectId'], 'animation feedback objectId'),
+      generation: requireU64Text(record['generation'], 'animation feedback generation'),
+      sequence: requireU32(record['sequence'], 'animation feedback sequence'), reason: requireCatalogValue<'destroyed' | 'teardown'>(record['reason'], 'animation stop reason', new Set(['destroyed', 'teardown'])) });
+  }
+  if (record.kind === 'diagnostic') {
+    requireKnownFields(record, ['kind', 'factId', 'objectId', 'generation', 'code', 'sequence'], 'animation diagnostic');
+    return Object.freeze({ kind: 'diagnostic', factId,
+      objectId: record['objectId'] === null ? null : requireU64Text(record['objectId'], 'animation feedback objectId'),
+      generation: record['generation'] === null ? null : requireU64Text(record['generation'], 'animation feedback generation'),
+      code: requireBoundedString(record['code'], 'animation diagnostic code'), sequence: requireU32(record['sequence'], 'animation diagnostic sequence') });
+  }
+  throw new TypeError('animation feedback fact kind is not admitted');
+}
+
 function snapshotInputFact(value: unknown): RustyApplicationRuntimeInputFact {
   const record = requireRecord(value, 'runtime input fact');
   const kind = record.kind;
@@ -1224,6 +1293,31 @@ function decodeAudioFeedbackResult(
   if (acceptedThroughFactId !== expectedThroughFactId) {
     throw new TypeError('audio feedback acknowledgement boundary does not match submitted facts');
   }
+  return Object.freeze({ accepted: true, runtime, acceptedThroughFactId });
+}
+
+function decodeAnimationFeedbackResult(
+  value: unknown,
+  expectedRuntime: RustyApplicationRuntimeIdentity,
+  submittedFacts: readonly ProductBrowserAnimationFeedbackFact[],
+): ProductBrowserAnimationFeedbackResult {
+  const record = requireRecord(value, 'animation feedback result');
+  requireKnownFields(record, ['accepted', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'animation feedback result');
+  if (record.accepted !== true && record.accepted !== false) throw new TypeError('animation feedback accepted must be boolean');
+  const runtime = decodeRuntimeIdentity(record.runtime);
+  if (!sameRuntimeIdentity(runtime, expectedRuntime)) throw new TypeError('animation feedback result runtime does not match request runtime');
+  const expectedThroughFactId = submittedFacts.length === 0 ? undefined : submittedFacts[submittedFacts.length - 1]!.factId;
+  if (!record.accepted) {
+    if (record.acceptedThroughFactId !== undefined) throw new TypeError('rejected animation feedback cannot include acceptedThroughFactId');
+    return Object.freeze({ accepted: false, runtime, ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }) });
+  }
+  if (record.diagnostic !== undefined) throw new TypeError('accepted animation feedback cannot include diagnostic');
+  if (expectedThroughFactId === undefined) {
+    if (record.acceptedThroughFactId !== undefined) throw new TypeError('empty animation feedback cannot include acceptedThroughFactId');
+    return Object.freeze({ accepted: true, runtime });
+  }
+  const acceptedThroughFactId = requireU64Text(record.acceptedThroughFactId, 'animation feedback acceptedThroughFactId');
+  if (acceptedThroughFactId !== expectedThroughFactId) throw new TypeError('animation feedback acknowledgement boundary does not match submitted facts');
   return Object.freeze({ accepted: true, runtime, acceptedThroughFactId });
 }
 

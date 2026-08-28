@@ -28,6 +28,13 @@ const adapter: ProductBrowserRuntimeAdapter = {
       ? {}
       : { acceptedThroughFactId: feedback.facts[feedback.facts.length - 1]!.factId }),
   }),
+  reportAnimationFeedback: async (feedback) => ({
+    accepted: true,
+    runtime: feedback.runtime,
+    ...(feedback.facts.length === 0
+      ? {}
+      : { acceptedThroughFactId: feedback.facts[feedback.facts.length - 1]!.factId }),
+  }),
   advanceRealtime: async () => ({ accepted: true, operation: 'advance-realtime' as const }),
   subscribeOutputs: () => () => undefined,
   dispose: () => undefined,

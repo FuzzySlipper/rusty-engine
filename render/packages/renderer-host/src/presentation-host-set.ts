@@ -8,6 +8,7 @@ import type {
   RendererAudioListenerPose,
   RendererAudioRealizedFactsReadout,
 } from './audio-host.js';
+import type { RendererAnimationRealizedFactsReadout } from './animation-host.js';
 import type { AudioProjectionDiagnostic } from './host-types.js';
 
 export type RendererPresentationDomain = PresentationOp['domain'];
@@ -49,8 +50,14 @@ interface RendererAudioListenerPresentationHost extends RendererPresentationDoma
   readonly reset?: () => void;
 }
 
+interface RendererAnimationPresentationHost extends RendererAdvancingPresentationDomainHost {
+  readonly realizedFacts?: () => RendererAnimationRealizedFactsReadout;
+  readonly acknowledgeRealizedFacts?: (throughFactId: number) => void;
+  readonly reset?: () => void;
+}
+
 export interface RendererPresentationHosts {
-  readonly animation?: RendererAdvancingPresentationDomainHost;
+  readonly animation?: RendererAnimationPresentationHost;
   readonly audio?: RendererAudioListenerPresentationHost;
   readonly billboard?: RendererAdvancingPresentationDomainHost;
   readonly particle?: RendererAdvancingPresentationDomainHost;
@@ -193,6 +200,27 @@ export class RendererPresentationHostSet {
   /** Replace the current audio realization owner and invalidate its callbacks. */
   resetAudioRealizationOwner(): boolean {
     const reset = this.#hosts.audio?.reset;
+    if (reset === undefined) return false;
+    reset();
+    return true;
+  }
+
+  /** Renderer-observed animation facts; status observations are not terminal claims. */
+  readAnimationRealizedFacts(): RendererAnimationRealizedFactsReadout | null {
+    return this.#hosts.animation?.realizedFacts?.() ?? null;
+  }
+
+  /** Acknowledge only the exact submitted animation feedback boundary. */
+  acknowledgeAnimationRealizedFacts(throughFactId: number): boolean {
+    const acknowledge = this.#hosts.animation?.acknowledgeRealizedFacts;
+    if (acknowledge === undefined) return false;
+    acknowledge(throughFactId);
+    return true;
+  }
+
+  /** Replace the animation feedback owner without recycling fact identifiers. */
+  resetAnimationRealizationOwner(): boolean {
+    const reset = this.#hosts.animation?.reset;
     if (reset === undefined) return false;
     reset();
     return true;

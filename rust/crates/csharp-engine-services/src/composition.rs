@@ -341,9 +341,27 @@ impl EngineServiceSet {
             .ingest_realized_feedback(replace_owner, evicted_fact_count, facts)
     }
 
+    pub fn ingest_animation_realization_feedback(
+        &mut self,
+        replace_owner: bool,
+        evicted_fact_count: u64,
+        facts: impl IntoIterator<Item = crate::appearance::AnimationRealizationFact>,
+    ) {
+        self.appearance.ingest_animation_realization_feedback(
+            replace_owner,
+            evicted_fact_count,
+            facts,
+        );
+    }
+
     /// Clears realization observations when the exact runtime binding changes.
     pub fn reset_audio_realization_owner(&mut self) {
         self.audio.reset_realized_feedback();
+    }
+
+    pub fn reset_animation_realization_owner(&mut self) {
+        self.appearance
+            .ingest_animation_realization_feedback(true, 0, []);
     }
 
     pub fn discard_call(&mut self) {
