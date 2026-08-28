@@ -97,6 +97,8 @@ fn engine_api(
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             create_billboard: crate::presentation::create_billboard,
             update_billboard: crate::presentation::update_billboard,
+            create_structured_billboard: crate::presentation::create_structured_billboard,
+            update_structured_billboard: crate::presentation::update_structured_billboard,
             destroy_billboard: crate::presentation::destroy_billboard,
             emit_particles: crate::presentation::emit_particles,
             create_emitter: crate::presentation::create_emitter,

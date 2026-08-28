@@ -44,6 +44,104 @@ pub enum NativeBillboardContentKind {
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationBillboardMeterFillDirection {
+    LeftToRight = 1,
+    RightToLeft = 2,
+    BottomToTop = 3,
+    TopToBottom = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationBillboardMeter {
+    pub id: NativeUtf8Slice,
+    pub accessible_label_key: NativeUtf8Slice,
+    pub accessible_fallback_text: NativeUtf8Slice,
+    pub current: f32,
+    pub minimum: f32,
+    pub maximum: f32,
+    pub has_preview: bool,
+    pub preview: f32,
+    pub fill_direction: NativePresentationBillboardMeterFillDirection,
+    pub segments: u8,
+    pub fill: NativeColor,
+    pub preview_fill: NativeColor,
+    pub back: NativeColor,
+    pub border: NativeColor,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationBillboardStatusCue {
+    pub id: NativeUtf8Slice,
+    pub label_key: NativeUtf8Slice,
+    pub label_fallback_text: NativeUtf8Slice,
+    pub has_icon: bool,
+    pub icon: NativeRenderResourceHandle,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationBillboardStyle {
+    pub opacity: f32,
+    pub backing: NativeColor,
+    pub border: NativeColor,
+    pub radius_pixels: f32,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationBillboardAlignment {
+    Start = 1,
+    Center = 2,
+    End = 3,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationBillboardLayoutSizing {
+    ConstantPixels = 1,
+    DistanceScaled = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationBillboardSafeArea {
+    pub top_pixels: f32,
+    pub right_pixels: f32,
+    pub bottom_pixels: f32,
+    pub left_pixels: f32,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationBillboardEdgeBehavior {
+    Clamp = 1,
+    Cull = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationBillboardOverlapBehavior {
+    Stack = 1,
+    Suppress = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationBillboardLayout {
+    pub priority: i32,
+    pub sizing: NativePresentationBillboardLayoutSizing,
+    pub reference_distance: f32,
+    pub minimum_scale: f32,
+    pub maximum_scale: f32,
+    pub safe_area: NativePresentationBillboardSafeArea,
+    pub edge_behavior: NativePresentationBillboardEdgeBehavior,
+    pub overlap_behavior: NativePresentationBillboardOverlapBehavior,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativePresentationBillboardLayer {
     AlwaysOnTop = 1,
     DepthTested = 2,
@@ -72,6 +170,40 @@ pub struct NativePresentationBillboardDescriptor {
     pub unit_key: NativeUtf8Slice,
     pub fallback_unit: NativeUtf8Slice,
     pub texture: NativeRenderResourceHandle,
+    pub font_kind: NativePresentationFontKind,
+    pub font_asset: NativeRenderResourceHandle,
+    pub font_family: NativeUtf8Slice,
+    pub height_pixels: f32,
+    pub color: NativeColor,
+    pub background: NativeColor,
+    pub max_distance: f32,
+    pub layer: NativePresentationBillboardLayer,
+    pub visible: bool,
+}
+
+/// A complete replacement descriptor for one structured world indicator. It
+/// has a named presentation operation so ordinary billboards stay compact.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationStructuredBillboardDescriptor {
+    pub logical_id: u64,
+    pub anchor: NativePresentationAnchor,
+    pub has_label: bool,
+    pub label_key: NativeUtf8Slice,
+    pub label_fallback_text: NativeUtf8Slice,
+    pub has_icon: bool,
+    pub icon: NativeRenderResourceHandle,
+    pub accessible_label_key: NativeUtf8Slice,
+    pub accessible_fallback_text: NativeUtf8Slice,
+    pub meters: *const NativePresentationBillboardMeter,
+    pub meters_len: usize,
+    pub status_cues: *const NativePresentationBillboardStatusCue,
+    pub status_cues_len: usize,
+    pub width_pixels: f32,
+    pub spacing_pixels: f32,
+    pub alignment: NativePresentationBillboardAlignment,
+    pub style: NativePresentationBillboardStyle,
+    pub layout: NativePresentationBillboardLayout,
     pub font_kind: NativePresentationFontKind,
     pub font_asset: NativeRenderResourceHandle,
     pub font_family: NativeUtf8Slice,

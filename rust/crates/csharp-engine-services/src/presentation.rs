@@ -57,6 +57,49 @@ pub(crate) unsafe extern "C" fn update_billboard(
     }
 }
 
+pub(crate) unsafe extern "C" fn create_structured_billboard(
+    context: *mut c_void,
+    request: *const NativePresentationStructuredBillboardDescriptor,
+    result: *mut NativePresentationBillboardHandle,
+) -> i32 {
+    if request.is_null() || result.is_null() {
+        return 0;
+    }
+    let Some(bridge) = (unsafe { bridge(context) }) else {
+        return 0;
+    };
+    match bridge.presentation_create_structured_billboard(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.record_callback_error(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn update_structured_billboard(
+    context: *mut c_void,
+    owner: NativePresentationBillboardHandle,
+    request: *const NativePresentationStructuredBillboardDescriptor,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    let Some(bridge) = (unsafe { bridge(context) }) else {
+        return 0;
+    };
+    match bridge.presentation_update_structured_billboard(owner, unsafe { &*request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.record_callback_error(error);
+            0
+        }
+    }
+}
+
 pub(crate) unsafe extern "C" fn destroy_billboard(
     context: *mut c_void,
     owner: NativePresentationBillboardHandle,

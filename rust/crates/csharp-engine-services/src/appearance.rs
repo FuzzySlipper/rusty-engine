@@ -7,13 +7,15 @@ use render_presentation::{
     AnimationControllerService, AnimationGraphDefinition, AnimationMotionDefinition,
     AnimationParameterDefinition, AnimationParameterKind, AnimationParameterValue,
     AnimationProjectionTarget, AnimationProjector, AnimationStateDefinition,
-    AnimationTransitionDefinition, AnimationTransitionFactMoment, BillboardAnchor,
-    BillboardContent, BillboardDescriptor, BillboardFontRef, BillboardHandle, BillboardLayer,
+    AnimationTransitionDefinition, AnimationTransitionFactMoment, BillboardAlignment,
+    BillboardAnchor, BillboardContent, BillboardDescriptor, BillboardEdgeBehavior,
+    BillboardFontRef, BillboardHandle, BillboardIndicator, BillboardLayer, BillboardLayoutPolicy,
+    BillboardLayoutSizing, BillboardMeter, BillboardMeterFillDirection, BillboardOverlapBehavior,
     BillboardPatch, BillboardProjectionDiagnosticCode, BillboardProjectionOp, BillboardProjector,
-    BillboardTextureRef, ParticleAnchor, ParticleEmitterDescriptor, ParticleEmitterHandle,
-    ParticleEmitterPatch, ParticleProjectionDiagnosticCode, ParticleProjectionOp,
-    ParticleProjector, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff,
-    PresentationOpMeta,
+    BillboardSafeArea, BillboardStatusCue, BillboardStyle, BillboardTextureRef, ParticleAnchor,
+    ParticleEmitterDescriptor, ParticleEmitterHandle, ParticleEmitterPatch,
+    ParticleProjectionDiagnosticCode, ParticleProjectionOp, ParticleProjector, ParticleSpriteRef,
+    ParticleVisual, PresentationFrameDiff, PresentationOpMeta,
 };
 use render_projection::{
     Appearance, RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
@@ -509,22 +511,40 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: &NativePresentationBillboardDescriptor,
     ) -> Result<NativePresentationBillboardHandle, CsharpEngineServicesError> {
-        if request.logical_id == 0 {
+        self.presentation_create_billboard_descriptor(
+            request.logical_id,
+            self.presentation_billboard_descriptor(request)?,
+        )
+    }
+
+    pub(crate) fn presentation_create_structured_billboard(
+        &mut self,
+        request: &NativePresentationStructuredBillboardDescriptor,
+    ) -> Result<NativePresentationBillboardHandle, CsharpEngineServicesError> {
+        self.presentation_create_billboard_descriptor(
+            request.logical_id,
+            self.presentation_structured_billboard_descriptor(request)?,
+        )
+    }
+
+    fn presentation_create_billboard_descriptor(
+        &mut self,
+        logical_id: u64,
+        descriptor: BillboardDescriptor,
+    ) -> Result<NativePresentationBillboardHandle, CsharpEngineServicesError> {
+        if logical_id == 0 {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_PRESENTATION_BILLBOARD",
                 "billboard logical id must be nonzero",
             ));
         }
-        let descriptor = self.presentation_billboard_descriptor(request)?;
-        let handle = BillboardHandle::new(request.logical_id);
+        let handle = BillboardHandle::new(logical_id);
         self.stage_billboard(BillboardProjectionOp::Create { handle, descriptor })?;
         self.staged_mut()?
             .state
             .billboards
             .insert(handle.raw(), handle);
-        Ok(NativePresentationBillboardHandle {
-            value: request.logical_id,
-        })
+        Ok(NativePresentationBillboardHandle { value: logical_id })
     }
 
     pub(crate) fn presentation_update_billboard(
@@ -532,7 +552,31 @@ impl RuntimeAppearanceBridge {
         owner: NativePresentationBillboardHandle,
         request: &NativePresentationBillboardDescriptor,
     ) -> Result<(), CsharpEngineServicesError> {
-        let descriptor = self.presentation_billboard_descriptor(request)?;
+        self.presentation_update_billboard_descriptor(
+            owner,
+            request.logical_id,
+            self.presentation_billboard_descriptor(request)?,
+        )
+    }
+
+    pub(crate) fn presentation_update_structured_billboard(
+        &mut self,
+        owner: NativePresentationBillboardHandle,
+        request: &NativePresentationStructuredBillboardDescriptor,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.presentation_update_billboard_descriptor(
+            owner,
+            request.logical_id,
+            self.presentation_structured_billboard_descriptor(request)?,
+        )
+    }
+
+    fn presentation_update_billboard_descriptor(
+        &mut self,
+        owner: NativePresentationBillboardHandle,
+        logical_id: u64,
+        descriptor: BillboardDescriptor,
+    ) -> Result<(), CsharpEngineServicesError> {
         let handle = self
             .staged_mut()?
             .state
@@ -545,7 +589,7 @@ impl RuntimeAppearanceBridge {
                     "billboard owner is not live",
                 )
             })?;
-        if request.logical_id != owner.value {
+        if logical_id != owner.value {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_PRESENTATION_BILLBOARD",
                 "full billboard update must retain its logical id",
@@ -805,24 +849,33 @@ impl RuntimeAppearanceBridge {
         let unit_key = native_presentation_optional_text(request.unit_key, "billboard unit key")?;
         let fallback_unit =
             native_presentation_optional_text(request.fallback_unit, "billboard fallback unit")?;
-        let content = match request.content_kind {
-            NativeBillboardContentKind::Text => BillboardContent::Text {
-                localization_key: key,
-                fallback_text: fallback,
-                arguments: Vec::new(),
-            },
-            NativeBillboardContentKind::Value => BillboardContent::Value {
-                label_key: key,
-                fallback_label: fallback,
-                value,
-                unit_key,
-                fallback_unit,
-            },
-            NativeBillboardContentKind::Icon => BillboardContent::Icon {
-                texture: self.presentation_texture_ref(request.texture)?,
-                alt_key: key,
-                fallback_alt: fallback,
-            },
+        let (content, layout) = match request.content_kind {
+            NativeBillboardContentKind::Text => (
+                BillboardContent::Text {
+                    localization_key: key,
+                    fallback_text: fallback,
+                    arguments: Vec::new(),
+                },
+                None,
+            ),
+            NativeBillboardContentKind::Value => (
+                BillboardContent::Value {
+                    label_key: key,
+                    fallback_label: fallback,
+                    value,
+                    unit_key,
+                    fallback_unit,
+                },
+                None,
+            ),
+            NativeBillboardContentKind::Icon => (
+                BillboardContent::Icon {
+                    texture: self.presentation_texture_ref(request.texture)?,
+                    alt_key: key,
+                    fallback_alt: fallback,
+                },
+                None,
+            ),
         };
         Ok(BillboardDescriptor {
             anchor: native_presentation_billboard_anchor(request.anchor),
@@ -842,7 +895,154 @@ impl RuntimeAppearanceBridge {
                 NativePresentationBillboardLayer::Occluded => BillboardLayer::Occluded,
             },
             visible: request.visible,
-            layout: None,
+            layout,
+        })
+    }
+
+    fn presentation_structured_billboard_descriptor(
+        &self,
+        request: &NativePresentationStructuredBillboardDescriptor,
+    ) -> Result<BillboardDescriptor, CsharpEngineServicesError> {
+        Ok(BillboardDescriptor {
+            anchor: native_presentation_billboard_anchor(request.anchor),
+            content: BillboardContent::Structured {
+                indicator: self.presentation_structured_indicator(request)?,
+            },
+            font: self.presentation_font_ref(
+                request.font_kind,
+                request.font_asset,
+                request.font_family,
+            )?,
+            height_pixels: request.height_pixels,
+            color: native_color(request.color),
+            background: native_color(request.background),
+            max_distance: request.max_distance,
+            layer: match request.layer {
+                NativePresentationBillboardLayer::AlwaysOnTop => BillboardLayer::AlwaysOnTop,
+                NativePresentationBillboardLayer::DepthTested => BillboardLayer::DepthTested,
+                NativePresentationBillboardLayer::Occluded => BillboardLayer::Occluded,
+            },
+            visible: request.visible,
+            layout: Some(native_presentation_billboard_layout(request.layout)),
+        })
+    }
+
+    fn presentation_structured_indicator(
+        &self,
+        request: &NativePresentationStructuredBillboardDescriptor,
+    ) -> Result<BillboardIndicator, CsharpEngineServicesError> {
+        let label = request
+            .has_label
+            .then(|| {
+                native_presentation_localized_text(
+                    request.label_key,
+                    request.label_fallback_text,
+                    "structured billboard label",
+                )
+            })
+            .transpose()?;
+        let icon = request
+            .has_icon
+            .then(|| self.presentation_texture_ref(request.icon))
+            .transpose()?;
+        let meters = unsafe {
+            borrowed_slice(
+                request.meters,
+                request.meters_len,
+                "structured billboard meters",
+            )?
+        }
+        .iter()
+        .map(|meter| self.presentation_billboard_meter(*meter))
+        .collect::<Result<Vec<_>, _>>()?;
+        let status_cues = unsafe {
+            borrowed_slice(
+                request.status_cues,
+                request.status_cues_len,
+                "structured billboard status cues",
+            )?
+        }
+        .iter()
+        .map(|cue| self.presentation_billboard_status_cue(*cue))
+        .collect::<Result<Vec<_>, _>>()?;
+        Ok(BillboardIndicator {
+            label,
+            icon,
+            accessible_label: native_presentation_localized_text(
+                request.accessible_label_key,
+                request.accessible_fallback_text,
+                "structured billboard accessible label",
+            )?,
+            meters,
+            status_cues,
+            width_pixels: request.width_pixels,
+            spacing_pixels: request.spacing_pixels,
+            alignment: match request.alignment {
+                NativePresentationBillboardAlignment::Start => BillboardAlignment::Start,
+                NativePresentationBillboardAlignment::Center => BillboardAlignment::Center,
+                NativePresentationBillboardAlignment::End => BillboardAlignment::End,
+            },
+            style: BillboardStyle {
+                opacity: request.style.opacity,
+                backing: native_color(request.style.backing),
+                border: native_color(request.style.border),
+                radius_pixels: request.style.radius_pixels,
+            },
+        })
+    }
+
+    fn presentation_billboard_meter(
+        &self,
+        meter: NativePresentationBillboardMeter,
+    ) -> Result<BillboardMeter, CsharpEngineServicesError> {
+        Ok(BillboardMeter {
+            id: native_presentation_text(meter.id, "structured billboard meter id")?,
+            accessible_label: native_presentation_localized_text(
+                meter.accessible_label_key,
+                meter.accessible_fallback_text,
+                "structured billboard meter label",
+            )?,
+            current: meter.current,
+            min: meter.minimum,
+            max: meter.maximum,
+            preview: meter.has_preview.then_some(meter.preview),
+            fill_direction: match meter.fill_direction {
+                NativePresentationBillboardMeterFillDirection::LeftToRight => {
+                    BillboardMeterFillDirection::LeftToRight
+                }
+                NativePresentationBillboardMeterFillDirection::RightToLeft => {
+                    BillboardMeterFillDirection::RightToLeft
+                }
+                NativePresentationBillboardMeterFillDirection::BottomToTop => {
+                    BillboardMeterFillDirection::BottomToTop
+                }
+                NativePresentationBillboardMeterFillDirection::TopToBottom => {
+                    BillboardMeterFillDirection::TopToBottom
+                }
+            },
+            segments: meter.segments,
+            fill: native_color(meter.fill),
+            preview_fill: native_color(meter.preview_fill),
+            back: native_color(meter.back),
+            border: native_color(meter.border),
+        })
+    }
+
+    fn presentation_billboard_status_cue(
+        &self,
+        cue: NativePresentationBillboardStatusCue,
+    ) -> Result<BillboardStatusCue, CsharpEngineServicesError> {
+        Ok(BillboardStatusCue {
+            id: native_presentation_text(cue.id, "structured billboard status cue id")?,
+            label: native_presentation_localized_text(
+                cue.label_key,
+                cue.label_fallback_text,
+                "structured billboard status cue label",
+            )?,
+            icon: cue
+                .has_icon
+                .then(|| self.presentation_texture_ref(cue.icon))
+                .transpose()?,
         })
     }
 
@@ -3312,6 +3512,53 @@ fn native_presentation_optional_text(
     native_presentation_text(value, field).map(Some)
 }
 
+fn native_presentation_localized_text(
+    localization_key: NativeUtf8Slice,
+    fallback_text: NativeUtf8Slice,
+    field: &'static str,
+) -> Result<render_presentation::BillboardLocalizedText, CsharpEngineServicesError> {
+    Ok(render_presentation::BillboardLocalizedText {
+        localization_key: native_presentation_text(localization_key, field)?,
+        fallback_text: native_presentation_text(fallback_text, field)?,
+    })
+}
+
+fn native_presentation_billboard_layout(
+    value: NativePresentationBillboardLayout,
+) -> BillboardLayoutPolicy {
+    BillboardLayoutPolicy {
+        priority: value.priority,
+        sizing: match value.sizing {
+            NativePresentationBillboardLayoutSizing::ConstantPixels => {
+                BillboardLayoutSizing::ConstantPixels
+            }
+            NativePresentationBillboardLayoutSizing::DistanceScaled => {
+                BillboardLayoutSizing::DistanceScaled {
+                    reference_distance: value.reference_distance,
+                    min_scale: value.minimum_scale,
+                    max_scale: value.maximum_scale,
+                }
+            }
+        },
+        safe_area: BillboardSafeArea {
+            top_pixels: value.safe_area.top_pixels,
+            right_pixels: value.safe_area.right_pixels,
+            bottom_pixels: value.safe_area.bottom_pixels,
+            left_pixels: value.safe_area.left_pixels,
+        },
+        edge_behavior: match value.edge_behavior {
+            NativePresentationBillboardEdgeBehavior::Clamp => BillboardEdgeBehavior::Clamp,
+            NativePresentationBillboardEdgeBehavior::Cull => BillboardEdgeBehavior::Cull,
+        },
+        overlap_behavior: match value.overlap_behavior {
+            NativePresentationBillboardOverlapBehavior::Stack => BillboardOverlapBehavior::Stack,
+            NativePresentationBillboardOverlapBehavior::Suppress => {
+                BillboardOverlapBehavior::Suppress
+            }
+        },
+    }
+}
+
 fn native_billboard_diagnostic_code(
     value: BillboardProjectionDiagnosticCode,
 ) -> NativePresentationDiagnosticCode {
@@ -5229,5 +5476,144 @@ mod tests {
             render_presentation::PresentationOp::Billboard { op: BillboardProjectionOp::Create { descriptor: BillboardDescriptor { font: BillboardFontRef::Asset { family: resolved_family, .. }, .. }, .. }, .. }
                 if resolved_family == "Ui Font"
         ));
+    }
+
+    #[test]
+    fn structured_billboard_updates_atomically_and_keeps_projector_diagnostic() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let key = b"shield";
+        let fallback = b"Shield";
+        let meter_id = b"armor";
+        let cue_id = b"blessed";
+        let cue_label = b"Blessed";
+        let font = b"sans-serif";
+        let slice = |value: &[u8]| NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        };
+        let color = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let meters = [NativePresentationBillboardMeter {
+            id: slice(meter_id),
+            accessible_label_key: slice(key),
+            accessible_fallback_text: slice(fallback),
+            current: 4.0,
+            minimum: 0.0,
+            maximum: 6.0,
+            has_preview: true,
+            preview: 5.0,
+            fill_direction: NativePresentationBillboardMeterFillDirection::LeftToRight,
+            segments: 2,
+            fill: color,
+            preview_fill: color,
+            back: NativeColor::default(),
+            border: color,
+        }];
+        let cues = [NativePresentationBillboardStatusCue {
+            id: slice(cue_id),
+            label_key: slice(cue_id),
+            label_fallback_text: slice(cue_label),
+            has_icon: false,
+            icon: NativeRenderResourceHandle::default(),
+        }];
+        let descriptor = || NativePresentationStructuredBillboardDescriptor {
+            logical_id: 99,
+            anchor: NativePresentationAnchor {
+                kind: NativePresentationAnchorKind::World,
+                position: NativeVec3::default(),
+                entity: 0,
+                offset: NativeVec3::default(),
+            },
+            has_label: true,
+            label_key: slice(key),
+            label_fallback_text: slice(fallback),
+            has_icon: false,
+            icon: NativeRenderResourceHandle::default(),
+            accessible_label_key: slice(key),
+            accessible_fallback_text: slice(fallback),
+            meters: meters.as_ptr(),
+            meters_len: meters.len(),
+            status_cues: cues.as_ptr(),
+            status_cues_len: cues.len(),
+            width_pixels: 120.0,
+            spacing_pixels: 4.0,
+            alignment: NativePresentationBillboardAlignment::Center,
+            style: NativePresentationBillboardStyle {
+                opacity: 1.0,
+                backing: NativeColor::default(),
+                border: color,
+                radius_pixels: 3.0,
+            },
+            layout: NativePresentationBillboardLayout {
+                priority: 2,
+                sizing: NativePresentationBillboardLayoutSizing::DistanceScaled,
+                reference_distance: 8.0,
+                minimum_scale: 0.5,
+                maximum_scale: 2.0,
+                safe_area: NativePresentationBillboardSafeArea {
+                    top_pixels: 2.0,
+                    right_pixels: 2.0,
+                    bottom_pixels: 2.0,
+                    left_pixels: 2.0,
+                },
+                edge_behavior: NativePresentationBillboardEdgeBehavior::Clamp,
+                overlap_behavior: NativePresentationBillboardOverlapBehavior::Stack,
+            },
+            font_kind: NativePresentationFontKind::System,
+            font_asset: NativeRenderResourceHandle::default(),
+            font_family: slice(font),
+            height_pixels: 16.0,
+            color,
+            background: NativeColor::default(),
+            max_distance: 100.0,
+            layer: NativePresentationBillboardLayer::AlwaysOnTop,
+            visible: true,
+        };
+        bridge.begin_call();
+        let owner = bridge
+            .presentation_create_structured_billboard(&descriptor())
+            .expect("structured create");
+        let create = bridge.take_staged_call().expect("create call");
+        bridge.commit(create);
+        assert_eq!(
+            bridge
+                .state
+                .billboard_projector
+                .descriptor(BillboardHandle::new(99))
+                .expect("retained indicator")
+                .layout
+                .as_ref()
+                .expect("structured layout")
+                .priority,
+            2
+        );
+
+        bridge.begin_call();
+        let mut invalid = descriptor();
+        let invalid_meters = [NativePresentationBillboardMeter {
+            segments: 0,
+            ..meters[0]
+        }];
+        invalid.meters = invalid_meters.as_ptr();
+        let error = bridge
+            .presentation_update_structured_billboard(owner, &invalid)
+            .expect_err("invalid meter update");
+        bridge.record_callback_error(error);
+        assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
+        assert!(bridge.take_staged_call().is_err());
+        let retained = bridge
+            .state
+            .billboard_projector
+            .descriptor(BillboardHandle::new(99))
+            .expect("unchanged retained indicator");
+        let BillboardContent::Structured { indicator } = &retained.content else {
+            panic!("retained content remains structured");
+        };
+        assert_eq!(indicator.meters[0].segments, 2);
     }
 }

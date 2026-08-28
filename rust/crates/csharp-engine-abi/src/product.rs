@@ -337,6 +337,16 @@ pub type NativeUpdatePresentationBillboard = unsafe extern "C" fn(
     NativePresentationBillboardHandle,
     *const NativePresentationBillboardDescriptor,
 ) -> i32;
+pub type NativeCreatePresentationStructuredBillboard = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePresentationStructuredBillboardDescriptor,
+    *mut NativePresentationBillboardHandle,
+) -> i32;
+pub type NativeUpdatePresentationStructuredBillboard = unsafe extern "C" fn(
+    *mut c_void,
+    NativePresentationBillboardHandle,
+    *const NativePresentationStructuredBillboardDescriptor,
+) -> i32;
 pub type NativeDestroyPresentationBillboard =
     unsafe extern "C" fn(*mut c_void, NativePresentationBillboardHandle) -> i32;
 pub type NativeEmitPresentationParticles =
@@ -1393,6 +1403,8 @@ pub struct NativePresentationApi {
     pub context: *mut c_void,
     pub create_billboard: NativeCreatePresentationBillboard,
     pub update_billboard: NativeUpdatePresentationBillboard,
+    pub create_structured_billboard: NativeCreatePresentationStructuredBillboard,
+    pub update_structured_billboard: NativeUpdatePresentationStructuredBillboard,
     pub destroy_billboard: NativeDestroyPresentationBillboard,
     pub emit_particles: NativeEmitPresentationParticles,
     pub create_emitter: NativeCreatePresentationEmitter,
