@@ -1,5 +1,6 @@
 using Rusty.Engine;
 using Rusty.Engine.Entities;
+using Rusty.Engine.Persistence;
 
 const uint HealthLocalComponentId = 1;
 const uint ArmorLocalComponentId = 2;
@@ -52,6 +53,7 @@ ExerciseMechanicsUniqueItemTransfer();
 ExerciseMechanicsUniqueItemLifecycle();
 ExerciseMechanicsWorldRestore();
 ExerciseMechanicsWorldImport();
+ExerciseMechanicsWorldPersistenceComposition();
 
 static void Require(bool condition, string message)
 {
@@ -336,6 +338,86 @@ static void ExerciseMechanicsWorldImport()
     Require(mechanics.Export().Entities.Length == 2, "typed Mechanics export did not return copied native facts");
 }
 
+static void ExerciseMechanicsWorldPersistenceComposition()
+{
+    using var world = new EntityWorld();
+    EntityId retired = world.Create();
+    var mechanicsService = new MechanicsAdapterFake();
+    var persistence = new InMemoryPersistenceService();
+    using var mechanics = new MechanicsEntityWorld(world, mechanicsService, mechanicsService.Catalog);
+    mechanics.Bind(retired, "retired");
+    mechanics.Commit(retired);
+
+    EntityWorldRestorePlan plan = new(world.Revision, 4);
+    plan.AddEntity(new EntityWorldEntityState(new EntityId(2), EntityLifecycle.Disabled, 1));
+    plan.AddEntity(new EntityWorldEntityState(new EntityId(3), EntityLifecycle.Active, 1));
+    plan.AddContainment(new EntityWorldContainmentState(new EntityId(3), new EntityId(2)));
+    MechanicsWorldImportRequest request = ImportRequest(mechanicsService.Catalog);
+    var state = new MechanicsCheckpoint(plan, request);
+    var codec = new InMemoryMechanicsCheckpointCodec();
+    int captures = 0;
+    int mappings = 0;
+    bool emitMalformedPlan = false;
+
+    using var store = new MechanicsEntityWorldProductStateStore<MechanicsCheckpoint>(
+        mechanics,
+        new PersistenceEngineContext(persistence),
+        "mechanics-example",
+        codec,
+        export =>
+        {
+            captures++;
+            Require(export.Entities.Length == 1 && export.Entities.Span[0].EntityId == retired.Value,
+                "product capture did not receive the copied typed Mechanics export");
+            return state;
+        },
+        checkpoint =>
+        {
+            mappings++;
+            return emitMalformedPlan
+                ? new MechanicsProductStateRestorePlan(
+                    checkpoint.Plan,
+                    checkpoint.Request with { Entities = checkpoint.Request.Entities[..1] })
+                : new MechanicsProductStateRestorePlan(checkpoint.Plan, checkpoint.Request);
+        });
+
+    store.Save("checkpoint");
+    Require(captures == 1, "product capture was not called exactly once during save");
+
+    using (MechanicsEntityWorldProductStateLoad<MechanicsCheckpoint> absent = store.LoadPrepared("missing", world.Revision))
+    {
+        Require(!absent.Present && absent.PersistenceRevision == 0 && absent.PreparedImport is null,
+            "an absent persistence load did not remain an honest no-op candidate");
+        absent.Publish();
+    }
+
+    emitMalformedPlan = true;
+    Throws(() => store.LoadPrepared("checkpoint", world.Revision),
+        "a malformed product restore mapping was accepted");
+    Require(world.IsAlive(retired) && mechanicsService.ImportPrepares == 0,
+        "a rejected product restore mapping changed a live world");
+
+    emitMalformedPlan = false;
+    using (MechanicsEntityWorldProductStateLoad<MechanicsCheckpoint> cancelled = store.LoadPrepared("checkpoint", world.Revision))
+    {
+        Require(cancelled.Present && cancelled.PreparedImport is not null && mechanicsService.ImportPrepares == 1,
+            "a present persistence load did not prepare its paired Engine candidate");
+        cancelled.Dispose();
+    }
+    Require(world.IsAlive(retired) && mechanicsService.ImportPublishes == 0 && mechanicsService.ImportDisposals == 1,
+        "cancelling a product persistence candidate changed either live world");
+
+    using MechanicsEntityWorldProductStateLoad<MechanicsCheckpoint> loaded = store.LoadPrepared("checkpoint", world.Revision);
+    Require(loaded.Present && loaded.PersistenceRevision == 1 && loaded.PreparedImport is not null
+        && mappings == 3 && mechanicsService.ImportPrepares == 2 && mechanicsService.ImportPublishes == 0,
+        "load preparation did not finish product mapping and Engine validation before publication");
+    loaded.Publish();
+    loaded.Publish();
+    Require(mappings == 3 && mechanicsService.ImportPublishes == 1 && !world.IsAlive(retired)
+        && world.GetLifecycle(new EntityId(2)) == EntityLifecycle.Disabled,
+        "paired persistence publication invoked product callbacks or failed to replace live state");
+}
+
 static MechanicsWorldImportRequest ImportRequest(MechanicsCatalog catalog)
     => new(
         catalog,
@@ -371,6 +453,101 @@ static IEnumerable<MechanicsWorldComponentPresenceRow> ImportPresence(ulong enti
 readonly record struct Health(int Current);
 
 readonly record struct Armor(int Current);
+
+readonly record struct MechanicsCheckpoint(
+    EntityWorldRestorePlan Plan,
+    MechanicsWorldImportRequest Request);
+
+// This in-memory codec exists only to exercise the persistence composition. Products supply
+// their own durable archive bytes, schema, and migrations; the Engine does not select them.
+sealed class InMemoryMechanicsCheckpointCodec : IProductStateCodec<MechanicsCheckpoint>
+{
+    private MechanicsCheckpoint? _saved;
+
+    public uint SchemaVersion => 1;
+
+    public void Encode(in MechanicsCheckpoint state, System.Buffers.IBufferWriter<byte> destination)
+    {
+        _saved = state;
+        destination.GetSpan(1)[0] = 1;
+        destination.Advance(1);
+    }
+
+    public MechanicsCheckpoint Decode(ReadOnlySpan<byte> payload)
+        => payload.Length == 1 && payload[0] == 1 && _saved is MechanicsCheckpoint saved
+            ? saved
+            : throw new InvalidOperationException("example checkpoint bytes were not available");
+}
+
+sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngineContext
+{
+    public ILookService Look => throw new NotSupportedException();
+    public IDynamicsService Dynamics => throw new NotSupportedException();
+    public ISpatialService Spatial => throw new NotSupportedException();
+    public IVoxelService Voxel => throw new NotSupportedException();
+    public IVoxelContentService VoxelContent => throw new NotSupportedException();
+    public IContentService Content => throw new NotSupportedException();
+    public IAppearanceService Appearance => throw new NotSupportedException();
+    public IAnimationService Animation => throw new NotSupportedException();
+    public IAudioService Audio => throw new NotSupportedException();
+    public ICameraViewService CameraView => throw new NotSupportedException();
+    public IRandomService Random => throw new NotSupportedException();
+    public IMechanicsService Mechanics => throw new NotSupportedException();
+    public IPersistenceService Persistence { get; } = persistence;
+    public IContentStoreService ContentStore => throw new NotSupportedException();
+    public IRulesService Rules => throw new NotSupportedException();
+    public IStandardExactService StandardExact => throw new NotSupportedException();
+    public IStandardContinuousService StandardContinuous => throw new NotSupportedException();
+    public IUiService Ui => throw new NotSupportedException();
+}
+
+sealed class InMemoryPersistenceService : IPersistenceService
+{
+    private sealed record Saved(uint SchemaVersion, ulong Revision, byte[] Payload);
+
+    private readonly Dictionary<ulong, string> _scopes = [];
+    private readonly Dictionary<ulong, Saved> _blobs = [];
+    private readonly Dictionary<(string Scope, string Key), Saved> _saved = [];
+    private ulong _nextHandle = 1;
+
+    public PersistenceStore OpenStore(PersistenceOpenRequest request)
+    {
+        ulong handle = _nextHandle++;
+        _scopes.Add(handle, request.Scope);
+        return new PersistenceStore(new PersistenceStoreHandle(handle), () => _scopes.Remove(handle));
+    }
+
+    public PersistenceSaveReceipt Save(PersistenceSaveRequest request)
+    {
+        string scope = _scopes[request.Store.Handle.Value];
+        var key = (scope, request.Key);
+        _saved.TryGetValue(key, out Saved? previous);
+        ulong revision = (previous?.Revision ?? 0) + 1;
+        _saved[key] = new Saved(request.SchemaVersion, revision, request.Payload.ToArray());
+        return new PersistenceSaveReceipt(revision, request.SchemaVersion);
+    }
+
+    public PersistenceBlob Load(PersistenceLoadRequest request)
+    {
+        string scope = _scopes[request.Store.Handle.Value];
+        _saved.TryGetValue((scope, request.Key), out Saved? saved);
+        ulong handle = _nextHandle++;
+        _blobs.Add(handle, saved ?? new Saved(0, 0, []));
+        return new PersistenceBlob(new PersistenceBlobHandle(handle), () => _blobs.Remove(handle));
+    }
+
+    public PersistenceBlobInfo DescribeBlob(PersistenceBlob blob)
+    {
+        Saved saved = _blobs[blob.Handle.Value];
+        return new PersistenceBlobInfo(saved.Revision != 0, saved.SchemaVersion, saved.Revision, (nuint)saved.Payload.Length);
+    }
+
+    public void CopyBlob(PersistenceCopyBlobRequest request)
+        => _blobs[request.Blob.Handle.Value].Payload.CopyTo(request.Destination.Span);
+
+    public ReadOnlyMemory<byte> ReadBlobBytes(PersistenceBlob blob)
+        => _blobs[blob.Handle.Value].Payload;
+}
 
 sealed class MechanicsAdapterFake : IMechanicsService
 {

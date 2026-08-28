@@ -158,3 +158,153 @@ public sealed class EntityWorldProductStateStore<TState> : IDisposable
 
     public void Dispose() => _state.Dispose();
 }
+
+/// <summary>
+/// Product-decoded transient state for one paired managed Entity and Mechanics import.
+/// This is deliberately not an archive record: the product selects the durable state type,
+/// codec, migrations, and the mapping that constructs these typed Engine inputs.
+/// </summary>
+public sealed class MechanicsProductStateRestorePlan
+{
+    public MechanicsProductStateRestorePlan(
+        EntityWorldRestorePlan entities,
+        MechanicsWorldImportRequest mechanics)
+    {
+        Entities = entities ?? throw new ArgumentNullException(nameof(entities));
+        Mechanics = mechanics;
+    }
+
+    public EntityWorldRestorePlan Entities { get; }
+
+    public MechanicsWorldImportRequest Mechanics { get; }
+}
+
+/// <summary>
+/// Product-owned durable state composition for an admitted <see cref="MechanicsEntityWorld"/>.
+/// The product owns <typeparamref name="TState"/>, its codec/migrations, and both mapping
+/// delegates. This class only coordinates opaque Persistence bytes with the existing typed,
+/// paired Engine prepare/publish mechanism.
+/// </summary>
+public sealed class MechanicsEntityWorldProductStateStore<TState> : IDisposable
+{
+    private readonly MechanicsEntityWorld _world;
+    private readonly ProductStateStore<TState> _state;
+    private readonly Func<MechanicsWorldExportLeaseReceipt, TState> _capture;
+    private readonly Func<TState, MechanicsProductStateRestorePlan> _restore;
+
+    public MechanicsEntityWorldProductStateStore(
+        MechanicsEntityWorld world,
+        IEngineContext engine,
+        string scope,
+        IProductStateCodec<TState> codec,
+        Func<MechanicsWorldExportLeaseReceipt, TState> capture,
+        Func<TState, MechanicsProductStateRestorePlan> restore,
+        IReadOnlyList<IProductStateMigration>? migrations = null)
+    {
+        _world = world ?? throw new ArgumentNullException(nameof(world));
+        ArgumentNullException.ThrowIfNull(engine);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        ArgumentNullException.ThrowIfNull(codec);
+        _capture = capture ?? throw new ArgumentNullException(nameof(capture));
+        _restore = restore ?? throw new ArgumentNullException(nameof(restore));
+        _state = new ProductStateStore<TState>(engine, scope, codec, migrations);
+    }
+
+    /// <summary>
+    /// Publishes the current copied typed Mechanics export to the product capture callback, then
+    /// persists only the product-selected opaque state.
+    /// </summary>
+    public PersistenceSaveReceipt Save(
+        string key,
+        PersistenceRevisionGuard guard = PersistenceRevisionGuard.Any,
+        ulong expectedRevision = 0)
+    {
+        MechanicsWorldExportLeaseReceipt export = _world.Export();
+        return _state.Save(key, _capture(export), guard, expectedRevision);
+    }
+
+    /// <summary>
+    /// Loads product-owned state and prepares the paired managed/native import without changing
+    /// either live world. Dispose the returned result to cancel; call its explicit
+    /// <see cref="MechanicsEntityWorldProductStateLoad{TState}.Publish"/> to commit.
+    /// </summary>
+    public MechanicsEntityWorldProductStateLoad<TState> LoadPrepared(
+        string key,
+        ulong? expectedManagedRevision = null)
+    {
+        ProductStateLoad<TState> loaded = _state.Load(key);
+        if (!loaded.Present)
+        {
+            return new MechanicsEntityWorldProductStateLoad<TState>(loaded, null);
+        }
+
+        MechanicsProductStateRestorePlan plan = _restore(loaded.State!)
+            ?? throw new InvalidOperationException("The product restore mapper returned no paired Mechanics plan.");
+        MechanicsEntityWorldImportCandidate candidate = _world.PrepareImport(
+            plan.Entities,
+            plan.Mechanics,
+            expectedManagedRevision);
+        return new MechanicsEntityWorldProductStateLoad<TState>(loaded, candidate);
+    }
+
+    /// <summary>Convenience for products that do not need to inspect a prepared candidate.</summary>
+    public ProductStateLoad<TState> LoadAndPublish(string key, ulong? expectedManagedRevision = null)
+    {
+        using var loaded = LoadPrepared(key, expectedManagedRevision);
+        loaded.Publish();
+        return new ProductStateLoad<TState>(loaded.Present, loaded.PersistenceRevision, loaded.State);
+    }
+
+    public void Dispose() => _state.Dispose();
+}
+
+/// <summary>
+/// One loaded product state and, when present, its already-prepared paired Engine candidate.
+/// Publication never invokes product code: mapping and validation have already completed.
+/// </summary>
+public sealed class MechanicsEntityWorldProductStateLoad<TState> : IDisposable
+{
+    private MechanicsEntityWorldImportCandidate? _candidate;
+    private int _published;
+
+    internal MechanicsEntityWorldProductStateLoad(
+        ProductStateLoad<TState> loaded,
+        MechanicsEntityWorldImportCandidate? candidate)
+    {
+        Present = loaded.Present;
+        PersistenceRevision = loaded.Revision;
+        State = loaded.State;
+        _candidate = candidate;
+    }
+
+    public bool Present { get; }
+
+    public ulong PersistenceRevision { get; }
+
+    public TState? State { get; }
+
+    /// <summary>Copied Engine evidence for a present, successfully prepared import.</summary>
+    public MechanicsWorldImportLeaseReceipt? PreparedImport => _candidate?.Receipt;
+
+    /// <summary>
+    /// Commits the already validated pair. It is idempotent; an absent load is a no-op.
+    /// </summary>
+    public void Publish()
+    {
+        if (!Present || Interlocked.Exchange(ref _published, 1) != 0)
+        {
+            return;
+        }
+
+        MechanicsEntityWorldImportCandidate candidate = _candidate
+            ?? throw new ObjectDisposedException(nameof(MechanicsEntityWorldProductStateLoad<TState>));
+        candidate.Publish();
+    }
+
+    /// <summary>Cancels a present candidate that has not yet been published.</summary>
+    public void Dispose()
+    {
+        MechanicsEntityWorldImportCandidate? candidate = Interlocked.Exchange(ref _candidate, null);
+        candidate?.Dispose();
+    }
+}

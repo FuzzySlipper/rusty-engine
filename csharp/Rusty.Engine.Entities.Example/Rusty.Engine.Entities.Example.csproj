@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Rusty.Engine.Entities/Rusty.Engine.Entities.csproj" />
+    <ProjectReference Include="../Rusty.Engine.Persistence/Rusty.Engine.Persistence.csproj" />
   </ItemGroup>
 </Project>
