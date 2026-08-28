@@ -449,6 +449,54 @@ pub type NativeDestroyRulesPayloadSelectionLease =
     unsafe extern "C" fn(*mut c_void, NativeRulesPayloadSelectionLeaseHandle) -> i32;
 pub type NativeDestroyRulesOperationDiagnosticLease =
     unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
+pub type NativeAdmitStandardExact = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStandardExactAdmitRequest,
+    *mut NativeStandardExactDefinitionHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyStandardExactDefinition =
+    unsafe extern "C" fn(*mut c_void, NativeStandardExactDefinitionHandle) -> i32;
+pub type NativeReadStandardExactDefinition = unsafe extern "C" fn(
+    *mut c_void,
+    NativeStandardExactDefinitionHandle,
+    *mut NativeStandardExactReadoutLease,
+) -> i32;
+pub type NativeDestroyStandardExactReadoutLease =
+    unsafe extern "C" fn(*mut c_void, NativeStandardExactReadoutLeaseHandle) -> i32;
+pub type NativeEvaluateStandardExact = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStandardExactEvaluateRequest,
+    *mut NativeStandardExactEvaluationLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyStandardExactEvaluationLease =
+    unsafe extern "C" fn(*mut c_void, NativeStandardExactEvaluationLeaseHandle) -> i32;
+pub type NativeDestroyStandardExactOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
+pub type NativeAdmitStandardExactPredicate = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStandardExactPredicateAdmitRequest,
+    *mut NativeStandardExactPredicateHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyStandardExactPredicate =
+    unsafe extern "C" fn(*mut c_void, NativeStandardExactPredicateHandle) -> i32;
+pub type NativeReadStandardExactPredicate = unsafe extern "C" fn(
+    *mut c_void,
+    NativeStandardExactPredicateHandle,
+    *mut NativeStandardExactPredicateReadoutLease,
+) -> i32;
+pub type NativeDestroyStandardExactPredicateReadoutLease =
+    unsafe extern "C" fn(*mut c_void, NativeStandardExactPredicateReadoutLeaseHandle) -> i32;
+pub type NativeEvaluateStandardExactPredicate = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStandardExactEvaluatePredicateRequest,
+    *mut NativeStandardExactPredicateEvaluationLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyStandardExactPredicateEvaluationLease =
+    unsafe extern "C" fn(*mut c_void, NativeStandardExactPredicateEvaluationLeaseHandle) -> i32;
 pub type NativeDrawKeyedRng = unsafe extern "C" fn(
     *mut c_void,
     *const NativeKeyedRngRequest,
@@ -1105,6 +1153,25 @@ pub struct NativeRulesApi {
     pub destroy_operation_diagnostic_lease: NativeDestroyRulesOperationDiagnosticLease,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStandardExactApi {
+    pub context: *mut c_void,
+    pub admit: NativeAdmitStandardExact,
+    pub destroy_definition: NativeDestroyStandardExactDefinition,
+    pub read_definition: NativeReadStandardExactDefinition,
+    pub destroy_readout_lease: NativeDestroyStandardExactReadoutLease,
+    pub evaluate: NativeEvaluateStandardExact,
+    pub destroy_evaluation_lease: NativeDestroyStandardExactEvaluationLease,
+    pub destroy_operation_diagnostic_lease: NativeDestroyStandardExactOperationDiagnosticLease,
+    pub admit_predicate: NativeAdmitStandardExactPredicate,
+    pub destroy_predicate: NativeDestroyStandardExactPredicate,
+    pub read_predicate: NativeReadStandardExactPredicate,
+    pub destroy_predicate_readout_lease: NativeDestroyStandardExactPredicateReadoutLease,
+    pub evaluate_predicate: NativeEvaluateStandardExactPredicate,
+    pub destroy_predicate_evaluation_lease: NativeDestroyStandardExactPredicateEvaluationLease,
+}
+
 /// Direct named Engine service families available to trusted NativeAOT code.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1122,6 +1189,7 @@ pub struct NativeEngineApi {
     pub mechanics: NativeMechanicsApi,
     pub persistence: NativePersistenceApi,
     pub rules: NativeRulesApi,
+    pub standard_exact: NativeStandardExactApi,
     pub ui: NativeUiApi,
 }
 

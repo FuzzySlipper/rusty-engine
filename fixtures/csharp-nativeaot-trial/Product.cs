@@ -386,6 +386,37 @@ public sealed class Product : IEngineProduct
                 Require(input.PayloadData.Span.SequenceEqual("{\"exercise\":true}"u8), "payload data did not reach Product.Game");
             }
         }
+        using (StandardExactDefinition exact = _engine.StandardExact.Admit(new StandardExactAdmitRequest(
+            "fixture",
+            "nativeaot-exact",
+            1,
+            "trial.damage",
+            "trial-source",
+            "rules/trial.exact",
+            false,
+            0,
+            false,
+            0,
+            new StandardExactRole[] { new("self", 0, 0) },
+            Array.Empty<StandardExactCapability>(),
+            new StandardExactNode[] {
+                new(StandardExactNodeKind.Literal, 7, StandardExactInputKind.Parameter, string.Empty, string.Empty, 0, 0, 0, 0, 0, 0, 0),
+            },
+            Array.Empty<uint>(),
+            0)))
+        {
+            StandardExactReadoutLeaseReceipt exactReadout = _engine.StandardExact.ReadDefinition(exact);
+            ReadOnlyMemory<StandardExactEvaluationRow> exactResult = _engine.StandardExact.Evaluate(
+                new StandardExactEvaluateRequest(exact, Array.Empty<StandardExactEvidence>()));
+            Require(exactReadout.Definitions.Length == 1
+                && exactReadout.Definitions.Span[0].Family == "exact"
+                && exactReadout.Roles.Length == 1
+                && exactReadout.Roles.Span[0].CapabilitiesLen == 0
+                && exactResult.Length == 1
+                && exactResult.Span[0].Value == 7
+                && exactResult.Span[0].WorkUsed == 1,
+                "StandardExact definition did not retain canonical identity, empty role, and measured evaluation work");
+        }
         if (_mappingReleasePending && !releaseObservedThisTurn)
         {
             Require(!mappedHeldThisTurn, "released physical mapping remained Held on the next admitted turn");

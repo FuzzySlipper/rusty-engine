@@ -11,6 +11,7 @@ mod persistence;
 mod rng;
 mod rules;
 mod spatial;
+mod standard_exact;
 mod ui;
 mod voxel;
 mod voxel_content;

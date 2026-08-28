@@ -543,6 +543,7 @@ dependencies = [
  "entity-state",
  "gameplay-mechanics",
  "gameplay-rules",
+ "gameplay-standard",
  "render-host-contracts",
  "render-model",
  "render-presentation",

@@ -85,6 +85,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Mechanics = new MechanicsServiceImplementation(native.mechanics);
                     Persistence = new PersistenceServiceImplementation(native.persistence);
                     Rules = new RulesServiceImplementation(native.rules);
+                    StandardExact = new StandardExactServiceImplementation(native.standard_exact);
                     Ui = new UiServiceImplementation(native.ui);
                 }
 
@@ -101,6 +102,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IMechanicsService Mechanics { get; }
                 public IPersistenceService Persistence { get; }
                 public IRulesService Rules { get; }
+                public IStandardExactService StandardExact { get; }
                 public IUiService Ui { get; }
             }
 

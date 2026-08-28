@@ -18,6 +18,7 @@ use crate::{
     rng::RuntimeRngBridge,
     rules::RuntimeRulesBridge,
     spatial::RuntimeSpatialBridge,
+    standard_exact::RuntimeStandardExactBridge,
     ui::{RuntimeUiBridge, RuntimeUiCall},
     voxel_content::RuntimeVoxelContentBridge,
 };
@@ -46,6 +47,7 @@ fn engine_api(
     mechanics_bridge: &mut RuntimeMechanicsBridge,
     persistence_bridge: &mut RuntimePersistenceBridge,
     rules_bridge: &mut RuntimeRulesBridge,
+    standard_exact_bridge: &mut RuntimeStandardExactBridge,
     ui_bridge: &mut RuntimeUiBridge,
 ) -> NativeEngineApi {
     NativeEngineApi {
@@ -91,6 +93,7 @@ fn engine_api(
         mechanics: crate::mechanics::api(mechanics_bridge),
         persistence: crate::persistence::api(persistence_bridge),
         rules: crate::rules::api(rules_bridge),
+        standard_exact: crate::standard_exact::api(standard_exact_bridge),
         ui: crate::ui::api(ui_bridge),
     }
 }
@@ -176,6 +179,7 @@ pub struct EngineServiceSet {
     mechanics: RuntimeMechanicsBridge,
     persistence: RuntimePersistenceBridge,
     rules: RuntimeRulesBridge,
+    standard_exact: RuntimeStandardExactBridge,
     ui: RuntimeUiBridge,
 }
 
@@ -219,6 +223,7 @@ impl EngineServiceSet {
             mechanics: crate::mechanics::RuntimeMechanicsBridge::new(),
             persistence: crate::persistence::RuntimePersistenceBridge::new(),
             rules: crate::rules::RuntimeRulesBridge::new(),
+            standard_exact: crate::standard_exact::RuntimeStandardExactBridge::new(),
             ui: crate::ui::RuntimeUiBridge::new(),
         }
     }
@@ -235,6 +240,7 @@ impl EngineServiceSet {
             &mut self.mechanics,
             &mut self.persistence,
             &mut self.rules,
+            &mut self.standard_exact,
             &mut self.ui,
         )
     }
