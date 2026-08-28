@@ -126,6 +126,7 @@ fn fixture_frame() -> PresentationFrameDiff {
         PresentationOp::Audio {
             meta: PresentationOpMeta::new(0),
             op: AudioProjectionOp::Emit {
+                signal_handle: AudioSignalHandle::new(1),
                 signal_id: "fixture:pulse".into(),
                 descriptor: audio(),
             },
@@ -181,6 +182,7 @@ fn every_presentation_operation_survives_the_json_border() {
         PresentationOp::Audio {
             meta: PresentationOpMeta::new(0),
             op: AudioProjectionOp::Emit {
+                signal_handle: AudioSignalHandle::new(1),
                 signal_id: "pulse".into(),
                 descriptor: audio(),
             },
@@ -375,6 +377,7 @@ fn frame_rejects_sequence_gaps_and_unknown_fields() {
     let error = PresentationFrameDiff::try_from_ops(vec![PresentationOp::Audio {
         meta: PresentationOpMeta::new(1),
         op: AudioProjectionOp::Emit {
+            signal_handle: AudioSignalHandle::new(1),
             signal_id: "late".into(),
             descriptor: audio(),
         },

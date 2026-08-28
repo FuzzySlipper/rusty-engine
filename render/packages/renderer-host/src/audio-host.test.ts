@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  audioSignalHandle,
   audioHandle,
   type AudioSourceDescriptor,
   type PresentationFrameDiff,
@@ -87,6 +88,10 @@ class FakeSource extends FakeNode {
 
   stop(): void {
     this.stopped = true;
+  }
+
+  endNaturally(): void {
+    this.onended?.();
   }
 }
 
@@ -203,11 +208,13 @@ void test('Web Audio host emits catalog-hash-bound 3D cues and caches decoded cl
     frame([
       operation(0, {
         op: 'emit',
+        signalHandle: audioSignalHandle(11),
         signalId: 'shot:44',
         descriptor: descriptor(),
       }),
       operation(1, {
         op: 'emit',
+        signalHandle: audioSignalHandle(12),
         signalId: 'impact:44',
         descriptor: descriptor(),
       }),
@@ -231,6 +238,7 @@ void test('Web Audio host emits catalog-hash-bound 3D cues and caches decoded cl
     frame([
       operation(0, {
         op: 'emit',
+        signalHandle: audioSignalHandle(11),
         signalId: 'shot:44',
         descriptor: descriptor(),
       }),
@@ -239,6 +247,110 @@ void test('Web Audio host emits catalog-hash-bound 3D cues and caches decoded cl
   assert.equal(repeated.applied, 1);
   assert.equal(repeated.readout.emittedSignals, 2);
   assert.equal(context.sources.length, 2, 're-reading a frame does not replay a one-shot signal');
+});
+
+void test('audio realization facts use numeric correlations and reject stale completion callbacks', async () => {
+  const context = new FakeContext();
+  const audio = host(context);
+  const voice = audioHandle(44);
+  await audio.applyPresentation(frame([
+    operation(0, {
+      op: 'emit',
+      signalHandle: audioSignalHandle(101),
+      signalId: 'idempotency-only',
+      descriptor: descriptor(),
+    }),
+    operation(1, { op: 'create', handle: voice, descriptor: descriptor() }),
+  ]));
+
+  context.sources[0]?.endNaturally();
+  context.sources[1]?.endNaturally();
+  assert.deepEqual(audio.realizedFacts().facts, [
+    {
+      kind: 'naturalCompletion', factId: 1, source: 'oneShot', sequence: 0,
+      signalHandle: audioSignalHandle(101),
+    },
+    {
+      kind: 'naturalCompletion', factId: 2, source: 'retainedVoice', sequence: 1, handle: voice,
+    },
+  ]);
+  const ownerDestroy = await audio.applyPresentation(frame([
+    operation(0, { op: 'destroy', handle: voice }),
+  ]));
+  assert.equal(ownerDestroy.applied, 1, 'natural end keeps the retained voice owner alive');
+  assert.equal(audio.realizedFacts().facts.length, 2);
+
+  const replacement = audioHandle(45);
+  await audio.applyPresentation(frame([
+    operation(0, { op: 'create', handle: replacement, descriptor: descriptor() }),
+  ]));
+  const staleEnded = context.sources[2]?.onended;
+  await audio.applyPresentation(frame([
+    operation(0, { op: 'destroy', handle: replacement }),
+  ]));
+  staleEnded?.();
+  assert.equal(audio.realizedFacts().facts.length, 2, 'destroy must not report completion');
+
+  const paused = audioHandle(46);
+  await audio.applyPresentation(frame([
+    operation(0, { op: 'create', handle: paused, descriptor: descriptor() }),
+  ]));
+  const pausedEnded = context.sources[3]?.onended;
+  await audio.applyPresentation(frame([
+    operation(0, { op: 'voiceControl', handle: paused, control: 'pause' }),
+  ]));
+  pausedEnded?.();
+  assert.equal(audio.realizedFacts().facts.length, 2, 'pause must not report completion');
+
+  const retriggered = audioHandle(47);
+  await audio.applyPresentation(frame([
+    operation(0, { op: 'create', handle: retriggered, descriptor: descriptor() }),
+  ]));
+  const retriggeredEnded = context.sources[4]?.onended;
+  await audio.applyPresentation(frame([
+    operation(0, { op: 'voiceControl', handle: retriggered, control: 'retrigger' }),
+  ]));
+  retriggeredEnded?.();
+  assert.equal(audio.realizedFacts().facts.length, 2, 'retrigger replacement must suppress old completion');
+  const disposedEnded = context.sources[5]?.onended;
+  await audio.dispose();
+  disposedEnded?.();
+  assert.equal(audio.realizedFacts().facts.length, 0, 'dispose clears owner facts and suppresses callbacks');
+
+  audio.reset();
+  staleEnded?.();
+  assert.deepEqual(audio.realizedFacts(), {
+    retainedFactCount: 0, evictedFactCount: 0, facts: [],
+  });
+});
+
+void test('audio realization and diagnostic retention are bounded while fact IDs stay monotonic', async () => {
+  const context = new FakeContext();
+  const audio = new RendererAudioHost({
+    createContext: () => context as unknown as RendererAudioContext,
+    maxRetainedFacts: 1,
+    maxRetainedDiagnostics: 1,
+    resolveResource: async () => { throw new Error('fixture audio resource unavailable'); },
+  });
+  await audio.applyPresentation(frame([
+    operation(0, {
+      op: 'emit', signalHandle: audioSignalHandle(1), signalId: 'missing:1', descriptor: descriptor(),
+    }),
+    operation(1, {
+      op: 'emit', signalHandle: audioSignalHandle(2), signalId: 'missing:2', descriptor: descriptor(),
+    }),
+  ]));
+
+  assert.equal(audio.readout().retainedDiagnosticCount, 1);
+  assert.equal(audio.readout().evictedDiagnosticCount, 1);
+  assert.deepEqual(audio.realizedFacts(), {
+    retainedFactCount: 1,
+    evictedFactCount: 1,
+    facts: [{ kind: 'diagnostic', factId: 2, diagnostic: audio.readout().diagnostics[0] }],
+  });
+  audio.resetRealizedFacts();
+  assert.equal(audio.realizedFacts().retainedFactCount, 0);
+  assert.equal(audio.realizedFacts().evictedFactCount, 1);
 });
 
 void test('listener updates after disposal retain a diagnostic without writing Web Audio state', async () => {
@@ -408,6 +520,7 @@ void test('missing audio host returns an explicit typed domain diagnostic', asyn
     frame([
       operation(0, {
         op: 'emit',
+        signalHandle: audioSignalHandle(11),
         signalId: 'shot:44',
         descriptor: descriptor(),
       }),
@@ -435,6 +548,7 @@ void test('audio host hashes resolved bytes before decode and reports catalog dr
     frame([
       operation(0, {
         op: 'emit',
+        signalHandle: audioSignalHandle(13),
         signalId: 'bad-hash',
         descriptor: badDescriptor,
       }),
@@ -454,6 +568,7 @@ void test('audio host accepts a manifest-native FNV content hash', async () => {
   const receipt = await audio.applyPresentation(frame([
     operation(0, {
       op: 'emit',
+      signalHandle: audioSignalHandle(14),
       signalId: 'fnv-audio',
       descriptor: {
         ...descriptor(),
@@ -481,6 +596,7 @@ void test('missing audio resources fail locally with typed operation diagnostics
   const receipt = await audio.applyPresentation(frame([
     operation(0, {
       op: 'emit',
+      signalHandle: audioSignalHandle(15),
       signalId: 'missing-audio:44',
       descriptor: descriptor(),
     }),
@@ -506,6 +622,7 @@ void test('blocked AudioContext and malformed frame return explicit failures', a
       frame([
         operation(1, {
           op: 'emit',
+          signalHandle: audioSignalHandle(16),
           signalId: 'bad-sequence',
           descriptor: descriptor(),
         }),

@@ -973,7 +973,8 @@ function presentationOperation(domain: string, input: unknown, path: string): vo
 
 function audioOperation(op: string, input: unknown, path: string): void {
   if (op === 'emit') {
-    const value = record(input, path, ['op', 'signalId', 'descriptor']);
+    const value = record(input, path, ['op', 'signalHandle', 'signalId', 'descriptor']);
+    handle(value['signalHandle'], `${path}.signalHandle`);
     nonEmptyText(value['signalId'], `${path}.signalId`);
     audioDescriptor(value['descriptor'], `${path}.descriptor`);
   } else if (op === 'create') {

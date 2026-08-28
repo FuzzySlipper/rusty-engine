@@ -8,6 +8,7 @@
       },
       "op": {
         "op": "emit",
+        "signalHandle": 1,
         "signalId": "fixture:pulse",
         "descriptor": {
           "clip": {

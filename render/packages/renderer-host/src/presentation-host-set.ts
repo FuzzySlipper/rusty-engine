@@ -4,7 +4,10 @@ import type {
   PresentationOp,
 } from '@rusty-engine/render-contracts';
 import { decodePresentationFrameDiff } from '@rusty-engine/render-contracts';
-import type { RendererAudioListenerPose } from './audio-host.js';
+import type {
+  RendererAudioListenerPose,
+  RendererAudioRealizedFactsReadout,
+} from './audio-host.js';
 import type { AudioProjectionDiagnostic } from './host-types.js';
 
 export type RendererPresentationDomain = PresentationOp['domain'];
@@ -41,6 +44,9 @@ interface RendererAudioListenerPresentationHost extends RendererPresentationDoma
   readonly updateListener?: (
     pose: RendererAudioListenerPose,
   ) => readonly AudioProjectionDiagnostic[];
+  readonly realizedFacts?: () => RendererAudioRealizedFactsReadout;
+  readonly resetRealizedFacts?: () => void;
+  readonly reset?: () => void;
 }
 
 export interface RendererPresentationHosts {
@@ -168,6 +174,28 @@ export class RendererPresentationHostSet {
       applied: diagnostics.length === 0,
       diagnostics,
     };
+  }
+
+  /** Renderer-realized audio feedback, never projection/admission state. */
+  readAudioRealizedFacts(): RendererAudioRealizedFactsReadout | null {
+    const host = this.#hosts.audio;
+    return host?.realizedFacts?.() ?? null;
+  }
+
+  /** Acknowledge audio facts after the product-facing route has consumed them. */
+  resetAudioRealizedFacts(): boolean {
+    const reset = this.#hosts.audio?.resetRealizedFacts;
+    if (reset === undefined) return false;
+    reset();
+    return true;
+  }
+
+  /** Replace the current audio realization owner and invalidate its callbacks. */
+  resetAudioRealizationOwner(): boolean {
+    const reset = this.#hosts.audio?.reset;
+    if (reset === undefined) return false;
+    reset();
+    return true;
   }
 
   requiresAnimationFrame(): boolean {

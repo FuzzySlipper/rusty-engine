@@ -55,6 +55,7 @@ import {
   RendererPresentationHostSet,
   type RendererPresentationFrameReceipt,
 } from './presentation-host-set.js';
+import type { RendererAudioRealizedFactsReadout } from './audio-host.js';
 import { resolveRendererAudioListenerPose } from './renderer-listener-pose.js';
 import {
   assertRendererSurfaceSourceTime,
@@ -481,6 +482,8 @@ export interface RendererSurface {
   readonly applyPresentation: (
     frame: PresentationFrameDiff,
   ) => Promise<RendererPresentationFrameReceipt>;
+  /** Read renderer-realized audio facts without exposing a projector readout. */
+  readonly audioRealizedFacts: () => RendererAudioRealizedFactsReadout | null;
   readonly automaticSubmissionPacing: () => RendererSurfaceAutomaticSubmissionPacingSample;
   readonly cameraPose: () => RendererSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
@@ -499,6 +502,10 @@ export interface RendererSurface {
   readonly projectionSnapshot: () => RenderProjectionSnapshot;
   /** Release pointer capture and clear transient physical input without disposing the surface. */
   readonly releaseInput: () => void;
+  /** Acknowledge audio facts after an attached product route has consumed them. */
+  readonly resetAudioRealizedFacts: () => boolean;
+  /** Invalidate audio playback ownership when the runtime binding is replaced. */
+  readonly resetAudioRealizationOwner: () => boolean;
   /** Submit one explicit frame and return its immutable renderer-owned sample. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceSubmissionSample;
   readonly resetCamera: () => void;
@@ -943,6 +950,7 @@ function mountPreparedRendererSurface(
       }
       return receipt;
     },
+    audioRealizedFacts: () => presentationHosts?.readAudioRealizedFacts() ?? null,
     automaticSubmissionPacing: () => Object.freeze({
       ...backendSurface.automaticSubmissionPacing(),
       hostAdmission: automaticSubmissionAdmission.sample(),
@@ -973,6 +981,8 @@ function mountPreparedRendererSurface(
     projectWorldPoint: backendSurface.projectWorldPoint,
     projectionSnapshot: () => projection.snapshot(),
     releaseInput: controls.releaseInput,
+    resetAudioRealizedFacts: () => presentationHosts?.resetAudioRealizedFacts() ?? false,
+    resetAudioRealizationOwner: () => presentationHosts?.resetAudioRealizationOwner() ?? false,
     renderOnce,
     resetCamera: () => {
       controls.resetCamera();

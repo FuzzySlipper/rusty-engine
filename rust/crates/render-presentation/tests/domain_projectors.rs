@@ -166,6 +166,7 @@ fn audio_batch_is_atomic_and_reset_clears_retained_and_impulse_state() {
             &assets,
             PresentationOpMeta::new(0),
             AudioProjectionOp::Emit {
+                signal_handle: AudioSignalHandle::new(1),
                 signal_id: "shot:1".into(),
                 descriptor: AudioSourceDescriptor {
                     looping: false,
@@ -179,6 +180,7 @@ fn audio_batch_is_atomic_and_reset_clears_retained_and_impulse_state() {
             &assets,
             PresentationOpMeta::new(1),
             AudioProjectionOp::Emit {
+                signal_handle: AudioSignalHandle::new(2),
                 signal_id: "shot:1".into(),
                 descriptor: AudioSourceDescriptor {
                     looping: false,

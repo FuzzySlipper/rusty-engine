@@ -162,7 +162,14 @@ fn validate_json_safe_integers(
 ) -> Result<(), PresentationFrameError> {
     match op {
         PresentationOp::Audio { op, .. } => match op {
-            AudioProjectionOp::Emit { descriptor, .. } => validate_audio(descriptor, sequence),
+            AudioProjectionOp::Emit {
+                signal_handle,
+                descriptor,
+                ..
+            } => {
+                json_safe(signal_handle.raw(), sequence, "audio.signalHandle")?;
+                validate_audio(descriptor, sequence)
+            }
             AudioProjectionOp::Create { handle, descriptor } => {
                 json_safe(handle.raw(), sequence, "audio.handle")?;
                 validate_audio(descriptor, sequence)

@@ -6,6 +6,8 @@ import {
 } from './render.js';
 
 export type AudioHandle = number & { readonly __brand: 'AudioHandle' };
+/** Engine-issued correlation for an individual one-shot audio realization. */
+export type AudioSignalHandle = number & { readonly __brand: 'AudioSignalHandle' };
 export type BillboardHandle = number & { readonly __brand: 'BillboardHandle' };
 export type ParticleEmitterHandle = number & { readonly __brand: 'ParticleEmitterHandle' };
 export type TelemetryOverlayHandle = number & { readonly __brand: 'TelemetryOverlayHandle' };
@@ -13,6 +15,8 @@ export type AnimationProjectionHandle = number & { readonly __brand: 'AnimationP
 
 export const audioHandle = (raw: number): AudioHandle =>
   assertJsonSafeUnsignedInteger(raw, 'audio handle') as AudioHandle;
+export const audioSignalHandle = (raw: number): AudioSignalHandle =>
+  assertJsonSafeUnsignedInteger(raw, 'audio signal handle') as AudioSignalHandle;
 export const billboardHandle = (raw: number): BillboardHandle =>
   assertJsonSafeUnsignedInteger(raw, 'billboard handle') as BillboardHandle;
 export const particleEmitterHandle = (raw: number): ParticleEmitterHandle =>
@@ -66,7 +70,13 @@ export type AudioBusControl =
   | { readonly kind: 'setMuted'; readonly muted: boolean };
 
 export type AudioProjectionOp =
-  | { readonly op: 'emit'; readonly signalId: string; readonly descriptor: AudioSourceDescriptor }
+  | {
+    readonly op: 'emit';
+    /** Stable Engine-issued completion correlation; signalId remains idempotency-only. */
+    readonly signalHandle: AudioSignalHandle;
+    readonly signalId: string;
+    readonly descriptor: AudioSourceDescriptor;
+  }
   | { readonly op: 'create'; readonly handle: AudioHandle; readonly descriptor: AudioSourceDescriptor }
   | { readonly op: 'update'; readonly handle: AudioHandle; readonly patch: AudioSourcePatch }
   | { readonly op: 'destroy'; readonly handle: AudioHandle }

@@ -34,6 +34,8 @@ export interface AudioProjectionReadout {
   readonly activeSources: number;
   readonly cachedClips: number;
   readonly emittedSignals: number;
+  readonly retainedDiagnosticCount: number;
+  readonly evictedDiagnosticCount: number;
   readonly diagnostics: readonly AudioProjectionDiagnostic[];
 }
 

@@ -100,3 +100,27 @@ void test('listener synchronization is typed, local, and forwards only to audio 
   assert.equal(rejected.applied, false);
   assert.equal(rejected.diagnostics[0]?.code, 'hostFailure');
 });
+
+void test('audio feedback acknowledgement remains separate from audio owner replacement', () => {
+  let acknowledged = 0;
+  let ownerResets = 0;
+  const hosts = new RendererPresentationHostSet({
+    audio: {
+      applyPresentation: (_frame: PresentationFrameDiff) => EMPTY_RECEIPT,
+      realizedFacts: () => ({
+        retainedFactCount: 1,
+        evictedFactCount: 0,
+        facts: [],
+      }),
+      resetRealizedFacts: () => { acknowledged += 1; },
+      reset: () => { ownerResets += 1; },
+    },
+  });
+
+  assert.equal(hosts.readAudioRealizedFacts()?.retainedFactCount, 1);
+  assert.equal(hosts.resetAudioRealizedFacts(), true);
+  assert.equal(ownerResets, 0);
+  assert.equal(hosts.resetAudioRealizationOwner(), true);
+  assert.equal(acknowledged, 1);
+  assert.equal(ownerResets, 1);
+});

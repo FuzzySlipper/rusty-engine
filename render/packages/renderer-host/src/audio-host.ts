@@ -3,6 +3,7 @@ import type {
   AudioClipRef,
   AudioEmitter,
   AudioHandle,
+  AudioSignalHandle,
   AudioProjectionOp,
   AudioSourceDescriptor,
   AudioSourcePatch,
@@ -90,6 +91,10 @@ export interface RendererAudioContext {
 
 export interface RendererAudioHostOptions {
   readonly createContext?: () => RendererAudioContext;
+  /** Maximum realized facts retained for product-owned feedback consumption. */
+  readonly maxRetainedFacts?: number;
+  /** Maximum host diagnostics retained for local renderer inspection. */
+  readonly maxRetainedDiagnostics?: number;
   readonly resolveEntityPosition?: RendererAudioEntityPositionResolver;
   readonly resolveResource: RendererAudioResourceResolver;
 }
@@ -106,6 +111,39 @@ export interface RendererAudioFrameReceipt {
   readonly readout: AudioProjectionReadout;
 }
 
+/** A concrete audio realization, intentionally separate from projection/admission readout. */
+export type RendererAudioRealizedFact =
+  | {
+    readonly kind: 'naturalCompletion';
+    readonly factId: number;
+    readonly source: 'oneShot';
+    readonly sequence: number;
+    readonly signalHandle: AudioSignalHandle;
+  }
+  | {
+    readonly kind: 'naturalCompletion';
+    readonly factId: number;
+    readonly source: 'retainedVoice';
+    readonly sequence: number;
+    readonly handle: AudioHandle;
+  }
+  | {
+    readonly kind: 'diagnostic';
+    readonly factId: number;
+    readonly diagnostic: AudioProjectionDiagnostic;
+  };
+
+export interface RendererAudioRealizedFactsReadout {
+  readonly retainedFactCount: number;
+  readonly evictedFactCount: number;
+  readonly facts: readonly RendererAudioRealizedFact[];
+}
+
+type RendererAudioRealizedFactInput =
+  | Omit<Extract<RendererAudioRealizedFact, { readonly source: 'oneShot' }>, 'factId'>
+  | Omit<Extract<RendererAudioRealizedFact, { readonly source: 'retainedVoice' }>, 'factId'>
+  | Omit<Extract<RendererAudioRealizedFact, { readonly kind: 'diagnostic' }>, 'factId'>;
+
 interface RendererAudioSourceGraph {
   descriptor: AudioSourceDescriptor;
   sequence: number;
@@ -118,13 +156,14 @@ interface RendererAudioSourceGraph {
   startedAt: number;
   startedOffset: number;
   playbackRate: number;
+  readonly epoch: number;
   disposed: boolean;
 }
 
 interface RendererRetainedVoice {
   descriptor: AudioSourceDescriptor;
   sequence: number;
-  state: 'playing' | 'paused';
+  state: 'playing' | 'paused' | 'completed';
   cursor: number;
   graph: RendererAudioSourceGraph | null;
 }
@@ -149,10 +188,25 @@ export class RendererAudioHost {
   readonly #oneShots = new Set<RendererAudioSourceGraph>();
   readonly #seenSignals = new Set<string>();
   readonly #diagnostics: AudioProjectionDiagnostic[] = [];
+  readonly #realizedFacts: RendererAudioRealizedFact[] = [];
+  readonly #maxRetainedFacts: number;
+  readonly #maxRetainedDiagnostics: number;
   #emittedSignals = 0;
+  #evictedDiagnosticCount = 0;
+  #evictedFactCount = 0;
+  #nextFactId = 1;
+  #epoch = 1;
   #disposed = false;
 
   constructor(options: RendererAudioHostOptions) {
+    this.#maxRetainedFacts = options.maxRetainedFacts ?? 128;
+    if (!Number.isSafeInteger(this.#maxRetainedFacts) || this.#maxRetainedFacts < 1) {
+      throw new RangeError('maxRetainedFacts must be a positive safe integer');
+    }
+    this.#maxRetainedDiagnostics = options.maxRetainedDiagnostics ?? 128;
+    if (!Number.isSafeInteger(this.#maxRetainedDiagnostics) || this.#maxRetainedDiagnostics < 1) {
+      throw new RangeError('maxRetainedDiagnostics must be a positive safe integer');
+    }
     this.#context = options.createContext?.() ?? createBrowserAudioContext();
     this.#resolveResource = options.resolveResource;
     this.#resolveEntityPosition = options.resolveEntityPosition ?? (() => null);
@@ -218,7 +272,7 @@ export class RendererAudioHost {
         applied += 1;
       } else {
         diagnostics.push(diagnostic);
-        this.#diagnostics.push(diagnostic);
+        this.#recordDiagnostic(diagnostic);
       }
     }
     return this.#receipt(applied, diagnostics);
@@ -229,8 +283,41 @@ export class RendererAudioHost {
       activeSources: this.#retained.size,
       cachedClips: this.#cache.size,
       emittedSignals: this.#emittedSignals,
+      retainedDiagnosticCount: this.#diagnostics.length,
+      evictedDiagnosticCount: this.#evictedDiagnosticCount,
       diagnostics: [...this.#diagnostics],
     };
+  }
+
+  /** Read host-realized facts without conflating them with projection admission. */
+  realizedFacts(): RendererAudioRealizedFactsReadout {
+    return {
+      retainedFactCount: this.#realizedFacts.length,
+      evictedFactCount: this.#evictedFactCount,
+      facts: [...this.#realizedFacts],
+    };
+  }
+
+  /** Acknowledge currently retained realization facts; fact IDs remain monotonic. */
+  resetRealizedFacts(): void {
+    this.#realizedFacts.length = 0;
+  }
+
+  /** Invalidate current playback ownership so late Web Audio callbacks cannot leak forward. */
+  reset(): void {
+    if (this.#disposed) return;
+    this.#epoch += 1;
+    const retainedGraphs = [...this.#retained.values()]
+      .flatMap((voice) => voice.graph === null ? [] : [voice.graph]);
+    for (const graph of [...retainedGraphs, ...this.#oneShots]) disposeGraph(graph);
+    this.#retained.clear();
+    this.#oneShots.clear();
+    this.#seenSignals.clear();
+    this.#emittedSignals = 0;
+    this.#diagnostics.length = 0;
+    this.#evictedDiagnosticCount = 0;
+    this.#realizedFacts.length = 0;
+    this.#evictedFactCount = 0;
   }
 
   refreshLayout(): readonly AudioProjectionDiagnostic[] {
@@ -258,7 +345,7 @@ export class RendererAudioHost {
       }
       setPannerPosition(graph.panner, position, this.#context.currentTime);
     }
-    this.#diagnostics.push(...diagnostics);
+    this.#recordDiagnostics(diagnostics);
     return diagnostics;
   }
 
@@ -266,15 +353,8 @@ export class RendererAudioHost {
     if (this.#disposed) {
       return;
     }
+    this.reset();
     this.#disposed = true;
-    const retainedGraphs = [...this.#retained.values()]
-      .flatMap((voice) => voice.graph === null ? [] : [voice.graph]);
-    for (const graph of [...retainedGraphs, ...this.#oneShots]) {
-      disposeGraph(graph);
-    }
-    this.#retained.clear();
-    this.#oneShots.clear();
-    this.#seenSignals.clear();
     for (const bus of Object.values(this.#buses)) {
       bus.disconnect();
     }
@@ -293,11 +373,7 @@ export class RendererAudioHost {
         const graph = await this.#createGraph(op.descriptor, meta.sequence);
         this.#seenSignals.add(op.signalId);
         this.#oneShots.add(graph);
-        graph.source.onended = () => {
-          this.#oneShots.delete(graph);
-          disposeGraph(graph);
-        };
-        graph.source.start();
+        this.#startOneShotGraph(graph, op.signalHandle);
         this.#emittedSignals += 1;
         return null;
       }
@@ -312,8 +388,10 @@ export class RendererAudioHost {
           cursor: 0,
           graph: null,
         };
-        voice.graph = await this.#createAndStartGraph(voice, 0);
+        const graph = await this.#createGraph(voice.descriptor, voice.sequence);
+        voice.graph = graph;
         this.#retained.set(op.handle as number, voice);
+        this.#startRetainedGraph(op.handle, voice, graph, 0);
         return null;
       }
       if (op.op === 'destroy') {
@@ -363,10 +441,10 @@ export class RendererAudioHost {
     if (patch.emitter !== null) {
       const replacement = await this.#createGraph(next, meta.sequence);
       disposeGraph(graph);
-      startGraph(replacement, cursor, this.#context.currentTime);
+      voice.graph = replacement;
       voice.descriptor = next;
       voice.sequence = meta.sequence;
-      voice.graph = replacement;
+      this.#startRetainedGraph(handle, voice, replacement, cursor);
       return null;
     }
     graph.descriptor = next;
@@ -403,16 +481,18 @@ export class RendererAudioHost {
       if (voice.state === 'playing') {
         return null;
       }
-      voice.graph = await this.#createAndStartGraph(voice, voice.cursor);
+      const graph = await this.#createGraph(voice.descriptor, voice.sequence);
+      voice.graph = graph;
       voice.state = 'playing';
+      this.#startRetainedGraph(handle, voice, graph, voice.cursor);
       return null;
     }
     const replacement = await this.#createGraph(voice.descriptor, voice.sequence);
     disposeGraph(voice.graph);
     voice.cursor = 0;
-    startGraph(replacement, 0, this.#context.currentTime);
     voice.graph = replacement;
     voice.state = 'playing';
+    this.#startRetainedGraph(handle, voice, replacement, 0);
     return null;
   }
 
@@ -440,15 +520,6 @@ export class RendererAudioHost {
     );
   }
 
-  async #createAndStartGraph(
-    voice: RendererRetainedVoice,
-    offset: number,
-  ): Promise<RendererAudioSourceGraph> {
-    const graph = await this.#createGraph(voice.descriptor, voice.sequence);
-    startGraph(graph, offset, this.#context.currentTime);
-    return graph;
-  }
-
   async #createGraph(
     descriptor: AudioSourceDescriptor,
     sequence: number,
@@ -468,6 +539,7 @@ export class RendererAudioHost {
       startedAt: this.#context.currentTime,
       startedOffset: 0,
       playbackRate: descriptor.pitch,
+      epoch: this.#epoch,
       disposed: false,
     };
     source.connect(graph.stereoPanner);
@@ -530,8 +602,75 @@ export class RendererAudioHost {
     message: string,
   ): readonly AudioProjectionDiagnostic[] {
     const diagnostic = hostDiagnostic(code, message);
-    this.#diagnostics.push(diagnostic);
+    this.#recordDiagnostic(diagnostic);
     return [diagnostic];
+  }
+
+  #recordDiagnostics(diagnostics: readonly AudioProjectionDiagnostic[]): void {
+    for (const diagnostic of diagnostics) this.#recordDiagnostic(diagnostic);
+  }
+
+  #recordDiagnostic(diagnostic: AudioProjectionDiagnostic): void {
+    if (this.#diagnostics.length === this.#maxRetainedDiagnostics) {
+      this.#diagnostics.shift();
+      this.#evictedDiagnosticCount += 1;
+    }
+    this.#diagnostics.push(diagnostic);
+    this.#appendRealizedFact({ kind: 'diagnostic', diagnostic });
+  }
+
+  #appendRealizedFact(
+    fact: RendererAudioRealizedFactInput,
+  ): void {
+    if (this.#realizedFacts.length === this.#maxRetainedFacts) {
+      this.#realizedFacts.shift();
+      this.#evictedFactCount += 1;
+    }
+    this.#realizedFacts.push({ ...fact, factId: this.#nextFactId++ } as RendererAudioRealizedFact);
+  }
+
+  #startOneShotGraph(
+    graph: RendererAudioSourceGraph,
+    signalHandle: AudioSignalHandle,
+  ): void {
+    graph.source.onended = () => {
+      if (graph.disposed || graph.epoch !== this.#epoch || !this.#oneShots.delete(graph)) return;
+      if (!graph.descriptor.looping) {
+        this.#appendRealizedFact({
+          kind: 'naturalCompletion',
+          source: 'oneShot',
+          sequence: graph.sequence,
+          signalHandle,
+        });
+      }
+      disposeGraph(graph);
+    };
+    startGraph(graph, 0, this.#context.currentTime);
+  }
+
+  #startRetainedGraph(
+    handle: AudioHandle,
+    voice: RendererRetainedVoice,
+    graph: RendererAudioSourceGraph,
+    offset: number,
+  ): void {
+    graph.source.onended = () => {
+      if (graph.disposed || graph.epoch !== this.#epoch) return;
+      if (this.#retained.get(handle as number)?.graph !== graph) return;
+      if (!graph.descriptor.looping) {
+        voice.graph = null;
+        voice.state = 'completed';
+        voice.cursor = graph.duration ?? playbackCursor(graph, this.#context.currentTime);
+        this.#appendRealizedFact({
+          kind: 'naturalCompletion',
+          source: 'retainedVoice',
+          sequence: graph.sequence,
+          handle,
+        });
+      }
+      disposeGraph(graph);
+    };
+    startGraph(graph, offset, this.#context.currentTime);
   }
 
   #receipt(

@@ -156,6 +156,8 @@ export type {
   RendererAudioEntityPositionResolver,
   RendererAudioFrameReceipt,
   RendererAudioHostOptions,
+  RendererAudioRealizedFact,
+  RendererAudioRealizedFactsReadout,
   RendererAudioResource,
   RendererAudioResourceResolver,
 } from './audio-host.js';

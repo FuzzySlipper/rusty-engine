@@ -27,6 +27,25 @@ impl AudioHandle {
     }
 }
 
+/// Engine-issued correlation for one realized one-shot audio signal.
+///
+/// This is intentionally separate from the string idempotency key: renderer
+/// feedback names a concrete realization, while replay/admission can continue
+/// to deduplicate by `signal_id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AudioSignalHandle(u64);
+
+impl AudioSignalHandle {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioBus {
@@ -131,6 +150,7 @@ pub struct AudioBusReadout {
 )]
 pub enum AudioProjectionOp {
     Emit {
+        signal_handle: AudioSignalHandle,
         signal_id: String,
         descriptor: AudioSourceDescriptor,
     },
@@ -320,6 +340,7 @@ impl AudioProjector {
             AudioProjectionOp::Emit {
                 signal_id,
                 descriptor,
+                ..
             } => {
                 if signal_id.is_empty() {
                     return Err(AudioProjectionDiagnosticCode::InvalidDescriptor);
