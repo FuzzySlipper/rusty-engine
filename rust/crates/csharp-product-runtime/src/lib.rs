@@ -17,17 +17,18 @@ use std::{
 };
 
 use csharp_engine_services::{
-    CsharpAppearanceCatalog, CsharpEngineCallOutput, CsharpEngineServicesError,
-    CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet,
+    AudioRealizationFact, CsharpAppearanceCatalog, CsharpEngineCallOutput,
+    CsharpEngineServicesError, CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet,
 };
 use libloading::Library;
 use product_dev_host::{
-    CanonicalU64, ProductDevControlOperation, ProductDevInputBatch, ProductDevInputResult,
-    ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevOperationResult,
-    ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
-    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeOutput,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    CanonicalU64, ProductDevAudioCompletionSource, ProductDevAudioFeedback,
+    ProductDevAudioFeedbackFact, ProductDevAudioFeedbackResult, ProductDevControlOperation,
+    ProductDevInputBatch, ProductDevInputResult, ProductDevLifecycleOperation,
+    ProductDevOperationKind, ProductDevOperationResult, ProductDevRendererResource,
+    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
+    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
+    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
 use product_model::{InputAxis, InputEdge, IntentValueKind};
 use runtime_input::{
@@ -1299,6 +1300,7 @@ impl CsharpProductRuntime {
         self.input_lane
             .rebind(binding, standard_input_context(), reason)
             .map_err(input_error)?;
+        self.services.reset_audio_realization_owner();
         self.pending_inputs.clear();
         self.pending_inputs.push(clear_input_owned(binding, reason));
         Ok(())
@@ -1547,6 +1549,115 @@ impl ProductDevRuntime for CsharpProductRuntime {
             "the NativeAOT walking trial has no timeline bridge",
         )
         .expect("fixed error"))
+    }
+
+    fn report_audio_feedback(
+        &mut self,
+        feedback: ProductDevAudioFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
+    {
+        // Fence before clearing/replacing the realization owner. A stale host
+        // generation must be observationally rejected without touching the
+        // committed Engine audio store.
+        self.require_current_control_binding(Some(feedback.runtime))?;
+        feedback.validate().map_err(host_runtime_error)?;
+        let accepted_through_fact_id = feedback.facts.last().map(|fact| fact.fact_id());
+        let facts = feedback
+            .facts
+            .into_iter()
+            .map(audio_realization_fact)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.services
+            .ingest_audio_realization_feedback(
+                feedback.replace_owner,
+                feedback.evicted_fact_count.get(),
+                facts,
+            )
+            .map_err(|error| self.runtime_error(error.into()))?;
+        let result =
+            ProductDevAudioFeedbackResult::accepted(self.binding(), accepted_through_fact_id);
+        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
+    }
+}
+
+fn audio_realization_fact(
+    fact: ProductDevAudioFeedbackFact,
+) -> Result<AudioRealizationFact, ProductDevRuntimeError> {
+    Ok(match fact {
+        ProductDevAudioFeedbackFact::NaturalCompletion {
+            fact_id,
+            sequence,
+            source,
+        } => match source {
+            ProductDevAudioCompletionSource::OneShot { signal_handle } => {
+                AudioRealizationFact::NaturalCompletionOneShot {
+                    fact_id: fact_id.get(),
+                    sequence,
+                    signal_handle: signal_handle.get(),
+                }
+            }
+            ProductDevAudioCompletionSource::RetainedVoice { voice_handle } => {
+                AudioRealizationFact::NaturalCompletionRetainedVoice {
+                    fact_id: fact_id.get(),
+                    sequence,
+                    voice_handle: voice_handle.get(),
+                }
+            }
+        },
+        ProductDevAudioFeedbackFact::Diagnostic {
+            fact_id,
+            code,
+            sequence,
+            voice_handle,
+        } => AudioRealizationFact::Diagnostic {
+            fact_id: fact_id.get(),
+            code: native_audio_diagnostic_code(code),
+            sequence,
+            voice_handle: voice_handle.map(CanonicalU64::get),
+        },
+    })
+}
+
+fn native_audio_diagnostic_code(
+    code: render_presentation::AudioProjectionDiagnosticCode,
+) -> NativeAudioDiagnosticCode {
+    match code {
+        render_presentation::AudioProjectionDiagnosticCode::InvalidDescriptor => {
+            NativeAudioDiagnosticCode::InvalidDescriptor
+        }
+        render_presentation::AudioProjectionDiagnosticCode::AssetMissing => {
+            NativeAudioDiagnosticCode::AssetMissing
+        }
+        render_presentation::AudioProjectionDiagnosticCode::AssetKindMismatch => {
+            NativeAudioDiagnosticCode::AssetKindMismatch
+        }
+        render_presentation::AudioProjectionDiagnosticCode::ContentHashMismatch => {
+            NativeAudioDiagnosticCode::ContentHashMismatch
+        }
+        render_presentation::AudioProjectionDiagnosticCode::DuplicateSignal => {
+            NativeAudioDiagnosticCode::DuplicateSignal
+        }
+        render_presentation::AudioProjectionDiagnosticCode::DuplicateHandle => {
+            NativeAudioDiagnosticCode::DuplicateHandle
+        }
+        render_presentation::AudioProjectionDiagnosticCode::UnknownHandle => {
+            NativeAudioDiagnosticCode::UnknownHandle
+        }
+        render_presentation::AudioProjectionDiagnosticCode::UnavailableHost => {
+            NativeAudioDiagnosticCode::UnavailableHost
+        }
+        render_presentation::AudioProjectionDiagnosticCode::AudioContextBlocked => {
+            NativeAudioDiagnosticCode::AudioContextBlocked
+        }
+        render_presentation::AudioProjectionDiagnosticCode::DecodeFailed => {
+            NativeAudioDiagnosticCode::DecodeFailed
+        }
+        render_presentation::AudioProjectionDiagnosticCode::HostFailure => {
+            NativeAudioDiagnosticCode::HostFailure
+        }
+        render_presentation::AudioProjectionDiagnosticCode::InvalidControl => {
+            NativeAudioDiagnosticCode::InvalidControl
+        }
     }
 }
 

@@ -3,7 +3,9 @@ import test from 'node:test';
 import {
   ProductBrowserHostError,
   PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE,
+  createProductBrowserAudioFeedbackReporter,
   createProductBrowserRuntimeTransport,
+  flushProductBrowserAudioFeedbackBeforeUpdate,
   productBrowserBundleAssets,
   productBrowserBundleDescriptor,
 } from './product-browser-host.js';
@@ -11,12 +13,21 @@ import type { ProductBrowserRuntimeAdapter } from './product-browser-host.js';
 import type { RustyApplicationRuntimeInputEnvelope } from '@rusty-engine/application-host';
 import { createProductBrowserCadence } from './realtime-cadence.js';
 
+const AUDIO_RUNTIME = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
+
 const adapter: ProductBrowserRuntimeAdapter = {
   lifecycle: async (operation) => ({
     accepted: true,
     operation: operation.kind,
   }),
   input: async (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => ({ accepted: true, count: batch.length }),
+  reportAudioFeedback: async (feedback) => ({
+    accepted: true,
+    runtime: feedback.runtime,
+    ...(feedback.facts.length === 0
+      ? {}
+      : { acceptedThroughFactId: feedback.facts[feedback.facts.length - 1]!.factId }),
+  }),
   advanceRealtime: async () => ({ accepted: true, operation: 'advance-realtime' as const }),
   subscribeOutputs: () => () => undefined,
   dispose: () => undefined,
@@ -28,6 +39,84 @@ test('fixed runtime transport preserves only named operations', async () => {
   assert.equal((await transport.input([])).count, 0);
   assert.equal((await transport.advanceRealtime('1000000')).operation, 'advance-realtime');
   assert.equal('call' in transport, false);
+});
+
+test('audio feedback claims the initial owner, retries without loss, and acknowledges only the submitted range', async () => {
+  const reports: Array<Record<string, unknown>> = [];
+  const acknowledgements: number[] = [];
+  let resets = 0;
+  let facts: Array<Record<string, unknown>> = [];
+  const deferred: { resolve: ((value: unknown) => void) | null } = { resolve: null };
+  const renderer = {
+    audioRealizedFacts: () => ({ retainedFactCount: facts.length, evictedFactCount: 0, facts }),
+    acknowledgeAudioRealizedFacts: (throughFactId: number) => {
+      acknowledgements.push(throughFactId);
+      facts = facts.filter((fact) => (fact['factId'] as number) > throughFactId);
+      return true;
+    },
+    resetAudioRealizationOwner: () => { resets += 1; return true; },
+  } as unknown as Parameters<typeof createProductBrowserAudioFeedbackReporter>[0]['renderer'];
+  const reporter = createProductBrowserAudioFeedbackReporter({
+    renderer,
+    report: async (feedback) => {
+      reports.push(feedback as unknown as Record<string, unknown>);
+      if (reports.length === 1) {
+        return { accepted: true as const, runtime: feedback.runtime };
+      }
+      if (reports.length === 2) {
+        return { accepted: false as const, runtime: feedback.runtime, diagnostic: 'retry' };
+      }
+      if (reports.length === 3) {
+        return new Promise((resolve) => { deferred.resolve = resolve; }) as never;
+      }
+      const acceptedThroughFactId = feedback.facts.at(-1)?.factId;
+      if (acceptedThroughFactId === undefined) return { accepted: true as const, runtime: feedback.runtime };
+      return {
+        accepted: true as const,
+        runtime: feedback.runtime,
+        acceptedThroughFactId,
+      };
+    },
+    initialRuntime: AUDIO_RUNTIME,
+  });
+
+  // A remount with an identical binding must still claim the feedback owner;
+  // later duplicate binding markers do not reset the renderer again.
+  await reporter.flush();
+  assert.equal((reports[0]!['replaceOwner']), true);
+  facts.push({ kind: 'naturalCompletion', factId: 1, source: 'oneShot', sequence: 3, signalHandle: 11 });
+  reporter.bindRuntime(AUDIO_RUNTIME);
+  assert.equal(resets, 0);
+  await assert.rejects(reporter.flush(), /retry/u);
+  assert.deepEqual(acknowledgements, []);
+
+  const inFlight = reporter.flush();
+  facts.push({
+    kind: 'diagnostic',
+    factId: 2,
+    diagnostic: { code: 'decodeFailed', sequence: 4, handle: null, message: 'test-only' },
+  });
+  assert.ok(deferred.resolve);
+  deferred.resolve({ accepted: true, runtime: AUDIO_RUNTIME, acceptedThroughFactId: '1' });
+  await inFlight;
+  assert.deepEqual(acknowledgements, [1]);
+  assert.deepEqual((reports[1]!['facts'] as Array<Record<string, unknown>>).map((fact) => fact['factId']), ['1']);
+  assert.deepEqual((reports[2]!['facts'] as Array<Record<string, unknown>>).map((fact) => fact['factId']), ['1']);
+
+  await reporter.flush();
+  assert.deepEqual((reports[3]!['facts'] as Array<Record<string, unknown>>).map((fact) => fact['factId']), ['2']);
+  assert.deepEqual(acknowledgements, [1, 2]);
+});
+
+test('audio feedback flush precedes every browser-host C# update admission lane', async () => {
+  for (const operation of ['advance-realtime', 'admit-demand-step', 'admit-external-step']) {
+    const order: string[] = [];
+    await flushProductBrowserAudioFeedbackBeforeUpdate(
+      async () => { order.push('feedback'); },
+      async () => { order.push(operation); return operation; },
+    );
+    assert.deepEqual(order, ['feedback', operation]);
+  }
 });
 
 test('realtime owner controls advancement without dropping typed cadence input', async () => {
@@ -115,6 +204,13 @@ test('transport rejects an adapter with an arbitrary or missing operation surfac
       subscribeOutputs: undefined,
     } as never),
     /subscribeOutputs must be a function/u,
+  );
+  assert.throws(
+    () => createProductBrowserRuntimeTransport({
+      ...adapter,
+      reportAudioFeedback: undefined,
+    } as never),
+    /reportAudioFeedback must be a function/u,
   );
   assert.throws(
     () => createProductBrowserRuntimeTransport({

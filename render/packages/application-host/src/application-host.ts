@@ -477,6 +477,12 @@ export interface RustyApplicationRendererPort {
   readonly applyPresentation: (
     frame: RustyApplicationPresentationFrame,
   ) => Promise<RustyApplicationPresentationReceipt>;
+  /** Read Engine-realized audio facts without exposing the browser audio owner. */
+  readonly audioRealizedFacts: () => ReturnType<RendererSurface['audioRealizedFacts']>;
+  /** Acknowledge only the submitted Engine-realized audio fact range. */
+  readonly acknowledgeAudioRealizedFacts: RendererSurface['acknowledgeAudioRealizedFacts'];
+  /** Invalidate the realized-audio owner when a product runtime binding changes. */
+  readonly resetAudioRealizationOwner: RendererSurface['resetAudioRealizationOwner'];
   readonly configureViews: (
     composition: RustyApplicationViewComposition,
   ) => ReturnType<RendererSurface['configureViews']>;
@@ -1140,6 +1146,10 @@ async function mountRustyApplicationWithEnvironment(
         }))),
       });
     },
+    audioRealizedFacts: () => requireActive().audioRealizedFacts(),
+    acknowledgeAudioRealizedFacts: (throughFactId: number) =>
+      requireActive().acknowledgeAudioRealizedFacts(throughFactId),
+    resetAudioRealizationOwner: () => requireActive().resetAudioRealizationOwner(),
     setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
     configureViews: (composition: RustyApplicationViewComposition) => requireActive().configureViews(composition),
   });

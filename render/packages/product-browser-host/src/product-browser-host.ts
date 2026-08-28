@@ -67,6 +67,46 @@ export interface ProductBrowserRuntimeInputResult {
   readonly diagnostic?: string;
 }
 
+/** Closed browser-to-runtime audio realization feedback; no browser objects cross this boundary. */
+export type ProductBrowserAudioFeedbackFact =
+  | {
+      readonly kind: 'naturalCompletion';
+      readonly source: 'oneShot';
+      readonly factId: string;
+      readonly sequence: number;
+      readonly signalHandle: string;
+    }
+  | {
+      readonly kind: 'naturalCompletion';
+      readonly source: 'retainedVoice';
+      readonly factId: string;
+      readonly sequence: number;
+      readonly voiceHandle: string;
+    }
+  | {
+      readonly kind: 'diagnostic';
+      readonly factId: string;
+      readonly code: string;
+      readonly sequence: number;
+      readonly voiceHandle: string | null;
+    };
+
+export interface ProductBrowserAudioFeedback {
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly replaceOwner: boolean;
+  readonly evictedFactCount: string;
+  readonly facts: readonly ProductBrowserAudioFeedbackFact[];
+}
+
+export interface ProductBrowserAudioFeedbackResult {
+  readonly accepted: boolean;
+  /** The exact runtime binding which accepted or rejected this fixed report. */
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  /** The accepted submitted boundary; absent when the fixed report had no facts. */
+  readonly acceptedThroughFactId?: string;
+  readonly diagnostic?: string;
+}
+
 export interface ProductBrowserTimelineCompletion {
   /** Canonical decimal u64 ticket issued by runtime-timeline. */
   readonly ticket: string;
@@ -158,6 +198,9 @@ export interface ProductBrowserRuntimeAdapter {
   readonly input: (
     batch: readonly RustyApplicationRuntimeInputEnvelope[],
   ) => Promise<ProductBrowserRuntimeInputResult>;
+  readonly reportAudioFeedback: (
+    feedback: ProductBrowserAudioFeedback,
+  ) => Promise<ProductBrowserAudioFeedbackResult>;
   readonly advanceRealtime: (
     observedTimeNs: string,
   ) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -181,6 +224,7 @@ export interface ProductBrowserRuntimeAdapter {
 export interface ProductBrowserRuntimeTransport {
   readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
   readonly input: ProductBrowserRuntimeAdapter['input'];
+  readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
   readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
   readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
   readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -198,6 +242,7 @@ export function createProductBrowserRuntimeTransport(
   }
   requireFunction(adapter.lifecycle, 'lifecycle');
   requireFunction(adapter.input, 'input');
+  requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
   requireFunction(adapter.advanceRealtime, 'advanceRealtime');
   if (adapter.completeTimeline !== undefined) {
     requireFunction(adapter.completeTimeline, 'completeTimeline');
@@ -210,6 +255,7 @@ export function createProductBrowserRuntimeTransport(
   return Object.freeze({
     lifecycle: adapter.lifecycle,
     input: adapter.input,
+    reportAudioFeedback: adapter.reportAudioFeedback,
     advanceRealtime: adapter.advanceRealtime,
     ...(adapter.admitDemandStep === undefined ? {} : { admitDemandStep: adapter.admitDemandStep }),
     ...(adapter.admitExternalStep === undefined ? {} : { admitExternalStep: adapter.admitExternalStep }),
@@ -320,6 +366,96 @@ interface ProductBrowserOperationQueue {
   readonly settle: () => Promise<void>;
 }
 
+interface ProductBrowserAudioFeedbackReporter {
+  readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
+  readonly flush: () => Promise<void>;
+}
+
+/** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
+export function createProductBrowserAudioFeedbackReporter(options: {
+  readonly renderer: Pick<RustyApplicationHost['renderer'],
+    'audioRealizedFacts' | 'acknowledgeAudioRealizedFacts' | 'resetAudioRealizationOwner'>;
+  readonly report: ProductBrowserRuntimeTransport['reportAudioFeedback'];
+  readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+}): ProductBrowserAudioFeedbackReporter {
+  let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
+  // A fresh browser owner must replace any feedback retained by a prior page,
+  // even when it rejoins with an identical runtime identity.
+  let replaceOwnerPending = currentBinding !== null;
+  let lastReportedEvictionCount = 0;
+
+  const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
+    if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) {
+      options.renderer.resetAudioRealizationOwner();
+      replaceOwnerPending = true;
+    }
+    currentBinding = runtime;
+  };
+
+  const flush = async (): Promise<void> => {
+    const binding = currentBinding;
+    if (binding === null) return;
+    const factsReadout = options.renderer.audioRealizedFacts();
+    const realizedFacts = factsReadout?.facts ?? [];
+    const facts = realizedFacts.map(snapshotAudioFeedbackFact);
+    const evictedFactCount = factsReadout?.evictedFactCount ?? 0;
+    if (!replaceOwnerPending
+      && facts.length === 0
+      && evictedFactCount === lastReportedEvictionCount) {
+      return;
+    }
+    const submittedThroughFactId = realizedFacts.length === 0
+      ? undefined
+      : realizedFacts[realizedFacts.length - 1]!.factId;
+    const result = await options.report(Object.freeze({
+      runtime: binding,
+      replaceOwner: replaceOwnerPending,
+      evictedFactCount: canonicalSafeU64(evictedFactCount, 'audio feedback evictedFactCount'),
+      facts: Object.freeze(facts),
+    }));
+    if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
+      throw new ProductBrowserHostError(
+        'transport_failed',
+        'audio feedback result did not match the current Product runtime binding',
+      );
+    }
+    if (!result.accepted) {
+      throw new ProductBrowserHostError(
+        'transport_failed',
+        result.diagnostic ?? 'audio feedback was rejected by the runtime',
+      );
+    }
+    if (result.diagnostic !== undefined) {
+      throw new ProductBrowserHostError('transport_failed', 'accepted audio feedback cannot include a diagnostic');
+    }
+    const expectedThroughFactId = submittedThroughFactId === undefined
+      ? undefined
+      : canonicalSafeU64(submittedThroughFactId, 'audio feedback factId');
+    if (result.acceptedThroughFactId !== expectedThroughFactId) {
+      throw new ProductBrowserHostError(
+        'transport_failed',
+        'audio feedback acknowledgement boundary did not match the submitted facts',
+      );
+    }
+    if (submittedThroughFactId !== undefined) {
+      options.renderer.acknowledgeAudioRealizedFacts(submittedThroughFactId);
+    }
+    replaceOwnerPending = false;
+    lastReportedEvictionCount = evictedFactCount;
+  };
+
+  return Object.freeze({ bindRuntime, flush });
+}
+
+/** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
+export async function flushProductBrowserAudioFeedbackBeforeUpdate<T>(
+  flush: () => Promise<void>,
+  update: () => Promise<T>,
+): Promise<T> {
+  await flush();
+  return update();
+}
+
 /**
  * Mounts the one Engine-owned application composition root. The browser host
  * has no renderer implementation, product state, evaluator, or own cadence;
@@ -346,6 +482,7 @@ export async function mountProductBrowserHost(
   let failure: ProductBrowserHostError | null = null;
   let transportClosed = false;
   let runtimeProgress = 0;
+  let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
   const maximumPendingOutputs = 64;
 
@@ -426,6 +563,15 @@ export async function mountProductBrowserHost(
     return error;
   };
 
+  const flushAudioFeedback = (): Promise<void> => audioFeedbackReporter?.flush() ?? Promise.resolve();
+
+  const scheduleAudioFeedbackFlush = (): void => {
+    if (state !== 'ready') return;
+    void queue.enqueue(flushAudioFeedback).catch((cause: unknown) => {
+      failAndClose(cause, 'transport_failed');
+    });
+  };
+
   const applyOutput = (output: ProductBrowserRuntimeOutput): void => {
     if (application === null) {
       if (pendingOutputs.length >= maximumPendingOutputs) {
@@ -446,6 +592,7 @@ export async function mountProductBrowserHost(
       const host = requireApplication();
       switch (output.kind) {
         case 'binding':
+          audioFeedbackReporter?.bindRuntime(output.runtime);
           host.input?.bindRuntime({
             runtime: output.runtime,
             context: options.inputContext ?? 'gameplay.default',
@@ -494,14 +641,20 @@ export async function mountProductBrowserHost(
           // fixed typed port and never becomes a promise bus.
           void host.renderer.applyPresentation(output.frame).then((receipt) => {
             if (receipt.diagnostics.length > 0) {
-              failAndClose(
-                new ProductBrowserHostError(
-                  'output_failed',
-                  receipt.diagnostics.map((item) => item.message).join('; '),
-                ),
+              const presentationFailure = new ProductBrowserHostError(
                 'output_failed',
+                receipt.diagnostics.map((item) => item.message).join('; '),
               );
+              // Preserve the existing terminal presentation posture, but give
+              // the fixed audio-feedback lane one serialized attempt first so
+              // a just-realized audio diagnostic reaches its C# readout.
+              void queue.enqueue(flushAudioFeedback).then(
+                () => { failAndClose(presentationFailure, 'output_failed'); },
+                (cause: unknown) => { failAndClose(cause, 'transport_failed'); },
+              );
+              return;
             }
+            scheduleAudioFeedbackFlush();
           }).catch((cause: unknown) => {
             failAndClose(cause, 'output_failed');
           });
@@ -574,7 +727,10 @@ export async function mountProductBrowserHost(
       applyInputResult(await transport.input(batch));
     },
     advanceRealtime: async (observedTimeNs) => {
-      applyOperationResult(await transport.advanceRealtime(observedTimeNs));
+      applyOperationResult(await flushProductBrowserAudioFeedbackBeforeUpdate(
+        flushAudioFeedback,
+        () => transport.advanceRealtime(observedTimeNs),
+      ));
       if (options.lifecycleMode === 'realtime' && realtimeAdvanceOwner === 'browser') {
         runtimeProgress += 1;
         publishHealth();
@@ -636,6 +792,13 @@ export async function mountProductBrowserHost(
             },
           }),
     });
+    audioFeedbackReporter = createProductBrowserAudioFeedbackReporter({
+      renderer: application.renderer,
+      report: transport.reportAudioFeedback,
+      ...(options.runtimeInput?.binding === undefined
+        ? {}
+        : { initialRuntime: options.runtimeInput.binding }),
+    });
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
     for (const output of bufferedOutputs) applyOutput(output);
     if (failure !== null) throw failure;
@@ -647,6 +810,7 @@ export async function mountProductBrowserHost(
     started = true;
     state = 'ready';
     publishHealth();
+    scheduleAudioFeedbackFlush();
   } catch (cause) {
     const error = reportFailure(cause, 'startup_failed');
     unsubscribeTerminalFailures?.();
@@ -727,7 +891,10 @@ export async function mountProductBrowserHost(
       host.input?.sampleController();
       const batch = host.input?.drain() ?? [];
       if (batch.length > 0) applyInputResult(await transport.input(batch));
-      const result = await transport.admitDemandStep!();
+      const result = await flushProductBrowserAudioFeedbackBeforeUpdate(
+        flushAudioFeedback,
+        () => transport.admitDemandStep!(),
+      );
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
@@ -754,7 +921,10 @@ export async function mountProductBrowserHost(
       host.input?.sampleController();
       const batch = host.input?.drain() ?? [];
       if (batch.length > 0) applyInputResult(await transport.input(batch));
-      const result = await transport.admitExternalStep!(step);
+      const result = await flushProductBrowserAudioFeedbackBeforeUpdate(
+        flushAudioFeedback,
+        () => transport.admitExternalStep!(step),
+      );
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
@@ -806,6 +976,62 @@ export async function mountProductBrowserHost(
 }
 
 const MAXIMUM_HEALTH_DIAGNOSTIC_BYTES = 512;
+
+function snapshotAudioFeedbackFact(
+  value: NonNullable<ReturnType<RustyApplicationHost['renderer']['audioRealizedFacts']>>['facts'][number],
+): ProductBrowserAudioFeedbackFact {
+  if (value.kind === 'naturalCompletion' && value.source === 'oneShot') {
+    return Object.freeze({
+      kind: 'naturalCompletion',
+      source: 'oneShot',
+      factId: canonicalSafeU64(value.factId, 'audio feedback factId'),
+      sequence: requireAudioFeedbackSequence(value.sequence),
+      signalHandle: canonicalSafeU64(value.signalHandle, 'audio feedback signalHandle'),
+    });
+  }
+  if (value.kind === 'naturalCompletion' && value.source === 'retainedVoice') {
+    return Object.freeze({
+      kind: 'naturalCompletion',
+      source: 'retainedVoice',
+      factId: canonicalSafeU64(value.factId, 'audio feedback factId'),
+      sequence: requireAudioFeedbackSequence(value.sequence),
+      voiceHandle: canonicalSafeU64(value.handle, 'audio feedback voiceHandle'),
+    });
+  }
+  return Object.freeze({
+    kind: 'diagnostic',
+    factId: canonicalSafeU64(value.factId, 'audio feedback factId'),
+    code: value.diagnostic.code,
+    sequence: requireAudioFeedbackSequence(value.diagnostic.sequence),
+    voiceHandle: value.diagnostic.handle === null
+      ? null
+      : canonicalSafeU64(value.diagnostic.handle, 'audio feedback diagnostic voiceHandle'),
+  });
+}
+
+function requireAudioFeedbackSequence(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 4_294_967_295) {
+    throw new ProductBrowserHostError('transport_failed', 'renderer audio feedback sequence is outside u32 range');
+  }
+  return value;
+}
+
+function canonicalSafeU64(value: number, name: string): string {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new ProductBrowserHostError('transport_failed', `${name} is outside the safe u64 bridge range`);
+  }
+  return String(value);
+}
+
+function sameRuntimeBinding(
+  left: RustyApplicationRuntimeIdentity | null,
+  right: RustyApplicationRuntimeIdentity,
+): boolean {
+  return left !== null
+    && left.instanceId === right.instanceId
+    && left.generation === right.generation
+    && left.controlRevision === right.controlRevision;
+}
 
 function boundedDiagnostic(value: string): string {
   let diagnostic = '';

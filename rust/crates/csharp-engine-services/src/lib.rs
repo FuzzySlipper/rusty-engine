@@ -27,6 +27,7 @@ mod voxel_content;
 mod world_origin;
 
 pub use appearance::{CsharpRenderResource, CsharpRenderResourceKind};
+pub use audio::AudioRealizationFact;
 pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCatalog, CsharpEngineCallOutput,
     CsharpEngineServicesError, EngineServiceSet,

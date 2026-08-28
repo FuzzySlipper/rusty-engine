@@ -95,6 +95,16 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`:
           assert.equal(body?.['ticket'], '1');
           return response({ accepted: true, ticket: '1', binding: RUNTIME, readout: READOUT });
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}audio-feedback`:
+          assert.deepEqual(body, {
+            runtime: RUNTIME,
+            replaceOwner: true,
+            evictedFactCount: '2',
+            facts: [{
+              kind: 'naturalCompletion', source: 'oneShot', factId: '7', sequence: 3, signalHandle: '11',
+            }],
+          });
+          return response({ accepted: true, runtime: RUNTIME, acceptedThroughFactId: '7' });
         default:
           return response({ error: 'missing route' }, 404);
       }
@@ -131,6 +141,14 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     outcome: { kind: 'success' },
     provenance: { correlation: 'request-1' },
   }))?.ticket, '1');
+  assert.deepEqual(await adapter.reportAudioFeedback({
+    runtime: RUNTIME,
+    replaceOwner: true,
+    evictedFactCount: '2',
+    facts: [{
+      kind: 'naturalCompletion', source: 'oneShot', factId: '7', sequence: 3, signalHandle: '11',
+    }],
+  }), { accepted: true, runtime: RUNTIME, acceptedThroughFactId: '7' });
   assert.throws(
     () => adapter.completeTimeline?.({
       ticket: '01',
@@ -169,6 +187,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     'POST /__rusty/product/runtime/admit-demand-step',
     'POST /__rusty/product/runtime/admit-external-step',
     'POST /__rusty/product/runtime/timeline-completion',
+    'POST /__rusty/product/runtime/audio-feedback',
   ]);
   assert.equal(batches.length, 1);
   unsubscribe();

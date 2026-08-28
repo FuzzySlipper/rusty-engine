@@ -15,6 +15,9 @@ import type {
 import { validateRendererViewComposition, type RendererViewComposition } from '@rusty-engine/render-contracts';
 import type {
   ProductBrowserLifecycleOperation,
+  ProductBrowserAudioFeedback,
+  ProductBrowserAudioFeedbackFact,
+  ProductBrowserAudioFeedbackResult,
   ProductBrowserRuntimeAdapter,
   ProductBrowserRuntimeInputResult,
   ProductBrowserRuntimeOperationKind,
@@ -53,6 +56,7 @@ const ROUTES = Object.freeze({
   admitDemandStep: 'admit-demand-step',
   admitExternalStep: 'admit-external-step',
   completeTimeline: 'timeline-completion',
+  audioFeedback: 'audio-feedback',
   outputs: 'outputs',
 });
 
@@ -63,6 +67,7 @@ const DEFAULT_MAXIMUM_OUTPUT_BYTES = MAXIMUM_RUNTIME_OUTPUT_BYTES;
 const MAXIMUM_CONFIGURED_BYTES = 16 * 1024 * 1024;
 const UINT64_MAX_DECIMAL = '18446744073709551615';
 const MAXIMUM_INPUT_BATCH_LENGTH = 1_024;
+const MAXIMUM_AUDIO_FEEDBACK_FACTS = 128;
 const MAXIMUM_JSON_DEPTH = 64;
 const MAXIMUM_JSON_ARRAY_LENGTH = 1_024;
 const MAXIMUM_JSON_OBJECT_KEYS = 256;
@@ -87,6 +92,11 @@ const INPUT_EDGES = new Set<string>(['pressed', 'released']);
 const INPUT_CLEAR_REASONS = new Set<string>([
   'focus-loss', 'ingress-overflow', 'interaction-mode-loss', 'pointer-lock-loss',
   'restart', 'control-revision-change', 'dispose',
+]);
+const AUDIO_DIAGNOSTIC_CODES = new Set<string>([
+  'invalidDescriptor', 'assetMissing', 'assetKindMismatch', 'contentHashMismatch',
+  'duplicateSignal', 'duplicateHandle', 'unknownHandle', 'unavailableHost',
+  'audioContextBlocked', 'decodeFailed', 'hostFailure', 'invalidControl',
 ]);
 
 interface ProductBrowserWireRecord {
@@ -135,6 +145,13 @@ interface ProductBrowserWireRecord {
   readonly droppedRealtimeSteps?: unknown;
   readonly clockRegressions?: unknown;
   readonly lastObservedTimeNs?: unknown;
+  readonly replaceOwner?: unknown;
+  readonly evictedFactCount?: unknown;
+  readonly facts?: unknown;
+  readonly acceptedThroughFactId?: unknown;
+  readonly source?: unknown;
+  readonly signalHandle?: unknown;
+  readonly voiceHandle?: unknown;
 }
 
 export type ProductBrowserLocalFetch = (
@@ -352,6 +369,17 @@ export function createProductBrowserLocalHttpAdapter(
   ): Promise<ProductBrowserRuntimeInputResult> =>
     post(ROUTES.input, { batch: snapshotInputBatch(batch) }, decodeInputResult);
 
+  const reportAudioFeedback = (
+    feedback: ProductBrowserAudioFeedback,
+  ): Promise<ProductBrowserAudioFeedbackResult> => {
+    const snapshot = snapshotAudioFeedback(feedback);
+    return post(
+      ROUTES.audioFeedback,
+      snapshot,
+      (value) => decodeAudioFeedbackResult(value, snapshot.runtime, snapshot.facts),
+    );
+  };
+
   const advanceRealtime = (observedTimeNs: string): Promise<ProductBrowserRuntimeOperationResult> =>
     post(
       ROUTES.advanceRealtime,
@@ -536,6 +564,7 @@ export function createProductBrowserLocalHttpAdapter(
   return Object.freeze({
     lifecycle,
     input,
+    reportAudioFeedback,
     advanceRealtime,
     admitDemandStep,
     admitExternalStep,
@@ -603,6 +632,16 @@ function requireU64Text(value: unknown, name: string): string {
     );
   }
   return value;
+}
+
+function requireU32(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 4_294_967_295) {
+    throw new ProductBrowserLocalTransportError(
+      'invalid_options',
+      `${name} must be an unsigned 32-bit integer`,
+    );
+  }
+  return value as number;
 }
 
 function requireIdentity(value: unknown, name: string): string {
@@ -799,6 +838,72 @@ function snapshotInputEnvelope(value: unknown): RustyApplicationRuntimeInputEnve
     });
   }
   throw new TypeError('runtime input envelope must contain fact or intent');
+}
+
+function snapshotAudioFeedback(value: ProductBrowserAudioFeedback): ProductBrowserAudioFeedback {
+  const record = requireRecord(value, 'audio feedback');
+  requireKnownFields(record, ['runtime', 'replaceOwner', 'evictedFactCount', 'facts'], 'audio feedback');
+  if (typeof record.replaceOwner !== 'boolean') throw new TypeError('audio feedback replaceOwner must be boolean');
+  const facts = requirePlainArray(record.facts, 'audio feedback facts');
+  if (facts.length > MAXIMUM_AUDIO_FEEDBACK_FACTS) {
+    throw new ProductBrowserLocalTransportError(
+      'invalid_options',
+      `audio feedback facts must contain 0..${String(MAXIMUM_AUDIO_FEEDBACK_FACTS)} entries`,
+    );
+  }
+  const snapshotFacts: ProductBrowserAudioFeedbackFact[] = [];
+  for (let index = 0; index < facts.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(facts, String(index));
+    if (descriptor === undefined || !('value' in descriptor)) {
+      throw new ProductBrowserLocalTransportError(
+        'invalid_options',
+        `audio feedback fact ${String(index)} cannot be a getter or hole`,
+      );
+    }
+    snapshotFacts.push(snapshotAudioFeedbackFact(descriptor.value));
+  }
+  return Object.freeze({
+    runtime: decodeRuntimeIdentity(record.runtime),
+    replaceOwner: record.replaceOwner,
+    evictedFactCount: requireU64Text(record.evictedFactCount, 'audio feedback evictedFactCount'),
+    facts: Object.freeze(snapshotFacts),
+  });
+}
+
+function snapshotAudioFeedbackFact(value: unknown): ProductBrowserAudioFeedbackFact {
+  const record = requireRecord(value, 'audio feedback fact');
+  const common = {
+    factId: requireU64Text(record['factId'], 'audio feedback factId'),
+    sequence: requireU32(record.sequence, 'audio feedback sequence'),
+  };
+  if (record.kind === 'naturalCompletion') {
+    if (record.source === 'oneShot') {
+      requireKnownFields(record, ['kind', 'source', 'factId', 'sequence', 'signalHandle'], 'one-shot audio completion');
+      return Object.freeze({
+        kind: 'naturalCompletion', source: 'oneShot', ...common,
+        signalHandle: requireU64Text(record.signalHandle, 'audio feedback signalHandle'),
+      });
+    }
+    if (record.source === 'retainedVoice') {
+      requireKnownFields(record, ['kind', 'source', 'factId', 'sequence', 'voiceHandle'], 'retained audio completion');
+      return Object.freeze({
+        kind: 'naturalCompletion', source: 'retainedVoice', ...common,
+        voiceHandle: requireU64Text(record.voiceHandle, 'audio feedback voiceHandle'),
+      });
+    }
+    throw new TypeError('audio feedback natural completion source is invalid');
+  }
+  if (record.kind === 'diagnostic') {
+    requireKnownFields(record, ['kind', 'factId', 'code', 'sequence', 'voiceHandle'], 'audio feedback diagnostic');
+    return Object.freeze({
+      kind: 'diagnostic', ...common,
+      code: requireCatalogValue<string>(record.code, 'audio feedback diagnostic code', AUDIO_DIAGNOSTIC_CODES),
+      voiceHandle: record.voiceHandle === null
+        ? null
+        : requireU64Text(record.voiceHandle, 'audio feedback diagnostic voiceHandle'),
+    });
+  }
+  throw new TypeError('audio feedback fact kind is not admitted');
 }
 
 function snapshotInputFact(value: unknown): RustyApplicationRuntimeInputFact {
@@ -1078,6 +1183,50 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
   };
 }
 
+function decodeAudioFeedbackResult(
+  value: unknown,
+  expectedRuntime: RustyApplicationRuntimeIdentity,
+  submittedFacts: readonly ProductBrowserAudioFeedbackFact[],
+): ProductBrowserAudioFeedbackResult {
+  const record = requireRecord(value, 'audio feedback result');
+  requireKnownFields(record, ['accepted', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'audio feedback result');
+  if (record.accepted !== true && record.accepted !== false) {
+    throw new TypeError('audio feedback accepted must be boolean');
+  }
+  const runtime = decodeRuntimeIdentity(record.runtime);
+  if (!sameRuntimeIdentity(runtime, expectedRuntime)) {
+    throw new TypeError('audio feedback result runtime does not match request runtime');
+  }
+  const expectedThroughFactId = submittedFacts.length === 0
+    ? undefined
+    : submittedFacts[submittedFacts.length - 1]!.factId;
+  if (record.accepted === false) {
+    if (record.acceptedThroughFactId !== undefined) {
+      throw new TypeError('rejected audio feedback cannot include acceptedThroughFactId');
+    }
+    return Object.freeze({
+      accepted: false,
+      runtime,
+      ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
+    });
+  }
+  if (record.diagnostic !== undefined) throw new TypeError('accepted audio feedback cannot include diagnostic');
+  if (expectedThroughFactId === undefined) {
+    if (record.acceptedThroughFactId !== undefined) {
+      throw new TypeError('empty audio feedback cannot include acceptedThroughFactId');
+    }
+    return Object.freeze({ accepted: true, runtime });
+  }
+  const acceptedThroughFactId = requireU64Text(
+    record.acceptedThroughFactId,
+    'audio feedback acceptedThroughFactId',
+  );
+  if (acceptedThroughFactId !== expectedThroughFactId) {
+    throw new TypeError('audio feedback acknowledgement boundary does not match submitted facts');
+  }
+  return Object.freeze({ accepted: true, runtime, acceptedThroughFactId });
+}
+
 function decodeTimelineCompletionResult(
   value: unknown,
   expectedTicket: string,
@@ -1161,6 +1310,15 @@ function decodeRuntimeIdentity(value: unknown): RustyApplicationRuntimeIdentity 
     generation: requireU64Text(record.generation, 'generation'),
     controlRevision: requireU64Text(record.controlRevision, 'controlRevision'),
   };
+}
+
+function sameRuntimeIdentity(
+  left: RustyApplicationRuntimeIdentity,
+  right: RustyApplicationRuntimeIdentity,
+): boolean {
+  return left.instanceId === right.instanceId
+    && left.generation === right.generation
+    && left.controlRevision === right.controlRevision;
 }
 
 function decodeRuntimeReadout(value: unknown): ProductBrowserRuntimeReadout {

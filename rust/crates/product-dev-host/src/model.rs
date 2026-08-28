@@ -155,6 +155,208 @@ pub enum ProductDevOperationKind {
     AdvanceRealtime,
     AdmitDemandStep,
     AdmitExternalStep,
+    ReportAudioFeedback,
+}
+
+/// Bounded, host-realized audio facts. These are observations from the
+/// Engine browser host rather than audio projector/admission state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ProductDevAudioFeedbackFact {
+    NaturalCompletion {
+        fact_id: CanonicalU64,
+        sequence: u32,
+        #[serde(flatten)]
+        source: ProductDevAudioCompletionSource,
+    },
+    Diagnostic {
+        fact_id: CanonicalU64,
+        code: render_presentation::AudioProjectionDiagnosticCode,
+        sequence: u32,
+        voice_handle: Option<CanonicalU64>,
+    },
+}
+
+/// The two Engine-owned realization identities. This matches the closed
+/// browser-host transport shape without exposing browser objects downstream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "source",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ProductDevAudioCompletionSource {
+    OneShot { signal_handle: CanonicalU64 },
+    RetainedVoice { voice_handle: CanonicalU64 },
+}
+
+#[derive(Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum ProductDevAudioFeedbackFactWire {
+    NaturalCompletion {
+        fact_id: CanonicalU64,
+        sequence: u32,
+        source: String,
+        #[serde(default)]
+        signal_handle: Option<CanonicalU64>,
+        #[serde(default)]
+        voice_handle: Option<CanonicalU64>,
+    },
+    Diagnostic {
+        fact_id: CanonicalU64,
+        code: render_presentation::AudioProjectionDiagnosticCode,
+        sequence: u32,
+        voice_handle: Option<CanonicalU64>,
+    },
+}
+
+fn decode_audio_feedback_facts<'de, D>(
+    deserializer: D,
+) -> Result<Vec<ProductDevAudioFeedbackFact>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<ProductDevAudioFeedbackFactWire>::deserialize(deserializer)?
+        .into_iter()
+        .map(|fact| match fact {
+            ProductDevAudioFeedbackFactWire::NaturalCompletion {
+                fact_id,
+                sequence,
+                source,
+                signal_handle,
+                voice_handle,
+            } => match source.as_str() {
+                "oneShot" if voice_handle.is_none() => signal_handle
+                    .map(
+                        |signal_handle| ProductDevAudioFeedbackFact::NaturalCompletion {
+                            fact_id,
+                            sequence,
+                            source: ProductDevAudioCompletionSource::OneShot { signal_handle },
+                        },
+                    )
+                    .ok_or_else(|| {
+                        serde::de::Error::custom("oneShot completion requires signalHandle")
+                    }),
+                "retainedVoice" if signal_handle.is_none() => voice_handle
+                    .map(
+                        |voice_handle| ProductDevAudioFeedbackFact::NaturalCompletion {
+                            fact_id,
+                            sequence,
+                            source: ProductDevAudioCompletionSource::RetainedVoice { voice_handle },
+                        },
+                    )
+                    .ok_or_else(|| {
+                        serde::de::Error::custom("retainedVoice completion requires voiceHandle")
+                    }),
+                _ => Err(serde::de::Error::custom(
+                    "audio completion source and handle are incoherent",
+                )),
+            },
+            ProductDevAudioFeedbackFactWire::Diagnostic {
+                fact_id,
+                code,
+                sequence,
+                voice_handle,
+            } => Ok(ProductDevAudioFeedbackFact::Diagnostic {
+                fact_id,
+                code,
+                sequence,
+                voice_handle,
+            }),
+        })
+        .collect()
+}
+
+impl ProductDevAudioFeedbackFact {
+    pub const fn fact_id(&self) -> CanonicalU64 {
+        match self {
+            Self::NaturalCompletion { fact_id, .. } | Self::Diagnostic { fact_id, .. } => *fact_id,
+        }
+    }
+}
+
+/// One fixed host-to-runtime audio realization snapshot. `facts` is bounded
+/// to the same 128-item FIFO retained by the browser Engine host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevAudioFeedback {
+    pub runtime: ProductDevRuntimeBinding,
+    pub replace_owner: bool,
+    pub evicted_fact_count: CanonicalU64,
+    #[serde(deserialize_with = "decode_audio_feedback_facts")]
+    pub facts: Vec<ProductDevAudioFeedbackFact>,
+}
+
+impl ProductDevAudioFeedback {
+    pub const MAX_FACTS: usize = 128;
+
+    pub fn validate(&self) -> Result<(), ProductDevHostError> {
+        if self.facts.len() > Self::MAX_FACTS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_AUDIO_FEEDBACK_BOUNDS",
+                "audio feedback exceeds the 128 fact host bound",
+            ));
+        }
+        if self
+            .facts
+            .windows(2)
+            .any(|facts| facts[0].fact_id() >= facts[1].fact_id())
+        {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_AUDIO_FEEDBACK_ORDER",
+                "audio feedback fact ids must be strictly increasing",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Fixed response for the browser host's audio feedback route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevAudioFeedbackResult {
+    pub accepted: bool,
+    pub runtime: ProductDevRuntimeBinding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_through_fact_id: Option<CanonicalU64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
+impl ProductDevAudioFeedbackResult {
+    pub fn accepted(
+        runtime: ProductDevRuntimeBinding,
+        accepted_through_fact_id: Option<CanonicalU64>,
+    ) -> Self {
+        Self {
+            accepted: true,
+            runtime,
+            accepted_through_fact_id,
+            diagnostic: None,
+        }
+    }
+
+    pub fn rejected(
+        runtime: ProductDevRuntimeBinding,
+        diagnostic: impl Into<String>,
+    ) -> Result<Self, ProductDevHostError> {
+        Ok(Self {
+            accepted: false,
+            runtime,
+            accepted_through_fact_id: None,
+            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+        })
+    }
 }
 
 /// Minimal local readout passed through from the generated runtime owner.
@@ -836,4 +1038,19 @@ pub trait ProductDevRuntime: Send + 'static {
         &mut self,
         completion: ProductDevTimelineCompletion,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>, ProductDevRuntimeError>;
+
+    /// Ingests the fixed Engine browser-host audio realization snapshot. This
+    /// deliberately has no callback: a later ordinary product call exposes
+    /// the copied facts through the generated audio service readout.
+    fn report_audio_feedback(
+        &mut self,
+        _feedback: ProductDevAudioFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
+    {
+        Err(ProductDevRuntimeError::new(
+            "DEV_HOST_AUDIO_FEEDBACK_UNSUPPORTED",
+            "audio feedback is not supported by this runtime",
+        )
+        .expect("fixed audio-feedback diagnostic"))
+    }
 }

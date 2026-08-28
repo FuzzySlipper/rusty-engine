@@ -18,6 +18,13 @@ pub struct NativeAudioVoiceHandle {
     pub value: u64,
 }
 
+/// Engine-issued correlation for one realized one-shot signal.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAudioSignalHandle {
+    pub value: u64,
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioBus {
@@ -65,6 +72,17 @@ pub enum NativeAudioDiagnosticCode {
     DecodeFailed = 10,
     HostFailure = 11,
     InvalidControl = 12,
+}
+
+/// The concrete browser-host realization fact kind, distinct from the audio
+/// projector's admission/readout state.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAudioRealizationFactKind {
+    None = 0,
+    NaturalCompletionOneShot = 1,
+    NaturalCompletionRetainedVoice = 2,
+    Diagnostic = 3,
 }
 
 #[repr(C)]
@@ -211,6 +229,50 @@ pub struct NativeAudioDiagnosticAtReceipt {
     /// one-shots and resource-level diagnostics. This is observational and
     /// never an owning handle.
     pub voice_value: u64,
+}
+
+/// Aggregate realization-feedback readout. This is a committed copied store
+/// populated between product calls, not the NativeAudioReadout projector.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAudioRealizationReadout {
+    pub retained_fact_count: u32,
+    pub evicted_fact_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioRealizationFactAtRequest {
+    pub index: u32,
+}
+
+/// Indexed copied realization fact. `signal_handle` is set only for a
+/// one-shot completion, `voice_value` only for retained voice/voice-scoped
+/// diagnostic facts, and `code` only for diagnostics.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeAudioRealizationFactAtReceipt {
+    pub present: bool,
+    pub kind: NativeAudioRealizationFactKind,
+    pub fact_id: u64,
+    pub sequence: u32,
+    pub signal_handle: u64,
+    pub voice_value: u64,
+    pub code: NativeAudioDiagnosticCode,
+}
+
+impl Default for NativeAudioRealizationFactAtReceipt {
+    fn default() -> Self {
+        Self {
+            present: false,
+            kind: NativeAudioRealizationFactKind::None,
+            fact_id: 0,
+            sequence: 0,
+            signal_handle: 0,
+            voice_value: 0,
+            code: NativeAudioDiagnosticCode::None,
+        }
+    }
 }
 
 impl Default for NativeAudioDiagnosticAtReceipt {

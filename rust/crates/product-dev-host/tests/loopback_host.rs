@@ -6,12 +6,12 @@ use std::{
 };
 
 use product_dev_host::{
-    CanonicalU64, ProductDevBundle, ProductDevBundleEntry, ProductDevHost, ProductDevHostConfig,
-    ProductDevInputBatch, ProductDevInputResult, ProductDevLifecycleOperation,
-    ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
-    ProductDevRuntimeBinding, ProductDevRuntimeMode, ProductDevRuntimeOutput,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    CanonicalU64, ProductDevAudioFeedback, ProductDevAudioFeedbackResult, ProductDevBundle,
+    ProductDevBundleEntry, ProductDevHost, ProductDevHostConfig, ProductDevInputBatch,
+    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
+    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeMode,
+    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
+    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
 
 #[derive(Default)]
@@ -122,6 +122,28 @@ impl ProductDevRuntime for FixtureRuntime {
         )
         .unwrap())
     }
+
+    fn report_audio_feedback(
+        &mut self,
+        feedback: ProductDevAudioFeedback,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        if feedback.runtime != Self::binding() {
+            return Err(product_dev_host::ProductDevRuntimeError::new(
+                "FIXTURE_AUDIO_BINDING",
+                "audio feedback does not name the current binding",
+            )
+            .unwrap());
+        }
+        let accepted_through = feedback.facts.last().map(|fact| fact.fact_id());
+        Ok(ProductDevRuntimeReceipt::new(
+            ProductDevAudioFeedbackResult::accepted(Self::binding(), accepted_through),
+            Vec::new(),
+        )
+        .unwrap())
+    }
 }
 
 fn start() -> product_dev_host::RunningProductDevHost {
@@ -201,6 +223,38 @@ fn rejects_nonclosed_routes_headers_bodies_and_canonical_integers() {
     assert!(bad_realtime.starts_with("HTTP/1.1 400 Bad Request\r\n"));
     let oversized = request(&origin, "POST /__rusty/product/runtime/input HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 999999999\r\n\r\n");
     assert!(oversized.starts_with("HTTP/1.1 413 Payload Too Large\r\n"));
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn accepts_only_bounded_exact_binding_audio_feedback_on_its_fixed_route() {
+    let host = start();
+    let origin = host.origin();
+    let accepted_body = r#"{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"replaceOwner":true,"evictedFactCount":"0","facts":[{"kind":"naturalCompletion","factId":"9","sequence":3,"source":"oneShot","signalHandle":"4"}]}"#;
+    let decoded = serde_json::from_str::<ProductDevAudioFeedback>(accepted_body).unwrap();
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), accepted_body);
+    let accepted = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/audio-feedback HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{accepted_body}",
+            accepted_body.len()
+        ),
+    );
+    assert!(accepted.starts_with("HTTP/1.1 200 OK\r\n"), "{accepted}");
+    assert!(accepted.contains("\"accepted\":true"));
+    assert!(accepted.contains("\"acceptedThroughFactId\":\"9\""));
+
+    let stale_body = accepted_body.replace("\"generation\":\"1\"", "\"generation\":\"2\"");
+    let stale = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/audio-feedback HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{stale_body}",
+            stale_body.len()
+        ),
+    );
+    assert!(stale.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(stale.contains("\"accepted\":false"));
+    assert!(stale.contains("\"runtime\":{\"instanceId\":\"7\""));
     host.shutdown().unwrap();
 }
 

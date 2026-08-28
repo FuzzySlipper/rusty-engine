@@ -10,7 +10,7 @@ use csharp_engine_abi::*;
 use entity_state::Quat;
 
 use crate::{
-    audio::{RuntimeAudioBridge, RuntimeAudioCall},
+    audio::{AudioRealizationFact, RuntimeAudioBridge, RuntimeAudioCall},
     authored_content::RuntimeAuthoredContentBridge,
     camera_view::RuntimeCameraViewBridge,
     content::RuntimeContentBridge,
@@ -319,6 +319,23 @@ impl EngineServiceSet {
         self.camera_view.begin_call();
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
+    }
+
+    /// Copies browser-host realization facts while C# is not executing. The
+    /// next normal product call snapshots this store for generated reads.
+    pub fn ingest_audio_realization_feedback(
+        &mut self,
+        replace_owner: bool,
+        evicted_fact_count: u64,
+        facts: impl IntoIterator<Item = AudioRealizationFact>,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.audio
+            .ingest_realized_feedback(replace_owner, evicted_fact_count, facts)
+    }
+
+    /// Clears realization observations when the exact runtime binding changes.
+    pub fn reset_audio_realization_owner(&mut self) {
+        self.audio.reset_realized_feedback();
     }
 
     pub fn discard_call(&mut self) {

@@ -277,7 +277,11 @@ pub type NativeOpenAudioClip = unsafe extern "C" fn(
     *const NativeAudioClipRequest,
     *mut NativeAudioClipHandle,
 ) -> i32;
-pub type NativeEmitAudio = unsafe extern "C" fn(*mut c_void, *const NativeAudioEmitRequest) -> i32;
+pub type NativeEmitAudio = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioEmitRequest,
+    *mut NativeAudioSignalHandle,
+) -> i32;
 pub type NativeCreateAudioVoice = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioSourceDescriptor,
@@ -312,6 +316,13 @@ pub type NativeReadAudioDiagnosticAt = unsafe extern "C" fn(
     *mut c_void,
     NativeAudioDiagnosticAtRequest,
     *mut NativeAudioDiagnosticAtReceipt,
+) -> i32;
+pub type NativeReadAudioRealization =
+    unsafe extern "C" fn(*mut c_void, *mut NativeAudioRealizationReadout) -> i32;
+pub type NativeReadAudioRealizationFactAt = unsafe extern "C" fn(
+    *mut c_void,
+    NativeAudioRealizationFactAtRequest,
+    *mut NativeAudioRealizationFactAtReceipt,
 ) -> i32;
 pub type NativeCreateMaterial =
     unsafe extern "C" fn(*mut c_void, NativeMaterialRequest, *mut NativeMaterialHandle) -> i32;
@@ -1588,6 +1599,8 @@ pub struct NativeAudioApi {
     pub read_voice: NativeReadAudioVoice,
     pub read_bus: NativeReadAudioBus,
     pub read_diagnostic_at: NativeReadAudioDiagnosticAt,
+    pub read_realization: NativeReadAudioRealization,
+    pub read_realization_fact_at: NativeReadAudioRealizationFactAt,
 }
 
 #[repr(C)]

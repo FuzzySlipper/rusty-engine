@@ -1,7 +1,11 @@
-use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    ffi::c_void,
+    sync::Arc,
+};
 
 use csharp_engine_abi::*;
-use render_model::{RenderAssetKind, ResolvedRenderAsset};
+use render_model::{RenderAssetKind, ResolvedRenderAsset, JSON_SAFE_U64_MAX};
 use render_presentation::{
     AudioBus, AudioBusControl, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode,
     AudioProjectionOp, AudioProjector, AudioSourceDescriptor, AudioVoiceControl,
@@ -36,6 +40,85 @@ struct AudioState {
     voices: BTreeMap<u64, AudioHandle>,
     next_clip: u64,
     next_voice: u64,
+    next_signal: u64,
+}
+
+/// Copied Engine browser-host realization feedback. Kept separate from the
+/// projector state so C# can distinguish desired presentation from what Web
+/// Audio actually completed or diagnosed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioRealizationFact {
+    NaturalCompletionOneShot {
+        fact_id: u64,
+        sequence: u32,
+        signal_handle: u64,
+    },
+    NaturalCompletionRetainedVoice {
+        fact_id: u64,
+        sequence: u32,
+        voice_handle: u64,
+    },
+    Diagnostic {
+        fact_id: u64,
+        code: NativeAudioDiagnosticCode,
+        sequence: u32,
+        voice_handle: Option<u64>,
+    },
+}
+
+impl AudioRealizationFact {
+    pub const fn fact_id(&self) -> u64 {
+        match self {
+            Self::NaturalCompletionOneShot { fact_id, .. }
+            | Self::NaturalCompletionRetainedVoice { fact_id, .. }
+            | Self::Diagnostic { fact_id, .. } => *fact_id,
+        }
+    }
+
+    fn receipt(&self) -> NativeAudioRealizationFactAtReceipt {
+        match *self {
+            Self::NaturalCompletionOneShot {
+                fact_id,
+                sequence,
+                signal_handle,
+            } => NativeAudioRealizationFactAtReceipt {
+                present: true,
+                kind: NativeAudioRealizationFactKind::NaturalCompletionOneShot,
+                fact_id,
+                sequence,
+                signal_handle,
+                voice_value: 0,
+                code: NativeAudioDiagnosticCode::None,
+            },
+            Self::NaturalCompletionRetainedVoice {
+                fact_id,
+                sequence,
+                voice_handle,
+            } => NativeAudioRealizationFactAtReceipt {
+                present: true,
+                kind: NativeAudioRealizationFactKind::NaturalCompletionRetainedVoice,
+                fact_id,
+                sequence,
+                signal_handle: 0,
+                voice_value: voice_handle,
+                code: NativeAudioDiagnosticCode::None,
+            },
+            Self::Diagnostic {
+                fact_id,
+                code,
+                sequence,
+                voice_handle,
+            } => NativeAudioRealizationFactAtReceipt {
+                present: true,
+                kind: NativeAudioRealizationFactKind::Diagnostic,
+                fact_id,
+                sequence,
+                signal_handle: 0,
+                voice_value: voice_handle.unwrap_or(0),
+                code,
+            },
+        }
+    }
 }
 
 pub(crate) struct RuntimeAudioCall {
@@ -52,6 +135,10 @@ pub(crate) struct RuntimeAudioBridge {
     selection_sealed: bool,
     staged: Option<RuntimeAudioCall>,
     callback_error: Option<CsharpEngineServicesError>,
+    realized_facts: VecDeque<AudioRealizationFact>,
+    renderer_evicted_fact_count: u64,
+    local_evicted_fact_count: u64,
+    accepted_through_fact_id: Option<u64>,
 }
 
 impl RuntimeAudioBridge {
@@ -64,12 +151,70 @@ impl RuntimeAudioBridge {
                 voices: BTreeMap::new(),
                 next_clip: 1,
                 next_voice: 1,
+                next_signal: 1,
             },
             content_resources,
             selection_sealed: false,
             staged: None,
             callback_error: None,
+            realized_facts: VecDeque::new(),
+            renderer_evicted_fact_count: 0,
+            local_evicted_fact_count: 0,
+            accepted_through_fact_id: None,
         }
+    }
+
+    /// Replaces or incrementally admits a browser-owned snapshot between C#
+    /// calls. Monotonic fact ids make retries harmless; the copied FIFO stays
+    /// bounded independently of the browser host's own eviction count.
+    pub(crate) fn ingest_realized_feedback(
+        &mut self,
+        replace_owner: bool,
+        evicted_fact_count: u64,
+        facts: impl IntoIterator<Item = AudioRealizationFact>,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let facts: Vec<_> = facts.into_iter().collect();
+        if facts.len() > 128
+            || facts
+                .windows(2)
+                .any(|facts| facts[0].fact_id() >= facts[1].fact_id())
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_REALIZATION_BOUNDS",
+                "audio realization feedback must contain at most 128 strictly ordered facts",
+            ));
+        }
+        if replace_owner {
+            self.realized_facts.clear();
+            self.renderer_evicted_fact_count = evicted_fact_count;
+            self.local_evicted_fact_count = 0;
+            self.accepted_through_fact_id = None;
+        } else if evicted_fact_count > self.renderer_evicted_fact_count {
+            self.renderer_evicted_fact_count = evicted_fact_count;
+        }
+        for fact in facts {
+            if self
+                .accepted_through_fact_id
+                .is_some_and(|last| fact.fact_id() <= last)
+            {
+                continue;
+            }
+            if self.realized_facts.len() == 128 {
+                self.realized_facts.pop_front();
+                self.local_evicted_fact_count = self.local_evicted_fact_count.saturating_add(1);
+            }
+            let fact_id = fact.fact_id();
+            self.realized_facts.push_back(fact);
+            self.accepted_through_fact_id = Some(fact_id);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reset_realized_feedback(&mut self) {
+        self.realized_facts.clear();
+        self.renderer_evicted_fact_count = 0;
+        self.local_evicted_fact_count = 0;
+        self.accepted_through_fact_id = None;
     }
 
     pub(crate) fn begin_call(&mut self) {
@@ -276,7 +421,10 @@ impl RuntimeAudioBridge {
         Ok(())
     }
 
-    fn emit(&mut self, request: NativeAudioEmitRequest) -> Result<(), CsharpEngineServicesError> {
+    fn emit(
+        &mut self,
+        request: NativeAudioEmitRequest,
+    ) -> Result<NativeAudioSignalHandle, CsharpEngineServicesError> {
         let signal_id = unsafe {
             borrowed_utf8(
                 request.signal_id.bytes,
@@ -286,10 +434,29 @@ impl RuntimeAudioBridge {
         }
         .to_owned();
         let descriptor = self.descriptor(request.descriptor)?;
+        let signal_handle = {
+            let staged = self.staged_mut()?;
+            let value = staged.state.next_signal;
+            if value > JSON_SAFE_U64_MAX {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_AUDIO_SIGNAL_HANDLE",
+                    "audio signal handles exhausted the JSON-safe range",
+                ));
+            }
+            staged.state.next_signal = value.checked_add(1).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_AUDIO_SIGNAL_HANDLE",
+                    "audio signal handles exhausted",
+                )
+            })?;
+            NativeAudioSignalHandle { value }
+        };
         self.stage_op(AudioProjectionOp::Emit {
+            signal_handle: render_presentation::AudioSignalHandle::new(signal_handle.value),
             signal_id,
             descriptor,
-        })
+        })?;
+        Ok(signal_handle)
     }
 
     fn create_voice(
@@ -484,6 +651,39 @@ impl RuntimeAudioBridge {
         })
     }
 
+    fn read_realization(
+        &mut self,
+    ) -> Result<NativeAudioRealizationReadout, CsharpEngineServicesError> {
+        self.staged.as_ref().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_CALL",
+                "audio service was called outside a product call",
+            )
+        })?;
+        Ok(NativeAudioRealizationReadout {
+            retained_fact_count: self.realized_facts.len() as u32,
+            evicted_fact_count: self
+                .renderer_evicted_fact_count
+                .saturating_add(self.local_evicted_fact_count),
+        })
+    }
+
+    fn read_realization_fact_at(
+        &mut self,
+        request: NativeAudioRealizationFactAtRequest,
+    ) -> Result<NativeAudioRealizationFactAtReceipt, CsharpEngineServicesError> {
+        self.staged.as_ref().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_CALL",
+                "audio service was called outside a product call",
+            )
+        })?;
+        Ok(self.realized_facts.get(request.index as usize).map_or_else(
+            NativeAudioRealizationFactAtReceipt::default,
+            AudioRealizationFact::receipt,
+        ))
+    }
+
     fn read_voice(
         &mut self,
         voice: NativeAudioVoiceHandle,
@@ -622,13 +822,19 @@ pub(crate) unsafe extern "C" fn open_audio_clip(
 pub(crate) unsafe extern "C" fn emit_audio(
     context: *mut c_void,
     request: *const NativeAudioEmitRequest,
+    result: *mut NativeAudioSignalHandle,
 ) -> i32 {
-    if context.is_null() || request.is_null() {
+    if context.is_null() || request.is_null() || result.is_null() {
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
     match bridge.emit(unsafe { *request }) {
-        Ok(()) => ABI_OK,
+        Ok(value) => {
+            unsafe {
+                *result = value;
+            }
+            ABI_OK
+        }
         Err(error) => {
             bridge.callback_error = Some(error);
             0
@@ -856,6 +1062,51 @@ pub(crate) unsafe extern "C" fn read_audio_diagnostic_at(
     }
 }
 
+pub(crate) unsafe extern "C" fn read_audio_realization(
+    context: *mut c_void,
+    result: *mut NativeAudioRealizationReadout,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.read_realization() {
+        Ok(value) => {
+            unsafe {
+                *result = value;
+            }
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn read_audio_realization_fact_at(
+    context: *mut c_void,
+    request: NativeAudioRealizationFactAtRequest,
+    result: *mut NativeAudioRealizationFactAtReceipt,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.read_realization_fact_at(request) {
+        Ok(value) => {
+            unsafe {
+                *result = value;
+            }
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
 pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
     NativeAudioApi {
         context: (bridge as *mut RuntimeAudioBridge).cast(),
@@ -872,6 +1123,8 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
         read_voice: read_audio_voice,
         read_bus: read_audio_bus,
         read_diagnostic_at: read_audio_diagnostic_at,
+        read_realization: read_audio_realization,
+        read_realization_fact_at: read_audio_realization_fact_at,
     }
 }
 
@@ -927,6 +1180,16 @@ mod tests {
                 descriptor: descriptor(clip, NativeAudioBus::Ui),
             })
             .expect("one-shot");
+        let signal = bridge
+            .emit(NativeAudioEmitRequest {
+                signal_id: NativeUtf8Slice {
+                    bytes: b"trial-one-shot-2".as_ptr(),
+                    len: b"trial-one-shot-2".len(),
+                },
+                descriptor: descriptor(clip, NativeAudioBus::Ui),
+            })
+            .expect("Engine-issued one-shot signal");
+        assert_eq!(signal.value, 2);
         let voice = bridge
             .create_voice(descriptor(clip, NativeAudioBus::Sfx))
             .expect("retained voice");
@@ -948,9 +1211,9 @@ mod tests {
         let readout = bridge.read().expect("projector readout");
         assert_eq!(readout.admitted_clips, 1);
         assert_eq!(readout.active_voices, 1);
-        assert_eq!(readout.emitted_signals, 1);
+        assert_eq!(readout.emitted_signals, 2);
         let staged = bridge.take_staged_call().expect("staged call");
-        assert_eq!(staged.frame.as_ref().expect("audio frame").ops.len(), 5);
+        assert_eq!(staged.frame.as_ref().expect("audio frame").ops.len(), 6);
         bridge.commit(staged);
         bridge.seal_resource_selection();
         assert_eq!(bridge.render_resources().count(), 1);
@@ -1093,5 +1356,74 @@ mod tests {
 
         let staged = bridge.take_staged_call().expect("staged controls");
         assert_eq!(staged.frame.expect("audio frame").ops.len(), 6);
+    }
+
+    #[test]
+    fn retains_realization_facts_separately_with_cumulative_evictions() {
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        bridge
+            .ingest_realized_feedback(
+                true,
+                3,
+                [AudioRealizationFact::NaturalCompletionOneShot {
+                    fact_id: 4,
+                    sequence: 2,
+                    signal_handle: 7,
+                }],
+            )
+            .expect("initial owner snapshot");
+        bridge.begin_call();
+        assert_eq!(
+            bridge
+                .read_realization()
+                .expect("committed realization readout"),
+            NativeAudioRealizationReadout {
+                retained_fact_count: 1,
+                evicted_fact_count: 3,
+            }
+        );
+        assert_eq!(
+            bridge
+                .read_realization_fact_at(NativeAudioRealizationFactAtRequest { index: 0 })
+                .expect("indexed realization fact"),
+            NativeAudioRealizationFactAtReceipt {
+                present: true,
+                kind: NativeAudioRealizationFactKind::NaturalCompletionOneShot,
+                fact_id: 4,
+                sequence: 2,
+                signal_handle: 7,
+                voice_value: 0,
+                code: NativeAudioDiagnosticCode::None,
+            }
+        );
+        bridge.discard_call();
+        // A retry is deduplicated, while a newer browser cumulative eviction
+        // count remains visible independently of local store evictions.
+        bridge
+            .ingest_realized_feedback(
+                false,
+                5,
+                [AudioRealizationFact::NaturalCompletionOneShot {
+                    fact_id: 4,
+                    sequence: 2,
+                    signal_handle: 7,
+                }],
+            )
+            .expect("idempotent retry");
+        bridge.begin_call();
+        assert_eq!(
+            bridge
+                .read_realization()
+                .expect("updated realization readout")
+                .evicted_fact_count,
+            5
+        );
+        bridge.discard_call();
+        bridge.reset_realized_feedback();
+        bridge.begin_call();
+        assert_eq!(
+            bridge.read_realization().expect("replacement owner readout"),
+            NativeAudioRealizationReadout::default()
+        );
     }
 }

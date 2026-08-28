@@ -29,9 +29,11 @@ pub use bundle::{
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
 pub use host::{ProductDevHost, ProductDevHostConfig, RunningProductDevHost};
 pub use model::{
-    CanonicalU64, ProductDevControlOperation, ProductDevInputBatch, ProductDevInputResult,
-    ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevOperationResult,
-    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeFault, ProductDevRuntimeMode,
+    CanonicalU64, ProductDevAudioCompletionSource, ProductDevAudioFeedback,
+    ProductDevAudioFeedbackFact, ProductDevAudioFeedbackResult, ProductDevControlOperation,
+    ProductDevInputBatch, ProductDevInputResult, ProductDevLifecycleOperation,
+    ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeFault, ProductDevRuntimeMode,
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
     PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
