@@ -4,6 +4,8 @@ import type {
   PresentationOp,
 } from '@rusty-engine/render-contracts';
 import { decodePresentationFrameDiff } from '@rusty-engine/render-contracts';
+import type { RendererAudioListenerPose } from './audio-host.js';
+import type { AudioProjectionDiagnostic } from './host-types.js';
 
 export type RendererPresentationDomain = PresentationOp['domain'];
 
@@ -35,12 +37,29 @@ export interface RendererAdvancingPresentationDomainHost
   readonly requiresAnimationFrame?: () => boolean;
 }
 
+interface RendererAudioListenerPresentationHost extends RendererPresentationDomainHost {
+  readonly updateListener?: (
+    pose: RendererAudioListenerPose,
+  ) => readonly AudioProjectionDiagnostic[];
+}
+
 export interface RendererPresentationHosts {
   readonly animation?: RendererAdvancingPresentationDomainHost;
-  readonly audio?: RendererPresentationDomainHost;
+  readonly audio?: RendererAudioListenerPresentationHost;
   readonly billboard?: RendererAdvancingPresentationDomainHost;
   readonly particle?: RendererAdvancingPresentationDomainHost;
   readonly telemetryOverlay?: RendererPresentationDomainHost;
+}
+
+/** Typed receipt for the Engine-owned camera-to-audio listener handoff. */
+export interface RendererPresentationListenerSyncReceipt {
+  readonly schemaVersion: 1;
+  /** Whether an audio presentation host is attached. */
+  readonly configured: boolean;
+  /** Whether the attached audio host accepts listener synchronization. */
+  readonly applied: boolean;
+  /** Diagnostics are retained by the audio host and surfaced here for callers that need them. */
+  readonly diagnostics: readonly AudioProjectionDiagnostic[];
 }
 
 export interface RendererPresentationDomainReceipt {
@@ -134,12 +153,38 @@ export class RendererPresentationHostSet {
     return { schemaVersion: 1, advancedDomains, applied, diagnostics };
   }
 
+  syncListener(pose: RendererAudioListenerPose): RendererPresentationListenerSyncReceipt {
+    const host = this.#hosts.audio;
+    if (host === undefined) {
+      return { schemaVersion: 1, configured: false, applied: false, diagnostics: [] };
+    }
+    if (!hasListenerSynchronization(host)) {
+      return { schemaVersion: 1, configured: true, applied: false, diagnostics: [] };
+    }
+    const diagnostics = host.updateListener(pose);
+    return {
+      schemaVersion: 1,
+      configured: true,
+      applied: diagnostics.length === 0,
+      diagnostics,
+    };
+  }
+
   requiresAnimationFrame(): boolean {
     return ADVANCING_DOMAIN_ORDER.some((domain) => {
       const host = this.#hosts[domain];
       return host !== undefined && (host.requiresAnimationFrame?.() ?? true);
     });
   }
+}
+
+function hasListenerSynchronization(
+  host: RendererAudioListenerPresentationHost,
+): host is RendererAudioListenerPresentationHost & Required<Pick<
+  RendererAudioListenerPresentationHost,
+  'updateListener'
+>> {
+  return typeof host.updateListener === 'function';
 }
 
 const PRESENTATION_DOMAIN_ORDER: readonly RendererPresentationDomain[] = [

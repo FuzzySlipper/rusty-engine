@@ -55,6 +55,7 @@ import {
   RendererPresentationHostSet,
   type RendererPresentationFrameReceipt,
 } from './presentation-host-set.js';
+import { resolveRendererAudioListenerPose } from './renderer-listener-pose.js';
 import {
   assertRendererSurfaceSourceTime,
   RendererSurfaceTimingTracker,
@@ -707,6 +708,12 @@ function mountPreparedRendererSurface(
   const requestAutomaticSubmission = (): void => {
     submissionDemand.request();
   };
+  const syncListener = (fallback: RendererSurfaceCameraSnapshot): void => {
+    presentationHosts?.syncListener(resolveRendererAudioListenerPose(
+      backendSurface.viewCompositionReadout(),
+      fallback,
+    ));
+  };
 
   interface RenderFrameResult {
     readonly submission: RendererSurfaceSubmissionSample;
@@ -731,6 +738,7 @@ function mountPreparedRendererSurface(
     const camera = controls.cameraSnapshot();
     backendSurface.setCameraPose(camera.pose, camera.basis);
     const cameraUpdatedAtMs = surfaceTimingNow();
+    syncListener(camera);
     presentationHosts?.advance(deltaSeconds);
     const presentationAdvancedAtMs = surfaceTimingNow();
     const backendSubmissionStartedMs = surfaceTimingNow();
@@ -946,6 +954,7 @@ function mountPreparedRendererSurface(
     visibilityReadout: backendSurface.visibilityReadout,
     configureViews: (composition) => {
       const receipt = backendSurface.configureViews(composition);
+      if (receipt.applied) syncListener(controls.cameraSnapshot());
       if (receipt.applied) requestAutomaticSubmission();
       return receipt;
     },
@@ -974,12 +983,14 @@ function mountPreparedRendererSurface(
       const before = controls.cameraSnapshot();
       controls.setCameraPose(pose, basis);
       backendSurface.setCameraPose(pose, basis);
+      syncListener(controls.cameraSnapshot());
       if (!sameCameraSnapshot(before, controls.cameraSnapshot())) {
         requestAutomaticSubmission();
       }
     },
     setPresentationHosts: (hosts) => {
       presentationHosts = hosts;
+      if (hosts !== null) syncListener(controls.cameraSnapshot());
       requestAutomaticSubmission();
     },
     snapshot: backendSurface.snapshot,

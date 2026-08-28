@@ -56,3 +56,47 @@ void test('billboard hosts advance while indicators are active', () => {
   billboardActive = false;
   assert.equal(hosts.requiresAnimationFrame(), false);
 });
+
+void test('listener synchronization is typed, local, and forwards only to audio hosts that support it', () => {
+  const poses: unknown[] = [];
+  const hosts = new RendererPresentationHostSet({
+    audio: {
+      applyPresentation: (_frame: PresentationFrameDiff) => EMPTY_RECEIPT,
+      updateListener: (pose) => {
+        poses.push(pose);
+        return [];
+      },
+    },
+  });
+  const receipt = hosts.syncListener({
+    position: [1, 2, 3],
+    forward: [0, 0, -1],
+    up: [0, 1, 0],
+  });
+  assert.deepEqual(receipt, {
+    schemaVersion: 1, configured: true, applied: true, diagnostics: [],
+  });
+  assert.deepEqual(poses, [{
+    position: [1, 2, 3], forward: [0, 0, -1], up: [0, 1, 0],
+  }]);
+
+  assert.deepEqual(new RendererPresentationHostSet({}).syncListener({
+    position: [0, 0, 0], forward: [0, 0, -1], up: [0, 1, 0],
+  }), {
+    schemaVersion: 1, configured: false, applied: false, diagnostics: [],
+  });
+
+  const rejected = new RendererPresentationHostSet({
+    audio: {
+      applyPresentation: (_frame: PresentationFrameDiff) => EMPTY_RECEIPT,
+      updateListener: () => [{
+        code: 'hostFailure', sequence: 0, handle: null, message: 'audio host is disposed',
+      }],
+    },
+  }).syncListener({
+    position: [0, 0, 0], forward: [0, 0, -1], up: [0, 1, 0],
+  });
+  assert.equal(rejected.configured, true);
+  assert.equal(rejected.applied, false);
+  assert.equal(rejected.diagnostics[0]?.code, 'hostFailure');
+});

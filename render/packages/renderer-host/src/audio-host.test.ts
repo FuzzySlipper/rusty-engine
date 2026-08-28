@@ -241,6 +241,19 @@ void test('Web Audio host emits catalog-hash-bound 3D cues and caches decoded cl
   assert.equal(context.sources.length, 2, 're-reading a frame does not replay a one-shot signal');
 });
 
+void test('listener updates after disposal retain a diagnostic without writing Web Audio state', async () => {
+  const context = new FakeContext();
+  const audio = host(context);
+  await audio.dispose();
+
+  const diagnostics = audio.updateListener({
+    position: [4, 5, 6], forward: [0, 0, -1], up: [0, 1, 0],
+  });
+  assert.equal(diagnostics[0]?.code, 'hostFailure');
+  assert.deepEqual(context.listener.positionX.writes, []);
+  assert.equal(audio.readout().diagnostics.at(-1)?.message, 'audio host is disposed');
+});
+
 void test('retained 2D/3D sources create update destroy and clean up independently', async () => {
   const context = new FakeContext();
   const audio = host(context);

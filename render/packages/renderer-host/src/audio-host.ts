@@ -187,6 +187,9 @@ export class RendererAudioHost {
   }
 
   updateListener(pose: RendererAudioListenerPose): readonly AudioProjectionDiagnostic[] {
+    if (this.#disposed) {
+      return this.#recordHostDiagnostic('hostFailure', 'audio host is disposed');
+    }
     if (![...pose.position, ...pose.forward, ...pose.up].every(Number.isFinite)) {
       return this.#recordHostDiagnostic('invalidDescriptor', 'audio listener pose must be finite');
     }
