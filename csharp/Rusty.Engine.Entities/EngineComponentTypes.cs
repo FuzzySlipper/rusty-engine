@@ -22,6 +22,14 @@ public static class EngineComponentTypes
         EngineComponentKeys.Create(2),
         validator: ValidateCharacterMotion);
 
+    /// <summary>
+    /// A local-space collider shape projected with the canonical <see cref="Transform"/> into
+    /// the generated Spatial trigger batch. Entity identity remains owned by <see cref="EntityWorld"/>.
+    /// </summary>
+    public static ComponentType<SpatialCollider> SpatialCollider { get; } = ComponentType<SpatialCollider>.CreateEngine(
+        EngineComponentKeys.Create(3),
+        validator: ValidateSpatialCollider);
+
     private static void ValidateTransform(in Transform value)
     {
         if (!IsFinite(value.Translation) || !IsFinite(value.Scale)
@@ -50,6 +58,17 @@ public static class EngineComponentTypes
             || !IsBounded(value.PeakY, MaxAbsTranslation))
         {
             throw new ArgumentException("Character motion does not satisfy its intrinsic Engine value bounds.");
+        }
+    }
+
+    private static void ValidateSpatialCollider(in SpatialCollider value)
+    {
+        if (!IsFinite(value.Min) || !IsFinite(value.Max)
+            || value.Min.X > value.Max.X
+            || value.Min.Y > value.Max.Y
+            || value.Min.Z > value.Max.Z)
+        {
+            throw new ArgumentException("Spatial collider bounds must be finite and ordered.");
         }
     }
 

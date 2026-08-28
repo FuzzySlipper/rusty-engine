@@ -1,6 +1,7 @@
 using Rusty.Engine;
 using Rusty.Engine.Entities;
 using Rusty.Engine.Persistence;
+using System.Numerics;
 
 const uint HealthLocalComponentId = 1;
 const uint ArmorLocalComponentId = 2;
@@ -57,6 +58,7 @@ ExerciseMechanicsWorldPersistenceComposition();
 ExerciseContinuousMechanicsSibling();
 ExerciseContinuousMechanicsComposition();
 ExerciseStateMachineEntityComposition();
+ExerciseSpatialEntityProjection();
 
 static void Require(bool condition, string message)
 {
@@ -185,6 +187,60 @@ static void ExerciseStateMachineEntityComposition()
     world.Destroy(actor);
     Require(!world.Has(actor, movement) && !world.Has(actor, activity),
         "tombstoning did not remove attached state-machine components");
+}
+
+static void ExerciseSpatialEntityProjection()
+{
+    using var world = new EntityWorld([EngineComponentTypes.Transform, EngineComponentTypes.SpatialCollider]);
+    var spatial = new SpatialServiceFake();
+    using var session = new SpatialSession(new SpatialSessionHandle(1), () => { });
+    var adapter = new SpatialEntityWorld(world, spatial, session, EngineComponentTypes.SpatialCollider);
+    EntityId actor = world.Create();
+    world.Set(actor, EngineComponentTypes.Transform, new Transform(
+        new Vector3(10f, 2f, -3f),
+        Quaternion.Identity,
+        new Vector3(2f, 1f, 1f)));
+    world.Set(actor, EngineComponentTypes.SpatialCollider,
+        new SpatialCollider(
+            new Vector3(-1f, -1f, -1f),
+            new Vector3(1f, 1f, 1f),
+            CollisionGroup: 1,
+            CollisionMask: 1,
+            Enabled: true,
+            StaticCollider: false,
+            Trigger: true));
+
+    SpatialEntityWorldReconcileReceipt receipt = adapter.ReconcileTriggers(
+        tick: 7,
+        cause: SpatialTriggerCause.Movement,
+        maximumEntities: 4,
+        maximumFactReadback: 1);
+    Require(receipt.Entities.Length == 1, "spatial projection did not produce one active entity");
+    SpatialEntityCollider projected = receipt.Entities.Span[0];
+    Require(spatial.ReconcileCalls == 1
+        && projected.Entity == actor.Value
+        && projected.Min == new Vector3(8f, 1f, -4f)
+        && projected.Max == new Vector3(12f, 3f, -2f),
+        "spatial projection did not inject the canonical entity identity and transformed bounds");
+    Require(receipt.Trigger.Tick == 7
+        && receipt.Facts.Length == 1
+        && receipt.Facts.Span[0].Present
+        && receipt.Facts.Span[0].Subject == actor.Value
+        && !receipt.FactsTruncated,
+        "spatial reconciliation did not copy its bounded generated readback");
+
+    world.Set(actor, EngineComponentTypes.Transform, new Transform(
+        new Vector3(11f, 2f, -3f),
+        Quaternion.Identity,
+        new Vector3(2f, 1f, 1f)));
+    Throws(
+        () => adapter.ReconcileTriggers(8, SpatialTriggerCause.Movement, 4, 1, receipt.Guard),
+        "stale spatial world guard was accepted");
+    SpatialEntityWorldGuard staleComponentGuard = receipt.Guard with { WorldRevision = world.Revision };
+    Throws(
+        () => adapter.ReconcileTriggers(8, SpatialTriggerCause.Movement, 4, 1, staleComponentGuard),
+        "stale spatial component guard was accepted");
+    Require(spatial.ReconcileCalls == 1, "stale spatial projection crossed into the generated service");
 }
 
 static void ExerciseManagedRestorePlan(
@@ -982,6 +1038,60 @@ sealed class InMemoryContinuousCheckpointMigration : IProductStateMigration
         Calls++;
         return new byte[] { 1 };
     }
+}
+
+sealed class SpatialServiceFake : ISpatialService
+{
+    public int ReconcileCalls { get; private set; }
+    private SpatialEntityCollider[] _entities = [];
+
+    public SpatialSession CreateSession(SpatialSessionConfig arg0) => throw new NotSupportedException();
+    public CollisionReplaceReceipt ReplaceCollision(CollisionReplaceRequest arg0) => throw new NotSupportedException();
+    public NavigationReplaceReceipt ReplaceNavigation(NavigationReplaceRequest arg0) => throw new NotSupportedException();
+    public NavigationReplaceReceipt ReplaceVoxelNavigation(NavigationVoxelReplaceRequest arg0) => throw new NotSupportedException();
+    public NavigationProjectionReadout ReadNavigationProjection(NavigationProjectionReadRequest arg0) => throw new NotSupportedException();
+    public NavigationPathReadout RequestNavigationPath(NavigationPathRequest arg0) => throw new NotSupportedException();
+    public NavigationPathCellAtReceipt ReadNavigationPathCellAt(NavigationPathCellAtRequest arg0) => throw new NotSupportedException();
+    public NavigationPathReadout RequestVolumetricNavigationPath(NavigationVolumetricPathRequest arg0) => throw new NotSupportedException();
+    public void ClearNavigation(NavigationClearRequest arg0) => throw new NotSupportedException();
+    public CharacterControllerConfig DefaultCharacterControllerConfig() => throw new NotSupportedException();
+    public CharacterStepReceipt ProposeCharacterStep(CharacterStepRequest arg0) => throw new NotSupportedException();
+    public CharacterControllerReadout ReadCharacterController(CharacterControllerReadRequest arg0) => throw new NotSupportedException();
+    public CharacterContactAtReceipt ReadCharacterContactAt(CharacterContactAtRequest arg0) => throw new NotSupportedException();
+    public CharacterDynamicImpulseAtReceipt ReadCharacterDynamicImpulseAt(CharacterDynamicImpulseAtRequest arg0) => throw new NotSupportedException();
+    public NavigationStepReceipt ProposeNavigationStep(NavigationStepRequest arg0) => throw new NotSupportedException();
+    public SpatialProjectionReadout ReadProjection(SpatialProjectionReadRequest arg0) => throw new NotSupportedException();
+    public SpatialQueryReceipt ContainsPoint(SpatialContainsPointRequest arg0) => throw new NotSupportedException();
+    public SpatialHit CastRay(SpatialRaycastRequest arg0) => throw new NotSupportedException();
+    public SpatialHit CastSegment(SpatialSegmentCastRequest arg0) => throw new NotSupportedException();
+    public SpatialQueryReceipt OverlapAabb(SpatialAabbQueryRequest arg0) => throw new NotSupportedException();
+    public SpatialQueryReceipt SweepAabb(SpatialAabbQueryRequest arg0) => throw new NotSupportedException();
+    public SpatialHit CastCapsule(SpatialCapsuleQueryRequest arg0) => throw new NotSupportedException();
+    public SpatialHit OverlapCapsule(SpatialCapsuleQueryRequest arg0) => throw new NotSupportedException();
+    public SpatialHit PickVoxel(SpatialPickRequest arg0) => throw new NotSupportedException();
+    public void RegisterTrigger(SpatialTriggerRegisterRequest arg0) => throw new NotSupportedException();
+
+    public SpatialTriggerReceipt ReconcileTriggers(SpatialTriggerReconcileRequest request)
+    {
+        ReconcileCalls++;
+        _entities = request.Entities.ToArray();
+        return new SpatialTriggerReceipt(
+            request.Tick,
+            request.Cause,
+            (ulong)ReconcileCalls,
+            _entities.Length == 0 ? 0u : 1u,
+            0,
+            0,
+            0);
+    }
+
+    public SpatialTriggerReadReceipt ReadTrigger(SpatialTriggerReadRequest arg0) => throw new NotSupportedException();
+    public SpatialTriggerOverlapAtReceipt ReadTriggerOverlapAt(SpatialTriggerOverlapAtRequest arg0) => throw new NotSupportedException();
+
+    public SpatialTriggerFactAtReceipt ReadTriggerFactAt(SpatialTriggerFactAtRequest request)
+        => request.Index == 0 && _entities.Length != 0
+            ? new SpatialTriggerFactAtReceipt(true, true, _entities[0].Entity, _entities[0].Entity, 7, SpatialTriggerCause.Movement)
+            : default;
 }
 
 sealed class StateMachineServiceFake : IStateMachineService
