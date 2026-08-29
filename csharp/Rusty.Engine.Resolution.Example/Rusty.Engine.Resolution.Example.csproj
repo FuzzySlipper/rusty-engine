@@ -6,6 +6,6 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../Rusty.Engine.Resolution/Rusty.Engine.Resolution.csproj" />
+    <ProjectReference Include="../Rusty.Engine/Rusty.Engine.csproj" />
   </ItemGroup>
 </Project>
