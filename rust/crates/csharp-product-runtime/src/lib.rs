@@ -1003,6 +1003,44 @@ impl CsharpProductRuntime {
                 "direct intent was not converted to the configured safe ProductInputEvent shape",
             ));
         }
+        let digital = self
+            .direct_intents
+            .iter()
+            .find(|candidate| candidate.value_kind() == IntentValueKind::Digital)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_EXERCISE_INTENT_CONFIG",
+                    "digital exercise requires one configured direct intent",
+                )
+            })?;
+        let admitted = direct_intent(
+            current_binding,
+            next_sequence.checked_add(3).ok_or_else(|| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_EXERCISE_DIRECT_INTENT",
+                    "direct-intent exercise sequence overflowed",
+                )
+            })?,
+            &digital,
+        )?;
+        self.input(ProductDevInputBatch::new(vec![admitted]))
+            .map_err(exercise_runtime_error)?;
+        let native = self.pending_inputs.last().ok_or_else(|| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_DIRECT_INTENT",
+                "admitted digital intent did not reach the ProductInputEvent conversion queue",
+            )
+        })?;
+        if native.kind != NativeInputEventKind::DirectDigital
+            || native.intent != digital.id().as_bytes()
+            || native.x != 1.0
+        {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_DIRECT_INTENT",
+                "digital intent was not converted to the configured safe ProductInputEvent shape",
+            ));
+        }
         Ok(())
     }
 
@@ -1153,7 +1191,10 @@ impl CsharpProductRuntime {
                 .map_err(lifecycle_error)?;
             self.rebind_input(InputClearReason::ControlRevisionChange)?;
             let binding = self.binding();
-            outputs.push(ProductDevRuntimeOutput::binding(binding));
+            outputs.push(ProductDevRuntimeOutput::binding(
+                binding,
+                self.next_input_sequence(),
+            ));
             outputs.push(ProductDevRuntimeOutput::complete_baseline(binding));
         }
         Ok(outputs)
@@ -1267,8 +1308,13 @@ impl CsharpProductRuntime {
         outputs: Vec<ProductDevRuntimeOutput>,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
         let readout = self.readout();
-        let result = ProductDevOperationResult::accepted(operation, self.binding(), readout)
-            .map_err(host_runtime_error)?;
+        let result = ProductDevOperationResult::accepted(
+            operation,
+            self.binding(),
+            self.next_input_sequence(),
+            readout,
+        )
+        .map_err(host_runtime_error)?;
         ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
     }
 
@@ -1283,6 +1329,14 @@ impl CsharpProductRuntime {
 
     fn binding(&self) -> ProductDevRuntimeBinding {
         dev_binding(self.lifecycle.readout())
+    }
+
+    fn next_input_sequence(&self) -> CanonicalU64 {
+        CanonicalU64::new(
+            self.input_lane
+                .last_sequence()
+                .map_or(0, |sequence| sequence.saturating_add(1)),
+        )
     }
 
     fn require_control_binding(
@@ -1340,7 +1394,10 @@ impl CsharpProductRuntime {
     ) -> Vec<ProductDevRuntimeOutput> {
         let binding = self.binding();
         let mut tagged = Vec::with_capacity(outputs.len() + 2);
-        tagged.push(ProductDevRuntimeOutput::binding(binding));
+        tagged.push(ProductDevRuntimeOutput::binding(
+            binding,
+            self.next_input_sequence(),
+        ));
         tagged.append(&mut outputs);
         tagged.push(ProductDevRuntimeOutput::complete_baseline(binding));
         tagged

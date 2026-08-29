@@ -27,6 +27,8 @@ export interface RustyApplicationRuntimeInputBinding {
     readonly runtime: RustyApplicationRuntimeIdentity;
     /** Product-declared input context. The host preserves it but assigns no meaning. */
     readonly context: string;
+    /** Engine-published next sequence for this runtime epoch. Generic hosts default to zero. */
+    readonly nextSequence?: string;
 }
 /** Mirrors the closed Engine input control catalog; navigation keys are not admitted yet. */
 export type RustyApplicationKeyboardControl = 'key-a' | 'key-b' | 'key-c' | 'key-d' | 'key-e' | 'key-f' | 'key-g' | 'key-h' | 'key-i' | 'key-j' | 'key-k' | 'key-l' | 'key-m' | 'key-n' | 'key-o' | 'key-p' | 'key-q' | 'key-r' | 'key-s' | 'key-t' | 'key-u' | 'key-v' | 'key-w' | 'key-x' | 'key-y' | 'key-z' | 'digit-0' | 'digit-1' | 'digit-2' | 'digit-3' | 'digit-4' | 'digit-5' | 'digit-6' | 'digit-7' | 'digit-8' | 'digit-9' | 'space' | 'enter' | 'escape' | 'shift-left' | 'shift-right' | 'control-left' | 'control-right' | 'alt-left' | 'alt-right';

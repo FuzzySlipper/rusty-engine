@@ -77,26 +77,52 @@ const runtimeReadout = (state: ProductBrowserRuntimeReadout['state']): ProductBr
 const adapter: ProductBrowserRuntimeAdapter = {
   lifecycle: async (operation) => {
     if (operation.kind === 'start') {
-      emit({ kind: 'binding', runtime: RUNTIME });
+      emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
       emit({ kind: 'runtime-readout', readout: runtimeReadout('running') });
     }
-    return { accepted: true, operation: operation.kind, binding: RUNTIME, readout: runtimeReadout('running') };
+    return {
+      accepted: true,
+      operation: operation.kind,
+      binding: RUNTIME,
+      nextInputSequence: '1',
+      readout: runtimeReadout('running'),
+    };
   },
   input: async (batch) => {
     inputBatches.push(batch);
     return { accepted: true, count: batch.length, binding: RUNTIME, readout: runtimeReadout('running') };
   },
+  reportAudioFeedback: async (feedback) => ({
+    accepted: true,
+    runtime: feedback.runtime,
+    ...(feedback.facts.at(-1) === undefined
+      ? {}
+      : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
+  }),
+  reportAnimationFeedback: async (feedback) => ({
+    accepted: true,
+    runtime: feedback.runtime,
+    ...(feedback.facts.at(-1) === undefined
+      ? {}
+      : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
+  }),
   advanceRealtime: async (observedTimeNs) => {
     realtimeTicks.push(observedTimeNs);
     emit({ kind: 'runtime-readout', readout: runtimeReadout('running') });
-    return { accepted: true, operation: 'advance-realtime', binding: RUNTIME, readout: runtimeReadout('running') };
+    return {
+      accepted: true,
+      operation: 'advance-realtime',
+      binding: RUNTIME,
+      nextInputSequence: '1',
+      readout: runtimeReadout('running'),
+    };
   },
   subscribeOutputs: (listener) => {
     outputListeners.add(listener);
     // Adversarially emit a binding before application-host mount. Product
     // Browser Host must retain it in its bounded pre-mount buffer and apply it
     // only after the public input/projection ports exist.
-    listener({ kind: 'binding', runtime: RUNTIME });
+    listener({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
     return () => { outputListeners.delete(listener); };
   },
   subscribeTerminalFailures: (listener) => {
@@ -198,6 +224,7 @@ void mountProductBrowserHost({
   transport: adapter,
   lifecycleMode: 'realtime',
   mountUi,
+  initialInteractionMode: 'gameplay',
   inputContext: 'gameplay.default',
   runtimeInput: { maximumPointerDelta: 32, maximumWheelDelta: 64 },
   uiProjection: { expectedStream: 'product.ui', expectedContract: 'product.ui.v1' },

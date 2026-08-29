@@ -163,7 +163,7 @@ async function handleRequest(
       'content-type': 'text/event-stream; charset=utf-8',
     });
     response.write([
-      { kind: 'binding', runtime: RUNTIME },
+      { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' },
       { kind: 'runtime-readout', readout: READOUT },
       {
         kind: 'ui-projection',
@@ -195,7 +195,13 @@ async function handleRequest(
       const operation = pathname.slice('/__rusty/product/runtime/'.length);
       const result = operation === 'input'
         ? { accepted: true, count: inputCount, binding: RUNTIME, readout: READOUT }
-        : { accepted: true, operation: operation === 'lifecycle/start' ? 'start' : 'advance-realtime', binding: RUNTIME, readout: READOUT };
+        : {
+            accepted: true,
+            operation: operation === 'lifecycle/start' ? 'start' : 'advance-realtime',
+            binding: RUNTIME,
+            nextInputSequence: '1',
+            readout: READOUT,
+          };
       sendJson(response, result);
     });
     return;

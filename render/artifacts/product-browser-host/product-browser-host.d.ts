@@ -35,6 +35,8 @@ export interface ProductBrowserRuntimeOperationResult {
     readonly accepted: boolean;
     readonly operation: ProductBrowserRuntimeOperationKind;
     readonly binding?: RustyApplicationRuntimeIdentity;
+    /** Engine-owned cursor after lifecycle input clear/rebind work. */
+    readonly nextInputSequence?: string;
     readonly readout?: ProductBrowserRuntimeReadout;
     readonly diagnostic?: string;
 }
@@ -175,6 +177,7 @@ export interface ProductBrowserRuntimeReadout {
 export interface ProductBrowserRuntimeBindingOutput {
     readonly kind: 'binding';
     readonly runtime: RustyApplicationRuntimeIdentity;
+    readonly nextInputSequence: string;
 }
 export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
 /** Fixed host evidence that one Rust-owned realtime advance was accepted. */

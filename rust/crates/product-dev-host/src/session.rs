@@ -164,7 +164,10 @@ mod tests {
         ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
             ProductDevRuntimeReceipt::new(
                 ProductDevOperationResult::rejected(operation, "fixture").unwrap(),
-                vec![crate::ProductDevRuntimeOutput::binding(binding())],
+                vec![crate::ProductDevRuntimeOutput::binding(
+                    binding(),
+                    CanonicalU64::new(0),
+                )],
             )
             .unwrap()
         }
@@ -203,7 +206,10 @@ mod tests {
             Ok(ProductDevRuntimeReceipt::new(
                 crate::ProductDevInputResult::accepted(batch.events().len(), binding(), readout())
                     .unwrap(),
-                vec![crate::ProductDevRuntimeOutput::binding(binding())],
+                vec![crate::ProductDevRuntimeOutput::binding(
+                    binding(),
+                    CanonicalU64::new(0),
+                )],
             )
             .unwrap())
         }
@@ -244,7 +250,10 @@ mod tests {
                     "fixture",
                 )
                 .unwrap(),
-                vec![crate::ProductDevRuntimeOutput::binding(binding())],
+                vec![crate::ProductDevRuntimeOutput::binding(
+                    binding(),
+                    CanonicalU64::new(0),
+                )],
             )
             .unwrap())
         }

@@ -27001,10 +27001,10 @@ function BT(e, t = 0n) {
 				if (t > e && BigInt(s.runtime.controlRevision) <= BigInt(c.runtime.controlRevision)) throw RangeError("runtime control revision must advance with generation");
 				if (t === e && BigInt(s.runtime.controlRevision) < BigInt(c.runtime.controlRevision)) throw RangeError("runtime control revision cannot move backward within one generation");
 			}
-			if (c === null) return n = s, r = i ? t : 0n, i = !1, a = !1, !0;
+			if (c === null) return n = s, r = s.nextSequence === void 0 ? i ? t : 0n : BigInt(s.nextSequence), i = !1, a = !1, !0;
 			if (aE(c.runtime, s.runtime)) return c.context === s.context ? !1 : (n = s, l("interaction-mode-loss"), !0);
 			let u = c.runtime.instanceId !== s.runtime.instanceId || c.runtime.generation !== s.runtime.generation ? "restart" : "control-revision-change";
-			return n = s, r = 0n, a = !1, o = [], l(u), !0;
+			return n = s, r = s.nextSequence === void 0 ? 0n : BigInt(s.nextSequence), a = !1, o = [], l(u), !0;
 		},
 		setContext: (e) => {
 			let t = qT(e);
@@ -27068,7 +27068,8 @@ function GT(e) {
 			generation: KT(e.runtime.generation, "runtime.generation"),
 			controlRevision: KT(e.runtime.controlRevision, "runtime.controlRevision")
 		}),
-		context: qT(e.context)
+		context: qT(e.context),
+		...e.nextSequence === void 0 ? {} : { nextSequence: KT(e.nextSequence, "nextSequence") }
 	});
 }
 function KT(e, t) {
@@ -28360,7 +28361,8 @@ async function _D(e) {
 				case "binding":
 					m?.bindRuntime(n.runtime), h?.bindRuntime(n.runtime), o.input?.bindRuntime({
 						runtime: n.runtime,
-						context: e.inputContext ?? "gameplay.default"
+						context: e.inputContext ?? "gameplay.default",
+						nextSequence: n.nextInputSequence
 					}), o.uiProjection?.bindRuntime(n.runtime);
 					return;
 				case "runtime-progress":
@@ -28419,19 +28421,17 @@ async function _D(e) {
 		w(new pD("transport_failed", t.diagnostic), "transport_failed");
 	}, k = (e, t = "transport_failed") => {
 		if (!e.accepted) throw new pD(t, e.diagnostic ?? `${e.operation} was rejected by the runtime`);
-		e.binding !== void 0 && O({
+		e.binding !== void 0 && e.nextInputSequence !== void 0 && O({
 			kind: "binding",
-			runtime: e.binding
+			runtime: e.binding,
+			nextInputSequence: e.nextInputSequence
 		}), e.readout !== void 0 && O({
 			kind: "runtime-readout",
 			readout: e.readout
 		});
 	}, te = (e) => {
 		if (!e.accepted) throw new pD("transport_failed", e.diagnostic ?? "runtime input batch was rejected by the runtime");
-		e.binding !== void 0 && O({
-			kind: "binding",
-			runtime: e.binding
-		}), e.readout !== void 0 && O({
+		e.readout !== void 0 && O({
 			kind: "runtime-readout",
 			readout: e.readout
 		});
@@ -28530,10 +28530,7 @@ async function _D(e) {
 			return n.completeTimeline === void 0 ? Promise.reject(new pD("timeline_unavailable", "this native product did not provide a timeline completion lane")) : r.enqueue(async () => {
 				let t = await n.completeTimeline(e);
 				if (!t.accepted) throw new pD("transport_failed", t.diagnostic ?? "timeline completion was rejected by the runtime");
-				return t.binding !== void 0 && O({
-					kind: "binding",
-					runtime: t.binding
-				}), t.readout !== void 0 && O({
+				return t.readout !== void 0 && O({
 					kind: "runtime-readout",
 					readout: t.readout
 				}), t;
@@ -29692,16 +29689,19 @@ function rk(e, t) {
 		"accepted",
 		"operation",
 		"binding",
+		"nextInputSequence",
 		"readout",
 		"diagnostic"
 	], "operation result"), n.accepted !== !0 && n.accepted !== !1) throw TypeError("accepted must be boolean");
 	if (n.operation !== t) throw TypeError(`operation must be ${t}`);
-	if (n.accepted === !1 && (n.binding !== void 0 || n.readout !== void 0)) throw TypeError("rejected operation result cannot include binding or readout");
+	if (n.binding === void 0 != (n.nextInputSequence === void 0)) throw TypeError("operation binding and nextInputSequence must be present together");
+	if (n.accepted === !1 && (n.binding !== void 0 || n.nextInputSequence !== void 0 || n.readout !== void 0)) throw TypeError("rejected operation result cannot include binding, input cursor, or readout");
 	if (n.accepted === !0 && n.diagnostic !== void 0) throw TypeError("accepted operation result cannot include diagnostic");
 	return {
 		accepted: n.accepted,
 		operation: t,
 		...n.binding === void 0 ? {} : { binding: pk(n.binding) },
+		...n.nextInputSequence === void 0 ? {} : { nextInputSequence: MO(n.nextInputSequence, "operation nextInputSequence") },
 		...n.readout === void 0 ? {} : { readout: hk(n.readout) },
 		...n.diagnostic === void 0 ? {} : { diagnostic: yk(n.diagnostic) }
 	};
@@ -29820,9 +29820,14 @@ function sk(e, t) {
 function ck(e) {
 	let t = gk(e, "runtime output");
 	switch (t.kind) {
-		case "binding": return vk(t, ["kind", "runtime"], "binding output"), {
+		case "binding": return vk(t, [
+			"kind",
+			"runtime",
+			"nextInputSequence"
+		], "binding output"), {
 			kind: "binding",
-			runtime: pk(t.runtime)
+			runtime: pk(t.runtime),
+			nextInputSequence: MO(t.nextInputSequence, "binding nextInputSequence")
 		};
 		case "frame": return vk(t, ["kind", "frame"], "frame output"), {
 			kind: "frame",

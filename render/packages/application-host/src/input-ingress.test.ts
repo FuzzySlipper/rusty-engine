@@ -50,6 +50,14 @@ void test('input ingress preserves physical and direct UI observation order with
   ]);
 });
 
+void test('Engine-published runtime cursor starts physical and direct UI input after lifecycle clear', () => {
+  const queue = createRustyApplicationInputQueue(8);
+  assert.equal(queue.bindRuntime({ ...INITIAL, nextSequence: '1' }), true);
+  assert.equal(queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' }), false);
+  assert.equal(queue.claim('move.forward', { kind: 'digital', active: true }), false);
+  assert.deepEqual(queue.drain().map((entry) => entry.sequence), ['1', '2']);
+});
+
 void test('direct product payload claims are deeply plain, bounded, and immutable', () => {
   const queue = createRustyApplicationInputQueue(8);
   queue.bindRuntime(INITIAL);

@@ -30,6 +30,8 @@ export interface RustyApplicationRuntimeInputBinding {
   readonly runtime: RustyApplicationRuntimeIdentity;
   /** Product-declared input context. The host preserves it but assigns no meaning. */
   readonly context: string;
+  /** Engine-published next sequence for this runtime epoch. Generic hosts default to zero. */
+  readonly nextSequence?: string;
 }
 
 /** Mirrors the closed Engine input control catalog; navigation keys are not admitted yet. */
@@ -545,7 +547,9 @@ export function createRustyApplicationInputQueue(
       }
       if (previous === null) {
         binding = normalized;
-        sequence = initialBinding ? initialSequence : 0n;
+        sequence = normalized.nextSequence === undefined
+          ? (initialBinding ? initialSequence : 0n)
+          : BigInt(normalized.nextSequence);
         initialBinding = false;
         terminal = false;
         return true;
@@ -561,7 +565,7 @@ export function createRustyApplicationInputQueue(
         ? 'restart'
         : 'control-revision-change';
       binding = normalized;
-      sequence = 0n;
+      sequence = normalized.nextSequence === undefined ? 0n : BigInt(normalized.nextSequence);
       terminal = false;
       entries = [];
       replaceQueuedWithClear(reason);
@@ -675,6 +679,9 @@ function validateBinding(binding: RustyApplicationRuntimeInputBinding): RustyApp
       controlRevision: validateCanonicalU64(binding.runtime.controlRevision, 'runtime.controlRevision'),
     }),
     context: validateContext(binding.context),
+    ...(binding.nextSequence === undefined
+      ? {}
+      : { nextSequence: validateCanonicalU64(binding.nextSequence, 'nextSequence') }),
   });
 }
 

@@ -1215,15 +1215,19 @@ function decodeOperationResult(
   expectedOperation: ProductBrowserRuntimeOperationKind,
 ): ProductBrowserRuntimeOperationResult {
   const record = requireRecord(value, 'operation result');
-  requireKnownFields(record, ['accepted', 'operation', 'binding', 'readout', 'diagnostic'], 'operation result');
+  requireKnownFields(record, ['accepted', 'operation', 'binding', 'nextInputSequence', 'readout', 'diagnostic'], 'operation result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
   if (record.operation !== expectedOperation) {
     throw new TypeError(`operation must be ${expectedOperation}`);
   }
-  if (record.accepted === false && (record.binding !== undefined || record.readout !== undefined)) {
-    throw new TypeError('rejected operation result cannot include binding or readout');
+  if ((record.binding === undefined) !== (record['nextInputSequence'] === undefined)) {
+    throw new TypeError('operation binding and nextInputSequence must be present together');
+  }
+  if (record.accepted === false
+    && (record.binding !== undefined || record['nextInputSequence'] !== undefined || record.readout !== undefined)) {
+    throw new TypeError('rejected operation result cannot include binding, input cursor, or readout');
   }
   if (record.accepted === true && record.diagnostic !== undefined) {
     throw new TypeError('accepted operation result cannot include diagnostic');
@@ -1232,6 +1236,9 @@ function decodeOperationResult(
     accepted: record.accepted,
     operation: expectedOperation,
     ...(record.binding === undefined ? {} : { binding: decodeRuntimeIdentity(record.binding) }),
+    ...(record['nextInputSequence'] === undefined
+      ? {}
+      : { nextInputSequence: requireU64Text(record['nextInputSequence'], 'operation nextInputSequence') }),
     ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   };
@@ -1362,8 +1369,12 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
   const record = requireRecord(value, 'runtime output');
   switch (record.kind) {
     case 'binding':
-      requireKnownFields(record, ['kind', 'runtime'], 'binding output');
-      return { kind: 'binding', runtime: decodeRuntimeIdentity(record.runtime) };
+      requireKnownFields(record, ['kind', 'runtime', 'nextInputSequence'], 'binding output');
+      return {
+        kind: 'binding',
+        runtime: decodeRuntimeIdentity(record.runtime),
+        nextInputSequence: requireU64Text(record['nextInputSequence'], 'binding nextInputSequence'),
+      };
     case 'frame':
       requireKnownFields(record, ['kind', 'frame'], 'frame output');
       return { kind: 'frame', frame: decodeFrame(record.frame, 'frame') };

@@ -683,6 +683,8 @@ pub struct ProductDevOperationResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     binding: Option<ProductDevRuntimeBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    next_input_sequence: Option<CanonicalU64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     readout: Option<ProductDevRuntimeReadout>,
     #[serde(skip_serializing_if = "Option::is_none")]
     diagnostic: Option<String>,
@@ -692,6 +694,7 @@ impl ProductDevOperationResult {
     pub fn accepted(
         operation: ProductDevOperationKind,
         binding: ProductDevRuntimeBinding,
+        next_input_sequence: CanonicalU64,
         readout: ProductDevRuntimeReadout,
     ) -> Result<Self, ProductDevHostError> {
         if readout.runtime() != binding {
@@ -704,6 +707,7 @@ impl ProductDevOperationResult {
             accepted: true,
             operation,
             binding: Some(binding),
+            next_input_sequence: Some(next_input_sequence),
             readout: Some(readout),
             diagnostic: None,
         })
@@ -718,6 +722,7 @@ impl ProductDevOperationResult {
             accepted: false,
             operation,
             binding: None,
+            next_input_sequence: None,
             readout: None,
             diagnostic: Some(diagnostic),
         })
@@ -1006,6 +1011,8 @@ pub struct ProductDevRuntimeOutput {
 enum ProductDevRuntimeOutputWire {
     Binding {
         runtime: ProductDevRuntimeBinding,
+        #[serde(rename = "nextInputSequence")]
+        next_input_sequence: CanonicalU64,
     },
     CompleteBaseline {
         runtime: ProductDevRuntimeBinding,
@@ -1091,9 +1098,12 @@ impl ProductDevAnimationCueDefinition {
 }
 
 impl ProductDevRuntimeOutput {
-    pub fn binding(runtime: ProductDevRuntimeBinding) -> Self {
+    pub fn binding(runtime: ProductDevRuntimeBinding, next_input_sequence: CanonicalU64) -> Self {
         Self {
-            wire: ProductDevRuntimeOutputWire::Binding { runtime },
+            wire: ProductDevRuntimeOutputWire::Binding {
+                runtime,
+                next_input_sequence,
+            },
         }
     }
     pub fn frame(frame: &render_model::RenderFrameDiff) -> Result<Self, ProductDevHostError> {
@@ -1216,7 +1226,7 @@ impl ProductDevRuntimeOutput {
 
     pub(crate) const fn binding_marker(&self) -> Option<ProductDevRuntimeBinding> {
         match &self.wire {
-            ProductDevRuntimeOutputWire::Binding { runtime } => Some(*runtime),
+            ProductDevRuntimeOutputWire::Binding { runtime, .. } => Some(*runtime),
             _ => None,
         }
     }

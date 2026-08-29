@@ -34,6 +34,7 @@ public sealed class Product : IEngineProduct
     private int _mappedHeldTurns;
     private bool _mappingReleasePending;
     private bool _mappingReleaseVerified;
+    private bool _directDigitalObserved;
     private bool _updateFactsSeen;
     private ulong _lastUpdateGeneration;
     private ulong _lastUpdateControlRevision;
@@ -476,6 +477,13 @@ public sealed class Product : IEngineProduct
                 Require(input.PayloadContract.Span.SequenceEqual("runtime.exercise.payload"u8), "payload contract did not reach Product.Game");
                 Require(input.PayloadData.Span.SequenceEqual("{\"exercise\":true}"u8), "payload data did not reach Product.Game");
             }
+            if (input.Kind == InputEventKind.DirectDigital)
+            {
+                Require(input.Intent.Span.SequenceEqual("runtime.exercise.move"u8), "direct digital intent identity did not reach Product.Game");
+                Require(input.ValueKind == InputValueKind.Digital && input.X == 1.0f, "direct digital intent value did not reach Product.Game");
+                Require(input.Provenance == InputProvenance.DirectUi && input.Phase == InputPhase.DirectUi, "direct digital UI provenance did not reach Product.Game");
+                _directDigitalObserved = true;
+            }
         }
         if (_mappingReleasePending && !releaseObservedThisTurn)
         {
@@ -510,6 +518,7 @@ public sealed class Product : IEngineProduct
         {
             Require(_mappedHeldTurns >= 2, "physical mapping exercise did not reach two admitted Held turns");
             Require(_mappingReleaseVerified, "physical mapping release was not observed to end Held delivery");
+            Require(_directDigitalObserved, "direct digital UI claim never reached Product.Game");
         }
         // Release the retained Engine projection before owner disposal.
         _engine.Appearance.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);

@@ -56,6 +56,8 @@ export interface ProductBrowserRuntimeOperationResult {
   readonly accepted: boolean;
   readonly operation: ProductBrowserRuntimeOperationKind;
   readonly binding?: RustyApplicationRuntimeIdentity;
+  /** Engine-owned cursor after lifecycle input clear/rebind work. */
+  readonly nextInputSequence?: string;
   readonly readout?: ProductBrowserRuntimeReadout;
   readonly diagnostic?: string;
 }
@@ -171,6 +173,7 @@ export interface ProductBrowserRuntimeReadout {
 export interface ProductBrowserRuntimeBindingOutput {
   readonly kind: 'binding';
   readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly nextInputSequence: string;
 }
 
 export type ProductBrowserRuntimeOutput =
@@ -714,6 +717,7 @@ export async function mountProductBrowserHost(
           host.input?.bindRuntime({
             runtime: output.runtime,
             context: options.inputContext ?? 'gameplay.default',
+            nextSequence: output.nextInputSequence,
           });
           host.uiProjection?.bindRuntime(output.runtime);
           return;
@@ -831,7 +835,13 @@ export async function mountProductBrowserHost(
         result.diagnostic ?? `${result.operation} was rejected by the runtime`,
       );
     }
-    if (result.binding !== undefined) applyOutput({ kind: 'binding', runtime: result.binding });
+    if (result.binding !== undefined && result.nextInputSequence !== undefined) {
+      applyOutput({
+        kind: 'binding',
+        runtime: result.binding,
+        nextInputSequence: result.nextInputSequence,
+      });
+    }
     if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
   };
 
@@ -842,7 +852,6 @@ export async function mountProductBrowserHost(
         result.diagnostic ?? 'runtime input batch was rejected by the runtime',
       );
     }
-    if (result.binding !== undefined) applyOutput({ kind: 'binding', runtime: result.binding });
     if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
   };
 
@@ -1005,7 +1014,6 @@ export async function mountProductBrowserHost(
           result.diagnostic ?? 'timeline completion was rejected by the runtime',
         );
       }
-      if (result.binding !== undefined) applyOutput({ kind: 'binding', runtime: result.binding });
       if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
       return result;
     }).catch((cause: unknown) => {

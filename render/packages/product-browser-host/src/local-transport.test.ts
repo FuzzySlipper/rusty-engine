@@ -65,7 +65,13 @@ function response(body: unknown, status = 200): Response {
 }
 
 function result(operation: string): Record<string, unknown> {
-  return { accepted: true, operation, binding: RUNTIME, readout: READOUT };
+  return {
+    accepted: true,
+    operation,
+    binding: RUNTIME,
+    nextInputSequence: '1',
+    readout: READOUT,
+  };
 }
 
 test('same-origin local transport uses fixed typed operation routes and SSE outputs', async () => {
@@ -130,17 +136,19 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   const isolatedOutputs: unknown[] = [];
   const isolatedUnsubscribe = adapter.subscribeOutputs((output) => isolatedOutputs.push(output));
   assert.equal(FakeEventSource.instances[0]?.url, `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}outputs`);
-  FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME });
+  FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
   FakeEventSource.instances[0]!.emit({ kind: 'runtime-readout', readout: READOUT });
   assert.equal(outputs.length, 2);
   assert.equal(isolatedOutputs.length, 2);
   FakeEventSource.instances[0]!.onerror?.(new Error('transient stream failure'));
   assert.equal(FakeEventSource.instances[0]!.closed, false);
-  FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME });
+  FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
   assert.equal(outputs.length, 3);
   assert.equal(isolatedOutputs.length, 3);
   assert.equal(transportErrors.length, 4);
-  assert.deepEqual((await adapter.lifecycle({ kind: 'start' })).binding, RUNTIME);
+  const lifecycle = await adapter.lifecycle({ kind: 'start' });
+  assert.deepEqual(lifecycle.binding, RUNTIME);
+  assert.equal(lifecycle.nextInputSequence, '1');
   assert.equal((await adapter.input([])).count, 0);
   assert.equal((await adapter.advanceRealtime('100')).operation, 'advance-realtime');
   assert.equal((await adapter.admitDemandStep?.())?.operation, 'admit-demand-step');

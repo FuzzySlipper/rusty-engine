@@ -87,7 +87,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
     });
   },
   subscribeOutputs: (listener) => {
-    listener({ kind: 'binding', runtime });
+    listener({ kind: 'binding', runtime, nextInputSequence: '0' });
     return () => undefined;
   },
   dispose: () => { root.dataset['transportDisposed'] = 'true'; },

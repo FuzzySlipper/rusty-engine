@@ -11,6 +11,15 @@ test('generated product browser host owns one canvas, cadence, input drain, and 
     intentsKeys: ['claim'],
   });
 
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').focus();
+  await page.keyboard.press('KeyW');
+  await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? []).some((batch) => batch.some((value) => (
+    typeof value === 'object'
+      && value !== null
+      && 'fact' in value
+      && (value as { readonly fact?: { readonly kind?: string; readonly code?: string } }).fact?.kind === 'key'
+      && (value as { readonly fact?: { readonly kind?: string; readonly code?: string } }).fact?.code === 'key-w'
+  ))))).toBe(true);
   await page.locator('#product-intent').click();
   await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? []).some((batch) => batch.some((value) => (
     typeof value === 'object'
@@ -18,6 +27,9 @@ test('generated product browser host owns one canvas, cadence, input drain, and 
       && 'intent' in value
       && (value as { readonly intent?: string }).intent === 'product.jump'
   ))))).toBe(true);
+  expect(await page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? [])
+    .flat()
+    .every((value) => BigInt(value.sequence) >= 1n))).toBe(true);
   expect(await page.evaluate(() => window.__rustyProductBrowserRealtimeTicks?.length ?? 0)).toBeGreaterThan(0);
   expect(await page.evaluate(() => window.__rustyProductBrowserRafCount ?? 0)).toBeGreaterThan(0);
   await expect(page.locator('#product-state')).toHaveText('state: ready');

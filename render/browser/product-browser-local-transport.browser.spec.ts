@@ -23,7 +23,7 @@ test('generated-style browser composition reaches a local Rust-shaped HTTP/SSE t
     requests.push(`${request.method()} ${url.pathname}`);
     if (url.pathname.endsWith('/outputs')) {
       const body = [
-        { kind: 'binding', runtime: RUNTIME },
+        { kind: 'binding', runtime: RUNTIME, nextInputSequence: '0' },
         { kind: 'runtime-readout', readout: READOUT },
         {
           kind: 'ui-projection',

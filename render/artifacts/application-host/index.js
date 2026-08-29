@@ -27077,10 +27077,10 @@ function $T(e, t = 0n) {
 				if (t > e && BigInt(s.runtime.controlRevision) <= BigInt(c.runtime.controlRevision)) throw RangeError("runtime control revision must advance with generation");
 				if (t === e && BigInt(s.runtime.controlRevision) < BigInt(c.runtime.controlRevision)) throw RangeError("runtime control revision cannot move backward within one generation");
 			}
-			if (c === null) return n = s, r = i ? t : 0n, i = !1, a = !1, !0;
+			if (c === null) return n = s, r = s.nextSequence === void 0 ? i ? t : 0n : BigInt(s.nextSequence), i = !1, a = !1, !0;
 			if (vE(c.runtime, s.runtime)) return c.context === s.context ? !1 : (n = s, l("interaction-mode-loss"), !0);
 			let u = c.runtime.instanceId !== s.runtime.instanceId || c.runtime.generation !== s.runtime.generation ? "restart" : "control-revision-change";
-			return n = s, r = 0n, a = !1, o = [], l(u), !0;
+			return n = s, r = s.nextSequence === void 0 ? 0n : BigInt(s.nextSequence), a = !1, o = [], l(u), !0;
 		},
 		setContext: (e) => {
 			let t = oE(e);
@@ -27144,7 +27144,8 @@ function iE(e) {
 			generation: aE(e.runtime.generation, "runtime.generation"),
 			controlRevision: aE(e.runtime.controlRevision, "runtime.controlRevision")
 		}),
-		context: oE(e.context)
+		context: oE(e.context),
+		...e.nextSequence === void 0 ? {} : { nextSequence: aE(e.nextSequence, "nextSequence") }
 	});
 }
 function aE(e, t) {

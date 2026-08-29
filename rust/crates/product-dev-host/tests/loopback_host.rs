@@ -38,10 +38,15 @@ impl FixtureRuntime {
         operation: ProductDevOperationKind,
     ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
         ProductDevRuntimeReceipt::new(
-            ProductDevOperationResult::accepted(operation, Self::binding(), Self::readout())
-                .unwrap(),
+            ProductDevOperationResult::accepted(
+                operation,
+                Self::binding(),
+                CanonicalU64::new(0),
+                Self::readout(),
+            )
+            .unwrap(),
             vec![
-                ProductDevRuntimeOutput::binding(Self::binding()),
+                ProductDevRuntimeOutput::binding(Self::binding(), CanonicalU64::new(0)),
                 ProductDevRuntimeOutput::complete_baseline(Self::binding()),
             ],
         )
@@ -199,6 +204,7 @@ fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
     assert!(start.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(start.contains("\"operation\":\"start\""));
     assert!(start.contains("\"instanceId\":\"7\""));
+    assert!(start.contains("\"nextInputSequence\":\"0\""));
 
     let missing = request(
         &origin,
@@ -279,7 +285,7 @@ fn sse_receives_runtime_receipt_outputs_without_blocking_post() {
         bytes.extend_from_slice(&output[..count]);
         if std::str::from_utf8(&bytes)
             .unwrap()
-            .contains("data: {\"kind\":\"binding\"")
+            .contains("\"nextInputSequence\":\"0\"")
         {
             break;
         }
@@ -288,6 +294,7 @@ fn sse_receives_runtime_receipt_outputs_without_blocking_post() {
     assert!(output.contains("HTTP/1.1 200 OK\r\n"));
     assert!(output.contains("Content-Type: text/event-stream\r\n"));
     assert!(output.contains("data: {\"kind\":\"binding\""));
+    assert!(output.contains("\"nextInputSequence\":\"0\""));
     host.shutdown().unwrap();
 }
 
