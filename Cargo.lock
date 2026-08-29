@@ -415,6 +415,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "content-store-host"
+version = "0.1.0"
+dependencies = [
+ "content-store",
+ "fs2",
+ "tempfile",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -538,6 +547,7 @@ dependencies = [
  "asset-import",
  "authored-scene",
  "content-store",
+ "content-store-host",
  "core-assets",
  "core-ids",
  "core-math",
@@ -560,7 +570,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "state-machine",
- "svc-content-store",
  "svc-pathfinding",
  "svc-rng",
  "svc-spatial",
@@ -3542,15 +3551,6 @@ dependencies = [
  "rapier3d-f64",
  "svc-spatial",
  "svc-volume",
-]
-
-[[package]]
-name = "svc-content-store"
-version = "0.1.0"
-dependencies = [
- "content-store",
- "fs2",
- "tempfile",
 ]
 
 [[package]]

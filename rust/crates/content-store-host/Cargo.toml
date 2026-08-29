@@ -1,5 +1,5 @@
 [package]
-name = "svc-content-store"
+name = "content-store-host"
 version.workspace = true
 edition.workspace = true
 

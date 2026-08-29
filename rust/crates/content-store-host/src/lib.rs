@@ -1,8 +1,10 @@
 //! Host-rooted execution of admitted [`content_store`] publications.
 //!
-//! This service owns a small, named filesystem layout below a caller-selected
-//! host root. It deliberately has no ambient/default path and exposes neither
-//! a generic filesystem nor a product-byte persistence API.
+//! This host adapter owns a small, named filesystem layout below a
+//! caller-selected host root. It consumes the authoritative content-store model
+//! as an upper host adapter rather than a lower `svc-*` mechanism. It
+//! deliberately has no ambient/default path and exposes neither a generic
+//! filesystem nor a product-byte persistence API.
 
 #![forbid(unsafe_code)]
 

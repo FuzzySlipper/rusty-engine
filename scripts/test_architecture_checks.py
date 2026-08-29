@@ -114,6 +114,16 @@ class DependencyBoundaryTests(unittest.TestCase):
             )
         )
 
+    def test_host_adapter_may_execute_an_authoritative_owner_model(self) -> None:
+        metadata = metadata_fixture(
+            ["content-store", "content-store-host", "entity-state"],
+            [
+                ("content-store-host", "content-store", None, "content_store"),
+                ("content-store", "entity-state", None, "entity_state"),
+            ],
+        )
+        self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
+
     def test_inspector_and_render_authority_paths_are_rejected(self) -> None:
         metadata = metadata_fixture(
             [

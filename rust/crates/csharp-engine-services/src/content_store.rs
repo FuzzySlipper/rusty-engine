@@ -17,7 +17,7 @@ use content_store::{
     ContentWriteSetDraft,
 };
 use csharp_engine_abi::*;
-use svc_content_store::{
+use content_store_host::{
     ContentStore, ContentStoreExecutor, ContentStoreExecutorError, ContentStoreSnapshot,
 };
 
