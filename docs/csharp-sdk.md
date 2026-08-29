@@ -62,8 +62,10 @@ a live `Appearance` material, retain the disposable projection, and call
 `RefreshScene` after voxel edits, residency changes, or origin changes. The
 Engine keeps incremental renderer identity and owns all generated mesh/frame
 work; C# receives only a small readout. `Clear` or disposal stages the matching
-renderer destroys. Spatial sessions currently use their existing greedy-cube
-mesh posture; C# surface-mode selection is not yet part of this family.
+renderer destroys. Select `VoxelSurfaceMode` in `SpatialSessionConfig` when
+creating the session; it chooses only the Engine-derived mesh posture and is
+retained through subsequent voxel changes. Changing the mode of an existing
+session is not currently a C# API.
 
 ## Values, leases, and native lifetime
 

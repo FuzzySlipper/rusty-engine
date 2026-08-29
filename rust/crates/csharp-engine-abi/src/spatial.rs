@@ -12,7 +12,21 @@ pub struct NativeSpatialSessionHandle {
 pub struct NativeSpatialSessionConfig {
     pub collision_voxel_size: f64,
     pub collision_chunk_size: u32,
-    pub reserved: u32,
+    /// Engine-owned derived mesh posture for this canonical Spatial scene.
+    /// It does not change voxel occupancy, collision, navigation, or edits.
+    pub voxel_surface_mode: NativeVoxelSurfaceMode,
+}
+
+/// Renderer-neutral surface derivation selected when a canonical Spatial
+/// session is created. The Engine retains the chosen mode through later voxel
+/// edits, residency changes, and origin rebases.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelSurfaceMode {
+    #[default]
+    GreedyCubes = 0,
+    MarchingCubes = 1,
+    DualContouring = 2,
 }
 
 /// Named source of a spatial query result. `None` is a miss, while the other

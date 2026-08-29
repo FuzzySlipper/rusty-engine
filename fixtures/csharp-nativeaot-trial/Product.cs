@@ -262,7 +262,7 @@ public sealed class Product : IEngineProduct
         _forkedRng = _engine.Random.ForkScoped(new ScopedRngForkRequest(_rng, "child"));
         _lastRandom = _engine.Random.NextU64(_forkedRng).Value;
         _uiStream = _engine.Ui.OpenStream(new UiStreamRequest("nativeaot-trial", "nativeaot.trial.hud"));
-        _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1.0, 16, 0));
+        _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
         VoxelSceneReadout initialVoxelScene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(_spatial));
         Require(initialVoxelScene.Present && initialVoxelScene.ChunkSize == 16 && initialVoxelScene.SourceRevision == 0,
             "voxel scene facts did not reach C#");

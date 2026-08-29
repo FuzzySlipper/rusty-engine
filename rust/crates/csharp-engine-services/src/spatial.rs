@@ -10,9 +10,9 @@ use engine_spatial::{
     CharacterControllerService, CharacterGroundFact, CharacterObstacle,
     SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
     StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
-    StaticMeshTransform, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,
-    TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem, VoxelCollisionScene,
-    VoxelPickHint, VoxelPickService,
+    StaticMeshTransform, SurfaceMeshOptions, SurfaceMode, TriggerGeometrySource,
+    TriggerOverlapFact, TriggerOverlapFactKind, TriggerReconcileCause, TriggerVolumeError,
+    TriggerVolumeSystem, VoxelCollisionScene, VoxelPickHint, VoxelPickService,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityAuthoringService, EntityDefinition,
@@ -232,10 +232,14 @@ impl RuntimeSpatialBridge {
         &mut self,
         config: NativeSpatialSessionConfig,
     ) -> Result<NativeSpatialSessionHandle, CsharpEngineServicesError> {
-        let scene = VoxelCollisionScene::from_solid_voxels(
+        let scene = VoxelCollisionScene::from_solid_voxels_with_mesh_options(
             config.collision_voxel_size,
             config.collision_chunk_size,
             std::iter::empty(),
+            SurfaceMeshOptions {
+                mode: surface_mode(config.voxel_surface_mode),
+                ..SurfaceMeshOptions::default()
+            },
         )
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPATIAL_CREATE", error.to_string())
@@ -1487,6 +1491,14 @@ impl RuntimeSpatialBridge {
             tick: fact.tick,
             cause: native_trigger_cause_value(fact.cause),
         })
+    }
+}
+
+fn surface_mode(mode: NativeVoxelSurfaceMode) -> SurfaceMode {
+    match mode {
+        NativeVoxelSurfaceMode::GreedyCubes => SurfaceMode::GreedyCubes,
+        NativeVoxelSurfaceMode::MarchingCubes => SurfaceMode::MarchingCubes,
+        NativeVoxelSurfaceMode::DualContouring => SurfaceMode::DualContouring,
     }
 }
 
@@ -3344,7 +3356,7 @@ mod tests {
                     NativeSpatialSessionConfig {
                         collision_voxel_size: 1.0,
                         collision_chunk_size: 16,
-                        reserved: 0,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
                 )
@@ -3352,6 +3364,44 @@ mod tests {
             ABI_OK
         );
         session
+    }
+
+    #[test]
+    fn spatial_session_surface_mode_selects_only_the_derived_mesh_posture() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 8,
+                voxel_surface_mode: NativeVoxelSurfaceMode::MarchingCubes,
+            })
+            .expect("selected surface mode creates a canonical scene");
+        let voxel_api = crate::voxel::api(&mut bridge);
+        let edits = [NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Set,
+            address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
+            material_slot: 1,
+        }];
+        let mut receipt = NativeVoxelEditReceipt::default();
+        assert_eq!(
+            unsafe {
+                (voxel_api.apply_edits)(
+                    voxel_api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: 0,
+                        edits: edits.as_ptr(),
+                        edits_len: edits.len(),
+                    },
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        let scene = &bridge.sessions[&session.value].scene;
+        assert_eq!(scene.mesh_options().mode, SurfaceMode::MarchingCubes);
+        assert_eq!(scene.solid_voxel_count(), 1);
+        assert_eq!(receipt.accepted_revision, 1);
     }
 
     #[test]

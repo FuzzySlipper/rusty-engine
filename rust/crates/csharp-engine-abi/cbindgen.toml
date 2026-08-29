@@ -59,6 +59,7 @@ include = [
     "NativeContentStorePublishStatus",
     "NativeContentStorePublishReceipt",
     "NativeSpatialSessionHandle",
+    "NativeVoxelSurfaceMode",
     "NativeMotionEntityRow",
     "NativeMotionOutcome",
     "NativeMotionResolveRequest",

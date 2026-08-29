@@ -384,7 +384,7 @@ mod tests {
                     NativeSpatialSessionConfig {
                         collision_voxel_size: 1.0,
                         collision_chunk_size: 8,
-                        reserved: 0,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
                     },
                     &mut session,
                 )
