@@ -20,12 +20,14 @@ use entity_state::{
 };
 use svc_pathfinding::{
     build_nav_projection, find_path_with_policy, find_volumetric_path,
-    find_weighted_path_with_policy, propose_direct_nav_movement, DirectNavMovementRequest,
-    NavError, NavPathOutcome, NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell,
-    NavTraversalOverlay, PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig,
-    VolumetricNavError, VolumetricNavOutcome, VolumetricNavQuery, VolumetricNeighborSet,
-    VolumetricTraversalRule, VolumetricVerticalPolicy, WeightedNavPathError,
-    WeightedNavPathOutcome,
+    find_weighted_path_with_policy, find_weighted_volumetric_path, propose_direct_nav_movement,
+    volumetric_navigation_source_hash, DirectNavMovementRequest, NavError, NavPathOutcome,
+    NavPathQuery, NavProjection, NavProjectionConfig, NavTraversalCell, NavTraversalOverlay,
+    PlanarNavNeighborPolicy, VolumetricAgentVolume, VolumetricNavConfig, VolumetricNavError,
+    VolumetricNavOutcome, VolumetricNavQuery, VolumetricNavTraversalCell,
+    VolumetricNavTraversalOverlay, VolumetricNeighborSet, VolumetricTraversalRule,
+    VolumetricVerticalPolicy, WeightedNavPathError, WeightedNavPathOutcome,
+    WeightedVolumetricNavPathError,
 };
 
 use crate::composition::{
@@ -125,6 +127,7 @@ struct NavigationState {
     agent_height_voxels: u32,
     require_solid_floor: bool,
     traversal: NavTraversalOverlay,
+    volumetric_traversal: VolumetricNavTraversalOverlay,
     revision: u64,
     last_path: Vec<VoxelCoord>,
 }
@@ -434,6 +437,7 @@ impl RuntimeSpatialBridge {
             agent_height_voxels: 0,
             require_solid_floor: false,
             traversal,
+            volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
             revision: navigation_revision,
             last_path: Vec::new(),
         });
@@ -498,6 +502,7 @@ impl RuntimeSpatialBridge {
             agent_height_voxels: request.agent_height_voxels,
             require_solid_floor: request.require_solid_floor,
             traversal,
+            volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
             revision: navigation_revision,
             last_path: Vec::new(),
         });
@@ -572,6 +577,101 @@ impl RuntimeSpatialBridge {
         Ok(NativeNavigationTraversalReplaceReceipt {
             traversal_cell_count: 0,
             traversal_overlay_hash: navigation.traversal.overlay_hash(),
+            navigation_revision,
+        })
+    }
+
+    fn replace_volumetric_navigation_traversal(
+        &mut self,
+        request: &NativeNavigationVolumetricTraversalReplaceRequest,
+    ) -> Result<NativeNavigationVolumetricTraversalReplaceReceipt, CsharpEngineServicesError> {
+        let cells = unsafe {
+            borrowed_slice(
+                request.cells,
+                request.cells_len,
+                "volumetric navigation traversal cells",
+            )
+        }?;
+        let traversal = VolumetricNavTraversalOverlay::from_cells(cells.iter().map(|cell| {
+            VolumetricNavTraversalCell {
+                coord: nav_cell(cell.cell),
+                allowed: cell.allowed,
+                cost: cell.traversal_cost,
+            }
+        }))
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL", error.label())
+        })?;
+        let session = self.session_mut(request.session)?;
+        let source_hash = session
+            .navigation
+            .as_ref()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL",
+                    "navigation projection is unavailable",
+                )
+            })?
+            .voxel_world()
+            .map(volumetric_navigation_source_hash)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL",
+                    "voxel-derived navigation is unavailable",
+                )
+            })?;
+        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        let navigation_revision = session.navigation_revision;
+        let navigation = session
+            .navigation
+            .as_mut()
+            .expect("navigation checked above");
+        navigation.volumetric_traversal = traversal;
+        navigation.revision = navigation_revision;
+        navigation.last_path.clear();
+        Ok(NativeNavigationVolumetricTraversalReplaceReceipt {
+            traversal_cell_count: navigation.volumetric_traversal.len() as u64,
+            traversal_overlay_hash: navigation.volumetric_traversal.overlay_hash(),
+            volumetric_source_hash: source_hash,
+            navigation_revision,
+        })
+    }
+
+    fn clear_volumetric_navigation_traversal(
+        &mut self,
+        request: NativeNavigationVolumetricTraversalClearRequest,
+    ) -> Result<NativeNavigationVolumetricTraversalReplaceReceipt, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let source_hash = session
+            .navigation
+            .as_ref()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL",
+                    "navigation projection is unavailable",
+                )
+            })?
+            .voxel_world()
+            .map(volumetric_navigation_source_hash)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL",
+                    "voxel-derived navigation is unavailable",
+                )
+            })?;
+        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        let navigation_revision = session.navigation_revision;
+        let navigation = session
+            .navigation
+            .as_mut()
+            .expect("navigation checked above");
+        navigation.volumetric_traversal = VolumetricNavTraversalOverlay::empty();
+        navigation.revision = navigation_revision;
+        navigation.last_path.clear();
+        Ok(NativeNavigationVolumetricTraversalReplaceReceipt {
+            traversal_cell_count: 0,
+            traversal_overlay_hash: navigation.volumetric_traversal.overlay_hash(),
+            volumetric_source_hash: source_hash,
             navigation_revision,
         })
     }
@@ -752,6 +852,77 @@ impl RuntimeSpatialBridge {
             path_len: u32::try_from(navigation.last_path.len()).unwrap_or(u32::MAX),
             navigation_revision: revision,
             projection_hash,
+            path_hash,
+        })
+    }
+
+    fn request_weighted_volumetric_navigation_path(
+        &mut self,
+        request: NativeNavigationVolumetricWeightedPathRequest,
+    ) -> Result<NativeNavigationVolumetricWeightedPathReadout, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let Some(navigation) = session.navigation.as_mut() else {
+            return Ok(NativeNavigationVolumetricWeightedPathReadout {
+                outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
+                ..Default::default()
+            });
+        };
+        let kind = navigation.kind();
+        let revision = navigation.revision;
+        let overlay_hash = navigation.volumetric_traversal.overlay_hash();
+        let Some(world) = navigation.voxel_world() else {
+            navigation.last_path.clear();
+            return Ok(NativeNavigationVolumetricWeightedPathReadout {
+                outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
+                kind,
+                navigation_revision: revision,
+                traversal_overlay_hash: overlay_hash,
+                ..Default::default()
+            });
+        };
+        let source_hash = volumetric_navigation_source_hash(world);
+        let result = find_weighted_volumetric_path(
+            world,
+            &navigation.volumetric_traversal,
+            VolumetricNavQuery {
+                start: nav_cell(request.start),
+                goal: nav_cell(request.goal),
+                max_visited: request.max_visited as usize,
+                config: volumetric_config(request.config),
+            },
+        );
+        let (outcome, visited, total_traversal_cost, path, path_hash) = match result {
+            Ok(result) => (
+                match result.outcome {
+                    WeightedNavPathOutcome::Reached => NativeNavigationPathOutcome::Reached,
+                    WeightedNavPathOutcome::NoPath => NativeNavigationPathOutcome::NoPath,
+                    WeightedNavPathOutcome::BudgetExhausted => {
+                        NativeNavigationPathOutcome::BudgetExhausted
+                    }
+                },
+                result.visited,
+                result.total_cost,
+                result.path,
+                result.path_hash,
+            ),
+            Err(error) => (
+                weighted_volumetric_navigation_outcome(error),
+                0,
+                0,
+                Vec::new(),
+                0,
+            ),
+        };
+        navigation.last_path = path;
+        Ok(NativeNavigationVolumetricWeightedPathReadout {
+            outcome,
+            kind,
+            visited: u32::try_from(visited).unwrap_or(u32::MAX),
+            path_len: u32::try_from(navigation.last_path.len()).unwrap_or(u32::MAX),
+            total_traversal_cost,
+            navigation_revision: revision,
+            volumetric_source_hash: source_hash,
+            traversal_overlay_hash: overlay_hash,
             path_hash,
         })
     }
@@ -2323,6 +2494,44 @@ unsafe extern "C" fn clear_spatial_navigation_traversal(
     }
 }
 
+unsafe extern "C" fn replace_spatial_volumetric_navigation_traversal(
+    context: *mut c_void,
+    request: *const NativeNavigationVolumetricTraversalReplaceRequest,
+    receipt: *mut NativeNavigationVolumetricTraversalReplaceReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || receipt.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .replace_volumetric_navigation_traversal(unsafe { &*request })
+    {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn clear_spatial_volumetric_navigation_traversal(
+    context: *mut c_void,
+    request: NativeNavigationVolumetricTraversalClearRequest,
+    receipt: *mut NativeNavigationVolumetricTraversalReplaceReceipt,
+) -> i32 {
+    if context.is_null() || receipt.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .clear_volumetric_navigation_traversal(request)
+    {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 unsafe extern "C" fn read_navigation_projection(
     context: *mut c_void,
     request: NativeNavigationProjectionReadRequest,
@@ -2407,6 +2616,25 @@ unsafe extern "C" fn request_volumetric_navigation_path(
     }
     match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
         .request_volumetric_navigation_path(request)
+    {
+        Ok(value) => {
+            unsafe { *readout = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn request_weighted_volumetric_navigation_path(
+    context: *mut c_void,
+    request: NativeNavigationVolumetricWeightedPathRequest,
+    readout: *mut NativeNavigationVolumetricWeightedPathReadout,
+) -> i32 {
+    if context.is_null() || readout.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+        .request_weighted_volumetric_navigation_path(request)
     {
         Ok(value) => {
             unsafe { *readout = value };
@@ -2790,9 +3018,12 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         replace_voxel_navigation: replace_spatial_voxel_navigation,
         replace_navigation_traversal: replace_spatial_navigation_traversal,
         clear_navigation_traversal: clear_spatial_navigation_traversal,
+        replace_volumetric_navigation_traversal: replace_spatial_volumetric_navigation_traversal,
+        clear_volumetric_navigation_traversal: clear_spatial_volumetric_navigation_traversal,
         read_navigation_projection,
         request_navigation_path,
         request_weighted_navigation_path,
+        request_weighted_volumetric_navigation_path,
         read_navigation_path_cell_at,
         request_volumetric_navigation_path,
         clear_navigation,
@@ -2903,6 +3134,32 @@ fn weighted_navigation_outcome(error: WeightedNavPathError) -> NativeNavigationP
         WeightedNavPathError::StartBlocked { .. } => NativeNavigationPathOutcome::StartBlocked,
         WeightedNavPathError::GoalBlocked { .. } => NativeNavigationPathOutcome::GoalBlocked,
         WeightedNavPathError::CostOverflow => NativeNavigationPathOutcome::CostOverflow,
+    }
+}
+
+fn weighted_volumetric_navigation_outcome(
+    error: WeightedVolumetricNavPathError,
+) -> NativeNavigationPathOutcome {
+    match error {
+        WeightedVolumetricNavPathError::InvalidAgentVolume => {
+            NativeNavigationPathOutcome::InvalidAgentVolume
+        }
+        WeightedVolumetricNavPathError::InvalidQueryBudget => {
+            NativeNavigationPathOutcome::InvalidQueryBudget
+        }
+        WeightedVolumetricNavPathError::StartNotTraversable { .. } => {
+            NativeNavigationPathOutcome::StartNotTraversable
+        }
+        WeightedVolumetricNavPathError::GoalNotTraversable { .. } => {
+            NativeNavigationPathOutcome::GoalNotTraversable
+        }
+        WeightedVolumetricNavPathError::StartBlocked { .. } => {
+            NativeNavigationPathOutcome::StartBlocked
+        }
+        WeightedVolumetricNavPathError::GoalBlocked { .. } => {
+            NativeNavigationPathOutcome::GoalBlocked
+        }
+        WeightedVolumetricNavPathError::CostOverflow => NativeNavigationPathOutcome::CostOverflow,
     }
 }
 
@@ -3451,6 +3708,120 @@ mod tests {
             ABI_OK
         );
         session
+    }
+
+    #[test]
+    fn volumetric_weighted_navigation_bridge_retains_overlay_and_source_identity() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let solids = [NativePlanarNavCell { x: 0, y: 0, z: 0 }];
+        let navigation_config = NativePlanarNavConfig {
+            grid_id: 0,
+            cell_size: 1.0,
+            chunk_size: 8,
+            max_step_cells: 1,
+        };
+        let mut navigation_receipt = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_voxel_navigation)(
+                    api.context,
+                    &NativeNavigationVoxelReplaceRequest {
+                        session,
+                        config: navigation_config,
+                        agent_height_voxels: 1,
+                        require_solid_floor: false,
+                        solid_cells: solids.as_ptr(),
+                        solid_cells_len: solids.len(),
+                    },
+                    &mut navigation_receipt,
+                )
+            },
+            ABI_OK
+        );
+
+        let overlay_cells = [NativeNavigationVolumetricTraversalCell {
+            cell: NativePlanarNavCell { x: 0, y: 2, z: 0 },
+            allowed: true,
+            traversal_cost: 4,
+        }];
+        let mut overlay_receipt = NativeNavigationVolumetricTraversalReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_volumetric_navigation_traversal)(
+                    api.context,
+                    &NativeNavigationVolumetricTraversalReplaceRequest {
+                        session,
+                        cells: overlay_cells.as_ptr(),
+                        cells_len: overlay_cells.len(),
+                    },
+                    &mut overlay_receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(overlay_receipt.traversal_cell_count, 1);
+        assert_ne!(overlay_receipt.traversal_overlay_hash, 0);
+        assert_ne!(overlay_receipt.volumetric_source_hash, 0);
+
+        let mut readout = NativeNavigationVolumetricWeightedPathReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.request_weighted_volumetric_navigation_path)(
+                    api.context,
+                    NativeNavigationVolumetricWeightedPathRequest {
+                        session,
+                        start: NativePlanarNavCell { x: 0, y: 1, z: 0 },
+                        goal: NativePlanarNavCell { x: 0, y: 2, z: 0 },
+                        max_visited: 4096,
+                        config: NativeNavigationVolumetricConfig {
+                            size_x: 1,
+                            size_y: 1,
+                            size_z: 1,
+                            neighbor_set: NativeNavigationVolumetricNeighborSet::Faces6,
+                            vertical_policy:
+                                NativeNavigationVolumetricVerticalPolicy::AllowVertical,
+                            traversal_rule: NativeNavigationVolumetricTraversalRule::EmptyCells,
+                        },
+                    },
+                    &mut readout,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(readout.outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(readout.total_traversal_cost, 4);
+        assert_eq!(readout.path_len, 2);
+        assert_eq!(
+            readout.traversal_overlay_hash,
+            overlay_receipt.traversal_overlay_hash
+        );
+        assert_eq!(
+            readout.volumetric_source_hash,
+            overlay_receipt.volumetric_source_hash
+        );
+
+        let mut clear_receipt = NativeNavigationVolumetricTraversalReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.clear_volumetric_navigation_traversal)(
+                    api.context,
+                    NativeNavigationVolumetricTraversalClearRequest { session },
+                    &mut clear_receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(clear_receipt.traversal_cell_count, 0);
+        assert_eq!(
+            clear_receipt.volumetric_source_hash,
+            readout.volumetric_source_hash
+        );
+        assert_ne!(
+            clear_receipt.traversal_overlay_hash,
+            overlay_receipt.traversal_overlay_hash
+        );
     }
 
     #[test]

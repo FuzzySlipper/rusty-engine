@@ -3274,6 +3274,7 @@ void test('one admitted compatible clip pack serves independent instances with o
   const rig = {
     joints: [{ id: 'Root', parent: null }], bindRestHash: hash,
     bindRestConvention: 'localMatrixV1' as const, rootConvention: 'inPlace' as const, rootJointId: 'Root',
+    structuralRootIds: ['Root'], designatedMotionRootIds: ['Root'], authoredPoseTranslationJointIds: [],
   };
   const pack = {
     asset: 'animation-clip-pack/fixture', runtimeFormat: 'glb' as const, contentHash: hash, rig,
@@ -3393,6 +3394,7 @@ void test('clip-pack channels reject malformed decoded keyframes before publicat
   const rig = {
     joints: [{ id: 'Root', parent: null }], bindRestHash: hash,
     bindRestConvention: 'localMatrixV1' as const, rootConvention: 'inPlace' as const, rootJointId: 'Root',
+    structuralRootIds: ['Root'], designatedMotionRootIds: [], authoredPoseTranslationJointIds: ['Root'],
   };
   const pack = {
     asset: 'animation-clip-pack/strict', runtimeFormat: 'glb' as const, contentHash: hash, rig,
@@ -3430,6 +3432,7 @@ void test('clip packs admit a joint forest when the designated root is structura
       joints: [{ id: 'RootA', parent: null }, { id: 'RootB', parent: null }],
       bindRestHash: hash, bindRestConvention: 'localMatrixV1' as const,
       rootConvention: 'inPlace' as const, rootJointId: 'RootB',
+      structuralRootIds: ['RootA', 'RootB'], designatedMotionRootIds: ['RootB'], authoredPoseTranslationJointIds: [],
     },
     clips: [{ id: 'wave', name: 'Wave', durationSeconds: 1 }],
     provenance: { producer: 'fixture', sourceHash: `sha256:${'c'.repeat(64)}`, targetHash: `sha256:${'c'.repeat(64)}`, license: 'CC0-1.0' },
@@ -3442,6 +3445,35 @@ void test('clip packs admit a joint forest when the designated root is structura
     ] }],
   ));
   assert.doesNotThrow(() => registry.define(asset));
+});
+
+void test('clip packs retain multiple root translations as authored pose when motion is unspecified', () => {
+  const target = forestRigScene();
+  const sourceScene = forestRigScene();
+  const hash = animationRigFingerprint(target);
+  const pack = {
+    asset: 'animation-clip-pack/forest-pose', runtimeFormat: 'glb' as const, contentHash: hash,
+    rig: {
+      joints: [{ id: 'RootA', parent: null }, { id: 'RootB', parent: null }],
+      bindRestHash: hash, bindRestConvention: 'localMatrixV1' as const,
+      rootConvention: 'inPlace' as const, rootJointId: 'RootA',
+      structuralRootIds: ['RootA', 'RootB'], designatedMotionRootIds: [],
+      authoredPoseTranslationJointIds: ['RootA', 'RootB'],
+    },
+    clips: [{ id: 'pose', name: 'Pose', durationSeconds: 1 }],
+    provenance: { producer: 'fixture', sourceHash: `sha256:${'d'.repeat(64)}`, targetHash: `sha256:${'d'.repeat(64)}`, license: 'CC0-1.0' },
+  };
+  const asset = animatedMeshAsset({ clips: [], defaultClip: null, clipPacks: [pack] });
+  const source = new MapAnimatedMeshAssetSource(
+    [{ asset: asset.asset, contentHash: asset.contentHash, scene: target, clips: [] }],
+    [{ asset: pack.asset, contentHash: hash, scene: sourceScene, clips: [
+      new THREE.AnimationClip('Pose', 1, [
+        new THREE.VectorKeyframeTrack('RootA.position', [0, 1], [0, 0, 0, 1, 0, 0]),
+        new THREE.VectorKeyframeTrack('RootB.position', [0, 1], [0, 0, 0, 0, 0, 1]),
+      ]),
+    ] }],
+  );
+  assert.doesNotThrow(() => new AnimatedMeshRegistry(source).define(asset));
 });
 
 function rigScene(withSkin = false): THREE.Group {

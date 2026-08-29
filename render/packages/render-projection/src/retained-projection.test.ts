@@ -241,6 +241,9 @@ function animatedMeshAssetWithClipPackOnlyClip(): AnimatedMeshAsset {
         bindRestConvention: 'localMatrixV1',
         rootConvention: 'inPlace',
         rootJointId: 'mixamorig:Hips',
+        structuralRootIds: ['mixamorig:Hips'],
+        designatedMotionRootIds: [],
+        authoredPoseTranslationJointIds: [],
       },
       clips: [{ id: 'gesture', name: 'gesture', durationSeconds: 0.75 }],
       provenance: {

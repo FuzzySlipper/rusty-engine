@@ -740,13 +740,25 @@ pub struct AnimationRigSignature {
     pub bind_rest_convention: AnimationBindRestConvention,
     pub root_convention: AnimationRootConvention,
     pub root_joint_id: String,
+    /// Every top-level joint in this exact imported forest, in code-unit
+    /// order.  This is retained as a fact instead of asking a renderer to
+    /// rediscover the forest from an arbitrary object hierarchy.
+    pub structural_root_ids: Vec<String>,
+    /// Roots whose translation the owner has explicitly designated as motion
+    /// rather than authored pose.  Importers leave this empty when source
+    /// channels do not carry that semantic distinction.
+    pub designated_motion_root_ids: Vec<String>,
+    /// Joint identities which carry authored translation channels that are
+    /// presentation pose.  This includes structural roots when no motion
+    /// root can be selected without guessing.
+    pub authored_pose_translation_joint_ids: Vec<String>,
 }
 
 impl AnimationRigSignature {
     /// Validates the Engine's declared skeleton surface. A rig may contain a
-    /// deterministic forest: `root_joint_id` identifies the one structural
-    /// root which owns the supported root-motion policy, rather than implying
-    /// that every skin must have one global root.
+    /// deterministic forest.  Structural roots, designated motion roots, and
+    /// authored pose translations are separate typed facts: no root-motion
+    /// meaning is inferred from a joint's name or from merely being a root.
     pub fn validate(&self) -> Result<(), AnimationRigSignatureError> {
         if self.joints.is_empty() || self.joints.len() > 256 || !valid_sha256(&self.bind_rest_hash)
         {
@@ -767,11 +779,46 @@ impl AnimationRigSignature {
                 return Err(AnimationRigSignatureError::Invalid);
             }
         }
-        if !valid_joint_id(&self.root_joint_id)
+        let mut actual_structural_roots = self
+            .joints
+            .iter()
+            .filter(|joint| joint.parent.is_none())
+            .map(|joint| joint.id.clone())
+            .collect::<Vec<_>>();
+        actual_structural_roots.sort();
+        if !valid_ordered_joint_ids(&self.structural_root_ids)
+            || self.structural_root_ids != actual_structural_roots
+            || !valid_joint_id(&self.root_joint_id)
             || !self
-                .joints
+                .structural_root_ids
                 .iter()
-                .any(|joint| joint.id == self.root_joint_id && joint.parent.is_none())
+                .any(|root| root == &self.root_joint_id)
+        {
+            return Err(AnimationRigSignatureError::Invalid);
+        }
+        if !valid_ordered_joint_ids(&self.designated_motion_root_ids)
+            || self
+                .designated_motion_root_ids
+                .iter()
+                .any(|root| !self.structural_root_ids.contains(root))
+            || !valid_ordered_joint_ids(&self.authored_pose_translation_joint_ids)
+            || self
+                .authored_pose_translation_joint_ids
+                .iter()
+                .any(|joint| !joints.contains(joint.as_str()))
+            || self.designated_motion_root_ids.iter().any(|root| {
+                self.authored_pose_translation_joint_ids
+                    .iter()
+                    .any(|joint| joint == root)
+            })
+        {
+            return Err(AnimationRigSignatureError::Invalid);
+        }
+        if self.root_convention == AnimationRootConvention::AuthoredRootTranslation
+            && !self
+                .designated_motion_root_ids
+                .iter()
+                .any(|root| root == &self.root_joint_id)
         {
             return Err(AnimationRigSignatureError::Invalid);
         }
@@ -790,6 +837,23 @@ impl AnimationRigSignature {
             }
         }
         Ok(())
+    }
+
+    /// Reports whether two importer-derived rigs can be used as a primary
+    /// mesh/clip-pack pair.  Translation channels are facts about the clips
+    /// carried by each asset, so authored pose identities are intentionally
+    /// not part of this structural compatibility check.  The structural
+    /// forest and the explicitly declared motion policy must still agree;
+    /// accepting either from a name or from whichever asset happens to be
+    /// loaded first would make clip binding order-dependent.
+    pub fn is_clip_compatible_with(&self, other: &Self) -> bool {
+        self.joints == other.joints
+            && self.bind_rest_hash == other.bind_rest_hash
+            && self.bind_rest_convention == other.bind_rest_convention
+            && self.root_convention == other.root_convention
+            && self.root_joint_id == other.root_joint_id
+            && self.structural_root_ids == other.structural_root_ids
+            && self.designated_motion_root_ids == other.designated_motion_root_ids
     }
 }
 
@@ -984,6 +1048,11 @@ fn valid_joint_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn valid_ordered_joint_ids(values: &[String]) -> bool {
+    values.windows(2).all(|pair| pair[0] < pair[1])
+        && values.iter().all(|value| valid_joint_id(value))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1443,8 +1512,47 @@ mod tests {
             bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
             root_convention: AnimationRootConvention::InPlace,
             root_joint_id: "RootB".to_owned(),
+            structural_root_ids: vec!["RootA".to_owned(), "RootB".to_owned()],
+            designated_motion_root_ids: vec!["RootB".to_owned()],
+            authored_pose_translation_joint_ids: Vec::new(),
         };
         assert_eq!(signature.validate(), Ok(()));
+    }
+
+    #[test]
+    fn clip_compatibility_ignores_asset_specific_authored_pose_channels() {
+        let hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let primary = AnimationRigSignature {
+            joints: vec![
+                AnimationRigJoint {
+                    id: "RootA".to_owned(),
+                    parent: None,
+                },
+                AnimationRigJoint {
+                    id: "RootB".to_owned(),
+                    parent: None,
+                },
+            ],
+            bind_rest_hash: hash.to_owned(),
+            bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
+            root_convention: AnimationRootConvention::InPlace,
+            root_joint_id: "RootA".to_owned(),
+            structural_root_ids: vec!["RootA".to_owned(), "RootB".to_owned()],
+            designated_motion_root_ids: Vec::new(),
+            authored_pose_translation_joint_ids: vec!["RootA".to_owned()],
+        };
+        let mut clip_pack = primary.clone();
+        clip_pack.authored_pose_translation_joint_ids = vec!["RootB".to_owned()];
+
+        assert_eq!(primary.validate(), Ok(()));
+        assert_eq!(clip_pack.validate(), Ok(()));
+        assert!(primary.is_clip_compatible_with(&clip_pack));
+
+        clip_pack.designated_motion_root_ids = vec!["RootB".to_owned()];
+        clip_pack.root_convention = AnimationRootConvention::AuthoredRootTranslation;
+        clip_pack.root_joint_id = "RootB".to_owned();
+        clip_pack.authored_pose_translation_joint_ids.clear();
+        assert!(!primary.is_clip_compatible_with(&clip_pack));
     }
 
     #[test]
@@ -1565,6 +1673,9 @@ mod tests {
                 bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
                 root_convention: AnimationRootConvention::InPlace,
                 root_joint_id: "Root".to_owned(),
+                structural_root_ids: vec!["Root".to_owned()],
+                designated_motion_root_ids: Vec::new(),
+                authored_pose_translation_joint_ids: Vec::new(),
             },
             clips: vec![AnimationClipDescriptor {
                 id: "idle".to_owned(),

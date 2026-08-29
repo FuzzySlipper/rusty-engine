@@ -138,6 +138,16 @@ pub type NativeClearNavigationTraversal = unsafe extern "C" fn(
     NativeNavigationTraversalClearRequest,
     *mut NativeNavigationTraversalReplaceReceipt,
 ) -> i32;
+pub type NativeReplaceVolumetricNavigationTraversal = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeNavigationVolumetricTraversalReplaceRequest,
+    *mut NativeNavigationVolumetricTraversalReplaceReceipt,
+) -> i32;
+pub type NativeClearVolumetricNavigationTraversal = unsafe extern "C" fn(
+    *mut c_void,
+    NativeNavigationVolumetricTraversalClearRequest,
+    *mut NativeNavigationVolumetricTraversalReplaceReceipt,
+) -> i32;
 pub type NativeReadNavigationProjection = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationProjectionReadRequest,
@@ -152,6 +162,11 @@ pub type NativeRequestWeightedNavigationPath = unsafe extern "C" fn(
     *mut c_void,
     NativeNavigationWeightedPathRequest,
     *mut NativeNavigationWeightedPathReadout,
+) -> i32;
+pub type NativeRequestWeightedVolumetricNavigationPath = unsafe extern "C" fn(
+    *mut c_void,
+    NativeNavigationVolumetricWeightedPathRequest,
+    *mut NativeNavigationVolumetricWeightedPathReadout,
 ) -> i32;
 pub type NativeReadNavigationPathCellAt = unsafe extern "C" fn(
     *mut c_void,
@@ -722,9 +737,12 @@ pub struct NativeSpatialApi {
     pub replace_voxel_navigation: NativeReplaceVoxelNavigation,
     pub replace_navigation_traversal: NativeReplaceNavigationTraversal,
     pub clear_navigation_traversal: NativeClearNavigationTraversal,
+    pub replace_volumetric_navigation_traversal: NativeReplaceVolumetricNavigationTraversal,
+    pub clear_volumetric_navigation_traversal: NativeClearVolumetricNavigationTraversal,
     pub read_navigation_projection: NativeReadNavigationProjection,
     pub request_navigation_path: NativeRequestNavigationPath,
     pub request_weighted_navigation_path: NativeRequestWeightedNavigationPath,
+    pub request_weighted_volumetric_navigation_path: NativeRequestWeightedVolumetricNavigationPath,
     pub read_navigation_path_cell_at: NativeReadNavigationPathCellAt,
     pub request_volumetric_navigation_path: NativeRequestVolumetricNavigationPath,
     pub clear_navigation: NativeClearNavigation,

@@ -302,6 +302,13 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
     assert_eq!(imported.receipt.clip_count, 3);
     assert_eq!(imported.receipt.channel_count, 56);
     assert_eq!(imported.receipt.keyframe_count, 1048);
+    let rig = descriptor
+        .rig
+        .as_ref()
+        .expect("multi-root animated GLB retains an importer-derived rig");
+    assert!(rig.structural_root_ids.len() > 1);
+    assert!(rig.designated_motion_root_ids.is_empty());
+    assert!(!rig.authored_pose_translation_joint_ids.is_empty());
 }
 
 #[test]

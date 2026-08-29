@@ -205,7 +205,11 @@ void test('application content composes animated GLB, packed mesh, and texture r
           clips: [{ id: 'idle', name: 'idle', durationSeconds: 1 }],
           clipPacks: [{
             asset: 'animation-clip-pack/test-actor-idle', runtimeFormat: 'glb', contentHash: `sha256:${animatedDigest}`,
-            rig: { joints: [{ id: 'Root', parent: null }], bindRestHash: `sha256:${animatedDigest}`, bindRestConvention: 'localMatrixV1', rootConvention: 'inPlace', rootJointId: 'Root' },
+            rig: {
+              joints: [{ id: 'Root', parent: null }], bindRestHash: `sha256:${animatedDigest}`,
+              bindRestConvention: 'localMatrixV1', rootConvention: 'inPlace', rootJointId: 'Root',
+              structuralRootIds: ['Root'], designatedMotionRootIds: [], authoredPoseTranslationJointIds: [],
+            },
             clips: [{ id: 'pack-idle', name: 'idle', durationSeconds: 1 }],
             provenance: { producer: 'fixture', sourceHash: `sha256:${animatedDigest}`, targetHash: `sha256:${animatedDigest}`, license: 'CC0-1.0' },
           }],

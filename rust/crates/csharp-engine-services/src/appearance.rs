@@ -2526,7 +2526,7 @@ impl RuntimeAppearanceBridge {
                 "animation clip-pack has no importer-derived named skin rig",
             )
         })?;
-        if primary_rig != pack_rig {
+        if !primary_rig.is_clip_compatible_with(&pack_rig) {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_CLIP_PACK_RIG",
                 "primary animated mesh and clip-pack importer-derived rig signatures differ",
@@ -6117,35 +6117,6 @@ mod tests {
             primary.value, pack.value,
             "same bytes retain distinct roles"
         );
-        // `character-medium` intentionally has unsupported multi-root
-        // translation metadata. This service-level retention test supplies a
-        // coherent importer result directly so it can exercise association
-        // lifetime without treating that real asset as a positive rig fixture.
-        let rig = AnimationRigSignature {
-            joints: vec![AnimationRigJoint {
-                id: "Root".to_owned(),
-                parent: None,
-            }],
-            bind_rest_hash:
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-            bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
-            root_convention: AnimationRootConvention::InPlace,
-            root_joint_id: "Root".to_owned(),
-        };
-        for handle in [primary.value, pack.value] {
-            bridge
-                .staged
-                .as_mut()
-                .expect("staged state")
-                .state
-                .render_resources
-                .get_mut(usize::try_from(handle - 1).expect("small handle"))
-                .expect("animated resource")
-                .animated_mesh_mut()
-                .expect("animated descriptor")
-                .rig = Some(rig.clone());
-        }
-
         let associate = NativeAnimationClipPackAssociationRequest {
             primary_mesh: primary,
             clip_pack: pack,

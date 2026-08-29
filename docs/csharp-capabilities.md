@@ -27,7 +27,7 @@ the ignored `obj/Generated` output is produced by
 | `Dynamics` | Own native dynamics worlds, bodies, contacts, stepping, and collision binding. |
 | `Motion` | Resolve reusable motion requests. |
 | `Kinematic` | Integrate kinematic movement and run bounded motion operations. |
-| `Spatial` | Own collision, navigation, character movement proposals, voxel picking, spatial queries, and triggers. |
+| `Spatial` | Own collision, navigation, character movement proposals, voxel picking, spatial queries, and triggers. Navigation includes distinct planar and volumetric traversal overlays plus bounded weighted queries. |
 | `Perception` | Query reusable visibility facts; the product retains AI and awareness policy. |
 | `WorldOrigin` | Prepare, inspect, and commit world-origin rebases. |
 | `Voxel` | Read and mutate Engine-owned voxel state. |
@@ -48,6 +48,21 @@ the ignored `obj/Generated` output is produced by
 The generated contracts are authoritative when this table and source ever
 disagree. Add a missing coherent family at the ABI and generator edge; do not
 handwrite a parallel C# declaration or generic dispatch protocol.
+
+Volumetric navigation is keyed by voxel coordinates and the resident voxel
+source, not by planar `NavProjection` membership. Its overlay admits bounded
+allowed/cost records; omitted cells remain allowed at unit cost, while the
+volumetric query still owns occupancy, agent-volume, neighbors, budget, and
+deterministic ordering. Replacement and weighted-query receipts expose both
+the overlay hash and volumetric source hash so callers can identify the facts
+used without treating a surface projection hash as authoritative.
+
+Animation rig admission keeps structural roots, explicitly designated motion
+roots, and authored pose-translation channels as separate typed facts. The
+importer selects a motion root only when the source is unambiguous; multi-root
+translation remains valid pose data instead of being guessed from joint names
+or rejected. Primary meshes and clip packs must agree on the structural rig
+and motion policy, while clip-specific pose channels may differ.
 
 ## Managed helpers in the default assembly
 

@@ -428,7 +428,14 @@ fn derive_animation_rig_signature(
         .cloned()
         .ok_or_else(|| "the named skin joint forest has no structural root".to_owned())?;
 
+    // Root motion is a product meaning, not something an importer can infer
+    // from a node name or from the fact that a node happens to be a root.  A
+    // single unambiguous changing root retains the historical authored-motion
+    // convention.  As soon as more than one root changes (or clips disagree),
+    // retain every joint translation as authored pose and leave selection to a
+    // future explicit product policy.
     let mut changing_horizontal_roots = BTreeSet::new();
+    let mut translated_joints = BTreeSet::new();
     let mut every_clip_has_changing_root = true;
     for clip in &model.clips {
         let mut clip_changing_roots = BTreeSet::new();
@@ -441,12 +448,6 @@ fn derive_animation_rig_signature(
                 // GLB animation data, not a root-motion declaration.
                 continue;
             };
-            if !roots.contains(joint_id) {
-                // Child translation remains pose data. The renderer validates
-                // the eventual clip pack independently; deriving metadata
-                // must not reduce primary GLB animation compatibility.
-                continue;
-            }
             let AnimationChannelValues::Translations(values) = &channel.values else {
                 return Err(format!(
                     "clip `{}` has malformed translation values",
@@ -459,9 +460,16 @@ fn derive_animation_rig_signature(
                     .any(|value| !value.iter().all(|item| item.is_finite()))
             {
                 return Err(format!(
-                    "clip `{}` has non-finite structural-root translation values",
+                    "clip `{}` has non-finite joint translation values",
                     clip.name
                 ));
+            }
+            translated_joints.insert(joint_id.clone());
+            if !roots.contains(joint_id) {
+                // Child translation is always authored pose data. The
+                // renderer validates the eventual clip pack independently;
+                // deriving metadata must not reduce primary compatibility.
+                continue;
             }
             let origin = values[0];
             if values.iter().any(|value| {
@@ -470,34 +478,36 @@ fn derive_animation_rig_signature(
                 clip_changing_roots.insert(joint_id.clone());
             }
         }
-        if clip_changing_roots.len() > 1 {
-            return Err(format!(
-                "clip `{}` has changing horizontal translation on multiple structural roots",
-                clip.name
-            ));
-        }
+        // A clip may contain several structural-root translations. They are
+        // still valid authored pose channels; only one changing root across
+        // every clip is sufficiently unambiguous for the legacy motion mode.
         every_clip_has_changing_root &= !clip_changing_roots.is_empty();
         changing_horizontal_roots.extend(clip_changing_roots);
     }
-    if changing_horizontal_roots.len() > 1 {
-        return Err(
-            "clip pack mixes changing horizontal translation across multiple structural roots"
-                .to_owned(),
-        );
-    }
-    let root_joint_id = changing_horizontal_roots
+    let designated_motion_root_ids =
+        if changing_horizontal_roots.len() == 1 && every_clip_has_changing_root {
+            changing_horizontal_roots
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+    let designated_motion_roots = designated_motion_root_ids
         .iter()
-        .next()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let authored_pose_translation_joint_ids = translated_joints
+        .difference(&designated_motion_roots)
+        .cloned()
+        .collect::<Vec<_>>();
+    let root_joint_id = designated_motion_root_ids
+        .first()
         .cloned()
         .unwrap_or(default_root);
-    let root_convention = if changing_horizontal_roots.is_empty() {
+    let root_convention = if designated_motion_root_ids.is_empty() {
         AnimationRootConvention::InPlace
     } else {
-        if !every_clip_has_changing_root {
-            return Err(
-                "authored horizontal root translation is not changing on the designated structural root in every clip".to_owned(),
-            );
-        }
         AnimationRootConvention::AuthoredRootTranslation
     };
     let bind_rest_hash = animation_rig_fingerprint(&fingerprint_joints).map_err(|_| {
@@ -509,6 +519,9 @@ fn derive_animation_rig_signature(
         bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
         root_convention,
         root_joint_id,
+        structural_root_ids: roots,
+        designated_motion_root_ids,
+        authored_pose_translation_joint_ids,
     };
     signature.validate().map_err(|_| {
         "derived named skin joint forest is not a valid renderer rig signature".to_owned()

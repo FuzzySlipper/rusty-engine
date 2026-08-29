@@ -92,6 +92,7 @@ void test('clip-pack joint identities use decoded Three binding names only', () 
     rig: {
       joints: [{ id: 'mixamorig:Hips', parent: null }], bindRestHash: `sha256:${'a'.repeat(64)}`,
       bindRestConvention: 'localMatrixV1', rootConvention: 'inPlace', rootJointId: 'mixamorig:Hips',
+      structuralRootIds: ['mixamorig:Hips'], designatedMotionRootIds: [], authoredPoseTranslationJointIds: [],
     },
     clips: [{ id: 'wave', name: 'wave', durationSeconds: 1 }],
     provenance: { producer: 'fixture', sourceHash: `sha256:${'a'.repeat(64)}`, targetHash: `sha256:${'a'.repeat(64)}`, license: 'CC0-1.0' },

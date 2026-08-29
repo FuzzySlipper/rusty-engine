@@ -209,6 +209,107 @@ pub enum NavTraversalOverlayError {
     ZeroCost { coord: VoxelCoord },
 }
 
+/// One purpose-neutral traversal rule for a volumetric navigation cell.
+///
+/// Volumetric queries use dynamic voxel/agent-volume occupancy rather than the
+/// planar [`NavProjection`] membership set.  Consequently these records are
+/// deliberately not checked against a planar projection.  A missing record is
+/// allowed with the unit cost, just as it is for [`NavTraversalOverlay`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumetricNavTraversalCell {
+    pub coord: VoxelCoord,
+    pub allowed: bool,
+    pub cost: u64,
+}
+
+/// Canonical, bounded traversal rules for a volumetric navigation query.
+///
+/// The overlay is independent of the planar surface projection.  Admission
+/// only owns the concerns that are meaningful for a caller-supplied set of
+/// records: duplicate coordinates, non-zero costs, bounded retention, and a
+/// deterministic hash.  Voxel occupancy and agent-volume validity remain
+/// query concerns owned by the volumetric pathfinding service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumetricNavTraversalOverlay {
+    cells: BTreeMap<VoxelCoord, VolumetricNavTraversalCell>,
+    overlay_hash: u64,
+}
+
+impl VolumetricNavTraversalOverlay {
+    /// Build canonical traversal rules without requiring planar projection
+    /// membership. Input order does not affect retained state or its hash.
+    pub fn from_cells(
+        cells: impl IntoIterator<Item = VolumetricNavTraversalCell>,
+    ) -> Result<Self, VolumetricNavTraversalOverlayError> {
+        let mut canonical = BTreeMap::new();
+        for cell in cells {
+            if cell.cost == 0 {
+                return Err(VolumetricNavTraversalOverlayError::ZeroCost { coord: cell.coord });
+            }
+            if canonical.contains_key(&cell.coord) {
+                return Err(VolumetricNavTraversalOverlayError::DuplicateCell {
+                    coord: cell.coord,
+                });
+            }
+            if canonical.len() == MAX_NAV_TRAVERSAL_CELLS {
+                return Err(VolumetricNavTraversalOverlayError::TooManyCells {
+                    maximum: MAX_NAV_TRAVERSAL_CELLS,
+                });
+            }
+            canonical.insert(cell.coord, cell);
+        }
+        let overlay_hash = hash_volumetric_traversal_cells(&canonical);
+        Ok(Self {
+            cells: canonical,
+            overlay_hash,
+        })
+    }
+
+    /// The empty overlay preserves ordinary allowed, unit-cost traversal.
+    pub fn empty() -> Self {
+        Self::from_cells(std::iter::empty()).expect("empty overlay is valid")
+    }
+
+    pub fn len(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    pub fn overlay_hash(&self) -> u64 {
+        self.overlay_hash
+    }
+
+    pub fn is_allowed(&self, coord: VoxelCoord) -> bool {
+        self.cells.get(&coord).is_none_or(|cell| cell.allowed)
+    }
+
+    pub fn cost_for(&self, coord: VoxelCoord) -> u64 {
+        self.cells.get(&coord).map_or(1, |cell| cell.cost)
+    }
+}
+
+/// Why a caller-provided volumetric traversal overlay was rejected before
+/// replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumetricNavTraversalOverlayError {
+    TooManyCells { maximum: usize },
+    DuplicateCell { coord: VoxelCoord },
+    ZeroCost { coord: VoxelCoord },
+}
+
+impl VolumetricNavTraversalOverlayError {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::TooManyCells { .. } => "tooManyCells",
+            Self::DuplicateCell { .. } => "duplicateCell",
+            Self::ZeroCost { .. } => "zeroCost",
+        }
+    }
+}
+
 impl NavTraversalOverlayError {
     pub const fn label(self) -> &'static str {
         match self {
@@ -357,6 +458,23 @@ pub struct VolumetricNavReadout {
     pub path_hash: u64,
 }
 
+/// Deterministic weighted path facts over resident voxel space.
+///
+/// `source_hash` identifies the resident voxel source used for occupancy
+/// admission. It is intentionally distinct from the planar surface projection
+/// hash because a volumetric route may occupy cells that are not walkable
+/// surface cells at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeightedVolumetricNavPathReadout {
+    pub outcome: WeightedNavPathOutcome,
+    pub visited: usize,
+    pub total_cost: u64,
+    pub path: Vec<VoxelCoord>,
+    pub path_hash: u64,
+    pub source_hash: u64,
+    pub overlay_hash: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolumetricNavOutcome {
     Reached,
@@ -380,6 +498,18 @@ pub enum VolumetricNavError {
     InvalidQueryBudget,
     StartNotTraversable { start: VoxelCoord },
     GoalNotTraversable { goal: VoxelCoord },
+}
+
+/// Why a weighted volumetric path query could not produce an ordinary readout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeightedVolumetricNavPathError {
+    InvalidAgentVolume,
+    InvalidQueryBudget,
+    StartNotTraversable { start: VoxelCoord },
+    GoalNotTraversable { goal: VoxelCoord },
+    StartBlocked { start: VoxelCoord },
+    GoalBlocked { goal: VoxelCoord },
+    CostOverflow,
 }
 
 /// A bounded live-position path request for an authority caller.
@@ -506,6 +636,20 @@ impl VolumetricNavError {
             VolumetricNavError::InvalidQueryBudget => "invalidQueryBudget",
             VolumetricNavError::StartNotTraversable { .. } => "startNotTraversable",
             VolumetricNavError::GoalNotTraversable { .. } => "goalNotTraversable",
+        }
+    }
+}
+
+impl WeightedVolumetricNavPathError {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::InvalidAgentVolume => "invalidAgentVolume",
+            Self::InvalidQueryBudget => "invalidQueryBudget",
+            Self::StartNotTraversable { .. } => "startNotTraversable",
+            Self::GoalNotTraversable { .. } => "goalNotTraversable",
+            Self::StartBlocked { .. } => "startBlocked",
+            Self::GoalBlocked { .. } => "goalBlocked",
+            Self::CostOverflow => "costOverflow",
         }
     }
 }
@@ -804,6 +948,117 @@ pub fn find_volumetric_path(
     ))
 }
 
+/// Query a deterministic, bounded minimum-cost path through resident voxel
+/// space using a purpose-neutral volumetric traversal overlay.
+///
+/// This reuses the ordinary volumetric occupancy, agent-volume, neighbor, and
+/// budget rules. The overlay only changes admission and accumulated traversal
+/// cost for coordinates it contains; omitted coordinates remain allowed at
+/// unit cost. It does not consult the planar [`NavProjection`], because a
+/// volumetric route is allowed to occupy cells outside that surface set.
+pub fn find_weighted_volumetric_path(
+    world: &VoxelWorld,
+    overlay: &VolumetricNavTraversalOverlay,
+    query: VolumetricNavQuery,
+) -> Result<WeightedVolumetricNavPathReadout, WeightedVolumetricNavPathError> {
+    if !query.config.agent_volume.is_valid() {
+        return Err(WeightedVolumetricNavPathError::InvalidAgentVolume);
+    }
+    if query.max_visited == 0 {
+        return Err(WeightedVolumetricNavPathError::InvalidQueryBudget);
+    }
+    if !is_volumetric_traversable(world, query.start, query.config) {
+        return Err(WeightedVolumetricNavPathError::StartNotTraversable { start: query.start });
+    }
+    if !is_volumetric_traversable(world, query.goal, query.config) {
+        return Err(WeightedVolumetricNavPathError::GoalNotTraversable { goal: query.goal });
+    }
+    if !overlay.is_allowed(query.start) {
+        return Err(WeightedVolumetricNavPathError::StartBlocked { start: query.start });
+    }
+    if !overlay.is_allowed(query.goal) {
+        return Err(WeightedVolumetricNavPathError::GoalBlocked { goal: query.goal });
+    }
+
+    let source_hash = volumetric_navigation_source_hash(world);
+    if query.start == query.goal {
+        let path = vec![query.start];
+        return Ok(weighted_volumetric_readout(
+            WeightedNavPathOutcome::Reached,
+            1,
+            0,
+            path,
+            source_hash,
+            overlay.overlay_hash(),
+        ));
+    }
+
+    // The priority tuple is `(cost, coordinate)`. `Reverse` makes Rust's
+    // max-heap a min-heap while preserving the coordinate's stable total
+    // ordering for equal-cost candidates.
+    let mut frontier = BinaryHeap::new();
+    let mut best_cost = BTreeMap::new();
+    let mut came_from = BTreeMap::new();
+    frontier.push(Reverse((0_u64, query.start)));
+    best_cost.insert(query.start, 0_u64);
+    let mut visited = 0_usize;
+
+    while let Some(Reverse((cost, current))) = frontier.pop() {
+        if best_cost.get(&current) != Some(&cost) {
+            continue;
+        }
+        if visited == query.max_visited {
+            return Ok(weighted_volumetric_readout(
+                WeightedNavPathOutcome::BudgetExhausted,
+                visited,
+                0,
+                Vec::new(),
+                source_hash,
+                overlay.overlay_hash(),
+            ));
+        }
+        visited += 1;
+        if current == query.goal {
+            let path = reconstruct_path(query.start, query.goal, &came_from);
+            return Ok(weighted_volumetric_readout(
+                WeightedNavPathOutcome::Reached,
+                visited,
+                cost,
+                path,
+                source_hash,
+                overlay.overlay_hash(),
+            ));
+        }
+
+        for next in volumetric_neighbors(current, query.config) {
+            if !overlay.is_allowed(next) || !is_volumetric_traversable(world, next, query.config) {
+                continue;
+            }
+            let next_cost = cost
+                .checked_add(overlay.cost_for(next))
+                .ok_or(WeightedVolumetricNavPathError::CostOverflow)?;
+            if best_cost
+                .get(&next)
+                .is_some_and(|known| *known <= next_cost)
+            {
+                continue;
+            }
+            best_cost.insert(next, next_cost);
+            came_from.insert(next, current);
+            frontier.push(Reverse((next_cost, next)));
+        }
+    }
+
+    Ok(weighted_volumetric_readout(
+        WeightedNavPathOutcome::NoPath,
+        visited,
+        0,
+        Vec::new(),
+        source_hash,
+        overlay.overlay_hash(),
+    ))
+}
+
 /// Propose one deterministic, bounded waypoint toward a live target position.
 ///
 /// This is intentionally small: it is not a full pathfinding replacement, nor
@@ -1030,6 +1285,25 @@ fn volumetric_readout(
     }
 }
 
+fn weighted_volumetric_readout(
+    outcome: WeightedNavPathOutcome,
+    visited: usize,
+    total_cost: u64,
+    path: Vec<VoxelCoord>,
+    source_hash: u64,
+    overlay_hash: u64,
+) -> WeightedVolumetricNavPathReadout {
+    WeightedVolumetricNavPathReadout {
+        outcome,
+        visited,
+        total_cost,
+        path_hash: hash_path(&path),
+        path,
+        source_hash,
+        overlay_hash,
+    }
+}
+
 fn weighted_nav_readout(
     outcome: WeightedNavPathOutcome,
     visited: usize,
@@ -1102,6 +1376,47 @@ fn hash_traversal_cells(cells: &BTreeMap<VoxelCoord, NavTraversalCell>) -> u64 {
         feed_coord(&mut h, cell.coord);
         feed_byte(&mut h, u8::from(cell.allowed));
         feed_u64(&mut h, cell.cost);
+    }
+    h
+}
+
+fn hash_volumetric_traversal_cells(
+    cells: &BTreeMap<VoxelCoord, VolumetricNavTraversalCell>,
+) -> u64 {
+    let mut h = fnv_offset();
+    feed_u64(&mut h, cells.len() as u64);
+    for cell in cells.values() {
+        feed_coord(&mut h, cell.coord);
+        feed_byte(&mut h, u8::from(cell.allowed));
+        feed_u64(&mut h, cell.cost);
+    }
+    h
+}
+
+/// Stable identity for the resident voxel source used by volumetric queries.
+///
+/// This intentionally does not use the planar `NavProjection` hash. It covers
+/// the grid identity/shape/origin plus resident chunk coordinates and content,
+/// so callers can distinguish a volumetric occupancy source even when its
+/// surface projection is unchanged.
+pub fn volumetric_navigation_source_hash(world: &VoxelWorld) -> u64 {
+    let grid = world.grid();
+    let mut h = fnv_offset();
+    feed_u64(&mut h, u64::from(grid.id().raw()));
+    feed_u64(&mut h, grid.voxel_size().to_bits());
+    for dimension in grid.chunk_dims().to_array() {
+        feed_u64(&mut h, u64::from(dimension));
+    }
+    for value in grid.origin_world().to_array() {
+        feed_u64(&mut h, value.to_bits());
+    }
+    let residents = world.resident_chunks().collect::<Vec<_>>();
+    feed_u64(&mut h, residents.len() as u64);
+    for (coordinate, chunk) in residents {
+        for value in coordinate.to_array() {
+            feed_i64(&mut h, value);
+        }
+        feed_u64(&mut h, chunk.content_hash().0);
     }
     h
 }
@@ -1935,6 +2250,100 @@ mod tests {
         assert_eq!(first.outcome, VolumetricNavOutcome::Reached);
         assert_eq!(first.path, path);
         assert_ne!(first.path_hash, planar.path_hash);
+    }
+
+    #[test]
+    fn weighted_volumetric_overlay_is_independent_of_surface_projection() {
+        let mut world = solid_test_world();
+        let path = [
+            VoxelCoord::new(1, 1, 1),
+            VoxelCoord::new(1, 2, 1),
+            VoxelCoord::new(1, 3, 1),
+        ];
+        for coord in path {
+            carve_empty(&mut world, coord);
+        }
+
+        let surface = build_nav_projection(&world, NavProjectionConfig::default())
+            .expect("surface projection");
+        assert!(surface.is_walkable(path[0]));
+        assert!(!surface.is_walkable(path[1]));
+        assert!(!surface.is_walkable(path[2]));
+
+        let records = [
+            VolumetricNavTraversalCell {
+                coord: path[1],
+                allowed: true,
+                cost: 5,
+            },
+            VolumetricNavTraversalCell {
+                coord: path[2],
+                allowed: true,
+                cost: 2,
+            },
+        ];
+        let forward = VolumetricNavTraversalOverlay::from_cells(records).expect("forward overlay");
+        let reverse =
+            VolumetricNavTraversalOverlay::from_cells(records.into_iter().rev()).expect("reverse");
+        assert_eq!(forward, reverse);
+        assert_eq!(forward.cost_for(path[0]), 1);
+        assert!(forward.is_allowed(path[0]));
+
+        let readout =
+            find_weighted_volumetric_path(&world, &forward, volumetric_query(path[0], path[2], 16))
+                .expect("weighted volumetric path");
+        assert_eq!(readout.outcome, WeightedNavPathOutcome::Reached);
+        assert_eq!(readout.path, path);
+        assert_eq!(readout.total_cost, 7);
+        assert_eq!(readout.overlay_hash, forward.overlay_hash());
+        assert_eq!(
+            readout.source_hash,
+            volumetric_navigation_source_hash(&world)
+        );
+    }
+
+    #[test]
+    fn weighted_volumetric_overlay_blocks_and_rejects_invalid_records() {
+        let mut world = solid_test_world();
+        let start = VoxelCoord::new(1, 1, 1);
+        let goal = VoxelCoord::new(1, 2, 1);
+        carve_empty(&mut world, start);
+        carve_empty(&mut world, goal);
+
+        let blocked = VolumetricNavTraversalOverlay::from_cells([VolumetricNavTraversalCell {
+            coord: goal,
+            allowed: false,
+            cost: 1,
+        }])
+        .expect("blocked overlay");
+        assert_eq!(
+            find_weighted_volumetric_path(&world, &blocked, volumetric_query(start, goal, 16)),
+            Err(WeightedVolumetricNavPathError::GoalBlocked { goal })
+        );
+
+        assert_eq!(
+            VolumetricNavTraversalOverlay::from_cells([
+                VolumetricNavTraversalCell {
+                    coord: start,
+                    allowed: true,
+                    cost: 1,
+                },
+                VolumetricNavTraversalCell {
+                    coord: start,
+                    allowed: true,
+                    cost: 2,
+                },
+            ]),
+            Err(VolumetricNavTraversalOverlayError::DuplicateCell { coord: start })
+        );
+        assert_eq!(
+            VolumetricNavTraversalOverlay::from_cells([VolumetricNavTraversalCell {
+                coord: start,
+                allowed: true,
+                cost: 0,
+            }]),
+            Err(VolumetricNavTraversalOverlayError::ZeroCost { coord: start })
+        );
     }
 
     #[test]

@@ -173,6 +173,12 @@ export interface AnimationRigSignature {
   readonly bindRestConvention: 'localMatrixV1';
   readonly rootConvention: 'inPlace' | 'authoredRootTranslation';
   readonly rootJointId: string;
+  /** Every top-level joint in the exact imported forest, code-unit ordered. */
+  readonly structuralRootIds: readonly string[];
+  /** Explicitly selected roots whose translation carries motion semantics. */
+  readonly designatedMotionRootIds: readonly string[];
+  /** Joint translations retained as authored presentation pose channels. */
+  readonly authoredPoseTranslationJointIds: readonly string[];
 }
 
 export interface AnimationClipPackProvenance {

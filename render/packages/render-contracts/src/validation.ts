@@ -599,7 +599,10 @@ function animatedMesh(input: unknown, path: string): void {
 }
 
 function validateAnimationRig(input: unknown, path: string): void {
-  const rig = record(input, path, ['joints', 'bindRestHash', 'bindRestConvention', 'rootConvention', 'rootJointId']);
+  const rig = record(input, path, [
+    'joints', 'bindRestHash', 'bindRestConvention', 'rootConvention', 'rootJointId',
+    'structuralRootIds', 'designatedMotionRootIds', 'authoredPoseTranslationJointIds',
+  ]);
   sha256(rig['bindRestHash'], `${path}.bindRestHash`);
   enumeration(rig['bindRestConvention'], `${path}.bindRestConvention`, ['localMatrixV1'] as const);
   enumeration(rig['rootConvention'], `${path}.rootConvention`, ['inPlace', 'authoredRootTranslation'] as const);
@@ -622,7 +625,29 @@ function validateAnimationRig(input: unknown, path: string): void {
   });
   if (parentIds.filter((parent) => parent === null).length === 0) fail(`${path}.joints`, 'must declare at least one structural root');
   const parents = new Map([...jointIds].map((id, index) => [id, parentIds[index] ?? null]));
+  const structuralRootIds = orderedJointIds(rig['structuralRootIds'], `${path}.structuralRootIds`);
+  const actualStructuralRootIds = [...jointIds].filter((id) => parents.get(id) === null).sort();
+  if (structuralRootIds.length !== actualStructuralRootIds.length
+    || structuralRootIds.some((id, index) => id !== actualStructuralRootIds[index])) {
+    fail(`${path}.structuralRootIds`, 'must list every structural root exactly once in code-unit order');
+  }
   if (!jointIds.has(rootJointId) || parents.get(rootJointId) !== null) fail(`${path}.rootJointId`, 'must identify the designated structural root joint');
+  const designatedMotionRootIds = orderedJointIds(rig['designatedMotionRootIds'], `${path}.designatedMotionRootIds`);
+  if (designatedMotionRootIds.some((id) => !structuralRootIds.includes(id))) {
+    fail(`${path}.designatedMotionRootIds`, 'must identify only structural roots');
+  }
+  if (rig['rootConvention'] === 'authoredRootTranslation' && !designatedMotionRootIds.includes(rootJointId)) {
+    fail(`${path}.rootJointId`, 'must identify one designated motion root for authored root translation');
+  }
+  const authoredPoseTranslationJointIds = orderedJointIds(
+    rig['authoredPoseTranslationJointIds'], `${path}.authoredPoseTranslationJointIds`,
+  );
+  if (authoredPoseTranslationJointIds.some((id) => !jointIds.has(id))) {
+    fail(`${path}.authoredPoseTranslationJointIds`, 'must identify declared joints');
+  }
+  if (authoredPoseTranslationJointIds.some((id) => designatedMotionRootIds.includes(id))) {
+    fail(`${path}.authoredPoseTranslationJointIds`, 'must not overlap designated motion roots');
+  }
   for (const id of jointIds) {
     const seen = new Set<string>();
     let current: string | null = id;
@@ -632,6 +657,16 @@ function validateAnimationRig(input: unknown, path: string): void {
       current = parents.get(current) ?? null;
     }
   }
+}
+
+function orderedJointIds(input: unknown, path: string, maxLength = 256): string[] {
+  const values = list(input, path);
+  if (values.length > maxLength) fail(path, `must contain at most ${String(maxLength)} entries`);
+  const ids = values.map((value, index) => jointId(value, `${path}[${String(index)}]`));
+  for (let index = 1; index < ids.length; index += 1) {
+    if (ids[index - 1]! >= ids[index]!) fail(path, 'must be strictly sorted and unique');
+  }
+  return ids;
 }
 
 function animatedMeshInstance(input: unknown, path: string): void {

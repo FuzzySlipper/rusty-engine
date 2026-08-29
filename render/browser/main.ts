@@ -1624,6 +1624,9 @@ function rigForFixtureClip(scene: THREE.Object3D, clip: THREE.AnimationClip): An
     bindRestConvention: 'localMatrixV1',
     rootConvention: 'authoredRootTranslation',
     rootJointId: roots[0]!.id,
+    structuralRootIds: roots.map((root) => root.id),
+    designatedMotionRootIds: roots.map((root) => root.id),
+    authoredPoseTranslationJointIds: [],
   };
 }
 

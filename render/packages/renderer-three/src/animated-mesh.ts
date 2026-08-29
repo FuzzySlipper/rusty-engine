@@ -987,12 +987,32 @@ function assertClipPack(
   if (pack.rig.bindRestHash !== targetFingerprint) {
     throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (bind/rest fingerprint)`);
   }
-  const roots = pack.rig.joints.filter((joint) => joint.parent === null);
-  if (!roots.some((joint) => joint.id === pack.rig.rootJointId)) {
-    throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (designated root)`);
-  }
+  assertRigPolicy(pack);
   for (const [, clip] of requireDescriptorClips(resource, pack.clips)) {
     assertClipChannels(pack, clip, new Set(pack.rig.joints.map((joint) => joint.id)));
+  }
+}
+
+function assertRigPolicy(pack: AnimationClipPack): void {
+  const structuralRootIds = pack.rig.joints
+    .filter((joint) => joint.parent === null)
+    .map((joint) => joint.id)
+    .sort();
+  if (structuralRootIds.length !== pack.rig.structuralRootIds.length
+    || structuralRootIds.some((id, index) => id !== pack.rig.structuralRootIds[index])) {
+    throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (structural roots)`);
+  }
+  const structuralRoots = new Set(pack.rig.structuralRootIds);
+  const joints = new Set(pack.rig.joints.map((joint) => joint.id));
+  const motionRoots = new Set(pack.rig.designatedMotionRootIds);
+  const poseTranslations = new Set(pack.rig.authoredPoseTranslationJointIds);
+  if ([...motionRoots].some((id) => !structuralRoots.has(id))
+    || [...poseTranslations].some((id) => !joints.has(id) || motionRoots.has(id))) {
+    throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (translation policy)`);
+  }
+  if (!joints.has(pack.rig.rootJointId) || !structuralRoots.has(pack.rig.rootJointId)
+    || (pack.rig.rootConvention === 'authoredRootTranslation' && !motionRoots.has(pack.rig.rootJointId))) {
+    throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (designated root)`);
   }
 }
 
@@ -1090,7 +1110,9 @@ function assertClipChannels(pack: AnimationClipPack, clip: THREE.AnimationClip, 
   if (clip.tracks.length === 0 || clip.tracks.length > 1_024) {
     throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed or unsupported channels for ${clip.name}`);
   }
-  const translated = new Set<string>();
+  const translatedMotionRoots = new Set<string>();
+  const motionRoots = new Set(pack.rig.designatedMotionRootIds);
+  const poseTranslations = new Set(pack.rig.authoredPoseTranslationJointIds);
   const bindings = new Set<string>();
   let totalKeys = 0;
   for (const track of clip.tracks) {
@@ -1136,13 +1158,18 @@ function assertClipChannels(pack: AnimationClipPack, clip: THREE.AnimationClip, 
       throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: unsupported root-motion declaration or channel for ${clip.name}`);
     }
     if (property === 'position') {
-      if (joint !== pack.rig.rootJointId) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: unsupported root-motion declaration for ${clip.name}`);
-      if (pack.rig.rootConvention === 'inPlace') assertInPlaceHorizontal(track, pack, clip);
-      translated.add(joint);
+      if (!motionRoots.has(joint) && !poseTranslations.has(joint)) {
+        throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: unsupported translation channel for ${clip.name}`);
+      }
+      if (motionRoots.has(joint)) {
+        if (pack.rig.rootConvention === 'inPlace') assertInPlaceHorizontal(track, pack, clip);
+        translatedMotionRoots.add(joint);
+      }
     }
   }
   if (pack.rig.rootConvention === 'authoredRootTranslation'
-    && (translated.size !== 1 || !translated.has(pack.rig.rootJointId))) {
+    && ([...motionRoots].some((root) => !translatedMotionRoots.has(root))
+      || translatedMotionRoots.size !== motionRoots.size)) {
     throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: unsupported root-motion declaration for ${clip.name}`);
   }
 }

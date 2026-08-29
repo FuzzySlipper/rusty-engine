@@ -446,6 +446,42 @@ pub struct NativeNavigationTraversalClearRequest {
     pub session: NativeSpatialSessionHandle,
 }
 
+/// One bounded purpose-neutral traversal rule for volumetric navigation.
+/// Unlike the planar traversal cell, this is not validated against a
+/// NavProjection: volumetric occupancy is admitted dynamically by the query.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationVolumetricTraversalCell {
+    pub cell: NativePlanarNavCell,
+    pub allowed: bool,
+    pub traversal_cost: u64,
+}
+
+/// Replaces the retained traversal overlay for the session's voxel-derived
+/// volumetric navigation source. Records are borrowed only for this call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationVolumetricTraversalReplaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub cells: *const NativeNavigationVolumetricTraversalCell,
+    pub cells_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationVolumetricTraversalReplaceReceipt {
+    pub traversal_cell_count: u64,
+    pub traversal_overlay_hash: u64,
+    pub volumetric_source_hash: u64,
+    pub navigation_revision: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationVolumetricTraversalClearRequest {
+    pub session: NativeSpatialSessionHandle,
+}
+
 /// The admitted Engine-owned substrate for a navigation projection. Host cells
 /// are already-walkable facts; voxel-derived projections remain derived by the
 /// pathfinding owner from admitted solid voxels and agent dimensions.
@@ -558,6 +594,32 @@ pub struct NativeNavigationWeightedPathReadout {
     pub total_traversal_cost: u64,
     pub navigation_revision: u64,
     pub projection_hash: u64,
+    pub traversal_overlay_hash: u64,
+    pub path_hash: u64,
+}
+
+/// A bounded full 3D minimum-cost path request over the session's retained
+/// voxel-derived navigation source and volumetric traversal overlay.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationVolumetricWeightedPathRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub start: NativePlanarNavCell,
+    pub goal: NativePlanarNavCell,
+    pub max_visited: u32,
+    pub config: NativeNavigationVolumetricConfig,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationVolumetricWeightedPathReadout {
+    pub outcome: NativeNavigationPathOutcome,
+    pub kind: NativeNavigationProjectionKind,
+    pub visited: u32,
+    pub path_len: u32,
+    pub total_traversal_cost: u64,
+    pub navigation_revision: u64,
+    pub volumetric_source_hash: u64,
     pub traversal_overlay_hash: u64,
     pub path_hash: u64,
 }
