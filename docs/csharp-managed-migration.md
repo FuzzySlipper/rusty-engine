@@ -1,9 +1,9 @@
 # Managed C# capability migration
 
-Status: active survey and planning record for Den campaign #7502. This file is
-not authorization to delete, port, or deprecate a capability. Tasks #7503–#7507
-populate the inventory; task #7508 owns synthesis and owner decisions; task
-#7509 may create implementation work only after those decisions.
+Status: synthesized planning record for Den campaign #7502. This file is not
+authorization to delete, port, or deprecate a capability. Tasks #7503–#7507
+populated the inventory and task #7508 recorded the owner decisions. Task #7509
+may create dependency-ordered implementation work from this map.
 
 ## Direction
 
@@ -72,7 +72,7 @@ above and explicit removal gates.
 
 ## Required record for every capability
 
-Each final inventory entry synthesized under #7508 must state:
+Each final inventory entry states, directly or through its keyed matrix row:
 
 - capability and current source owner/files;
 - observable semantics and invariants;
@@ -85,11 +85,10 @@ Each final inventory entry synthesized under #7508 must state:
 - neutral extractions, consumer moves, ABI changes, and other removal gates;
 - evidence confidence and any owner question.
 
-The survey tables below record semantics, evidence, tentative disposition, and
-local gates. The keyed dependency/exposure matrix supplies the cross-cutting
-consumer, managed-surface, confidence, and owner-question fields that would be
-unreadable if repeated inside every prose cell. Task #7508 must join both views
-before treating any row as final.
+The survey tables below record semantics, evidence, disposition, and local
+gates. The keyed dependency/exposure matrix supplies the cross-cutting consumer,
+managed-surface, confidence, and decision fields that would be unreadable if
+repeated inside every prose cell. Read the two views together.
 
 No source family disappears from the ledger because it has no current
 downstream consumer. Conversely, presence in the current ABI or fixture does
@@ -136,8 +135,9 @@ current mandates:
 
 ## Capability ledger
 
-The entries in this section are provisional until task #7508 reconciles the
-parallel surveys. `owner-decision-needed` is preferable to a confident guess.
+Task #7508 reconciled these entries with the owner decisions below. Explicit
+`defer` entries are consumer-driven deferrals, not unanswered architecture
+questions.
 
 Survey baseline: Engine `main` at `391bf25`. Historical Board posts and Git
 commits explain why code was written; most Board posts are agent-authored
@@ -146,56 +146,56 @@ the #7502 task contract take precedence.
 
 ### Rules, Standard, Product Model, and TypeScript
 
-| Capability and evidence | Current semantics and boundary | Provisional disposition, target, and gates |
+| Capability and evidence | Current semantics and boundary | Disposition, target, and gates |
 | --- | --- | --- |
-| Rules artifact envelope, identity, canonical JSON, provenance, and diagnostics ([`gameplay-rules`](../rust/crates/gameplay-rules/src/lib.rs)) | Admits bounded immutable packages, canonicalizes bytes, fingerprints content, and correlates sources. It never evaluates gameplay meaning. The generated `Rules` service exposes this artifact protocol directly. | `abandon` as the ordinary C# product-definition path; `owner-decision-needed` for a separately supported artifact/mod/TS lane. Do not port the JSON envelope, compatibility ceremony, or package registry into C#. Removal requires resolving inspector, Standard, ABI, fixture, generator, and CLI consumers. |
-| Rule package-set dependency resolution ([`resolve.rs`](../rust/crates/gameplay-rules/src/resolve.rs)) | Deterministic bounded topological ordering, duplicate/version/fingerprint checks, and cycle diagnostics. Useful only when rule packages remain a real product artifact. | `defer` behind the artifact-lane decision. If retained, keep it as a typed Rust packaging mechanism, not a global gameplay catalog. |
-| Rule payload subtree selection ([`selection.rs`](../rust/crates/gameplay-rules/src/selection.rs)) | Copies a canonical, fingerprint-fenced subtree for inspection/tooling; it is not product rule evaluation. | `adapt-managed` only for a named tooling/content need, otherwise `abandon` with the package lane. Do not replace it with generic JSON-pointer gameplay access. |
-| Exact expression/value evaluation ([`exact.rs`](../rust/crates/gameplay-standard/src/exact.rs)) | Pure bounded integer expression compilation/evaluation over `MechanicsScalar`, explicit input/roll evidence, checked arithmetic, comparisons, and work receipts. No host or shared-state requirement. | `adapt-managed` or `retain-rust`; #7508 must decide whether cross-product sharing/performance justifies the ABI. A C# form should be ordinary typed values/functions, not serialized trees as its authoring model. Preserve overflow, rounding, quotas, duplicate-evidence rejection, and vectors. |
-| Continuous expression/value evaluation ([`continuous.rs`](../rust/crates/gameplay-standard/src/continuous.rs)) | Pure finite-binary64 values, bit identity, explicit input bundles, bounded expressions/comparisons, and work receipts. | `owner-decision-needed`, coupled to the continuous-mechanics decision. Never collapse exact and continuous domains into one universal `Number` abstraction. |
-| Standard definition/package admission, composed leaves, and extension artifacts ([`package.rs`](../rust/crates/gameplay-standard/src/package.rs), [`composed.rs`](../rust/crates/gameplay-standard/src/composed.rs), [`extension.rs`](../rust/crates/gameplay-standard/src/extension.rs)) | Wraps typed definitions and caller-compiled product leaves in Rules provenance/schema machinery. This was primarily a build-time authoring seam. | `abandon` as mainline C# infrastructure; `defer` only for a named external artifact compiler. Preserve selected typed semantics in product C# without porting generic leaf registries, schema dispatch, or opaque runtime JSON. |
+| Rules artifact envelope, identity, canonical JSON, provenance, and diagnostics ([`gameplay-rules`](../rust/crates/gameplay-rules/src/lib.rs)) | Admits bounded immutable packages, canonicalizes bytes, fingerprints content, and correlates sources. It never evaluates gameplay meaning. The generated `Rules` service exposes this artifact protocol directly. | `abandon`. There is no separately supported TypeScript authoring or package lane. Do not port the JSON envelope, compatibility ceremony, or package registry into C#. Removal requires resolving inspector, Standard, ABI, fixture, generator, and CLI consumers. |
+| Rule package-set dependency resolution ([`resolve.rs`](../rust/crates/gameplay-rules/src/resolve.rs)) | Deterministic bounded topological ordering, duplicate/version/fingerprint checks, and cycle diagnostics. Useful only when rule packages remain a real product artifact. | `abandon` with the Rules artifact lane. Reintroduce a normal typed dependency helper only if a future managed content system demonstrates the need. |
+| Rule payload subtree selection ([`selection.rs`](../rust/crates/gameplay-rules/src/selection.rs)) | Copies a canonical, fingerprint-fenced subtree for inspection/tooling; it is not product rule evaluation. | `abandon` with the Rules artifact lane. A future tooling/content consumer may request a typed read API; do not preserve generic JSON-pointer gameplay access speculatively. |
+| Exact expression/value evaluation ([`exact.rs`](../rust/crates/gameplay-standard/src/exact.rs)) | Pure bounded integer expression compilation/evaluation over `MechanicsScalar`, explicit input/roll evidence, checked arithmetic, comparisons, and work receipts. No host or shared-state requirement. | `adapt-managed` as ordinary typed C# values/functions. Preserve useful checked arithmetic, rounding, quotas, duplicate-evidence rejection, and vectors without serialized expression trees or a native call boundary. |
+| Continuous expression/value evaluation ([`continuous.rs`](../rust/crates/gameplay-standard/src/continuous.rs)) | Pure finite-binary64 values, bit identity, explicit input bundles, bounded expressions/comparisons, and work receipts. | `adapt-managed` as ordinary C# where a named consumer needs these semantics. Keep exact and continuous domains distinct; do not create one universal `Number` abstraction. |
+| Standard definition/package admission, composed leaves, and extension artifacts ([`package.rs`](../rust/crates/gameplay-standard/src/package.rs), [`composed.rs`](../rust/crates/gameplay-standard/src/composed.rs), [`extension.rs`](../rust/crates/gameplay-standard/src/extension.rs)) | Wraps typed definitions and caller-compiled product leaves in Rules provenance/schema machinery. This was primarily a build-time authoring seam. | `abandon`. Preserve selected typed semantics in product C# without porting generic leaf registries, schema dispatch, or opaque runtime JSON. |
 | Standard mechanics operation planning and generic role binding ([`resolution.rs`](../rust/crates/gameplay-standard/src/resolution.rs)) | Binds actor/target-style roles, evaluates operands, plans track/damage/effect/inventory/equipment requests, and validates read sets. It composes existing mechanisms but has no native/host requirement. | `adapt-managed` for any useful product coordinator/read-set concepts; `abandon` the universal operation enum/role grammar unless a concrete product proves it. Direct domain C# calling named mechanisms is the baseline. |
 | Quantization, residual carry, cadence, and exact deadlines ([`quantization.rs`](../rust/crates/gameplay-standard/src/quantization.rs), [`cadence.rs`](../rust/crates/gameplay-standard/src/cadence.rs)) | Pure conversion policies and caller-owned continuation records. It owns no clock, loop, resource, component, cap, or save format. Historical experiments found partition drift and deliberately left cadence ownership downstream. | `adapt-managed` for small conversion helpers; `defer` residual/cadence continuation until a product-neutral persisted resource exists. Preserve rounding/provenance/policy-version fields if adopted. Do not create an Engine cadence loop. |
-| Bounded evidence/sample plans ([`bounded_evidence.rs`](../rust/crates/gameplay-standard/src/bounded_evidence.rs)) | Validates named caller-supplied sample ranges and receipts; it does not generate randomness or assign product meaning. | `owner-decision-needed`. Keep only if it proves to be a reusable evidence contract; otherwise ordinary product C# validation is clearer. |
+| Bounded evidence/sample plans ([`bounded_evidence.rs`](../rust/crates/gameplay-standard/src/bounded_evidence.rs)) | Validates named caller-supplied sample ranges and receipts; it does not generate randomness or assign product meaning. | `adapt-managed` only when an Engine managed capability actually consumes the contract; otherwise leave validation in ordinary product C#. |
 | Standard presets and fixed vocabulary ([`presets.rs`](../rust/crates/gameplay-standard/src/presets.rs)) | Emits inert actor/vitality/resource and destructible/integrity/impact catalog fragments. Names/defaults are product policy. | `abandon` as Engine vocabulary. Preserve only as donor/sample code moved into a product namespace. |
 | Standard projections, receipts, and inspection ([`projection.rs`](../rust/crates/gameplay-standard/src/projection.rs), [`engine-inspector`](../rust/crates/engine-inspector)) | Read-only evidence over packages, evaluation, mechanics, and resolution. The developer console work also planned preview/play/admin/provenance lanes. | `retain-rust` for mechanism inspection where the mechanism remains; `adapt-managed` typed readouts for C# tooling. Do not retain an obsolete evaluator only to retain its inspector. |
-| TypeScript Rules/Standard authoring and contract generation ([`rules/packages`](../rules/packages), [`rules/scripts`](../rules/scripts)) | Build-time immutable drafts, Rust-shaped validation, canonical output, and Rust/TS convergence fixtures. No runtime evaluator. | `abandon` from the main C# product path; `defer` only as an explicitly supported TS artifact producer. C# definitions should be C# code, not a port of the Node serializer or fixture suite. |
-| Product Layout manifest and compiled composition ([`product-model`](../rust/crates/product-model/src/lib.rs)) | `rusty.toml`, input maps, five schedule phases, opaque definitions/timelines, capability links, quotas, and static artifact admission. This was the cancelled Product Model composition root. | `abandon` as C# application architecture. Extract neutral input, identity, JSON-limit, schedule, and timeline primitives that retained Rust lanes still import. `owner-decision-needed` for a separately supported Rust/TS product lane. |
+| TypeScript Rules/Standard authoring and contract generation ([`rules/packages`](../rules/packages), [`rules/scripts`](../rules/scripts)) | Build-time immutable drafts, Rust-shaped validation, canonical output, and Rust/TS convergence fixtures. No runtime evaluator. | `abandon`. C# definitions are C# code; do not port the Node serializer or convergence fixture suite. Any future arbitrary-code development console is a separate tooling problem and is not a reason to retain this authoring architecture. |
+| Product Layout manifest and compiled composition ([`product-model`](../rust/crates/product-model/src/lib.rs)) | `rusty.toml`, input maps, five schedule phases, opaque definitions/timelines, capability links, quotas, and static artifact admission. This was the cancelled Product Model composition root. | `abandon`; there is no separately supported Rust/TS product lane. Extract only neutral input, identity, JSON-limit, schedule, or timeline primitives still required by retained Rust mechanisms. |
 | Product Kernel and Runtime Composition ([`product-kernel`](../rust/crates/product-kernel/src/lib.rs), [`runtime-composition`](../rust/crates/runtime-composition/src/lib.rs)) | Static source-linked owners and a five-lane lifecycle/input/schedule/timeline/mutation/UI root. Even without a runtime registry, it duplicates the direct C# product root. | `abandon` from the C# path. Preserve useful phase/token and named mechanism concepts individually; do not port macros, module registration, generic dispatch, or a `ProductApplication` framework. |
-| Runtime VM ([`runtime-vm`](../rust/crates/runtime-vm/src/lib.rs)) | Bounded fresh QuickJS realm with fixed exports and atomic revisioned JSON state. It is a distinct TS product option, not needed by NativeAOT C#. | `defer` and request an owner decision on separate long-horizon TS support. Never port it to C# or keep it accidentally through the facade alone. |
-| Product materializer, assembly, and Product-Model CLI paths ([`product-materializer`](../rust/crates/product-materializer/src/lib.rs), [`product-assembly`](../rust/crates/product-assembly/src/lib.rs), [`rusty-cli`](../rust/crates/rusty-cli)) | Build/package tools for TS/Rust products, generated Rust assembly source, product layouts, and contract outputs. | `defer` only while the legacy/separate product lane is supported. C# should use normal .NET build/content paths plus the generated NativeAOT bootstrap; do not port Node/materialization ceremony into the SDK. |
+| Runtime VM ([`runtime-vm`](../rust/crates/runtime-vm/src/lib.rs)) | Bounded fresh QuickJS realm with fixed exports and atomic revisioned JSON state. It is a distinct TS product option, not needed by NativeAOT C#. | `abandon` with the TypeScript product lane. A future development-only arbitrary-code facility must be evaluated on its own requirements rather than inheriting QuickJS or JSON state by default. |
+| Product materializer, assembly, and Product-Model CLI paths ([`product-materializer`](../rust/crates/product-materializer/src/lib.rs), [`product-assembly`](../rust/crates/product-assembly/src/lib.rs), [`rusty-cli`](../rust/crates/rusty-cli)) | Build/package tools for TS/Rust products, generated Rust assembly source, product layouts, and contract outputs. | `abandon` after removing retained consumers. C# uses normal .NET build/content paths plus the generated NativeAOT bootstrap; do not port Node/materialization ceremony into the SDK. |
 | Product development host ([`product-dev-host`](../rust/crates/product-dev-host/src/lib.rs)) | Loopback HTTP/SSE, serialized runtime calls, lifecycle/input/timeline/UI host models. It owns host integration, not gameplay. | `retain-rust`; remove Product Model type contamination from the retained runtime lanes. Do not move browser/host machinery into product C#. |
 
 ### Mechanics, resolution, state, and numeric helpers
 
-| Capability and evidence | Current semantics and boundary | Provisional disposition, target, and gates |
+| Capability and evidence | Current semantics and boundary | Disposition, target, and gates |
 | --- | --- | --- |
-| Mechanics IDs, exact scalar/ratio arithmetic, and immutable catalog ([`gameplay-mechanics`](../rust/crates/gameplay-mechanics/src/lib.rs), [`scalar.rs`](../rust/crates/gameplay-mechanics/src/scalar.rs), [`catalog.rs`](../rust/crates/gameplay-mechanics/src/catalog.rs)) | Checked ±1e12 integers, normalized ratios, canonical typed IDs, product-authored definitions, catalog validation/version/fingerprint. Pure admission/arithmetic feeds stateful services. | `adapt-managed` for product definitions and C#-natural value builders; `retain-rust` only for contracts shared by retained native mechanics. Preserve arithmetic vectors and catalog identity. Do not create a universal registry/modifier framework. |
-| Seven exact mechanics component families and codecs ([`component.rs`](../rust/crates/gameplay-mechanics/src/component.rs)) | Stats, tracks, intrinsic sources, effects, inventory, item, and equipment live in the shared native `EntityState`, with revisions, catalog versions, codecs, and exact replacement. | `retain-rust` where native mechanics owns the state; `adapt-managed` copied facts/adapters. Do not mirror the same mechanics state as an independent C# authority. Removal requires an explicit replacement for revisions, codecs, containment, and atomic publication. |
-| Modifier/source attribution and collection ([`source.rs`](../rust/crates/gameplay-mechanics/src/source.rs)) | Expands intrinsic/effect/equipment/request sources; validates provenance and revisions; orders deterministically; reports applied/suppressed/inapplicable decisions. | `retain-rust` with native mechanics; product C# owns definitions and interpretation. Preserve provenance/order/cost bounds. Do not add callback registries or ambient source lookup. |
-| Stats and tracks ([`stat.rs`](../rust/crates/gameplay-mechanics/src/stat.rs), [`track.rs`](../rust/crates/gameplay-mechanics/src/track.rs)) | Modifier evaluation, checked scale/add/clamp, prospective no-stranding validation, read/spend/restore/set/reconcile, revision-guarded exact publication. Product decides what a value means and when actions are legal. | `retain-rust` provisionally for shared stateful invariants; `adapt-managed` domain methods and definitions. A managed replacement would need exact ordering, rounding, stale, and no-stranding equivalence before native removal. |
-| Effects ([`effect.rs`](../rust/crates/gameplay-mechanics/src/effect.rs)) | Provenance-aware independent/refresh/replace stacking, prospective track validation, and source activation. No duration, timer, callback, or scheduler. | `retain-rust` for lifecycle/invariants if exact mechanics remains; product C# owns duration, timing, meaning, and consequences. Do not port an effect bus or scheduler. |
-| Damage and restoration ([`damage.rs`](../rust/crates/gameplay-mechanics/src/damage.rs)) | Preview/apply pipeline of prevention, flat reduction, one rounded scale, ordered absorption, and target-track application with bounded multipart receipts and one exact publication. It owns no attack, hit, target, reaction, death, or score semantics. | `retain-rust` provisionally as a reusable deterministic stateful mechanism; C# owns combat admission and consequences. Preserve stage order and late-failure atomicity. |
-| Inventory, unique items, containment, equipment, and capacity ([`item.rs`](../rust/crates/gameplay-mechanics/src/item.rs)) | Canonical fungible stacks, entity-backed unique items, maintained containment, typed capacity costs, multislot/exclusivity rules, source activation, explicit unequip/transfer/destruction policy. | `retain-rust` for native containment/capacity/equipment invariants; `adapt-managed` definitions and product policy. Removal must replace maintained child indexes and cross-component atomicity, not merely copy records into C#. |
-| Mechanics views, snapshots, imports, and receipts ([`snapshot.rs`](../rust/crates/gameplay-mechanics/src/snapshot.rs), [`view.rs`](../rust/crates/gameplay-mechanics/src/view.rs)) | Strict registry/catalog-aware mechanism snapshots and bounded readouts; not a complete product save format. | `retain-rust` with the native mechanism; `adapt-managed` outer save schema through product codecs. Preserve catalog identity, containment, and fresh revision remapping. |
-| Continuous mechanics ([`gameplay-continuous-mechanics`](../rust/crates/gameplay-continuous-mechanics/src/lib.rs)) | Separate finite-binary64 stats/tracks/sources/effects catalog and four durable component families sharing the exact entity binding. No continuous damage/inventory/equipment/cadence. | `owner-decision-needed`. Either keep a deliberate second native family or move continuous product values to C#; never keep both as unexamined duplicate authorities. Preserve bit identity and dependent-track validation if retained. |
-| Structural resolution lifecycle ([`gameplay-resolution`](../rust/crates/gameplay-resolution/src/lib.rs), [`structural.rs`](../rust/crates/gameplay-resolution/src/structural.rs)) | Bounded Admit/Gather/Check/Plan/BeforeCommit/Commit/Consequences traversal, correlation, child budgets, preview/apply, traces, and transaction finalization; product owns all meaning and state. | `retain-rust` or `adapt-managed`. The current managed `StructuralResolutionSession` is a thin optional wrapper, but native per-node ABI calls may be ceremony C# no longer needs. Preserve structural limits and transaction separation if ported. |
+| Mechanics IDs, exact scalar/ratio arithmetic, and immutable catalog ([`gameplay-mechanics`](../rust/crates/gameplay-mechanics/src/lib.rs), [`scalar.rs`](../rust/crates/gameplay-mechanics/src/scalar.rs), [`catalog.rs`](../rust/crates/gameplay-mechanics/src/catalog.rs)) | Checked ±1e12 integers, normalized ratios, canonical typed IDs, product-authored definitions, catalog validation/version/fingerprint. Pure admission/arithmetic feeds stateful services. | `adapt-managed` into the Engine C# SDK. Preserve useful checked arithmetic and stable typed identities without keeping a native call boundary, immutable package protocol, or universal registry. |
+| Seven exact mechanics component families and codecs ([`component.rs`](../rust/crates/gameplay-mechanics/src/component.rs)) | Stats, tracks, intrinsic sources, effects, inventory, item, and equipment live in the shared native `EntityState`, with revisions, catalog versions, codecs, and exact replacement. | `adapt-managed` for the reusable families other than damage. Product-owned managed state becomes canonical; retire the native mechanics mirror after managed revisions, containment, and atomic publication cover the selected semantics. Do not preserve native codecs as the product save format. |
+| Modifier/source attribution and collection ([`source.rs`](../rust/crates/gameplay-mechanics/src/source.rs)) | Expands intrinsic/effect/equipment/request sources; validates provenance and revisions; orders deterministically; reports applied/suppressed/inapplicable decisions. | `adapt-managed` as an Engine C# mechanism. Preserve deterministic attribution/order where useful; product C# owns definitions, meaning, and consequences. Do not add an ambient source registry. |
+| Stats and tracks ([`stat.rs`](../rust/crates/gameplay-mechanics/src/stat.rs), [`track.rs`](../rust/crates/gameplay-mechanics/src/track.rs)) | Modifier evaluation, checked scale/add/clamp, prospective no-stranding validation, read/spend/restore/set/reconcile, revision-guarded exact publication. Product decides what a value means and when actions are legal. | `adapt-managed` as Engine C# mechanisms. The Engine supplies generic stat calculation and track mutation/current-value invariants; downstream supplies concepts such as health, damage, healing, stamina, and action legality. Preserve selected ordering, rounding, stale, and no-stranding behavior in managed form. |
+| Effects ([`effect.rs`](../rust/crates/gameplay-mechanics/src/effect.rs)) | Provenance-aware independent/refresh/replace stacking, prospective track validation, and source activation. No duration, timer, callback, or scheduler. | `adapt-managed` as a reusable Engine C# stacking/lifecycle mechanism. Product C# owns duration, timing, names, meaning, and consequences. Do not turn it into an effect bus or hidden scheduler. |
+| Damage and restoration ([`damage.rs`](../rust/crates/gameplay-mechanics/src/damage.rs)) | Preview/apply pipeline of prevention, flat reduction, one rounded scale, ordered absorption, and target-track application with bounded multipart receipts and one exact publication. It owns no attack, hit, target, reaction, death, or score semantics. | `abandon` as an Engine concept. Damage and healing are downstream domain meanings assembled from generic Engine track/stat/effect mechanisms. The existing pipeline remains donor evidence only and must not hold up native mechanics removal. |
+| Inventory, unique items, containment, equipment, and capacity ([`item.rs`](../rust/crates/gameplay-mechanics/src/item.rs)) | Canonical fungible stacks, entity-backed unique items, maintained containment, typed capacity costs, multislot/exclusivity rules, source activation, explicit unequip/transfer/destruction policy. | `adapt-managed` as reusable Engine C# mechanisms. Preserve maintained containment, capacity, multislot/exclusivity, and cross-component atomicity where selected; downstream owns item/equipment meaning and policy. |
+| Mechanics views, snapshots, imports, and receipts ([`snapshot.rs`](../rust/crates/gameplay-mechanics/src/snapshot.rs), [`view.rs`](../rust/crates/gameplay-mechanics/src/view.rs)) | Strict registry/catalog-aware mechanism snapshots and bounded readouts; not a complete product save format. | `adapt-managed` into ordinary typed readouts and product-composed persistence. Preserve only semantics selected for the managed mechanisms; retire native catalog/snapshot formats with their owner. |
+| Continuous mechanics ([`gameplay-continuous-mechanics`](../rust/crates/gameplay-continuous-mechanics/src/lib.rs)) | Separate finite-binary64 stats/tracks/sources/effects catalog and four durable component families sharing the exact entity binding. No continuous damage/inventory/equipment/cadence. | `adapt-managed`. Continuous product values live in C#; preserve useful finite-value and dependent-track validation without a second native component authority. |
+| Structural resolution lifecycle ([`gameplay-resolution`](../rust/crates/gameplay-resolution/src/lib.rs), [`structural.rs`](../rust/crates/gameplay-resolution/src/structural.rs)) | Bounded Admit/Gather/Check/Plan/BeforeCommit/Commit/Consequences traversal, correlation, child budgets, preview/apply, traces, and transaction finalization; product owns all meaning and state. | `adapt-managed` only as ordinary C# helpers or donor concepts. Direct domain methods, interfaces, and virtual dispatch are the baseline; retire the native per-node ABI and mandatory coordinator. Preserve structural bounds or transaction separation only where a real managed consumer uses them. |
 | Generic Rust policy/program/resolver and Standard operation enum ([`policy.rs`](../rust/crates/gameplay-resolution/src/policy.rs), [`resolver.rs`](../rust/crates/gameplay-resolution/src/resolver.rs)) | Generic traits/program nodes and staged downstream effects; Standard adds a mechanics-shaped operation grammar. These primarily compensate for static Rust composition and are not exposed as the C# product API. | `abandon` as a mandatory Engine framework; `adapt-managed` only selected read-set/receipt concepts. Ordinary virtual methods, interfaces, resolvers, and domain methods are the C#-natural lane. |
-| State-machine transition validation and stores ([`state-machine`](../rust/crates/state-machine/src/lib.rs)) | Bounded graph admission, guarded transitions, and revisions. Current C# stores instances in managed `EntityWorld`; the ABI retains definitions and validates detached transitions, while older `StateMachineStore` can retain native instances. | `adapt-managed` for ordinary product machine instances; `retain-rust` only for a shared detached validator if useful. `owner-decision-needed` for the old native store. Choose exactly one instance owner per domain. |
-| Deterministic RNG ([`svc-rng`](../rust/crates/svc-rng/src/lib.rs)) | Seeded stateless keyed draws and mutable scoped streams behind native handles; no ambient entropy, time, or global state. | `retain-rust` for shared authoritative randomness and scoped streams. Define save/restart continuation before claiming streams are durable. Preserve versioned vectors, framing, unbiased mapping, and fork/counter semantics. |
+| State-machine transition validation and stores ([`state-machine`](../rust/crates/state-machine/src/lib.rs)) | Bounded graph admission, guarded transitions, and revisions. Current C# stores instances in managed `EntityWorld`; the ABI retains definitions and validates detached transitions, while older `StateMachineStore` can retain native instances. | `adapt-managed` as ordinary C#. Managed product state is the sole instance owner; retire the native `StateMachineStore` and native validator after callers move. |
+| Deterministic RNG ([`svc-rng`](../rust/crates/svc-rng/src/lib.rs)) | Seeded stateless keyed draws and mutable scoped streams behind native handles; no ambient entropy, time, or global state. | `retain-rust` for shared authoritative randomness and scoped streams. Stream save/restore is optional future work for an identified consumer, not a migration gate. Preserve versioned vectors, framing, unbiased mapping, and fork/counter semantics. |
 | Standard bounded roles, evidence, extensions, and presets | Pure validation and authoring concepts around the families above. | Preserve only named useful concepts in C# product code. Do not port generic registries, opaque operation dispatch, TypeScript callbacks, or fixed actor/vitality vocabulary. |
 
 ### Entity/component, update, timeline, and persistence composition
 
-| Capability and evidence | Current semantics and boundary | Provisional disposition, target, and gates |
+| Capability and evidence | Current semantics and boundary | Disposition, target, and gates |
 | --- | --- | --- |
 | Native entity/component state ([`entity-state`](../rust/crates/entity-state/src/lib.rs)) | Typed component registry/stores, lifecycle, revisions, atomic commands, transforms, containment/relationships, projections, and mechanism snapshots. It has no Product Model dependency and is used by mechanics, spatial, rendering, content, and tooling. | `retain-rust` for mechanism-owned native state. Do not wholesale-port its layout or snapshot schema to C#. Every retained native consumer must identify the subset it owns; ordinary product facts remain C# authority. |
-| Managed product entity world ([`EntityWorld.cs`](../csharp/Rusty.Engine.Entities/EntityWorld.cs), [`ComponentType.cs`](../csharp/Rusty.Engine.Entities/ComponentType.cs)) | Product-owned typed storage with stable IDs, lifecycle, containment, revisions, deterministic queries, batches, snapshots, and restore candidates. It deliberately does not mirror Rust `EntityState`. | `adapt-managed`; merge into the one assembly under `Rusty.Engine.Entities` if retained. Keep it optional and ordinary C#, not a mandatory ECS/framework. Clarify whether its reserved Engine component range and broad clone-on-batch behavior are still useful. |
-| Named managed/native entity adapters ([`Rusty.Engine.Entities`](../csharp/Rusty.Engine.Entities)) | Explicit projections for mechanics, dynamics, kinematic/motion, spatial, character, world origin, appearance, and state machines. They use copied facts, guard rechecks, and one managed publication rather than a registry. | `adapt-managed` per adapter while its Rust mechanism remains. Keep only adapters that simplify a real multi-entity/cross-owner transaction; direct service calls remain valid. Never infer a hidden binding or second durable world. |
+| Managed product entity world ([`EntityWorld.cs`](../csharp/Rusty.Engine.Entities/EntityWorld.cs), [`ComponentType.cs`](../csharp/Rusty.Engine.Entities/ComponentType.cs)) | Product-owned typed storage with stable IDs, lifecycle, containment, revisions, deterministic queries, batches, snapshots, and restore candidates. It deliberately does not mirror Rust `EntityState`. | `adapt-managed`; merge into the one assembly under `Rusty.Engine.Entities` as an optional default storage helper, not a mandatory ECS/framework. It avoids a native call for ordinary product facts and gives cross-owner adapters one guarded publication boundary. Revisit reserved Engine component IDs and clone-on-batch cost only when measured use makes them relevant. |
+| Named managed/native entity adapters ([`Rusty.Engine.Entities`](../csharp/Rusty.Engine.Entities)) | Explicit projections for mechanics, dynamics, kinematic/motion, spatial, character, world origin, appearance, and state machines. They use copied facts, guard rechecks, and one managed publication rather than a registry. | `adapt-managed` only where an adapter standardizes a reusable Engine mechanism crossing or a real cross-owner transaction. Spatial/character/dynamics/kinematic/motion/world-origin/appearance are plausible upstream helpers; mechanics and state-machine adapters should retire or simplify as those owners move to C#. Product-specific component mappings remain downstream. Direct service calls remain valid. |
 | Runtime lifecycle ([`runtime-lifecycle`](../rust/crates/runtime-lifecycle/src/lib.rs)) | Product-Model-free lifecycle state, generations/control revisions, realtime/demand/external admission, simulation/presentation facts, pause/restart/fault/shutdown, and typed phase tokens. | `retain-rust`. C# consumes copied `ProductUpdate` facts and owns product orchestration; it must not create another host clock or central Engine loop. |
-| Managed update pipeline and scheduler ([`Rusty.Engine.Application`](../csharp/Rusty.Engine.Application)) | Optional named callback phases and deterministic due-callback ordering driven only by admitted update facts; no clock, host loop, native state, persistence, or rollback. | `adapt-managed`; fold into the one assembly/namespace as an optional convenience. It must remain realtime-neutral and ignorable, not a hidden Product Model scheduler. |
-| Product Model runtime schedule ([`runtime-schedule`](../rust/crates/runtime-schedule/src/lib.rs)) | Compiles a closed five-phase authored schedule and validates dependency/access/cadence before caller-supplied dispatch. It stores no callbacks or clock but is tightly coupled to Product Model types. | `owner-decision-needed`; current C# baseline rejects an upstream gameplay scheduler. Extract a narrow reusable ordering/token primitive only if a real consumer needs it. Do not port the five-phase DSL or generic dispatcher. |
-| Runtime timeline and completion tickets ([`runtime-timeline`](../rust/crates/runtime-timeline/src/lib.rs)) | Bounded step queue, deterministic release order, finite recurrence, issue-ordered completion tickets, lifecycle fencing, snapshot/restore of mechanism state, and C# completion callback. It owns no clock, executor, callback, or product meaning. | `retain-rust` provisionally as a reusable mechanism; extract Product Model identity/opaque-data/template coupling. Add named C# schedule/cancel/read surfaces only if products need them. Do not port opaque Product Model templates as the product API. |
+| Managed update pipeline and scheduler ([`Rusty.Engine.Application`](../csharp/Rusty.Engine.Application)) | Optional named callback phases and deterministic due-callback ordering driven only by admitted update facts; no clock, host loop, native state, persistence, or rollback. | `adapt-managed`; fold into the one assembly/namespace as an optional convenience. Extend the managed lane with simple coroutine-like continuation over admitted simulation steps, such as next-step, wait-steps, and caller-predicate waits, without owning a second clock or requiring the Product Model scheduler. Compiler-generated C# state machines are acceptable; runtime code generation is not required. |
+| Product Model runtime schedule ([`runtime-schedule`](../rust/crates/runtime-schedule/src/lib.rs)) | Compiles a closed five-phase authored schedule and validates dependency/access/cadence before caller-supplied dispatch. It stores no callbacks or clock but is tightly coupled to Product Model types. | `abandon` with Product Model. Do not port the five-phase DSL, static access graph, or generic dispatcher. The optional managed update/scheduler/coroutine helpers consume Engine-admitted update facts directly. |
+| Runtime timeline and completion tickets ([`runtime-timeline`](../rust/crates/runtime-timeline/src/lib.rs)) | Bounded step queue, deterministic release order, finite recurrence, issue-ordered completion tickets, lifecycle fencing, snapshot/restore of mechanism state, and C# completion callback. It owns no clock, executor, callback, or product meaning. | `retain-rust` as a reusable mechanism; extract Product Model identity/opaque-data/template coupling. Add named C# schedule/cancel/read surfaces only for identified callers/use cases. Do not port opaque Product Model templates as the product API. |
 | Runtime mutation ([`runtime-mutation`](../rust/crates/runtime-mutation/src/lib.rs)) | Closed capability descriptors, caller planner, guarded owned candidate, and one fail-atomic assignment. It is coupled to Product Model/Kernel operation envelopes. | `abandon` as generic C# product mutation infrastructure; `retain-rust` only for a named native authority that genuinely needs the mechanism. Managed `EntityWorld` typed candidates are the product-side shape. |
 | Runtime input ([`runtime-input`](../rust/crates/runtime-input/src/lib.rs)) | Host-normalized physical/direct facts, held/edge synthesis, focus/restart/overflow clearing, sequence and binding fences. Product meaning remains downstream. | `retain-rust`, extracting input enums/value kinds/bounds from Product Model. C# gets copied typed events/configuration. Do not move DOM translation or add an input event bus. |
 | Runtime UI projection ([`runtime-ui`](../rust/crates/runtime-ui/src/lib.rs)) | Bounded copied DTO/value transport with streams, sequences, and staged publication. It owns no DOM renderer, product state, callback, clock, or scheduler. | `retain-rust`; extract identity/JSON validation from Product Model. C# publishes typed facts through the named UI service; TypeScript remains DOM UI only. |
@@ -235,12 +235,12 @@ need a split decision:
 
 | Family | Required split |
 | --- | --- |
-| Voxel annotations and material authority ([`voxel-annotation`](../rust/crates/voxel-annotation), [`asset-catalog`](../rust/crates/asset-catalog)) | Rust retains canonical content/material admission and collision/occlusion/structural facts. Product C# owns the gameplay meaning of spawn areas, cover, hazards, and navigation hints. `owner-decision-needed` on authoring/API shape. |
-| Authored scenes, prefabs, and content load plans ([`authored-scene`](../rust/crates/authored-scene), [`content-store`](../rust/crates/content-store)) | Rust retains bounded atomic admission, artifact roles, load ordering, resources, and publication. C# owns which entity/prefab/content facts mean what. Do not collapse this into generic entity persistence. |
-| Environment authoring and seeded materialization ([`environment-authoring`](../rust/crates/environment-authoring), [`Studio owner map`](../studio/owner-adoption.tsv)) | Seeded generators materialize voxel/scene facts, annotations/markers, transforms, collision participation, and provenance into Engine-owned authored content. Rust should retain deterministic generation/admission and reusable materialization invariants; product C# owns authored gameplay meaning and selection policy. `owner-decision-needed` on whether generator definitions live in product C#, Engine content tools, or both through a typed seam. Survey Studio, CLI, authored-scene, asset/content, and fixture consumers before removal or relocation. |
+| Voxel annotations and material authority ([`voxel-annotation`](../rust/crates/voxel-annotation), [`asset-catalog`](../rust/crates/asset-catalog)) | `retain-rust` for canonical content/material state, admission, and collision/occlusion/structural facts. Product C# proposes typed mutations, reads facts, and owns gameplay interpretation such as what a hazard or spawn marker causes. |
+| Authored scenes, prefabs, and content load plans ([`authored-scene`](../rust/crates/authored-scene), [`content-store`](../rust/crates/content-store)) | `retain-rust` for bounded atomic admission, artifact roles, load ordering, resources, and publication. C# proposes typed content mutations and owns which entity/prefab/content facts mean what. Do not collapse this into generic entity persistence. |
+| Environment authoring and seeded materialization ([`environment-authoring`](../rust/crates/environment-authoring), [`Studio owner map`](../studio/owner-adoption.tsv)) | `retain-rust` for deterministic generation/admission and reusable materialization invariants over Engine-owned authored content. Product C# supplies typed requests, reads results, and owns authored gameplay meaning and selection policy. Generator definition placement may follow concrete authoring workflows; it is not a migration blocker. |
 | Spatial, collision, navigation, character, voxel residency, and world origin ([`engine-spatial`](../rust/crates/engine-spatial), [`svc-pathfinding`](../rust/crates/svc-pathfinding)) | `retain-rust` native indexes, queries, leases, revisions, and high-frequency mechanisms; `adapt-managed` product movement policy, goals, and copied facts. These are not candidates for a downstream replacement system. |
-| Animation and explicit-time voxel playback ([`voxel-object-runtime`](../rust/crates/voxel-object-runtime), [`render-presentation`](../rust/crates/render-presentation)) | Rust retains renderer/resource realization and reusable sampling. `owner-decision-needed` on whether clip/loop/scrub state is product gameplay state or presentation-only state. Collision selection must remain explicit rather than follow visual frames accidentally. |
-| Runtime `observe-pairs` ([`runtime-standard-capabilities`](../rust/crates/runtime-standard-capabilities)) | Likely split into retained Rust spatial sensing/reduction plus C# product policy/operation meaning. Do not retain its Product Model schedule/mutation coupling just to keep the useful query. |
+| Animation and explicit-time voxel playback ([`voxel-object-runtime`](../rust/crates/voxel-object-runtime), [`render-presentation`](../rust/crates/render-presentation)) | `retain-rust` for playback/clip state, renderer/resource realization, and reusable sampling. Product C# proposes typed playback mutations, reads state, and owns why an animation plays. Collision selection remains explicit rather than following visual frames accidentally. |
+| Runtime `observe-pairs` ([`runtime-standard-capabilities`](../rust/crates/runtime-standard-capabilities)) | `defer` pending a concrete sensing consumer. The reusable candidate is a Rust distance/facing/occlusion query with deterministic per-target aggregation for stealth visibility, AI target acquisition, sentry vision, or awareness/threat accumulation. C# would supply observer/target facts and own the resulting policy. Retire Product Model schedule/mutation coupling regardless. |
 | Input, time, and RNG ([`runtime-input`](../rust/crates/runtime-input), [`core-time`](../rust/crates/core-time), [`svc-rng`](../rust/crates/svc-rng)) | Retain normalized host facts and deterministic services in Rust. Keep host time, admitted simulation steps, animation timestamps, and product scheduler time distinct. |
 | Rendering, audio, UI host/backend, assets/resources, voxel mechanisms, core math/space/IDs | Explicitly excluded from gameplay-language migration except where a mixed file embeds product semantics. These remain durable Engine mechanisms and generated service families. |
 | Developer command, inspector, CLI, dev host, Studio, and renderer TypeScript | Tool/host/editor lanes, not C# gameplay owners. Survey their dependency closures before deleting a legacy provider, but do not port them merely for language uniformity. |
@@ -252,34 +252,34 @@ managed API, not that the capability is unused or valueless.
 
 | Capability key | Current production/tooling dependents | Current managed exposure | Confidence and decision gate |
 | --- | --- | --- | --- |
-| Rules envelope/set/selection | `csharp-engine-services`, Standard, inspector, facade, contract generator, fixture | Generated `IRulesService` and leases/readouts | High; owner question 1 decides whether the artifact lane remains. |
-| Standard exact/continuous evaluation and admission | `csharp-engine-services`, Mechanics/Resolution/Rules via Standard, Continuous Mechanics, inspector/developer command, facade | Generated `IStandardExactService` and `IStandardContinuousService` | High on closure; questions 3–4 decide managed/native shape. |
-| Standard operation planning, presets, cadence, evidence, extensions | Standard internals, developer tooling, TS authoring/contracts, fixtures | No direct managed planner/preset/cadence API | High on source shape, medium on future value; questions 3–5 and 13. |
-| TS Rules/Standard authoring | Rules workspace, Rust-driven contract generators, product-conformance fixtures, materializer/CLI output | None at runtime | High; questions 1 and 10. |
-| Product Model manifest/composition/catalog | input, mutation, schedule, timeline, UI, Kernel, assembly/materializer, dev host, CLI, facade, C# runtime type imports | No named service; some creation/update types still derive from its vocabulary | High; question 10 and neutral-extraction gates. |
-| Product Kernel/Runtime Composition | legacy generated assembly source, runtime lanes, facade | None in direct C# product root | High; question 10. |
-| QuickJS VM | Rust facade and separate VM/assembly fixtures or commands | None | High on isolation, low on future product intent; question 10. |
-| Product materializer/assembly/CLI | Each other, Product Model, dev host/content tools, generated source and CI paths | None as runtime SDK | High; question 10. |
+| Rules envelope/set/selection | `csharp-engine-services`, Standard, inspector, facade, contract generator, fixture | Generated `IRulesService` and leases/readouts | High; abandon after listed dependents move or retire. |
+| Standard exact/continuous evaluation and admission | `csharp-engine-services`, Mechanics/Resolution/Rules via Standard, Continuous Mechanics, inspector/developer command, facade | Generated `IStandardExactService` and `IStandardContinuousService` | High; selected pure semantics move to ordinary C#. |
+| Standard operation planning, presets, cadence, evidence, extensions | Standard internals, developer tooling, TS authoring/contracts, fixtures | No direct managed planner/preset/cadence API | High; preserve only named managed concepts, not the legacy coordinator/vocabulary. |
+| TS Rules/Standard authoring | Rules workspace, Rust-driven contract generators, product-conformance fixtures, materializer/CLI output | None at runtime | High; abandon the lane and remove its closure. |
+| Product Model manifest/composition/catalog | input, mutation, schedule, timeline, UI, Kernel, assembly/materializer, dev host, CLI, facade, C# runtime type imports | No named service; some creation/update types still derive from its vocabulary | High; abandon after neutral extraction for retained Rust mechanisms. |
+| Product Kernel/Runtime Composition | legacy generated assembly source, runtime lanes, facade | None in direct C# product root | High; abandon after retained mechanisms are separated. |
+| QuickJS VM | Rust facade and separate VM/assembly fixtures or commands | None | High; abandon. Future developer arbitrary-code work is a separate capability. |
+| Product materializer/assembly/CLI | Each other, Product Model, dev host/content tools, generated source and CI paths | None as runtime SDK | High; abandon legacy product paths while preserving unrelated current CLI/content tools. |
 | Product development host | C# product runtime models, renderer/host, input/timeline/UI | Host integration, not `IEngineContext` gameplay service | High; retain after neutral extractions. |
-| Exact Mechanics | C# services, Standard, developer command, inspector, facade, managed definitions/entity/persistence helpers | Generated `IMechanicsService` plus handwritten helpers | High; question 2. |
-| Continuous Mechanics | C# services, inspector, combined native registry, facade, managed entity/composed persistence helpers | Generated `IContinuousMechanicsService` plus helpers | High; question 3. |
-| Structural resolution | C# services, Standard, developer command/inspector, facade | Generated `IResolutionService` and `StructuralResolutionSession` | High; question 5. |
-| State machines | facade, ABI/service bridge, managed entity adapter, NativeAOT fixture | Generated `IStateMachineService` | High; question 7 chooses the instance owner. |
-| RNG | ABI/service bridge, facade, NativeAOT fixture and downstream products | Generated `IRandomService` with scoped owners | High; question 8 covers continuation. |
-| Native `EntityState` | Mechanics, Continuous Mechanics, spatial, render projection, content store, runtime standard capability, tools | No generic managed world; exposed indirectly through named services | High; question 6 and per-native-consumer ownership audit. |
-| Managed `EntityWorld` and adapters | Engine helper projects/examples; no current Dagger/Space/CraftSurvive helper-project reference | Four separate helper assemblies today | High on current use, medium on desired SDK breadth; question 6. |
+| Exact Mechanics | C# services, Standard, developer command, inspector, facade, managed definitions/entity/persistence helpers | Generated `IMechanicsService` plus handwritten helpers | High; selected Engine mechanisms move to managed C#, damage/restoration does not. |
+| Continuous Mechanics | C# services, inspector, combined native registry, facade, managed entity/composed persistence helpers | Generated `IContinuousMechanicsService` plus helpers | High; move selected semantics to managed C# and retire the native authority. |
+| Structural resolution | C# services, Standard, developer command/inspector, facade | Generated `IResolutionService` and `StructuralResolutionSession` | High; direct ordinary C# replaces the native coordinator. |
+| State machines | facade, ABI/service bridge, managed entity adapter, NativeAOT fixture | Generated `IStateMachineService` | High; managed C# is the sole product instance owner. |
+| RNG | ABI/service bridge, facade, NativeAOT fixture and downstream products | Generated `IRandomService` with scoped owners | High; retain Rust, defer continuation persistence to an identified need. |
+| Native `EntityState` | Mechanics, Continuous Mechanics, spatial, render projection, content store, runtime standard capability, tools | No generic managed world; exposed indirectly through named services | High; retain only per-native-mechanism state after mechanics/continuous consumers migrate. |
+| Managed `EntityWorld` and adapters | Engine helper projects/examples; no current Dagger/Space/CraftSurvive helper-project reference | Four separate helper assemblies today | High on shape; keep an optional one-assembly helper and retain only generic Engine-crossing adapters. Downstream adoption remains voluntary. |
 | Runtime lifecycle | C# product runtime, dev host, Kernel and all runtime lanes | Generated `IEngineProduct` lifecycle/update facts | High; retained Rust mechanism. |
-| Managed update pipeline/scheduler | Application helper/example only | Separate `Rusty.Engine.Application` assembly | High on shape, medium on future adoption; merge namespace only after #7508. |
-| Runtime schedule/mutation | Product Model/Kernel/Composition and standard capability paths, facade | None | High; questions 10–11. |
-| Runtime timeline | C# product runtime, dev host, Runtime Composition, facade | `IEngineProduct.CompleteTimeline`; no general schedule/cancel API | High; question 9. |
+| Managed update pipeline/scheduler | Application helper/example only | Separate `Rusty.Engine.Application` assembly | High on target shape; merge into the one assembly and add optional coroutine-like continuations. |
+| Runtime schedule/mutation | Product Model/Kernel/Composition and standard capability paths, facade | None | High; abandon Product Model owners, retain only named native mutation authority required by surviving mechanisms. |
+| Runtime timeline | C# product runtime, dev host, Runtime Composition, facade | `IEngineProduct.CompleteTimeline`; no general schedule/cancel API | High; retain the mechanism and grow the managed API only for identified callers. |
 | Runtime input | C# runtime, dev host, Runtime Composition, facade | Copied product creation/update configuration and events | High; neutral Product Model type extraction required. |
 | Runtime UI | C# UI bridge, dev host, Runtime Composition, facade | Generated `IUiService` | High; neutral identity/JSON extraction required. |
-| Persistence composition | native persistence/content owners plus managed product/entity/mechanics stores | Generated `IPersistenceService` and separate helper assembly | High; per-adapter decision under questions 2, 3, and 6. |
-| Annotations/materials/scenes/content | asset/content/scene/voxel/spatial/render/Studio/tooling owners | Generated AuthoredContent, Content, ContentStore, Voxel, and related service families cover subsets | Medium until #7508 splits semantic authoring from admission; question 12. |
-| Environment authoring | authored scene/content/voxel/annotation owners, Studio owner map, tools/fixtures | No dedicated managed generator service | Medium; question 12 must choose typed C# authoring versus tool-owned generation. |
+| Persistence composition | native persistence/content owners plus managed product/entity/mechanics stores | Generated `IPersistenceService` and separate helper assembly | High; preserve product codecs and retained-native adapters, retire native mechanics composition after the managed move. |
+| Annotations/materials/scenes/content | asset/content/scene/voxel/spatial/render/Studio/tooling owners | Generated AuthoredContent, Content, ContentStore, Voxel, and related service families cover subsets | Medium; retain Rust state/admission and expose typed C# proposal/read surfaces. |
+| Environment authoring | authored scene/content/voxel/annotation owners, Studio owner map, tools/fixtures | No dedicated managed generator service | Medium; retain Rust generation/admission, add typed managed requests only as workflows require. |
 | Spatial/navigation/physics/world origin | spatial/service crates, render/content consumers, multiple downstream products | Generated named Spatial, Motion, Kinematic, Dynamics, Character, Voxel, and WorldOrigin families | High; native mechanisms retained, managed adapter breadth remains per-helper. |
-| Animation/playback | voxel-object runtime, render presentation/projection, content/tooling | Generated Animation/Presentation and voxel presentation subsets | Medium; question 12 separates product clip state from presentation realization. |
-| Developer/inspector surfaces | gameplay providers, CLI/host wire schemas, tooling | Mostly Rust/CLI; selected readouts cross named services | Medium on future scope; question 13. |
+| Animation/playback | voxel-object runtime, render presentation/projection, content/tooling | Generated Animation/Presentation and voxel presentation subsets | Medium; retain Rust playback state/mechanism with typed C# proposal/read APIs. |
+| Developer/inspector surfaces | gameplay providers, CLI/host wire schemas, tooling | Mostly Rust/CLI; selected readouts cross named services | Medium; preserve debugger, observation, and trusted mutation outcomes rather than the legacy provider shape. |
 
 ## Compile-time removal closure
 
@@ -320,54 +320,119 @@ A legacy owner can be removed only when all applicable gates are explicit:
    boundary. Old provider-wide, browser, security, packaging, or conformance
    gates do not become requirements by inertia.
 
-## Owner decision queue
+## Owner decisions and remaining gates
 
-Questions discovered during survey live here until answered. A question must
-name the capability and consequence of each plausible answer; vague requests
-for general approval are not useful.
+These decisions were recorded on 2026-08-28. They govern migration planning;
+they do not authorize deleting a legacy owner before its dependency closure and
+replacement surface are ready.
 
-1. Are Rules packages/provenance/mod-style artifacts still a supported product
-   feature outside the main C# lane, or may that entire package/TS authoring
-   path be retired after dependents move?
-2. Which exact mechanics capabilities remain canonical native mechanisms:
-   stats/tracks/sources/effects/damage/inventory/equipment, or a smaller set?
-3. Is continuous mechanics a durable second component family, or should
-   continuous gameplay values live in C# with only selected pure math retained?
-4. Do the pure exact/continuous evaluators justify a native call boundary, or
-   should their semantics be adapted into ordinary C#?
-5. Is structural resolution valuable as a native bounded coordinator, or are
-   its useful phase/receipt concepts better expressed directly in C# now that
-   virtual methods/interfaces are available?
-6. Should managed `EntityWorld` remain an optional SDK storage helper, and if
-   so which adapters belong upstream rather than in individual products?
-7. Is managed `EntityWorld` the sole owner for product state-machine instances;
-   may the older native `StateMachineStore` be retired after caller migration?
-8. Must stateful RNG streams survive save/restart, and what exact continuation
-   state is durable if they do?
-9. Which timeline operations need public C# schedule/cancel/read APIs beyond
-   the existing completion callback?
-10. Does any supported product still require Product Model runtime schedule,
-    mutation, Product Kernel, Runtime Composition, QuickJS VM, materializer, or
-    Assembly as a separate Rust/TS lane?
-11. Is `observe-pairs` a durable named spatial mechanism once its Product Model
-    schedule/mutation wrapper is removed?
-12. Who owns the gameplay meaning and authoring shape of voxel annotations,
-    scene/prefab semantics, and animation playback/clip state?
-13. Which planned developer inspection capabilities—preview/play/admin,
-    catalog overlays/epochs, scratch/checkpoint/fault isolation—remain useful
-    after their legacy provider surfaces move?
+1. **Rules and TypeScript authoring: abandon.** Retire the Rules package,
+   provenance, Product Model, and TypeScript authoring lane after dependents
+   move. A possible future arbitrary-code development console is a separate
+   tooling capability, not a reason to keep QuickJS or the authored JSON path.
+2. **Mechanics: keep reusable Engine concepts, move them to managed C#.** Stats,
+   tracks, modifier/source attribution, effects, inventory, equipment, and
+   their useful atomicity are Engine SDK candidates. They are not required to
+   remain Rust. Damage and healing are downstream meanings built from generic
+   track/stat/effect mechanisms, not Engine concepts.
+3. **Continuous mechanics: managed C#.** Do not retain a second native
+   component authority. Carry over only useful finite-value and dependent-track
+   behavior.
+4. **Exact/continuous evaluators: ordinary C#.** Retire their native service
+   boundary and serialized authoring shape.
+5. **Structural resolution: direct C#.** Interfaces, virtual methods, and
+   domain methods replace the native coordinator. Selected bounds, receipts,
+   or transaction-separation ideas may survive as ordinary helpers.
+6. **Managed `EntityWorld`: retain as an optional SDK default.** Its use cases
+   are typed product-owned component storage without per-access ABI crossings;
+   stable entity identity/lifecycle/containment; deterministic joins; revision
+   guards; atomic batches; and product-composed snapshot/restore. Upstream
+   adapters are justified only when they standardize a reusable Engine service
+   crossing or cross-owner transaction. Spatial, character, dynamics,
+   kinematic/motion, world-origin, and appearance adapters are plausible;
+   product-specific mappings stay downstream. Mechanics and state-machine
+   adapters should shrink or retire as those authorities move to C#.
+7. **State machines: managed C#.** Retire the older native
+   `StateMachineStore` and validator after callers migrate.
+8. **RNG continuation: consumer-driven.** Rust RNG remains useful, but stream
+   save/restore is not a general migration requirement. Add it when a concrete
+   save/replay consumer needs exact continuation.
+9. **Timeline API growth: consumer-driven.** Add public C# schedule, cancel, or
+   read operations only for identified callers and use cases.
+10. **Legacy product runtime lane: abandon.** Product Model schedule/mutation,
+    Product Kernel, Runtime Composition, QuickJS VM, materializer, and Assembly
+    are not supported product variants. The managed SDK does need optional
+    coroutine-like logic driven by Engine-admitted steps. Extend the existing
+    C# scheduler with simple continuations rather than preserving the five-phase
+    Product Model scheduler.
+11. **`observe-pairs`: defer pending a concrete sensing consumer.** Its reusable
+    core could serve stealth visibility, AI target acquisition, sentry vision,
+    or per-target awareness/threat accumulation by combining distance, facing,
+    occlusion, and deterministic aggregation. If adopted, Rust owns the spatial
+    query/reduction and C# supplies facts and policy. Remove its Product Model
+    schedule/mutation wrapper either way.
+12. **Content and playback mechanisms: retain Rust state.** Voxel annotations,
+    scene/prefab/content admission, and animation playback/clip state may remain
+    Rust Engine mechanisms. C# proposes typed mutations, reads state, and owns
+    application meaning and orchestration.
+13. **Developer tooling: preserve outcomes, not legacy providers.** Required
+    outcomes are a practical debugger path for the real product, runtime state
+    observation, and trusted direct mutation/override for testing. Preview,
+    admin, checkpoint, fault isolation, or overlays survive only where they
+    help those outcomes. [.NET NativeAOT diagnostics](https://learn.microsoft.com/dotnet/core/deploying/native-aot/diagnostics)
+    support ordinary managed debugging during non-AOT development builds and
+    native source debugging of published code when symbols are retained; the
+    [deployment contract](https://learn.microsoft.com/dotnet/core/deploying/native-aot/)
+    does not support runtime code generation or dynamic assembly loading. The
+    current Rust-hosted shared-library path has not yet demonstrated a normal
+    managed-debugger workflow. A focused implementation task must prove that
+    workflow instead of assuming the old command architecture is its
+    replacement.
 
-## Planned sequence
+No owner question above blocks #7508 synthesis. Items 8, 9, and 11 are
+explicitly deferred to identified consumers; item 13 defines a result to prove
+rather than prescribing its implementation.
 
-1. Establish this ledger and enumerate every relevant owner (#7503).
-2. Complete the four independent source/intent surveys (#7504–#7507).
-3. Reconcile overlaps, omissions, dispositions, namespace targets, and owner
-   questions (#7508).
-4. Return unresolved intent decisions to the owner before any destructive plan.
-5. Create dependency-ordered implementation tasks only from the accepted map
-   (#7509).
+## Implementation dependency order
 
-Likely implementation ordering will be neutral primitive extraction, managed
-foundation, selected capability ports/adaptations, downstream consumer moves,
-publication cleanup, and only then legacy deletion. Task #7508 must establish
-the exact sequence; this survey does not pre-approve it.
+Task #7509 should turn these phases into bounded tasks without collapsing the
+whole migration into one proof campaign:
+
+1. **Consolidate the managed foundation.** Fold accepted Application,
+   `EntityWorld`, persistence, and helper sources into the one `Rusty.Engine`
+   assembly. Add optional admitted-step coroutine-like continuations. Keep the
+   build-time generators separate.
+2. **Build managed gameplay mechanisms beside the native owners.** Adapt
+   exact/continuous values, stats, tracks, sources/modifiers, effects,
+   inventory/equipment, selected resolution helpers, and state machines into
+   ordinary C#. Do not port damage/restoration, generic Standard operation
+   grammar, serialized expression trees, or package registries.
+3. **Move consumers before owners.** Migrate managed adapters, product
+   persistence, downstream products, inspector/developer surfaces, examples,
+   and fixtures to the selected managed mechanisms. Shrink or remove mechanics,
+   continuous-mechanics, resolution, and state-machine ABI families only after
+   their callers move.
+4. **Neutralize retained Rust runtime mechanisms.** Extract identity, bounded
+   value, input, timeline, UI, lifecycle, and dev-host primitives still coupled
+   to Product Model. Preserve their named Engine behavior without the Product
+   Kernel/Runtime Composition root. `observe-pairs` is not preserved by this
+   phase unless a concrete sensing consumer adopts it.
+5. **Remove the abandoned legacy closure.** Delete Rules/Standard artifact and
+   TypeScript authoring packages, generators, Product Model schedule/mutation,
+   Product Kernel, Runtime Composition, QuickJS VM, materializer, Assembly, and
+   their obsolete ABI/services/facade/CLI/fixture/workflow edges in dependency
+   order. Preserve unrelated current CLI/content tooling.
+6. **Finish publication and documentation cleanup.** Regenerate the C#/C ABI
+   surface, remove obsolete helper projects and examples, update downstream
+   references, and replace this migration plan with durable architecture/API
+   documentation when the implementation has landed.
+
+In parallel with phases 1–4, run one bounded development-access task that
+either demonstrates a practical debugger workflow for the Rust-hosted C#
+product or records the exact missing host capability. Add named trusted state
+inspection/mutation seams only as needed. This outcome must not block unrelated
+managed migration or preserve the legacy developer-command architecture.
+
+Each phase uses focused compilation or a direct consumer exercise for the
+changed boundary. Legacy provider-wide gates do not become prerequisites for
+deletion merely because they once existed.
