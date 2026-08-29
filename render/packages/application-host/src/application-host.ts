@@ -48,6 +48,8 @@ import {
 
 export const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION =
   'rusty_application_host.v1';
+const RUSTY_APPLICATION_INTERACTIVE_UI_SELECTOR =
+  'a,button,input,select,textarea,summary,dialog,[contenteditable="true"],[data-rusty-ui-interactive],[role="dialog"],[aria-modal="true"]';
 
 export type RustyApplicationInteractionMode =
   | 'gameplay'
@@ -551,6 +553,9 @@ export interface RustyApplicationUiOwner {
 /**
  * Mount trusted downstream product UI into the Engine-owned composition root.
  * This is an application composition seam, not an untrusted plugin boundary.
+ * The root is hit-test transparent: native interactive controls and descendants
+ * marked `data-rusty-ui-interactive` receive pointer events, while other overlay
+ * regions pass through to the Engine canvas and its input arbitration.
  */
 export type RustyApplicationUiMount = (
   root: HTMLElement,
@@ -1269,6 +1274,7 @@ async function mountRustyApplicationWithEnvironment(
       () => requireActive(),
       () => interactionMode,
       focusGameplay,
+      input === null,
       (event) => {
         ui.allowsGameplayInput(event);
         input?.clear('focus-loss');
@@ -1433,8 +1439,14 @@ function createLayout(
   const ui = document.createElement('div');
   ui.dataset['rustyApplicationUi'] = 'downstream';
   ui.style.cssText = presentationAspectBounds === undefined
-    ? 'min-height:100dvh;position:relative;width:100%;z-index:2;'
-    : 'height:100%;min-height:0;overflow:hidden;position:relative;width:100%;z-index:2;';
+    ? 'min-height:100dvh;pointer-events:none;position:relative;width:100%;z-index:2;'
+    : 'height:100%;min-height:0;overflow:hidden;pointer-events:none;position:relative;width:100%;z-index:2;';
+
+  const uiInteractionStyle = document.createElement('style');
+  uiInteractionStyle.dataset['rustyApplicationUiHitTesting'] = 'engine-owned';
+  uiInteractionStyle.textContent =
+    `[data-rusty-application-ui="downstream"] :is(${RUSTY_APPLICATION_INTERACTIVE_UI_SELECTOR}){pointer-events:auto;}`;
+  host.append(uiInteractionStyle);
 
   const loading = document.createElement('div');
   loading.dataset['rustyApplicationLoading'] = '';
@@ -1516,18 +1528,22 @@ function installInputArbitration(
   surface: () => RendererSurface,
   interactionMode: () => RustyApplicationInteractionMode,
   focusGameplay: () => void,
+  coreOwnsPrimaryFocus: boolean,
   clearRuntimeInputForFocus: (event: FocusEvent) => void,
 ): () => void {
   const document = host.ownerDocument;
   const onPointerDown = (event: PointerEvent): void => {
+    if (!isArbitratedHostPointerEvent(event, uiRoot, surface().canvas)) return;
     if (isInteractiveUiEvent(event, uiRoot)) {
       surface().releaseInput();
       return;
     }
-    if (interactionMode() === 'gameplay') focusGameplay();
+    if (interactionMode() === 'gameplay' && (coreOwnsPrimaryFocus || event.button !== 0)) {
+      focusGameplay();
+    }
   };
   const onFocusIn = (event: FocusEvent): void => {
-    if (!isTextEntry(event.target)) return;
+    if (!isUiTarget(event.target, uiRoot) || !isTextEntry(event.target)) return;
     surface().releaseInput();
     clearRuntimeInputForFocus(event);
   };
@@ -1536,14 +1552,14 @@ function installInputArbitration(
   };
   const onBlur = (): void => surface().releaseInput();
 
-  uiRoot.addEventListener('pointerdown', onPointerDown, true);
-  uiRoot.addEventListener('focusin', onFocusIn, true);
+  host.addEventListener('pointerdown', onPointerDown, true);
+  host.addEventListener('focusin', onFocusIn, true);
   document.addEventListener('pointerlockchange', onPointerLockChange);
   document.defaultView?.addEventListener('blur', onBlur);
   onPointerLockChange();
   return () => {
-    uiRoot.removeEventListener('pointerdown', onPointerDown, true);
-    uiRoot.removeEventListener('focusin', onFocusIn, true);
+    host.removeEventListener('pointerdown', onPointerDown, true);
+    host.removeEventListener('focusin', onFocusIn, true);
     document.removeEventListener('pointerlockchange', onPointerLockChange);
     document.defaultView?.removeEventListener('blur', onBlur);
   };
@@ -1551,6 +1567,14 @@ function installInputArbitration(
 
 function isInteractiveUiEvent(event: Event, uiRoot: HTMLElement): boolean {
   return event.composedPath().some((target) => isInteractiveUiTarget(target, uiRoot));
+}
+
+function isArbitratedHostPointerEvent(
+  event: Event,
+  uiRoot: HTMLElement,
+  canvas: HTMLCanvasElement,
+): boolean {
+  return event.composedPath().some((target) => target === uiRoot || target === canvas);
 }
 
 /**
@@ -1607,10 +1631,12 @@ function coordinatePoint(value: unknown): EventClientPoint {
 }
 
 function isInteractiveUiTarget(target: EventTarget | null, uiRoot: HTMLElement): boolean {
-  if (!(target instanceof Element) || !uiRoot.contains(target)) return false;
-  return target.closest(
-    'a,button,input,select,textarea,summary,dialog,[contenteditable="true"],[data-rusty-ui-interactive],[role="dialog"],[aria-modal="true"]',
-  ) !== null;
+  if (!isUiTarget(target, uiRoot)) return false;
+  return target.closest(RUSTY_APPLICATION_INTERACTIVE_UI_SELECTOR) !== null;
+}
+
+function isUiTarget(target: EventTarget | null, uiRoot: HTMLElement): target is Element {
+  return target instanceof Element && uiRoot.contains(target);
 }
 
 function isTextEntry(target: EventTarget | null): boolean {

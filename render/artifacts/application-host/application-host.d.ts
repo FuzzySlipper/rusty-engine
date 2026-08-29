@@ -427,6 +427,9 @@ export interface RustyApplicationUiOwner {
 /**
  * Mount trusted downstream product UI into the Engine-owned composition root.
  * This is an application composition seam, not an untrusted plugin boundary.
+ * The root is hit-test transparent: native interactive controls and descendants
+ * marked `data-rusty-ui-interactive` receive pointer events, while other overlay
+ * regions pass through to the Engine canvas and its input arbitration.
  */
 export type RustyApplicationUiMount = (root: HTMLElement, context: RustyApplicationUiContext) => void | RustyApplicationUiOwner | Promise<void | RustyApplicationUiOwner>;
 export interface RustyApplicationRendererOptions {

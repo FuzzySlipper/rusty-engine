@@ -15,6 +15,7 @@ declare global {
     __rustyApplicationHost?: RustyApplicationHost;
     __rustyApplicationMount?: (
       presentationAspectBounds?: RustyApplicationPresentationAspectBounds,
+      includeRuntimeInput?: boolean,
     ) => Promise<RustyApplicationHost>;
     __rustyApplicationFailureProbe?: () => Promise<string>;
     __rustyApplicationBoundedFailureProbe?: () => Promise<string>;
@@ -181,21 +182,23 @@ function developerCommandClient() {
   });
 }
 
-window.__rustyApplicationMount = (presentationAspectBounds) =>
+window.__rustyApplicationMount = (presentationAspectBounds, includeRuntimeInput = true) =>
   mountRustyApplication({
     root,
     ...(presentationAspectBounds === undefined ? {} : { presentationAspectBounds }),
     developerCommands: { client: developerCommandClient() },
     initialInteractionMode: 'gameplay',
-    runtimeInput: {
-      binding: {
-        runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
-        context: 'gameplay.default',
+    ...(includeRuntimeInput ? {
+      runtimeInput: {
+        binding: {
+          runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+          context: 'gameplay.default',
+        },
+        maximumPointerDelta: 32,
+        maximumWheelDelta: 64,
+        selectedController: { index: 0 },
       },
-      maximumPointerDelta: 32,
-      maximumWheelDelta: 64,
-      selectedController: { index: 0 },
-    },
+    } : {}),
     uiProjection: {
       expectedStream: 'product.hud',
       expectedContract: 'product.hud.v1',

@@ -1402,6 +1402,104 @@ test('public application-host UI projection is read-only in the mounted DOM lane
   });
 });
 
+test('application host makes noninteractive UI transparent while preserving explicit UI controls', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const hitTargets = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[data-rusty-application-renderer="engine-owned"]');
+    const gameplay = document.querySelector<HTMLElement>('#gameplay-zone');
+    const button = document.querySelector<HTMLElement>('#interface-button');
+    const input = document.querySelector<HTMLElement>('#text-entry');
+    if (canvas === null || gameplay === null || button === null || input === null) {
+      throw new Error('hit-testing fixtures are unavailable');
+    }
+    const targetAtCenter = (element: HTMLElement): Element | null => {
+      const bounds = element.getBoundingClientRect();
+      return document.elementFromPoint(bounds.left + (bounds.width / 2), bounds.top + (bounds.height / 2));
+    };
+    return {
+      button: targetAtCenter(button)?.id ?? null,
+      input: targetAtCenter(input)?.id ?? null,
+      noninteractive: targetAtCenter(gameplay) === canvas,
+      uiPointerEvents: getComputedStyle(gameplay.parentElement!).pointerEvents,
+    };
+  });
+  expect(hitTargets).toEqual({
+    button: 'interface-button',
+    input: 'text-entry',
+    noninteractive: true,
+    uiPointerEvents: 'none',
+  });
+
+  await page.evaluate(() => window.__rustyApplicationHost?.input?.drain());
+  await page.locator('#interface-button').click();
+  const buttonEntries = await page.evaluate(() => window.__rustyApplicationHost?.input?.drain() ?? []);
+  expect(buttonEntries.filter((entry) => 'fact' in entry && entry.fact.kind === 'pointer-button')).toEqual([]);
+
+  await page.evaluate(() => window.__rustyApplicationHost?.ui.setInteractionMode('gameplay'));
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').click();
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null))
+    .toBe('CANVAS');
+  await page.keyboard.down('KeyW');
+  await page.locator('#text-entry').focus();
+  const textEntries = await page.evaluate(() => window.__rustyApplicationHost?.input?.drain() ?? []);
+  expect(textEntries.some((entry) => 'fact' in entry
+    && entry.fact.kind === 'clear'
+    && (entry.fact.reason === 'focus-loss' || entry.fact.reason === 'pointer-lock-loss'))).toBe(true);
+  await page.keyboard.up('KeyW');
+});
+
+test('application host without runtime ingress owns canvas focus through replacement and remount', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await page.evaluate(async () => {
+    await window.__rustyApplicationHost?.dispose();
+    const host = await window.__rustyApplicationMount?.(undefined, false);
+    if (host === undefined) throw new Error('application host remount helper is unavailable');
+    window.__rustyApplicationHost = host;
+  });
+  const requestCounter = async (): Promise<number> => page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]');
+    if (canvas === null) throw new Error('renderer canvas is unavailable');
+    let requests = 0;
+    const requestPointerLock = canvas.requestPointerLock.bind(canvas);
+    canvas.requestPointerLock = () => {
+      requests += 1;
+      return requestPointerLock();
+    };
+    canvas.dataset['pointerLockRequestCounter'] = 'installed';
+    Object.defineProperty(canvas, '__rustyPointerLockRequests', { get: () => requests });
+    return requests;
+  });
+  const requests = (): Promise<number> => page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]');
+    if (canvas === null) throw new Error('renderer canvas is unavailable');
+    return (canvas as HTMLCanvasElement & { __rustyPointerLockRequests?: number }).__rustyPointerLockRequests ?? -1;
+  });
+
+  expect(await page.evaluate(() => window.__rustyApplicationHost?.input)).toBeUndefined();
+  await requestCounter();
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').click();
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null)).toBe('CANVAS');
+  expect(await requests()).toBe(1);
+
+  await page.evaluate(() => document.exitPointerLock());
+  await page.evaluate(() => window.__rustyApplicationHost?.renderer.replaceFrame({ schemaVersion: 1, ops: [] }));
+  await requestCounter();
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').click();
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null)).toBe('CANVAS');
+  expect(await requests()).toBe(1);
+
+  await page.evaluate(async () => {
+    await window.__rustyApplicationHost?.dispose();
+    const host = await window.__rustyApplicationMount?.(undefined, false);
+    if (host === undefined) throw new Error('application host remount helper is unavailable');
+    window.__rustyApplicationHost = host;
+  });
+  await requestCounter();
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').click();
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null)).toBe('CANVAS');
+  expect(await requests()).toBe(1);
+});
+
 test('application-host input ingress treats pointer cancellation as a fail-closed loss', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const entries = await page.evaluate(() => {

@@ -39,6 +39,39 @@ test('generated product browser host owns one canvas, cadence, input drain, and 
   await expect(page.locator('body')).not.toHaveAttribute('data-rusty-product-runtime-failure');
 });
 
+test('generated product browser host keeps UI controls out of gameplay pointer input and focuses canvas once', async ({ page }) => {
+  await page.goto('/browser/product-browser-host.html');
+  await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');
+  await page.locator('#product-intent').click();
+  await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? []).some((batch) =>
+    batch.some((value) => typeof value === 'object' && value !== null && 'intent' in value),
+  ))).toBe(true);
+  expect(await page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? [])
+    .flat()
+    .filter((value) => typeof value === 'object' && value !== null && 'fact' in value)
+    .map((value) => (value as { readonly fact: { readonly kind: string } }).fact.kind)))
+    .not.toContain('pointer-button');
+
+  await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]');
+    if (canvas === null) throw new Error('renderer canvas is unavailable');
+    let requests = 0;
+    const requestPointerLock = canvas.requestPointerLock.bind(canvas);
+    canvas.requestPointerLock = () => {
+      requests += 1;
+      return requestPointerLock();
+    };
+    Object.defineProperty(canvas, '__rustyPointerLockRequests', { get: () => requests });
+  });
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').click({ position: { x: 400, y: 300 } });
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null)).toBe('CANVAS');
+  expect(await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]');
+    if (canvas === null) throw new Error('renderer canvas is unavailable');
+    return (canvas as HTMLCanvasElement & { __rustyPointerLockRequests?: number }).__rustyPointerLockRequests;
+  })).toBe(1);
+});
+
 test('generated product browser host disposes transport and application owners', async ({ page }) => {
   await page.goto('/browser/product-browser-host.html');
   await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');
