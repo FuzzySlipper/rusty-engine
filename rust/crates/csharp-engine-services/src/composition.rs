@@ -52,6 +52,7 @@ fn engine_api(
     camera_view_bridge: &mut RuntimeCameraViewBridge,
     dynamics_bridge: &mut RuntimeDynamicsBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
+    perception_bridge: &mut crate::perception::RuntimePerceptionBridge,
     voxel_content_bridge: &mut RuntimeVoxelContentBridge,
     voxel_scene_presentation_bridge: &mut RuntimeVoxelScenePresentationBridge,
     rng_bridge: &mut RuntimeRngBridge,
@@ -70,6 +71,7 @@ fn engine_api(
         motion: crate::motion::api(),
         kinematic: crate::kinematic::api(spatial_bridge),
         spatial: crate::spatial::api(spatial_bridge),
+        perception: crate::perception::api(perception_bridge),
         world_origin: crate::world_origin::api(spatial_bridge),
         voxel: crate::voxel::api(spatial_bridge),
         voxel_content: crate::voxel_content::api(voxel_content_bridge, appearance_bridge),
@@ -224,6 +226,7 @@ pub struct EngineServiceSet {
     camera_view: RuntimeCameraViewBridge,
     dynamics: RuntimeDynamicsBridge,
     spatial: RuntimeSpatialBridge,
+    perception: crate::perception::RuntimePerceptionBridge,
     voxel_content: RuntimeVoxelContentBridge,
     voxel_scene_presentation: RuntimeVoxelScenePresentationBridge,
     rng: RuntimeRngBridge,
@@ -277,6 +280,7 @@ impl EngineServiceSet {
         content_store_root: Option<PathBuf>,
     ) -> Result<Self, CsharpEngineServicesError> {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let perception = crate::perception::RuntimePerceptionBridge::new(&spatial);
         let dynamics = crate::dynamics::RuntimeDynamicsBridge::new(spatial.collision_source());
         let content = Box::new(RuntimeContentBridge::new(content_resources.clone()));
         let mut authored_content = RuntimeAuthoredContentBridge::new();
@@ -296,6 +300,7 @@ impl EngineServiceSet {
             camera_view: RuntimeCameraViewBridge::new(),
             dynamics,
             spatial,
+            perception,
             voxel_content: RuntimeVoxelContentBridge::new(),
             voxel_scene_presentation,
             rng: crate::rng::RuntimeRngBridge::new(),
@@ -320,6 +325,7 @@ impl EngineServiceSet {
             &mut self.camera_view,
             &mut self.dynamics,
             &mut self.spatial,
+            &mut self.perception,
             &mut self.voxel_content,
             &mut self.voxel_scene_presentation,
             &mut self.rng,

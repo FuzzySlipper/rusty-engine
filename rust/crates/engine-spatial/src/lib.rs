@@ -12,6 +12,7 @@ mod active_collision;
 mod character_controller;
 mod entity_motion;
 mod occlusion;
+mod perception;
 mod physics;
 mod rigid_body;
 mod trigger;
@@ -49,6 +50,13 @@ pub use occlusion::{
     SpatialOcclusionError, SpatialOcclusionHit, SpatialOcclusionHitboxOverride,
     SpatialOcclusionQuery, SpatialOcclusionService, MAX_OCCLUSION_HITBOX_OVERRIDES,
     MAX_OCCLUSION_IGNORED_ENTITIES, MAX_OCCLUSION_QUERY_ENTITIES,
+};
+pub use perception::{
+    SpatialPerceptionAggregate, SpatialPerceptionError, SpatialPerceptionObserver,
+    SpatialPerceptionPair, SpatialPerceptionPairKind, SpatialPerceptionQuery,
+    SpatialPerceptionReadout, SpatialPerceptionService, SpatialPerceptionTarget,
+    MAX_PERCEPTION_AGGREGATES, MAX_PERCEPTION_OBSERVERS, MAX_PERCEPTION_PAIRS,
+    MAX_PERCEPTION_TARGETS,
 };
 pub use physics::{
     integrate_kinematic, integrate_kinematic_with_query, CollisionMode, CollisionResolution,

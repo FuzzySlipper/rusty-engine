@@ -207,6 +207,13 @@ pub type NativeSpatialRaycast = unsafe extern "C" fn(
     *const NativeSpatialRaycastRequest,
     *mut NativeSpatialHit,
 ) -> i32;
+pub type NativeQueryPerception = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePerceptionQueryRequest,
+    *mut NativePerceptionReadoutLease,
+) -> i32;
+pub type NativeDestroyPerceptionReadoutLease =
+    unsafe extern "C" fn(*mut c_void, NativePerceptionReadoutLeaseHandle) -> i32;
 pub type NativeSpatialSegmentCast = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialSegmentCastRequest,
@@ -1905,6 +1912,7 @@ pub struct NativeEngineApi {
     pub motion: NativeMotionApi,
     pub kinematic: NativeKinematicApi,
     pub spatial: NativeSpatialApi,
+    pub perception: NativePerceptionApi,
     pub world_origin: NativeWorldOriginApi,
     pub voxel: NativeVoxelApi,
     pub voxel_content: NativeVoxelContentApi,

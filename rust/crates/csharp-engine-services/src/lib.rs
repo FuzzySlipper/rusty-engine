@@ -12,6 +12,7 @@ mod kinematic;
 mod look;
 mod mechanics;
 mod motion;
+mod perception;
 mod persistence;
 mod presentation;
 mod resolution;

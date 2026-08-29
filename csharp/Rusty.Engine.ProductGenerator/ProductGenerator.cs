@@ -78,6 +78,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Motion = new MotionServiceImplementation(native.motion);
                     Kinematic = new KinematicServiceImplementation(native.kinematic);
                     Spatial = new SpatialServiceImplementation(native.spatial);
+                    Perception = new PerceptionServiceImplementation(native.perception);
                     WorldOrigin = new WorldOriginServiceImplementation(native.world_origin);
                     Voxel = new VoxelServiceImplementation(native.voxel);
                     VoxelContent = new VoxelContentServiceImplementation(native.voxel_content);
@@ -107,6 +108,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IMotionService Motion { get; }
                 public IKinematicService Kinematic { get; }
                 public ISpatialService Spatial { get; }
+                public IPerceptionService Perception { get; }
                 public IWorldOriginService WorldOrigin { get; }
                 public IVoxelService Voxel { get; }
                 public IVoxelContentService VoxelContent { get; }

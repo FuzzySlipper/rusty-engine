@@ -2962,7 +2962,7 @@ fn navigation_step_failure(
     }
 }
 
-fn native_array(value: NativeVec3) -> [f64; 3] {
+pub(crate) fn native_array(value: NativeVec3) -> [f64; 3] {
     [f64::from(value.x), f64::from(value.y), f64::from(value.z)]
 }
 
@@ -3065,7 +3065,7 @@ fn validate_entity_collider(
     Ok(())
 }
 
-fn entity_state(
+pub(crate) fn entity_state(
     values: &[NativeSpatialEntityCollider],
 ) -> Result<EntityState, CsharpEngineServicesError> {
     let definitions = values.iter().copied().map(|value| {
