@@ -1513,6 +1513,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IAudioService Audio => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
+    public IVoxelScenePresentationService VoxelScenePresentation => throw new NotSupportedException();
     public IMechanicsService Mechanics => throw new NotSupportedException();
     public IContinuousMechanicsService ContinuousMechanics => throw new NotSupportedException();
     public IPersistenceService Persistence { get; } = persistence;

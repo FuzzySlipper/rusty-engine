@@ -28,7 +28,7 @@ The paired proving product is `/home/dev/rusty-dagger`.
 | Binding generation | [`scripts/generate-csharp-native-bindings.sh`](scripts/generate-csharp-native-bindings.sh) and [`csharp/Rusty.Engine.BindingGenerator`](csharp/Rusty.Engine.BindingGenerator) | Generates native declarations, safe contracts/values, and generator inputs. |
 | Safe C# surface | [`csharp/Rusty.Engine`](csharp/Rusty.Engine) | Generated contracts plus handwritten managed helpers. |
 | Product bootstrap | [`csharp/Rusty.Engine.ProductGenerator`](csharp/Rusty.Engine.ProductGenerator) | Generates the internal NativeAOT exports and safe service implementations. |
-| Optional C# helpers | [`Rusty.Engine.Application`](csharp/Rusty.Engine/Application), [`Entities`](csharp/Rusty.Engine.Entities), [`Persistence`](csharp/Rusty.Engine.Persistence), [`Resolution`](csharp/Rusty.Engine.Resolution) | Reusable managed scheduling, entity, persistence, and resolution helpers. |
+| Optional C# helpers | [`Application`](csharp/Rusty.Engine/Application), [`Entities`](csharp/Rusty.Engine/Entities), [`Persistence`](csharp/Rusty.Engine/Persistence), [`Rusty.Engine.Resolution`](csharp/Rusty.Engine.Resolution) | Reusable managed scheduling, entity, persistence, and resolution helpers. |
 | Working fixture | [`fixtures/csharp-nativeaot-trial`](fixtures/csharp-nativeaot-trial) | Minimal buildable product and direct runtime exercise. |
 
 ## NativeAOT quick start
