@@ -202,21 +202,22 @@ the #7502 task contract take precedence.
 | Persistence primitives and product composition ([`ProductStateStore.cs`](../csharp/Rusty.Engine/Persistence/ProductStateStore.cs), [`content-store`](../rust/crates/content-store/src/lib.rs)) | Product C# owns DTO schemas, codecs, migrations, scope/key, and restore meaning. Rust owns durable bytes/storage and mechanism snapshots. Composition is an ordered product-selected adapter list. | `retain-rust` native storage; managed codecs/stores now compile into the one assembly. Do not port a generic Rust archive or automatically persist every managed/native world. |
 | Product Kernel/Runtime Composition root | A separate closed orchestration root over lifecycle, input, schedule, timeline, mutation, and UI. | `abandon` from the direct C# runtime. Extract retained lanes individually so the generated C# product root remains the only product orchestrator. |
 
-### Managed SDK and one-assembly target
+### Managed SDK and one-assembly shape
 
-There is no measured compile-time problem supporting an assembly split. Current
-Dagger, Space, and CraftSurvive runtime/game projects reference only
-`Rusty.Engine`; none references the four helper assemblies. Their NativeProduct
-projects also reference `Rusty.Engine.ProductGenerator` correctly as a separate
-build-time analyzer dependency.
+There is no measured compile-time problem supporting an assembly split. The
+managed namespaces under `csharp/Rusty.Engine` currently compile into the one
+`Rusty.Engine` runtime assembly. Current Dagger, Space, and CraftSurvive
+runtime/game projects reference that assembly directly. Their NativeProduct
+projects also reference `Rusty.Engine.ProductGenerator` as a separate build-time
+analyzer dependency; the binding generator remains separate build tooling.
 
 | Current project/surface | Survey finding | Target |
 | --- | --- | --- |
-| [`Rusty.Engine`](../csharp/Rusty.Engine/Rusty.Engine.csproj) | Safe generated contracts/values plus three handwritten Mechanics helpers. It compiles no raw bindings. | The one default runtime assembly. Retain `Rusty.Engine` as the generated root namespace. |
-| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | Small optional update/scheduler convention, compiled with the default runtime assembly. | Retained under `Rusty.Engine.Application`; it remains optional. |
-| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Product world plus service adapters and temporary paired mechanics composition now live in the runtime assembly. Valuable pieces and transitional adapters remain mixed. | Consolidated under `Rusty.Engine.Entities`; do not make this the canonical Engine ECS. Retire or simplify temporary adapters as their owners move to C#. |
-| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Product codecs, native-store composition, and temporary entity/mechanics/continuous adapters now live in the runtime assembly. | Keep product codecs explicit and adapter composition opt-in; simplify transitional adapters with their owning migrations. |
-| [`Rusty.Engine.Resolution`](../csharp/Rusty.Engine.Resolution/Rusty.Engine.Resolution.csproj) | About 437 lines around a native structural session and product transaction. | Fold or rewrite accepted concepts under `Rusty.Engine.Resolution`; do not preserve ABI-per-node ceremony merely to preserve this project. |
+| [`Rusty.Engine`](../csharp/Rusty.Engine/Rusty.Engine.csproj) | Safe generated contracts/values plus managed application, entity, mechanics, persistence, resolution, and state-machine helpers. It compiles no raw bindings. | The one default runtime assembly. Retain `Rusty.Engine` as the generated root namespace. |
+| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | Small optional update/scheduler convention compiled into the default runtime assembly. | Retained under `Rusty.Engine.Application`; it remains optional. |
+| [`Rusty.Engine.Entities`](../csharp/Rusty.Engine/Entities) | Product world plus service adapters and temporary paired mechanics composition compiled into the default runtime assembly. Valuable pieces and transitional adapters remain mixed. | Consolidated under `Rusty.Engine.Entities`; do not make this the canonical Engine ECS. Retire or simplify temporary adapters as their owners move to C#. |
+| [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine/Persistence) | Product codecs, native-store composition, and temporary entity/mechanics/continuous adapters compiled into the default runtime assembly. | Keep product codecs explicit and adapter composition opt-in; simplify transitional adapters with their owning migrations. |
+| [`Rusty.Engine.Resolution`](../csharp/Rusty.Engine/Resolution) | Managed structural resolution session and typed product transaction helpers compiled into the default runtime assembly. | Retain accepted concepts under `Rusty.Engine.Resolution`; do not preserve ABI-per-node ceremony merely to preserve a separate project. |
 | [`Rusty.Engine.BindingGenerator`](../csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj) | ClangSharp/cbindgen executable build tool; unsafe AST interop is appropriate here. | Keep separate as build-time tooling. |
 | [`Rusty.Engine.ProductGenerator`](../csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj) | Roslyn analyzer/source generator that embeds raw ABI/service implementation inputs and emits the NativeAOT bootstrap. | Keep separate, analyzer-only. Unsafe, pointers, `GCHandle`, exports, and raw tables remain generated/boundary-local. |
 | Example projects and NativeAOT fixture | Proof/scaffolding; the broad capability exercise is not product architecture. The Application example already drifts from the current `IEngineContext`. | Keep separate or retire individually. Update references only when the one-assembly implementation occurs; do not use example breakage to retain obsolete services. |
@@ -267,14 +268,14 @@ managed API, not that the capability is unused or valueless.
 | State machines | facade, ABI/service bridge, managed entity adapter, NativeAOT fixture | Generated `IStateMachineService` | High; managed C# is the sole product instance owner. |
 | RNG | ABI/service bridge, facade, NativeAOT fixture and downstream products | Generated `IRandomService` with scoped owners | High; retain Rust, defer continuation persistence to an identified need. |
 | Native `EntityState` | Mechanics, Continuous Mechanics, spatial, render projection, content store, runtime standard capability, tools | No generic managed world; exposed indirectly through named services | High; retain only per-native-mechanism state after mechanics/continuous consumers migrate. |
-| Managed `EntityWorld` and adapters | Engine helper projects/examples; no current Dagger/Space/CraftSurvive helper-project reference | Four separate helper assemblies today | High on shape; keep an optional one-assembly helper and retain only generic Engine-crossing adapters. Downstream adoption remains voluntary. |
+| Managed `EntityWorld` and adapters | Engine namespaces/examples; no current Dagger/Space/CraftSurvive helper-assembly reference | Optional namespaces inside the one `Rusty.Engine` runtime assembly | High on shape; keep optional helpers in the default assembly and retain only generic Engine-crossing adapters. Downstream adoption remains voluntary. |
 | Runtime lifecycle | C# product runtime, dev host, Kernel and all runtime lanes | Generated `IEngineProduct` lifecycle/update facts | High; retained Rust mechanism. |
 | Managed update pipeline/scheduler | Application helper/example only | Optional `Rusty.Engine.Application` namespace in the default assembly | High on target shape; add optional coroutine-like continuations only in follow-on work. |
 | Runtime schedule/mutation | Product Model/Kernel/Composition and standard capability paths, facade | None | High; abandon Product Model owners, retain only named native mutation authority required by surviving mechanisms. |
 | Runtime timeline | C# product runtime, dev host, Runtime Composition, facade | `IEngineProduct.CompleteTimeline`; no general schedule/cancel API | High; retain the mechanism and grow the managed API only for identified callers. |
 | Runtime input | C# runtime, dev host, Runtime Composition, facade | Copied product creation/update configuration and events | High; neutral Product Model type extraction required. |
 | Runtime UI | C# UI bridge, dev host, Runtime Composition, facade | Generated `IUiService` | High; neutral identity/JSON extraction required. |
-| Persistence composition | native persistence/content owners plus managed product/entity/mechanics stores | Generated `IPersistenceService` and separate helper assembly | High; preserve product codecs and retained-native adapters, retire native mechanics composition after the managed move. |
+| Persistence composition | native persistence/content owners plus managed product/entity/mechanics stores | Generated `IPersistenceService` and managed helpers inside the default `Rusty.Engine` assembly | High; preserve product codecs and retained-native adapters, retire native mechanics composition after the managed move. |
 | Annotations/materials/scenes/content | asset/content/scene/voxel/spatial/render/Studio/tooling owners | Generated AuthoredContent, Content, ContentStore, Voxel, and related service families cover subsets | Medium; retain Rust state/admission and expose typed C# proposal/read surfaces. |
 | Environment authoring | authored scene/content/voxel/annotation owners, Studio owner map, tools/fixtures | No dedicated managed generator service | Medium; retain Rust generation/admission, add typed managed requests only as workflows require. |
 | Spatial/navigation/physics/world origin | spatial/service crates, render/content consumers, multiple downstream products | Generated named Spatial, Motion, Kinematic, Dynamics, Character, Voxel, and WorldOrigin families | High; native mechanisms retained, managed adapter breadth remains per-helper. |

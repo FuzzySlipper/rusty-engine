@@ -1,5 +1,8 @@
 using System.Numerics;
 using Rusty.Engine;
+using Rusty.Engine.Entities;
+using ManagedMechanics = Rusty.Engine.Mechanics;
+using ManagedStateMachine = Rusty.Engine.StateMachine;
 
 namespace CsharpNativeAotTrial;
 
@@ -16,8 +19,6 @@ public sealed class Product : IEngineProduct
     private readonly Appearance _appearance;
     private readonly Material _material;
     private readonly Camera _camera;
-    private readonly MechanicsCatalog _mechanicsCatalog;
-    private readonly MechanicsEntity _mechanicsEntity;
     private readonly PersistenceStore _persistenceStore;
     private int _turns;
     private float _x;
@@ -77,32 +78,7 @@ public sealed class Product : IEngineProduct
             Require(mapping.Context.Value.IsEmpty, "unscoped physical mapping unexpectedly carried a context");
             _physicalMappingConfigured = true;
         }
-        _mechanicsCatalog = _engine.Mechanics.CreateCatalog(new MechanicsCatalogCreateRequest("nativeaot_trial"));
-        _engine.Mechanics.DefineStat(new MechanicsStatDefinitionRequest(_mechanicsCatalog, "strength", 0, 100));
-        _engine.Mechanics.DefineTrack(new MechanicsTrackDefinitionRequest(_mechanicsCatalog, "stamina", 0, MechanicsTrackMaximumKind.Stat, 0, "strength"));
-        _engine.Mechanics.DefineTrack(new MechanicsTrackDefinitionRequest(_mechanicsCatalog, "focus", 0, MechanicsTrackMaximumKind.Fixed, 10, string.Empty));
-        _engine.Mechanics.DefineContribution(new MechanicsContributionDefinitionRequest(_mechanicsCatalog, "trial_bonus", 0, "strength", MechanicsContributionKind.Add, 2, 0, 0, "trial_bonus", MechanicsStackingPolicy.Sum));
-        _engine.Mechanics.AdmitCatalog(_mechanicsCatalog);
-        _mechanicsEntity = _engine.Mechanics.BindEntity(new MechanicsEntityBindRequest(_mechanicsCatalog, 41, "trial_actor"));
-        _engine.Mechanics.SetInitialStat(new MechanicsInitialStatRequest(_mechanicsEntity, "strength", 10));
-        _engine.Mechanics.SetInitialTrack(new MechanicsInitialTrackRequest(_mechanicsEntity, "stamina", 12));
-        _engine.Mechanics.SetInitialTrack(new MechanicsInitialTrackRequest(_mechanicsEntity, "focus", 10));
-        _engine.Mechanics.BindIntrinsicSource(new MechanicsIntrinsicSourceRequest(_mechanicsEntity, "trial_bonus_instance", "trial_bonus"));
-        MechanicsEntityReceipt mechanicsReceipt = _engine.Mechanics.CommitEntity(_mechanicsEntity);
-        MechanicsStatEvaluationLeaseReceipt strength = _engine.Mechanics.EvaluateStat(new MechanicsStatOperationRequest(
-            _mechanicsEntity,
-            "strength",
-            "trial_evaluate",
-            ReadOnlyMemory<MechanicsRequestSource>.Empty));
-        if (strength.Value != 12)
-        {
-            throw new InvalidOperationException("exact mechanics contribution did not apply");
-        }
-        MechanicsTrackMutationLeaseReceipt staminaSpend = _engine.Mechanics.SpendTrack(new MechanicsTrackMutationRequest(_mechanicsEntity, "trial_spend", "trial_spend_source", "stamina", 2, MechanicsRevisionGuard.Exact, mechanicsReceipt.TracksRevision));
-        if (staminaSpend.After != 10)
-        {
-            throw new InvalidOperationException("exact mechanics spend did not preserve the track bound");
-        }
+        ExerciseManagedMechanics();
         ExerciseStateMachine();
         _persistenceStore = _engine.Persistence.OpenStore(new PersistenceOpenRequest(
             "lease-fixture"));
@@ -664,13 +640,51 @@ public sealed class Product : IEngineProduct
         _material.Dispose();
         _voxelLease.Dispose();
         _spatial.Dispose();
-        _mechanicsEntity.Dispose();
-        _mechanicsCatalog.Dispose();
         _persistenceStore.Dispose();
         _uiStream.Dispose();
     }
 
     private static LookConfig LookConfig() => new(0.01f, 0.01f, -1.4f, 1.4f, 1.0f, false, false, true);
+
+    private static void ExerciseManagedMechanics()
+    {
+        ManagedMechanics.StatId strength = ManagedMechanics.StatId.Parse("strength");
+        ManagedMechanics.ExactStatDefinition definition = new(
+            strength,
+            new ManagedMechanics.ExactValue(0),
+            new ManagedMechanics.ExactValue(100));
+        ManagedMechanics.ExactSource source = new(
+            new ManagedMechanics.IntrinsicSourceIdentity(
+                new EntityId(41),
+                ManagedMechanics.SourceInstanceId.Parse("trial_bonus_instance")),
+            ManagedMechanics.SourceDefinitionId.Parse("trial_bonus"),
+            0,
+            [
+                new ManagedMechanics.ExactStatContributionDefinition(
+                    strength,
+                    ManagedMechanics.StackingGroupId.Parse("trial_bonus"),
+                    ManagedMechanics.MechanicsStackingPolicy.Sum,
+                    new ManagedMechanics.ExactStatContribution.Add(new ManagedMechanics.ExactValue(2))),
+            ]);
+        ManagedMechanics.ExactStatEvaluation evaluation = ManagedMechanics.ExactStatEvaluator.Evaluate(
+            definition,
+            new ManagedMechanics.ExactValue(10),
+            [source]);
+        Require(evaluation.Value == new ManagedMechanics.ExactValue(12),
+            "managed exact mechanics contribution did not apply");
+
+        ManagedMechanics.ExactTrackDefinition staminaDefinition = new(
+            ManagedMechanics.TrackId.Parse("stamina"),
+            new ManagedMechanics.ExactValue(0),
+            new ManagedMechanics.ExactTrackMaximum.FromStat(strength));
+        ManagedMechanics.ExactTrack stamina = new(
+            staminaDefinition,
+            new ManagedMechanics.ExactValue(12),
+            staminaDefinition.ResolveBounds(evaluation.Value));
+        ManagedMechanics.ExactTrackMutationReceipt spend = stamina.Spend(new ManagedMechanics.ExactValue(2));
+        Require(spend.After == new ManagedMechanics.ExactValue(10),
+            "managed exact track spend did not preserve the track bound");
+    }
 
     private void ExerciseStateMachine()
     {
@@ -678,37 +692,37 @@ public sealed class Product : IEngineProduct
         const ulong idle = 10;
         const ulong active = 20;
         const ulong finished = 30;
-        StateMachineState[] states = [new(idle), new(active), new(finished)];
-        StateMachineTransition[] transitions = [new(idle, active), new(active, finished)];
-
-        using StateMachineDefinition definition = _engine.StateMachine.AdmitDefinition(
-            new StateMachineDefinitionRequest(machine, states, transitions));
-        StateMachineDefinitionReadoutLeaseReceipt readout = _engine.StateMachine.ReadDefinition(definition);
-        Require(readout.Definitions.Length == 1
-            && readout.States.Span.SequenceEqual(states)
-            && readout.Transitions.Span.SequenceEqual(transitions),
-            "state-machine definition readout did not preserve deterministic states and edges");
-        StateMachineDefinitionReadoutRow row = readout.Definitions.Span[0];
-        Require(row.Machine == machine
-            && row.StatesStart == 0
-            && row.StatesLen == states.Length
-            && row.TransitionsStart == 0
-            && row.TransitionsLen == transitions.Length,
-            "state-machine readout ranges did not describe the admitted definition");
-
-        StateMachineInstance instance = new(machine, idle, 0);
-        StateMachineTransitionReceipt applied = _engine.StateMachine.ApplyTransition(
-            new StateMachineTransitionRequest(definition, instance, idle, active, true, instance.Revision));
+        ManagedStateMachine.StateMachineTransition[] transitions = [
+            new(idle, active),
+            new(active, finished),
+        ];
+        ManagedStateMachine.StateMachineDefinition definition = new(
+            machine,
+            [idle, active, finished],
+            transitions);
+        ManagedStateMachine.StateMachineInstance instance = definition.CreateInstance(idle);
+        ManagedStateMachine.StateMachineTransitionReceipt applied = definition.Transition(
+            instance,
+            idle,
+            active,
+            instance.Revision);
         Require(applied.Previous == idle
-            && applied.Instance == new StateMachineInstance(machine, active, 1)
+            && applied.Instance == new ManagedStateMachine.StateMachineInstance(machine, active, 1)
             && applied.Revision == 1,
-            "state-machine detached transition did not return the expected caller-owned value");
+            "managed state-machine transition did not return the expected caller-owned value");
         instance = applied.Instance;
-        StateMachineInstance beforeStale = instance;
-        ExpectEngineFailure(() => _engine.StateMachine.ApplyTransition(
-            new StateMachineTransitionRequest(definition, instance, active, finished, true, 0)));
+        ManagedStateMachine.StateMachineInstance beforeStale = instance;
+        try
+        {
+            definition.Transition(instance, active, finished, 0);
+            throw new InvalidOperationException("stale managed state-machine transition was accepted");
+        }
+        catch (InvalidOperationException exception) when (exception.Message.Contains("expected revision", StringComparison.Ordinal))
+        {
+            // The managed definition rejects stale caller-owned state before producing a new value.
+        }
         Require(instance == beforeStale,
-            "stale detached state-machine transition mutated the caller-owned value");
+            "stale managed state-machine transition mutated the caller-owned value");
     }
 
     private void ExerciseCharacterController()

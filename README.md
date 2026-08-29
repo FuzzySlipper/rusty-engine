@@ -26,9 +26,9 @@ The paired proving product is `/home/dev/rusty-dagger`.
 | Rust Engine bridges | [`rust/crates/csharp-engine-services`](rust/crates/csharp-engine-services) | Concrete named Engine service bridges. |
 | Product runtime | [`rust/crates/csharp-product-runtime`](rust/crates/csharp-product-runtime) | Loads NativeAOT products and integrates their lifecycle with the host. |
 | Binding generation | [`scripts/generate-csharp-native-bindings.sh`](scripts/generate-csharp-native-bindings.sh) and [`csharp/Rusty.Engine.BindingGenerator`](csharp/Rusty.Engine.BindingGenerator) | Generates native declarations, safe contracts/values, and generator inputs. |
-| Safe C# surface | [`csharp/Rusty.Engine`](csharp/Rusty.Engine) | Generated contracts plus handwritten managed helpers. |
+| Default managed C# assembly | [`csharp/Rusty.Engine`](csharp/Rusty.Engine) | The single runtime assembly containing generated contracts/values and handwritten managed helpers. |
 | Product bootstrap | [`csharp/Rusty.Engine.ProductGenerator`](csharp/Rusty.Engine.ProductGenerator) | Generates the internal NativeAOT exports and safe service implementations. |
-| Optional C# helpers | [`Application`](csharp/Rusty.Engine/Application), [`Entities`](csharp/Rusty.Engine/Entities), [`Persistence`](csharp/Rusty.Engine/Persistence), [`Rusty.Engine.Resolution`](csharp/Rusty.Engine.Resolution) | Reusable managed scheduling, entity, persistence, and resolution helpers. |
+| Managed namespaces | [`Application`](csharp/Rusty.Engine/Application), [`Entities`](csharp/Rusty.Engine/Entities), [`Mechanics`](csharp/Rusty.Engine/Mechanics), [`Persistence`](csharp/Rusty.Engine/Persistence), [`Resolution`](csharp/Rusty.Engine/Resolution), [`StateMachine`](csharp/Rusty.Engine/StateMachine) | Optional reusable scheduling, entity, mechanics, persistence, resolution, and state-machine helpers inside `Rusty.Engine`; these are namespace boundaries, not separate runtime assemblies. |
 | Working fixture | [`fixtures/csharp-nativeaot-trial`](fixtures/csharp-nativeaot-trial) | Minimal buildable product and direct runtime exercise. |
 
 ## NativeAOT quick start

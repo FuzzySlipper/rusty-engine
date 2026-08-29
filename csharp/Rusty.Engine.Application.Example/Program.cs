@@ -184,6 +184,7 @@ sealed class ExampleEngineContext : IEngineContext
     public IMotionService Motion => throw new NotSupportedException();
     public IKinematicService Kinematic => throw new NotSupportedException();
     public ISpatialService Spatial => throw new NotSupportedException();
+    public IPerceptionService Perception => throw new NotSupportedException();
     public IWorldOriginService WorldOrigin => throw new NotSupportedException();
     public IVoxelService Voxel => throw new NotSupportedException();
     public IVoxelContentService VoxelContent => throw new NotSupportedException();
