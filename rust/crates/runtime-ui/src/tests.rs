@@ -1,16 +1,8 @@
 use super::*;
-use product_kernel::{ProductKernelContextError, ProductProjectionContext};
 use runtime_lifecycle::{
     RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId, RuntimeLifecycle,
-    RuntimeLifecycleConfig, RuntimePhase, RuntimePhaseToken, SimulationStep,
+    RuntimeLifecycleConfig, RuntimePhase, RuntimePhaseToken,
 };
-use serde::Serialize;
-
-#[derive(Debug, Clone, Serialize)]
-struct Snapshot {
-    selected: String,
-    alerts: u32,
-}
 
 fn fresh_lifecycle() -> RuntimeLifecycle {
     let mut lifecycle =
@@ -30,30 +22,22 @@ fn projection_token(lifecycle: &mut RuntimeLifecycle) -> RuntimePhaseToken {
 }
 
 #[test]
-fn context_and_typed_projection_emit_owned_deterministic_envelope() {
+fn direct_value_projection_emits_owned_deterministic_envelope() {
     let mut lifecycle = fresh_lifecycle();
     let token = projection_token(&mut lifecycle);
-    let snapshot = Snapshot {
-        selected: "target-1".to_owned(),
-        alerts: 2,
-    };
     let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
     let envelope = lane
-        .project(
+        .emit_value(
             &lifecycle,
             token,
             "stealth.hud",
             "stealth.ui.snapshot.v1",
-            &snapshot,
-            |context| {
-                assert_eq!(context.step(), SimulationStep::new(0));
-                serde_json::json!({
-                    "selected": context.snapshot().selected.clone(),
-                    "alerts": context.snapshot().alerts,
-                })
-            },
+            serde_json::json!({
+                "selected": "target-1",
+                "alerts": 2,
+            }),
         )
-        .expect("project");
+        .expect("projection");
     let encoded = envelope.encode_json_string().expect("wire");
     assert_eq!(
         encoded,
@@ -63,7 +47,7 @@ fn context_and_typed_projection_emit_owned_deterministic_envelope() {
 }
 
 #[test]
-fn direct_value_projection_uses_the_same_lifecycle_and_stream_guards() {
+fn direct_value_projection_uses_lifecycle_and_stream_guards() {
     let mut lifecycle = fresh_lifecycle();
     let token = projection_token(&mut lifecycle);
     let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
@@ -118,38 +102,23 @@ fn wrong_phase_foreign_stale_duplicate_regression_rebind_and_dispose_fail_closed
     let mut lifecycle = fresh_lifecycle();
     let admission = lifecycle.admit_demand_step().expect("admit");
     let phases = admission.step_at(0).expect("step").phases();
-    let snapshot = Snapshot {
-        selected: "target-1".to_owned(),
-        alerts: 2,
-    };
     let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
-    let wrong = ProductProjectionContext::new(&lifecycle, phases.mutation(), &snapshot);
     assert!(matches!(
-        wrong,
-        Err(ProductKernelContextError::WrongPhase {
-            expected: RuntimePhase::Projection,
-            received: RuntimePhase::Mutation
-        })
-    ));
-    assert!(matches!(
-        lane.project(
+        lane.emit_value(
             &lifecycle,
             phases.mutation(),
             "stealth.hud",
             "stealth.ui.snapshot.v1",
-            &snapshot,
-            |_| serde_json::json!({})
+            serde_json::json!({}),
         ),
         Err(RuntimeUiProjectionError::WrongPhase {
             expected: RuntimePhase::Projection,
             received: RuntimePhase::Mutation
         })
     ));
-    let context =
-        ProductProjectionContext::new(&lifecycle, phases.projection(), &snapshot).expect("context");
-    lane.emit(
+    lane.emit_value(
         &lifecycle,
-        context,
+        phases.projection(),
         "stealth.hud",
         "stealth.ui.snapshot.v1",
         serde_json::json!({"value": 1}),
@@ -157,9 +126,9 @@ fn wrong_phase_foreign_stale_duplicate_regression_rebind_and_dispose_fail_closed
     .expect("first");
     lane.rebind(&lifecycle).expect("same binding is a no-op");
     assert!(matches!(
-        lane.emit(
+        lane.emit_value(
             &lifecycle,
-            context,
+            phases.projection(),
             "stealth.hud",
             "stealth.ui.snapshot.v1",
             serde_json::json!({"value": 2}),
@@ -186,13 +155,10 @@ fn wrong_phase_foreign_stale_duplicate_regression_rebind_and_dispose_fail_closed
         lane.rebind(&older),
         Err(RuntimeUiProjectionError::RebindRegression { .. })
     ));
-    lane.rebind(&lifecycle).expect("rebind");
     let new_token = projection_token(&mut lifecycle);
-    let context =
-        ProductProjectionContext::new(&lifecycle, new_token, &snapshot).expect("new context");
-    lane.emit(
+    lane.emit_value(
         &lifecycle,
-        context,
+        new_token,
         "stealth.hud",
         "stealth.ui.snapshot.v1",
         serde_json::json!({"value": 3}),
@@ -200,9 +166,9 @@ fn wrong_phase_foreign_stale_duplicate_regression_rebind_and_dispose_fail_closed
     .expect("rebound sequence resets");
     lane.dispose();
     assert!(matches!(
-        lane.emit(
+        lane.emit_value(
             &lifecycle,
-            context,
+            new_token,
             "stealth.hud",
             "stealth.ui.snapshot.v1",
             serde_json::json!({}),
@@ -215,18 +181,13 @@ fn wrong_phase_foreign_stale_duplicate_regression_rebind_and_dispose_fail_closed
 fn stream_contract_and_value_bounds_are_checked_before_emission() {
     let mut lifecycle = fresh_lifecycle();
     let token = projection_token(&mut lifecycle);
-    let snapshot = Snapshot {
-        selected: "target-1".to_owned(),
-        alerts: 2,
-    };
     let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
-    let invalid = lane.project(
+    let invalid = lane.emit_value(
         &lifecycle,
         token,
         "not valid",
         "stealth.ui.snapshot.v1",
-        &snapshot,
-        |_| -> serde_json::Value { panic!("invalid stream must not invoke projector") },
+        serde_json::json!({}),
     );
     assert!(matches!(
         invalid,
@@ -236,13 +197,12 @@ fn stream_contract_and_value_bounds_are_checked_before_emission() {
         })
     ));
     let huge = "x".repeat(MAX_RUNTIME_UI_PROJECTION_VALUE_JSON_BYTES);
-    let result = lane.project(
+    let result = lane.emit_value(
         &lifecycle,
         token,
         "stealth.hud",
         "stealth.ui.snapshot.v1",
-        &snapshot,
-        |_| serde_json::json!({"huge": huge}),
+        serde_json::json!({"huge": huge}),
     );
     assert!(matches!(
         result,
@@ -251,24 +211,22 @@ fn stream_contract_and_value_bounds_are_checked_before_emission() {
     assert_eq!(lane.readout().stream_count(), 0);
 
     let first = lane
-        .project(
+        .emit_value(
             &lifecycle,
             token,
             "stealth.hud",
             "stealth.ui.snapshot.v1",
-            &snapshot,
-            |_| serde_json::json!({"ok": true}),
+            serde_json::json!({"ok": true}),
         )
         .expect("first contract");
     assert_eq!(first.contract(), "stealth.ui.snapshot.v1");
     assert!(matches!(
-        lane.project(
+        lane.emit_value(
             &lifecycle,
             token,
             "stealth.hud",
             "stealth.ui.other.v1",
-            &snapshot,
-            |_| serde_json::json!({}),
+            serde_json::json!({}),
         ),
         Err(RuntimeUiProjectionError::ContractChanged { .. })
     ));
@@ -278,27 +236,23 @@ fn stream_contract_and_value_bounds_are_checked_before_emission() {
 fn shape_bounds_match_application_host_limits() {
     let mut lifecycle = fresh_lifecycle();
     let token = projection_token(&mut lifecycle);
-    let snapshot = Snapshot {
-        selected: "target-1".to_owned(),
-        alerts: 2,
-    };
     let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
     let too_deep = (0..(MAX_RUNTIME_UI_PROJECTION_VALUE_DEPTH + 1))
         .fold(serde_json::json!(null), |value, _| {
             serde_json::json!([value])
         });
-    let result = lane.project(
+    let result = lane.emit_value(
         &lifecycle,
         token,
         "stealth.deep",
         "stealth.ui.snapshot.v1",
-        &snapshot,
-        |_| too_deep,
+        too_deep,
     );
     assert!(matches!(
         result,
         Err(RuntimeUiProjectionError::ValueDepthLimit { .. })
     ));
+
     let mut too_many_nodes_object = serde_json::Map::new();
     for index in 0..MAX_RUNTIME_UI_PROJECTION_VALUE_OBJECT_KEYS {
         too_many_nodes_object.insert(
@@ -306,62 +260,59 @@ fn shape_bounds_match_application_host_limits() {
             serde_json::Value::Array((0..8).map(|_| serde_json::json!(null)).collect()),
         );
     }
-    let too_many_nodes = serde_json::Value::Object(too_many_nodes_object);
-    let result = lane.project(
+    let result = lane.emit_value(
         &lifecycle,
         token,
         "stealth.nodes",
         "stealth.ui.snapshot.v1",
-        &snapshot,
-        |_| too_many_nodes,
+        serde_json::Value::Object(too_many_nodes_object),
     );
     assert!(matches!(
         result,
         Err(RuntimeUiProjectionError::ValueNodeLimit { .. })
     ));
-    let too_many_strings = serde_json::json!({
-        "value": "x".repeat(MAX_RUNTIME_UI_PROJECTION_VALUE_STRING_BYTES + 1)
-    });
-    let result = lane.project(
+
+    let result = lane.emit_value(
         &lifecycle,
         token,
         "stealth.string",
         "stealth.ui.snapshot.v1",
-        &snapshot,
-        |_| too_many_strings,
+        serde_json::json!({
+            "value": "x".repeat(MAX_RUNTIME_UI_PROJECTION_VALUE_STRING_BYTES + 1)
+        }),
     );
     assert!(matches!(
         result,
         Err(RuntimeUiProjectionError::ValueStringLimit { .. })
     ));
+
     let too_many_array_entries = serde_json::Value::Array(
         (0..(MAX_RUNTIME_UI_PROJECTION_VALUE_ARRAY_LENGTH + 1))
             .map(|_| serde_json::json!(null))
             .collect(),
     );
-    let result = lane.project(
+    let result = lane.emit_value(
         &lifecycle,
         token,
         "stealth.array",
         "stealth.ui.snapshot.v1",
-        &snapshot,
-        |_| too_many_array_entries,
+        too_many_array_entries,
     );
     assert!(matches!(
         result,
         Err(RuntimeUiProjectionError::ValueArrayLimit { .. })
     ));
+
     let mut too_many_object_keys = serde_json::Map::new();
     for index in 0..(MAX_RUNTIME_UI_PROJECTION_VALUE_OBJECT_KEYS + 1) {
         too_many_object_keys.insert(index.to_string(), serde_json::json!(null));
     }
-    let result = lane.project(
+    let result = lane.emit_value(
         &lifecycle,
         token,
         "stealth.object",
         "stealth.ui.snapshot.v1",
-        &snapshot,
-        |_| serde_json::Value::Object(too_many_object_keys),
+        serde_json::Value::Object(too_many_object_keys),
     );
     assert!(matches!(
         result,
@@ -412,30 +363,28 @@ fn portable_numbers_admit_fractions_and_reject_unsafe_integers() {
 fn copied_value_does_not_alias_source_and_multiple_streams_share_step() {
     let mut lifecycle = fresh_lifecycle();
     let token = projection_token(&mut lifecycle);
-    let mut source = Snapshot {
-        selected: "before".to_owned(),
-        alerts: 1,
-    };
+    let mut source = serde_json::json!({
+        "selected": "before",
+        "alerts": 1,
+    });
     let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
     let first = lane
-        .project(
+        .emit_value(
             &lifecycle,
             token,
             "stealth.hud",
             "stealth.ui.snapshot.v1",
-            &source,
-            |context| context.snapshot().clone(),
+            source.clone(),
         )
         .expect("first");
-    source.selected = "after".to_owned();
+    source["selected"] = serde_json::json!("after");
     let second = lane
-        .project(
+        .emit_value(
             &lifecycle,
             token,
             "stealth.overlay",
             "stealth.ui.snapshot.v1",
-            &source,
-            |context| context.snapshot().clone(),
+            source,
         )
         .expect("second stream");
     assert_eq!(first.value()["selected"], "before");

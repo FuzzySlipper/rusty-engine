@@ -5,11 +5,9 @@
 //! realize as DOM or another UI surface. It does not render, schedule, read a
 //! clock, invoke callbacks, inspect a browser, or retain product state.
 //!
-//! A caller constructs a [`product_kernel::ProductProjectionContext`] with the
-//! exact `RuntimePhase::Projection` token, runs an ordinary typed function to
-//! produce an owned DTO, and submits that DTO here. The lane copies the DTO
-//! into JSON before retaining or emitting it, so the resulting envelope cannot
-//! alias mutable source data.
+//! A caller supplies an already-owned JSON value with the exact
+//! `RuntimePhase::Projection` token. The lane copies the value before retaining
+//! or emitting it, so the resulting envelope cannot alias mutable source data.
 
 #![forbid(unsafe_code)]
 

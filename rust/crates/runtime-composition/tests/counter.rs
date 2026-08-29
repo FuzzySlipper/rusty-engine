@@ -15,7 +15,7 @@ use runtime_mutation::{
     MutationOwnerEvidence, MutationPlanner, MutationProvenance, MutationStage,
 };
 use runtime_schedule::{CompiledRuntimeSchedule, ScheduleSystemInvocation};
-use runtime_timeline::CompiledTimelineCatalog;
+use runtime_timeline::TimelineCatalog;
 use serde_json::{json, Value};
 
 const MANIFEST: &str = include_str!("../../../../fixtures/product-model/minimum.rusty.toml");
@@ -226,9 +226,27 @@ fn root_with_adapter(
     adapter: CounterAdapter,
 ) -> RuntimeComposition<CounterAdapter> {
     let linked = linked();
-    let input = runtime_input::CompiledInputMappings::compile(&linked).expect("input");
+    let input = runtime_input::CompiledInputMappings::standard(
+        [runtime_input::DirectInputIntentDescriptor::new(
+            "counter.increment",
+            runtime_input::IntentValueKind::Digital,
+        )
+        .expect("input descriptor")],
+        [runtime_input::RuntimeInputMapping::new(
+            "counter.increment",
+            "counter.increment",
+            runtime_input::RuntimeInputTrigger::Key {
+                code: runtime_input::KeyboardControl::Space,
+                edge: runtime_input::InputEdge::Pressed,
+                chord: Vec::new(),
+                context: Some(InputContext::new("gameplay").expect("context")),
+            },
+        )
+        .expect("input mapping")],
+    )
+    .expect("input");
     let schedule = CompiledRuntimeSchedule::compile(&linked).expect("schedule");
-    let timeline = CompiledTimelineCatalog::compile(&linked).expect("timeline");
+    let timeline = TimelineCatalog::empty();
     let mutation = CompiledMutationCatalog::compile(
         &linked,
         &[MutationCapabilityDescriptor::new(

@@ -1,66 +1,24 @@
-use product_model::{
-    admit_checked_product_composition, decode_compiled_composition, decode_product_manifest,
-    link_admitted_product_composition, CapabilityAccess, CapabilityAvailability, CapabilityKind,
-    CapabilityMetadata, CapabilityProvenance, CapabilityUses, ProductKernelCapabilityDescriptor,
-};
 use runtime_lifecycle::{RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig};
 use runtime_timeline::{
-    CompiledTimelineCatalog, ReleasedCompletionStatus, ReleasedTimelineEvent, RuntimeOpaqueData,
-    RuntimeProvenance, RuntimeSourceKind, RuntimeTimelineError, TimelineCompletionEnvelope,
+    ReleasedCompletionStatus, ReleasedTimelineEvent, RuntimeOpaqueData, RuntimeProvenance,
+    RuntimeSourceKind, RuntimeTimelineError, TimelineCatalog, TimelineCompletionEnvelope,
     TimelineCompletionOutcome, TimelineCompletionSpec, TimelineCompletionTicket,
-    TimelineOperationIdentity, TimelineOperationReplacement, TimelineOperationRevision,
-    TimelineOperationSnapshot, TimelineOperationSpec, TimelineRecurrence, TimelineSnapshot,
-    TimelineTicketSnapshot,
+    TimelineDescriptor, TimelineOperationIdentity, TimelineOperationReplacement,
+    TimelineOperationRevision, TimelineOperationSnapshot, TimelineOperationSpec,
+    TimelineRecurrence, TimelineSnapshot, TimelineStepDescriptor, TimelineTicketSnapshot,
 };
 use serde_json::json;
 
-const MANIFEST: &str = include_str!("../../../../fixtures/product-model/minimum.rusty.toml");
-const COMPOSITION: &[u8] =
-    include_bytes!("../../../../fixtures/product-model/minimum.compiled-composition.json");
-
-fn linked() -> product_model::LinkedProductComposition {
-    let composition = decode_compiled_composition(COMPOSITION).expect("composition");
-    let manifest = decode_product_manifest(MANIFEST).expect("manifest");
-    let admitted = admit_checked_product_composition(&manifest, composition).expect("admission");
-    link_admitted_product_composition(admitted, &kernel_capabilities()).expect("linkage")
-}
-
-fn kernel_capabilities() -> [ProductKernelCapabilityDescriptor; 3] {
-    [
-        ProductKernelCapabilityDescriptor::new(
-            "camera-look",
-            CapabilityMetadata::new(
-                CapabilityKind::System,
-                CapabilityUses::INPUT_MAP,
-                CapabilityAvailability::Linkable,
-                CapabilityAccess::new(&[], &[]),
-                product_model::CapabilityBudget::new(1_024),
-                CapabilityProvenance::new("example.product.kernel", "kernel/input.rs", "look"),
-            ),
-        ),
-        ProductKernelCapabilityDescriptor::new(
-            "apply-movement",
-            CapabilityMetadata::new(
-                CapabilityKind::System,
-                CapabilityUses::SCHEDULE,
-                CapabilityAvailability::Linkable,
-                CapabilityAccess::new(&["input.motion", "state.transform"], &["state.transform"]),
-                product_model::CapabilityBudget::new(1_024),
-                CapabilityProvenance::new("example.product.kernel", "kernel/move.rs", "move"),
-            ),
-        ),
-        ProductKernelCapabilityDescriptor::new(
-            "start-timeline",
-            CapabilityMetadata::new(
-                CapabilityKind::Operation,
-                CapabilityUses::TIMELINE,
-                CapabilityAvailability::Linkable,
-                CapabilityAccess::new(&[], &[]),
-                product_model::CapabilityBudget::new(1_024),
-                CapabilityProvenance::new("example.product.kernel", "kernel/timeline.rs", "start"),
-            ),
-        ),
-    ]
+fn catalog() -> TimelineCatalog {
+    TimelineCatalog::new([TimelineDescriptor::new(
+        "intro",
+        [
+            TimelineStepDescriptor::new("start", "timeline.start", json!({"scene": "opening"}))
+                .unwrap(),
+        ],
+    )
+    .unwrap()])
+    .unwrap()
 }
 
 fn setup() -> (
@@ -68,11 +26,11 @@ fn setup() -> (
     runtime_timeline::RuntimeTimeline,
     runtime_lifecycle::RuntimePhaseToken,
 ) {
-    let compiled = CompiledTimelineCatalog::compile(&linked()).expect("compile timeline");
+    let catalog = catalog();
     let mut lifecycle =
         RuntimeLifecycle::new(RuntimeInstanceId::new(91), RuntimeLifecycleConfig::Demand);
     lifecycle.start().expect("start");
-    let timeline = compiled.bind(&lifecycle).expect("bind");
+    let timeline = catalog.bind(&lifecycle).expect("bind");
     let admission = lifecycle.admit_demand_step().expect("step");
     (
         lifecycle,
@@ -120,15 +78,13 @@ fn completion_spec(
 }
 
 #[test]
-fn compiles_static_templates_with_exact_capability_provenance() {
-    let first = CompiledTimelineCatalog::compile(&linked()).unwrap();
-    let second = CompiledTimelineCatalog::compile(&linked()).unwrap();
+fn builds_neutral_descriptors_with_stable_inspection() {
+    let first = catalog();
+    let second = catalog();
     assert_eq!(first, second);
     let step = first.step("intro", "start").unwrap();
-    assert_eq!(step.capability().target(), "kernel.start-timeline");
-    assert_eq!(step.capability().resolved_target(), "product-kernel[2]");
-    assert_eq!(step.capability().kind(), "operation");
-    assert_eq!(step.capability().owner(), "example.product.kernel");
+    assert_eq!(step.operation(), "timeline.start");
+    assert_eq!(step.payload(), &json!({"scene": "opening"}));
     assert_eq!(
         first.inspection_json_newline().unwrap(),
         second.inspection_json_newline().unwrap()
@@ -703,7 +659,7 @@ fn snapshot_restore_rejects_duplicate_items_without_mutating_live_state() {
 }
 
 #[test]
-fn snapshot_restore_rejects_missing_bound_operation_and_revision_or_template_drift() {
+fn snapshot_restore_rejects_missing_bound_operation_and_revision_or_descriptor_drift() {
     let (lifecycle, mut timeline, token) = setup();
     let operation = timeline
         .schedule(&lifecycle, token, operation(3, 0, TimelineRecurrence::Once))
@@ -765,14 +721,13 @@ fn snapshot_restore_rejects_missing_bound_operation_and_revision_or_template_dri
         true,
         ticket.timeline_id(),
         ticket.step_id(),
-        "kernel.other-operation",
-        ticket.capability_kind(),
+        "timeline.other-operation",
         ticket.source(),
         ticket.correlation(),
         ticket.result_contract(),
         ticket.provenance().clone(),
     );
-    let drifted_template = TimelineSnapshot::from_parts(
+    let drifted_descriptor = TimelineSnapshot::from_parts(
         original.binding(),
         original.next_insertion_sequence(),
         original.next_ticket_id(),
@@ -785,8 +740,8 @@ fn snapshot_restore_rejects_missing_bound_operation_and_revision_or_template_dri
         )],
     );
     assert!(matches!(
-        timeline.restore_snapshot(&lifecycle, drifted_template),
-        Err(RuntimeTimelineError::SnapshotBoundOperationTemplateMismatch(_))
+        timeline.restore_snapshot(&lifecycle, drifted_descriptor),
+        Err(RuntimeTimelineError::SnapshotBoundOperationDescriptorMismatch(_))
     ));
     assert_eq!(timeline.snapshot(), original);
 }
@@ -812,8 +767,7 @@ fn snapshot_restore_rejects_unbound_ticket_drift_identity_and_issue_cursor_atomi
         false,
         ticket.timeline_id(),
         ticket.step_id(),
-        "kernel.not-the-linked-capability",
-        ticket.capability_kind(),
+        "timeline.not-the-linked-operation",
         ticket.source(),
         ticket.correlation(),
         ticket.result_contract(),
@@ -833,7 +787,7 @@ fn snapshot_restore_rejects_unbound_ticket_drift_identity_and_issue_cursor_atomi
     );
     assert!(matches!(
         timeline.restore_snapshot(&lifecycle, malformed),
-        Err(RuntimeTimelineError::SnapshotBoundOperationTemplateMismatch(_))
+        Err(RuntimeTimelineError::SnapshotBoundOperationDescriptorMismatch(_))
     ));
     assert_eq!(timeline.snapshot(), original);
 
@@ -846,8 +800,7 @@ fn snapshot_restore_rejects_unbound_ticket_drift_identity_and_issue_cursor_atomi
         false,
         ticket.timeline_id(),
         ticket.step_id(),
-        ticket.capability_target(),
-        ticket.capability_kind(),
+        ticket.operation(),
         ticket.source(),
         "bad//correlation",
         ticket.result_contract(),
@@ -882,8 +835,7 @@ fn snapshot_restore_rejects_unbound_ticket_drift_identity_and_issue_cursor_atomi
         false,
         ticket.timeline_id(),
         ticket.step_id(),
-        ticket.capability_target(),
-        ticket.capability_kind(),
+        ticket.operation(),
         ticket.source(),
         ticket.correlation(),
         ticket.result_contract(),

@@ -7,7 +7,8 @@ use runtime_lifecycle::{
 
 use crate::{TimelineCompletionTicketId, TimelineOperationIdentity, TimelineOperationRevision};
 
-/// Rejections from the static timeline compiler and instance-owned lane.
+/// Rejections from the static timeline descriptor catalog and instance-owned
+/// lane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeTimelineError {
     BoundsExceeded(&'static str),
@@ -16,22 +17,7 @@ pub enum RuntimeTimelineError {
         timeline: String,
         step: String,
     },
-    UnknownCapability(String),
-    CapabilityUnavailable {
-        capability: String,
-    },
-    CapabilityKindMismatch {
-        capability: String,
-        expected: &'static str,
-        received: String,
-    },
-    InvalidTemplate(String),
-    PayloadTooLarge {
-        timeline: String,
-        step: String,
-        actual: usize,
-        maximum: usize,
-    },
+    DuplicateTimeline(String),
     InspectionEncode(String),
     LifecycleNotRunning,
     LifecycleFaulted,
@@ -92,7 +78,7 @@ pub enum RuntimeTimelineError {
         ticket: TimelineOperationRevision,
         operation_snapshot: TimelineOperationRevision,
     },
-    SnapshotBoundOperationTemplateMismatch(TimelineCompletionTicketId),
+    SnapshotBoundOperationDescriptorMismatch(TimelineCompletionTicketId),
     SnapshotUnsortedOperations,
     SnapshotUnsortedTickets,
     SnapshotCursorInvalid(&'static str),

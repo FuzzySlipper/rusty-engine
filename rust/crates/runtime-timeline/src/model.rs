@@ -183,7 +183,7 @@ impl RuntimeOpaqueData {
 }
 
 /// Bounded runtime provenance and correlation data. This is descriptive data
-/// only; it cannot resolve a capability or invoke a host owner.
+/// only; it cannot resolve or invoke an operation or host owner.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeProvenance {
     correlation: String,
@@ -398,7 +398,7 @@ impl TimelineCompletionOutcome {
 }
 
 /// A typed completion envelope returned by external work. It carries only the
-/// ticket/correlation binding and data outcome; no capability can be supplied.
+/// ticket/correlation binding and data outcome; no operation can be supplied.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineCompletionEnvelope {
     ticket: TimelineCompletionTicketId,
@@ -460,6 +460,8 @@ pub enum RuntimeTimelineDataError {
     OpaqueDataTooManyNodes,
     ZeroRecurrenceInterval,
     InvalidRecurrenceCount { received: u32, maximum: u32 },
+    DescriptorTooLarge { kind: &'static str, maximum: usize },
+    DuplicateDescriptor(String),
 }
 
 impl fmt::Display for RuntimeTimelineDataError {

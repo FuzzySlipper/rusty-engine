@@ -4,17 +4,14 @@ use crate::{
     model::is_identity, ControllerAxis, ControllerButton, InputAxis, InputContext, InputEdge,
     IntentValueKind, KeyboardControl, PointerButton, RuntimeInputError,
 };
-use product_model::{InputTrigger, LinkedProductComposition};
 use serde_json::Value;
 
 /// A typed physical trigger owned by the standard runtime input lane.
 ///
-/// This is deliberately a runtime vocabulary rather than a Product Model
-/// composition.  A product host may construct these values directly from
-/// generated/native configuration and never needs to load or assemble a
-/// `LinkedProductComposition`. The legacy compiler vocabulary is converted at
-/// that one edge; the retained direct configuration owns its runtime input
-/// values without carrying Product Model types into host services.
+/// This is deliberately a runtime vocabulary rather than a product
+/// configuration format. A product host may construct these values directly
+/// from generated/native configuration without loading or assembling a larger
+/// product description.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeInputTrigger {
     Key {
@@ -114,7 +111,7 @@ impl RuntimeInputMapping {
 }
 
 /// One purpose-neutral direct intent admitted by a standard runtime without a
-/// Product Model composition. It authorizes only the named direct value shape;
+/// product composition. It authorizes only the named direct value shape;
 /// it does not register a callback, route a command, or define product policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectInputIntentDescriptor {
@@ -198,6 +195,23 @@ pub struct CompiledInputCapabilityLink {
 }
 
 impl CompiledInputCapabilityLink {
+    pub fn new(
+        id: impl Into<String>,
+        target: impl Into<String>,
+        binding_index: usize,
+    ) -> Result<Self, RuntimeInputError> {
+        let id = id.into();
+        let target = target.into();
+        if !is_identity(&id) || !is_identity(&target) {
+            return Err(RuntimeInputError::InvalidMapping);
+        }
+        Ok(Self {
+            id,
+            target,
+            binding_index,
+        })
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -210,6 +224,37 @@ impl CompiledInputCapabilityLink {
 }
 
 impl CompiledInputIntent {
+    /// Builds one neutral compiled intent from already-converted descriptor
+    /// facts. Product configuration conversion belongs at its owning assembly
+    /// edge; this crate retains only the values the input lane consumes.
+    pub fn new(
+        descriptor_index: usize,
+        id: impl Into<String>,
+        value_kind: IntentValueKind,
+        payload_contract: Option<String>,
+        capability: Option<CompiledInputCapabilityLink>,
+        payload: Value,
+    ) -> Result<Self, RuntimeInputError> {
+        let id = id.into();
+        if !is_identity(&id) {
+            return Err(RuntimeInputError::InvalidIntent);
+        }
+        if payload_contract
+            .as_deref()
+            .is_some_and(|contract| !is_identity(contract))
+        {
+            return Err(RuntimeInputError::InvalidProductPayloadContract);
+        }
+        Ok(Self {
+            descriptor_index,
+            id,
+            value_kind,
+            payload_contract,
+            capability,
+            payload,
+        })
+    }
+
     pub const fn descriptor_index(&self) -> usize {
         self.descriptor_index
     }
@@ -229,8 +274,8 @@ impl CompiledInputIntent {
     /// Immutable descriptor payload. It remains data only whether or not this
     /// intent retains a legacy capability link.
     pub fn payload(&self) -> &Value {
-        // Product Model already admitted this opaque value before input
-        // compilation. Runtime Input never interprets it.
+        // The owning configuration edge has already admitted this opaque
+        // value. Runtime Input never interprets it.
         &self.payload
     }
 }
@@ -243,6 +288,23 @@ pub struct CompiledInputMapping {
 }
 
 impl CompiledInputMapping {
+    pub fn new(
+        id: impl Into<String>,
+        intent: impl Into<String>,
+        trigger: RuntimeInputTrigger,
+    ) -> Result<Self, RuntimeInputError> {
+        let id = id.into();
+        let intent = intent.into();
+        if !is_identity(&id) || !is_identity(&intent) {
+            return Err(RuntimeInputError::InvalidMapping);
+        }
+        Ok(Self {
+            id,
+            intent,
+            trigger,
+        })
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -268,8 +330,8 @@ impl CompiledInputMappings {
     ///
     /// A product runtime that forwards normalized physical observations to a
     /// downstream application still needs the lane's binding, sequence, and
-    /// held-input ownership. It does not need Product Model intent mappings
-    /// merely to retain those infrastructure guarantees.
+    /// held-input ownership. It does not need a product description's intent
+    /// mappings merely to retain those infrastructure guarantees.
     pub fn empty() -> Self {
         Self {
             intents: BTreeMap::new(),
@@ -278,7 +340,7 @@ impl CompiledInputMappings {
     }
 
     /// Compiles direct descriptors and typed physical mappings for a standard
-    /// runtime without loading an older Product Model composition. The
+    /// runtime without loading an older product composition. The
     /// returned lane owns the normal direct-claim binding, sequence,
     /// context, held-state, clear, and rebind rules.
     pub fn direct_intents(
@@ -288,28 +350,46 @@ impl CompiledInputMappings {
     }
 
     /// Compiles the standard runtime's direct descriptors and physical mapping
-    /// configuration. This path has no Product Model composition input and
+    /// configuration. This path has no product composition input and
     /// performs all mapping identity/value-kind checks before runtime use.
     pub fn standard(
         descriptors: impl IntoIterator<Item = DirectInputIntentDescriptor>,
         mappings: impl IntoIterator<Item = RuntimeInputMapping>,
     ) -> Result<Self, RuntimeInputError> {
-        let mut intents = BTreeMap::new();
-        for (descriptor_index, descriptor) in descriptors.into_iter().enumerate() {
-            if intents.contains_key(descriptor.id()) {
+        let intents = descriptors
+            .into_iter()
+            .enumerate()
+            .map(|(descriptor_index, descriptor)| {
+                CompiledInputIntent::new(
+                    descriptor_index,
+                    descriptor.id,
+                    descriptor.value_kind,
+                    descriptor.payload_contract,
+                    None,
+                    Value::Null,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mappings = mappings
+            .into_iter()
+            .map(|mapping| CompiledInputMapping::new(mapping.id, mapping.intent, mapping.trigger))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::from_parts(intents, mappings)
+    }
+
+    /// Builds a neutral mapping set from already-converted runtime values.
+    /// Legacy product configuration and any future configuration format should
+    /// perform its one-way conversion before calling this boundary.
+    pub fn from_parts(
+        intents: impl IntoIterator<Item = CompiledInputIntent>,
+        mappings: impl IntoIterator<Item = CompiledInputMapping>,
+    ) -> Result<Self, RuntimeInputError> {
+        let mut intent_map = BTreeMap::new();
+        for intent in intents {
+            if intent_map.contains_key(intent.id()) {
                 return Err(RuntimeInputError::DuplicateIntent);
             }
-            intents.insert(
-                descriptor.id.clone(),
-                CompiledInputIntent {
-                    descriptor_index,
-                    id: descriptor.id,
-                    value_kind: descriptor.value_kind,
-                    payload_contract: descriptor.payload_contract,
-                    capability: None,
-                    payload: Value::Null,
-                },
-            );
+            intent_map.insert(intent.id.clone(), intent);
         }
         let mut compiled_mappings = Vec::new();
         for mapping in mappings {
@@ -319,74 +399,18 @@ impl CompiledInputMappings {
             {
                 return Err(RuntimeInputError::DuplicateMapping);
             }
-            let intent = intents
+            let intent = intent_map
                 .get(mapping.intent())
                 .ok_or(RuntimeInputError::UnknownIntent)?;
             if intent.value_kind() != mapping.trigger().value_kind() {
                 return Err(RuntimeInputError::IntentValueKindMismatch);
             }
-            compiled_mappings.push(CompiledInputMapping {
-                id: mapping.id,
-                intent: mapping.intent,
-                trigger: mapping.trigger,
-            });
+            compiled_mappings.push(mapping);
         }
         Ok(Self {
-            intents,
+            intents: intent_map,
             mappings: compiled_mappings,
         })
-    }
-
-    pub fn compile(linked: &LinkedProductComposition) -> Result<Self, RuntimeInputError> {
-        let mut intents = BTreeMap::new();
-        for descriptor in linked.admitted().intent_descriptors() {
-            let capability = descriptor
-                .capability()
-                .map(|reference| {
-                    let capability = linked
-                        .capability_binding(reference.binding_index())
-                        .ok_or(RuntimeInputError::BindingMismatch)?;
-                    if capability.id() != reference.id()
-                        || capability.target() != reference.target()
-                    {
-                        return Err(RuntimeInputError::BindingMismatch);
-                    }
-                    Ok(CompiledInputCapabilityLink {
-                        id: reference.id().to_owned(),
-                        target: reference.target().to_owned(),
-                        binding_index: reference.binding_index(),
-                    })
-                })
-                .transpose()?;
-            intents.insert(
-                descriptor.id().to_owned(),
-                CompiledInputIntent {
-                    descriptor_index: descriptor.index(),
-                    id: descriptor.id().to_owned(),
-                    value_kind: runtime_intent_value_kind(descriptor.value_kind()),
-                    payload_contract: descriptor.payload_contract().map(str::to_owned),
-                    capability,
-                    payload: descriptor.payload().clone(),
-                },
-            );
-        }
-        let mut mappings = Vec::with_capacity(linked.admitted().input_map().len());
-        for mapping in linked.admitted().input_map() {
-            let intent = intents
-                .get(mapping.intent())
-                .ok_or(RuntimeInputError::UnknownIntent)?;
-            if intent.value_kind()
-                != runtime_intent_value_kind(mapping.intent_descriptor().value_kind())
-            {
-                return Err(RuntimeInputError::IntentValueKindMismatch);
-            }
-            mappings.push(CompiledInputMapping {
-                id: mapping.id().to_owned(),
-                intent: mapping.intent().to_owned(),
-                trigger: runtime_trigger(mapping.trigger())?,
-            });
-        }
-        Ok(Self { intents, mappings })
     }
 
     pub fn intent(&self, id: &str) -> Option<&CompiledInputIntent> {
@@ -397,176 +421,5 @@ impl CompiledInputMappings {
     }
     pub fn mappings(&self) -> &[CompiledInputMapping] {
         &self.mappings
-    }
-}
-
-fn runtime_trigger(trigger: &InputTrigger) -> Result<RuntimeInputTrigger, RuntimeInputError> {
-    let context = |value: &Option<String>| value.as_deref().map(InputContext::new).transpose();
-    Ok(match trigger {
-        InputTrigger::Key {
-            code,
-            edge,
-            chord,
-            context: trigger_context,
-        } => RuntimeInputTrigger::Key {
-            code: runtime_keyboard_control(*code),
-            edge: runtime_input_edge(*edge),
-            chord: chord
-                .iter()
-                .copied()
-                .map(runtime_keyboard_control)
-                .collect(),
-            context: context(trigger_context)?,
-        },
-        InputTrigger::PointerButton {
-            button,
-            edge,
-            context: trigger_context,
-        } => RuntimeInputTrigger::PointerButton {
-            button: runtime_pointer_button(*button),
-            edge: runtime_input_edge(*edge),
-            context: context(trigger_context)?,
-        },
-        InputTrigger::PointerAxis {
-            axis,
-            context: trigger_context,
-        } => RuntimeInputTrigger::PointerAxis {
-            axis: runtime_input_axis(*axis),
-            context: context(trigger_context)?,
-        },
-        InputTrigger::Wheel {
-            axis,
-            context: trigger_context,
-        } => RuntimeInputTrigger::Wheel {
-            axis: runtime_input_axis(*axis),
-            context: context(trigger_context)?,
-        },
-        InputTrigger::ControllerButton {
-            button,
-            edge,
-            context: trigger_context,
-        } => RuntimeInputTrigger::ControllerButton {
-            button: runtime_controller_button(*button),
-            edge: runtime_input_edge(*edge),
-            context: context(trigger_context)?,
-        },
-        InputTrigger::ControllerAxis {
-            axis,
-            context: trigger_context,
-        } => RuntimeInputTrigger::ControllerAxis {
-            axis: runtime_controller_axis(*axis),
-            context: context(trigger_context)?,
-        },
-    })
-}
-
-fn runtime_intent_value_kind(value: product_model::IntentValueKind) -> IntentValueKind {
-    match value {
-        product_model::IntentValueKind::Digital => IntentValueKind::Digital,
-        product_model::IntentValueKind::Axis => IntentValueKind::Axis,
-        product_model::IntentValueKind::ProductPayload => IntentValueKind::ProductPayload,
-    }
-}
-
-fn runtime_input_edge(value: product_model::InputEdge) -> InputEdge {
-    match value {
-        product_model::InputEdge::Held => InputEdge::Held,
-        product_model::InputEdge::Pressed => InputEdge::Pressed,
-        product_model::InputEdge::Released => InputEdge::Released,
-    }
-}
-
-fn runtime_keyboard_control(value: product_model::KeyboardControl) -> KeyboardControl {
-    match value {
-        product_model::KeyboardControl::KeyA => KeyboardControl::KeyA,
-        product_model::KeyboardControl::KeyB => KeyboardControl::KeyB,
-        product_model::KeyboardControl::KeyC => KeyboardControl::KeyC,
-        product_model::KeyboardControl::KeyD => KeyboardControl::KeyD,
-        product_model::KeyboardControl::KeyE => KeyboardControl::KeyE,
-        product_model::KeyboardControl::KeyF => KeyboardControl::KeyF,
-        product_model::KeyboardControl::KeyG => KeyboardControl::KeyG,
-        product_model::KeyboardControl::KeyH => KeyboardControl::KeyH,
-        product_model::KeyboardControl::KeyI => KeyboardControl::KeyI,
-        product_model::KeyboardControl::KeyJ => KeyboardControl::KeyJ,
-        product_model::KeyboardControl::KeyK => KeyboardControl::KeyK,
-        product_model::KeyboardControl::KeyL => KeyboardControl::KeyL,
-        product_model::KeyboardControl::KeyM => KeyboardControl::KeyM,
-        product_model::KeyboardControl::KeyN => KeyboardControl::KeyN,
-        product_model::KeyboardControl::KeyO => KeyboardControl::KeyO,
-        product_model::KeyboardControl::KeyP => KeyboardControl::KeyP,
-        product_model::KeyboardControl::KeyQ => KeyboardControl::KeyQ,
-        product_model::KeyboardControl::KeyR => KeyboardControl::KeyR,
-        product_model::KeyboardControl::KeyS => KeyboardControl::KeyS,
-        product_model::KeyboardControl::KeyT => KeyboardControl::KeyT,
-        product_model::KeyboardControl::KeyU => KeyboardControl::KeyU,
-        product_model::KeyboardControl::KeyV => KeyboardControl::KeyV,
-        product_model::KeyboardControl::KeyW => KeyboardControl::KeyW,
-        product_model::KeyboardControl::KeyX => KeyboardControl::KeyX,
-        product_model::KeyboardControl::KeyY => KeyboardControl::KeyY,
-        product_model::KeyboardControl::KeyZ => KeyboardControl::KeyZ,
-        product_model::KeyboardControl::Digit0 => KeyboardControl::Digit0,
-        product_model::KeyboardControl::Digit1 => KeyboardControl::Digit1,
-        product_model::KeyboardControl::Digit2 => KeyboardControl::Digit2,
-        product_model::KeyboardControl::Digit3 => KeyboardControl::Digit3,
-        product_model::KeyboardControl::Digit4 => KeyboardControl::Digit4,
-        product_model::KeyboardControl::Digit5 => KeyboardControl::Digit5,
-        product_model::KeyboardControl::Digit6 => KeyboardControl::Digit6,
-        product_model::KeyboardControl::Digit7 => KeyboardControl::Digit7,
-        product_model::KeyboardControl::Digit8 => KeyboardControl::Digit8,
-        product_model::KeyboardControl::Digit9 => KeyboardControl::Digit9,
-        product_model::KeyboardControl::Space => KeyboardControl::Space,
-        product_model::KeyboardControl::Enter => KeyboardControl::Enter,
-        product_model::KeyboardControl::Escape => KeyboardControl::Escape,
-        product_model::KeyboardControl::ShiftLeft => KeyboardControl::ShiftLeft,
-        product_model::KeyboardControl::ShiftRight => KeyboardControl::ShiftRight,
-        product_model::KeyboardControl::ControlLeft => KeyboardControl::ControlLeft,
-        product_model::KeyboardControl::ControlRight => KeyboardControl::ControlRight,
-        product_model::KeyboardControl::AltLeft => KeyboardControl::AltLeft,
-        product_model::KeyboardControl::AltRight => KeyboardControl::AltRight,
-    }
-}
-
-fn runtime_pointer_button(value: product_model::PointerButton) -> PointerButton {
-    match value {
-        product_model::PointerButton::Primary => PointerButton::Primary,
-        product_model::PointerButton::Secondary => PointerButton::Secondary,
-        product_model::PointerButton::Middle => PointerButton::Middle,
-    }
-}
-
-fn runtime_input_axis(value: product_model::InputAxis) -> InputAxis {
-    match value {
-        product_model::InputAxis::X => InputAxis::X,
-        product_model::InputAxis::Y => InputAxis::Y,
-    }
-}
-
-fn runtime_controller_button(value: product_model::ControllerButton) -> ControllerButton {
-    match value {
-        product_model::ControllerButton::Button0 => ControllerButton::Button0,
-        product_model::ControllerButton::Button1 => ControllerButton::Button1,
-        product_model::ControllerButton::Button2 => ControllerButton::Button2,
-        product_model::ControllerButton::Button3 => ControllerButton::Button3,
-        product_model::ControllerButton::Button4 => ControllerButton::Button4,
-        product_model::ControllerButton::Button5 => ControllerButton::Button5,
-        product_model::ControllerButton::Button6 => ControllerButton::Button6,
-        product_model::ControllerButton::Button7 => ControllerButton::Button7,
-        product_model::ControllerButton::Button8 => ControllerButton::Button8,
-        product_model::ControllerButton::Button9 => ControllerButton::Button9,
-        product_model::ControllerButton::Button10 => ControllerButton::Button10,
-        product_model::ControllerButton::Button11 => ControllerButton::Button11,
-        product_model::ControllerButton::Button12 => ControllerButton::Button12,
-        product_model::ControllerButton::Button13 => ControllerButton::Button13,
-        product_model::ControllerButton::Button14 => ControllerButton::Button14,
-        product_model::ControllerButton::Button15 => ControllerButton::Button15,
-    }
-}
-
-fn runtime_controller_axis(value: product_model::ControllerAxis) -> ControllerAxis {
-    match value {
-        product_model::ControllerAxis::Axis0 => ControllerAxis::Axis0,
-        product_model::ControllerAxis::Axis1 => ControllerAxis::Axis1,
-        product_model::ControllerAxis::Axis2 => ControllerAxis::Axis2,
-        product_model::ControllerAxis::Axis3 => ControllerAxis::Axis3,
     }
 }

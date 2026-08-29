@@ -2679,6 +2679,7 @@ dependencies = [
  "product-dev-host",
  "product-model",
  "render-model",
+ "runtime-input",
  "serde",
  "serde_json",
  "sha2",
@@ -2997,7 +2998,6 @@ dependencies = [
 name = "runtime-input"
 version = "0.1.0"
 dependencies = [
- "product-model",
  "runtime-lifecycle",
  "serde",
  "serde_json",
@@ -3048,7 +3048,6 @@ dependencies = [
 name = "runtime-timeline"
 version = "0.1.0"
 dependencies = [
- "product-model",
  "runtime-lifecycle",
  "serde",
  "serde_json",
@@ -3058,7 +3057,6 @@ dependencies = [
 name = "runtime-ui"
 version = "0.1.0"
 dependencies = [
- "product-kernel",
  "runtime-lifecycle",
  "serde",
  "serde_json",

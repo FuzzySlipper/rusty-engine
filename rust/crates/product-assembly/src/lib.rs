@@ -17,6 +17,7 @@
 
 mod error;
 mod filesystem;
+mod input;
 mod publish;
 mod receipt;
 mod source;
@@ -25,6 +26,7 @@ mod source;
 mod tests;
 
 pub use error::{AssemblyDiagnostic, ProductAssemblyError};
+pub use input::compile_input_mappings;
 pub use publish::{
     publish_outputs, verify_outputs, AssemblyPublication, PublicationFile, PublicationOutput,
     PublicationOutputKind, PublishedOutputs,

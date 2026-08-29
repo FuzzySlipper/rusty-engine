@@ -1823,8 +1823,8 @@ fn render_vm_runtime_product_source(
     r#"use std::fmt::Debug;
 
 use rusty_engine::{
-    product_dev_host, product_model, render_model, runtime_input, runtime_lifecycle, runtime_ui,
-    runtime_vm,
+    product_assembly, product_dev_host, product_model, render_model, runtime_input,
+    runtime_lifecycle, runtime_ui, runtime_vm,
 };
 
 const ADMITTED_COMPILED_COMPOSITION: &[u8] =
@@ -1893,7 +1893,7 @@ impl GeneratedProductDevRuntime {
             .map_err(|error| format!("composition admission: {error}"))?;
         let linked = product_model::link_admitted_product_composition(admitted, &[])
             .map_err(|error| format!("composition linkage: {error}"))?;
-        let mappings = runtime_input::CompiledInputMappings::compile(&linked)
+        let mappings = product_assembly::compile_input_mappings(&linked)
             .map_err(|error| format!("input compilation: {error}"))?;
         let config = runtime_lifecycle_config(&manifest)?;
         Ok(Self {
@@ -2426,8 +2426,8 @@ fn render_runtime_product_source(
     let mut source = r#"use std::fmt::Debug;
 
 use rusty_engine::{
-    product_dev_host, __KERNEL_IMPORT__product_model, runtime_composition, runtime_input,
-    runtime_lifecycle, runtime_mutation, runtime_schedule, runtime_timeline,
+    product_assembly, product_dev_host, __KERNEL_IMPORT__product_model, runtime_composition,
+    runtime_input, runtime_lifecycle, runtime_mutation, runtime_schedule, runtime_timeline,
 };
 use runtime_composition::{RuntimeComposition, RuntimeCompositionInputs};
 
@@ -2455,6 +2455,34 @@ fn runtime_lifecycle_config(
         product_model::LifecycleMode::Demand => Ok(runtime_lifecycle::RuntimeLifecycleConfig::Demand),
         product_model::LifecycleMode::External => Ok(runtime_lifecycle::RuntimeLifecycleConfig::External),
     }
+}
+
+fn timeline_catalog(
+    linked: &product_model::LinkedProductComposition,
+) -> Result<runtime_timeline::TimelineCatalog, String> {
+    let timelines = linked
+        .admitted()
+        .timelines()
+        .iter()
+        .map(|timeline| {
+            let steps = timeline
+                .steps()
+                .iter()
+                .map(|step| {
+                    runtime_timeline::TimelineStepDescriptor::new(
+                        step.id(),
+                        step.capability().target(),
+                        step.payload().clone(),
+                    )
+                    .map_err(|error| format!("timeline step descriptor: {error}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            runtime_timeline::TimelineDescriptor::new(timeline.id(), steps)
+                .map_err(|error| format!("timeline descriptor: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    runtime_timeline::TimelineCatalog::new(timelines)
+        .map_err(|error| format!("timeline catalog: {error}"))
 }
 
 __EMPTY_ADAPTER_START__
@@ -2595,11 +2623,10 @@ impl GeneratedProductDevRuntime {
 __MUTATION_CATALOG__
 __STANDARD_CAPABILITIES__
         let inputs = RuntimeCompositionInputs::new(
-            runtime_input::CompiledInputMappings::compile(&linked)
+            product_assembly::compile_input_mappings(&linked)
                 .map_err(|error| format!("input compilation: {error}"))?,
             schedule,
-            runtime_timeline::CompiledTimelineCatalog::compile(&linked)
-                .map_err(|error| format!("timeline compilation: {error}"))?,
+            timeline_catalog(&linked)?,
             mutation,
             runtime_input::InputContext::new("gameplay.default")
                 .map_err(|error| format!("input context: {error}"))?,

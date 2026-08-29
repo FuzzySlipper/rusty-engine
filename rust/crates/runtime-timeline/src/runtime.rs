@@ -5,12 +5,12 @@ use runtime_lifecycle::{
 };
 
 use crate::{
-    CompiledTimelineCatalog, CompiledTimelineStep, RuntimeProvenance, RuntimeSourceKind,
-    RuntimeTimelineError, RuntimeTimelineInspection, TimelineCompletionEnvelope,
-    TimelineCompletionOutcome, TimelineCompletionTicketId, TimelineInsertionSequence,
-    TimelineOperationIdentity, TimelineOperationReplacement, TimelineOperationRevision,
-    TimelineOperationSpec, TimelineRecurrence, MAX_TIMELINE_COMPLETION_TICKETS,
-    MAX_TIMELINE_OPERATIONS, MAX_TIMELINE_RELEASE_PREFIX, MAX_TIMELINE_SNAPSHOT_ITEMS,
+    RuntimeProvenance, RuntimeSourceKind, RuntimeTimelineError, RuntimeTimelineInspection,
+    TimelineCatalog, TimelineCompletionEnvelope, TimelineCompletionOutcome,
+    TimelineCompletionTicketId, TimelineInsertionSequence, TimelineOperationIdentity,
+    TimelineOperationReplacement, TimelineOperationRevision, TimelineOperationSpec,
+    TimelineRecurrence, TimelineStep, MAX_TIMELINE_COMPLETION_TICKETS, MAX_TIMELINE_OPERATIONS,
+    MAX_TIMELINE_RELEASE_PREFIX, MAX_TIMELINE_SNAPSHOT_ITEMS,
 };
 
 /// A receipt that identifies one exact live operation revision. Cancel and
@@ -41,7 +41,7 @@ impl TimelineOperationReceipt {
     }
 }
 
-/// One lane-issued completion ticket bound to a compiled timeline step.
+/// One lane-issued completion ticket bound to a retained timeline descriptor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineCompletionTicket {
     id: TimelineCompletionTicketId,
@@ -52,8 +52,7 @@ pub struct TimelineCompletionTicket {
     operation_bound: bool,
     timeline_id: String,
     step_id: String,
-    capability_target: String,
-    capability_kind: String,
+    operation: String,
     source: RuntimeSourceKind,
     correlation: String,
     result_contract: String,
@@ -62,7 +61,7 @@ pub struct TimelineCompletionTicket {
 
 impl TimelineCompletionTicket {
     /// Constructs a typed snapshot candidate. The lane validates the exact
-    /// ticket-to-operation/template relationship during snapshot restore.
+    /// ticket-to-operation/descriptor relationship during snapshot restore.
     #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         id: TimelineCompletionTicketId,
@@ -73,8 +72,7 @@ impl TimelineCompletionTicket {
         operation_bound: bool,
         timeline_id: impl Into<String>,
         step_id: impl Into<String>,
-        capability_target: impl Into<String>,
-        capability_kind: impl Into<String>,
+        operation: impl Into<String>,
         source: RuntimeSourceKind,
         correlation: impl Into<String>,
         result_contract: impl Into<String>,
@@ -89,8 +87,7 @@ impl TimelineCompletionTicket {
             operation_bound,
             timeline_id: timeline_id.into(),
             step_id: step_id.into(),
-            capability_target: capability_target.into(),
-            capability_kind: capability_kind.into(),
+            operation: operation.into(),
             source,
             correlation: correlation.into(),
             result_contract: result_contract.into(),
@@ -130,12 +127,8 @@ impl TimelineCompletionTicket {
         &self.step_id
     }
 
-    pub fn capability_target(&self) -> &str {
-        &self.capability_target
-    }
-
-    pub fn capability_kind(&self) -> &str {
-        &self.capability_kind
+    pub fn operation(&self) -> &str {
+        &self.operation
     }
 
     pub const fn source(&self) -> RuntimeSourceKind {
@@ -216,15 +209,15 @@ impl TimelineRebindReceipt {
     }
 }
 
-/// Immutable operation release record. A release never invokes the compiled
-/// capability; a later mutation owner consumes this data.
+/// Immutable operation release record. A release never invokes the retained
+/// operation descriptor; a later owner consumes this data.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReleasedTimelineOperation {
     operation_id: TimelineOperationIdentity,
     insertion_sequence: TimelineInsertionSequence,
     revision: TimelineOperationRevision,
     due_step: SimulationStep,
-    step: CompiledTimelineStep,
+    step: TimelineStep,
     provenance: RuntimeProvenance,
 }
 
@@ -245,7 +238,7 @@ impl ReleasedTimelineOperation {
         self.due_step
     }
 
-    pub fn step(&self) -> &CompiledTimelineStep {
+    pub fn step(&self) -> &TimelineStep {
         &self.step
     }
 
@@ -262,11 +255,11 @@ pub enum ReleasedCompletionStatus {
     Cancelled,
 }
 
-/// Immutable completion release record bound to its original compiled step.
+/// Immutable completion release record bound to its original descriptor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReleasedTimelineCompletion {
     ticket: TimelineCompletionTicket,
-    step: CompiledTimelineStep,
+    step: TimelineStep,
     status: ReleasedCompletionStatus,
 }
 
@@ -275,7 +268,7 @@ impl ReleasedTimelineCompletion {
         &self.ticket
     }
 
-    pub fn step(&self) -> &CompiledTimelineStep {
+    pub fn step(&self) -> &TimelineStep {
         &self.step
     }
 
@@ -421,12 +414,12 @@ impl TimelineState {
     }
 }
 
-/// One instance-owned timeline runtime lane. It resolves only compiled static
-/// templates and emits immutable records; it stores no callback, executor,
-/// host state, clock, live game state, or capability registry.
+/// One instance-owned timeline runtime lane. It resolves only retained static
+/// descriptors and emits immutable records; it stores no callback, executor,
+/// host state, clock, live game state, or operation registry.
 #[derive(Debug)]
 pub struct RuntimeTimeline {
-    catalog: CompiledTimelineCatalog,
+    catalog: TimelineCatalog,
     binding: crate::RuntimeTimelineBinding,
     state: TimelineState,
     disposed: bool,
@@ -435,7 +428,7 @@ pub struct RuntimeTimeline {
 
 impl RuntimeTimeline {
     pub(crate) fn bind(
-        catalog: CompiledTimelineCatalog,
+        catalog: TimelineCatalog,
         lifecycle: &RuntimeLifecycle,
     ) -> Result<Self, RuntimeTimelineError> {
         if lifecycle.state() != RuntimeState::Running {
@@ -458,7 +451,7 @@ impl RuntimeTimeline {
         })
     }
 
-    pub fn catalog(&self) -> &CompiledTimelineCatalog {
+    pub fn catalog(&self) -> &TimelineCatalog {
         &self.catalog
     }
 
@@ -500,14 +493,14 @@ impl RuntimeTimeline {
         Ok(self.receipt(&self.state.operations[index]))
     }
 
-    /// Clears the lane without mutating the compiled static catalog.
+    /// Clears the lane without mutating the retained static catalog.
     pub fn dispose(&mut self) {
         self.state = TimelineState::new();
         self.disposed = true;
     }
 
     /// Enqueues an operation at a caller-supplied due step. The lane issues
-    /// insertion ordering and validates the selected static template before
+    /// insertion ordering and validates the selected static descriptor before
     /// publishing any queue change.
     pub fn schedule(
         &mut self,
@@ -529,7 +522,7 @@ impl RuntimeTimeline {
     /// Atomically enqueues one bounded product-owned request batch at the
     /// current Timeline boundary. Existing state and every readout counter
     /// remain unchanged if a request duplicates a live/candidate identity or
-    /// fails any static-template, due-step, or capacity validation.
+    /// fails any static-descriptor, due-step, or capacity validation.
     pub fn schedule_batch(
         &mut self,
         lifecycle: &RuntimeLifecycle,
@@ -683,7 +676,7 @@ impl RuntimeTimeline {
     }
 
     /// Registers a completion ticket before external work starts. The ticket
-    /// is bound to the selected compiled step and current lifecycle revision.
+    /// is bound to the selected descriptor and current lifecycle revision.
     pub fn register_completion(
         &mut self,
         lifecycle: &RuntimeLifecycle,
@@ -749,8 +742,7 @@ impl RuntimeTimeline {
             operation_bound,
             timeline_id: spec.timeline_id,
             step_id: spec.step_id,
-            capability_target: selected_step.capability().target().to_owned(),
-            capability_kind: selected_step.capability().kind().to_owned(),
+            operation: selected_step.operation().to_owned(),
             source: spec.source,
             correlation: spec.correlation,
             result_contract: spec.result_contract,
@@ -764,7 +756,7 @@ impl RuntimeTimeline {
     }
 
     /// Queues an exact ticket completion as inert data while the lifecycle is
-    /// Running and bound to this lane. It never resolves a new capability and
+    /// Running and bound to this lane. It never resolves a new operation and
     /// never releases an event by itself; release still requires a Timeline
     /// token. This queue-only path intentionally does not require that the
     /// caller retain a phase token while external work finishes.
@@ -1119,18 +1111,16 @@ impl RuntimeTimeline {
                 .provenance()
                 .validate()
                 .map_err(|_| RuntimeTimelineError::SnapshotInvariant("ticket provenance"))?;
-            let compiled = self
+            let descriptor = self
                 .catalog
                 .step(ticket.ticket.timeline_id(), ticket.ticket.step_id())
                 .ok_or_else(|| RuntimeTimelineError::UnknownStep {
                     timeline: ticket.ticket.timeline_id().to_owned(),
                     step: ticket.ticket.step_id().to_owned(),
                 })?;
-            if compiled.capability().target() != ticket.ticket.capability_target()
-                || compiled.capability().kind() != ticket.ticket.capability_kind()
-            {
+            if descriptor.operation() != ticket.ticket.operation() {
                 return Err(
-                    RuntimeTimelineError::SnapshotBoundOperationTemplateMismatch(
+                    RuntimeTimelineError::SnapshotBoundOperationDescriptorMismatch(
                         ticket.ticket.id(),
                     ),
                 );
@@ -1165,7 +1155,7 @@ impl RuntimeTimeline {
                     || operation.step_id != ticket.ticket.step_id()
                 {
                     return Err(
-                        RuntimeTimelineError::SnapshotBoundOperationTemplateMismatch(
+                        RuntimeTimelineError::SnapshotBoundOperationDescriptorMismatch(
                             ticket.ticket.id(),
                         ),
                     );
@@ -1655,7 +1645,7 @@ pub struct TimelineSnapshot {
 
 impl TimelineSnapshot {
     /// Constructs a typed candidate for restore. The lane performs all
-    /// uniqueness, canonical-order, quota, cursor, and compiled-step checks;
+    /// uniqueness, canonical-order, quota, cursor, and descriptor checks;
     /// this constructor deliberately performs none of those checks.
     pub fn from_parts(
         binding: crate::RuntimeTimelineBinding,

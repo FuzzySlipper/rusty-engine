@@ -1,11 +1,10 @@
 //! Instance-owned, host-neutral Runtime Composition timeline operations.
 //!
-//! Product Model timelines are static descriptive templates. This crate
-//! compiles those templates after closed capability linkage, then owns one
+//! Timeline descriptors are static caller-owned data. This crate retains one
 //! bounded queue and completion-ticket lane per explicit runtime instance.
-//! It emits immutable operation/completion data for downstream mutation
-//! owners; it never invokes capabilities, stores callbacks, reads a clock, or
-//! owns product state or persistence.
+//! It emits immutable operation/completion data for downstream owners; it
+//! never invokes operations, stores callbacks, reads a clock, or owns product
+//! state or persistence.
 
 #![forbid(unsafe_code)]
 
@@ -16,12 +15,13 @@ mod model;
 mod runtime;
 
 pub use compile::{
-    CompiledTimeline, CompiledTimelineCapability, CompiledTimelineCatalog, CompiledTimelineStep,
-    MAX_COMPILED_TIMELINES, MAX_COMPILED_TIMELINE_STEPS, MAX_RUNTIME_TIMELINE_INSPECTION_BYTES,
+    TimelineCatalog, TimelineDescriptor, TimelineStep, TimelineStepDescriptor,
+    MAX_RUNTIME_TIMELINE_INSPECTION_BYTES, MAX_TIMELINES, MAX_TIMELINE_DESCRIPTOR_STEPS,
+    MAX_TIMELINE_STEPS,
 };
 pub use error::RuntimeTimelineError;
 pub use inspection::{
-    RuntimeTimelineInspection, TimelineCapabilityInspection, TimelineInspection,
+    RuntimeTimelineInspection, TimelineInspection, TimelineOperationInspection,
     TimelineStepInspection,
 };
 /// Compatibility vocabulary for callers that name the closed completion

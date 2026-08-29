@@ -1,6 +1,5 @@
 use std::fmt;
 
-use product_kernel::ProductKernelContextError;
 use runtime_lifecycle::{
     validate_runtime_identity, RuntimeControlRevision, RuntimeGeneration, RuntimeIdentityError,
     RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleError, RuntimePhase, RuntimeState,
@@ -40,9 +39,6 @@ pub const MAX_RUNTIME_UI_PROJECTION_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 /// Maximum encoded envelope size accepted from or emitted to a host.
 pub const MAX_RUNTIME_UI_PROJECTION_WIRE_BYTES: usize = 262_144;
-
-/// Maximum error text copied into a projection failure diagnostic.
-pub(crate) const MAX_PROJECTION_ERROR_BYTES: usize = 1_024;
 
 /// Typed lifecycle identity retained by one UI projection envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -242,8 +238,7 @@ impl RuntimeUiProjectionReadout {
 }
 
 /// Rejections from context, lifecycle, wire, identity, and bounded transport
-/// validation. Product projection functions retain their own semantic error
-/// types; `ProjectionFailed` is the only optional conversion into this lane.
+/// validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeUiProjectionError {
     Disposed,
@@ -321,7 +316,6 @@ pub enum RuntimeUiProjectionError {
         value: String,
     },
     ValueEncoding(String),
-    ProjectionFailed(String),
     WireTooLarge {
         bytes: usize,
         maximum: usize,
@@ -346,15 +340,6 @@ impl fmt::Display for RuntimeUiProjectionError {
 }
 
 impl std::error::Error for RuntimeUiProjectionError {}
-
-pub(crate) fn map_context_error(error: ProductKernelContextError) -> RuntimeUiProjectionError {
-    match error {
-        ProductKernelContextError::WrongPhase { expected, received } => {
-            RuntimeUiProjectionError::WrongPhase { expected, received }
-        }
-        ProductKernelContextError::Lifecycle(error) => RuntimeUiProjectionError::Lifecycle(error),
-    }
-}
 
 pub(crate) fn validate_identity(
     field: &'static str,
@@ -459,18 +444,6 @@ fn validate_number(number: &serde_json::Number) -> Result<(), RuntimeUiProjectio
         });
     }
     Ok(())
-}
-
-pub(crate) fn bound_error<E: fmt::Display>(error: E) -> String {
-    let value = error.to_string();
-    if value.len() <= MAX_PROJECTION_ERROR_BYTES {
-        return value;
-    }
-    let mut end = MAX_PROJECTION_ERROR_BYTES;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_owned()
 }
 
 #[derive(Debug, Serialize, Deserialize)]

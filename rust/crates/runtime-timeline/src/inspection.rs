@@ -1,88 +1,45 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::compile::{CompiledTimeline, CompiledTimelineStep};
+use crate::compile::{TimelineDescriptor, TimelineStep};
 
-/// Printable, deterministic capability provenance for one timeline step.
+/// Printable, deterministic operation metadata for one timeline step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TimelineCapabilityInspection {
-    binding_index: usize,
-    id: String,
-    target: String,
-    resolved_target: String,
-    kind: String,
-    owner: String,
-    provenance_source: String,
-    provenance_path: String,
+pub struct TimelineOperationInspection {
+    operation: String,
 }
 
-impl TimelineCapabilityInspection {
-    fn from_step(step: &CompiledTimelineStep) -> Self {
-        let capability = step.capability();
+impl TimelineOperationInspection {
+    fn from_step(step: &TimelineStep) -> Self {
         Self {
-            binding_index: capability.binding_index(),
-            id: capability.id().to_owned(),
-            target: capability.target().to_owned(),
-            resolved_target: capability.resolved_target().to_owned(),
-            kind: capability.kind().to_owned(),
-            owner: capability.owner().to_owned(),
-            provenance_source: capability.provenance_source().to_owned(),
-            provenance_path: capability.provenance_path().to_owned(),
+            operation: step.operation().to_owned(),
         }
     }
 
-    pub const fn binding_index(&self) -> usize {
-        self.binding_index
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub fn target(&self) -> &str {
-        &self.target
-    }
-
-    pub fn resolved_target(&self) -> &str {
-        &self.resolved_target
-    }
-
-    pub fn kind(&self) -> &str {
-        &self.kind
-    }
-
-    pub fn owner(&self) -> &str {
-        &self.owner
-    }
-
-    pub fn provenance_source(&self) -> &str {
-        &self.provenance_source
-    }
-
-    pub fn provenance_path(&self) -> &str {
-        &self.provenance_path
+    pub fn operation(&self) -> &str {
+        &self.operation
     }
 }
 
-/// One statically compiled timeline step inspection item.
+/// One immutable timeline step inspection item.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineStepInspection {
     timeline_id: String,
     index: usize,
     id: String,
-    capability: TimelineCapabilityInspection,
+    operation: TimelineOperationInspection,
     payload: Value,
 }
 
 impl TimelineStepInspection {
-    fn from_step(step: &CompiledTimelineStep) -> Self {
+    fn from_step(step: &TimelineStep) -> Self {
         Self {
             timeline_id: step.timeline_id().to_owned(),
             index: step.index(),
             id: step.id().to_owned(),
-            capability: TimelineCapabilityInspection::from_step(step),
+            operation: TimelineOperationInspection::from_step(step),
             payload: step.payload().clone(),
         }
     }
@@ -99,8 +56,8 @@ impl TimelineStepInspection {
         &self.id
     }
 
-    pub fn capability(&self) -> &TimelineCapabilityInspection {
-        &self.capability
+    pub fn operation(&self) -> &TimelineOperationInspection {
+        &self.operation
     }
 
     pub fn payload(&self) -> &Value {
@@ -108,7 +65,7 @@ impl TimelineStepInspection {
     }
 }
 
-/// One complete statically compiled timeline inspection item.
+/// One complete immutable timeline inspection item.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineInspection {
@@ -118,9 +75,9 @@ pub struct TimelineInspection {
 }
 
 impl TimelineInspection {
-    fn from_timeline(timeline: &CompiledTimeline) -> Self {
+    fn from_timeline(index: usize, timeline: &TimelineDescriptor) -> Self {
         Self {
-            index: timeline.index(),
+            index,
             id: timeline.id().to_owned(),
             steps: timeline
                 .steps()
@@ -143,8 +100,8 @@ impl TimelineInspection {
     }
 }
 
-/// Deterministic static timeline catalog readout. It has no independently
-/// versioned schema; Product Model changes are the compatibility boundary.
+/// Deterministic static timeline catalog readout. It contains only the
+/// caller-owned descriptors retained by the Engine mechanism.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeTimelineInspection {
@@ -152,11 +109,12 @@ pub struct RuntimeTimelineInspection {
 }
 
 impl RuntimeTimelineInspection {
-    pub(crate) fn from_catalog(timelines: &[CompiledTimeline]) -> Self {
+    pub(crate) fn from_catalog(timelines: &[TimelineDescriptor]) -> Self {
         Self {
             timelines: timelines
                 .iter()
-                .map(TimelineInspection::from_timeline)
+                .enumerate()
+                .map(|(index, timeline)| TimelineInspection::from_timeline(index, timeline))
                 .collect(),
         }
     }

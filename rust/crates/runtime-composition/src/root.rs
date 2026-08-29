@@ -14,8 +14,8 @@ use runtime_mutation::{
 };
 use runtime_schedule::{CompiledRuntimeSchedule, RuntimeSchedule, ScheduleDispatcher};
 use runtime_timeline::{
-    CompiledTimelineCatalog, RuntimeTimeline, TimelineCompletionAdmission,
-    TimelineCompletionEnvelope, TimelineRelease, MAX_TIMELINE_RELEASE_PREFIX,
+    RuntimeTimeline, TimelineCatalog, TimelineCompletionAdmission, TimelineCompletionEnvelope,
+    TimelineRelease, MAX_TIMELINE_RELEASE_PREFIX,
 };
 use runtime_ui::{RuntimeUiProjection, RuntimeUiProjectionEnvelope};
 use serde::Serialize;
@@ -40,7 +40,7 @@ pub enum MutationStepReceipt<G, E> {
 pub struct RuntimeCompositionInputs {
     pub input_mappings: CompiledInputMappings,
     pub schedule: CompiledRuntimeSchedule,
-    pub timeline: CompiledTimelineCatalog,
+    pub timeline: TimelineCatalog,
     pub mutation: CompiledMutationCatalog,
     pub input_context: InputContext,
 }
@@ -49,7 +49,7 @@ impl RuntimeCompositionInputs {
     pub fn new(
         input_mappings: CompiledInputMappings,
         schedule: CompiledRuntimeSchedule,
-        timeline: CompiledTimelineCatalog,
+        timeline: TimelineCatalog,
         mutation: CompiledMutationCatalog,
         input_context: InputContext,
     ) -> Self {
@@ -99,7 +99,7 @@ where
     lifecycle: RuntimeLifecycle,
     input_mappings: Option<CompiledInputMappings>,
     schedule_definition: Option<CompiledRuntimeSchedule>,
-    timeline_definition: Option<CompiledTimelineCatalog>,
+    timeline_definition: Option<TimelineCatalog>,
     mutation_definition: Option<CompiledMutationCatalog>,
     input: Option<RuntimeInputLane>,
     schedule: Option<RuntimeSchedule>,
@@ -739,19 +739,18 @@ where
         }
         let mut ui = Vec::with_capacity(ui_output.len());
         for (stream, contract, value) in ui_output.into_iter().map(ProductRuntimeUi::into_parts) {
-            let snapshot = ();
-            let context = product_kernel::ProductProjectionContext::new(
-                &self.lifecycle,
-                phases.projection(),
-                &snapshot,
-            )
-            .map_err(|error| RuntimeCompositionError::Ui(map_projection_error(error)))?;
             let value = serde_json::to_value(value).map_err(RuntimeCompositionError::UiEncoding)?;
             ui.push(
                 self.ui
                     .as_mut()
                     .ok_or(RuntimeCompositionError::NotStarted)?
-                    .emit(&self.lifecycle, context, stream, contract, value)
+                    .emit_value(
+                        &self.lifecycle,
+                        phases.projection(),
+                        stream,
+                        contract,
+                        value,
+                    )
                     .map_err(RuntimeCompositionError::Ui)?,
             );
         }
@@ -785,19 +784,6 @@ where
             .execute_phase(lifecycle, token, &(), dispatcher)
             .map(|receipt| receipt.into_outputs())
             .map_err(RuntimeCompositionError::Schedule)
-    }
-}
-
-fn map_projection_error(
-    error: product_kernel::ProductKernelContextError,
-) -> runtime_ui::RuntimeUiProjectionError {
-    match error {
-        product_kernel::ProductKernelContextError::Lifecycle(error) => {
-            runtime_ui::RuntimeUiProjectionError::Lifecycle(error)
-        }
-        product_kernel::ProductKernelContextError::WrongPhase { expected, received } => {
-            runtime_ui::RuntimeUiProjectionError::WrongPhase { expected, received }
-        }
     }
 }
 
