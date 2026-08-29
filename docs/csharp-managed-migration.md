@@ -240,7 +240,7 @@ need a split decision:
 | Environment authoring and seeded materialization ([`environment-authoring`](../rust/crates/environment-authoring), [`Studio owner map`](../studio/owner-adoption.tsv)) | `retain-rust` for deterministic generation/admission and reusable materialization invariants over Engine-owned authored content. Product C# supplies typed requests, reads results, and owns authored gameplay meaning and selection policy. Generator definition placement may follow concrete authoring workflows; it is not a migration blocker. |
 | Spatial, collision, navigation, character, voxel residency, and world origin ([`engine-spatial`](../rust/crates/engine-spatial), [`svc-pathfinding`](../rust/crates/svc-pathfinding)) | `retain-rust` native indexes, queries, leases, revisions, and high-frequency mechanisms; `adapt-managed` product movement policy, goals, and copied facts. These are not candidates for a downstream replacement system. |
 | Animation and explicit-time voxel playback ([`voxel-object-runtime`](../rust/crates/voxel-object-runtime), [`render-presentation`](../rust/crates/render-presentation)) | `retain-rust` for playback/clip state, renderer/resource realization, and reusable sampling. Product C# proposes typed playback mutations, reads state, and owns why an animation plays. Collision selection remains explicit rather than following visual frames accidentally. |
-| Runtime `observe-pairs` ([`runtime-standard-capabilities`](../rust/crates/runtime-standard-capabilities)) | `defer` pending a concrete sensing consumer. The reusable candidate is a Rust distance/facing/occlusion query with deterministic per-target aggregation for stealth visibility, AI target acquisition, sentry vision, or awareness/threat accumulation. C# would supply observer/target facts and own the resulting policy. Retire Product Model schedule/mutation coupling regardless. |
+| Runtime `observe-pairs` ([`runtime-standard-capabilities`](../rust/crates/runtime-standard-capabilities)) | `retain-rust` for the reusable distance/facing/occlusion query and deterministic per-target reduction, but do not publish the Product Model name or wrapper as the managed API. Surface discoverable `Perception`/`Visibility` C# utilities for direct custom use plus optional `EntityWorld` vision/target adapters. C# supplies observer/target facts and owns AI, stealth, and awareness policy. Retire Product Model schedule/mutation coupling. |
 | Input, time, and RNG ([`runtime-input`](../rust/crates/runtime-input), [`core-time`](../rust/crates/core-time), [`svc-rng`](../rust/crates/svc-rng)) | Retain normalized host facts and deterministic services in Rust. Keep host time, admitted simulation steps, animation timestamps, and product scheduler time distinct. |
 | Rendering, audio, UI host/backend, assets/resources, voxel mechanisms, core math/space/IDs | Explicitly excluded from gameplay-language migration except where a mixed file embeds product semantics. These remain durable Engine mechanisms and generated service families. |
 | Developer command, inspector, CLI, dev host, Studio, and renderer TypeScript | Tool/host/editor lanes, not C# gameplay owners. Survey their dependency closures before deleting a legacy provider, but do not port them merely for language uniformity. |
@@ -365,12 +365,15 @@ replacement surface are ready.
     coroutine-like logic driven by Engine-admitted steps. Extend the existing
     C# scheduler with simple continuations rather than preserving the five-phase
     Product Model scheduler.
-11. **`observe-pairs`: defer pending a concrete sensing consumer.** Its reusable
-    core could serve stealth visibility, AI target acquisition, sentry vision,
-    or per-target awareness/threat accumulation by combining distance, facing,
-    occlusion, and deterministic aggregation. If adopted, Rust owns the spatial
-    query/reduction and C# supplies facts and policy. Remove its Product Model
-    schedule/mutation wrapper either way.
+11. **`observe-pairs`: retain the mechanism under discoverable sensing names.**
+    Its reusable core serves stealth visibility, AI target acquisition, sentry
+    vision, and per-target awareness/threat accumulation by combining distance,
+    facing, occlusion, and deterministic aggregation. Rust owns the spatial
+    query/reduction. The managed SDK exposes direct `Perception`/`Visibility`
+    utility methods for custom implementations and optional default vision and
+    perceivable-target adapters over `EntityWorld`; it does not own AI policy or
+    automatically mutate AI state. Remove the Product Model schedule/mutation
+    wrapper and the `observe-pairs` public vocabulary.
 12. **Content and playback mechanisms: retain Rust state.** Voxel annotations,
     scene/prefab/content admission, and animation playback/clip state may remain
     Rust Engine mechanisms. C# proposes typed mutations, reads state, and owns
@@ -389,9 +392,27 @@ replacement surface are ready.
     workflow instead of assuming the old command architecture is its
     replacement.
 
-No owner question above blocks #7508 synthesis. Items 8, 9, and 11 are
-explicitly deferred to identified consumers; item 13 defines a result to prove
-rather than prescribing its implementation.
+No owner question above blocks #7508 synthesis. Items 8 and 9 are explicitly
+deferred to identified consumers; item 13 defines a result to prove rather
+than prescribing its implementation.
+
+### Public lifecycle terminology follow-up
+
+The current public names `ProductTurnKind` and `ProductTurnRequest` do not
+describe gameplay turns. The kind is the admission mode (`Realtime`, `Demand`,
+or `External`), while the request is the post-`Update` outcome (`None` or
+`ReportFault`). This is likely to collide with downstream turn-based concepts.
+During managed-foundation consolidation, prefer update-oriented names such as
+`ProductUpdateMode`/`UpdateAdmissionKind` and `ProductUpdateResult`. Preserve an
+explicit return value: the runtime intentionally commits staged Engine service
+work before applying `ReportFault`, whereas an exception makes the callback
+fail and discards the staged call. Do not convert this distinction into
+exception control flow merely to obtain a `void Update` signature.
+
+The broader `Product` prefix is a separate readability question. Audit only the
+public managed lifecycle/input/content surface and downstream call sites before
+renaming it; do not commission a repository-wide terminology rewrite without a
+clear replacement vocabulary and migration benefit.
 
 ## Implementation dependency order
 
@@ -415,8 +436,9 @@ whole migration into one proof campaign:
 4. **Neutralize retained Rust runtime mechanisms.** Extract identity, bounded
    value, input, timeline, UI, lifecycle, and dev-host primitives still coupled
    to Product Model. Preserve their named Engine behavior without the Product
-   Kernel/Runtime Composition root. `observe-pairs` is not preserved by this
-   phase unless a concrete sensing consumer adopts it.
+    Kernel/Runtime Composition root. Extract `observe-pairs` into the retained
+    spatial sensing mechanism and publish discoverable managed
+    `Perception`/`Visibility` utilities and optional EntityWorld adapters.
 5. **Remove the abandoned legacy closure.** Delete Rules/Standard artifact and
    TypeScript authoring packages, generators, Product Model schedule/mutation,
    Product Kernel, Runtime Composition, QuickJS VM, materializer, Assembly, and
@@ -427,11 +449,10 @@ whole migration into one proof campaign:
    references, and replace this migration plan with durable architecture/API
    documentation when the implementation has landed.
 
-In parallel with phases 1–4, run one bounded development-access task that
-either demonstrates a practical debugger workflow for the Rust-hosted C#
-product or records the exact missing host capability. Add named trusted state
-inspection/mutation seams only as needed. This outcome must not block unrelated
-managed migration or preserve the legacy developer-command architecture.
+Standalone task #7511 owns the C# debugger, precompiled-command console, and
+trusted live inspection/mutation plan. It is intentionally outside campaign
+#7502 and must not block unrelated managed migration or preserve the legacy
+developer-command architecture.
 
 Each phase uses focused compilation or a direct consumer exercise for the
 changed boundary. Legacy provider-wide gates do not become prerequisites for
