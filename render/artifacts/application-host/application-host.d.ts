@@ -1,5 +1,5 @@
 import type { RendererViewComposition } from '@rusty-engine/render-contracts';
-import { type RendererSurface } from '@rusty-engine/renderer-host';
+import { type RendererSurface, type RendererAnimationClipCueDefinition } from '@rusty-engine/renderer-host';
 import { type RustyApplicationContent } from './application-content.js';
 import { type RustyDeveloperCommandShellOptions } from './developer-command-shell.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
@@ -13,6 +13,8 @@ export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
 export type RustyApplicationPresentationFrame = Readonly<Record<string, unknown>>;
 /** Typed Engine view composition, realized by the Engine renderer against its current surface. */
 export type RustyApplicationViewComposition = RendererViewComposition;
+/** A product-provided marker snapshot realized only by the Engine animation host. */
+export type RustyApplicationAnimationCueDefinition = RendererAnimationClipCueDefinition;
 export interface RustyApplicationCameraPose {
     readonly position: readonly [number, number, number];
     readonly pitchDegrees: number;
@@ -371,6 +373,17 @@ export interface RustyApplicationAudioResumeReceipt {
 export interface RustyApplicationRendererPort {
     readonly applyFrame: (frame: RustyApplicationFrame) => RustyApplicationFrameReceipt;
     readonly applyPresentation: (frame: RustyApplicationPresentationFrame) => Promise<RustyApplicationPresentationReceipt>;
+    /** Atomically replace marker definitions consumed by the existing animation host. */
+    readonly replaceAnimationCueDefinitions: (definitions: readonly RustyApplicationAnimationCueDefinition[]) => RustyApplicationFrameReceipt;
+    /** Read Engine-realized audio facts without exposing the browser audio owner. */
+    readonly audioRealizedFacts: () => ReturnType<RendererSurface['audioRealizedFacts']>;
+    readonly animationRealizedFacts: () => ReturnType<RendererSurface['animationRealizedFacts']>;
+    /** Acknowledge only the submitted Engine-realized audio fact range. */
+    readonly acknowledgeAudioRealizedFacts: RendererSurface['acknowledgeAudioRealizedFacts'];
+    readonly acknowledgeAnimationRealizedFacts: RendererSurface['acknowledgeAnimationRealizedFacts'];
+    /** Invalidate the realized-audio owner when a product runtime binding changes. */
+    readonly resetAudioRealizationOwner: RendererSurface['resetAudioRealizationOwner'];
+    readonly resetAnimationRealizationOwner: RendererSurface['resetAnimationRealizationOwner'];
     readonly configureViews: (composition: RustyApplicationViewComposition) => ReturnType<RendererSurface['configureViews']>;
     /** Replace product content with the Engine-owned empty/default retained frame. */
     readonly clear: () => Promise<void>;

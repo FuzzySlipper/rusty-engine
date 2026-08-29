@@ -1,4 +1,4 @@
-import { type RustyApplicationFrame, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
+import { type RustyApplicationFrame, type RustyApplicationAnimationCueDefinition, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export declare const PRODUCT_BROWSER_HOST_ARTIFACT: "rusty.product.browser-host";
 export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
@@ -79,6 +79,60 @@ export interface ProductBrowserAudioFeedbackResult {
     readonly acceptedThroughFactId?: string;
     readonly diagnostic?: string;
 }
+/** Closed renderer-observation feedback; this is not an animation command route. */
+export type ProductBrowserAnimationFeedbackFact = {
+    readonly kind: 'playbackObservation';
+    readonly factId: string;
+    readonly objectId: string;
+    readonly generation: string;
+    readonly sequence: number;
+    readonly status: string;
+    readonly selectedClip: string | null;
+    readonly sampledAtSeconds: number | null;
+} | {
+    readonly kind: 'naturalCompletion';
+    readonly factId: string;
+    readonly objectId: string;
+    readonly generation: string;
+    readonly clip: string;
+} | {
+    readonly kind: 'diagnostic';
+    readonly factId: string;
+    readonly objectId: string | null;
+    readonly generation: string | null;
+    readonly code: string;
+    readonly sequence: number;
+} | {
+    readonly kind: 'cue';
+    readonly factId: string;
+    readonly objectId: string;
+    readonly generation: string;
+    readonly cueId: string;
+    readonly clip: string;
+    readonly markerSeconds: number;
+    readonly sampledAtSeconds: number;
+    readonly signalDomain: 'audio' | 'particle';
+    readonly signalId: string;
+} | {
+    readonly kind: 'stopped';
+    readonly factId: string;
+    readonly objectId: string;
+    readonly generation: string;
+    readonly sequence: number;
+    readonly reason: 'destroyed' | 'teardown';
+};
+export interface ProductBrowserAnimationFeedback {
+    readonly runtime: RustyApplicationRuntimeIdentity;
+    readonly replaceOwner: boolean;
+    readonly evictedFactCount: string;
+    readonly facts: readonly ProductBrowserAnimationFeedbackFact[];
+}
+export interface ProductBrowserAnimationFeedbackResult {
+    readonly accepted: boolean;
+    readonly runtime: RustyApplicationRuntimeIdentity;
+    readonly acceptedThroughFactId?: string;
+    readonly diagnostic?: string;
+}
 export interface ProductBrowserTimelineCompletion {
     /** Canonical decimal u64 ticket issued by runtime-timeline. */
     readonly ticket: string;
@@ -134,6 +188,9 @@ export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
     readonly kind: 'view-composition';
     readonly composition: RustyApplicationViewComposition;
 } | {
+    readonly kind: 'animation-cue-definitions';
+    readonly definitions: readonly RustyApplicationAnimationCueDefinition[];
+} | {
     readonly kind: 'presentation';
     readonly frame: RustyApplicationPresentationFrame;
 } | {
@@ -165,6 +222,7 @@ export interface ProductBrowserRuntimeAdapter {
     readonly lifecycle: (operation: ProductBrowserLifecycleOperation) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly input: (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => Promise<ProductBrowserRuntimeInputResult>;
     readonly reportAudioFeedback: (feedback: ProductBrowserAudioFeedback) => Promise<ProductBrowserAudioFeedbackResult>;
+    readonly reportAnimationFeedback: (feedback: ProductBrowserAnimationFeedback) => Promise<ProductBrowserAnimationFeedbackResult>;
     readonly advanceRealtime: (observedTimeNs: string) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly admitDemandStep?: () => Promise<ProductBrowserRuntimeOperationResult>;
     readonly admitExternalStep?: (step: string) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -178,6 +236,7 @@ export interface ProductBrowserRuntimeTransport {
     readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
     readonly input: ProductBrowserRuntimeAdapter['input'];
     readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
+    readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
     readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
     readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
     readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -255,14 +314,26 @@ interface ProductBrowserAudioFeedbackReporter {
     readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
     readonly flush: () => Promise<void>;
 }
+interface ProductBrowserAnimationFeedbackReporter {
+    readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
+    readonly flush: () => Promise<void>;
+}
 /** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
 export declare function createProductBrowserAudioFeedbackReporter(options: {
     readonly renderer: Pick<RustyApplicationHost['renderer'], 'audioRealizedFacts' | 'acknowledgeAudioRealizedFacts' | 'resetAudioRealizationOwner'>;
     readonly report: ProductBrowserRuntimeTransport['reportAudioFeedback'];
     readonly initialRuntime?: RustyApplicationRuntimeIdentity;
 }): ProductBrowserAudioFeedbackReporter;
+/** @internal Fixed animation observation coordinator, intentionally parallel to audio. */
+export declare function createProductBrowserAnimationFeedbackReporter(options: {
+    readonly renderer: Pick<RustyApplicationHost['renderer'], 'animationRealizedFacts' | 'acknowledgeAnimationRealizedFacts' | 'resetAnimationRealizationOwner'>;
+    readonly report: ProductBrowserRuntimeTransport['reportAnimationFeedback'];
+    readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+}): ProductBrowserAnimationFeedbackReporter;
 /** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
 export declare function flushProductBrowserAudioFeedbackBeforeUpdate<T>(flush: () => Promise<void>, update: () => Promise<T>): Promise<T>;
+/** @internal Flushes both fixed renderer feedback families before C# update work. */
+export declare function flushProductBrowserRendererFeedbackBeforeUpdate<T>(flush: () => Promise<void>, update: () => Promise<T>): Promise<T>;
 /**
  * Mounts the one Engine-owned application composition root. The browser host
  * has no renderer implementation, product state, evaluator, or own cadence;

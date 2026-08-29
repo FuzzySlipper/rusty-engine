@@ -191,17 +191,17 @@ export class RendererPresentationHostSet {
 
   /** Acknowledge audio facts through the submitted ID while preserving later arrivals. */
   acknowledgeAudioRealizedFacts(throughFactId: number): boolean {
-    const acknowledge = this.#hosts.audio?.acknowledgeRealizedFacts;
-    if (acknowledge === undefined) return false;
-    acknowledge(throughFactId);
+    const host = this.#hosts.audio;
+    if (host?.acknowledgeRealizedFacts === undefined) return false;
+    host.acknowledgeRealizedFacts(throughFactId);
     return true;
   }
 
   /** Replace the current audio realization owner and invalidate its callbacks. */
   resetAudioRealizationOwner(): boolean {
-    const reset = this.#hosts.audio?.reset;
-    if (reset === undefined) return false;
-    reset();
+    const host = this.#hosts.audio;
+    if (host?.reset === undefined) return false;
+    host.reset();
     return true;
   }
 
@@ -212,17 +212,17 @@ export class RendererPresentationHostSet {
 
   /** Acknowledge only the exact submitted animation feedback boundary. */
   acknowledgeAnimationRealizedFacts(throughFactId: number): boolean {
-    const acknowledge = this.#hosts.animation?.acknowledgeRealizedFacts;
-    if (acknowledge === undefined) return false;
-    acknowledge(throughFactId);
+    const host = this.#hosts.animation;
+    if (host?.acknowledgeRealizedFacts === undefined) return false;
+    host.acknowledgeRealizedFacts(throughFactId);
     return true;
   }
 
   /** Replace the animation feedback owner without recycling fact identifiers. */
   resetAnimationRealizationOwner(): boolean {
-    const reset = this.#hosts.animation?.reset;
-    if (reset === undefined) return false;
-    reset();
+    const host = this.#hosts.animation;
+    if (host?.reset === undefined) return false;
+    host.reset();
     return true;
   }
 
