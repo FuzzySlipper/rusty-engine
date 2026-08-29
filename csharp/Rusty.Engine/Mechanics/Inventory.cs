@@ -314,6 +314,13 @@ public sealed class InventoryState
             return;
         }
 
+        if (!_stacks.ContainsKey(definition.Id)
+            && _stacks.Count >= ManagedInventoryLimits.MaximumStacksPerInventory)
+        {
+            throw new MechanicsException(
+                $"An inventory cannot contain more than {ManagedInventoryLimits.MaximumStacksPerInventory} fungible stacks.");
+        }
+
         _stacks[definition.Id] = new InventoryStackEntry(definition, quantity);
     }
 

@@ -387,6 +387,34 @@ static void ExerciseManagedInventory()
     Require(destroyed.FormerOwner == new EntityId(SecondOwner)
         && !world.TryGetItem(new EntityId(ShieldEntity), out _),
         "explicit unique destruction did not remove the item");
+
+    var boundedWorld = new InventoryWorld();
+    EntityId boundedOwner = new(100);
+    boundedWorld.RegisterInventory(new InventoryState(boundedOwner));
+    for (int index = 0; index < ManagedInventoryLimits.MaximumStacksPerInventory; index++)
+    {
+        boundedWorld.Grant(
+            boundedOwner,
+            new ItemDefinition(
+                ItemDefinitionId.Parse($"stack-{index}"),
+                ItemKind.Fungible,
+                maximumQuantity: 1),
+            quantity: 1);
+    }
+
+    ulong beforeRejectedStack = boundedWorld.Revision;
+    ExpectMechanicsError(
+        () => boundedWorld.Grant(
+            boundedOwner,
+            new ItemDefinition(
+                ItemDefinitionId.Parse("stack-overflow"),
+                ItemKind.Fungible,
+                maximumQuantity: 1),
+            quantity: 1),
+        "managed inventory stack limit was not enforced");
+    Require(boundedWorld.Revision == beforeRejectedStack
+        && boundedWorld.View(boundedOwner).Stacks.Count == ManagedInventoryLimits.MaximumStacksPerInventory,
+        "rejected stack insertion changed managed inventory state");
 }
 
 static void ExpectMechanicsError(Action action, string message)
