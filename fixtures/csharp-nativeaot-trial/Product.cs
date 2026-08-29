@@ -446,7 +446,7 @@ public sealed class Product : IEngineProduct
         Require(presentation.RetainedObjectCount == 1 && presentation.AppearanceCount == 1 && presentation.MaterialCount == 1, "appearance readout did not report retained Engine presentation facts");
     }
 
-    public ProductTurnRequest Update(ProductUpdate update)
+    public ProductUpdateResult Update(ProductUpdate update)
     {
         if (!_started || _paused || _shutdown)
         {
@@ -457,7 +457,7 @@ public sealed class Product : IEngineProduct
         Require(facts.Generation != 0 && facts.ControlRevision != 0, "lifecycle facts did not carry the current identity");
         Require(facts.AdmittedStepCount != 0, "update facts did not carry admitted simulation steps");
         Require(facts.SimulationStep + facts.AdmittedStepCount >= facts.SimulationStep, "simulation step facts overflowed");
-        if (facts.Mode == ProductTurnKind.Realtime)
+        if (facts.Mode == ProductUpdateMode.Realtime)
         {
             Require(facts.ObservedHostTimeNanoseconds != 0, "realtime update facts did not carry host observation");
             Require(facts.FixedStepHz != 0 && facts.FixedDeltaSeconds > 0, "realtime update facts did not carry fixed-step timing");
@@ -607,7 +607,7 @@ public sealed class Product : IEngineProduct
         _turns++;
         _lastRandom = _engine.Random.NextBoundedU32(new ScopedRngBoundedRequest(_rng, 100)).Value;
         PublishPresentation();
-        return reportFaultThisTurn ? ProductTurnRequest.ReportFault : ProductTurnRequest.None;
+        return reportFaultThisTurn ? ProductUpdateResult.ReportFault : ProductUpdateResult.None;
     }
 
     public void Pause() => _paused = true;

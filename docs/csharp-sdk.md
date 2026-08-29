@@ -39,7 +39,7 @@ lets product code accept or reject the product-owned ticket meaning.
 - The constructor receives `ProductCreateContext`, including `IEngineContext`,
   admitted product content, and input configuration.
 - `Update(ProductUpdate)` receives Engine-owned update facts and copied input
-  events, then returns `ProductTurnRequest` when it needs a supported host
+  events, then returns `ProductUpdateResult` when it needs a supported host
   action.
 - The runtime, not the product, drives lifecycle transitions and owns host
   integration. Do not create another central game loop or advance Engine time
@@ -103,7 +103,7 @@ pieces:
 
 | Package | Current role |
 | --- | --- |
-| [`Rusty.Engine.Application`](../csharp/Rusty.Engine.Application) | An Engine-context update pipeline and deterministic scheduler helper. |
+| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper, compiled into `Rusty.Engine`. |
 | [`Rusty.Engine.Entities`](../csharp/Rusty.Engine.Entities) | Product component keys, managed entity worlds, snapshots, batches, and managed adapters around Engine mechanisms. |
 | [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine.Persistence) | Product-state codecs, stores, restoration plans, and entity-world persistence helpers. |
 | [`Rusty.Engine.Resolution`](../csharp/Rusty.Engine.Resolution) | Structural resolution sessions and typed product transaction coordination. |

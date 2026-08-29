@@ -276,7 +276,7 @@ pub struct NativeInputConfiguration {
     pub physical_mappings_len: usize,
 }
 
-/// One admitted host-neutral input fact copied into a product turn.
+/// One admitted host-neutral input fact copied into a product update.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeInputEvent {
@@ -310,7 +310,7 @@ pub struct NativeInputEvent {
     pub context: *const u8,
     pub context_len: usize,
     /// Contract and bounded bytes for an already-admitted direct product
-    /// payload. Both slices are borrowed only for this product turn.
+    /// payload. Both slices are borrowed only for this product update.
     pub payload_contract: *const u8,
     pub payload_contract_len: usize,
     pub payload_data: *const u8,

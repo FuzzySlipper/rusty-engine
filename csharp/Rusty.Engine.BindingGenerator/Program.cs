@@ -152,7 +152,7 @@ internal sealed class BindingModel
     {
         if (IsScalar(type) || enums.ContainsKey(type)) return;
         if (!structs.TryGetValue(type, out Struct? value) || value is null) { Fail(family, method, signature, $"{role} {type} is not a supported scalar or emitted native struct"); return; }
-        if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs") Fail(family, method, signature, $"{role} {type} is an API/product table rather than a fixed value");
+        if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeProductUpdateArgs") Fail(family, method, signature, $"{role} {type} is an API/product table rather than a fixed value");
         if (type is "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue") Fail(family, method, signature, $"{role} {type} is only supported as a specially marshalled request field");
         if (!seen.Add(type)) return;
         foreach (Field field in value.Fields)
@@ -240,7 +240,7 @@ internal sealed class BindingModel
         // Immutable lease metadata may carry a borrowed UTF-8 slice only when the
         // generated receipt copies it before the matching lease is released.
         if (type == "NativeUtf8Slice") return;
-        if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue")
+        if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeProductUpdateArgs" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue")
         {
             Fail(family, method, signature, $"lease metadata {field.Name} ({field.Type}) is not a supported fixed value");
             return;
@@ -270,7 +270,7 @@ internal sealed class BindingModel
 
     private static void ValidateBorrowedRequest(string family, string method, string signature, Struct request, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums, HashSet<string> seen)
     {
-        if (request.Name.EndsWith("Api", StringComparison.Ordinal) || request.Name is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs") Fail(family, method, signature, $"borrowed request {request.Name} is an API/product table");
+        if (request.Name.EndsWith("Api", StringComparison.Ordinal) || request.Name is "NativeProductApi" or "NativeProductCreateArgs" or "NativeProductUpdateArgs") Fail(family, method, signature, $"borrowed request {request.Name} is an API/product table");
         if (!seen.Add(request.Name)) return;
         for (int index = 0; index < request.Fields.Count; index++)
         {
@@ -304,7 +304,7 @@ internal sealed class BindingModel
             Fail(family, method, signature, $"borrowed span element {type} is not a supported scalar or emitted native struct");
             return;
         }
-        if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeTurnArgs" or "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue")
+        if (type.EndsWith("Api", StringComparison.Ordinal) || type is "NativeProductApi" or "NativeProductCreateArgs" or "NativeProductUpdateArgs" or "NativeUtf8Slice" or "NativeByteSlice" or "NativeWritableByteSlice" or "NativeStructuredValue")
         {
             Fail(family, method, signature, $"borrowed span element {type} must be a fixed value or a shallow emitted struct");
             return;
@@ -398,7 +398,7 @@ internal static class Emit
         output.AppendLine("    public Type ProductType { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public interface IEngineProduct : IDisposable").AppendLine("{");
         output.AppendLine("    void Start();");
-        output.AppendLine("    ProductTurnRequest Update(ProductUpdate update);");
+        output.AppendLine("    ProductUpdateResult Update(ProductUpdate update);");
         output.AppendLine("    void Pause();");
         output.AppendLine("    void Resume();");
         output.AppendLine("    void Restart();");
@@ -983,7 +983,7 @@ internal static class Emit
         return (service.Name, operation.Name);
     }
 
-    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeProductTimelineCompletion" and not "NativeTurnArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" and not "NativeAnimationFeedbackText" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
+    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeProductTimelineCompletion" and not "NativeProductUpdateArgs" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" and not "NativeAnimationFeedbackText" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
     private static IReadOnlyList<(Field Field, string Type)> SafeFields(Struct value, BindingModel model)
     {
         List<(Field, string)> fields = [];

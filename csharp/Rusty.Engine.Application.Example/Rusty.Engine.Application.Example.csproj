@@ -7,6 +7,6 @@
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../Rusty.Engine.Application/Rusty.Engine.Application.csproj" />
+    <ProjectReference Include="../Rusty.Engine/Rusty.Engine.csproj" />
   </ItemGroup>
 </Project>

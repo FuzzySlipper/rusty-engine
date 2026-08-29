@@ -26,7 +26,7 @@ fn main() -> Result<(), String> {
     let bundle = load_bundle(&args.bundle_dir, runtime.render_resources())?;
     if args.exercise {
         runtime
-            .exercise_turns()
+            .exercise_updates()
             .map_err(|error| error.to_string())?;
     }
     let host = ProductDevHost::start(

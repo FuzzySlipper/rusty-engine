@@ -146,7 +146,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     if (api is null) return 2;
                     api->create = &Create;
                     api->start = &Start;
-                    api->turn = &Turn;
+                    api->update = &Update;
                     api->pause = &Pause;
                     api->resume = &Resume;
                     api->restart = &Restart;
@@ -182,18 +182,18 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 private static int Start(void* handle) => Invoke(handle, static product => product.Start());
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Turn(void* handle, NativeTurnArgs* args, NativeProductTurnRequest* request)
+                private static int Update(void* handle, NativeProductUpdateArgs* args, NativeProductUpdateResult* result)
                 {
                     try
                     {
-                        if (args is null || request is null || (args->event_count != 0 && args->events is null)) return 2;
-                        *request = NativeProductTurnRequest.NativeProductTurnRequest_None;
-                        ProductTurnRequest productRequest = Get(handle).Product.Update(new ProductUpdate(NativeConversions.FromNative(args->facts), CopyInput(args->events, args->event_count)));
-                        *request = productRequest switch
+                        if (args is null || result is null || (args->event_count != 0 && args->events is null)) return 2;
+                        *result = NativeProductUpdateResult.NativeProductUpdateResult_None;
+                        ProductUpdateResult productResult = Get(handle).Product.Update(new ProductUpdate(NativeConversions.FromNative(args->facts), CopyInput(args->events, args->event_count)));
+                        *result = productResult switch
                         {
-                            ProductTurnRequest.None => NativeProductTurnRequest.NativeProductTurnRequest_None,
-                            ProductTurnRequest.ReportFault => NativeProductTurnRequest.NativeProductTurnRequest_ReportFault,
-                            _ => throw new ArgumentOutOfRangeException(nameof(productRequest)),
+                            ProductUpdateResult.None => NativeProductUpdateResult.NativeProductUpdateResult_None,
+                            ProductUpdateResult.ReportFault => NativeProductUpdateResult.NativeProductUpdateResult_ReportFault,
+                            _ => throw new ArgumentOutOfRangeException(nameof(productResult)),
                         };
                         return 1;
                     }

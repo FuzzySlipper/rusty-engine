@@ -2,27 +2,27 @@ use crate::NativeInputEvent;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeProductTurnKind {
+pub enum NativeProductUpdateMode {
     Realtime = 1,
     Demand = 2,
     External = 3,
 }
 
-/// One typed request a trusted product may return after an admitted update.
+/// One typed result a trusted product may return after an admitted update.
 ///
-/// The request is copied across the product callback boundary and applied by
-/// the Rust runtime only after the completed turn has been staged and
+/// The result is copied across the product callback boundary and applied by
+/// the Rust runtime only after the completed update has been staged and
 /// committed. It is deliberately not a general command or event channel.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeProductTurnRequest {
+pub enum NativeProductUpdateResult {
     None = 0,
     ReportFault = 1,
 }
 
 /// Lifecycle state accompanying a product update.
 ///
-/// This is a snapshot of the Rust-owned lifecycle at the point a turn was
+/// This is a snapshot of the Rust-owned lifecycle at the point an update was
 /// admitted. In particular, `Paused` remains an explicit state even though a
 /// paused lifecycle does not admit product updates.
 #[repr(u32)]
@@ -47,7 +47,7 @@ pub enum NativeProductLifecycleState {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NativeProductUpdateFacts {
-    pub mode: NativeProductTurnKind,
+    pub mode: NativeProductUpdateMode,
     pub lifecycle_state: NativeProductLifecycleState,
     pub generation: u64,
     pub control_revision: u64,
@@ -62,7 +62,7 @@ pub struct NativeProductUpdateFacts {
 /// Explicit typed update facts and its borrowed input slice.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeTurnArgs {
+pub struct NativeProductUpdateArgs {
     pub facts: NativeProductUpdateFacts,
     pub events: *const NativeInputEvent,
     pub event_count: usize,

@@ -57,9 +57,9 @@ const STANDARD_REALTIME_EXERCISE_ADMISSION_NS: u64 = 16_666_667;
 // standard native runtime on that typed host default lets generated physical
 // input reach RuntimeInputLane without product-local bundle edits.
 const STANDARD_INPUT_CONTEXT: &str = "gameplay.default";
-const REALTIME_TURN_KIND: NativeProductTurnKind = NativeProductTurnKind::Realtime;
-const DEMAND_TURN_KIND: NativeProductTurnKind = NativeProductTurnKind::Demand;
-const EXTERNAL_TURN_KIND: NativeProductTurnKind = NativeProductTurnKind::External;
+const REALTIME_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::Realtime;
+const DEMAND_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::Demand;
+const EXTERNAL_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::External;
 // These are host admission bounds, before the immutable Content service owns
 // references. The per-file limit matches the Engine renderer resource limit;
 // the aggregate limit matches the existing product persistence payload limit.
@@ -171,7 +171,7 @@ struct LoadedProductApi {
     library: Option<Library>,
     create: NativeProductCreate,
     start: NativeProductAction,
-    turn: NativeProductTurn,
+    update: NativeProductUpdate,
     complete_timeline: NativeProductCompleteTimeline,
     pause: NativeProductAction,
     resume: NativeProductAction,
@@ -220,7 +220,7 @@ impl LoadedProductApi {
         Ok(Self {
             create: required_function(product.create, "create")?,
             start: required_function(product.start, "start")?,
-            turn: required_function(product.turn, "turn")?,
+            update: required_function(product.update, "update")?,
             complete_timeline: required_function(product.complete_timeline, "complete_timeline")?,
             pause: required_function(product.pause, "pause")?,
             resume: required_function(product.resume, "resume")?,
@@ -453,9 +453,9 @@ impl CsharpProductRuntime {
     }
 
     /// Exercises the selected lifecycle mode plus its rejected neighbouring
-    /// operation. Rejection happens before the NativeAOT product turn, so its
+    /// operation. Rejection happens before the NativeAOT product update, so its
     /// pending input and lifecycle counters remain unchanged.
-    pub fn exercise_turns(&mut self) -> Result<(), CsharpProductRuntimeError> {
+    pub fn exercise_updates(&mut self) -> Result<(), CsharpProductRuntimeError> {
         self.start_for_exercise()?;
         let started_binding = input_binding(&self.lifecycle);
         self.exercise_ui_projection_binding(started_binding)?;
@@ -743,7 +743,7 @@ impl CsharpProductRuntime {
         {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_FAULT",
-                "product fault request did not preserve the completed turn counters and typed fault state",
+                "product fault result did not preserve the completed update counters and typed fault state",
             ));
         }
         if self
@@ -1094,13 +1094,13 @@ impl CsharpProductRuntime {
         {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_ADMISSION",
-                "selected lifecycle mode did not admit exactly one Product.Game turn",
+                "selected lifecycle mode did not admit exactly one product update",
             ));
         }
         Ok(())
     }
 
-    fn turn(
+    fn update(
         &mut self,
         facts: NativeProductUpdateFacts,
     ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
@@ -1110,16 +1110,16 @@ impl CsharpProductRuntime {
             .map(NativeInputOwned::as_native)
             .collect();
         self.services.begin_call(ui_binding(&self.lifecycle));
-        let request = match call_turn(
+        let result = match call_update(
             &self.api,
             self.handle,
-            NativeTurnArgs {
+            NativeProductUpdateArgs {
                 facts,
                 events: events.as_ptr(),
                 event_count: events.len(),
             },
         ) {
-            Ok(request) => request,
+            Ok(result) => result,
             Err(error) => {
                 self.services.discard_call();
                 return Err(error);
@@ -1144,9 +1144,9 @@ impl CsharpProductRuntime {
         self.pending_inputs.clear();
         self.services.commit_call(staged);
 
-        if request == NativeProductTurnRequest::ReportFault {
-            // Product requests are intentionally deferred until the completed
-            // Engine service turn is committed. This is a typed lifecycle
+        if result == NativeProductUpdateResult::ReportFault {
+            // Product results are intentionally applied only after the completed
+            // Engine service call is committed. This is a typed lifecycle
             // signal, not a reentrant service call or a general event bus.
             self.lifecycle
                 .report_fault(runtime_lifecycle::RuntimeFault::OwnerReported)
@@ -1159,15 +1159,15 @@ impl CsharpProductRuntime {
         Ok(outputs)
     }
 
-    fn turn_admitted(
+    fn update_admitted(
         &mut self,
-        kind: NativeProductTurnKind,
+        kind: NativeProductUpdateMode,
         observed_host_time_nanoseconds: Option<u64>,
         admission: runtime_lifecycle::SimulationAdmission,
         dropped_step_count: u128,
     ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
-        // Realtime catch-up remains one Product.Game turn per host
-        // observation. Correlate that turn with the last lifecycle-admitted
+        // Realtime catch-up remains one product update per host
+        // observation. Correlate that update with the last lifecycle-admitted
         // step while Runtime Input retains all ingress and held state once.
         let step = admission
             .step_at(admission.step_count().saturating_sub(1))
@@ -1200,7 +1200,7 @@ impl CsharpProductRuntime {
             admission,
             dropped_step_count,
         )?;
-        self.turn(facts)
+        self.update(facts)
     }
 
     fn action<F, T>(
@@ -1549,11 +1549,11 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let outputs = match admission.simulation() {
             // The lifecycle owns admission and its readout counters. Runtime
             // Input snapshots once with the last admitted phase token; the
-            // product receives one turn per accepted host observation while
+            // product receives one update per accepted host observation while
             // retaining the host observation as its realtime timing value.
             Some(simulation) => self
-                .turn_admitted(
-                    REALTIME_TURN_KIND,
+                .update_admitted(
+                    REALTIME_UPDATE_MODE,
                     Some(observed_time_ns.get()),
                     simulation,
                     admission.dropped_steps(),
@@ -1572,7 +1572,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .admit_demand_step()
             .map_err(lifecycle_runtime_error)?;
         let outputs = self
-            .turn_admitted(DEMAND_TURN_KIND, None, admission, 0)
+            .update_admitted(DEMAND_UPDATE_MODE, None, admission, 0)
             .map_err(|error| self.runtime_error(error))?;
         self.receipt(ProductDevOperationKind::AdmitDemandStep, outputs)
     }
@@ -1586,7 +1586,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .admit_external_step(ExternalStep::new(step.get()))
             .map_err(lifecycle_runtime_error)?;
         let outputs = self
-            .turn_admitted(EXTERNAL_TURN_KIND, None, admission, 0)
+            .update_admitted(EXTERNAL_UPDATE_MODE, None, admission, 0)
             .map_err(|error| self.runtime_error(error))?;
         self.receipt(ProductDevOperationKind::AdmitExternalStep, outputs)
     }
@@ -2137,7 +2137,7 @@ fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductDevRuntimeReadout {
 
 fn update_facts(
     lifecycle: &RuntimeLifecycle,
-    mode: NativeProductTurnKind,
+    mode: NativeProductUpdateMode,
     observed_host_time_nanoseconds: Option<u64>,
     admission: runtime_lifecycle::SimulationAdmission,
     dropped_step_count: u128,
@@ -2303,17 +2303,17 @@ fn call_action(
     checked_status(status, operation_name(operation))
 }
 
-fn call_turn(
+fn call_update(
     api: &LoadedProductApi,
     handle: *mut c_void,
-    args: NativeTurnArgs,
-) -> Result<NativeProductTurnRequest, CsharpProductRuntimeError> {
-    let mut request = NativeProductTurnRequest::None;
+    args: NativeProductUpdateArgs,
+) -> Result<NativeProductUpdateResult, CsharpProductRuntimeError> {
+    let mut result = NativeProductUpdateResult::None;
     // SAFETY: event label pointers borrow local strings that remain alive for
     // the call; the C# product is required to copy anything it retains.
-    let status = unsafe { (api.turn)(handle, &args, &mut request) };
-    checked_status(status, "turn")?;
-    Ok(request)
+    let status = unsafe { (api.update)(handle, &args, &mut result) };
+    checked_status(status, "update")?;
+    Ok(result)
 }
 
 fn call_complete_timeline(

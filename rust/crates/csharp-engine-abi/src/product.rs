@@ -1966,8 +1966,11 @@ pub struct NativeProductTimelineCompletion {
 pub type NativeProductCreate =
     unsafe extern "C" fn(*const NativeProductCreateArgs, *mut *mut c_void) -> i32;
 pub type NativeProductAction = unsafe extern "C" fn(*mut c_void) -> i32;
-pub type NativeProductTurn =
-    unsafe extern "C" fn(*mut c_void, *const NativeTurnArgs, *mut NativeProductTurnRequest) -> i32;
+pub type NativeProductUpdate = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeProductUpdateArgs,
+    *mut NativeProductUpdateResult,
+) -> i32;
 pub type NativeProductCompleteTimeline =
     unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32;
 pub type NativeProductDestroy = unsafe extern "C" fn(*mut c_void);
@@ -1980,11 +1983,11 @@ pub struct NativeProductApi {
     pub create:
         Option<unsafe extern "C" fn(*const NativeProductCreateArgs, *mut *mut c_void) -> i32>,
     pub start: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
-    pub turn: Option<
+    pub update: Option<
         unsafe extern "C" fn(
             *mut c_void,
-            *const NativeTurnArgs,
-            *mut NativeProductTurnRequest,
+            *const NativeProductUpdateArgs,
+            *mut NativeProductUpdateResult,
         ) -> i32,
     >,
     pub pause: Option<unsafe extern "C" fn(*mut c_void) -> i32>,

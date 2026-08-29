@@ -46,7 +46,7 @@ var customOrder = new List<string>();
 var customPipeline = new UpdatePipeline(engine, [UpdatePhase.Presentation, UpdatePhase.Input]);
 Register(customPipeline, UpdatePhase.Input, "input", customOrder, engine);
 Register(customPipeline, UpdatePhase.Presentation, "presentation", customOrder, engine);
-customPipeline.Run(new ProductUpdate(new ProductUpdateFacts(ProductTurnKind.Realtime, ProductLifecycleState.Running, 1, 1, 0, 0, 60, 0, 0, 1.0 / 60.0), ReadOnlySpan<ProductInputEvent>.Empty));
+customPipeline.Run(new ProductUpdate(new ProductUpdateFacts(ProductUpdateMode.Realtime, ProductLifecycleState.Running, 1, 1, 0, 0, 60, 0, 0, 1.0 / 60.0), ReadOnlySpan<ProductInputEvent>.Empty));
 
 Require(string.Join(',', customOrder) == "presentation,input", "the supplied phase order was not used");
 
@@ -54,7 +54,7 @@ static ProductUpdate UpdateAt(ulong firstStep, uint admittedStepCount, ulong gen
 {
     return new ProductUpdate(
         new ProductUpdateFacts(
-            ProductTurnKind.Realtime,
+            ProductUpdateMode.Realtime,
             ProductLifecycleState.Running,
             generation,
             1,
@@ -89,12 +89,18 @@ sealed class ExampleEngineContext : IEngineContext
     public ILookService Look => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
+    public IMotionService Motion => throw new NotSupportedException();
+    public IKinematicService Kinematic => throw new NotSupportedException();
     public ISpatialService Spatial => throw new NotSupportedException();
+    public IWorldOriginService WorldOrigin => throw new NotSupportedException();
     public IVoxelService Voxel => throw new NotSupportedException();
     public IVoxelContentService VoxelContent => throw new NotSupportedException();
+    public IVoxelScenePresentationService VoxelScenePresentation => throw new NotSupportedException();
     public IContentService Content => throw new NotSupportedException();
+    public IAuthoredContentService AuthoredContent => throw new NotSupportedException();
     public IContentStoreService ContentStore => throw new NotSupportedException();
     public IAppearanceService Appearance => throw new NotSupportedException();
+    public IPresentationService Presentation => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public IMechanicsService Mechanics => throw new NotSupportedException();
