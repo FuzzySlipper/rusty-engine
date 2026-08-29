@@ -32,7 +32,9 @@ families it needs.
 ## Current lifecycle
 
 The generated `IEngineProduct` contract has lifecycle callbacks for `Start`,
-`Update`, `Pause`, `Resume`, `Restart`, `Shutdown`, and `Dispose`.
+`Update`, `Pause`, `Resume`, `Restart`, `Shutdown`, and `Dispose`. Its optional
+`CompleteTimeline` callback receives copied, host-admitted completion data and
+lets product code accept or reject the product-owned ticket meaning.
 
 - The constructor receives `ProductCreateContext`, including `IEngineContext`,
   admitted product content, and input configuration.
@@ -42,6 +44,10 @@ The generated `IEngineProduct` contract has lifecycle callbacks for `Start`,
 - The runtime, not the product, drives lifecycle transitions and owns host
   integration. Do not create another central game loop or advance Engine time
   yourself.
+- Timeline completion is binding-fenced by the Rust runtime before C# receives
+  it. Correlation, outcome, and provenance values are copied into safe managed
+  data; a product that does not own timeline tickets may leave the default
+  rejecting implementation in place.
 
 Current `IEngineContext` properties are named service families generated from
 the ABI, such as input-adjacent look/motion services, spatial, camera,

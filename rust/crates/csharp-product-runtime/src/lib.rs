@@ -172,6 +172,7 @@ struct LoadedProductApi {
     create: NativeProductCreate,
     start: NativeProductAction,
     turn: NativeProductTurn,
+    complete_timeline: NativeProductCompleteTimeline,
     pause: NativeProductAction,
     resume: NativeProductAction,
     restart: NativeProductAction,
@@ -220,6 +221,7 @@ impl LoadedProductApi {
             create: required_function(product.create, "create")?,
             start: required_function(product.start, "start")?,
             turn: required_function(product.turn, "turn")?,
+            complete_timeline: required_function(product.complete_timeline, "complete_timeline")?,
             pause: required_function(product.pause, "pause")?,
             resume: required_function(product.resume, "resume")?,
             restart: required_function(product.restart, "restart")?,
@@ -543,7 +545,53 @@ impl CsharpProductRuntime {
         self.exercise_physical_mapping(released_binding)?;
         self.exercise_direct_intent(released_binding)?;
         self.exercise_selected_mode()?;
+        self.exercise_timeline_completion()?;
         self.exercise_pause_resume()?;
+        Ok(())
+    }
+
+    fn exercise_timeline_completion(&mut self) -> Result<(), CsharpProductRuntimeError> {
+        let binding = self.binding();
+        let completion = ProductDevTimelineCompletion::decode_json(
+            &serde_json::to_vec(&serde_json::json!({
+                "ticket": "7",
+                "runtime": {
+                    "instanceId": binding.instance_id.get().to_string(),
+                    "generation": binding.generation.get().to_string(),
+                    "controlRevision": binding.control_revision.get().to_string(),
+                },
+                "correlation": "runtime.exercise.timeline",
+                "outcome": {
+                    "kind": "success",
+                    "data": { "accepted": true },
+                },
+                "provenance": {
+                    "correlation": "runtime.exercise.timeline",
+                    "detail": { "source": "fixture" },
+                },
+            }))
+            .map_err(|error| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_EXERCISE_TIMELINE",
+                    format!("timeline fixture encoding failed: {error}"),
+                )
+            })?,
+        )
+        .map_err(|error| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_TIMELINE",
+                format!("timeline fixture admission failed: {error}"),
+            )
+        })?;
+        let receipt = self
+            .complete_timeline(completion)
+            .map_err(exercise_runtime_error)?;
+        if !receipt.result().is_accepted() || receipt.result().ticket().get() != 7 {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_TIMELINE",
+                "C# product did not accept the copied timeline completion",
+            ));
+        }
         Ok(())
     }
 
@@ -1545,14 +1593,107 @@ impl ProductDevRuntime for CsharpProductRuntime {
 
     fn complete_timeline(
         &mut self,
-        _completion: ProductDevTimelineCompletion,
+        completion: ProductDevTimelineCompletion,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>, ProductDevRuntimeError>
     {
-        Err(ProductDevRuntimeError::new(
-            "CSHARP_TIMELINE_UNSUPPORTED",
-            "the C# NativeAOT runtime does not yet bridge timeline completions",
-        )
-        .expect("fixed error"))
+        let envelope = completion.envelope();
+        let ticket = CanonicalU64::new(envelope.ticket().value());
+        let binding = envelope.binding();
+        let current = self.binding();
+        if self.lifecycle.state() != RuntimeState::Running
+            || binding.instance_id().value() != current.instance_id.get()
+            || binding.generation().value() != current.generation.get()
+            || binding.control_revision().value() != current.control_revision.get()
+        {
+            let result = ProductDevTimelineCompletionResult::rejected(
+                ticket,
+                "timeline completion does not name the current running product binding",
+            )
+            .map_err(host_runtime_error)?;
+            return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+        }
+
+        let outcome_data = match envelope.outcome() {
+            runtime_timeline::TimelineCompletionOutcome::Success(data)
+            | runtime_timeline::TimelineCompletionOutcome::Failure(data) => data
+                .as_ref()
+                .map(|value| serde_json::to_vec(value.value()))
+                .transpose()
+                .map_err(|error| {
+                    ProductDevRuntimeError::new(
+                        "CSHARP_TIMELINE_DATA",
+                        format!("timeline outcome data could not be copied: {error}"),
+                    )
+                    .expect("bounded serialization diagnostic")
+                })?,
+        };
+        let provenance_detail = envelope
+            .provenance()
+            .detail()
+            .map(|value| serde_json::to_vec(value.value()))
+            .transpose()
+            .map_err(|error| {
+                ProductDevRuntimeError::new(
+                    "CSHARP_TIMELINE_DATA",
+                    format!("timeline provenance data could not be copied: {error}"),
+                )
+                .expect("bounded serialization diagnostic")
+            })?;
+        let native = NativeProductTimelineCompletion {
+            ticket: ticket.get(),
+            instance_id: current.instance_id.get(),
+            generation: current.generation.get(),
+            control_revision: current.control_revision.get(),
+            correlation: native_utf8(envelope.correlation()),
+            outcome: match envelope.outcome() {
+                runtime_timeline::TimelineCompletionOutcome::Success(_) => {
+                    NativeProductTimelineOutcome::Success
+                }
+                runtime_timeline::TimelineCompletionOutcome::Failure(_) => {
+                    NativeProductTimelineOutcome::Failure
+                }
+            },
+            outcome_data: native_optional_bytes(outcome_data.as_deref()),
+            provenance_correlation: native_utf8(envelope.provenance().correlation()),
+            provenance_detail: native_optional_bytes(provenance_detail.as_deref()),
+        };
+
+        self.services.begin_call(ui_binding(&self.lifecycle));
+        let accepted = match call_complete_timeline(&self.api, self.handle, &native) {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                self.services.discard_call();
+                return Err(self.runtime_error(error));
+            }
+        };
+        if !accepted {
+            self.services.discard_call();
+            let result = ProductDevTimelineCompletionResult::rejected(
+                ticket,
+                "C# product rejected timeline completion",
+            )
+            .map_err(host_runtime_error)?;
+            return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+        }
+        let staged = match self.services.take_call() {
+            Ok(staged) => staged,
+            Err(error) => {
+                self.services.discard_call();
+                return Err(self.runtime_error(error.into()));
+            }
+        };
+        let outputs = match service_outputs(self.services.outputs(&staged)) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                self.services.discard_call();
+                return Err(self.runtime_error(error));
+            }
+        };
+        self.services.commit_call(staged);
+        let result =
+            ProductDevTimelineCompletionResult::accepted(ticket, self.binding(), self.readout())
+                .map_err(host_runtime_error)?;
+        ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
     }
 
     fn report_audio_feedback(
@@ -2173,6 +2314,46 @@ fn call_turn(
     let status = unsafe { (api.turn)(handle, &args, &mut request) };
     checked_status(status, "turn")?;
     Ok(request)
+}
+
+fn call_complete_timeline(
+    api: &LoadedProductApi,
+    handle: *mut c_void,
+    completion: &NativeProductTimelineCompletion,
+) -> Result<bool, CsharpProductRuntimeError> {
+    let mut accepted = 0u8;
+    // SAFETY: all pointers in `completion` borrow local UTF-8/JSON buffers that
+    // remain alive for this call; the generated C# bootstrap copies them.
+    let status = unsafe { (api.complete_timeline)(handle, completion, &mut accepted) };
+    checked_status(status, "complete_timeline")?;
+    match accepted {
+        0 => Ok(false),
+        1 => Ok(true),
+        value => Err(CsharpProductRuntimeError::new(
+            "CSHARP_TIMELINE_ACCEPTED",
+            format!("C# product returned invalid timeline acceptance value {value}"),
+        )),
+    }
+}
+
+fn native_utf8(value: &str) -> NativeUtf8Slice {
+    NativeUtf8Slice {
+        bytes: value.as_bytes().as_ptr(),
+        len: value.len(),
+    }
+}
+
+fn native_optional_bytes(value: Option<&[u8]>) -> NativeByteSlice {
+    value.map_or(
+        NativeByteSlice {
+            bytes: ptr::null(),
+            len: 0,
+        },
+        |bytes| NativeByteSlice {
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        },
+    )
 }
 
 fn checked_status(status: i32, operation: &str) -> Result<(), CsharpProductRuntimeError> {

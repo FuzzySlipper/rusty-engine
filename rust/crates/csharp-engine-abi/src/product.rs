@@ -1938,11 +1938,37 @@ pub struct NativeProductCreateArgs {
     pub engine: NativeEngineApi,
 }
 
+/// Product-owned meaning of one externally completed timeline ticket.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeProductTimelineOutcome {
+    Success = 1,
+    Failure = 2,
+}
+
+/// Borrowed completion data copied by the generated C# product bootstrap.
+/// Empty outcome/provenance data slices represent absent optional values.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeProductTimelineCompletion {
+    pub ticket: u64,
+    pub instance_id: u64,
+    pub generation: u64,
+    pub control_revision: u64,
+    pub correlation: NativeUtf8Slice,
+    pub outcome: NativeProductTimelineOutcome,
+    pub outcome_data: NativeByteSlice,
+    pub provenance_correlation: NativeUtf8Slice,
+    pub provenance_detail: NativeByteSlice,
+}
+
 pub type NativeProductCreate =
     unsafe extern "C" fn(*const NativeProductCreateArgs, *mut *mut c_void) -> i32;
 pub type NativeProductAction = unsafe extern "C" fn(*mut c_void) -> i32;
 pub type NativeProductTurn =
     unsafe extern "C" fn(*mut c_void, *const NativeTurnArgs, *mut NativeProductTurnRequest) -> i32;
+pub type NativeProductCompleteTimeline =
+    unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32;
 pub type NativeProductDestroy = unsafe extern "C" fn(*mut c_void);
 
 /// Product functions supplied to Rust by the one NativeAOT bootstrap export.
@@ -1965,6 +1991,9 @@ pub struct NativeProductApi {
     pub restart: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub shutdown: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub destroy: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub complete_timeline: Option<
+        unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32,
+    >,
 }
 
 pub type NativeProductBind = unsafe extern "C" fn(*mut NativeProductApi) -> i32;

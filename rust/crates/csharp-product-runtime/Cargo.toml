@@ -13,4 +13,5 @@ product-model.workspace = true
 render-presentation.workspace = true
 runtime-input.workspace = true
 runtime-lifecycle.workspace = true
+runtime-timeline.workspace = true
 runtime-ui.workspace = true

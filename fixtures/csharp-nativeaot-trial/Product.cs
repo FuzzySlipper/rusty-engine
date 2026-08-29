@@ -633,6 +633,27 @@ public sealed class Product : IEngineProduct
         _shutdown = true;
     }
 
+    public bool CompleteTimeline(ProductTimelineCompletion completion)
+    {
+        Require(_started && !_shutdown, "timeline completion reached an inactive product");
+        Require(completion.Ticket == 7, "timeline completion ticket did not reach Product.Game");
+        Require(completion.Binding.InstanceId == 1
+            && completion.Binding.Generation == _lastUpdateGeneration
+            && completion.Binding.ControlRevision == _lastUpdateControlRevision,
+            "timeline completion binding did not reach Product.Game");
+        Require(completion.Correlation.Span.SequenceEqual("runtime.exercise.timeline"u8),
+            "timeline completion correlation did not reach Product.Game");
+        Require(completion.Outcome == ProductTimelineOutcome.Success
+            && completion.OutcomeData is { } outcome
+            && outcome.Span.SequenceEqual("{\"accepted\":true}"u8),
+            "timeline completion outcome did not reach Product.Game");
+        Require(completion.ProvenanceCorrelation.Span.SequenceEqual("runtime.exercise.timeline"u8)
+            && completion.ProvenanceDetail is { } detail
+            && detail.Span.SequenceEqual("{\"source\":\"fixture\"}"u8),
+            "timeline completion provenance did not reach Product.Game");
+        return true;
+    }
+
     public void Dispose()
     {
         _ = _engine.Random.NextBool(_rng);

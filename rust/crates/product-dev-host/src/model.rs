@@ -954,6 +954,14 @@ pub struct ProductDevTimelineCompletionResult {
 }
 
 impl ProductDevTimelineCompletionResult {
+    pub const fn is_accepted(&self) -> bool {
+        self.accepted
+    }
+
+    pub const fn ticket(&self) -> CanonicalU64 {
+        self.ticket
+    }
+
     pub fn accepted(
         ticket: CanonicalU64,
         binding: ProductDevRuntimeBinding,

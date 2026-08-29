@@ -150,6 +150,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     api->restart = &Restart;
                     api->shutdown = &Shutdown;
                     api->destroy = &Destroy;
+                    api->complete_timeline = &CompleteTimeline;
                     return 1;
                 }
 
@@ -208,6 +209,31 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int Shutdown(void* handle) => Invoke(handle, static product => product.Shutdown());
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static int CompleteTimeline(void* handle, NativeProductTimelineCompletion* completion, byte* accepted)
+                {
+                    try
+                    {
+                        if (completion is null || accepted is null
+                            || (completion->correlation.len != 0 && completion->correlation.bytes is null)
+                            || (completion->outcome_data.len != 0 && completion->outcome_data.bytes is null)
+                            || (completion->provenance_correlation.len != 0 && completion->provenance_correlation.bytes is null)
+                            || (completion->provenance_detail.len != 0 && completion->provenance_detail.bytes is null)) return 2;
+                        *accepted = 0;
+                        ProductTimelineCompletion value = new(
+                            completion->ticket,
+                            new ProductTimelineBinding(completion->instance_id, completion->generation, completion->control_revision),
+                            CopyBytes(completion->correlation.bytes, completion->correlation.len),
+                            NativeConversions.FromNative(completion->outcome),
+                            CopyOptionalBytes(completion->outcome_data.bytes, completion->outcome_data.len),
+                            CopyBytes(completion->provenance_correlation.bytes, completion->provenance_correlation.len),
+                            CopyOptionalBytes(completion->provenance_detail.bytes, completion->provenance_detail.len));
+                        *accepted = Get(handle).Product.CompleteTimeline(value) ? (byte)1 : (byte)0;
+                        return 1;
+                    }
+                    catch { return 99; }
+                }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static void Destroy(void* handle)
@@ -331,6 +357,12 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     if (length == 0) return ReadOnlyMemory<byte>.Empty;
                     if (source is null) throw new ArgumentException("nonempty native byte slice has no storage");
                     return new ReadOnlySpan<byte>(source, checked((int)length)).ToArray();
+                }
+
+                private static ReadOnlyMemory<byte>? CopyOptionalBytes(byte* source, nuint length)
+                {
+                    if (source is null && length == 0) return null;
+                    return CopyBytes(source, length);
                 }
             }
             """;

@@ -591,6 +591,7 @@ dependencies = [
  "render-presentation",
  "runtime-input",
  "runtime-lifecycle",
+ "runtime-timeline",
  "runtime-ui",
  "serde_json",
 ]
