@@ -238,6 +238,116 @@ public sealed record OperationId : MechanicsIdentity
     }
 }
 
+/// <summary>Identity for one caller-authored item definition.</summary>
+public sealed record ItemDefinitionId : MechanicsIdentity
+{
+    private ItemDefinitionId(string value) : base(value) { }
+
+    public static ItemDefinitionId Parse(string value) => new(value);
+
+    public static bool TryParse(string? value, out ItemDefinitionId? result)
+    {
+        try
+        {
+            result = value is null ? null : Parse(value);
+            return result is not null;
+        }
+        catch (ArgumentException)
+        {
+            result = null;
+            return false;
+        }
+    }
+}
+
+/// <summary>Identity for one caller-authored capacity dimension.</summary>
+public sealed record CapacityMetricId : MechanicsIdentity
+{
+    private CapacityMetricId(string value) : base(value) { }
+
+    public static CapacityMetricId Parse(string value) => new(value);
+
+    public static bool TryParse(string? value, out CapacityMetricId? result)
+    {
+        try
+        {
+            result = value is null ? null : Parse(value);
+            return result is not null;
+        }
+        catch (ArgumentException)
+        {
+            result = null;
+            return false;
+        }
+    }
+}
+
+/// <summary>Identity for one caller-authored equipment slot.</summary>
+public sealed record EquipmentSlotId : MechanicsIdentity
+{
+    private EquipmentSlotId(string value) : base(value) { }
+
+    public static EquipmentSlotId Parse(string value) => new(value);
+
+    public static bool TryParse(string? value, out EquipmentSlotId? result)
+    {
+        try
+        {
+            result = value is null ? null : Parse(value);
+            return result is not null;
+        }
+        catch (ArgumentException)
+        {
+            result = null;
+            return false;
+        }
+    }
+}
+
+/// <summary>Identity for one caller-authored item classification.</summary>
+public sealed record ItemClassificationId : MechanicsIdentity
+{
+    private ItemClassificationId(string value) : base(value) { }
+
+    public static ItemClassificationId Parse(string value) => new(value);
+
+    public static bool TryParse(string? value, out ItemClassificationId? result)
+    {
+        try
+        {
+            result = value is null ? null : Parse(value);
+            return result is not null;
+        }
+        catch (ArgumentException)
+        {
+            result = null;
+            return false;
+        }
+    }
+}
+
+/// <summary>Identity for one caller-authored mutually exclusive equipment group.</summary>
+public sealed record EquipmentExclusivityId : MechanicsIdentity
+{
+    private EquipmentExclusivityId(string value) : base(value) { }
+
+    public static EquipmentExclusivityId Parse(string value) => new(value);
+
+    public static bool TryParse(string? value, out EquipmentExclusivityId? result)
+    {
+        try
+        {
+            result = value is null ? null : Parse(value);
+            return result is not null;
+        }
+        catch (ArgumentException)
+        {
+            result = null;
+            return false;
+        }
+    }
+}
+
 /// <summary>
 /// Describes where one source activation came from. The optional entity values
 /// let the same managed mechanism be used for entity-backed and standalone

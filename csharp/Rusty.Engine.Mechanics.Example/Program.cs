@@ -15,6 +15,7 @@ ExerciseContinuousStatEvaluation();
 ExerciseExactTrackAtomicity();
 ExerciseContinuousTrackAtomicity();
 ExerciseEffectPolicies();
+ExerciseManagedInventory();
 
 static void ExerciseTypedValues()
 {
@@ -249,6 +250,143 @@ static void ExerciseEffectPolicies()
     EffectMutationReceipt expired = replaceState.Expire(EffectInstanceId.Parse("stance-new"));
     Require(expired.Kind == EffectMutationKind.Expire && replaceState.Effects.Count == 0,
         "explicit effect expiry was not caller-driven");
+}
+
+static void ExerciseManagedInventory()
+{
+    const ulong Owner = 1;
+    const ulong SecondOwner = 2;
+    const ulong RifleEntity = 10;
+    const ulong ShieldEntity = 11;
+
+    CapacityMetricId mass = CapacityMetricId.Parse("mass");
+    ItemDefinition ammunition = new(
+        ItemDefinitionId.Parse("ammunition"),
+        ItemKind.Fungible,
+        maximumQuantity: 100,
+        capacityCosts: [new ItemCapacityCost(mass, 1)]);
+    ItemDefinition rifle = new(
+        ItemDefinitionId.Parse("rifle"),
+        ItemKind.Unique,
+        maximumQuantity: 1,
+        classifications: [ItemClassificationId.Parse("weapon")],
+        capacityCosts: [new ItemCapacityCost(mass, 8)],
+        equipment: new ItemEquipmentPolicy(
+            requiredSlots: 2,
+            EquipmentExclusivityId.Parse("weapons")),
+        sourceDefinitions: [SourceDefinitionId.Parse("precision")]);
+    ItemDefinition shield = new(
+        ItemDefinitionId.Parse("shield"),
+        ItemKind.Unique,
+        maximumQuantity: 1,
+        classifications: [ItemClassificationId.Parse("shield")],
+        capacityCosts: [new ItemCapacityCost(mass, 6)],
+        equipment: new ItemEquipmentPolicy(
+            requiredSlots: 1,
+            EquipmentExclusivityId.Parse("weapons")));
+    EquipmentSlotDefinition leftHand = new(
+        EquipmentSlotId.Parse("hand-left"),
+        [ItemClassificationId.Parse("weapon")]);
+    EquipmentSlotDefinition rightHand = new(
+        EquipmentSlotId.Parse("hand-right"),
+        [ItemClassificationId.Parse("weapon")]);
+    EquipmentSlotDefinition shieldHand = new(
+        EquipmentSlotId.Parse("shield-hand"),
+        [ItemClassificationId.Parse("shield")]);
+
+    var world = new InventoryWorld();
+    world.RegisterInventory(new InventoryState(
+        new EntityId(Owner),
+        [new InventoryCapacityLimit(mass, 18)]));
+    world.RegisterInventory(new InventoryState(
+        new EntityId(SecondOwner),
+        [new InventoryCapacityLimit(mass, 20)]));
+    world.RegisterEquipment(new EquipmentState(new EntityId(Owner)));
+    world.RegisterEquipment(new EquipmentState(new EntityId(SecondOwner)));
+
+    InventoryMutationReceipt granted = world.Grant(new EntityId(Owner), ammunition, 5);
+    Require(granted.AfterQuantity == 5, "managed fungible grant was not applied");
+    Require(world.View(new EntityId(Owner)).Stacks.Single().Quantity == 5,
+        "managed stacks were not exposed canonically");
+
+    ItemMaterializationReceipt materialized = world.MaterializeUnique(
+        new ItemState(new EntityId(RifleEntity), rifle),
+        new EntityId(Owner));
+    Require(materialized.CapacityAfter.Single().Used == 13,
+        "managed unique item capacity was not included");
+
+    EquipmentMutationReceipt equipped = EquipmentService.Equip(
+        world,
+        new EntityId(Owner),
+        new EntityId(RifleEntity),
+        [leftHand, rightHand]);
+    Require(equipped.SourceActivations.Count == 1
+        && equipped.SourceActivations[0].Identity.Item == new EntityId(RifleEntity),
+        "equipped item source was not activated once per item");
+
+    ulong beforeRejectedCapacity = world.Revision;
+    ExpectMechanicsError(
+        () => world.MaterializeUnique(
+            new ItemState(new EntityId(ShieldEntity), shield),
+            new EntityId(Owner)),
+        "managed capacity rejection was not atomic");
+    Require(world.Revision == beforeRejectedCapacity
+        && !world.TryGetItem(new EntityId(ShieldEntity), out _),
+        "rejected materialization changed managed world state");
+
+    ulong beforeEquippedTransfer = world.Revision;
+    ExpectMechanicsError(
+        () => ItemService.TransferUnique(
+            world,
+            new EntityId(RifleEntity),
+            new EntityId(Owner),
+            new EntityId(SecondOwner)),
+        "equipped unique item transfer was not blocked");
+    Require(world.Revision == beforeEquippedTransfer
+        && world.TryGetContainer(new EntityId(RifleEntity), out EntityId owner)
+        && owner == new EntityId(Owner),
+        "rejected equipped transfer changed containment");
+
+    InventoryWorldCandidate transfer = world.Prepare();
+    transfer.Unequip(new EntityId(Owner), new EntityId(RifleEntity));
+    ItemTransferReceipt moved = transfer.TransferUnique(
+        new EntityId(RifleEntity),
+        new EntityId(Owner),
+        new EntityId(SecondOwner));
+    transfer.Publish();
+    Require(moved.ToCapacityAfter.Single().Used == 8
+        && world.TryGetContainer(new EntityId(RifleEntity), out EntityId newOwner)
+        && newOwner == new EntityId(SecondOwner),
+        "detached unequip and transfer did not publish together");
+
+    EquipmentService.Equip(
+        world,
+        new EntityId(SecondOwner),
+        new EntityId(RifleEntity),
+        [leftHand, rightHand]);
+
+    ItemMaterializationReceipt secondShield = world.MaterializeUnique(
+        new ItemState(new EntityId(ShieldEntity), shield),
+        new EntityId(SecondOwner));
+    Require(secondShield.CapacityAfter.Single().Used == 14,
+        "second-owner capacity was not maintained");
+    ExpectMechanicsError(
+        () => EquipmentService.Equip(
+            world,
+            new EntityId(SecondOwner),
+            new EntityId(ShieldEntity),
+            [shieldHand]),
+        "exclusivity or containment validation was not enforced");
+    Require(world.TryGetEquipment(new EntityId(SecondOwner), out EquipmentState? equipment)
+        && equipment is not null
+        && equipment.Assignments.Count == 2
+        && equipment.Assignments.All(assignment => assignment.Item == new EntityId(RifleEntity)),
+        "rejected equipment changed state");
+
+    ItemDestroyReceipt destroyed = ItemService.DestroyUnique(world, new EntityId(ShieldEntity));
+    Require(destroyed.FormerOwner == new EntityId(SecondOwner)
+        && !world.TryGetItem(new EntityId(ShieldEntity), out _),
+        "explicit unique destruction did not remove the item");
 }
 
 static void ExpectMechanicsError(Action action, string message)
