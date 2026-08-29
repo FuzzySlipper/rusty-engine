@@ -166,6 +166,11 @@ public sealed class ExactTrack
     {
         EnsureBoundsMatchDefinition(prospectiveBounds);
         EnsureInBounds(Current, Bounds, "Current exact track value");
+        if (prospectiveBounds.Maximum > Bounds.Maximum)
+        {
+            throw new MechanicsException("Exact track reconciliation cannot expand its current maximum.");
+        }
+
         ExactValue before = Current;
         ExactValue after = policy switch
         {

@@ -118,13 +118,33 @@ public readonly record struct ExactRatio : IComparable<ExactRatio>
 
     public uint Denominator { get; }
 
-    public ExactValue Apply(ExactValue value) => ExactRatioProduct.One.Include(this).Apply(value);
+    public ExactValue Apply(ExactValue value)
+    {
+        EnsureValid();
+        return ExactRatioProduct.One.Include(this).Apply(value);
+    }
 
     public int CompareTo(ExactRatio other)
     {
+        EnsureValid();
+        other.EnsureValid();
         ulong left = (ulong)Numerator * other.Denominator;
         ulong right = (ulong)other.Numerator * Denominator;
         return left.CompareTo(right);
+    }
+
+    internal void EnsureValid()
+    {
+        if (Denominator == 0)
+        {
+            throw new MechanicsArithmeticException("Exact ratios cannot have a zero denominator.");
+        }
+
+        if (Numerator > MaximumComponent || Denominator > MaximumComponent)
+        {
+            throw new MechanicsArithmeticException(
+                $"Exact ratio components must be at most {MaximumComponent}.");
+        }
     }
 
     private static uint GreatestCommonDivisor(uint left, uint right)
@@ -161,6 +181,7 @@ public sealed class ExactRatioProduct
 
     public ExactRatioProduct Include(ExactRatio ratio)
     {
+        ratio.EnsureValid();
         BigInteger numerator = Numerator * ratio.Numerator;
         BigInteger denominator = Denominator * ratio.Denominator;
         BigInteger divisor = BigInteger.GreatestCommonDivisor(numerator, denominator);
@@ -169,6 +190,11 @@ public sealed class ExactRatioProduct
 
     public ExactValue Apply(ExactValue value)
     {
+        if (Denominator <= 0 || Numerator < 0)
+        {
+            throw new MechanicsArithmeticException("Exact ratio products must be non-negative with a positive denominator.");
+        }
+
         BigInteger magnitude = BigInteger.Abs(new BigInteger(value.Raw)) * Numerator / Denominator;
         BigInteger signed = value.Raw < 0 ? -magnitude : magnitude;
         if (signed < -ExactValue.MaximumAbsolute || signed > ExactValue.MaximumAbsolute)

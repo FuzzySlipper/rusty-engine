@@ -171,6 +171,11 @@ public sealed class ContinuousTrack
     {
         EnsureBoundsMatchDefinition(prospectiveBounds);
         EnsureInBounds(Current, Bounds, "Current continuous track value");
+        if (prospectiveBounds.Maximum > Bounds.Maximum)
+        {
+            throw new MechanicsException("Continuous track reconciliation cannot expand its current maximum.");
+        }
+
         ContinuousValue before = Current;
         ContinuousValue after = policy switch
         {

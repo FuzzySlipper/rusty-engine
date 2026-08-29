@@ -13,6 +13,7 @@ ExerciseTypedValues();
 ExerciseExactStatEvaluation();
 ExerciseContinuousStatEvaluation();
 ExerciseExactTrackAtomicity();
+ExerciseContinuousTrackAtomicity();
 ExerciseEffectPolicies();
 
 static void ExerciseTypedValues()
@@ -24,6 +25,13 @@ static void ExerciseTypedValues()
     ExactRatio ratio = new(2, 4);
     Require(ratio.Numerator == 1 && ratio.Denominator == 2, "ratio was not normalized");
     Require(ratio.Apply(new ExactValue(11)).Raw == 5, "exact ratio did not round toward zero once");
+    ExactRatio invalidDefaultRatio = default;
+    ExpectMechanicsError(
+        () => ExactRatioProduct.One.Include(invalidDefaultRatio),
+        "default exact ratio was accepted during composition");
+    ExpectMechanicsError(
+        () => invalidDefaultRatio.Apply(new ExactValue(1)),
+        "default exact ratio was accepted during application");
 
     ContinuousValue negativeZero = ContinuousValue.FromBits(0x8000_0000_0000_0000);
     Require(negativeZero.Bits == 0, "continuous negative zero was not normalized");
@@ -137,6 +145,36 @@ static void ExerciseExactTrackAtomicity()
         "no-stranding preserve policy was ignored");
     Require(track.Current.Raw == 60 && track.Bounds == beforeRejectedReconcile,
         "rejected reconciliation changed track state");
+
+    ExactTrackBounds beforeExpandedReconcile = track.Bounds;
+    ExactValue beforeExpandedValue = track.Current;
+    ExactValue expandedMaximum = new(80);
+    ExpectMechanicsError(
+        () => track.Reconcile(
+            definition.ResolveBounds(expandedMaximum),
+            ExactTrackReconciliationPolicy.ClampToMaximum),
+        "exact track reconciliation expanded its maximum");
+    Require(track.Current == beforeExpandedValue && track.Bounds == beforeExpandedReconcile,
+        "rejected exact maximum expansion changed track state");
+}
+
+static void ExerciseContinuousTrackAtomicity()
+{
+    ContinuousTrackDefinition definition = new(
+        TrackId.Parse("continuous-resource"),
+        new ContinuousValue(0.0),
+        new ContinuousTrackMaximum.Fixed(new ContinuousValue(1.0)));
+    ContinuousTrack track = new(definition, new ContinuousValue(0.5));
+    ContinuousTrackBounds beforeExpandedReconcile = track.Bounds;
+    ContinuousValue beforeExpandedValue = track.Current;
+    ContinuousValue expandedMaximum = new(1.5);
+    ExpectMechanicsError(
+        () => track.Reconcile(
+            definition.ResolveBounds(expandedMaximum),
+            ContinuousTrackReconciliationPolicy.ClampToMaximum),
+        "continuous track reconciliation expanded its maximum");
+    Require(track.Current == beforeExpandedValue && track.Bounds == beforeExpandedReconcile,
+        "rejected continuous maximum expansion changed track state");
 }
 
 static void ExerciseEffectPolicies()
