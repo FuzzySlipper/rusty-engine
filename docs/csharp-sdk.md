@@ -103,7 +103,7 @@ pieces:
 
 | Package | Current role |
 | --- | --- |
-| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper, compiled into `Rusty.Engine`. |
+| [`Rusty.Engine.Application`](../csharp/Rusty.Engine/Application) | An optional Engine-context update pipeline and deterministic scheduler helper, compiled into `Rusty.Engine`. Its `SimulationScheduler` can resume on the next admitted step, wait fixed admitted steps, or wait for a caller-owned completion condition without creating a second clock. |
 | [`Rusty.Engine.Entities`](../csharp/Rusty.Engine.Entities) | Product component keys, managed entity worlds, snapshots, batches, and managed adapters around Engine mechanisms. |
 | [`Rusty.Engine.Persistence`](../csharp/Rusty.Engine.Persistence) | Product-state codecs, stores, restoration plans, and entity-world persistence helpers. |
 | [`Rusty.Engine.Resolution`](../csharp/Rusty.Engine.Resolution) | Structural resolution sessions and typed product transaction coordination. |

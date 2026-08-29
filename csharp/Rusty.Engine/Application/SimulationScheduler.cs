@@ -50,6 +50,58 @@ public sealed class SimulationScheduler
         return Add(NextDueStep(delaySteps), NoRepeat, callback);
     }
 
+    /// <summary>Resumes a managed continuation at the next admitted simulation step.</summary>
+    /// <remarks>
+    /// This is equivalent to <see cref="ScheduleAfter(ulong, ScheduledWorkCallback)"/>
+    /// with a zero delay. It does not create or advance a managed clock.
+    /// </remarks>
+    public ScheduledWorkHandle ResumeNextStep(ScheduledWorkCallback continuation)
+    {
+        return ScheduleAfter(0, continuation);
+    }
+
+    /// <summary>
+    /// Resumes a managed continuation after the requested number of complete
+    /// admitted steps. Zero means the next admitted step.
+    /// </summary>
+    public ScheduledWorkHandle WaitSteps(ulong stepCount, ScheduledWorkCallback continuation)
+    {
+        return ScheduleAfter(stepCount, continuation);
+    }
+
+    /// <summary>
+    /// Evaluates a caller-owned completion condition at admitted simulation
+    /// steps and resumes the continuation once it succeeds.
+    /// </summary>
+    /// <remarks>
+    /// A false condition retains the same pending handle and evaluates again
+    /// at the next admitted step. If the condition throws, the exception
+    /// propagates and the continuation remains pending for caller-directed
+    /// recovery or cancellation.
+    /// </remarks>
+    public ScheduledWorkHandle WaitUntil(Func<bool> completionCondition, ScheduledWorkCallback continuation)
+    {
+        ArgumentNullException.ThrowIfNull(completionCondition);
+        return WaitUntil(_ => completionCondition(), continuation);
+    }
+
+    /// <summary>
+    /// Evaluates a caller-owned completion condition against each admitted
+    /// simulation step and resumes the continuation once it succeeds.
+    /// </summary>
+    public ScheduledWorkHandle WaitUntil(
+        Func<ScheduledWorkContext, bool> completionCondition,
+        ScheduledWorkCallback continuation)
+    {
+        ArgumentNullException.ThrowIfNull(completionCondition);
+        ValidateCallback(continuation);
+
+        var state = new ConditionContinuation(this, completionCondition, continuation);
+        ScheduledWorkHandle handle = ResumeNextStep(state.Dispatch);
+        state.Start(handle);
+        return handle;
+    }
+
     /// <summary>Schedules repeating work at an absolute Engine simulation step.</summary>
     public ScheduledWorkHandle ScheduleRepeatingAt(
         ulong firstSimulationStep,
@@ -279,6 +331,40 @@ public sealed class SimulationScheduler
         public ScheduledWorkCallback Callback { get; set; }
         public ulong InsertionOrder { get; }
         public ulong Revision { get; set; }
+    }
+
+    private sealed class ConditionContinuation
+    {
+        private readonly SimulationScheduler _scheduler;
+        private readonly Func<ScheduledWorkContext, bool> _completionCondition;
+        private readonly ScheduledWorkCallback _continuation;
+        private ScheduledWorkHandle _handle;
+
+        public ConditionContinuation(
+            SimulationScheduler scheduler,
+            Func<ScheduledWorkContext, bool> completionCondition,
+            ScheduledWorkCallback continuation)
+        {
+            _scheduler = scheduler;
+            _completionCondition = completionCondition;
+            _continuation = continuation;
+        }
+
+        public void Start(ScheduledWorkHandle handle)
+        {
+            _handle = handle;
+        }
+
+        public void Dispatch(ScheduledWorkContext context)
+        {
+            if (_completionCondition(context))
+            {
+                _continuation(context);
+                return;
+            }
+
+            _scheduler.RescheduleAfter(_handle, 0);
+        }
     }
 }
 

@@ -363,8 +363,9 @@ replacement surface are ready.
     Product Kernel, Runtime Composition, QuickJS VM, materializer, and Assembly
     are not supported product variants. The managed SDK does need optional
     coroutine-like logic driven by Engine-admitted steps. Extend the existing
-    C# scheduler with simple continuations rather than preserving the five-phase
-    Product Model scheduler.
+    C# scheduler with simple admitted-step continuations rather than preserving
+    the five-phase Product Model scheduler. Those continuations stay optional,
+    use ordinary managed delegates, and carry no persistence or second clock.
 11. **`observe-pairs`: retain the mechanism under discoverable sensing names.**
     Its reusable core serves stealth visibility, AI target acquisition, sentry
     vision, and per-target awareness/threat accumulation by combining distance,
