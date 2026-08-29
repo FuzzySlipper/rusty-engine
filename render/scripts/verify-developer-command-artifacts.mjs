@@ -14,9 +14,9 @@ for (const artifact of [clientArtifact, hostArtifact]) {
   for (const file of manifest.files) readFileSync(new URL(file, artifact), 'utf8');
 }
 for (const source of [
-  ...['index.js', 'generated-developer-command-contract.js', 'generated-standard-host-wire.js']
+  ...['index.js', 'generated-developer-command-contract.js']
     .map((file) => readFileSync(new URL(file, clientArtifact), 'utf8')),
-  ...['developer-command-client.js', 'generated-developer-command-contract.js', 'generated-standard-host-wire.js']
+  ...['developer-command-client.js', 'generated-developer-command-contract.js']
     .map((file) => readFileSync(new URL(file, hostArtifact), 'utf8')),
 ]) {
   if (source.includes('sourceMappingURL=')) {

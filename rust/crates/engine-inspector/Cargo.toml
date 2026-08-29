@@ -16,17 +16,12 @@ core-assets.workspace = true
 core-ids.workspace = true
 engine-spatial.workspace = true
 entity-state.workspace = true
-gameplay-mechanics.workspace = true
-gameplay-continuous-mechanics.workspace = true
-gameplay-standard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 voxel-asset.workspace = true
 
 [dev-dependencies]
 core-math.workspace = true
-gameplay-resolution.workspace = true
-gameplay-rules.workspace = true
 
 [lints]
 workspace = true

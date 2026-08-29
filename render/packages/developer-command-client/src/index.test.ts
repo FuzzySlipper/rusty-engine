@@ -9,7 +9,6 @@ import {
   type RustyDeveloperCommandRequest,
   type RustyDeveloperCommandValueSchema,
   type RustyDeveloperCommandWireSchema,
-  RUSTY_STANDARD_HOST_WIRE_SCHEMAS,
   validateRustyDeveloperCommandWireValue,
 } from './index.js';
 
@@ -193,30 +192,6 @@ test('help-only commands and unavailable adapters cannot fabricate an invocation
   });
   await assert.rejects(unavailable.discover(), (cause: unknown) =>
     cause instanceof RustyDeveloperCommandClientError && cause.code === 'unavailable');
-});
-
-test('generated standard schemas admit every source variant and reject bad policy and opaque values', () => {
-  const stat = RUSTY_STANDARD_HOST_WIRE_SCHEMAS['standard.admin.stat.set-base']!;
-  for (const source of [
-    { kind: 'intrinsic', entity: '1', instance: 'source' },
-    { kind: 'effect', entity: '1', effect: 'effect', stack: 1, source: 'source' },
-    { kind: 'equippedItem', owner: '1', item: '2', source: 'source' },
-    { kind: 'request', operation: 'operation', instance: 'source' },
-  ]) validateRustyDeveloperCommandWireValue({ operation: 'operation', source, entity: '1', stat: 'stat', base: 1 }, stat.request);
-  const track = RUSTY_STANDARD_HOST_WIRE_SCHEMAS['standard.admin.track.set']!;
-  assert.throws(() => validateRustyDeveloperCommandWireValue({ operation: 'operation', source: { kind: 'request', operation: 'operation', instance: 'source' }, entity: '1', track: 'track', value: 1, policy: 'freestyle' }, track.request));
-  const trackReceipt = {
-    catalogVersion: 'catalog', catalogFingerprint: 'fingerprint', operation: 'operation',
-    source: { kind: 'request', operation: 'operation', instance: 'source' }, entity: '1', track: 'track',
-    policy: 'clampToBounds', decision: 'clampedToBounds', requested: 99, before: 10, after: 20,
-    minimum: 0, maximum: 20, observedTracksRevision: '4', committedTracksRevision: '5',
-    observedRevisions: [{ entity: '1', component: 'rusty.mechanics.tracks', revision: '4' }],
-    sourceCost: { intrinsicEntriesVisited: 0, effectEntriesVisited: 0, effectSourceActivationsVisited: 0, equipmentEntriesVisited: 0, itemComponentsRead: 0, requestEntriesVisited: 1 },
-  };
-  validateRustyDeveloperCommandWireValue(trackReceipt, track.result);
-  assert.throws(() => validateRustyDeveloperCommandWireValue({ ...trackReceipt, unexpected: true }, track.result));
-  const circular: { self?: unknown } = {}; circular.self = circular;
-  assert.throws(() => validateRustyDeveloperCommandWireValue(circular, { kind: 'opaqueJson', maximumBytes: 32, maximumNodes: 4 }));
 });
 
 test('resolved pre-dispatch failures are visible without pretending a request was issued', async () => {

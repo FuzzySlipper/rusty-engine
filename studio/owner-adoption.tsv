@@ -10,16 +10,10 @@ core-space	indirect	voxel cell chunk and world coordinates inside voxel operatio
 core-time	downstream-only	project runtime timing and tick readouts where a project exposes them	project-adapter readout only	formatted observation	M11B/M11C
 core-voxel	indirect	compact voxel values inside spatial and asset owners	owner-defined serialized values	brush material and preview cells	M11E
 developer-command	non-studio	host-neutral developer command envelopes and explicit product safe-point binding	no Studio API	no Studio command queue transport authorization or tooling authority	developer-command-boundary
-developer-command-standard	non-studio	optional standard gameplay command descriptors and named-owner adapters	no Studio API	no Studio command queue transport authorization or gameplay authority	developer-command-standard-boundary
 engine-inspector	direct	catalog scene entity voxel import persistence and rejection diagnostics	typed deterministic reports and local diagnostic codes	focused row filters asset details and message formatting	M11B/M11D/M11E/M11F
 engine-spatial	direct	voxel edits; authoritative picks; history; collision-backed authoring; mechanics readout	typed preview commit pick and history operations	cube paint/erase plus block box shell edge line; durable query undo redo direct revert and preview/apply/discard revert implemented	M11E/M11F
 entity-state	direct	definitions; capabilities; relationships; transforms; static and animated appearance; lifecycle readout	typed entity readout and named collision kinematic appearance and lifecycle operations	selected entity parent-aware full-transform preview settlement and typed static animated clip light and capability drafts	M11B/M11D/M11F
 environment-authoring	direct	preset and seed authoring; generated voxel scene and markers	typed materialization request and candidate receipts	tiny-enclosed preset seed managed asset instance palette and named player/exit targets implemented	M11F
-gameplay-continuous-mechanics	non-studio	optional downstream continuous gameplay mechanics	no Studio API	no continuous mechanics state editor authority scheduler or rate policy	continuous-mechanics-boundary
-gameplay-mechanics	non-studio	reusable downstream gameplay mechanics	no Studio API	no mechanics state or editor authority	GM0-classification
-gameplay-resolution	non-studio	bounded downstream-owned attempt resolution	no Studio API	no gameplay attempt or transaction authority	gameplay-resolution-boundary
-gameplay-rules	non-studio	optional semantic-neutral packages consumed by downstream compilers	no Studio API	no package payload or downstream semantic editor authority	GR0-classification
-gameplay-standard	non-studio	optional gameplay capability metadata and direct downstream Rust composition	no Studio API	no gameplay definitions runtime state or editor authority	gameplay-standard-boundary
 product-kernel	non-studio	source-linked downstream Rust capability and schema declarations	no Studio API	no Product Kernel execution registry or downstream product authority	product-kernel-boundary
 product-model	non-studio	compiled downstream Product Model admission and immutable linkage	no Studio API	no Runtime Composition authoring or product orchestration authority	product-model-boundary
 render-host-contracts	non-studio	private native host composition input and readback contracts	no Studio API	no native host bridge or downstream gameplay authority	SDK-renderer-boundary
@@ -36,7 +30,6 @@ runtime-timeline	non-studio	linked static timeline operation and completion queu
 runtime-ui	non-studio	projection-phase product DTO envelopes for optional rich DOM hosts	no Studio API	no DOM renderer scheduler or product state authority	runtime-ui-boundary
 rusty-cli	non-studio	product layout initialization and structural conformance checks	no Studio API	no Studio project storage or host bootstrap authority	rusty-cli-boundary
 rusty-engine	non-studio	downstream Rust SDK facade and feature-complete provider namespace	no Studio API	no alternate Studio transport or product authority	SDK-facade-boundary
-state-machine	downstream-only	project-specific state readout where the external adapter exposes it	project-adapter readout only	formatted observation; no generic editor	M11B/M11C
 svc-collision	indirect	authoritative picking and spatial validation through engine-spatial	engine-spatial operations only	no collision authority	M11E
 svc-mesh	indirect	voxel mesh derivation consumed by shared projection	engine-spatial and render projection output	no mesh cache	M11E
 svc-pathfinding	downstream-only	project navigation diagnostics where explicitly exposed	project-adapter or engine-inspector readout	formatted observation	M11B/M11C

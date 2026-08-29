@@ -1,6 +1,5 @@
 import {
   createRustyDeveloperCommandClient,
-  RUSTY_STANDARD_HOST_WIRE_SCHEMAS,
   mountRustyApplication,
   type RustyDeveloperCommandAdapter,
   type RustyDeveloperCommandRequest,
@@ -114,11 +113,11 @@ const developerCommandAdapter: RustyDeveloperCommandAdapter = {
     permittedLanes: ['inspect', 'play', 'admin'], revision: '4', catalogEpoch: '9',
     contractFingerprint: 'browser-proof-contract',
     commands: [
-      { id: 'standard.inspect.entity', aliases: ['inspect.entity'], lane: 'inspect', summary: 'Inspect an entity.' },
-      { id: 'standard.inspect.help-only', aliases: ['inspect.help'], lane: 'inspect', summary: 'Help-only descriptor with no supplied codec.' },
+      { id: 'product.inspect.entity', aliases: ['inspect.entity'], lane: 'inspect', summary: 'Inspect an entity.' },
+      { id: 'product.inspect.help-only', aliases: ['inspect.help'], lane: 'inspect', summary: 'Help-only descriptor with no supplied codec.' },
       { id: 'product.play.probe', aliases: ['play.probe'], lane: 'play', summary: 'Run a product play probe.' },
-      { id: 'standard.admin.stat.set-base', aliases: ['admin.stat'], lane: 'admin', summary: 'Set a standard stat base.' },
-      { id: 'standard.admin.effect.remove', aliases: ['admin.remove'], lane: 'admin', summary: 'Run an Engine standard admin probe.' },
+      { id: 'product.admin.stat.set-base', aliases: ['admin.stat'], lane: 'admin', summary: 'Set a product stat base.' },
+      { id: 'product.admin.effect.remove', aliases: ['admin.remove'], lane: 'admin', summary: 'Run a product admin probe.' },
     ],
     };
   },
@@ -126,7 +125,7 @@ const developerCommandAdapter: RustyDeveloperCommandAdapter = {
     window.__rustyDeveloperCommandExecuteCount =
       (window.__rustyDeveloperCommandExecuteCount ?? 0) + 1;
     window.__rustyDeveloperCommandLastPayload = request.payload;
-    if (request.command === 'standard.admin.effect.remove' && (request.payload as { readonly instance?: string }).instance !== 'effect') {
+    if (request.command === 'product.admin.effect.remove' && (request.payload as { readonly instance?: string }).instance !== 'effect') {
       return { correlation: request.correlation, runtime: request.runtime, profile: request.expected.profile,
         revision: '4', catalogEpoch: '9', outcome: { kind: 'error', code: 'product_rejected', message: 'Admin probe requires instance=effect.' } };
     }
@@ -138,19 +137,46 @@ const developerCommandAdapter: RustyDeveloperCommandAdapter = {
 function developerCommandClient() {
   return createRustyDeveloperCommandClient({
     adapter: developerCommandAdapter,
-    schemas: {
-      ...RUSTY_STANDARD_HOST_WIRE_SCHEMAS,
-    },
     extensions: [{
       namespace: 'product',
-      schemas: [{
-        command: 'product.play.probe', lane: 'play', profile: 'developer',
-        schema: {
-          request: { kind: 'object', fields: { target: { required: true, value: { kind: 'string', maximumBytes: 32, pattern: 'identifier' } } } },
-          result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
-          error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+      schemas: [
+        {
+          command: 'product.inspect.entity', lane: 'inspect', profile: 'developer',
+          schema: {
+            request: { kind: 'object', fields: { entity: { required: true, value: { kind: 'decimalU64' } } } },
+            result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
+            error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+          },
         },
-      }],
+        {
+          command: 'product.play.probe', lane: 'play', profile: 'developer',
+          schema: {
+            request: { kind: 'object', fields: { target: { required: true, value: { kind: 'string', maximumBytes: 32, pattern: 'identifier' } } } },
+            result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
+            error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+          },
+        },
+        {
+          command: 'product.admin.stat.set-base', lane: 'admin', profile: 'developer',
+          schema: {
+            request: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+            result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
+            error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+          },
+        },
+        {
+          command: 'product.admin.effect.remove', lane: 'admin', profile: 'developer',
+          schema: {
+            request: { kind: 'object', fields: {
+              operation: { required: true, value: { kind: 'string', maximumBytes: 64, pattern: 'identifier' } },
+              entity: { required: true, value: { kind: 'decimalU64' } },
+              instance: { required: true, value: { kind: 'string', maximumBytes: 64, pattern: 'identifier' } },
+            } },
+            result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
+            error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+          },
+        },
+      ],
     }],
   });
 }

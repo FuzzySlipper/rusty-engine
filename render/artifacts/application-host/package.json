@@ -18,8 +18,6 @@
     "developer-command-shell.d.ts",
     "generated-developer-command-contract.d.ts",
     "generated-developer-command-contract.js",
-    "generated-standard-host-wire.d.ts",
-    "generated-standard-host-wire.js",
     "index.d.ts",
     "index.js",
     "input-ingress.d.ts",

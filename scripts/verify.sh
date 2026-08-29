@@ -14,8 +14,6 @@ PYTHONDONTWRITEBYTECODE=1 python3 ./scripts/test_rust_sdk_checks.py
 PYTHONDONTWRITEBYTECODE=1 python3 ./scripts/test_architecture_checks.py
 ./scripts/check-doc-links.sh
 ./scripts/check-asha-equivalence.sh --final
-./scripts/check-gameplay-mechanics-donor-disposition.sh
-./scripts/check-gameplay-rules-donor-disposition.sh
 ./scripts/test-asha-equivalence-checker.sh
 ./scripts/check-render-completeness.sh --strict
 ./scripts/test-render-completeness-checker.sh

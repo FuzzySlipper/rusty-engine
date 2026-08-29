@@ -482,13 +482,13 @@ test('public application-host console invokes inspect, play, and admin without i
   const command = shell.getByLabel('Developer command', { exact: true });
   const parameters = shell.getByLabel('Developer command parameters');
 
-  await expect(command.locator('option[value="standard.inspect.help-only"]')).toBeDisabled();
+  await expect(command.locator('option[value="product.inspect.help-only"]')).toBeDisabled();
   await shell.getByRole('button', { name: 'Developer commands' }).click();
   await expect.poll(() => page.evaluate(() => window.__rustyApplicationHost?.ui.interactionMode()))
     .toBe('gameplay');
   await shell.getByRole('button', { name: 'Developer commands' }).click();
 
-  await command.selectOption('standard.inspect.entity');
+  await command.selectOption('product.inspect.entity');
   await expect(parameters).toBeHidden();
   const inspectEntity = shell.locator('[data-developer-command-fields] input[data-command-field="entity"]');
   const dispatchesBeforeNoncanonicalInspect = await page.evaluate(() => window.__rustyDeveloperCommandExecuteCount);
@@ -503,7 +503,7 @@ test('public application-host console invokes inspect, play, and admin without i
   await shell.getByRole('button', { name: 'Run' }).click();
   await expect(shell.locator('[data-developer-command-status]')).toContainText('Success');
 
-  await command.selectOption('standard.admin.stat.set-base');
+  await command.selectOption('product.admin.stat.set-base');
   await expect(parameters).toBeVisible();
   await parameters.fill('{bad json');
   await shell.getByRole('button', { name: 'Run' }).click();
@@ -515,7 +515,7 @@ test('public application-host console invokes inspect, play, and admin without i
   await shell.getByRole('button', { name: 'Run' }).click();
   await expect(shell.locator('[data-developer-command-status]')).toContainText('Success');
 
-  await command.selectOption('standard.admin.effect.remove');
+  await command.selectOption('product.admin.effect.remove');
   await expect(parameters).toBeHidden();
   await shell.locator('[data-developer-command-fields] input[data-command-field="operation"]').fill('operation');
   const entity = shell.locator('[data-developer-command-fields] input[data-command-field="entity"]');

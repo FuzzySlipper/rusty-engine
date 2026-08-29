@@ -128,8 +128,8 @@ class DependencyBoundaryTests(unittest.TestCase):
         metadata = metadata_fixture(
             [
                 "engine-inspector",
+                "content-store",
                 "entity-state",
-                "gameplay-mechanics",
                 "renderer-host",
                 "render-model",
                 "render-presentation",
@@ -137,18 +137,15 @@ class DependencyBoundaryTests(unittest.TestCase):
             ],
             [
                 ("entity-state", "render-projection", None, "projection"),
-                ("gameplay-mechanics", "engine-inspector", None, "inspection"),
-                ("render-model", "gameplay-mechanics", None, "mechanics"),
+                ("content-store", "engine-inspector", None, "inspection"),
                 ("render-model", "renderer-host", None, "browser_host"),
                 ("render-presentation", "render-projection", None, "projection"),
-                ("render-projection", "gameplay-mechanics", None, "mechanics"),
             ],
         )
         rendered = "\n".join(dependency_boundary_check.find_violations(metadata))
         self.assertIn("authoritative owner reverse-depends on render-projection", rendered)
         self.assertIn("ordinary workspace package reaches the engine-inspector leaf", rendered)
         self.assertIn("renderer-neutral model reaches authority", rendered)
-        self.assertIn("render-projection reaches gameplay authority", rendered)
 
     def test_dev_edges_are_ignored_but_build_edges_are_enforced(self) -> None:
         dev_metadata = metadata_fixture(

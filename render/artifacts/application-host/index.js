@@ -28270,934 +28270,17 @@ var ED = Object.freeze({
 			"receiptRefs"
 		]
 	}
-}), DD = {
-	commands: {
-		"standard.admin.effect.apply": {
-			error: {
-				kind: "opaqueJson",
-				maximumBytes: 8192,
-				maximumNodes: 128
-			},
-			request: {
-				fields: {
-					definition: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					entity: {
-						required: !0,
-						value: { kind: "decimalU64" }
-					},
-					expectedRevision: {
-						required: !1,
-						value: { kind: "decimalU64" }
-					},
-					instance: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					operation: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					provenance: {
-						required: !0,
-						value: {
-							kind: "taggedUnion",
-							tag: "kind",
-							variants: {
-								effect: {
-									fields: {
-										effect: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										entity: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["effect"]
-											}
-										},
-										source: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										stack: {
-											required: !0,
-											value: {
-												kind: "integer",
-												maximum: 65535,
-												minimum: 0
-											}
-										}
-									},
-									kind: "object"
-								},
-								equippedItem: {
-									fields: {
-										item: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["equippedItem"]
-											}
-										},
-										owner: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										source: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										}
-									},
-									kind: "object"
-								},
-								intrinsic: {
-									fields: {
-										entity: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										instance: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["intrinsic"]
-											}
-										}
-									},
-									kind: "object"
-								},
-								request: {
-									fields: {
-										instance: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["request"]
-											}
-										},
-										operation: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										}
-									},
-									kind: "object"
-								}
-							}
-						}
-					},
-					stacks: {
-						required: !0,
-						value: {
-							kind: "integer",
-							maximum: 65535,
-							minimum: 1
-						}
-					}
-				},
-				kind: "object"
-			},
-			result: {
-				kind: "opaqueJson",
-				maximumBytes: 16384,
-				maximumNodes: 256
-			}
-		},
-		"standard.admin.effect.remove": {
-			error: {
-				kind: "opaqueJson",
-				maximumBytes: 8192,
-				maximumNodes: 128
-			},
-			request: {
-				fields: {
-					entity: {
-						required: !0,
-						value: { kind: "decimalU64" }
-					},
-					expectedRevision: {
-						required: !1,
-						value: { kind: "decimalU64" }
-					},
-					instance: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					operation: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					}
-				},
-				kind: "object"
-			},
-			result: {
-				kind: "opaqueJson",
-				maximumBytes: 16384,
-				maximumNodes: 256
-			}
-		},
-		"standard.admin.stat.set-base": {
-			error: {
-				kind: "opaqueJson",
-				maximumBytes: 8192,
-				maximumNodes: 128
-			},
-			request: {
-				fields: {
-					base: {
-						required: !0,
-						value: {
-							kind: "integer",
-							maximum: 0xe8d4a51000,
-							minimum: -0xe8d4a51000
-						}
-					},
-					entity: {
-						required: !0,
-						value: { kind: "decimalU64" }
-					},
-					expectedRevision: {
-						required: !1,
-						value: { kind: "decimalU64" }
-					},
-					operation: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					source: {
-						required: !0,
-						value: {
-							kind: "taggedUnion",
-							tag: "kind",
-							variants: {
-								effect: {
-									fields: {
-										effect: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										entity: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["effect"]
-											}
-										},
-										source: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										stack: {
-											required: !0,
-											value: {
-												kind: "integer",
-												maximum: 65535,
-												minimum: 0
-											}
-										}
-									},
-									kind: "object"
-								},
-								equippedItem: {
-									fields: {
-										item: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["equippedItem"]
-											}
-										},
-										owner: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										source: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										}
-									},
-									kind: "object"
-								},
-								intrinsic: {
-									fields: {
-										entity: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										instance: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["intrinsic"]
-											}
-										}
-									},
-									kind: "object"
-								},
-								request: {
-									fields: {
-										instance: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["request"]
-											}
-										},
-										operation: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										}
-									},
-									kind: "object"
-								}
-							}
-						}
-					},
-					stat: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					}
-				},
-				kind: "object"
-			},
-			result: {
-				kind: "opaqueJson",
-				maximumBytes: 16384,
-				maximumNodes: 256
-			}
-		},
-		"standard.admin.track.set": {
-			error: {
-				kind: "opaqueJson",
-				maximumBytes: 8192,
-				maximumNodes: 128
-			},
-			request: {
-				fields: {
-					entity: {
-						required: !0,
-						value: { kind: "decimalU64" }
-					},
-					expectedRevision: {
-						required: !1,
-						value: { kind: "decimalU64" }
-					},
-					operation: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					policy: {
-						required: !0,
-						value: {
-							kind: "enum",
-							values: ["rejectOutOfBounds", "clampToBounds"]
-						}
-					},
-					source: {
-						required: !0,
-						value: {
-							kind: "taggedUnion",
-							tag: "kind",
-							variants: {
-								effect: {
-									fields: {
-										effect: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										entity: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["effect"]
-											}
-										},
-										source: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										stack: {
-											required: !0,
-											value: {
-												kind: "integer",
-												maximum: 65535,
-												minimum: 0
-											}
-										}
-									},
-									kind: "object"
-								},
-								equippedItem: {
-									fields: {
-										item: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["equippedItem"]
-											}
-										},
-										owner: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										source: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										}
-									},
-									kind: "object"
-								},
-								intrinsic: {
-									fields: {
-										entity: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										instance: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["intrinsic"]
-											}
-										}
-									},
-									kind: "object"
-								},
-								request: {
-									fields: {
-										instance: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["request"]
-											}
-										},
-										operation: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										}
-									},
-									kind: "object"
-								}
-							}
-						}
-					},
-					track: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					value: {
-						required: !0,
-						value: {
-							kind: "integer",
-							maximum: 0xe8d4a51000,
-							minimum: -0xe8d4a51000
-						}
-					}
-				},
-				kind: "object"
-			},
-			result: {
-				fields: {
-					after: {
-						required: !0,
-						value: {
-							kind: "integer",
-							maximum: 0xe8d4a51000,
-							minimum: -0xe8d4a51000
-						}
-					},
-					before: {
-						required: !0,
-						value: {
-							kind: "integer",
-							maximum: 0xe8d4a51000,
-							minimum: -0xe8d4a51000
-						}
-					},
-					catalogFingerprint: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 256,
-							pattern: "identifier"
-						}
-					},
-					catalogVersion: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					committedTracksRevision: {
-						required: !0,
-						value: { kind: "decimalU64" }
-					},
-					decision: {
-						required: !0,
-						value: {
-							kind: "enum",
-							values: ["applied", "clampedToBounds"]
-						}
-					},
-					entity: {
-						required: !0,
-						value: { kind: "decimalU64" }
-					},
-					maximum: {
-						required: !0,
-						value: {
-							kind: "integer",
-							maximum: 0xe8d4a51000,
-							minimum: -0xe8d4a51000
-						}
-					},
-					minimum: {
-						required: !0,
-						value: {
-							kind: "integer",
-							maximum: 0xe8d4a51000,
-							minimum: -0xe8d4a51000
-						}
-					},
-					observedRevisions: {
-						required: !0,
-						value: {
-							items: {
-								fields: {
-									component: {
-										required: !0,
-										value: {
-											kind: "string",
-											maximumBytes: 128,
-											pattern: "identifier"
-										}
-									},
-									entity: {
-										required: !0,
-										value: { kind: "decimalU64" }
-									},
-									revision: {
-										required: !0,
-										value: { kind: "decimalU64" }
-									}
-								},
-								kind: "object"
-							},
-							kind: "array",
-							maximumItems: 32
-						}
-					},
-					observedTracksRevision: {
-						required: !0,
-						value: { kind: "decimalU64" }
-					},
-					operation: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					},
-					policy: {
-						required: !0,
-						value: {
-							kind: "enum",
-							values: ["rejectOutOfBounds", "clampToBounds"]
-						}
-					},
-					requested: {
-						required: !0,
-						value: {
-							kind: "integer",
-							maximum: 0xe8d4a51000,
-							minimum: -0xe8d4a51000
-						}
-					},
-					source: {
-						required: !0,
-						value: {
-							kind: "taggedUnion",
-							tag: "kind",
-							variants: {
-								effect: {
-									fields: {
-										effect: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										entity: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["effect"]
-											}
-										},
-										source: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										stack: {
-											required: !0,
-											value: {
-												kind: "integer",
-												maximum: 65535,
-												minimum: 0
-											}
-										}
-									},
-									kind: "object"
-								},
-								equippedItem: {
-									fields: {
-										item: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["equippedItem"]
-											}
-										},
-										owner: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										source: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										}
-									},
-									kind: "object"
-								},
-								intrinsic: {
-									fields: {
-										entity: {
-											required: !0,
-											value: { kind: "decimalU64" }
-										},
-										instance: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["intrinsic"]
-											}
-										}
-									},
-									kind: "object"
-								},
-								request: {
-									fields: {
-										instance: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										},
-										kind: {
-											required: !0,
-											value: {
-												kind: "enum",
-												values: ["request"]
-											}
-										},
-										operation: {
-											required: !0,
-											value: {
-												kind: "string",
-												maximumBytes: 96,
-												pattern: "identifier"
-											}
-										}
-									},
-									kind: "object"
-								}
-							}
-						}
-					},
-					sourceCost: {
-						required: !0,
-						value: {
-							fields: {
-								effectEntriesVisited: {
-									required: !0,
-									value: {
-										kind: "integer",
-										minimum: 0
-									}
-								},
-								effectSourceActivationsVisited: {
-									required: !0,
-									value: {
-										kind: "integer",
-										minimum: 0
-									}
-								},
-								equipmentEntriesVisited: {
-									required: !0,
-									value: {
-										kind: "integer",
-										minimum: 0
-									}
-								},
-								intrinsicEntriesVisited: {
-									required: !0,
-									value: {
-										kind: "integer",
-										minimum: 0
-									}
-								},
-								itemComponentsRead: {
-									required: !0,
-									value: {
-										kind: "integer",
-										minimum: 0
-									}
-								},
-								requestEntriesVisited: {
-									required: !0,
-									value: {
-										kind: "integer",
-										minimum: 0
-									}
-								}
-							},
-							kind: "object"
-						}
-					},
-					track: {
-						required: !0,
-						value: {
-							kind: "string",
-							maximumBytes: 96,
-							pattern: "identifier"
-						}
-					}
-				},
-				kind: "object"
-			}
-		},
-		"standard.inspect.entity": {
-			error: {
-				fields: {},
-				kind: "object"
-			},
-			request: {
-				fields: { entity: {
-					required: !0,
-					value: { kind: "decimalU64" }
-				} },
-				kind: "object"
-			},
-			result: {
-				kind: "opaqueJson",
-				maximumBytes: 65536,
-				maximumNodes: 2048
-			}
-		}
-	},
-	kind: "rusty-developer-command-standard-host-wire.v1"
-}, OD = ED.protocolVersion, kD = DD.commands, AD = kD, jD = ED.limits.historyEntries, MD = 256, ND = 16, PD = 256, FD = 256, ID = class extends Error {
+}), DD = ED.protocolVersion, OD = ED.limits.historyEntries, kD = 256, AD = 16, jD = 256, MD = 256, ND = class extends Error {
 	code;
 	constructor(e, t, n) {
 		super(t, n), this.name = "RustyDeveloperCommandClientError", this.code = e;
 	}
 };
-function LD(e) {
-	let t = BD(e.schemas ?? {}, e.extensions ?? []), n = t.schemas, r = /* @__PURE__ */ new Set(), i = [], a = e.createCorrelation ?? (() => `command-${uO()}`), o = e.now ?? Date.now, s = null, c = null, l = !1, u = () => {
-		if (l) throw new ID("disposed", "Developer command client is disposed");
+function PD(e) {
+	let t = LD(e.schemas ?? {}, e.extensions ?? []), n = t.schemas, r = /* @__PURE__ */ new Set(), i = [], a = e.createCorrelation ?? (() => `command-${sO()}`), o = e.now ?? Date.now, s = null, c = null, l = !1, u = () => {
+		if (l) throw new ND("disposed", "Developer command client is disposed");
 	}, d = () => {
-		i.length > jD && i.splice(0, i.length - jD);
+		i.length > OD && i.splice(0, i.length - OD);
 	}, f = (e, t, n, r) => {
 		let a = n.message.slice(0, 1024), s = Object.freeze(r === void 0 ? {
 			phase: e,
@@ -29220,28 +28303,28 @@ function LD(e) {
 		let t = s;
 		return t === null ? null : t.commands.find((t) => t.id === e || t.aliases.includes(e)) ?? null;
 	}, m = async (n) => {
-		u(), dO(n);
+		u(), cO(n);
 		let r;
 		try {
 			r = await e.adapter.discover(n);
 		} catch (e) {
-			throw fO(e);
+			throw lO(e);
 		}
-		u(), dO(n);
+		u(), cO(n);
 		let i;
 		try {
-			i = aO(r, t);
+			i = nO(r, t);
 		} catch (e) {
-			throw e instanceof ID && (e.code === "malformed" || e.code === "invalid_extension") && (s = null), e;
+			throw e instanceof ND && (e.code === "malformed" || e.code === "invalid_extension") && (s = null), e;
 		}
 		let a = s, o = c, l = o !== null && i.runtime === o.runtime && i.profile === o.profile && i.catalogEpoch === o.catalogEpoch;
-		if (o !== null && (i.runtime !== o.runtime || i.profile !== o.profile || TO(i.revision, o.revision) || TO(i.catalogEpoch, o.catalogEpoch) || l && o.contractFingerprint !== void 0 && i.contractFingerprint !== o.contractFingerprint) || a !== null && (i.runtime !== a.runtime || i.profile !== a.profile || TO(i.revision, a.revision) || TO(i.catalogEpoch, a.catalogEpoch))) throw new ID("stale_context", "Developer command discovery regressed or changed its selected runtime/profile context");
-		return s = i, c = RD(i), i;
+		if (o !== null && (i.runtime !== o.runtime || i.profile !== o.profile || SO(i.revision, o.revision) || SO(i.catalogEpoch, o.catalogEpoch) || l && o.contractFingerprint !== void 0 && i.contractFingerprint !== o.contractFingerprint) || a !== null && (i.runtime !== a.runtime || i.profile !== a.profile || SO(i.revision, a.revision) || SO(i.catalogEpoch, a.catalogEpoch))) throw new ND("stale_context", "Developer command discovery regressed or changed its selected runtime/profile context");
+		return s = i, c = FD(i), i;
 	};
 	return Object.freeze({
 		discover: m,
 		descriptor: (e) => p(e),
-		schema: (e) => p(e)?.id === e && hO(n, e) ? n[e] : null,
+		schema: (e) => p(e)?.id === e && fO(n, e) ? n[e] : null,
 		history: () => Object.freeze(i.slice()),
 		exportSequence: () => Object.freeze({
 			kind: "rusty_developer_command.sequence.v1",
@@ -29249,41 +28332,41 @@ function LD(e) {
 			entries: Object.freeze(i.filter((e) => e.phase === "completed").slice(-128))
 		}),
 		execute: async (t, l, p) => {
-			u(), dO(p);
+			u(), cO(p);
 			let h = s ?? await m(p), g = h.commands.find((e) => e.id === t || e.aliases.includes(t)) ?? null;
-			if (g === null) throw new ID("unknown_command", `Unknown developer command ${t}`);
+			if (g === null) throw new ND("unknown_command", `Unknown developer command ${t}`);
 			let _ = n[g.id];
 			if (_ === void 0) {
-				let e = new ID("codec_unavailable", `${g.id} has help only; its product has not supplied an exact wire codec`);
+				let e = new ND("codec_unavailable", `${g.id} has help only; its product has not supplied an exact wire codec`);
 				throw f("pre-dispatch", g.lane, e), e;
 			}
 			let v;
 			try {
-				lO(l, _.request, "$"), v = EO(l);
+				oO(l, _.request, "$"), v = CO(l);
 			} catch (e) {
-				let t = e instanceof ID && e.code === "malformed" ? new ID("invalid_payload", e.message, { cause: e }) : fO(e);
+				let t = e instanceof ND && e.code === "malformed" ? new ND("invalid_payload", e.message, { cause: e }) : lO(e);
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			let y;
 			try {
-				y = a(), xO(y, "correlation");
+				y = a(), vO(y, "correlation");
 			} catch (e) {
-				let t = e instanceof ID ? e : new ID("malformed", "Correlation factory returned an invalid identity", { cause: e instanceof Error ? e : void 0 });
+				let t = e instanceof ND ? e : new ND("malformed", "Correlation factory returned an invalid identity", { cause: e instanceof Error ? e : void 0 });
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			if (r.has(y)) {
-				let e = new ID("correlation_reused", `Correlation ${y} was already issued`);
+				let e = new ND("correlation_reused", `Correlation ${y} was already issued`);
 				throw f("pre-dispatch", g.lane, e), e;
 			}
 			try {
-				u(), dO(p);
+				u(), cO(p);
 			} catch (e) {
-				let t = e instanceof ID ? e : new ID("cancelled", "Developer command was cancelled", { cause: e instanceof Error ? e : void 0 });
+				let t = e instanceof ND ? e : new ND("cancelled", "Developer command was cancelled", { cause: e instanceof Error ? e : void 0 });
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			r.add(y);
 			let b = Object.freeze({
-				protocolVersion: OD,
+				protocolVersion: DD,
 				command: g.id,
 				correlation: y,
 				runtime: h.runtime,
@@ -29297,14 +28380,14 @@ function LD(e) {
 			try {
 				x = await e.adapter.execute(b, p);
 			} catch (e) {
-				let t = fO(e);
+				let t = lO(e);
 				throw f("transport", g.lane, t, b), t;
 			}
 			try {
-				u(), dO(p);
-				let e = sO(x, b, _), t = s, n = c, r = n !== null && t !== null && t.runtime === n.runtime && t.profile === n.profile && t.catalogEpoch === n.catalogEpoch;
-				if (t === null || t.runtime !== h.runtime || t.profile !== h.profile || t.revision === h.revision && t.catalogEpoch === h.catalogEpoch && r && n?.contractFingerprint !== void 0 && n.contractFingerprint !== h.contractFingerprint || e.runtime !== t.runtime || e.profile !== t.profile || TO(e.revision, t.revision) || TO(e.catalogEpoch, t.catalogEpoch)) throw new ID("stale_context", "Developer command response did not preserve the selected runtime/profile/epoch context");
-				u(), dO(p);
+				u(), cO(p);
+				let e = iO(x, b, _), t = s, n = c, r = n !== null && t !== null && t.runtime === n.runtime && t.profile === n.profile && t.catalogEpoch === n.catalogEpoch;
+				if (t === null || t.runtime !== h.runtime || t.profile !== h.profile || t.revision === h.revision && t.catalogEpoch === h.catalogEpoch && r && n?.contractFingerprint !== void 0 && n.contractFingerprint !== h.contractFingerprint || e.runtime !== t.runtime || e.profile !== t.profile || SO(e.revision, t.revision) || SO(e.catalogEpoch, t.catalogEpoch)) throw new ND("stale_context", "Developer command response did not preserve the selected runtime/profile/epoch context");
+				u(), cO(p);
 				let a = Object.freeze({
 					phase: "completed",
 					request: b,
@@ -29317,13 +28400,13 @@ function LD(e) {
 					catalogEpoch: e.catalogEpoch,
 					at: o()
 				});
-				return i.push(a), d(), TO(t.catalogEpoch, e.catalogEpoch) ? (s = null, c = zD(e)) : (s = Object.freeze({
+				return i.push(a), d(), SO(t.catalogEpoch, e.catalogEpoch) ? (s = null, c = ID(e)) : (s = Object.freeze({
 					...t,
 					revision: e.revision,
 					catalogEpoch: e.catalogEpoch
-				}), c = zD(e, r && e.catalogEpoch === t.catalogEpoch ? n?.contractFingerprint : void 0)), e;
+				}), c = ID(e, r && e.catalogEpoch === t.catalogEpoch ? n?.contractFingerprint : void 0)), e;
 			} catch (e) {
-				let t = e instanceof ID ? e : new ID("malformed", "Developer command response was not valid", { cause: e instanceof Error ? e : void 0 }), n = t.code === "cancelled" || t.code === "disposed" || t.code === "unavailable" ? "transport" : "post-dispatch";
+				let t = e instanceof ND ? e : new ND("malformed", "Developer command response was not valid", { cause: e instanceof Error ? e : void 0 }), n = t.code === "cancelled" || t.code === "disposed" || t.code === "unavailable" ? "transport" : "post-dispatch";
 				throw f(n, g.lane, t, b), t;
 			}
 		},
@@ -29332,7 +28415,7 @@ function LD(e) {
 		}
 	});
 }
-function RD(e) {
+function FD(e) {
 	return Object.freeze({
 		runtime: e.runtime,
 		profile: e.profile,
@@ -29341,7 +28424,7 @@ function RD(e) {
 		contractFingerprint: e.contractFingerprint
 	});
 }
-function zD(e, t) {
+function ID(e, t) {
 	return Object.freeze({
 		runtime: e.runtime,
 		profile: e.profile,
@@ -29350,25 +28433,25 @@ function zD(e, t) {
 		...t === void 0 ? {} : { contractFingerprint: t }
 	});
 }
-function BD(e, t) {
+function LD(e, t) {
 	let n = Object.create(null), r = [];
-	for (let [t, r] of Object.entries(e)) XD(t, `schema.${t}`), n[t] = VD(r, `schema.${t}`);
+	for (let [t, r] of Object.entries(e)) qD(t, `schema.${t}`), n[t] = RD(r, `schema.${t}`);
 	for (let e of t) {
-		let t = QD(e, "extension");
-		$D(t, ["namespace", "schemas"], "extension");
-		let i = rO(t.namespace), a = eO(t.schemas, `extension ${i}.schemas`);
+		let t = YD(e, "extension");
+		XD(t, ["namespace", "schemas"], "extension");
+		let i = eO(t.namespace), a = ZD(t.schemas, `extension ${i}.schemas`);
 		for (let [e, t] of a.entries()) {
-			let a = `extension ${i}.schemas[${e}]`, o = QD(t, a);
-			$D(o, [
+			let a = `extension ${i}.schemas[${e}]`, o = YD(t, a);
+			XD(o, [
 				"command",
 				"lane",
 				"profile",
 				"schema"
 			], a);
-			let s = nO(o.command, `${a}.command`);
-			s.startsWith(`${i}.`) || ZD(`${a}.command escapes ${i}`), hO(n, s) && ZD(`Duplicate wire schema ${s}`);
-			let c = iO(o.lane, `${a}.lane`), l = nO(o.profile, `${a}.profile`);
-			n[s] = VD(o.schema, `${a}.schema`), r.push(Object.freeze({
+			let s = $D(o.command, `${a}.command`);
+			s.startsWith(`${i}.`) || JD(`${a}.command escapes ${i}`), fO(n, s) && JD(`Duplicate wire schema ${s}`);
+			let c = tO(o.lane, `${a}.lane`), l = $D(o.profile, `${a}.profile`);
+			n[s] = RD(o.schema, `${a}.schema`), r.push(Object.freeze({
 				command: s,
 				lane: c,
 				profile: l,
@@ -29381,74 +28464,74 @@ function BD(e, t) {
 		extensionBindings: Object.freeze(r)
 	});
 }
-function VD(e, t) {
+function RD(e, t) {
 	let n = {
 		active: /* @__PURE__ */ new Set(),
 		seen: /* @__PURE__ */ new Set(),
 		nodes: 0
-	}, r = UD(e, t);
-	return WD(r, [
+	}, r = BD(e, t);
+	return VD(r, [
 		"request",
 		"result",
 		"error"
 	], t), Object.freeze({
-		request: HD(r.request, `${t}.request`, n, 0),
-		result: HD(r.result, `${t}.result`, n, 0),
-		error: HD(r.error, `${t}.error`, n, 0)
+		request: zD(r.request, `${t}.request`, n, 0),
+		result: zD(r.result, `${t}.result`, n, 0),
+		error: zD(r.error, `${t}.error`, n, 0)
 	});
 }
-function HD(e, t, n, r) {
-	r > ND && mO(`${t} exceeds wire schema depth`);
-	let i = UD(e, t);
-	n.active.has(i) && mO(`${t} contains a cyclic schema`), n.seen.has(i) || (n.seen.add(i), n.nodes += 1, n.nodes > PD && mO(`${t} exceeds the ${PD}-node schema limit`)), n.active.add(i);
+function zD(e, t, n, r) {
+	r > AD && dO(`${t} exceeds wire schema depth`);
+	let i = BD(e, t);
+	n.active.has(i) && dO(`${t} contains a cyclic schema`), n.seen.has(i) || (n.seen.add(i), n.nodes += 1, n.nodes > jD && dO(`${t} exceeds the ${jD}-node schema limit`)), n.active.add(i);
 	try {
-		let e = GD(i.kind, `${t}.kind`);
+		let e = HD(i.kind, `${t}.kind`);
 		switch (e) {
-			case "boolean": return WD(i, ["kind"], t), Object.freeze({ kind: e });
-			case "decimalU64": return WD(i, ["kind"], t), Object.freeze({ kind: e });
+			case "boolean": return VD(i, ["kind"], t), Object.freeze({ kind: e });
+			case "decimalU64": return VD(i, ["kind"], t), Object.freeze({ kind: e });
 			case "integer": {
-				WD(i, ["kind"], t, ["minimum", "maximum"]);
-				let n = JD(i.minimum, `${t}.minimum`), r = JD(i.maximum, `${t}.maximum`);
-				return n !== void 0 && r !== void 0 && n > r && mO(`${t} minimum exceeds maximum`), Object.freeze({
+				VD(i, ["kind"], t, ["minimum", "maximum"]);
+				let n = GD(i.minimum, `${t}.minimum`), r = GD(i.maximum, `${t}.maximum`);
+				return n !== void 0 && r !== void 0 && n > r && dO(`${t} minimum exceeds maximum`), Object.freeze({
 					kind: e,
 					...n === void 0 ? {} : { minimum: n },
 					...r === void 0 ? {} : { maximum: r }
 				});
 			}
 			case "string": {
-				WD(i, ["kind", "maximumBytes"], t, ["pattern"]);
-				let n = qD(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = i.pattern;
-				return r !== void 0 && r !== "identifier" && mO(`${t}.pattern is not supported`), Object.freeze({
+				VD(i, ["kind", "maximumBytes"], t, ["pattern"]);
+				let n = WD(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = i.pattern;
+				return r !== void 0 && r !== "identifier" && dO(`${t}.pattern is not supported`), Object.freeze({
 					kind: e,
 					maximumBytes: n,
 					...r === void 0 ? {} : { pattern: r }
 				});
 			}
 			case "array": {
-				WD(i, [
+				VD(i, [
 					"kind",
 					"items",
 					"maximumItems"
 				], t);
-				let a = qD(i.maximumItems, `${t}.maximumItems`, 0, 65536);
+				let a = WD(i.maximumItems, `${t}.maximumItems`, 0, 65536);
 				return Object.freeze({
 					kind: e,
-					items: HD(i.items, `${t}.items`, n, r + 1),
+					items: zD(i.items, `${t}.items`, n, r + 1),
 					maximumItems: a
 				});
 			}
 			case "object": {
-				WD(i, ["kind", "fields"], t);
-				let a = UD(i.fields, `${t}.fields`), o = Object.entries(a);
-				o.length > FD && mO(`${t}.fields exceeds the ${FD}-field limit`);
+				VD(i, ["kind", "fields"], t);
+				let a = BD(i.fields, `${t}.fields`), o = Object.entries(a);
+				o.length > MD && dO(`${t}.fields exceeds the ${MD}-field limit`);
 				let s = Object.create(null);
 				for (let [e, i] of o) {
 					let a = `${t}.fields.${e}`;
-					YD(e, a);
-					let o = UD(i, a);
-					WD(o, ["required", "value"], a), typeof o.required != "boolean" && mO(`${a}.required must be boolean`), s[e] = Object.freeze({
+					KD(e, a);
+					let o = BD(i, a);
+					VD(o, ["required", "value"], a), typeof o.required != "boolean" && dO(`${a}.required must be boolean`), s[e] = Object.freeze({
 						required: o.required,
-						value: HD(o.value, `${a}.value`, n, r + 1)
+						value: zD(o.value, `${a}.value`, n, r + 1)
 					});
 				}
 				return Object.freeze({
@@ -29457,25 +28540,25 @@ function HD(e, t, n, r) {
 				});
 			}
 			case "enum": {
-				WD(i, ["kind", "values"], t);
+				VD(i, ["kind", "values"], t);
 				let n = i.values;
-				(!Array.isArray(n) || n.length === 0 || n.length > FD) && mO(`${t}.values must be a bounded nonempty array`);
-				let r = n.map((e, n) => KD(e, `${t}.values[${n}]`, 256));
-				return new Set(r).size !== r.length && mO(`${t}.values contains duplicates`), Object.freeze({
+				(!Array.isArray(n) || n.length === 0 || n.length > MD) && dO(`${t}.values must be a bounded nonempty array`);
+				let r = n.map((e, n) => UD(e, `${t}.values[${n}]`, 256));
+				return new Set(r).size !== r.length && dO(`${t}.values contains duplicates`), Object.freeze({
 					kind: e,
 					values: Object.freeze(r)
 				});
 			}
 			case "taggedUnion": {
-				WD(i, [
+				VD(i, [
 					"kind",
 					"tag",
 					"variants"
 				], t);
-				let a = KD(i.tag, `${t}.tag`, 128), o = UD(i.variants, `${t}.variants`), s = Object.entries(o);
-				(s.length === 0 || s.length > FD) && mO(`${t}.variants must be a bounded nonempty object`);
+				let a = UD(i.tag, `${t}.tag`, 128), o = BD(i.variants, `${t}.variants`), s = Object.entries(o);
+				(s.length === 0 || s.length > MD) && dO(`${t}.variants must be a bounded nonempty object`);
 				let c = Object.create(null);
-				for (let [e, i] of s) YD(e, `${t}.variants.${e}`), c[e] = HD(i, `${t}.variants.${e}`, n, r + 1);
+				for (let [e, i] of s) KD(e, `${t}.variants.${e}`), c[e] = zD(i, `${t}.variants.${e}`, n, r + 1);
 				return Object.freeze({
 					kind: e,
 					tag: a,
@@ -29483,12 +28566,12 @@ function HD(e, t, n, r) {
 				});
 			}
 			case "opaqueJson": {
-				WD(i, [
+				VD(i, [
 					"kind",
 					"maximumBytes",
 					"maximumNodes"
 				], t);
-				let n = qD(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = qD(i.maximumNodes, `${t}.maximumNodes`, 1, 65536);
+				let n = WD(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = WD(i.maximumNodes, `${t}.maximumNodes`, 1, 65536);
 				return Object.freeze({
 					kind: e,
 					maximumBytes: n,
@@ -29500,18 +28583,18 @@ function HD(e, t, n, r) {
 		n.active.delete(i);
 	}
 }
-function UD(e, t) {
-	(typeof e != "object" || !e || Array.isArray(e)) && mO(`${t} must be an object`);
+function BD(e, t) {
+	(typeof e != "object" || !e || Array.isArray(e)) && dO(`${t} must be an object`);
 	let n = e, r = Object.getPrototypeOf(n);
-	r !== Object.prototype && r !== null && mO(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && mO(`${t} may not contain symbol properties`);
+	r !== Object.prototype && r !== null && dO(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && dO(`${t} may not contain symbol properties`);
 	let i = Object.getOwnPropertyDescriptors(n);
-	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && mO(`${t} may not contain accessors or hidden properties`), n;
+	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && dO(`${t} may not contain accessors or hidden properties`), n;
 }
-function WD(e, t, n, r = []) {
+function VD(e, t, n, r = []) {
 	let i = /* @__PURE__ */ new Set([...t, ...r]);
-	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !hO(e, t))) && mO(`${n} has unexpected or missing fields`);
+	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !fO(e, t))) && dO(`${n} has unexpected or missing fields`);
 }
-function GD(e, t) {
+function HD(e, t) {
 	return (typeof e != "string" || ![
 		"boolean",
 		"decimalU64",
@@ -29522,77 +28605,77 @@ function GD(e, t) {
 		"enum",
 		"taggedUnion",
 		"opaqueJson"
-	].includes(e)) && mO(`${t} is not a supported schema kind`), e;
+	].includes(e)) && dO(`${t} is not a supported schema kind`), e;
 }
-function KD(e, t, n) {
-	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && mO(`${t} must be a bounded string`), e;
+function UD(e, t, n) {
+	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && dO(`${t} must be a bounded string`), e;
 }
-function qD(e, t, n, r) {
-	return (typeof e != "number" || !Number.isSafeInteger(e) || e < n || e > r) && mO(`${t} must be a bounded nonnegative integer`), e;
+function WD(e, t, n, r) {
+	return (typeof e != "number" || !Number.isSafeInteger(e) || e < n || e > r) && dO(`${t} must be a bounded nonnegative integer`), e;
 }
-function JD(e, t) {
-	if (e !== void 0) return (typeof e != "number" || !Number.isSafeInteger(e)) && mO(`${t} must be a safe integer`), e;
+function GD(e, t) {
+	if (e !== void 0) return (typeof e != "number" || !Number.isSafeInteger(e)) && dO(`${t} must be a safe integer`), e;
+}
+function KD(e, t) {
+	(e.length === 0 || e === "__proto__" || e === "constructor" || e === "prototype") && dO(`${t} is not a usable field name`), UD(e, t, 128);
+}
+function qD(e, t) {
+	if (!/^[a-z0-9._:-]+$/u.test(e) || new TextEncoder().encode(e).byteLength > ED.identity.commandBytes) throw new ND("invalid_schema", `${t} is not a valid command identity`);
+}
+function JD(e) {
+	throw new ND("invalid_extension", e);
 }
 function YD(e, t) {
-	(e.length === 0 || e === "__proto__" || e === "constructor" || e === "prototype") && mO(`${t} is not a usable field name`), KD(e, t, 128);
-}
-function XD(e, t) {
-	if (!/^[a-z0-9._:-]+$/u.test(e) || new TextEncoder().encode(e).byteLength > ED.identity.commandBytes) throw new ID("invalid_schema", `${t} is not a valid command identity`);
-}
-function ZD(e) {
-	throw new ID("invalid_extension", e);
-}
-function QD(e, t) {
-	(typeof e != "object" || !e || Array.isArray(e)) && ZD(`${t} must be an object`);
+	(typeof e != "object" || !e || Array.isArray(e)) && JD(`${t} must be an object`);
 	let n = e, r = Object.getPrototypeOf(n);
-	r !== Object.prototype && r !== null && ZD(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && ZD(`${t} may not contain symbol properties`);
+	r !== Object.prototype && r !== null && JD(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && JD(`${t} may not contain symbol properties`);
 	let i = Object.getOwnPropertyDescriptors(n);
-	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && ZD(`${t} may not contain accessors or hidden properties`), n;
+	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && JD(`${t} may not contain accessors or hidden properties`), n;
 }
-function $D(e, t, n, r = []) {
+function XD(e, t, n, r = []) {
 	let i = /* @__PURE__ */ new Set([...t, ...r]);
-	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !hO(e, t))) && ZD(`${n} has unexpected or missing fields`);
+	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !fO(e, t))) && JD(`${n} has unexpected or missing fields`);
 }
-function eO(e, t) {
-	(!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype || Object.keys(e).length !== e.length || Object.getOwnPropertySymbols(e).length > 0) && ZD(`${t} must be a dense ordinary array`);
+function ZD(e, t) {
+	(!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype || Object.keys(e).length !== e.length || Object.getOwnPropertySymbols(e).length > 0) && JD(`${t} must be a dense ordinary array`);
 	let n = Object.getOwnPropertyDescriptors(e);
-	return Object.entries(n).some(([e, t]) => e !== "length" && (!t.enumerable || !("value" in t))) && ZD(`${t} may not contain accessors or hidden properties`), e;
+	return Object.entries(n).some(([e, t]) => e !== "length" && (!t.enumerable || !("value" in t))) && JD(`${t} may not contain accessors or hidden properties`), e;
 }
-function tO(e, t, n) {
-	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && ZD(`${t} must be a bounded string`), e;
+function QD(e, t, n) {
+	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && JD(`${t} must be a bounded string`), e;
+}
+function $D(e, t) {
+	let n = QD(e, t, ED.identity.commandBytes);
+	return /^[a-z0-9._:-]+$/u.test(n) || JD(`${t} must use lower-case command identity characters`), n;
+}
+function eO(e) {
+	let t = $D(e, "extension namespace");
+	return t.includes(":") && JD("extension namespace may not contain colon"), t;
+}
+function tO(e, t) {
+	let n = QD(e, t, ED.identity.commandBytes);
+	return ED.lanes.includes(n) || JD(`${t} is invalid`), n;
 }
 function nO(e, t) {
-	let n = tO(e, t, ED.identity.commandBytes);
-	return /^[a-z0-9._:-]+$/u.test(n) || ZD(`${t} must use lower-case command identity characters`), n;
-}
-function rO(e) {
-	let t = nO(e, "extension namespace");
-	return t.includes(":") && ZD("extension namespace may not contain colon"), t;
-}
-function iO(e, t) {
-	let n = tO(e, t, ED.identity.commandBytes);
-	return ED.lanes.includes(n) || ZD(`${t} is invalid`), n;
-}
-function aO(e, t) {
-	let n = gO(e, "discovery");
-	_O(n, ED.discoveryFields, "discovery");
-	let r = SO(n.protocolVersion, "discovery.protocolVersion"), i = bO(n.runtime, "runtime"), a = bO(n.profile, "profile");
+	let n = pO(e, "discovery");
+	mO(n, ED.discoveryFields, "discovery");
+	let r = yO(n.protocolVersion, "discovery.protocolVersion"), i = _O(n.runtime, "runtime"), a = _O(n.profile, "profile");
 	Array.isArray(n.permittedLanes) || $("discovery.permittedLanes must be a dense ordinary array");
-	let o = OO(n.permittedLanes, "discovery.permittedLanes");
+	let o = TO(n.permittedLanes, "discovery.permittedLanes");
 	(o.length === 0 || o.length > ED.lanes.length) && $(`discovery.permittedLanes must contain 1-${ED.lanes.length} lanes`);
-	let s = o.map((e, t) => CO(e, `discovery.permittedLanes[${t}]`));
+	let s = o.map((e, t) => bO(e, `discovery.permittedLanes[${t}]`));
 	new Set(s).size !== s.length && $("discovery.permittedLanes must not contain duplicates");
-	let c = wO(n.revision, "discovery.revision"), l = wO(n.catalogEpoch, "discovery.catalogEpoch"), u = bO(n.contractFingerprint, "discovery.contractFingerprint");
+	let c = xO(n.revision, "discovery.revision"), l = xO(n.catalogEpoch, "discovery.catalogEpoch"), u = _O(n.contractFingerprint, "discovery.contractFingerprint");
 	Array.isArray(n.commands) || $("discovery.commands must be a dense ordinary array");
-	let d = OO(n.commands, "discovery.commands");
-	d.length > MD && $("discovery.commands must be a bounded array");
-	let f = d.map((e, t) => oO(e, `discovery.commands[${t}]`)), p = /* @__PURE__ */ new Set();
+	let d = TO(n.commands, "discovery.commands");
+	d.length > kD && $("discovery.commands must be a bounded array");
+	let f = d.map((e, t) => rO(e, `discovery.commands[${t}]`)), p = /* @__PURE__ */ new Set();
 	for (let e of f) for (let t of [e.id, ...e.aliases]) p.has(t) && $(`duplicate command or alias ${t}`), p.add(t);
 	f.some((e) => !s.includes(e.lane)) && $("discovery command lane is not permitted by its selected profile");
 	let m = new Map(f.map((e) => [e.id, e]));
 	for (let e of t.extensionBindings) {
 		let t = m.get(e.command);
-		t === void 0 && ZD(`Schema binding ${e.command} has no available discovered command`), e.profile !== a && ZD(`Schema binding ${e.command} expects profile ${e.profile}, not ${a}`), e.lane !== t.lane && ZD(`Schema binding ${e.command} expects lane ${e.lane}, not ${t.lane}`);
+		t === void 0 && JD(`Schema binding ${e.command} has no available discovered command`), e.profile !== a && JD(`Schema binding ${e.command} expects profile ${e.profile}, not ${a}`), e.lane !== t.lane && JD(`Schema binding ${e.command} expects lane ${e.lane}, not ${t.lane}`);
 	}
 	return Object.freeze({
 		protocolVersion: r,
@@ -29605,17 +28688,17 @@ function aO(e, t) {
 		commands: Object.freeze(f)
 	});
 }
-function oO(e, t) {
-	let n = gO(e, t);
-	_O(n, [
+function rO(e, t) {
+	let n = pO(e, t);
+	mO(n, [
 		"id",
 		"aliases",
 		"lane",
 		"summary"
 	], t);
-	let r = bO(n.id, `${t}.id`);
+	let r = _O(n.id, `${t}.id`);
 	(!Array.isArray(n.aliases) || n.aliases.length > ED.limits.commandAliases) && $(`${t}.aliases must be bounded`);
-	let i = n.aliases.map((e, n) => bO(e, `${t}.aliases[${n}]`)), a = CO(n.lane, `${t}.lane`), o = yO(n.summary, ED.limits.summaryBytes, `${t}.summary`);
+	let i = n.aliases.map((e, n) => _O(e, `${t}.aliases[${n}]`)), a = bO(n.lane, `${t}.lane`), o = gO(n.summary, ED.limits.summaryBytes, `${t}.summary`);
 	return Object.freeze({
 		id: r,
 		aliases: Object.freeze(i),
@@ -29624,9 +28707,9 @@ function oO(e, t) {
 		helpOnly: !0
 	});
 }
-function sO(e, t, n) {
-	let r = gO(e, "response");
-	_O(r, [
+function iO(e, t, n) {
+	let r = pO(e, "response");
+	mO(r, [
 		"correlation",
 		"runtime",
 		"profile",
@@ -29634,19 +28717,19 @@ function sO(e, t, n) {
 		"catalogEpoch",
 		"outcome"
 	], "response");
-	let i = bO(r.correlation, "response.correlation");
+	let i = _O(r.correlation, "response.correlation");
 	i !== t.correlation && $("response correlation does not match request");
-	let a = bO(r.runtime, "response.runtime"), o = bO(r.profile, "response.profile"), s = wO(r.revision, "response.revision"), c = wO(r.catalogEpoch, "response.catalogEpoch"), l = gO(r.outcome, "response.outcome"), u = vO(l.kind, "response.outcome.kind"), d;
+	let a = _O(r.runtime, "response.runtime"), o = _O(r.profile, "response.profile"), s = xO(r.revision, "response.revision"), c = xO(r.catalogEpoch, "response.catalogEpoch"), l = pO(r.outcome, "response.outcome"), u = hO(l.kind, "response.outcome.kind"), d;
 	if (u === "success") {
-		_O(l, [
+		mO(l, [
 			"kind",
 			"value",
 			"receiptRefs"
 		], "response.outcome"), (!Array.isArray(l.receiptRefs) || l.receiptRefs.length > 32) && $("response receipt refs must be bounded");
-		let e = l.receiptRefs.map((e, t) => bO(e, `response.receiptRefs[${t}]`));
-		n !== void 0 && lO(l.value, n.result, "$result"), d = Object.freeze({
+		let e = l.receiptRefs.map((e, t) => _O(e, `response.receiptRefs[${t}]`));
+		n !== void 0 && oO(l.value, n.result, "$result"), d = Object.freeze({
 			kind: "success",
-			value: EO(l.value),
+			value: CO(l.value),
 			receiptRefs: Object.freeze(e)
 		});
 	} else u === "error" ? ((!Object.keys(l).every((e) => [
@@ -29654,11 +28737,11 @@ function sO(e, t, n) {
 		"code",
 		"message",
 		"details"
-	].includes(e)) || !hO(l, "code") || !hO(l, "message")) && $("response error has invalid fields"), n !== void 0 && hO(l, "details") && lO(l.details, n.error, "$error"), d = Object.freeze({
+	].includes(e)) || !fO(l, "code") || !fO(l, "message")) && $("response error has invalid fields"), n !== void 0 && fO(l, "details") && oO(l.details, n.error, "$error"), d = Object.freeze({
 		kind: "error",
-		code: bO(l.code, "response.outcome.code"),
-		message: yO(l.message, 1024, "response.outcome.message"),
-		...hO(l, "details") ? { details: EO(l.details) } : {}
+		code: _O(l.code, "response.outcome.code"),
+		message: gO(l.message, 1024, "response.outcome.message"),
+		...fO(l, "details") ? { details: CO(l.details) } : {}
 	})) : $("response outcome kind is invalid");
 	return Object.freeze({
 		correlation: i,
@@ -29669,149 +28752,149 @@ function sO(e, t, n) {
 		outcome: d
 	});
 }
-function cO(e, t) {
-	lO(e, t, "$");
+function aO(e, t) {
+	oO(e, t, "$");
 }
-function lO(e, t, n, r = 0) {
-	switch (r > ND && $(`${n} exceeds wire depth`), t.kind) {
+function oO(e, t, n, r = 0) {
+	switch (r > AD && $(`${n} exceeds wire depth`), t.kind) {
 		case "boolean":
 			typeof e != "boolean" && $(`${n} must be boolean`);
 			return;
 		case "decimalU64":
-			wO(e, n);
+			xO(e, n);
 			return;
 		case "integer":
 			(typeof e != "number" || !Number.isSafeInteger(e) || t.minimum !== void 0 && e < t.minimum || t.maximum !== void 0 && e > t.maximum) && $(`${n} must be a bounded integer`);
 			return;
 		case "string": {
-			let r = yO(e, t.maximumBytes, n);
-			t.pattern === "identifier" && xO(r, n);
+			let r = gO(e, t.maximumBytes, n);
+			t.pattern === "identifier" && vO(r, n);
 			return;
 		}
 		case "array":
-			(!Array.isArray(e) || e.length > t.maximumItems) && $(`${n} must be a bounded array`), OO(e, n).forEach((e, i) => lO(e, t.items, `${n}[${i}]`, r + 1));
+			(!Array.isArray(e) || e.length > t.maximumItems) && $(`${n} must be a bounded array`), TO(e, n).forEach((e, i) => oO(e, t.items, `${n}[${i}]`, r + 1));
 			return;
 		case "enum":
 			(typeof e != "string" || !t.values.includes(e)) && $(`${n} must be an admitted enum value`);
 			return;
 		case "taggedUnion": {
-			let i = DO(e, n);
-			hO(i, t.tag) || $(`${n}.${t.tag} is required`);
-			let a = vO(i[t.tag], `${n}.${t.tag}`);
-			hO(t.variants, a) || $(`${n}.${t.tag} is invalid`);
+			let i = wO(e, n);
+			fO(i, t.tag) || $(`${n}.${t.tag} is required`);
+			let a = hO(i[t.tag], `${n}.${t.tag}`);
+			fO(t.variants, a) || $(`${n}.${t.tag} is invalid`);
 			let o = t.variants[a];
-			lO(e, o, n, r + 1);
+			oO(e, o, n, r + 1);
 			return;
 		}
 		case "opaqueJson":
-			kO(e, t.maximumBytes, t.maximumNodes, n);
+			EO(e, t.maximumBytes, t.maximumNodes, n);
 			return;
 		case "object": {
-			let i = DO(e, n), a = t.fields;
-			for (let e of Object.keys(i)) hO(a, e) || $(`${n}.${e} is not allowed`);
+			let i = wO(e, n), a = t.fields;
+			for (let e of Object.keys(i)) fO(a, e) || $(`${n}.${e} is not allowed`);
 			for (let [e, t] of Object.entries(a)) {
-				if (!hO(i, e)) {
+				if (!fO(i, e)) {
 					t.required && $(`${n}.${e} is required`);
 					continue;
 				}
-				lO(i[e], t.value, `${n}.${e}`, r + 1);
+				oO(i[e], t.value, `${n}.${e}`, r + 1);
 			}
 			return;
 		}
 	}
 }
-function uO() {
+function sO() {
 	return typeof crypto < "u" && "randomUUID" in crypto ? crypto.randomUUID().toLowerCase() : `${Date.now()}-${Math.random()}`.replace(/[^a-z0-9.-]/gu, "-");
 }
-function dO(e) {
-	if (e?.aborted) throw new ID("cancelled", "Developer command was cancelled");
+function cO(e) {
+	if (e?.aborted) throw new ND("cancelled", "Developer command was cancelled");
 }
-function fO(e) {
-	return e instanceof ID ? e : e instanceof DOMException && e.name === "AbortError" ? new ID("cancelled", "Developer command was cancelled", { cause: e }) : new ID("unavailable", `Developer command adapter is unavailable: ${pO(e)}`, { cause: e instanceof Error ? e : void 0 });
+function lO(e) {
+	return e instanceof ND ? e : e instanceof DOMException && e.name === "AbortError" ? new ND("cancelled", "Developer command was cancelled", { cause: e }) : new ND("unavailable", `Developer command adapter is unavailable: ${uO(e)}`, { cause: e instanceof Error ? e : void 0 });
 }
-function pO(e) {
+function uO(e) {
 	return e instanceof Error ? e.message : String(e);
 }
 function $(e) {
-	throw new ID("malformed", e);
+	throw new ND("malformed", e);
 }
-function mO(e) {
-	throw new ID("invalid_schema", e);
+function dO(e) {
+	throw new ND("invalid_schema", e);
 }
-function hO(e, t) {
+function fO(e, t) {
 	return Object.prototype.hasOwnProperty.call(e, t);
 }
-function gO(e, t) {
-	return DO(e, t);
+function pO(e, t) {
+	return wO(e, t);
 }
-function _O(e, t, n) {
-	(Object.keys(e).some((e) => !t.includes(e)) || t.some((t) => !hO(e, t))) && $(`${n} has unexpected or missing fields`);
+function mO(e, t, n) {
+	(Object.keys(e).some((e) => !t.includes(e)) || t.some((t) => !fO(e, t))) && $(`${n} has unexpected or missing fields`);
 }
-function vO(e, t) {
+function hO(e, t) {
 	return typeof e != "string" && $(`${t} must be string`), e;
 }
-function yO(e, t, n) {
-	let r = vO(e, n);
+function gO(e, t, n) {
+	let r = hO(e, n);
 	return new TextEncoder().encode(r).byteLength > t && $(`${n} exceeds ${t} bytes`), r;
 }
-function bO(e, t) {
-	let n = yO(e, ED.identity.commandBytes, t);
-	return xO(n, t), n;
+function _O(e, t) {
+	let n = gO(e, ED.identity.commandBytes, t);
+	return vO(n, t), n;
 }
-function xO(e, t) {
+function vO(e, t) {
 	/^[a-z0-9._:-]+$/u.test(e) || $(`${t} must use lower-case command identity characters`);
 }
-function SO(e, t) {
-	return e !== OD && $(`${t} is unsupported`), OD;
+function yO(e, t) {
+	return e !== DD && $(`${t} is unsupported`), DD;
 }
-function CO(e, t) {
-	let n = vO(e, t);
+function bO(e, t) {
+	let n = hO(e, t);
 	return ED.lanes.includes(n) || $(`${t} is invalid`), n;
 }
-function wO(e, t) {
-	let n = yO(e, 20, t);
+function xO(e, t) {
+	let n = gO(e, 20, t);
 	return (!/^(?:0|[1-9][0-9]*)$/u.test(n) || BigInt(n) > 18446744073709551615n) && $(`${t} must be an unsigned 64-bit decimal string`), n;
 }
-function TO(e, t) {
+function SO(e, t) {
 	return BigInt(e) < BigInt(t);
 }
-function EO(e) {
+function CO(e) {
 	try {
 		return JSON.parse(JSON.stringify(e));
 	} catch (e) {
-		throw new ID("malformed", "Developer command values must be JSON-compatible", { cause: e instanceof Error ? e : void 0 });
+		throw new ND("malformed", "Developer command values must be JSON-compatible", { cause: e instanceof Error ? e : void 0 });
 	}
 }
-function DO(e, t) {
+function wO(e, t) {
 	(typeof e != "object" || !e || Array.isArray(e)) && $(`${t} must be an object`);
 	let n = e;
 	Object.getPrototypeOf(n) !== Object.prototype && $(`${t} must use the ordinary object prototype`), ("toJSON" in n || Object.getOwnPropertySymbols(n).length > 0) && $(`${t} has non-JSON hooks`);
 	let r = Object.getOwnPropertyDescriptors(n);
 	return Object.values(r).some((e) => !e.enumerable || !("value" in e)) && $(`${t} has accessor or hidden property`), n;
 }
-function OO(e, t) {
+function TO(e, t) {
 	Array.isArray(e) || $(`${t} must be an array`), Object.getPrototypeOf(e) !== Array.prototype && $(`${t} must use the ordinary array prototype`), ("toJSON" in e || Object.getOwnPropertySymbols(e).length > 0) && $(`${t} has non-JSON hooks`);
 	let n = Object.getOwnPropertyDescriptors(e);
 	for (let [e, r] of Object.entries(n)) e === "length" ? (r.enumerable || !("value" in r)) && $(`${t} has an invalid length property`) : (!r.enumerable || !("value" in r)) && $(`${t} has accessor or hidden property`);
 	Object.keys(e).length !== e.length && $(`${t} must be a dense ordinary array`);
-	for (let n = 0; n < e.length; n += 1) hO(e, n) || $(`${t} must be a dense ordinary array`);
+	for (let n = 0; n < e.length; n += 1) fO(e, n) || $(`${t} must be a dense ordinary array`);
 	return e;
 }
-function kO(e, t, n, r) {
+function EO(e, t, n, r) {
 	let i = /* @__PURE__ */ new Set(), a = 0, o = (e, t) => {
-		if ((t > ND || ++a > n) && $(`${r} exceeds opaque JSON bounds`), !(e === null || typeof e == "string" || typeof e == "boolean")) {
+		if ((t > AD || ++a > n) && $(`${r} exceeds opaque JSON bounds`), !(e === null || typeof e == "string" || typeof e == "boolean")) {
 			if (typeof e == "number") {
 				(!Number.isFinite(e) || Object.is(e, -0)) && $(`${r} has noncanonical number`);
 				return;
 			}
 			if ((typeof e != "object" || i.has(e)) && $(`${r} is not acyclic JSON`), i.add(e), Array.isArray(e)) {
-				OO(e, r), e.forEach((e) => o(e, t + 1));
+				TO(e, r), e.forEach((e) => o(e, t + 1));
 				return;
 			}
-			DO(e, r), Object.values(e).forEach((e) => o(e, t + 1));
+			wO(e, r), Object.values(e).forEach((e) => o(e, t + 1));
 		}
 	};
 	o(e, 0), new TextEncoder().encode(JSON.stringify(e)).byteLength > t && $(`${r} exceeds opaque JSON bytes`);
 }
 //#endregion
-export { _T as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, vT as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, yT as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, nD as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, VT as RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM, GT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM, YT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM, KT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM, qT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM, XT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM, JT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_STRING_BYTES_MAXIMUM, BT as RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM, UT as RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM, WT as RUSTY_APPLICATION_INPUT_U64_MAXIMUM, HT as RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM, ME as RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT, NE as RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM, zE as RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH, PE as RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES, LE as RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH, IE as RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES, BE as RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS, RE as RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES, VE as RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS, FE as RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES, OD as RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, AD as RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS, kD as RUSTY_STANDARD_HOST_WIRE_SCHEMAS, bT as RustyApplicationContentError, rD as RustyApplicationHostError, HE as RustyApplicationUiProjectionError, ID as RustyDeveloperCommandClientError, WE as createRustyApplicationUiProjection, LD as createRustyDeveloperCommandClient, oD as mountRustyApplication, MT as mountRustyDeveloperCommandShell, cO as validateRustyDeveloperCommandWireValue };
+export { _T as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, vT as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, yT as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, nD as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, VT as RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM, GT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM, YT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM, KT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM, qT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM, XT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM, JT as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_STRING_BYTES_MAXIMUM, BT as RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM, UT as RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM, WT as RUSTY_APPLICATION_INPUT_U64_MAXIMUM, HT as RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM, ME as RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT, NE as RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM, zE as RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH, PE as RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES, LE as RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH, IE as RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES, BE as RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS, RE as RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES, VE as RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS, FE as RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES, DD as RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, bT as RustyApplicationContentError, rD as RustyApplicationHostError, HE as RustyApplicationUiProjectionError, ND as RustyDeveloperCommandClientError, WE as createRustyApplicationUiProjection, PD as createRustyDeveloperCommandClient, oD as mountRustyApplication, MT as mountRustyDeveloperCommandShell, aO as validateRustyDeveloperCommandWireValue };

@@ -23,30 +23,20 @@ ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS = frozenset(
         "engine-spatial",
         "entity-state",
         "environment-authoring",
-        "gameplay-mechanics",
-        "state-machine",
         "voxel-annotation",
         "voxel-asset",
         "voxel-convert",
         "voxel-object-runtime",
     }
 )
-GAMEPLAY_AUTHORITY = frozenset(
-    {"gameplay-mechanics", "gameplay-resolution", "gameplay-rules"}
-)
-GAMEPLAY_RESOLUTION_FORBIDDEN = frozenset(
-    {"entity-state", "gameplay-mechanics", "gameplay-rules"}
-)
 RENDER_HOST_BACKEND_PACKAGES = frozenset({"renderer-host", "renderer-three"})
 RENDER_MODEL_FORBIDDEN = (
     ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS
-    | GAMEPLAY_AUTHORITY
     | RENDER_HOST_BACKEND_PACKAGES
     | {"engine-inspector", "render-presentation", "render-projection"}
 )
 RENDER_PRESENTATION_FORBIDDEN = (
     ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS
-    | GAMEPLAY_AUTHORITY
     | RENDER_HOST_BACKEND_PACKAGES
     | {"engine-inspector", "render-projection"}
 )
@@ -165,22 +155,7 @@ def find_violations(metadata: dict[str, Any]) -> list[str]:
                         + render_path(source, target, parents, names)
                     )
 
-        if source_name == "gameplay-resolution":
-            for target in reachable:
-                if names[target] in GAMEPLAY_RESOLUTION_FORBIDDEN:
-                    violations.add(
-                        "gameplay-resolution reaches a downstream-selected gameplay owner: "
-                        + render_path(source, target, parents, names)
-                    )
-
-        # `developer-command-standard` is the explicit tooling composition leaf
-        # for Engine-owned inspection command modules. Like the facade, it may
-        # depend on the read-only inspector but no owner may depend back.
-        if source_name not in {
-            "engine-inspector",
-            "developer-command-standard",
-            "rusty-engine",
-        }:
+        if source_name not in {"engine-inspector", "rusty-engine"}:
             for target in reachable:
                 if names[target] == "engine-inspector":
                     violations.add(
@@ -214,13 +189,6 @@ def find_violations(metadata: dict[str, Any]) -> list[str]:
                 RENDER_PRESENTATION_FORBIDDEN,
                 violations,
             )
-        elif source_name == "render-projection":
-            for target in reachable:
-                if names[target] in GAMEPLAY_AUTHORITY:
-                    violations.add(
-                        "render-projection reaches gameplay authority: "
-                        + render_path(source, target, parents, names)
-                    )
 
     return sorted(violations)
 

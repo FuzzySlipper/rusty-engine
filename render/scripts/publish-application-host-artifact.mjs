@@ -26,7 +26,7 @@ for (const file of [
 ]) {
   copyFileSync(new URL(file, declarations), new URL(file, artifact));
 }
-const clientFiles = ['index.js', 'index.d.ts', 'generated-developer-command-contract.js', 'generated-developer-command-contract.d.ts', 'generated-standard-host-wire.js', 'generated-standard-host-wire.d.ts'];
+const clientFiles = ['index.js', 'index.d.ts', 'generated-developer-command-contract.js', 'generated-developer-command-contract.d.ts'];
 for (const file of clientFiles) {
   copyFileSync(new URL(file, clientDeclarations), new URL(file, clientArtifact));
 }
@@ -37,14 +37,14 @@ copyFileSync(new URL('index.d.ts', clientDeclarations), new URL('developer-comma
 copyFileSync(new URL('index.js', clientDeclarations), new URL('developer-command-client.js', artifact));
 copyFileSync(new URL('developer-command-shell.d.ts', declarations), new URL('developer-command-shell.d.ts', artifact));
 for (const target of [
-  ...['index.js', 'generated-developer-command-contract.js', 'generated-standard-host-wire.js']
+  ...['index.js', 'generated-developer-command-contract.js']
     .map((file) => new URL(file, clientArtifact)),
-  ...['developer-command-client.js', 'generated-developer-command-contract.js', 'generated-standard-host-wire.js']
+  ...['developer-command-client.js', 'generated-developer-command-contract.js']
     .map((file) => new URL(file, artifact)),
 ]) {
   writeFileSync(target, readFileSync(target, 'utf8').replace(/^\/\/# sourceMappingURL=.*$/gmu, ''));
 }
-for (const file of ['generated-developer-command-contract.d.ts', 'generated-standard-host-wire.d.ts']) copyFileSync(new URL(file, clientDeclarations), new URL(file, artifact));
+for (const file of ['generated-developer-command-contract.d.ts']) copyFileSync(new URL(file, clientDeclarations), new URL(file, artifact));
 const applicationIndex = new URL('index.d.ts', artifact);
 writeFileSync(applicationIndex, readFileSync(applicationIndex, 'utf8').replaceAll('@rusty-engine/developer-command-client', './developer-command-client.js'));
 const shellDeclaration = new URL('developer-command-shell.d.ts', artifact);
@@ -68,10 +68,10 @@ writeFileSync(
         types: './index.d.ts',
       },
     },
-    files: ['application-content.d.ts', 'application-host.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.d.ts', 'generated-developer-command-contract.js', 'generated-standard-host-wire.d.ts', 'generated-standard-host-wire.js', 'index.d.ts', 'index.js', 'input-ingress.d.ts', 'presentation-frame.d.ts', 'ui-projection.d.ts'],
+    files: ['application-content.d.ts', 'application-host.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.d.ts', 'generated-developer-command-contract.js', 'index.d.ts', 'index.js', 'input-ingress.d.ts', 'presentation-frame.d.ts', 'ui-projection.d.ts'],
   }, null, 2)}\n`,
 );
-writeFileSync(new URL('package.json', clientArtifact), `${JSON.stringify({ name: '@rusty-engine/developer-command-client', version: '0.1.0', type: 'module', main: './index.js', types: './index.d.ts', exports: { '.': { import: './index.js', types: './index.d.ts' } }, files: ['index.js', 'index.d.ts', 'generated-developer-command-contract.js', 'generated-developer-command-contract.d.ts', 'generated-standard-host-wire.js', 'generated-standard-host-wire.d.ts'] }, null, 2)}\n`);
+writeFileSync(new URL('package.json', clientArtifact), `${JSON.stringify({ name: '@rusty-engine/developer-command-client', version: '0.1.0', type: 'module', main: './index.js', types: './index.d.ts', exports: { '.': { import: './index.js', types: './index.d.ts' } }, files: ['index.js', 'index.d.ts', 'generated-developer-command-contract.js', 'generated-developer-command-contract.d.ts'] }, null, 2)}\n`);
 
 function publicApplicationContentDeclaration(source) {
   const withoutRendererImport = source.replace(

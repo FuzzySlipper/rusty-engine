@@ -91,14 +91,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Animation = new AnimationServiceImplementation(native.animation);
                     CameraView = new CameraViewServiceImplementation(native.camera_view);
                     Random = new RngServiceImplementation(native.rng);
-                    Mechanics = new MechanicsServiceImplementation(native.mechanics);
-                    ContinuousMechanics = new ContinuousMechanicsServiceImplementation(native.continuous_mechanics);
                     Persistence = new PersistenceServiceImplementation(native.persistence);
-                    Rules = new RulesServiceImplementation(native.rules);
-                    Resolution = new ResolutionServiceImplementation(native.resolution);
-                    StateMachine = new StateMachineServiceImplementation(native.state_machine);
-                    StandardExact = new StandardExactServiceImplementation(native.standard_exact);
-                    StandardContinuous = new StandardContinuousServiceImplementation(native.standard_continuous);
                     Ui = new UiServiceImplementation(native.ui);
                 }
 
@@ -121,14 +114,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IAnimationService Animation { get; }
                 public ICameraViewService CameraView { get; }
                 public IRandomService Random { get; }
-                public IMechanicsService Mechanics { get; }
-                public IContinuousMechanicsService ContinuousMechanics { get; }
                 public IPersistenceService Persistence { get; }
-                public IRulesService Rules { get; }
-                public IResolutionService Resolution { get; }
-                public IStateMachineService StateMachine { get; }
-                public IStandardExactService StandardExact { get; }
-                public IStandardContinuousService StandardContinuous { get; }
                 public IUiService Ui { get; }
             }
 

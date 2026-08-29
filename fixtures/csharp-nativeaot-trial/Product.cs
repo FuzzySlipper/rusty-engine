@@ -167,38 +167,6 @@ public sealed class Product : IEngineProduct
                 reference.Path,
                 reference.Sha256 with { Word3 = reference.Sha256.Word3 ^ 1 })));
         }
-        using (RulesPackage rulesPackage = _engine.Rules.AdmitPackage(new RulesPackageAdmitRequest(
-            """
-            {"kind":"rusty.gameplay-rules.package","schemaVersion":1,"domain":"fixture","package":"nativeaot","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":{"machines":[{"output":10}]}}
-            """u8.ToArray())))
-        {
-            RulesPackageReadoutLeaseReceipt packageReadout = _engine.Rules.ReadPackage(rulesPackage);
-            RulesPackageReadoutRow parent = packageReadout.Packages.Span[0];
-            RulesResolvedPackageSetLeaseReceipt resolved = _engine.Rules.ResolvePackages(
-                new RulesResolvePackagesRequest(new RulesPackage[] { rulesPackage }));
-            Require(resolved.Packages.Length == 1
-                && resolved.Packages.Span[0].Package == "nativeaot"
-                && resolved.Aggregate.DependencyCount == 0,
-                "rules resolution did not copy deterministic package facts");
-            ReadOnlyMemory<RulesPayloadSelectionRow> selected = _engine.Rules.SelectPayload(
-                new RulesSelectPayloadRequest(
-                    rulesPackage,
-                    parent.Fingerprint,
-                    new RulesPayloadPathSegment[] {
-                        new RulesPayloadPathSegment(RulesPayloadPathSegmentKind.Field, "machines", 0),
-                        new RulesPayloadPathSegment(RulesPayloadPathSegmentKind.Index, string.Empty, 0),
-                        new RulesPayloadPathSegment(RulesPayloadPathSegmentKind.Field, "output", 0),
-                    }));
-            Require(selected.Length == 1 && selected.Span[0].ParentFingerprint == parent.Fingerprint
-                && selected.Span[0].CanonicalBytes.Span.SequenceEqual("10"u8),
-                "rules payload selection did not copy the requested field/index subtree");
-            ExpectEngineFailure(() => _engine.Rules.SelectPayload(new RulesSelectPayloadRequest(
-                rulesPackage,
-                new string('0', 64),
-                new RulesPayloadPathSegment[] {
-                    new RulesPayloadPathSegment(RulesPayloadPathSegmentKind.Field, "machines", 0),
-                })));
-        }
         _appearance = _engine.Appearance.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
         Material createdMaterial = _engine.Appearance.CreateMaterial(new MaterialRequest(
             new Color(0.25f, 0.75f, 1.0f, 1.0f),
@@ -508,67 +476,6 @@ public sealed class Product : IEngineProduct
                 Require(input.PayloadContract.Span.SequenceEqual("runtime.exercise.payload"u8), "payload contract did not reach Product.Game");
                 Require(input.PayloadData.Span.SequenceEqual("{\"exercise\":true}"u8), "payload data did not reach Product.Game");
             }
-        }
-        using (StandardExactDefinition exact = _engine.StandardExact.Admit(new StandardExactAdmitRequest(
-            "fixture",
-            "nativeaot-exact",
-            1,
-            "trial.damage",
-            "trial-source",
-            "rules/trial.exact",
-            false,
-            0,
-            false,
-            0,
-            new StandardExactRole[] { new("self", 0, 0) },
-            Array.Empty<StandardExactCapability>(),
-            new StandardExactNode[] {
-                new(StandardExactNodeKind.Literal, 7, StandardExactInputKind.Parameter, string.Empty, string.Empty, 0, 0, 0, 0, 0, 0, 0),
-            },
-            Array.Empty<uint>(),
-            0)))
-        {
-            StandardExactReadoutLeaseReceipt exactReadout = _engine.StandardExact.ReadDefinition(exact);
-            ReadOnlyMemory<StandardExactEvaluationRow> exactResult = _engine.StandardExact.Evaluate(
-                new StandardExactEvaluateRequest(exact, Array.Empty<StandardExactEvidence>()));
-            Require(exactReadout.Definitions.Length == 1
-                && exactReadout.Definitions.Span[0].Family == "exact"
-                && exactReadout.Roles.Length == 1
-                && exactReadout.Roles.Span[0].CapabilitiesLen == 0
-                && exactResult.Length == 1
-                && exactResult.Span[0].Value == 7
-                && exactResult.Span[0].WorkUsed == 1,
-                "StandardExact definition did not retain canonical identity, empty role, and measured evaluation work");
-        }
-        using (StandardContinuousDefinition continuous = _engine.StandardContinuous.Admit(new StandardContinuousAdmitRequest(
-            "fixture",
-            "nativeaot-continuous",
-            1,
-            "trial.rate",
-            "trial-source",
-            "rules/trial.continuous",
-            false,
-            0,
-            false,
-            0,
-            new StandardContinuousRole[] { new("self", 0, 0) },
-            Array.Empty<StandardContinuousCapability>(),
-            new StandardContinuousNode[] {
-                new(StandardContinuousNodeKind.Literal, 1UL, StandardContinuousInputKind.Parameter, string.Empty, string.Empty, 0, 0, 0, 0),
-            },
-            Array.Empty<uint>(),
-            0)))
-        {
-            StandardContinuousReadoutLeaseReceipt continuousReadout = _engine.StandardContinuous.ReadDefinition(continuous);
-            ReadOnlyMemory<StandardContinuousEvaluationRow> continuousResult = _engine.StandardContinuous.Evaluate(
-                new StandardContinuousEvaluateRequest(continuous, Array.Empty<StandardContinuousEvidence>()));
-            Require(continuousReadout.Definitions.Length == 1
-                && continuousReadout.Definitions.Span[0].Family == "continuous"
-                && continuousReadout.Roles.Span[0].CapabilitiesLen == 0
-                && continuousResult.Length == 1
-                && continuousResult.Span[0].ValueBits == 1UL
-                && continuousResult.Span[0].WorkUsed == 1,
-                "StandardContinuous definition did not preserve its finite binary64 value and measured work");
         }
         if (_mappingReleasePending && !releaseObservedThisTurn)
         {

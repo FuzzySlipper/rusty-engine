@@ -4,50 +4,6 @@ const root = new URL('../', import.meta.url);
 const repositoryRoot = new URL('../../', import.meta.url);
 const packages = new Map([
   [
-    'gameplay-rules-contracts',
-    {
-      dependencies: [],
-      peers: [],
-      devDependencies: ['@types/node'],
-    },
-  ],
-  [
-    'gameplay-rules-authoring',
-    {
-      dependencies: [],
-      peers: ['@rusty-engine/gameplay-rules-contracts'],
-      devDependencies: [
-        '@rusty-engine/gameplay-rules-contracts',
-        '@types/node',
-      ],
-    },
-  ],
-  [
-    'gameplay-standard-contracts',
-    {
-      dependencies: [],
-      peers: [],
-      devDependencies: ['@types/node'],
-    },
-  ],
-  [
-    'gameplay-standard-authoring',
-    {
-      dependencies: [],
-      peers: [
-        '@rusty-engine/gameplay-rules-authoring',
-        '@rusty-engine/gameplay-rules-contracts',
-        '@rusty-engine/gameplay-standard-contracts',
-      ],
-      devDependencies: [
-        '@rusty-engine/gameplay-rules-authoring',
-        '@rusty-engine/gameplay-rules-contracts',
-        '@rusty-engine/gameplay-standard-contracts',
-        '@types/node',
-      ],
-    },
-  ],
-  [
     'runtime-composition-authoring',
     {
       dependencies: [],
@@ -109,16 +65,10 @@ for (const name of packages.keys()) {
         `${url.pathname}:${String(lineAt(source, match.index ?? 0))}:deep package import ${match[0]}`,
       );
     }
-    if (
-      (name === 'gameplay-rules-contracts' || name === 'gameplay-standard-contracts') &&
-      source.includes('@rusty-engine/')
-    ) {
-      violations.push(`${url.pathname}:contracts package depends on another Engine package`);
-    }
   });
 }
 if (violations.length > 0) {
-  throw new Error(`gameplay-rules boundary violations:\n${violations.join('\n')}`);
+  throw new Error(`runtime-composition authoring boundary violations:\n${violations.join('\n')}`);
 }
 
 const ordinaryVerify = readFileSync(
@@ -133,28 +83,7 @@ if (
   existsSync(rootWorkspaceUrl) &&
   readFileSync(rootWorkspaceUrl, 'utf8').trim() !== ''
 ) {
-  throw new Error('rules must not join a repository-root pnpm workspace');
-}
-
-const generated = readFileSync(
-  new URL(
-    'packages/gameplay-rules-contracts/src/generated.ts',
-    root,
-  ),
-  'utf8',
-);
-if (!generated.startsWith('// Generated from the Rust gameplay-rules contract.')) {
-  throw new Error('generated contract lost its Rust ownership marker');
-}
-const standardGenerated = readFileSync(
-  new URL(
-    'packages/gameplay-standard-contracts/src/generated.ts',
-    root,
-  ),
-  'utf8',
-);
-if (!standardGenerated.startsWith('// Generated from the Rust gameplay-standard contract.')) {
-  throw new Error('generated gameplay-standard contract lost its Rust ownership marker');
+  throw new Error('runtime-composition authoring must not join a repository-root pnpm workspace');
 }
 const productModelGenerated = readFileSync(
   new URL(
@@ -167,7 +96,7 @@ if (!productModelGenerated.startsWith('// Generated from Rust product-model cont
   throw new Error('generated Product Model contract lost its Rust ownership marker');
 }
 
-console.log('gameplay-rules package boundaries passed');
+console.log('runtime-composition authoring package boundaries passed');
 
 function assertKeys(packageName, field, value, expected) {
   const actual = Object.keys(value ?? {}).sort();

@@ -19,11 +19,3 @@ if (process.argv.includes('--check')) {
 } else {
   writeFileSync(target, generated);
 }
-
-const standardSource = new URL('contracts/developer-command-standard-host-wire.json', root);
-const standardTarget = new URL('packages/developer-command-client/src/generated-standard-host-wire.ts', root);
-const standard = JSON.parse(readFileSync(standardSource, 'utf8'));
-const standardGenerated = `// Generated from developer-command-standard host DTO schema.\nexport const GENERATED_STANDARD_HOST_WIRE = ${JSON.stringify(standard, null, 2)} as const;\n`;
-if (process.argv.includes('--check')) {
-  if (readFileSync(standardTarget, 'utf8') !== standardGenerated) throw new Error('standard host-wire TypeScript schema is stale');
-} else writeFileSync(standardTarget, standardGenerated);

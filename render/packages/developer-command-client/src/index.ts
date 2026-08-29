@@ -1,5 +1,4 @@
 import { GENERATED_DEVELOPER_COMMAND_CONTRACT } from './generated-developer-command-contract.js';
-import { GENERATED_STANDARD_HOST_WIRE } from './generated-standard-host-wire.js';
 
 /**
  * Public, transport-neutral developer-command client and optional application-host
@@ -10,11 +9,6 @@ import { GENERATED_STANDARD_HOST_WIRE } from './generated-standard-host-wire.js'
 
 export const RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION =
   GENERATED_DEVELOPER_COMMAND_CONTRACT.protocolVersion;
-/** Exact schemas generated from developer-command-standard host DTOs. */
-export const RUSTY_STANDARD_HOST_WIRE_SCHEMAS =
-  GENERATED_STANDARD_HOST_WIRE.commands as unknown as Readonly<Record<string, RustyDeveloperCommandWireSchema>>;
-/** @deprecated Use `RUSTY_STANDARD_HOST_WIRE_SCHEMAS`; the host wire also includes inspect. */
-export const RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS = RUSTY_STANDARD_HOST_WIRE_SCHEMAS;
 const MAX_HISTORY = GENERATED_DEVELOPER_COMMAND_CONTRACT.limits.historyEntries;
 const MAX_SEQUENCE = 128;
 const MAX_COMMANDS = 256;

@@ -81,7 +81,7 @@ if (productBrowserRuntime.split(/\r?\n/u).some((line) => /^\s*(?:import|export)\
   && /['"]@rusty-engine\//u.test(line))) {
   throw new Error('product browser host artifact leaked a bare Engine package import');
 }
-for (const file of ['index.js', 'index.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.js', 'generated-standard-host-wire.js']) {
+for (const file of ['index.js', 'index.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.js']) {
   const source = readFileSync(new URL(`artifacts/application-host/${file}`, root), 'utf8');
   if (source.includes('@rusty-engine/developer-command-client')) {
     throw new Error(`application-host artifact ${file} leaked external developer-command client dependency`);

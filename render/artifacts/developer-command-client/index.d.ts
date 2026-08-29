@@ -6,10 +6,6 @@ import { GENERATED_DEVELOPER_COMMAND_CONTRACT } from './generated-developer-comm
  * an explicit wire schema.  Descriptor help is deliberately not a schema.
  */
 export declare const RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION: 1;
-/** Exact schemas generated from developer-command-standard host DTOs. */
-export declare const RUSTY_STANDARD_HOST_WIRE_SCHEMAS: Readonly<Record<string, RustyDeveloperCommandWireSchema>>;
-/** @deprecated Use `RUSTY_STANDARD_HOST_WIRE_SCHEMAS`; the host wire also includes inspect. */
-export declare const RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS: Readonly<Record<string, RustyDeveloperCommandWireSchema>>;
 export type RustyDeveloperCommandLane = typeof GENERATED_DEVELOPER_COMMAND_CONTRACT.lanes[number];
 export type RustyDeveloperCommandValueSchema = {
     readonly kind: 'boolean';

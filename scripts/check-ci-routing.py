@@ -67,7 +67,6 @@ def main() -> None:
             "verify",
             "render",
             "studio",
-            "rules",
             "docs",
             "product-materializer",
         )
@@ -100,7 +99,6 @@ def main() -> None:
             "rust/crates/render-host-contracts/**",
             "rust/crates/renderer-webview-host/**",
             "rust/crates/developer-command/**",
-            "rust/crates/developer-command-standard/**",
             "scripts/verify-render-artifacts.sh",
             "scripts/verify-renderer-webview-host.sh",
         },
@@ -120,14 +118,11 @@ def main() -> None:
             "product-materializer",
             "render",
         },
-        "render/contracts/developer-command-standard-host-wire.json": {"render"},
         "rust/crates/developer-command/src/wire.rs": {"render", "verify"},
-        "rust/crates/developer-command-standard/src/wire.rs": {"render", "verify"},
         "rust/crates/renderer-webview-host/artifacts/renderer-webview.js": {"render"},
         "rust/crates/renderer-webview-host/src/lib.rs": {"render", "verify"},
         "rust/crates/entity-state/src/lib.rs": {"studio", "verify"},
         "docs/csharp-sdk.md": {"docs"},
-        "rules/packages/gameplay-rules-authoring/src/index.ts": {"rules"},
         "studio/apps/studio-app/src/main.ts": {"studio"},
         ".github/workflows/render.yml": {"docs", "render"},
         "rust/crates/product-materializer/src/lib.rs": {
@@ -140,7 +135,6 @@ def main() -> None:
         },
         "rules/packages/runtime-composition-authoring/src/index.ts": {
             "product-materializer",
-            "rules",
         },
         "render/artifacts/application-host/index.js": {
             "product-materializer",
@@ -199,12 +193,6 @@ def main() -> None:
         {"render/**", "render/browser/**", "render/artifacts/**", "fixtures/render/**"},
     )
     require_paths(
-        "rules",
-        workflows["rules"],
-        {"rules/**", "rust/crates/gameplay-rules/**"},
-        {"docs/**", "README.md", "AGENTS.md"},
-    )
-    require_paths(
         "docs",
         workflows["docs"],
         {"README.md", "AGENTS.md", "docs/**", ".github/workflows/**"},
@@ -229,7 +217,7 @@ def main() -> None:
         {"rust/**", "rules/**", "render/**", "fixtures/**"},
     )
 
-    for name in ("verify", "render", "rules", "product-materializer"):
+    for name in ("verify", "render", "product-materializer"):
         workflow = workflows[name]
         if "uses: Swatinem/rust-cache@v2" not in workflow or "shared-key: engine-ci" not in workflow:
             fail(f"{name} does not participate in the bounded shared Rust cache")

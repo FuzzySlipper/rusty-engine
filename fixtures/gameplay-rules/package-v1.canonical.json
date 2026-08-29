@@ -1,1 +1,0 @@
-{"kind":"rusty.gameplay-rules.package","schemaVersion":1,"domain":"fixture","package":"core","version":1,"dependencies":[],"sources":[{"id":"rules","path":"rules/core.ts"}],"provenance":[{"subject":"machine.alpha","source":"rules","line":4,"column":3}],"payload":{"machines":[{"id":"alpha","output":10}],"name":"Fixture"}}
