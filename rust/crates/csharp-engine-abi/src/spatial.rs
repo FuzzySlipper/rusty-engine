@@ -883,6 +883,22 @@ pub struct NativeCharacterControllerCommand {
     pub sequence: u64,
 }
 
+/// One product-authored collider borrowed for a single character proposal.
+/// Bounds are translation-offset AABBs local to `transform`; rotation is used
+/// by platform carry and scale must remain one. The Engine retains neither
+/// this value nor the entity it describes after the direct call returns.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterObstacle {
+    pub entity: u64,
+    pub transform: NativeTransform,
+    pub bounds_min: NativeVec3,
+    pub bounds_max: NativeVec3,
+    pub collision_enabled: bool,
+    pub linear_velocity: NativeVec3,
+    pub angular_velocity: NativeVec3,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCharacterStepRequest {
@@ -890,6 +906,8 @@ pub struct NativeCharacterStepRequest {
     pub position: NativeVec3,
     pub motion: NativeCharacterMotion,
     pub support: NativeCharacterSupport,
+    pub obstacles: *const NativeCharacterObstacle,
+    pub obstacles_len: usize,
     pub config: NativeCharacterControllerConfig,
     pub command: NativeCharacterControllerCommand,
 }

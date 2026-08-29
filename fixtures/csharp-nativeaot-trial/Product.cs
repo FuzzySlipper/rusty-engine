@@ -727,11 +727,13 @@ public sealed class Product : IEngineProduct
         CharacterControllerCommand firstCommand = new(
             Vector2.Zero, 0, false, false, false, Vector3.Zero, Vector3.Zero, 1.0f / 60.0f, 1);
         CharacterStepReceipt first = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
-            _spatial, new Vector3(0, 3, 0), motion, noSupport, config, firstCommand));
+            _spatial, new Vector3(0, 3, 0), motion, noSupport,
+            ReadOnlyMemory<CharacterObstacle>.Empty, config, firstCommand));
         CharacterControllerCommand secondCommand = new(
             new Vector2(0, 1), 0, true, true, false, new Vector3(0.1f, 0, 0), new Vector3(0, 0.5f, 0), 1.0f / 60.0f, 2);
         CharacterStepReceipt second = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
-            _spatial, first.Transform.Translation, first.Motion, noSupport, config, secondCommand));
+            _spatial, first.Transform.Translation, first.Motion, noSupport,
+            ReadOnlyMemory<CharacterObstacle>.Empty, config, secondCommand));
         Require(second.Generation > first.Generation && second.RevisionAfter > second.RevisionBefore,
             "character proposal did not return Engine publication revisions");
         Require(second.Motion.LastCommandSequence == 2 && second.Motion.CollisionWorldHash != 0,

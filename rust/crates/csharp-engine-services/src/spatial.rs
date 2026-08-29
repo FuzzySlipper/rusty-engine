@@ -885,6 +885,13 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeCharacterStepRequest,
     ) -> Result<NativeCharacterStepReceipt, CsharpEngineServicesError> {
+        let obstacle_values = unsafe {
+            borrowed_slice(
+                request.obstacles,
+                request.obstacles_len,
+                "character obstacles",
+            )
+        }?;
         let session = self.session_mut(request.session)?;
         let position = native_vec3_value(request.position);
         let motion = character_motion(request.motion)?;
@@ -893,8 +900,16 @@ impl RuntimeSpatialBridge {
             .with_character_motion(motion);
         let support = character_support_definition(request.motion, request.support)?;
         let mut definitions = vec![player];
+        let (obstacle_definitions, obstacle_overrides) =
+            character_obstacle_definitions(obstacle_values)?;
+        definitions.extend(obstacle_definitions);
         if let Some(definition) = support.as_ref() {
-            definitions.push(definition.clone());
+            if !definitions
+                .iter()
+                .any(|candidate| candidate.id == definition.id)
+            {
+                definitions.push(definition.clone());
+            }
         }
         let mut entities = EntityState::from_definitions(definitions).map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_CHARACTER_STATE", error.to_string())
@@ -904,12 +919,13 @@ impl RuntimeSpatialBridge {
         }
         let receipt = session
             .controller
-            .step(
+            .step_with_obstacles(
                 &mut entities,
                 &session.scene,
                 EntityId::new(1),
                 &character_config(request.config)?,
                 character_command(request.command),
+                &obstacle_overrides,
             )
             .map_err(|error| {
                 CsharpEngineServicesError::new("CSHARP_CHARACTER_STEP", error.code())
@@ -1605,6 +1621,76 @@ fn character_support_definition(
                 .with_full_transform(native_entity_transform(support.transform)),
         )),
     }
+}
+
+fn character_obstacle_definitions(
+    values: &[NativeCharacterObstacle],
+) -> Result<(Vec<EntityDefinition>, Vec<CharacterObstacle>), CsharpEngineServicesError> {
+    let mut definitions = Vec::with_capacity(values.len());
+    let mut overrides = Vec::with_capacity(values.len());
+    for value in values {
+        if value.entity == 1 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_OBSTACLE",
+                "C# obstacle entity conflicted with the call-local character",
+            ));
+        }
+        let min = native_vec3_value(value.bounds_min);
+        let max = native_vec3_value(value.bounds_max);
+        validate_aabb(min, max)?;
+        let transform = native_entity_transform(value.transform);
+        if transform.scale != Vec3::ONE {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_CHARACTER_OBSTACLE",
+                "C# obstacle transforms require unit scale",
+            ));
+        }
+        definitions.push(
+            EntityDefinition::new(
+                EntityId::new(value.entity),
+                format!("spatial-character-obstacle-{}", value.entity),
+            )
+            .with_full_transform(transform)
+            .with_bounds(min, max)
+            .with_collision(value.collision_enabled, false),
+        );
+        if value.collision_enabled {
+            let linear_velocity = native_vec3_value(value.linear_velocity);
+            let angular_velocity = native_vec3_value(value.angular_velocity);
+            if !finite_vec3(linear_velocity) || !finite_vec3(angular_velocity) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_CHARACTER_OBSTACLE",
+                    "C# obstacle motion was not finite",
+                ));
+            }
+            let center = transform.translation + (min + max) * 0.5;
+            let half_extents = (max - min) * 0.5;
+            overrides.push(CharacterObstacle {
+                id: value.entity,
+                center: core_space::WorldPos::new(
+                    f64::from(center.x),
+                    f64::from(center.y),
+                    f64::from(center.z),
+                ),
+                half_extents: core_space::WorldVec::new(
+                    f64::from(half_extents.x),
+                    f64::from(half_extents.y),
+                    f64::from(half_extents.z),
+                ),
+                linear_velocity: core_space::WorldVec::new(
+                    f64::from(linear_velocity.x),
+                    f64::from(linear_velocity.y),
+                    f64::from(linear_velocity.z),
+                ),
+                angular_velocity: core_space::WorldVec::new(
+                    f64::from(angular_velocity.x),
+                    f64::from(angular_velocity.y),
+                    f64::from(angular_velocity.z),
+                ),
+            });
+        }
+    }
+    Ok((definitions, overrides))
 }
 
 fn apply_support_lifecycle(
@@ -2345,12 +2431,13 @@ unsafe extern "C" fn clear_navigation(
 
 unsafe extern "C" fn propose_character_step(
     context: *mut c_void,
-    request: NativeCharacterStepRequest,
+    request: *const NativeCharacterStepRequest,
     receipt: *mut NativeCharacterStepReceipt,
 ) -> i32 {
-    if context.is_null() || receipt.is_null() {
+    if context.is_null() || request.is_null() || receipt.is_null() {
         return 0;
     }
+    let request = unsafe { *request };
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
     match bridge.propose_character(request) {
         Ok(value) => {
@@ -3402,6 +3489,124 @@ mod tests {
         assert_eq!(scene.mesh_options().mode, SurfaceMode::MarchingCubes);
         assert_eq!(scene.solid_voxel_count(), 1);
         assert_eq!(receipt.accepted_revision, 1);
+    }
+
+    #[test]
+    fn character_step_borrows_moving_obstacle_for_support_and_next_call_carry() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 8,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .expect("character session creates");
+        let config = bridge.default_character_controller_config();
+        let platform = |x| NativeCharacterObstacle {
+            entity: 2,
+            transform: NativeTransform {
+                translation: NativeVec3 { x, y: 0.75, z: 0.0 },
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            },
+            bounds_min: NativeVec3 {
+                x: -1.0,
+                y: -0.25,
+                z: -1.0,
+            },
+            bounds_max: NativeVec3 {
+                x: 1.0,
+                y: 0.25,
+                z: 1.0,
+            },
+            collision_enabled: true,
+            linear_velocity: NativeVec3 {
+                x: 12.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            angular_velocity: NativeVec3::default(),
+        };
+        let first_obstacles = [platform(0.0)];
+        let first = bridge
+            .propose_character(NativeCharacterStepRequest {
+                session,
+                position: NativeVec3 {
+                    x: 0.0,
+                    y: 1.9,
+                    z: 0.0,
+                },
+                motion: NativeCharacterMotion {
+                    stance: NativeCharacterStance::Standing,
+                    fall_origin_y: 1.9,
+                    peak_y: 1.9,
+                    ..Default::default()
+                },
+                support: NativeCharacterSupport::default(),
+                obstacles: first_obstacles.as_ptr(),
+                obstacles_len: first_obstacles.len(),
+                config,
+                command: NativeCharacterControllerCommand {
+                    planar_intent: NativeVec2::default(),
+                    heading_yaw_radians: 0.0,
+                    jump_pressed: false,
+                    jump_held: false,
+                    crouch_requested: false,
+                    external_velocity: NativeVec3::default(),
+                    external_impulse: NativeVec3::default(),
+                    step_seconds: 1.0 / 60.0,
+                    sequence: 1,
+                },
+            })
+            .expect("first proposal lands on the borrowed platform");
+        assert!(first.ground.present);
+        assert_eq!(first.ground.source_entity, 2);
+        assert!(first.motion.support_entity_present);
+        assert_eq!(first.motion.support_entity, 2);
+        assert!((first.motion.support_point_velocity.x - 12.0).abs() < 1.0e-4);
+
+        let second_obstacles = [platform(0.2)];
+        let second = bridge
+            .propose_character(NativeCharacterStepRequest {
+                session,
+                position: first.transform.translation,
+                motion: first.motion,
+                support: NativeCharacterSupport {
+                    present: true,
+                    lifecycle: NativeCharacterSupportLifecycle::Active,
+                    entity: 2,
+                    transform: second_obstacles[0].transform,
+                },
+                obstacles: second_obstacles.as_ptr(),
+                obstacles_len: second_obstacles.len(),
+                config,
+                command: NativeCharacterControllerCommand {
+                    planar_intent: NativeVec2::default(),
+                    heading_yaw_radians: 0.0,
+                    jump_pressed: false,
+                    jump_held: false,
+                    crouch_requested: false,
+                    external_velocity: NativeVec3::default(),
+                    external_impulse: NativeVec3::default(),
+                    step_seconds: 1.0 / 60.0,
+                    sequence: 2,
+                },
+            })
+            .expect("second proposal carries with the moved obstacle");
+        assert!(second.platform.present);
+        assert_eq!(second.platform.entity, 2);
+        assert!(!second.platform.departed);
+        assert!((second.platform.carried_displacement.x - 0.2).abs() < 1.0e-4);
+        assert!(second.displacement.x > 0.19);
     }
 
     #[test]

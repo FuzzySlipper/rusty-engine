@@ -24,8 +24,8 @@ public readonly record struct CharacterEntityWorldReceipt(
 /// <summary>
 /// Projects the canonical managed Transform and CharacterMotion pair through the generated
 /// Character controller. The current native service creates its character with a call-local
-/// <c>EntityId(1)</c>; that temporary identity is validated on readback and never becomes a
-/// managed binding or mirror.
+/// <c>EntityId(1)</c>; optional active obstacles are likewise borrowed for one proposal. That
+/// temporary identity is validated on readback and never becomes a managed binding or mirror.
 /// </summary>
 public sealed class CharacterEntityWorld
 {
@@ -42,9 +42,9 @@ public sealed class CharacterEntityWorld
 
     /// <summary>
     /// Runs one generated Character proposal and publishes its returned Transform and
-    /// CharacterMotion together in one guarded managed batch. The Character service accepts
-    /// position only, so this adapter retains the managed Transform rotation and scale while
-    /// applying the returned translation.
+    /// CharacterMotion together in one guarded managed batch. The adapter keeps the managed
+    /// Transform rotation and scale while applying the returned translation; optional obstacle
+    /// values are borrowed by the generated proposal only.
     /// </summary>
     public CharacterEntityWorldReceipt Step(
         EntityId entity,
@@ -52,7 +52,8 @@ public sealed class CharacterEntityWorld
         CharacterSupport support,
         CharacterControllerConfig config,
         CharacterControllerCommand command,
-        CharacterEntityWorldGuard? expectedGuard = null)
+        CharacterEntityWorldGuard? expectedGuard = null,
+        ReadOnlyMemory<CharacterObstacle> obstacles = default)
     {
         ArgumentNullException.ThrowIfNull(session);
 
@@ -70,6 +71,7 @@ public sealed class CharacterEntityWorld
             transform.Translation,
             motion,
             support,
+            obstacles,
             config,
             command));
 

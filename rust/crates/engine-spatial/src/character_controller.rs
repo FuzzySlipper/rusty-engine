@@ -583,6 +583,30 @@ impl CharacterControllerService {
         self.commit(entities, scene, prepared)
     }
 
+    /// Solves one character step against the call-local active EntityState plus
+    /// typed obstacle motion supplied by an embedding host. The Engine does not
+    /// retain these obstacle facts; callers must submit their current values on
+    /// every step that needs them.
+    pub fn step_with_obstacles(
+        &mut self,
+        entities: &mut EntityState,
+        scene: &VoxelCollisionScene,
+        entity: EntityId,
+        config: &CharacterControllerConfig,
+        command: CharacterControllerCommand,
+        obstacle_overrides: &[CharacterObstacle],
+    ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
+        let prepared = self.prepare_with_obstacles(
+            entities,
+            scene,
+            entity,
+            config,
+            command,
+            obstacle_overrides,
+        )?;
+        self.commit_with_obstacles(entities, scene, prepared, obstacle_overrides)
+    }
+
     pub fn prepare(
         &self,
         entities: &EntityState,
@@ -590,6 +614,18 @@ impl CharacterControllerService {
         entity: EntityId,
         config: &CharacterControllerConfig,
         command: CharacterControllerCommand,
+    ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
+        self.prepare_with_obstacles(entities, scene, entity, config, command, &[])
+    }
+
+    fn prepare_with_obstacles(
+        &self,
+        entities: &EntityState,
+        scene: &VoxelCollisionScene,
+        entity: EntityId,
+        config: &CharacterControllerConfig,
+        command: CharacterControllerCommand,
+        obstacle_overrides: &[CharacterObstacle],
     ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
         config
             .validate()
@@ -625,7 +661,7 @@ impl CharacterControllerService {
         let motion_revision = entities
             .component_revision::<CharacterMotionComponent>(entity)
             .expect("built-in character-motion registration");
-        let obstacles = character_obstacles(entities, entity);
+        let obstacles = character_obstacles_with_overrides(entities, entity, obstacle_overrides);
         let environment = character_environment(scene, &obstacles);
         let world_hash = hash_environment(environment);
         let dt = command.step_seconds;
@@ -882,7 +918,15 @@ impl CharacterControllerService {
                 motion.landing_lockout_remaining = config.jump.landing_lockout_seconds;
             }
         }
-        update_platform_support(entities, &mut motion, &ground, &mut platform, dt, config)?;
+        update_platform_support(
+            entities,
+            &obstacles,
+            &mut motion,
+            &ground,
+            &mut platform,
+            dt,
+            config,
+        )?;
         let dynamic_impulses = dynamic_impulse_proposals(
             entities,
             &contacts,
@@ -936,7 +980,18 @@ impl CharacterControllerService {
         scene: &VoxelCollisionScene,
         prepared: PreparedCharacterControllerStep,
     ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
-        let obstacles = character_obstacles(entities, prepared.entity);
+        self.commit_with_obstacles(entities, scene, prepared, &[])
+    }
+
+    fn commit_with_obstacles(
+        &mut self,
+        entities: &mut EntityState,
+        scene: &VoxelCollisionScene,
+        prepared: PreparedCharacterControllerStep,
+        obstacle_overrides: &[CharacterObstacle],
+    ) -> Result<CharacterControllerReceipt, CharacterControllerError> {
+        let obstacles =
+            character_obstacles_with_overrides(entities, prepared.entity, obstacle_overrides);
         if character_environment(scene, &obstacles) != prepared.environment {
             return Err(CharacterControllerError::StaleEnvironment);
         }
@@ -1553,6 +1608,28 @@ fn character_obstacles(entities: &EntityState, controlled: EntityId) -> Vec<Char
         .collect()
 }
 
+fn character_obstacles_with_overrides(
+    entities: &EntityState,
+    controlled: EntityId,
+    overrides: &[CharacterObstacle],
+) -> Vec<CharacterObstacle> {
+    let mut obstacles = character_obstacles(entities, controlled);
+    for override_value in overrides {
+        if override_value.id == controlled.raw() {
+            continue;
+        }
+        if let Some(existing) = obstacles
+            .iter_mut()
+            .find(|existing| existing.id == override_value.id)
+        {
+            *existing = *override_value;
+        } else {
+            obstacles.push(*override_value);
+        }
+    }
+    obstacles
+}
+
 fn hash_obstacles(obstacles: &[CharacterObstacle]) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for obstacle in obstacles {
@@ -1671,6 +1748,7 @@ fn apply_platform_carry(
 
 fn update_platform_support(
     entities: &EntityState,
+    obstacles: &[CharacterObstacle],
     motion: &mut CharacterMotionComponent,
     ground: &Option<CharacterGroundFact>,
     platform: &mut Option<CharacterPlatformFact>,
@@ -1690,9 +1768,12 @@ fn update_platform_support(
             inverse_rotate(transform.rotation, point - transform.translation);
         motion.support_previous_translation = transform.translation;
         motion.support_previous_rotation = transform.rotation;
-        let linear = entities
-            .rigid_body(entity)
-            .map_or(Vec3::ZERO, |body| body.linear_velocity);
+        let linear = obstacles
+            .iter()
+            .find(|obstacle| obstacle.id == entity.raw())
+            .and_then(|obstacle| vec3_from_world(obstacle.linear_velocity).ok())
+            .or_else(|| entities.rigid_body(entity).map(|body| body.linear_velocity))
+            .unwrap_or(Vec3::ZERO);
         motion.support_point_velocity = linear;
         motion.coyote_remaining = motion
             .coyote_remaining

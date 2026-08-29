@@ -135,6 +135,7 @@ include = [
     "NativeCharacterBlockFlags",
     "NativeCharacterMotion",
     "NativeCharacterSupport",
+    "NativeCharacterObstacle",
     "NativeCharacterShapeConfig",
     "NativeCharacterGroundConfig",
     "NativeCharacterAirConfig",

@@ -67,6 +67,17 @@ creating the session; it chooses only the Engine-derived mesh posture and is
 retained through subsequent voxel changes. Changing the mode of an existing
 session is not currently a C# API.
 
+`CharacterStepRequest.Obstacles` is a borrowed, call-local list of active
+product-authored colliders. Give each obstacle its stable entity identity,
+current transform, local bounds, collision participation, and motion facts;
+the Engine uses them for the one controller proposal and returns ordinary
+`CharacterMotion`, `CharacterSupport`, and platform facts. Resubmit the
+current support transform and obstacle list on later steps so Engine-owned
+support/carry continuation can apply; the session never retains product
+entities or collider records. Collision uses the existing translation-offset
+AABB posture with unit scale; obstacle rotation participates in platform carry
+but does not rotate the collider volume.
+
 ## Values, leases, and native lifetime
 
 The public C# layer turns direct service calls into typed requests, receipts,

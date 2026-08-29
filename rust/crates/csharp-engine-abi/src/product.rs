@@ -169,7 +169,7 @@ pub type NativeDefaultCharacterControllerConfig =
     unsafe extern "C" fn(*mut c_void, *mut NativeCharacterControllerConfig) -> i32;
 pub type NativeProposeCharacterStep = unsafe extern "C" fn(
     *mut c_void,
-    NativeCharacterStepRequest,
+    *const NativeCharacterStepRequest,
     *mut NativeCharacterStepReceipt,
 ) -> i32;
 pub type NativeReadCharacterController = unsafe extern "C" fn(
