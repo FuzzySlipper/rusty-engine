@@ -56,6 +56,15 @@ resolution, and UI. The exact available family/method set is defined by the
 current generated `Rusty.Engine` output and Rust ABI source; do not assume a
 Rust API is callable from C# simply because its Rust crate is public.
 
+`VoxelScenePresentation` projects the canonical `Spatial` session voxel scene
+through the Engine renderer. Bind every currently used scene material slot to
+a live `Appearance` material, retain the disposable projection, and call
+`RefreshScene` after voxel edits, residency changes, or origin changes. The
+Engine keeps incremental renderer identity and owns all generated mesh/frame
+work; C# receives only a small readout. `Clear` or disposal stages the matching
+renderer destroys. Spatial sessions currently use their existing greedy-cube
+mesh posture; C# surface-mode selection is not yet part of this family.
+
 ## Values, leases, and native lifetime
 
 The public C# layer turns direct service calls into typed requests, receipts,

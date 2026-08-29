@@ -81,6 +81,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     WorldOrigin = new WorldOriginServiceImplementation(native.world_origin);
                     Voxel = new VoxelServiceImplementation(native.voxel);
                     VoxelContent = new VoxelContentServiceImplementation(native.voxel_content);
+                    VoxelScenePresentation = new VoxelScenePresentationServiceImplementation(native.voxel_scene_presentation);
                     Content = new ContentServiceImplementation(native.content);
                     AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
                     ContentStore = new ContentStoreServiceImplementation(native.content_store);
@@ -109,6 +110,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IWorldOriginService WorldOrigin { get; }
                 public IVoxelService Voxel { get; }
                 public IVoxelContentService VoxelContent { get; }
+                public IVoxelScenePresentationService VoxelScenePresentation { get; }
                 public IContentService Content { get; }
                 public IAuthoredContentService AuthoredContent { get; }
                 public IContentStoreService ContentStore { get; }

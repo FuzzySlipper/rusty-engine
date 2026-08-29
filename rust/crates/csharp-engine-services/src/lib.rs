@@ -24,6 +24,7 @@ mod state_machine;
 mod ui;
 mod voxel;
 mod voxel_content;
+mod voxel_scene_presentation;
 mod world_origin;
 
 pub use appearance::{

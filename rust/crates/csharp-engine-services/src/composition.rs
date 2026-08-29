@@ -26,6 +26,7 @@ use crate::{
     state_machine::RuntimeStateMachineBridge,
     ui::{RuntimeUiBridge, RuntimeUiCall},
     voxel_content::RuntimeVoxelContentBridge,
+    voxel_scene_presentation::RuntimeVoxelScenePresentationBridge,
 };
 use render_projection::RuntimeAppearanceCatalog;
 use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
@@ -52,6 +53,7 @@ fn engine_api(
     dynamics_bridge: &mut RuntimeDynamicsBridge,
     spatial_bridge: &mut RuntimeSpatialBridge,
     voxel_content_bridge: &mut RuntimeVoxelContentBridge,
+    voxel_scene_presentation_bridge: &mut RuntimeVoxelScenePresentationBridge,
     rng_bridge: &mut RuntimeRngBridge,
     mechanics_bridge: &mut RuntimeMechanicsBridge,
     persistence_bridge: &mut RuntimePersistenceBridge,
@@ -71,6 +73,10 @@ fn engine_api(
         world_origin: crate::world_origin::api(spatial_bridge),
         voxel: crate::voxel::api(spatial_bridge),
         voxel_content: crate::voxel_content::api(voxel_content_bridge, appearance_bridge),
+        voxel_scene_presentation: crate::voxel_scene_presentation::api(
+            voxel_scene_presentation_bridge,
+            appearance_bridge,
+        ),
         content: crate::content::api(content_bridge),
         authored_content: crate::authored_content::api(authored_content_bridge),
         content_store: crate::content_store::api(content_store_bridge),
@@ -219,6 +225,7 @@ pub struct EngineServiceSet {
     dynamics: RuntimeDynamicsBridge,
     spatial: RuntimeSpatialBridge,
     voxel_content: RuntimeVoxelContentBridge,
+    voxel_scene_presentation: RuntimeVoxelScenePresentationBridge,
     rng: RuntimeRngBridge,
     mechanics: RuntimeMechanicsBridge,
     persistence: RuntimePersistenceBridge,
@@ -237,6 +244,7 @@ pub struct CsharpEngineCall {
     sky_frame: Option<render_model::RenderFrameDiff>,
     ui: RuntimeUiCall,
     voxel_content: crate::voxel_content::RuntimeVoxelContentCall,
+    voxel_scene_presentation: crate::voxel_scene_presentation::RuntimeVoxelScenePresentationCall,
 }
 
 /// Staged Engine observations from one successful product call.
@@ -277,6 +285,8 @@ impl EngineServiceSet {
             content_store_root,
         )?);
         authored_content.bind_content_store(&mut content_store);
+        let voxel_scene_presentation =
+            RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         Ok(Self {
             appearance: crate::appearance::create(catalog.0, content_resources.clone()),
             content,
@@ -287,6 +297,7 @@ impl EngineServiceSet {
             dynamics,
             spatial,
             voxel_content: RuntimeVoxelContentBridge::new(),
+            voxel_scene_presentation,
             rng: crate::rng::RuntimeRngBridge::new(),
             mechanics: crate::mechanics::RuntimeMechanicsBridge::new(),
             persistence: crate::persistence::RuntimePersistenceBridge::new(persistence_root),
@@ -310,6 +321,7 @@ impl EngineServiceSet {
             &mut self.dynamics,
             &mut self.spatial,
             &mut self.voxel_content,
+            &mut self.voxel_scene_presentation,
             &mut self.rng,
             &mut self.mechanics,
             &mut self.persistence,
@@ -328,6 +340,7 @@ impl EngineServiceSet {
         self.camera_view.begin_call();
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
+        self.voxel_scene_presentation.begin_call();
     }
 
     /// Copies browser-host realization facts while C# is not executing. The
@@ -371,6 +384,7 @@ impl EngineServiceSet {
         self.camera_view.discard_call();
         self.ui.discard_call();
         self.voxel_content.discard_call();
+        self.voxel_scene_presentation.discard_call();
     }
 
     pub fn take_call(&mut self) -> Result<CsharpEngineCall, CsharpEngineServicesError> {
@@ -384,6 +398,7 @@ impl EngineServiceSet {
             crate::camera_view::sky_frame(camera_view.sky_texture, appearance.as_ref())?;
         let ui = self.ui.take_staged_call()?;
         let voxel_content = self.voxel_content.take_staged_call()?;
+        let voxel_scene_presentation = self.voxel_scene_presentation.take_staged_call()?;
         Ok(CsharpEngineCall {
             appearance,
             audio,
@@ -391,6 +406,7 @@ impl EngineServiceSet {
             sky_frame,
             ui,
             voxel_content,
+            voxel_scene_presentation,
         })
     }
 
@@ -400,6 +416,8 @@ impl EngineServiceSet {
         self.camera_view.commit(call.camera_view);
         self.ui.commit(call.ui);
         self.voxel_content.commit_call(call.voxel_content);
+        self.voxel_scene_presentation
+            .commit_call(call.voxel_scene_presentation);
     }
 
     pub fn seal_resource_selection(&mut self) {
@@ -444,6 +462,7 @@ impl EngineServiceSet {
             frames.push(frame);
         }
         frames.extend(call.voxel_content.frames.clone());
+        frames.extend(call.voxel_scene_presentation.frames.clone());
         CsharpEngineCallOutput {
             appearance,
             frames,

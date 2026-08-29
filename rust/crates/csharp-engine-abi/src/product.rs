@@ -1908,6 +1908,7 @@ pub struct NativeEngineApi {
     pub world_origin: NativeWorldOriginApi,
     pub voxel: NativeVoxelApi,
     pub voxel_content: NativeVoxelContentApi,
+    pub voxel_scene_presentation: NativeVoxelScenePresentationApi,
     pub content: NativeContentApi,
     pub authored_content: NativeAuthoredContentApi,
     pub appearance: NativeAppearanceApi,
