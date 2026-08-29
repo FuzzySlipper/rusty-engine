@@ -11,6 +11,9 @@ promise that every proposal or Rust API is already exposed to C#.
   packages.
 - [C# product style](csharp-product-style.md) gives a recommended, product-side
   organization that does not require a hidden Engine framework.
+- [Managed capability migration](csharp-managed-migration.md) is the living
+  capability ledger and decision gate for retiring or adapting the legacy
+  gameplay-facing Rust and TypeScript lanes.
 
 The root [README](../README.md) is the repository landing page and
 [AGENTS.md](../AGENTS.md) is the compact task-time guidance. Historical
