@@ -3492,6 +3492,143 @@ mod tests {
     }
 
     #[test]
+    fn character_step_accepts_empty_borrowed_obstacle_span() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 8,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .expect("character session creates");
+        let receipt = bridge
+            .propose_character(NativeCharacterStepRequest {
+                session,
+                position: NativeVec3 {
+                    x: 0.0,
+                    y: 2.0,
+                    z: 0.0,
+                },
+                motion: NativeCharacterMotion {
+                    stance: NativeCharacterStance::Standing,
+                    fall_origin_y: 2.0,
+                    peak_y: 2.0,
+                    ..Default::default()
+                },
+                support: NativeCharacterSupport::default(),
+                obstacles: std::ptr::null(),
+                obstacles_len: 0,
+                config: bridge.default_character_controller_config(),
+                command: NativeCharacterControllerCommand {
+                    planar_intent: NativeVec2::default(),
+                    heading_yaw_radians: 0.0,
+                    jump_pressed: false,
+                    jump_held: false,
+                    crouch_requested: false,
+                    external_velocity: NativeVec3::default(),
+                    external_impulse: NativeVec3::default(),
+                    step_seconds: 1.0 / 60.0,
+                    sequence: 1,
+                },
+            })
+            .expect("empty obstacle input is a valid borrowed span");
+
+        assert_eq!(receipt.command_sequence, 1);
+    }
+
+    #[test]
+    fn character_step_rejects_malformed_and_invalid_obstacles_with_diagnostics() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = bridge
+            .create(NativeSpatialSessionConfig {
+                collision_voxel_size: 1.0,
+                collision_chunk_size: 8,
+                voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+            })
+            .expect("character session creates");
+        let config = bridge.default_character_controller_config();
+        let request = |obstacles: *const NativeCharacterObstacle, obstacles_len: usize| {
+            NativeCharacterStepRequest {
+                session,
+                position: NativeVec3 {
+                    x: 0.0,
+                    y: 2.0,
+                    z: 0.0,
+                },
+                motion: NativeCharacterMotion {
+                    stance: NativeCharacterStance::Standing,
+                    fall_origin_y: 2.0,
+                    peak_y: 2.0,
+                    ..Default::default()
+                },
+                support: NativeCharacterSupport::default(),
+                obstacles,
+                obstacles_len,
+                config,
+                command: NativeCharacterControllerCommand {
+                    planar_intent: NativeVec2::default(),
+                    heading_yaw_radians: 0.0,
+                    jump_pressed: false,
+                    jump_held: false,
+                    crouch_requested: false,
+                    external_velocity: NativeVec3::default(),
+                    external_impulse: NativeVec3::default(),
+                    step_seconds: 1.0 / 60.0,
+                    sequence: 1,
+                },
+            }
+        };
+
+        let pointer_error = bridge
+            .propose_character(request(std::ptr::null(), 1))
+            .expect_err("a non-empty borrowed span requires a pointer");
+        assert_eq!(pointer_error.code(), "CSHARP_SPATIAL_POINTER");
+        assert_eq!(
+            pointer_error.detail(),
+            "C# character obstacles had length without a pointer"
+        );
+
+        let invalid = [NativeCharacterObstacle {
+            entity: 2,
+            transform: NativeTransform {
+                translation: NativeVec3::default(),
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 2.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            },
+            bounds_min: NativeVec3 {
+                x: -1.0,
+                y: -0.25,
+                z: -1.0,
+            },
+            bounds_max: NativeVec3 {
+                x: 1.0,
+                y: 0.25,
+                z: 1.0,
+            },
+            collision_enabled: true,
+            linear_velocity: NativeVec3::default(),
+            angular_velocity: NativeVec3::default(),
+        }];
+        let obstacle_error = bridge
+            .propose_character(request(invalid.as_ptr(), invalid.len()))
+            .expect_err("non-unit obstacle scale is rejected");
+        assert_eq!(obstacle_error.code(), "CSHARP_CHARACTER_OBSTACLE");
+        assert_eq!(
+            obstacle_error.detail(),
+            "C# obstacle transforms require unit scale"
+        );
+    }
+
+    #[test]
     fn character_step_borrows_moving_obstacle_for_support_and_next_call_carry() {
         let mut bridge = RuntimeSpatialBridge::new();
         let session = bridge
