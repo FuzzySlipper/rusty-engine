@@ -444,7 +444,7 @@ fn copied_value_does_not_alias_source_and_multiple_streams_share_step() {
 }
 
 #[test]
-fn identity_bound_matches_product_model_grammar() {
+fn identity_bound_matches_retained_runtime_grammar() {
     assert!(RuntimeUiProjectionEnvelope::new(
         RuntimeUiRuntimeBinding::new(
             RuntimeInstanceId::new(1),

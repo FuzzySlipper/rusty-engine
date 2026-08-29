@@ -2,13 +2,15 @@ use product_model::{
     admit_product_composition, link_admitted_product_composition, validate_product_manifest,
     CapabilityAccess, CapabilityAvailability, CapabilityBinding, CapabilityBudget, CapabilityKind,
     CapabilityMetadata, CapabilityProvenance, CapabilityUses, CompiledCompositionCandidate,
-    ControllerAxis, InputAxis, InputEdge, InputMapEntry, InputTrigger, IntentValueKind,
-    KeyboardControl, LifecycleMode, ProductIntentDescriptor, ProductKernelCapabilityDescriptor,
+    ControllerAxis as ModelControllerAxis, InputAxis as ModelInputAxis,
+    InputEdge as ModelInputEdge, InputMapEntry, InputTrigger,
+    IntentValueKind as ModelIntentValueKind, KeyboardControl as ModelKeyboardControl,
+    LifecycleMode, ProductIntentDescriptor, ProductKernelCapabilityDescriptor,
     ProductManifestCandidate, ScheduleComposition, SchedulePhase, SchedulePhaseDeclaration,
 };
 use runtime_input::{
-    AxisValue, CompiledInputMappings, InputClearReason, InputContext, IntentPhase,
-    IntentProvenance, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding,
+    AxisValue, CompiledInputMappings, ControllerAxis, InputClearReason, InputContext, IntentPhase,
+    IntentProvenance, KeyboardControl, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding,
     RuntimeInputError, RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress, RuntimeInputLane,
     RuntimeIntentValue, RuntimeProductPayload,
 };
@@ -120,6 +122,31 @@ fn vm_local_intent_compiles_and_snapshots_without_a_capability_binding() {
 
 #[test]
 fn direct_product_payload_is_contract_matched_and_keeps_immutable_json_data() {
+    assert_eq!(
+        runtime_input::MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES,
+        65_536
+    );
+    assert_eq!(runtime_input::MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_DEPTH, 32);
+    assert_eq!(
+        runtime_input::MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_NODES,
+        4_096
+    );
+    assert_eq!(
+        runtime_input::MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_STRING_BYTES,
+        16_384
+    );
+    assert_eq!(
+        runtime_input::MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_ARRAY_ENTRIES,
+        1_024
+    );
+    assert_eq!(
+        runtime_input::MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_OBJECT_ENTRIES,
+        1_024
+    );
+    assert_eq!(
+        runtime_input::MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER,
+        9_007_199_254_740_991
+    );
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
     let payload = RuntimeProductPayload::new(
@@ -724,6 +751,30 @@ fn direct_claims_fail_closed_for_unknown_kind_and_axis_range_and_pending_overflo
 
 #[test]
 fn wire_fixture_is_strict_bounded_and_host_parity_complete() {
+    assert_eq!(
+        serde_json::to_string(&KeyboardControl::KeyW).unwrap(),
+        "\"key-w\""
+    );
+    assert_eq!(
+        serde_json::to_string(&runtime_input::PointerButton::Primary).unwrap(),
+        "\"primary\""
+    );
+    assert_eq!(
+        serde_json::to_string(&runtime_input::ControllerButton::Button15).unwrap(),
+        "\"button-15\""
+    );
+    assert_eq!(
+        serde_json::to_string(&ControllerAxis::Axis3).unwrap(),
+        "\"axis-3\""
+    );
+    assert_eq!(
+        serde_json::to_string(&runtime_input::InputEdge::Released).unwrap(),
+        "\"released\""
+    );
+    assert_eq!(
+        serde_json::to_string(&runtime_input::IntentValueKind::ProductPayload).unwrap(),
+        "\"product-payload\""
+    );
     let events = runtime_input::decode_runtime_input_wire_events_json(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../fixtures/runtime-input/host-neutral-input-envelope.json"
@@ -842,21 +893,21 @@ fn compiled_mappings() -> CompiledInputMappings {
             intent_descriptors: vec![
                 ProductIntentDescriptor {
                     id: "move.forward".into(),
-                    value_kind: IntentValueKind::Digital,
+                    value_kind: ModelIntentValueKind::Digital,
                     payload_contract: None,
                     capability: Some("move.forward".into()),
                     payload: serde_json::json!({ "semantic": "move-forward" }),
                 },
                 ProductIntentDescriptor {
                     id: "inventory.drop".into(),
-                    value_kind: IntentValueKind::ProductPayload,
+                    value_kind: ModelIntentValueKind::ProductPayload,
                     payload_contract: Some("example.inventory.drop.v1".into()),
                     capability: Some("inventory.drop".into()),
                     payload: serde_json::json!({ "semantic": "inventory-drop" }),
                 },
                 ProductIntentDescriptor {
                     id: "look.horizontal".into(),
-                    value_kind: IntentValueKind::Axis,
+                    value_kind: ModelIntentValueKind::Axis,
                     payload_contract: None,
                     capability: Some("look.horizontal".into()),
                     payload: serde_json::json!({ "semantic": "look-horizontal" }),
@@ -866,25 +917,25 @@ fn compiled_mappings() -> CompiledInputMappings {
                 InputMapEntry {
                     id: "w-held".into(),
                     intent: "move.forward".into(),
-                    trigger: key(InputEdge::Held),
+                    trigger: key(ModelInputEdge::Held),
                 },
                 InputMapEntry {
                     id: "w-pressed".into(),
                     intent: "move.forward".into(),
-                    trigger: key(InputEdge::Pressed),
+                    trigger: key(ModelInputEdge::Pressed),
                 },
                 InputMapEntry {
                     id: "w-released".into(),
                     intent: "move.forward".into(),
-                    trigger: key(InputEdge::Released),
+                    trigger: key(ModelInputEdge::Released),
                 },
                 InputMapEntry {
                     id: "sprint-pressed".into(),
                     intent: "move.forward".into(),
                     trigger: InputTrigger::Key {
-                        code: KeyboardControl::KeyW,
-                        edge: InputEdge::Pressed,
-                        chord: vec![KeyboardControl::ShiftLeft],
+                        code: ModelKeyboardControl::KeyW,
+                        edge: ModelInputEdge::Pressed,
+                        chord: vec![ModelKeyboardControl::ShiftLeft],
                         context: Some("gameplay".into()),
                     },
                 },
@@ -892,9 +943,9 @@ fn compiled_mappings() -> CompiledInputMappings {
                     id: "sprint-released".into(),
                     intent: "move.forward".into(),
                     trigger: InputTrigger::Key {
-                        code: KeyboardControl::KeyW,
-                        edge: InputEdge::Released,
-                        chord: vec![KeyboardControl::ShiftLeft],
+                        code: ModelKeyboardControl::KeyW,
+                        edge: ModelInputEdge::Released,
+                        chord: vec![ModelKeyboardControl::ShiftLeft],
                         context: Some("gameplay".into()),
                     },
                 },
@@ -902,7 +953,7 @@ fn compiled_mappings() -> CompiledInputMappings {
                     id: "pointer-look".into(),
                     intent: "look.horizontal".into(),
                     trigger: InputTrigger::PointerAxis {
-                        axis: InputAxis::X,
+                        axis: ModelInputAxis::X,
                         context: Some("gameplay".into()),
                     },
                 },
@@ -910,7 +961,7 @@ fn compiled_mappings() -> CompiledInputMappings {
                     id: "wheel-look".into(),
                     intent: "look.horizontal".into(),
                     trigger: InputTrigger::Wheel {
-                        axis: InputAxis::Y,
+                        axis: ModelInputAxis::Y,
                         context: Some("gameplay".into()),
                     },
                 },
@@ -918,7 +969,7 @@ fn compiled_mappings() -> CompiledInputMappings {
                     id: "controller-look".into(),
                     intent: "look.horizontal".into(),
                     trigger: InputTrigger::ControllerAxis {
-                        axis: ControllerAxis::Axis0,
+                        axis: ModelControllerAxis::Axis0,
                         context: Some("gameplay".into()),
                     },
                 },
@@ -1027,7 +1078,7 @@ fn compiled_vm_mappings() -> CompiledInputMappings {
             product: "example.product".into(),
             intent_descriptors: vec![ProductIntentDescriptor {
                 id: "move.forward".into(),
-                value_kind: IntentValueKind::Digital,
+                value_kind: ModelIntentValueKind::Digital,
                 payload_contract: None,
                 capability: None,
                 payload: serde_json::json!({ "semantic": "move-forward" }),
@@ -1036,8 +1087,8 @@ fn compiled_vm_mappings() -> CompiledInputMappings {
                 id: "w-forward".into(),
                 intent: "move.forward".into(),
                 trigger: InputTrigger::Key {
-                    code: KeyboardControl::KeyW,
-                    edge: InputEdge::Pressed,
+                    code: ModelKeyboardControl::KeyW,
+                    edge: ModelInputEdge::Pressed,
                     chord: vec![],
                     context: Some("gameplay".into()),
                 },
@@ -1061,9 +1112,9 @@ fn compiled_vm_mappings() -> CompiledInputMappings {
     CompiledInputMappings::compile(&linked).unwrap()
 }
 
-fn key(edge: InputEdge) -> InputTrigger {
+fn key(edge: ModelInputEdge) -> InputTrigger {
     InputTrigger::Key {
-        code: KeyboardControl::KeyW,
+        code: ModelKeyboardControl::KeyW,
         edge,
         chord: vec![],
         context: Some("gameplay".into()),

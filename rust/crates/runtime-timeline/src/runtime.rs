@@ -1578,7 +1578,7 @@ impl TimelineCompletionSpec {
             return Err(crate::RuntimeTimelineDataError::EmptyIdentity);
         }
         if correlation.len() > crate::MAX_RUNTIME_CORRELATION_BYTES
-            || product_model::validate_product_identity(&correlation).is_err()
+            || runtime_lifecycle::validate_runtime_identity(&correlation).is_err()
         {
             if correlation.is_empty() {
                 return Err(crate::RuntimeTimelineDataError::EmptyIdentity);
@@ -1586,7 +1586,7 @@ impl TimelineCompletionSpec {
             return Err(crate::RuntimeTimelineDataError::InvalidIdentity);
         }
         if result_contract.len() > crate::MAX_RUNTIME_CORRELATION_BYTES
-            || product_model::validate_product_identity(&result_contract).is_err()
+            || runtime_lifecycle::validate_runtime_identity(&result_contract).is_err()
         {
             if result_contract.is_empty() {
                 return Err(crate::RuntimeTimelineDataError::EmptyIdentity);

@@ -33,8 +33,8 @@ pub use model::{
     TimelineCompletionTicketId, TimelineInsertionSequence, TimelineOperationIdentity,
     TimelineOperationReplacement, TimelineOperationRevision, TimelineOperationSpec,
     TimelineRecurrence, MAX_RECURRENCE_OCCURRENCES, MAX_RUNTIME_CORRELATION_BYTES,
-    MAX_RUNTIME_OPAQUE_DATA_BYTES, MAX_TIMELINE_COMPLETION_TICKETS, MAX_TIMELINE_OPERATIONS,
-    MAX_TIMELINE_RELEASE_PREFIX, MAX_TIMELINE_SNAPSHOT_ITEMS,
+    MAX_RUNTIME_OPAQUE_DATA_BYTES, MAX_RUNTIME_OPAQUE_DATA_DEPTH, MAX_TIMELINE_COMPLETION_TICKETS,
+    MAX_TIMELINE_OPERATIONS, MAX_TIMELINE_RELEASE_PREFIX, MAX_TIMELINE_SNAPSHOT_ITEMS,
 };
 pub use runtime::{
     ReleasedCompletionStatus, ReleasedTimelineCompletion, ReleasedTimelineEvent,

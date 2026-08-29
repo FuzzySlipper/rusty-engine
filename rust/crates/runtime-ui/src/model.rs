@@ -1,10 +1,9 @@
 use std::fmt;
 
 use product_kernel::ProductKernelContextError;
-use product_model::{validate_product_identity, ProductModelError};
 use runtime_lifecycle::{
-    RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId, RuntimeLifecycle,
-    RuntimeLifecycleError, RuntimePhase, RuntimeState,
+    validate_runtime_identity, RuntimeControlRevision, RuntimeGeneration, RuntimeIdentityError,
+    RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleError, RuntimePhase, RuntimeState,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -275,7 +274,7 @@ pub enum RuntimeUiProjectionError {
     InvalidIdentity {
         field: &'static str,
         value: String,
-        diagnostic: Box<ProductModelError>,
+        diagnostic: Box<RuntimeIdentityError>,
     },
     StreamLimit {
         maximum: usize,
@@ -361,7 +360,7 @@ pub(crate) fn validate_identity(
     field: &'static str,
     value: String,
 ) -> Result<String, RuntimeUiProjectionError> {
-    if let Err(diagnostic) = validate_product_identity(&value) {
+    if let Err(diagnostic) = validate_runtime_identity(&value) {
         return Err(RuntimeUiProjectionError::InvalidIdentity {
             field,
             value: value.clone(),

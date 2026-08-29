@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use crate::{model::is_identity, InputContext, RuntimeInputError};
-use product_model::{
-    ControllerAxis, ControllerButton, InputAxis, InputEdge, InputTrigger, IntentValueKind,
-    KeyboardControl, LinkedProductComposition, PointerButton,
+use crate::{
+    model::is_identity, ControllerAxis, ControllerButton, InputAxis, InputContext, InputEdge,
+    IntentValueKind, KeyboardControl, PointerButton, RuntimeInputError,
 };
+use product_model::{InputTrigger, LinkedProductComposition};
 use serde_json::Value;
 
 /// A typed physical trigger owned by the standard runtime input lane.
@@ -12,9 +12,9 @@ use serde_json::Value;
 /// This is deliberately a runtime vocabulary rather than a Product Model
 /// composition.  A product host may construct these values directly from
 /// generated/native configuration and never needs to load or assemble a
-/// `LinkedProductComposition`.  The control enums are shared host-neutral
-/// vocabulary; product-model composition, capability, and payload data are not
-/// part of this configuration.
+/// `LinkedProductComposition`. The legacy compiler vocabulary is converted at
+/// that one edge; the retained direct configuration owns its runtime input
+/// values without carrying Product Model types into host services.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeInputTrigger {
     Key {
@@ -363,7 +363,7 @@ impl CompiledInputMappings {
                 CompiledInputIntent {
                     descriptor_index: descriptor.index(),
                     id: descriptor.id().to_owned(),
-                    value_kind: descriptor.value_kind(),
+                    value_kind: runtime_intent_value_kind(descriptor.value_kind()),
                     payload_contract: descriptor.payload_contract().map(str::to_owned),
                     capability,
                     payload: descriptor.payload().clone(),
@@ -375,7 +375,9 @@ impl CompiledInputMappings {
             let intent = intents
                 .get(mapping.intent())
                 .ok_or(RuntimeInputError::UnknownIntent)?;
-            if intent.value_kind() != mapping.intent_descriptor().value_kind() {
+            if intent.value_kind()
+                != runtime_intent_value_kind(mapping.intent_descriptor().value_kind())
+            {
                 return Err(RuntimeInputError::IntentValueKindMismatch);
             }
             mappings.push(CompiledInputMapping {
@@ -407,9 +409,13 @@ fn runtime_trigger(trigger: &InputTrigger) -> Result<RuntimeInputTrigger, Runtim
             chord,
             context: trigger_context,
         } => RuntimeInputTrigger::Key {
-            code: *code,
-            edge: *edge,
-            chord: chord.clone(),
+            code: runtime_keyboard_control(*code),
+            edge: runtime_input_edge(*edge),
+            chord: chord
+                .iter()
+                .copied()
+                .map(runtime_keyboard_control)
+                .collect(),
             context: context(trigger_context)?,
         },
         InputTrigger::PointerButton {
@@ -417,22 +423,22 @@ fn runtime_trigger(trigger: &InputTrigger) -> Result<RuntimeInputTrigger, Runtim
             edge,
             context: trigger_context,
         } => RuntimeInputTrigger::PointerButton {
-            button: *button,
-            edge: *edge,
+            button: runtime_pointer_button(*button),
+            edge: runtime_input_edge(*edge),
             context: context(trigger_context)?,
         },
         InputTrigger::PointerAxis {
             axis,
             context: trigger_context,
         } => RuntimeInputTrigger::PointerAxis {
-            axis: *axis,
+            axis: runtime_input_axis(*axis),
             context: context(trigger_context)?,
         },
         InputTrigger::Wheel {
             axis,
             context: trigger_context,
         } => RuntimeInputTrigger::Wheel {
-            axis: *axis,
+            axis: runtime_input_axis(*axis),
             context: context(trigger_context)?,
         },
         InputTrigger::ControllerButton {
@@ -440,16 +446,127 @@ fn runtime_trigger(trigger: &InputTrigger) -> Result<RuntimeInputTrigger, Runtim
             edge,
             context: trigger_context,
         } => RuntimeInputTrigger::ControllerButton {
-            button: *button,
-            edge: *edge,
+            button: runtime_controller_button(*button),
+            edge: runtime_input_edge(*edge),
             context: context(trigger_context)?,
         },
         InputTrigger::ControllerAxis {
             axis,
             context: trigger_context,
         } => RuntimeInputTrigger::ControllerAxis {
-            axis: *axis,
+            axis: runtime_controller_axis(*axis),
             context: context(trigger_context)?,
         },
     })
+}
+
+fn runtime_intent_value_kind(value: product_model::IntentValueKind) -> IntentValueKind {
+    match value {
+        product_model::IntentValueKind::Digital => IntentValueKind::Digital,
+        product_model::IntentValueKind::Axis => IntentValueKind::Axis,
+        product_model::IntentValueKind::ProductPayload => IntentValueKind::ProductPayload,
+    }
+}
+
+fn runtime_input_edge(value: product_model::InputEdge) -> InputEdge {
+    match value {
+        product_model::InputEdge::Held => InputEdge::Held,
+        product_model::InputEdge::Pressed => InputEdge::Pressed,
+        product_model::InputEdge::Released => InputEdge::Released,
+    }
+}
+
+fn runtime_keyboard_control(value: product_model::KeyboardControl) -> KeyboardControl {
+    match value {
+        product_model::KeyboardControl::KeyA => KeyboardControl::KeyA,
+        product_model::KeyboardControl::KeyB => KeyboardControl::KeyB,
+        product_model::KeyboardControl::KeyC => KeyboardControl::KeyC,
+        product_model::KeyboardControl::KeyD => KeyboardControl::KeyD,
+        product_model::KeyboardControl::KeyE => KeyboardControl::KeyE,
+        product_model::KeyboardControl::KeyF => KeyboardControl::KeyF,
+        product_model::KeyboardControl::KeyG => KeyboardControl::KeyG,
+        product_model::KeyboardControl::KeyH => KeyboardControl::KeyH,
+        product_model::KeyboardControl::KeyI => KeyboardControl::KeyI,
+        product_model::KeyboardControl::KeyJ => KeyboardControl::KeyJ,
+        product_model::KeyboardControl::KeyK => KeyboardControl::KeyK,
+        product_model::KeyboardControl::KeyL => KeyboardControl::KeyL,
+        product_model::KeyboardControl::KeyM => KeyboardControl::KeyM,
+        product_model::KeyboardControl::KeyN => KeyboardControl::KeyN,
+        product_model::KeyboardControl::KeyO => KeyboardControl::KeyO,
+        product_model::KeyboardControl::KeyP => KeyboardControl::KeyP,
+        product_model::KeyboardControl::KeyQ => KeyboardControl::KeyQ,
+        product_model::KeyboardControl::KeyR => KeyboardControl::KeyR,
+        product_model::KeyboardControl::KeyS => KeyboardControl::KeyS,
+        product_model::KeyboardControl::KeyT => KeyboardControl::KeyT,
+        product_model::KeyboardControl::KeyU => KeyboardControl::KeyU,
+        product_model::KeyboardControl::KeyV => KeyboardControl::KeyV,
+        product_model::KeyboardControl::KeyW => KeyboardControl::KeyW,
+        product_model::KeyboardControl::KeyX => KeyboardControl::KeyX,
+        product_model::KeyboardControl::KeyY => KeyboardControl::KeyY,
+        product_model::KeyboardControl::KeyZ => KeyboardControl::KeyZ,
+        product_model::KeyboardControl::Digit0 => KeyboardControl::Digit0,
+        product_model::KeyboardControl::Digit1 => KeyboardControl::Digit1,
+        product_model::KeyboardControl::Digit2 => KeyboardControl::Digit2,
+        product_model::KeyboardControl::Digit3 => KeyboardControl::Digit3,
+        product_model::KeyboardControl::Digit4 => KeyboardControl::Digit4,
+        product_model::KeyboardControl::Digit5 => KeyboardControl::Digit5,
+        product_model::KeyboardControl::Digit6 => KeyboardControl::Digit6,
+        product_model::KeyboardControl::Digit7 => KeyboardControl::Digit7,
+        product_model::KeyboardControl::Digit8 => KeyboardControl::Digit8,
+        product_model::KeyboardControl::Digit9 => KeyboardControl::Digit9,
+        product_model::KeyboardControl::Space => KeyboardControl::Space,
+        product_model::KeyboardControl::Enter => KeyboardControl::Enter,
+        product_model::KeyboardControl::Escape => KeyboardControl::Escape,
+        product_model::KeyboardControl::ShiftLeft => KeyboardControl::ShiftLeft,
+        product_model::KeyboardControl::ShiftRight => KeyboardControl::ShiftRight,
+        product_model::KeyboardControl::ControlLeft => KeyboardControl::ControlLeft,
+        product_model::KeyboardControl::ControlRight => KeyboardControl::ControlRight,
+        product_model::KeyboardControl::AltLeft => KeyboardControl::AltLeft,
+        product_model::KeyboardControl::AltRight => KeyboardControl::AltRight,
+    }
+}
+
+fn runtime_pointer_button(value: product_model::PointerButton) -> PointerButton {
+    match value {
+        product_model::PointerButton::Primary => PointerButton::Primary,
+        product_model::PointerButton::Secondary => PointerButton::Secondary,
+        product_model::PointerButton::Middle => PointerButton::Middle,
+    }
+}
+
+fn runtime_input_axis(value: product_model::InputAxis) -> InputAxis {
+    match value {
+        product_model::InputAxis::X => InputAxis::X,
+        product_model::InputAxis::Y => InputAxis::Y,
+    }
+}
+
+fn runtime_controller_button(value: product_model::ControllerButton) -> ControllerButton {
+    match value {
+        product_model::ControllerButton::Button0 => ControllerButton::Button0,
+        product_model::ControllerButton::Button1 => ControllerButton::Button1,
+        product_model::ControllerButton::Button2 => ControllerButton::Button2,
+        product_model::ControllerButton::Button3 => ControllerButton::Button3,
+        product_model::ControllerButton::Button4 => ControllerButton::Button4,
+        product_model::ControllerButton::Button5 => ControllerButton::Button5,
+        product_model::ControllerButton::Button6 => ControllerButton::Button6,
+        product_model::ControllerButton::Button7 => ControllerButton::Button7,
+        product_model::ControllerButton::Button8 => ControllerButton::Button8,
+        product_model::ControllerButton::Button9 => ControllerButton::Button9,
+        product_model::ControllerButton::Button10 => ControllerButton::Button10,
+        product_model::ControllerButton::Button11 => ControllerButton::Button11,
+        product_model::ControllerButton::Button12 => ControllerButton::Button12,
+        product_model::ControllerButton::Button13 => ControllerButton::Button13,
+        product_model::ControllerButton::Button14 => ControllerButton::Button14,
+        product_model::ControllerButton::Button15 => ControllerButton::Button15,
+    }
+}
+
+fn runtime_controller_axis(value: product_model::ControllerAxis) -> ControllerAxis {
+    match value {
+        product_model::ControllerAxis::Axis0 => ControllerAxis::Axis0,
+        product_model::ControllerAxis::Axis1 => ControllerAxis::Axis1,
+        product_model::ControllerAxis::Axis2 => ControllerAxis::Axis2,
+        product_model::ControllerAxis::Axis3 => ControllerAxis::Axis3,
+    }
 }

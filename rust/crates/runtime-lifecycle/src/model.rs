@@ -8,6 +8,49 @@ pub const MAX_REALTIME_HZ: u32 = 240;
 /// Highest bounded realtime catch-up batch accepted by the reusable lifecycle.
 pub const MAX_REALTIME_CATCH_UP_STEPS: u32 = 16;
 
+/// Maximum UTF-8 bytes in a neutral runtime identity.
+///
+/// Runtime owners use these identifiers only as bounded caller-chosen labels;
+/// they do not admit a Product Model declaration or product policy.
+pub const MAX_RUNTIME_IDENTITY_BYTES: usize = 128;
+
+/// A caller-supplied runtime identity does not use the bounded neutral grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeIdentityError;
+
+impl fmt::Display for RuntimeIdentityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid runtime identity")
+    }
+}
+
+impl std::error::Error for RuntimeIdentityError {}
+
+/// Validates a bounded runtime label without admitting a product declaration.
+///
+/// The grammar deliberately remains byte-for-byte compatible with the
+/// existing retained runtime labels: lowercase ASCII letters and digits plus
+/// single `.`, `_`, or `-` separators, beginning and ending alphanumeric.
+pub fn validate_runtime_identity(value: &str) -> Result<(), RuntimeIdentityError> {
+    let valid = !value.is_empty()
+        && value.len() <= MAX_RUNTIME_IDENTITY_BYTES
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .last()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && !value.as_bytes().windows(2).any(|pair| {
+            matches!(pair[0], b'.' | b'_' | b'-') && matches!(pair[1], b'.' | b'_' | b'-')
+        });
+    valid.then_some(()).ok_or(RuntimeIdentityError)
+}
+
 /// A caller-provided reading from one host-owned monotonic clock.
 ///
 /// The runtime lifecycle deliberately stores only these supplied values. It

@@ -33,9 +33,9 @@ use product_dev_host::{
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
-use product_model::{InputAxis, InputEdge, IntentValueKind};
 use runtime_input::{
-    AxisValue, CompiledInputMappings, DirectInputIntentDescriptor, InputClearReason, InputContext,
+    self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
+    InputAxis, InputClearReason, InputContext, InputEdge, IntentValueKind,
     RuntimeDirectIntentClaim, RuntimeInputBinding, RuntimeInputEvent, RuntimeInputFact,
     RuntimeInputIngress, RuntimeInputLane, RuntimeInputMapping, RuntimeInputTrigger,
     RuntimeIntentEnvelope, RuntimeIntentValue,
@@ -1991,7 +1991,7 @@ fn key_press(binding: RuntimeInputBinding, sequence: u64) -> RuntimeInputEvent {
         sequence,
         standard_input_context(),
         RuntimeInputFact::Key {
-            code: product_model::KeyboardControl::KeyW,
+            code: runtime_input_model::KeyboardControl::KeyW,
             edge: runtime_input::PhysicalEdge::Pressed,
         },
     ))
@@ -2003,7 +2003,7 @@ fn fault_key_press(binding: RuntimeInputBinding, sequence: u64) -> RuntimeInputE
         sequence,
         standard_input_context(),
         RuntimeInputFact::Key {
-            code: product_model::KeyboardControl::KeyF,
+            code: runtime_input_model::KeyboardControl::KeyF,
             edge: runtime_input::PhysicalEdge::Pressed,
         },
     ))
@@ -2015,7 +2015,7 @@ fn key_release(binding: RuntimeInputBinding, sequence: u64) -> RuntimeInputEvent
         sequence,
         standard_input_context(),
         RuntimeInputFact::Key {
-            code: product_model::KeyboardControl::KeyW,
+            code: runtime_input_model::KeyboardControl::KeyW,
             edge: runtime_input::PhysicalEdge::Released,
         },
     ))
@@ -3106,91 +3106,91 @@ fn input_axis(axis: InputAxis) -> NativeInputAxis {
     }
 }
 
-fn keyboard_control(value: product_model::KeyboardControl) -> NativeKeyboardControl {
+fn keyboard_control(value: runtime_input_model::KeyboardControl) -> NativeKeyboardControl {
     match value {
-        product_model::KeyboardControl::KeyA => NativeKeyboardControl::KeyA,
-        product_model::KeyboardControl::KeyB => NativeKeyboardControl::KeyB,
-        product_model::KeyboardControl::KeyC => NativeKeyboardControl::KeyC,
-        product_model::KeyboardControl::KeyD => NativeKeyboardControl::KeyD,
-        product_model::KeyboardControl::KeyE => NativeKeyboardControl::KeyE,
-        product_model::KeyboardControl::KeyF => NativeKeyboardControl::KeyF,
-        product_model::KeyboardControl::KeyG => NativeKeyboardControl::KeyG,
-        product_model::KeyboardControl::KeyH => NativeKeyboardControl::KeyH,
-        product_model::KeyboardControl::KeyI => NativeKeyboardControl::KeyI,
-        product_model::KeyboardControl::KeyJ => NativeKeyboardControl::KeyJ,
-        product_model::KeyboardControl::KeyK => NativeKeyboardControl::KeyK,
-        product_model::KeyboardControl::KeyL => NativeKeyboardControl::KeyL,
-        product_model::KeyboardControl::KeyM => NativeKeyboardControl::KeyM,
-        product_model::KeyboardControl::KeyN => NativeKeyboardControl::KeyN,
-        product_model::KeyboardControl::KeyO => NativeKeyboardControl::KeyO,
-        product_model::KeyboardControl::KeyP => NativeKeyboardControl::KeyP,
-        product_model::KeyboardControl::KeyQ => NativeKeyboardControl::KeyQ,
-        product_model::KeyboardControl::KeyR => NativeKeyboardControl::KeyR,
-        product_model::KeyboardControl::KeyS => NativeKeyboardControl::KeyS,
-        product_model::KeyboardControl::KeyT => NativeKeyboardControl::KeyT,
-        product_model::KeyboardControl::KeyU => NativeKeyboardControl::KeyU,
-        product_model::KeyboardControl::KeyV => NativeKeyboardControl::KeyV,
-        product_model::KeyboardControl::KeyW => NativeKeyboardControl::KeyW,
-        product_model::KeyboardControl::KeyX => NativeKeyboardControl::KeyX,
-        product_model::KeyboardControl::KeyY => NativeKeyboardControl::KeyY,
-        product_model::KeyboardControl::KeyZ => NativeKeyboardControl::KeyZ,
-        product_model::KeyboardControl::Digit0 => NativeKeyboardControl::Digit0,
-        product_model::KeyboardControl::Digit1 => NativeKeyboardControl::Digit1,
-        product_model::KeyboardControl::Digit2 => NativeKeyboardControl::Digit2,
-        product_model::KeyboardControl::Digit3 => NativeKeyboardControl::Digit3,
-        product_model::KeyboardControl::Digit4 => NativeKeyboardControl::Digit4,
-        product_model::KeyboardControl::Digit5 => NativeKeyboardControl::Digit5,
-        product_model::KeyboardControl::Digit6 => NativeKeyboardControl::Digit6,
-        product_model::KeyboardControl::Digit7 => NativeKeyboardControl::Digit7,
-        product_model::KeyboardControl::Digit8 => NativeKeyboardControl::Digit8,
-        product_model::KeyboardControl::Digit9 => NativeKeyboardControl::Digit9,
-        product_model::KeyboardControl::Space => NativeKeyboardControl::Space,
-        product_model::KeyboardControl::Enter => NativeKeyboardControl::Enter,
-        product_model::KeyboardControl::Escape => NativeKeyboardControl::Escape,
-        product_model::KeyboardControl::ShiftLeft => NativeKeyboardControl::ShiftLeft,
-        product_model::KeyboardControl::ShiftRight => NativeKeyboardControl::ShiftRight,
-        product_model::KeyboardControl::ControlLeft => NativeKeyboardControl::ControlLeft,
-        product_model::KeyboardControl::ControlRight => NativeKeyboardControl::ControlRight,
-        product_model::KeyboardControl::AltLeft => NativeKeyboardControl::AltLeft,
-        product_model::KeyboardControl::AltRight => NativeKeyboardControl::AltRight,
+        runtime_input_model::KeyboardControl::KeyA => NativeKeyboardControl::KeyA,
+        runtime_input_model::KeyboardControl::KeyB => NativeKeyboardControl::KeyB,
+        runtime_input_model::KeyboardControl::KeyC => NativeKeyboardControl::KeyC,
+        runtime_input_model::KeyboardControl::KeyD => NativeKeyboardControl::KeyD,
+        runtime_input_model::KeyboardControl::KeyE => NativeKeyboardControl::KeyE,
+        runtime_input_model::KeyboardControl::KeyF => NativeKeyboardControl::KeyF,
+        runtime_input_model::KeyboardControl::KeyG => NativeKeyboardControl::KeyG,
+        runtime_input_model::KeyboardControl::KeyH => NativeKeyboardControl::KeyH,
+        runtime_input_model::KeyboardControl::KeyI => NativeKeyboardControl::KeyI,
+        runtime_input_model::KeyboardControl::KeyJ => NativeKeyboardControl::KeyJ,
+        runtime_input_model::KeyboardControl::KeyK => NativeKeyboardControl::KeyK,
+        runtime_input_model::KeyboardControl::KeyL => NativeKeyboardControl::KeyL,
+        runtime_input_model::KeyboardControl::KeyM => NativeKeyboardControl::KeyM,
+        runtime_input_model::KeyboardControl::KeyN => NativeKeyboardControl::KeyN,
+        runtime_input_model::KeyboardControl::KeyO => NativeKeyboardControl::KeyO,
+        runtime_input_model::KeyboardControl::KeyP => NativeKeyboardControl::KeyP,
+        runtime_input_model::KeyboardControl::KeyQ => NativeKeyboardControl::KeyQ,
+        runtime_input_model::KeyboardControl::KeyR => NativeKeyboardControl::KeyR,
+        runtime_input_model::KeyboardControl::KeyS => NativeKeyboardControl::KeyS,
+        runtime_input_model::KeyboardControl::KeyT => NativeKeyboardControl::KeyT,
+        runtime_input_model::KeyboardControl::KeyU => NativeKeyboardControl::KeyU,
+        runtime_input_model::KeyboardControl::KeyV => NativeKeyboardControl::KeyV,
+        runtime_input_model::KeyboardControl::KeyW => NativeKeyboardControl::KeyW,
+        runtime_input_model::KeyboardControl::KeyX => NativeKeyboardControl::KeyX,
+        runtime_input_model::KeyboardControl::KeyY => NativeKeyboardControl::KeyY,
+        runtime_input_model::KeyboardControl::KeyZ => NativeKeyboardControl::KeyZ,
+        runtime_input_model::KeyboardControl::Digit0 => NativeKeyboardControl::Digit0,
+        runtime_input_model::KeyboardControl::Digit1 => NativeKeyboardControl::Digit1,
+        runtime_input_model::KeyboardControl::Digit2 => NativeKeyboardControl::Digit2,
+        runtime_input_model::KeyboardControl::Digit3 => NativeKeyboardControl::Digit3,
+        runtime_input_model::KeyboardControl::Digit4 => NativeKeyboardControl::Digit4,
+        runtime_input_model::KeyboardControl::Digit5 => NativeKeyboardControl::Digit5,
+        runtime_input_model::KeyboardControl::Digit6 => NativeKeyboardControl::Digit6,
+        runtime_input_model::KeyboardControl::Digit7 => NativeKeyboardControl::Digit7,
+        runtime_input_model::KeyboardControl::Digit8 => NativeKeyboardControl::Digit8,
+        runtime_input_model::KeyboardControl::Digit9 => NativeKeyboardControl::Digit9,
+        runtime_input_model::KeyboardControl::Space => NativeKeyboardControl::Space,
+        runtime_input_model::KeyboardControl::Enter => NativeKeyboardControl::Enter,
+        runtime_input_model::KeyboardControl::Escape => NativeKeyboardControl::Escape,
+        runtime_input_model::KeyboardControl::ShiftLeft => NativeKeyboardControl::ShiftLeft,
+        runtime_input_model::KeyboardControl::ShiftRight => NativeKeyboardControl::ShiftRight,
+        runtime_input_model::KeyboardControl::ControlLeft => NativeKeyboardControl::ControlLeft,
+        runtime_input_model::KeyboardControl::ControlRight => NativeKeyboardControl::ControlRight,
+        runtime_input_model::KeyboardControl::AltLeft => NativeKeyboardControl::AltLeft,
+        runtime_input_model::KeyboardControl::AltRight => NativeKeyboardControl::AltRight,
     }
 }
 
-fn pointer_button(value: product_model::PointerButton) -> NativePointerButton {
+fn pointer_button(value: runtime_input_model::PointerButton) -> NativePointerButton {
     match value {
-        product_model::PointerButton::Primary => NativePointerButton::Primary,
-        product_model::PointerButton::Secondary => NativePointerButton::Secondary,
-        product_model::PointerButton::Middle => NativePointerButton::Middle,
+        runtime_input_model::PointerButton::Primary => NativePointerButton::Primary,
+        runtime_input_model::PointerButton::Secondary => NativePointerButton::Secondary,
+        runtime_input_model::PointerButton::Middle => NativePointerButton::Middle,
     }
 }
 
-fn controller_button(value: product_model::ControllerButton) -> NativeControllerButton {
+fn controller_button(value: runtime_input_model::ControllerButton) -> NativeControllerButton {
     match value {
-        product_model::ControllerButton::Button0 => NativeControllerButton::Button0,
-        product_model::ControllerButton::Button1 => NativeControllerButton::Button1,
-        product_model::ControllerButton::Button2 => NativeControllerButton::Button2,
-        product_model::ControllerButton::Button3 => NativeControllerButton::Button3,
-        product_model::ControllerButton::Button4 => NativeControllerButton::Button4,
-        product_model::ControllerButton::Button5 => NativeControllerButton::Button5,
-        product_model::ControllerButton::Button6 => NativeControllerButton::Button6,
-        product_model::ControllerButton::Button7 => NativeControllerButton::Button7,
-        product_model::ControllerButton::Button8 => NativeControllerButton::Button8,
-        product_model::ControllerButton::Button9 => NativeControllerButton::Button9,
-        product_model::ControllerButton::Button10 => NativeControllerButton::Button10,
-        product_model::ControllerButton::Button11 => NativeControllerButton::Button11,
-        product_model::ControllerButton::Button12 => NativeControllerButton::Button12,
-        product_model::ControllerButton::Button13 => NativeControllerButton::Button13,
-        product_model::ControllerButton::Button14 => NativeControllerButton::Button14,
-        product_model::ControllerButton::Button15 => NativeControllerButton::Button15,
+        runtime_input_model::ControllerButton::Button0 => NativeControllerButton::Button0,
+        runtime_input_model::ControllerButton::Button1 => NativeControllerButton::Button1,
+        runtime_input_model::ControllerButton::Button2 => NativeControllerButton::Button2,
+        runtime_input_model::ControllerButton::Button3 => NativeControllerButton::Button3,
+        runtime_input_model::ControllerButton::Button4 => NativeControllerButton::Button4,
+        runtime_input_model::ControllerButton::Button5 => NativeControllerButton::Button5,
+        runtime_input_model::ControllerButton::Button6 => NativeControllerButton::Button6,
+        runtime_input_model::ControllerButton::Button7 => NativeControllerButton::Button7,
+        runtime_input_model::ControllerButton::Button8 => NativeControllerButton::Button8,
+        runtime_input_model::ControllerButton::Button9 => NativeControllerButton::Button9,
+        runtime_input_model::ControllerButton::Button10 => NativeControllerButton::Button10,
+        runtime_input_model::ControllerButton::Button11 => NativeControllerButton::Button11,
+        runtime_input_model::ControllerButton::Button12 => NativeControllerButton::Button12,
+        runtime_input_model::ControllerButton::Button13 => NativeControllerButton::Button13,
+        runtime_input_model::ControllerButton::Button14 => NativeControllerButton::Button14,
+        runtime_input_model::ControllerButton::Button15 => NativeControllerButton::Button15,
     }
 }
 
-fn controller_axis(value: product_model::ControllerAxis) -> NativeControllerAxis {
+fn controller_axis(value: runtime_input_model::ControllerAxis) -> NativeControllerAxis {
     match value {
-        product_model::ControllerAxis::Axis0 => NativeControllerAxis::Axis0,
-        product_model::ControllerAxis::Axis1 => NativeControllerAxis::Axis1,
-        product_model::ControllerAxis::Axis2 => NativeControllerAxis::Axis2,
-        product_model::ControllerAxis::Axis3 => NativeControllerAxis::Axis3,
+        runtime_input_model::ControllerAxis::Axis0 => NativeControllerAxis::Axis0,
+        runtime_input_model::ControllerAxis::Axis1 => NativeControllerAxis::Axis1,
+        runtime_input_model::ControllerAxis::Axis2 => NativeControllerAxis::Axis2,
+        runtime_input_model::ControllerAxis::Axis3 => NativeControllerAxis::Axis3,
     }
 }
 

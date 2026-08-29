@@ -12,8 +12,10 @@ use product_dev_host::{
     product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
     ProductDevHostConfig, ProductDevRendererResource,
 };
-use product_model::IntentValueKind;
-use runtime_input::{DirectInputIntentDescriptor, RuntimeInputMapping, RuntimeInputTrigger};
+use runtime_input::{
+    DirectInputIntentDescriptor, InputEdge, IntentValueKind, KeyboardControl, RuntimeInputMapping,
+    RuntimeInputTrigger,
+};
 use runtime_lifecycle::RuntimeLifecycleConfig;
 
 fn main() -> Result<(), String> {
@@ -129,8 +131,8 @@ impl Arguments {
                 "runtime.exercise.move",
                 "runtime.exercise.move",
                 RuntimeInputTrigger::Key {
-                    code: product_model::KeyboardControl::KeyW,
-                    edge: product_model::InputEdge::Held,
+                    code: KeyboardControl::KeyW,
+                    edge: InputEdge::Held,
                     chord: Vec::new(),
                     context: None,
                 },

@@ -1,8 +1,29 @@
 use runtime_lifecycle::{
-    ExternalStep, HostMonotonicTime, RealtimeLifecycleConfig, RuntimeFault, RuntimeInstanceId,
-    RuntimeLifecycle, RuntimeLifecycleConfig, RuntimeLifecycleConfigError, RuntimeMode,
-    RuntimePhase, RuntimeState,
+    validate_runtime_identity, ExternalStep, HostMonotonicTime, RealtimeLifecycleConfig,
+    RuntimeFault, RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig,
+    RuntimeLifecycleConfigError, RuntimeMode, RuntimePhase, RuntimeState,
+    MAX_RUNTIME_IDENTITY_BYTES,
 };
+
+#[test]
+fn neutral_runtime_identity_preserves_the_retained_boundary_grammar() {
+    for value in ["a", "example.product", "runtime_input-v1", "z9"] {
+        assert!(validate_runtime_identity(value).is_ok(), "{value}");
+    }
+    let maximum = "a".repeat(MAX_RUNTIME_IDENTITY_BYTES);
+    assert!(validate_runtime_identity(&maximum).is_ok());
+    for value in [
+        "",
+        "Uppercase",
+        ".leading",
+        "trailing-",
+        "adjacent..punctuation",
+        "x/y",
+        &"a".repeat(MAX_RUNTIME_IDENTITY_BYTES + 1),
+    ] {
+        assert!(validate_runtime_identity(value).is_err(), "{value}");
+    }
+}
 
 fn realtime(hz: u32, catch_up: u32) -> RuntimeLifecycle {
     RuntimeLifecycle::new(

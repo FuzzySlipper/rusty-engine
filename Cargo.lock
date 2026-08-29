@@ -587,7 +587,6 @@ dependencies = [
  "csharp-engine-services",
  "libloading",
  "product-dev-host",
- "product-model",
  "render-presentation",
  "runtime-input",
  "runtime-lifecycle",
@@ -3060,7 +3059,6 @@ name = "runtime-ui"
 version = "0.1.0"
 dependencies = [
  "product-kernel",
- "product-model",
  "runtime-lifecycle",
  "serde",
  "serde_json",

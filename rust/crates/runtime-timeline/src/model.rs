@@ -1,7 +1,8 @@
 use std::fmt;
 
 use runtime_lifecycle::{
-    RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId, SimulationStep,
+    validate_runtime_identity as validate_neutral_identity, RuntimeControlRevision,
+    RuntimeGeneration, RuntimeInstanceId, SimulationStep,
 };
 use serde_json::Value;
 
@@ -14,7 +15,12 @@ pub const MAX_TIMELINE_RELEASE_PREFIX: usize = 256;
 /// Maximum compact JSON bytes in one opaque runtime data value.
 pub const MAX_RUNTIME_OPAQUE_DATA_BYTES: usize = 4_096;
 /// Maximum UTF-8 bytes in a caller correlation or provenance label.
-pub const MAX_RUNTIME_CORRELATION_BYTES: usize = product_model::MAX_IDENTITY_BYTES;
+pub const MAX_RUNTIME_CORRELATION_BYTES: usize = runtime_lifecycle::MAX_RUNTIME_IDENTITY_BYTES;
+/// Maximum nesting depth in a retained timeline opaque value.
+///
+/// This remains a timeline-local data bound; it is deliberately independent
+/// from the direct-input payload and UI projection limits.
+pub const MAX_RUNTIME_OPAQUE_DATA_DEPTH: usize = 32;
 /// Maximum finite recurrence occurrences accepted for one operation.
 pub const MAX_RECURRENCE_OCCURRENCES: u32 = 1_024;
 /// Maximum number of operations or tickets represented by one typed snapshot.
@@ -470,7 +476,7 @@ pub(crate) fn validate_runtime_identity(value: &str) -> Result<(), RuntimeTimeli
             maximum: MAX_RUNTIME_CORRELATION_BYTES,
         });
     }
-    if product_model::validate_product_identity(value).is_err() {
+    if validate_neutral_identity(value).is_err() {
         return Err(RuntimeTimelineDataError::InvalidIdentity);
     }
     Ok(())
@@ -481,7 +487,7 @@ fn validate_opaque_value(
     nodes: &mut usize,
     depth: usize,
 ) -> Result<(), RuntimeTimelineDataError> {
-    if depth > product_model::MAX_OPAQUE_JSON_DEPTH {
+    if depth > MAX_RUNTIME_OPAQUE_DATA_DEPTH {
         return Err(RuntimeTimelineDataError::OpaqueDataTooDeep);
     }
     *nodes = (*nodes)

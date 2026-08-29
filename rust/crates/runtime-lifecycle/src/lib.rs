@@ -14,10 +14,11 @@ mod model;
 
 pub use lifecycle::RuntimeLifecycle;
 pub use model::{
-    ExternalStep, HostMonotonicTime, LifecycleOperation, LifecycleReceipt, PresentationAdmission,
-    PresentationToken, RealtimeAdvance, RealtimeLifecycleConfig, RuntimeControlOperation,
-    RuntimeControlRevision, RuntimeFault, RuntimeGeneration, RuntimeInstanceId,
-    RuntimeLifecycleConfig, RuntimeLifecycleConfigError, RuntimeLifecycleError,
-    RuntimeLifecycleReadout, RuntimeMode, RuntimePhase, RuntimePhasePlan, RuntimePhaseToken,
-    RuntimeState, SimulationAdmission, SimulationStep, SimulationStepAdmission, SimulationToken,
+    validate_runtime_identity, ExternalStep, HostMonotonicTime, LifecycleOperation,
+    LifecycleReceipt, PresentationAdmission, PresentationToken, RealtimeAdvance,
+    RealtimeLifecycleConfig, RuntimeControlOperation, RuntimeControlRevision, RuntimeFault,
+    RuntimeGeneration, RuntimeIdentityError, RuntimeInstanceId, RuntimeLifecycleConfig,
+    RuntimeLifecycleConfigError, RuntimeLifecycleError, RuntimeLifecycleReadout, RuntimeMode,
+    RuntimePhase, RuntimePhasePlan, RuntimePhaseToken, RuntimeState, SimulationAdmission,
+    SimulationStep, SimulationStepAdmission, SimulationToken, MAX_RUNTIME_IDENTITY_BYTES,
 };

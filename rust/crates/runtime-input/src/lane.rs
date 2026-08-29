@@ -1,15 +1,13 @@
-use product_model::{
-    ControllerAxis, ControllerButton, InputAxis, InputEdge, IntentValueKind, KeyboardControl,
-    PointerButton,
-};
 use runtime_lifecycle::{RuntimeLifecycle, RuntimePhase, RuntimePhaseToken, SimulationStep};
 
 use crate::{
     model::{validate_controller_axis, InputFrameFacts},
-    AxisValue, ButtonSnapshot, CompiledInputMappings, InputClearReason, InputContext, InputFrame,
-    IntentPhase, IntentProvenance, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding,
-    RuntimeInputError, RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress,
-    RuntimeInputTrigger, RuntimeIntentEnvelope, RuntimeIntentValue, MAX_PENDING_INGRESS,
+    AxisValue, ButtonSnapshot, CompiledInputMappings, ControllerAxis, ControllerButton, InputAxis,
+    InputClearReason, InputContext, InputEdge, InputFrame, IntentPhase, IntentProvenance,
+    IntentValueKind, KeyboardControl, PhysicalEdge, PointerButton, RuntimeDirectIntentClaim,
+    RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent, RuntimeInputFact,
+    RuntimeInputIngress, RuntimeInputTrigger, RuntimeIntentEnvelope, RuntimeIntentValue,
+    MAX_PENDING_INGRESS,
 };
 
 #[derive(Debug, Clone, Copy, Default)]

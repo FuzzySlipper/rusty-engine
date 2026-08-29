@@ -1,14 +1,10 @@
 use std::{collections::BTreeMap, fmt};
 
-use product_model::{
-    ControllerAxis, ControllerButton, KeyboardControl, PointerButton,
-    MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES, MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH,
-    MAX_OPAQUE_JSON_NODES, MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES,
-    MAX_SAFE_JSON_INTEGER,
-};
 use runtime_lifecycle::{
-    RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId, SimulationStep,
+    validate_runtime_identity, RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId,
+    SimulationStep,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::CompiledInputIntent;
 
@@ -16,8 +12,148 @@ pub const MAX_PENDING_INGRESS: usize = 1_024;
 pub const MAX_AXIS_MAGNITUDE: f32 = 8_192.0;
 pub const MAX_DIRECT_INTENT_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_AXIS_MAGNITUDE: f32 = 1.0;
+/// Maximum canonical JSON bytes one direct product-payload intent may carry.
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES: usize = 65_536;
 pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES: usize =
     MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES;
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_DEPTH: usize = 32;
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_NODES: usize = 4_096;
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_STRING_BYTES: usize = 16_384;
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_ARRAY_ENTRIES: usize = 1_024;
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_OBJECT_ENTRIES: usize = 1_024;
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+/// The retained host-neutral direct input value vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IntentValueKind {
+    Digital,
+    Axis,
+    ProductPayload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputEdge {
+    Held,
+    Pressed,
+    Released,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyboardControl {
+    KeyA,
+    KeyB,
+    KeyC,
+    KeyD,
+    KeyE,
+    KeyF,
+    KeyG,
+    KeyH,
+    KeyI,
+    KeyJ,
+    KeyK,
+    KeyL,
+    KeyM,
+    KeyN,
+    KeyO,
+    KeyP,
+    KeyQ,
+    KeyR,
+    KeyS,
+    KeyT,
+    KeyU,
+    KeyV,
+    KeyW,
+    KeyX,
+    KeyY,
+    KeyZ,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
+    Space,
+    Enter,
+    Escape,
+    ShiftLeft,
+    ShiftRight,
+    ControlLeft,
+    ControlRight,
+    AltLeft,
+    AltRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PointerButton {
+    Primary,
+    Secondary,
+    Middle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputAxis {
+    X,
+    Y,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerButton {
+    #[serde(rename = "button-0")]
+    Button0,
+    #[serde(rename = "button-1")]
+    Button1,
+    #[serde(rename = "button-2")]
+    Button2,
+    #[serde(rename = "button-3")]
+    Button3,
+    #[serde(rename = "button-4")]
+    Button4,
+    #[serde(rename = "button-5")]
+    Button5,
+    #[serde(rename = "button-6")]
+    Button6,
+    #[serde(rename = "button-7")]
+    Button7,
+    #[serde(rename = "button-8")]
+    Button8,
+    #[serde(rename = "button-9")]
+    Button9,
+    #[serde(rename = "button-10")]
+    Button10,
+    #[serde(rename = "button-11")]
+    Button11,
+    #[serde(rename = "button-12")]
+    Button12,
+    #[serde(rename = "button-13")]
+    Button13,
+    #[serde(rename = "button-14")]
+    Button14,
+    #[serde(rename = "button-15")]
+    Button15,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerAxis {
+    #[serde(rename = "axis-0")]
+    Axis0,
+    #[serde(rename = "axis-1")]
+    Axis1,
+    #[serde(rename = "axis-2")]
+    Axis2,
+    #[serde(rename = "axis-3")]
+    Axis3,
+}
 
 /// Instance/generation/control correlation supplied by the explicit product
 /// runtime. It has no global registry or generated identity.
@@ -561,7 +697,7 @@ fn validate_product_payload_value(
     depth: usize,
     nodes: &mut usize,
 ) -> Result<(), RuntimeInputError> {
-    if depth > MAX_OPAQUE_JSON_DEPTH {
+    if depth > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_DEPTH {
         return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
             "depth",
         ));
@@ -571,7 +707,7 @@ fn validate_product_payload_value(
         .ok_or(RuntimeInputError::ProductPayloadStructureOutOfBounds(
             "nodes",
         ))?;
-    if *nodes > MAX_OPAQUE_JSON_NODES {
+    if *nodes > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_NODES {
         return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
             "nodes",
         ));
@@ -579,7 +715,7 @@ fn validate_product_payload_value(
     match value {
         serde_json::Value::Null | serde_json::Value::Bool(_) => Ok(()),
         serde_json::Value::String(value) => {
-            if value.len() > MAX_OPAQUE_JSON_STRING_BYTES {
+            if value.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_STRING_BYTES {
                 Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
                     "string",
                 ))
@@ -594,7 +730,8 @@ fn validate_product_payload_value(
                 ));
             };
             if !number.is_finite()
-                || (number.fract() == 0.0 && number.abs() > MAX_SAFE_JSON_INTEGER as f64)
+                || (number.fract() == 0.0
+                    && number.abs() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER as f64)
             {
                 Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
                     "integer",
@@ -604,7 +741,7 @@ fn validate_product_payload_value(
             }
         }
         serde_json::Value::Array(values) => {
-            if values.len() > MAX_OPAQUE_JSON_ARRAY_ENTRIES {
+            if values.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_ARRAY_ENTRIES {
                 return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
                     "array",
                 ));
@@ -614,13 +751,13 @@ fn validate_product_payload_value(
                 .try_for_each(|value| validate_product_payload_value(value, depth + 1, nodes))
         }
         serde_json::Value::Object(values) => {
-            if values.len() > MAX_OPAQUE_JSON_OBJECT_ENTRIES {
+            if values.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_OBJECT_ENTRIES {
                 return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
                     "object",
                 ));
             }
             for (key, value) in values {
-                if key.len() > MAX_OPAQUE_JSON_STRING_BYTES {
+                if key.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_STRING_BYTES {
                     return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
                         "object-key",
                     ));
@@ -640,20 +777,5 @@ impl fmt::Display for RuntimeInputError {
 impl std::error::Error for RuntimeInputError {}
 
 pub(crate) fn is_identity(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && value
-            .bytes()
-            .last()
-            .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && !value.as_bytes().windows(2).any(|pair| {
-            matches!(pair[0], b'.' | b'_' | b'-') && matches!(pair[1], b'.' | b'_' | b'-')
-        })
+    validate_runtime_identity(value).is_ok()
 }

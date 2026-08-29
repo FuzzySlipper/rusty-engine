@@ -1,12 +1,11 @@
-use product_model::{ControllerAxis, ControllerButton, KeyboardControl, PointerButton};
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 use serde::Deserialize;
 
 use crate::{
-    model::validate_controller_axis, parse_canonical_u64, AxisValue, InputClearReason,
-    InputContext, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding, RuntimeInputError,
-    RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress, RuntimeIntentValue,
-    RuntimeProductPayload,
+    model::validate_controller_axis, parse_canonical_u64, AxisValue, ControllerAxis,
+    ControllerButton, InputClearReason, InputContext, KeyboardControl, PhysicalEdge, PointerButton,
+    RuntimeDirectIntentClaim, RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent,
+    RuntimeInputFact, RuntimeInputIngress, RuntimeIntentValue, RuntimeProductPayload,
 };
 
 /// Maximum bytes accepted from one host wire decode operation.
