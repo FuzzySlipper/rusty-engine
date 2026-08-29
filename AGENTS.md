@@ -26,9 +26,8 @@ Read [the architecture overview](docs/architecture.md) and
 ## Den and missing capabilities
 
 - Engine project: `rusty-engine`. Resolve current Den guidance before
-  substantial work; the current task overrides stale documentation and old
-  assumptions about downstream Rust, compiled TypeScript gameplay, or Product
-  Model.
+  substantial work; the current task overrides stale documentation and
+  superseded downstream-language or authoring assumptions.
 - If Den is unreachable, stop and report the failed tool. Do not invent local
   task records.
 - If a needed mechanism is not expressible through the generated API, identify

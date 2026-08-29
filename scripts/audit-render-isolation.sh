@@ -37,10 +37,4 @@ if rg -n 'pub fn (eval|evaluate|invoke|dispatch|import_module)|pub (struct|enum)
   exit 1
 fi
 
-if rg -n '@rusty-engine/|render/private|renderer-webview.js|package.json|pnpm' \
-  fixtures/rust-sdk-consumer rust/crates/rusty-engine; then
-  echo "Rust SDK consumer or facade knows the private renderer package topology" >&2
-  exit 1
-fi
-
 echo "render isolation audit passed: no historical runtime dependency or external symlink"

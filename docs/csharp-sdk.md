@@ -50,11 +50,14 @@ lets product code accept or reject the product-owned ticket meaning.
   rejecting implementation in place.
 
 Current `IEngineContext` properties are named service families generated from
-the ABI, such as input-adjacent look/motion services, spatial, camera,
-appearance/presentation, content, persistence, random, mechanics, rules,
-resolution, and UI. The exact available family/method set is defined by the
-current generated `Rusty.Engine` output and Rust ABI source; do not assume a
-Rust API is callable from C# simply because its Rust crate is public.
+the ABI: look, dynamics, motion, kinematic, spatial, perception, world origin,
+voxel, voxel content and presentation, content, authored content, appearance,
+presentation, animation, audio, camera view, random, persistence, content
+store, and UI. The exact method set is defined by the current generated
+`Rusty.Engine` output and Rust ABI source. Mechanics, resolution, and state
+machines are ordinary managed helpers, not native context services. See the
+[current capability map](csharp-capabilities.md) and do not assume a Rust API
+is callable from C# simply because its crate is public.
 
 `VoxelScenePresentation` projects the canonical `Spatial` session voxel scene
 through the Engine renderer. Bind every currently used scene material slot to
@@ -121,9 +124,10 @@ by domain modules, keeping state ownership explicit, and using thin
 Read/Decide/Apply/Publish coordinators. These are conventions a product can
 adopt directly; they do not require registration APIs or runtime discovery.
 
-For mechanics that need Engine infrastructure, prefer named generated service
-calls and managed adapters over downstream reimplementation. For product-only
-rules or state transitions, ordinary C# types are the appropriate owner.
+For gameplay that needs Engine infrastructure, combine the ordinary managed
+helpers with named generated service calls rather than reimplementing native
+mechanisms downstream. Product rules, state transitions, and orchestration are
+ordinary C# concerns.
 
 ## Missing capability workflow
 

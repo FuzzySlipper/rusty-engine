@@ -311,7 +311,7 @@ fn monotonic_rebind_clears_state_and_disposal_is_terminal() {
 }
 
 #[test]
-fn direct_payload_contract_is_checked_without_a_product_model() {
+fn direct_payload_contract_is_checked_by_the_neutral_input_lane() {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
     let payload = RuntimeProductPayload::new(

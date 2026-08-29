@@ -155,7 +155,7 @@ def find_violations(metadata: dict[str, Any]) -> list[str]:
                         + render_path(source, target, parents, names)
                     )
 
-        if source_name not in {"engine-inspector", "rusty-engine"}:
+        if source_name != "engine-inspector":
             for target in reachable:
                 if names[target] == "engine-inspector":
                     violations.add(

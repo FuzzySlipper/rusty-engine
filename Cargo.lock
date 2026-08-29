@@ -2810,48 +2810,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
-name = "rusty-engine"
-version = "0.1.0"
-dependencies = [
- "asset-catalog",
- "asset-import",
- "authored-scene",
- "content-store",
- "core-assets",
- "core-ids",
- "core-math",
- "core-space",
- "core-time",
- "core-voxel",
- "developer-command",
- "engine-inspector",
- "engine-spatial",
- "entity-state",
- "environment-authoring",
- "product-dev-host",
- "render-host-contracts",
- "render-model",
- "render-presentation",
- "render-projection",
- "renderer-webview-host",
- "runtime-input",
- "runtime-lifecycle",
- "runtime-timeline",
- "runtime-ui",
- "serde_json",
- "svc-collision",
- "svc-mesh",
- "svc-pathfinding",
- "svc-rng",
- "svc-spatial",
- "svc-volume",
- "voxel-annotation",
- "voxel-asset",
- "voxel-convert",
- "voxel-object-runtime",
-]
-
-[[package]]
 name = "safe_arch"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

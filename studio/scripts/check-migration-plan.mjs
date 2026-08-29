@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,12 +91,14 @@ for (const [surfaceId, rulePath] of rules) {
 }
 
 const expectedOwners = new Set([
-  'asset-catalog', 'asset-import', 'authored-scene', 'content-store', 'core-assets', 'core-ids',
-  'core-math', 'core-space', 'core-time', 'core-voxel', 'engine-inspector', 'engine-spatial',
-  'developer-command', 'entity-state', 'environment-authoring', 'render-model',
+  'asset-catalog', 'asset-import', 'authored-scene', 'content-store', 'content-store-host',
+  'core-assets', 'core-ids', 'core-math', 'core-space', 'core-time', 'core-voxel',
+  'csharp-engine-abi', 'csharp-engine-services', 'csharp-product-runtime',
+  'engine-inspector', 'engine-spatial',
+  'developer-command', 'entity-state', 'environment-authoring', 'product-dev-host', 'render-model',
   'render-host-contracts', 'render-presentation', 'render-projection', 'renderer-webview-host',
   'runtime-input', 'runtime-lifecycle', 'runtime-timeline', 'runtime-ui',
-  'rusty-engine', 'svc-collision', 'svc-mesh', 'svc-pathfinding',
+  'svc-collision', 'svc-mesh', 'svc-pathfinding',
   'svc-rng', 'svc-spatial', 'svc-volume', 'voxel-annotation', 'voxel-asset', 'voxel-convert',
   'voxel-object-runtime',
   '@rusty-engine/render-contracts', '@rusty-engine/render-projection',
@@ -123,10 +124,5 @@ for (const [owner, classification] of adoption) {
 if (expectedOwners.size !== 0) {
   throw new Error(`owner adoption rows are missing: ${[...expectedOwners].sort().join(', ')}`);
 }
-
-const contractHash = createHash('sha256')
-  .update(readText('../docs/studio-migration-contract.md'))
-  .digest('hex');
-if (contractHash.length !== 64) throw new Error('failed to hash Studio migration contract');
 
 console.log(`Studio migration plan passed: ${inventory.length} donor files, ${rules.length} surfaces, ${adoption.length} owners`);

@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "rust/crates/render-host-contracts",
     "rust/crates/renderer-webview-host",
-    "rust/crates/rusty-engine",
     "rust/crates/product-dev-host",
     "rust/crates/csharp-engine-abi",
     "rust/crates/csharp-engine-services",
@@ -48,7 +47,6 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-rusty-engine = { path = "rust/crates/rusty-engine" }
 product-dev-host = { path = "rust/crates/product-dev-host" }
 csharp-engine-abi = { path = "rust/crates/csharp-engine-abi" }
 csharp-engine-services = { path = "rust/crates/csharp-engine-services" }
@@ -100,7 +98,6 @@ stats_alloc = "0.1.10"
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit"] }
 cap-std = "3"
 tempfile = "3"
-rquickjs = "0.12.2"
 fs2 = "0.4"
 
 [workspace.lints.rust]
