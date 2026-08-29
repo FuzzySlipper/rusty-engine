@@ -1,9 +1,9 @@
-//! Engine-owned browser development host for generated Products.
+//! Engine-owned browser development host for native products.
 //!
 //! This is deliberately a small HTTP/1.1 implementation rather than a product
 //! network service. It defaults to `127.0.0.1`; an explicit trusted-development
 //! bind may expose the same closed same-origin route vocabulary to a LAN.
-//! The generated Product Assembly remains the concrete runtime owner: every
+//! The native product remains the concrete runtime owner: every
 //! operation is a direct, serialized trait call and returns its own bounded
 //! output batch. The host stores neither gameplay callbacks nor product state.
 //!

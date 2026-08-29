@@ -109,8 +109,8 @@ impl RuntimeUiProjection {
     /// owner. This path has no product projection context:
     /// the caller supplies the exact lifecycle projection token directly.
     ///
-    /// This keeps VM-backed product runtimes out of the legacy kernel
-    /// projection contract while retaining the same lifecycle, epoch, stream,
+    /// This keeps product runtimes independent of projection internals while
+    /// retaining the same lifecycle, epoch, stream,
     /// sequence, identity, and bounded-value checks as typed projections.
     pub fn emit_value(
         &mut self,

@@ -1318,7 +1318,7 @@ impl<T> ProductDevRuntimeReceipt<T> {
     }
 }
 
-/// Source-linked concrete runtime owner implemented by Product Assembly.
+/// Concrete runtime owner implemented by the native product.
 ///
 /// The server serializes calls with one mutex. Implementors own lifecycle,
 /// input, schedule, timeline, mutation, and projection authority. They return

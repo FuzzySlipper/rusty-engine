@@ -171,68 +171,25 @@ impl DirectInputIntentDescriptor {
     }
 }
 
-/// One linked product intent available to both physical mappings and direct UI
-/// claims. It retains one optional capability linkage for legacy Product
-/// Kernel execution; VM-local intent descriptors omit it entirely.
+/// One product intent available to both physical mappings and direct UI claims.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledInputIntent {
     descriptor_index: usize,
     id: String,
     value_kind: IntentValueKind,
     payload_contract: Option<String>,
-    capability: Option<CompiledInputCapabilityLink>,
     payload: Value,
-}
-
-/// The one optional static capability linkage retained by a compiled input
-/// intent. It is descriptive only: Runtime Input neither invokes it nor turns
-/// it into a service route.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompiledInputCapabilityLink {
-    id: String,
-    target: String,
-    binding_index: usize,
-}
-
-impl CompiledInputCapabilityLink {
-    pub fn new(
-        id: impl Into<String>,
-        target: impl Into<String>,
-        binding_index: usize,
-    ) -> Result<Self, RuntimeInputError> {
-        let id = id.into();
-        let target = target.into();
-        if !is_identity(&id) || !is_identity(&target) {
-            return Err(RuntimeInputError::InvalidMapping);
-        }
-        Ok(Self {
-            id,
-            target,
-            binding_index,
-        })
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-    pub fn target(&self) -> &str {
-        &self.target
-    }
-    pub const fn binding_index(&self) -> usize {
-        self.binding_index
-    }
 }
 
 impl CompiledInputIntent {
     /// Builds one neutral compiled intent from already-converted descriptor
-    /// facts. Product configuration conversion belongs at its owning assembly
-    /// edge; this crate retains only the values the input lane consumes.
+    /// facts. Configuration conversion belongs at the caller's owning edge;
+    /// this crate retains only the values the input lane consumes.
     pub fn new(
         descriptor_index: usize,
         id: impl Into<String>,
         value_kind: IntentValueKind,
         payload_contract: Option<String>,
-        capability: Option<CompiledInputCapabilityLink>,
         payload: Value,
     ) -> Result<Self, RuntimeInputError> {
         let id = id.into();
@@ -250,7 +207,6 @@ impl CompiledInputIntent {
             id,
             value_kind,
             payload_contract,
-            capability,
             payload,
         })
     }
@@ -268,11 +224,7 @@ impl CompiledInputIntent {
     pub fn payload_contract(&self) -> Option<&str> {
         self.payload_contract.as_deref()
     }
-    pub fn capability(&self) -> Option<&CompiledInputCapabilityLink> {
-        self.capability.as_ref()
-    }
-    /// Immutable descriptor payload. It remains data only whether or not this
-    /// intent retains a legacy capability link.
+    /// Immutable descriptor payload.
     pub fn payload(&self) -> &Value {
         // The owning configuration edge has already admitted this opaque
         // value. Runtime Input never interprets it.
@@ -365,7 +317,6 @@ impl CompiledInputMappings {
                     descriptor.id,
                     descriptor.value_kind,
                     descriptor.payload_contract,
-                    None,
                     Value::Null,
                 )
             })
@@ -378,8 +329,8 @@ impl CompiledInputMappings {
     }
 
     /// Builds a neutral mapping set from already-converted runtime values.
-    /// Legacy product configuration and any future configuration format should
-    /// perform its one-way conversion before calling this boundary.
+    /// Any configuration format should perform its one-way conversion before
+    /// calling this boundary.
     pub fn from_parts(
         intents: impl IntoIterator<Item = CompiledInputIntent>,
         mappings: impl IntoIterator<Item = CompiledInputMapping>,

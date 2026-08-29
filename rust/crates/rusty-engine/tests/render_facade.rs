@@ -26,15 +26,11 @@ fn public_facade_admits_and_serializes_optional_sprite_frame_world_size() {
     }])
     .expect("facade frame should admit positive finite frame sizes");
 
-    let serialized = rusty_engine::product_kernel::serde_json::to_value(frame)
-        .expect("serialize public facade frame");
+    let serialized = serde_json::to_value(frame).expect("serialize public facade frame");
     let frames = serialized["ops"][0]["atlas"]["frames"]
         .as_array()
         .expect("serialized atlas frames");
-    assert_eq!(
-        frames[0]["size"],
-        rusty_engine::product_kernel::serde_json::json!([1.25, 2.5])
-    );
+    assert_eq!(frames[0]["size"], serde_json::json!([1.25, 2.5]));
     assert!(!frames[1]
         .as_object()
         .expect("serialized fallback frame")

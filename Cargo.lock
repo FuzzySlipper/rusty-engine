@@ -38,12 +38,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "ambient-authority"
-version = "0.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9d4ee0d472d1cd2e28c97dfa124b3d8d992e10eb0a035f33f5d12e3a177ba3b"
-
-[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -306,36 +300,6 @@ dependencies = [
  "rustix 0.38.44",
  "wayland-backend",
  "wayland-client",
-]
-
-[[package]]
-name = "cap-primitives"
-version = "3.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e0bf07d379916947be6c4a07f43684153d710a2896c31f9e97781362895596c"
-dependencies = [
- "ambient-authority",
- "fs-set-times",
- "io-extras",
- "io-lifetimes",
- "ipnet",
- "maybe-owned",
- "rustix 1.1.4",
- "rustix-linux-procfs",
- "windows-sys 0.59.0",
- "winx",
-]
-
-[[package]]
-name = "cap-std"
-version = "3.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a59e59fa26472d29680ece6a9f8ee8b0551a719a33df2f5240bde065ecbddfd7"
-dependencies = [
- "cap-primitives",
- "io-extras",
- "io-lifetimes",
- "rustix 1.1.4",
 ]
 
 [[package]]
@@ -935,17 +899,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fs-set-times"
-version = "0.20.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
-dependencies = [
- "io-lifetimes",
- "rustix 1.1.4",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "fs2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1401,8 +1354,6 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
- "allocator-api2",
- "equivalent",
  "foldhash",
 ]
 
@@ -1575,28 +1526,6 @@ name = "inflections"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
-
-[[package]]
-name = "io-extras"
-version = "0.18.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2285ddfe3054097ef4b2fe909ef8c3bcd1ea52a8f0d274416caebeef39f04a65"
-dependencies = [
- "io-lifetimes",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "io-lifetimes"
-version = "2.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06432fb54d3be7964ecd3649233cddf80db2832f47fec34c01f65b3d9d774983"
-
-[[package]]
-name = "ipnet"
-version = "2.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
 
 [[package]]
 name = "itoa"
@@ -1815,12 +1744,6 @@ dependencies = [
  "autocfg",
  "rawpointer",
 ]
-
-[[package]]
-name = "maybe-owned"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
 
 [[package]]
 name = "memchr"
@@ -2595,23 +2518,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "product-assembly"
-version = "0.1.0"
-dependencies = [
- "cap-primitives",
- "cap-std",
- "content-store",
- "product-dev-host",
- "product-model",
- "render-model",
- "runtime-input",
- "serde",
- "serde_json",
- "sha2",
- "toml",
-]
-
-[[package]]
 name = "product-dev-host"
 version = "0.1.0"
 dependencies = [
@@ -2625,44 +2531,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
-]
-
-[[package]]
-name = "product-kernel"
-version = "0.1.0"
-dependencies = [
- "product-model",
- "runtime-lifecycle",
- "runtime-mutation",
- "runtime-schedule",
- "runtime-standard-capabilities",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "product-materializer"
-version = "0.1.0"
-dependencies = [
- "cap-primitives",
- "cap-std",
- "product-assembly",
- "product-model",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "product-model"
-version = "0.1.0"
-dependencies = [
- "ryu-js",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "toml",
 ]
 
 [[package]]
@@ -2785,15 +2653,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "relative-path"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bca40a312222d8ba74837cb474edef44b37f561da5f773981007a10bbaa992b0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "render-host-contracts"
 version = "0.1.0"
 dependencies = [
@@ -2862,35 +2721,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
-name = "rquickjs"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e04e4eedfb060b503b5f0a2644abb890b0b3620d3fb674f9455f230014964e4"
-dependencies = [
- "rquickjs-core",
-]
-
-[[package]]
-name = "rquickjs-core"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16e4f499ac5b943d97ee6dbc44f23c2c10426f420f7d2f1793d6318911b6608c"
-dependencies = [
- "hashbrown 0.17.1",
- "relative-path",
- "rquickjs-sys",
-]
-
-[[package]]
-name = "rquickjs-sys"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a13ac243b86a74120814ef7e9e30ad5a2c1199b7b9963b1cf7c84e4cdc1cad99"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "rstar"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2899,24 +2729,6 @@ dependencies = [
  "heapless",
  "num-traits",
  "smallvec",
-]
-
-[[package]]
-name = "runtime-composition"
-version = "0.1.0"
-dependencies = [
- "product-kernel",
- "product-model",
- "render-model",
- "render-presentation",
- "runtime-input",
- "runtime-lifecycle",
- "runtime-mutation",
- "runtime-schedule",
- "runtime-timeline",
- "runtime-ui",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2931,43 +2743,6 @@ dependencies = [
 [[package]]
 name = "runtime-lifecycle"
 version = "0.1.0"
-
-[[package]]
-name = "runtime-mutation"
-version = "0.1.0"
-dependencies = [
- "product-model",
- "runtime-lifecycle",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "runtime-schedule"
-version = "0.1.0"
-dependencies = [
- "product-model",
- "runtime-lifecycle",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "runtime-standard-capabilities"
-version = "0.1.0"
-dependencies = [
- "core-ids",
- "core-math",
- "engine-spatial",
- "entity-state",
- "product-model",
- "runtime-lifecycle",
- "runtime-mutation",
- "runtime-schedule",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "runtime-timeline"
@@ -2985,15 +2760,6 @@ dependencies = [
  "runtime-lifecycle",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "runtime-vm"
-version = "0.1.0"
-dependencies = [
- "rquickjs",
- "serde_json",
- "sha2",
 ]
 
 [[package]]
@@ -3038,35 +2804,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustix-linux-procfs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc84bf7e9aa16c4f2c758f27412dc9841341e16aa682d9c7ac308fe3ee12056"
-dependencies = [
- "once_cell",
- "rustix 1.1.4",
-]
-
-[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-
-[[package]]
-name = "rusty-cli"
-version = "0.1.0"
-dependencies = [
- "cap-std",
- "product-assembly",
- "product-materializer",
- "product-model",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "toml",
-]
 
 [[package]]
 name = "rusty-engine"
@@ -3087,25 +2828,17 @@ dependencies = [
  "engine-spatial",
  "entity-state",
  "environment-authoring",
- "product-assembly",
  "product-dev-host",
- "product-kernel",
- "product-materializer",
- "product-model",
  "render-host-contracts",
  "render-model",
  "render-presentation",
  "render-projection",
  "renderer-webview-host",
- "runtime-composition",
  "runtime-input",
  "runtime-lifecycle",
- "runtime-mutation",
- "runtime-schedule",
- "runtime-standard-capabilities",
  "runtime-timeline",
  "runtime-ui",
- "runtime-vm",
+ "serde_json",
  "svc-collision",
  "svc-mesh",
  "svc-pathfinding",
@@ -3117,12 +2850,6 @@ dependencies = [
  "voxel-convert",
  "voxel-object-runtime",
 ]
-
-[[package]]
-name = "ryu-js"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714"
 
 [[package]]
 name = "safe_arch"
@@ -4581,16 +4308,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "winx"
-version = "0.36.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
-dependencies = [
- "bitflags 2.13.1",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

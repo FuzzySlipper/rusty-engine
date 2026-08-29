@@ -5,10 +5,6 @@ const port = Number(process.env['PLAYWRIGHT_RENDER_PORT'] ?? '4173');
 
 export default defineConfig({
   testDir: './browser',
-  // This spec requires the Rust integration test to launch an actual
-  // generated ProductDevHost and is owned by
-  // playwright.product-assembly.config.ts, not the ordinary Vite fixture.
-  testIgnore: 'product-assembly-generated.browser.spec.ts',
   timeout: 30_000,
   use: {
     baseURL: `http://127.0.0.1:${String(port)}`,

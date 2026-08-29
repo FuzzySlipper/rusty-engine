@@ -7,7 +7,7 @@ use crate::{
 
 /// Canonical manifest path relative to one host-neutral content-store
 /// generation. Store executors reserve exactly this path and must not probe or
-/// alias the legacy Product Assembly source path (`content/manifest.json`).
+/// alias the retired source path (`content/manifest.json`).
 pub const CONTENT_MANIFEST_PATH: &str = "content.manifest.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

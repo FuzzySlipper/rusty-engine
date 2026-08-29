@@ -674,7 +674,7 @@ function requireProductIdentity(value: unknown, name: string): string {
     || !/^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(value)) {
     throw new ProductBrowserLocalTransportError(
       'invalid_options',
-      `${name} must be a 1..128 byte lowercase Product Model identity`,
+      `${name} must be a 1..128 byte lowercase runtime identity`,
     );
   }
   return value;

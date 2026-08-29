@@ -94,11 +94,9 @@ for (const [surfaceId, rulePath] of rules) {
 const expectedOwners = new Set([
   'asset-catalog', 'asset-import', 'authored-scene', 'content-store', 'core-assets', 'core-ids',
   'core-math', 'core-space', 'core-time', 'core-voxel', 'engine-inspector', 'engine-spatial',
-  'developer-command', 'entity-state', 'environment-authoring',
-  'product-kernel', 'product-model', 'render-model',
+  'developer-command', 'entity-state', 'environment-authoring', 'render-model',
   'render-host-contracts', 'render-presentation', 'render-projection', 'renderer-webview-host',
-  'runtime-input', 'runtime-lifecycle', 'runtime-mutation', 'runtime-schedule',
-  'runtime-standard-capabilities', 'runtime-timeline', 'runtime-ui', 'rusty-cli',
+  'runtime-input', 'runtime-lifecycle', 'runtime-timeline', 'runtime-ui',
   'rusty-engine', 'svc-collision', 'svc-mesh', 'svc-pathfinding',
   'svc-rng', 'svc-spatial', 'svc-volume', 'voxel-annotation', 'voxel-asset', 'voxel-convert',
   'voxel-object-runtime',

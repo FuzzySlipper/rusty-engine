@@ -87,7 +87,7 @@ impl From<&RuntimeLifecycle> for RuntimeUiRuntimeBinding {
 /// An owned, validated UI projection transport envelope.
 ///
 /// The fields are private and there are no mutating accessors. Constructing
-/// an envelope validates Product Model identities, canonical runtime values,
+/// an envelope validates bounded identities, canonical runtime values,
 /// and the copied value's compact JSON bound. Use [`Self::encode_json`] to
 /// obtain the strict host wire shape.
 #[derive(Debug, Clone, PartialEq)]

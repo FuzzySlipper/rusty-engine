@@ -994,7 +994,7 @@ export async function mountProductBrowserHost(
     if (transport.completeTimeline === undefined) {
       return Promise.reject(new ProductBrowserHostError(
         'timeline_unavailable',
-        'this Product Assembly did not declare a timeline completion lane',
+        'this native product did not provide a timeline completion lane',
       ));
     }
     return queue.enqueue(async () => {
@@ -1024,7 +1024,7 @@ export async function mountProductBrowserHost(
     if (transport.admitDemandStep === undefined) {
       return Promise.reject(new ProductBrowserHostError(
         'transport_failed',
-        'this Product Assembly did not declare a demand-step transport lane',
+        'this native product did not provide a demand-step transport lane',
       ));
     }
     return queue.enqueue(async () => {
@@ -1054,7 +1054,7 @@ export async function mountProductBrowserHost(
     if (transport.admitExternalStep === undefined) {
       return Promise.reject(new ProductBrowserHostError(
         'transport_failed',
-        'this Product Assembly did not declare an external-step transport lane',
+        'this native product did not provide an external-step transport lane',
       ));
     }
     return queue.enqueue(async () => {
@@ -1344,8 +1344,8 @@ export interface ProductBrowserBundleTemplateOptions {
 }
 
 /**
- * Deterministic fixed composition assets copied by the Rusty CLI into the
- * ignored `generated/product-bundle` lane. Only source-linked module paths are
+ * Deterministic fixed host assets copied by product build scripts into an
+ * ignored generated bundle. Only source-linked module paths are
  * substituted; the HTML, main, bridge, and host topology remain Engine-owned.
  */
 export function productBrowserBundleAssets(

@@ -28527,7 +28527,7 @@ async function _D(e) {
 			} catch (e) {
 				return Promise.reject(e);
 			}
-			return n.completeTimeline === void 0 ? Promise.reject(new pD("timeline_unavailable", "this Product Assembly did not declare a timeline completion lane")) : r.enqueue(async () => {
+			return n.completeTimeline === void 0 ? Promise.reject(new pD("timeline_unavailable", "this native product did not provide a timeline completion lane")) : r.enqueue(async () => {
 				let t = await n.completeTimeline(e);
 				if (!t.accepted) throw new pD("transport_failed", t.diagnostic ?? "timeline completion was rejected by the runtime");
 				return t.binding !== void 0 && O({
@@ -28547,7 +28547,7 @@ async function _D(e) {
 			} catch (e) {
 				return Promise.reject(e);
 			}
-			return e.lifecycleMode === "demand" ? n.admitDemandStep === void 0 ? Promise.reject(new pD("transport_failed", "this Product Assembly did not declare a demand-step transport lane")) : r.enqueue(async () => {
+			return e.lifecycleMode === "demand" ? n.admitDemandStep === void 0 ? Promise.reject(new pD("transport_failed", "this native product did not provide a demand-step transport lane")) : r.enqueue(async () => {
 				let e = y();
 				e.input?.sampleController();
 				let t = e.input?.drain() ?? [];
@@ -28564,7 +28564,7 @@ async function _D(e) {
 			} catch (e) {
 				return Promise.reject(e);
 			}
-			return e.lifecycleMode === "external" ? n.admitExternalStep === void 0 ? Promise.reject(new pD("transport_failed", "this Product Assembly did not declare an external-step transport lane")) : r.enqueue(async () => {
+			return e.lifecycleMode === "external" ? n.admitExternalStep === void 0 ? Promise.reject(new pD("transport_failed", "this native product did not provide an external-step transport lane")) : r.enqueue(async () => {
 				let e = y();
 				e.input?.sampleController();
 				let r = e.input?.drain() ?? [];
@@ -29217,7 +29217,7 @@ function PO(e, t) {
 	return FO(e, t);
 }
 function FO(e, t) {
-	if (typeof e != "string" || new TextEncoder().encode(e).byteLength > 128 || !/^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(e)) throw new $("invalid_options", `${t} must be a 1..128 byte lowercase Product Model identity`);
+	if (typeof e != "string" || new TextEncoder().encode(e).byteLength > 128 || !/^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(e)) throw new $("invalid_options", `${t} must be a 1..128 byte lowercase runtime identity`);
 	return e;
 }
 function IO(e, t, n = 256) {

@@ -9,7 +9,7 @@ export const RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM = 256;
 export const RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM = 256;
 export const RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM = 3;
 export const RUSTY_APPLICATION_INPUT_U64_MAXIMUM = 18_446_744_073_709_551_615n;
-/** Mirrors the Rust-owned Product Model direct product-payload bound. */
+/** Mirrors the Engine runtime's direct product-payload bound. */
 export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM = 65_536;
 export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM = 32;
 export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM = 4_096;
@@ -32,7 +32,7 @@ export interface RustyApplicationRuntimeInputBinding {
   readonly context: string;
 }
 
-/** Mirrors the closed Product Model control catalog; navigation keys are not admitted yet. */
+/** Mirrors the closed Engine input control catalog; navigation keys are not admitted yet. */
 export type RustyApplicationKeyboardControl =
   | 'key-a' | 'key-b' | 'key-c' | 'key-d' | 'key-e' | 'key-f' | 'key-g'
   | 'key-h' | 'key-i' | 'key-j' | 'key-k' | 'key-l' | 'key-m' | 'key-n'
@@ -62,7 +62,7 @@ export type RustyApplicationInputClearReason =
   | 'control-revision-change'
   | 'dispose';
 
-/** Structural mirror of the Runtime Composition physical ingress wire. */
+/** Structural mirror of the Engine runtime physical ingress wire. */
 export type RustyApplicationRuntimeInputFact =
   | {
       readonly kind: 'key';

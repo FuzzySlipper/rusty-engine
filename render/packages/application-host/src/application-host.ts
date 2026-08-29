@@ -540,7 +540,7 @@ export interface RustyApplicationUiContext {
   readonly ui: RustyApplicationUiPort;
   /** Read-only current Product UI projection and subscription view. */
   readonly projection?: RustyApplicationUiProjectionView;
-  /** Claim-only adapter for the shared ordered Runtime Composition input lane. */
+  /** Claim-only adapter for the shared ordered Engine input lane. */
   readonly intents?: RustyApplicationUiIntentsPort;
 }
 

@@ -383,8 +383,8 @@ export interface ProductBrowserBundleTemplateOptions {
     } | null;
 }
 /**
- * Deterministic fixed composition assets copied by the Rusty CLI into the
- * ignored `generated/product-bundle` lane. Only source-linked module paths are
+ * Deterministic fixed host assets copied by product build scripts into an
+ * ignored generated bundle. Only source-linked module paths are
  * substituted; the HTML, main, bridge, and host topology remain Engine-owned.
  */
 export declare function productBrowserBundleAssets(options: ProductBrowserBundleTemplateOptions): readonly ProductBrowserBundleAsset[];

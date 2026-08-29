@@ -176,7 +176,6 @@ fn direct_runtime_descriptors_preserve_physical_edges_and_order() {
     assert!(envelopes
         .iter()
         .all(|entry| entry.intent() == "move.forward"));
-    assert!(envelopes[0].descriptor().capability().is_none());
     assert_eq!(
         envelopes[0].descriptor().payload(),
         &serde_json::Value::Null

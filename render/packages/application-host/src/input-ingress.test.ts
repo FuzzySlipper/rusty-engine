@@ -18,7 +18,7 @@ const HOST_NEUTRAL_WIRE_FIXTURE = new URL(
   import.meta.url,
 );
 
-void test('input ingress normalizes exactly the Product Model keyboard catalog', () => {
+void test('input ingress normalizes exactly the Engine keyboard catalog', () => {
   assert.equal(normalizeRustyApplicationKeyboardControl('KeyW'), 'key-w');
   assert.equal(normalizeRustyApplicationKeyboardControl('Digit7'), 'digit-7');
   assert.equal(normalizeRustyApplicationKeyboardControl('ShiftLeft'), 'shift-left');

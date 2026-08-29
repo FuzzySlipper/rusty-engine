@@ -101,7 +101,6 @@ fn main() {
 
     println!(
         "{}",
-        rusty_engine::product_kernel::serde_json::to_string_pretty(&frame)
-            .expect("presentation frame must serialize")
+        serde_json::to_string_pretty(&frame).expect("presentation frame must serialize")
     );
 }

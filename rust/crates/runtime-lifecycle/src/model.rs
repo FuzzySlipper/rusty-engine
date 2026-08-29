@@ -3,7 +3,7 @@ use std::fmt;
 pub(crate) const SCALED_NANOSECONDS_PER_SECOND: u128 = 1_000_000_000;
 
 /// Highest fixed-step rate accepted by the reusable runtime lifecycle.
-/// Product manifests may choose to apply a stricter policy at their own edge.
+/// Products may choose to apply a stricter policy at their own edge.
 pub const MAX_REALTIME_HZ: u32 = 240;
 /// Highest bounded realtime catch-up batch accepted by the reusable lifecycle.
 pub const MAX_REALTIME_CATCH_UP_STEPS: u32 = 16;
@@ -11,7 +11,7 @@ pub const MAX_REALTIME_CATCH_UP_STEPS: u32 = 16;
 /// Maximum UTF-8 bytes in a neutral runtime identity.
 ///
 /// Runtime owners use these identifiers only as bounded caller-chosen labels;
-/// they do not admit a Product Model declaration or product policy.
+/// they do not admit application declarations or product policy.
 pub const MAX_RUNTIME_IDENTITY_BYTES: usize = 128;
 
 /// A caller-supplied runtime identity does not use the bounded neutral grammar.

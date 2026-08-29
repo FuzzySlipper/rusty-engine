@@ -1,4 +1,4 @@
-//! Instance-owned, host-neutral Runtime Composition timeline operations.
+//! Instance-owned, host-neutral runtime timeline operations.
 //!
 //! Timeline descriptors are static caller-owned data. This crate retains one
 //! bounded queue and completion-ticket lane per explicit runtime instance.

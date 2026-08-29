@@ -1,8 +1,8 @@
 //! Instance-owned, host-neutral product runtime lifecycle admission.
 //!
 //! This crate turns explicit lifecycle configuration into simulation and
-//! presentation admission plans. Product Model adapters, where legacy hosts
-//! still need them, belong at their owning assembly edge. The lifecycle does
+//! presentation admission plans. Format adapters belong at their owning host
+//! edge. The lifecycle does
 //! not read a clock, execute a schedule, invoke callbacks, own input, mutate
 //! gameplay state, or render. Callers supply monotonic time for realtime
 //! products and carry the resulting tokens into their own named owners.

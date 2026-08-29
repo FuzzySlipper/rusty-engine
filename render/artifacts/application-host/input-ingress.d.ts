@@ -8,7 +8,7 @@ export declare const RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM = 256;
 export declare const RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM = 256;
 export declare const RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM = 3;
 export declare const RUSTY_APPLICATION_INPUT_U64_MAXIMUM = 18446744073709551615n;
-/** Mirrors the Rust-owned Product Model direct product-payload bound. */
+/** Mirrors the Engine runtime's direct product-payload bound. */
 export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM = 65536;
 export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM = 32;
 export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM = 4096;
@@ -28,14 +28,14 @@ export interface RustyApplicationRuntimeInputBinding {
     /** Product-declared input context. The host preserves it but assigns no meaning. */
     readonly context: string;
 }
-/** Mirrors the closed Product Model control catalog; navigation keys are not admitted yet. */
+/** Mirrors the closed Engine input control catalog; navigation keys are not admitted yet. */
 export type RustyApplicationKeyboardControl = 'key-a' | 'key-b' | 'key-c' | 'key-d' | 'key-e' | 'key-f' | 'key-g' | 'key-h' | 'key-i' | 'key-j' | 'key-k' | 'key-l' | 'key-m' | 'key-n' | 'key-o' | 'key-p' | 'key-q' | 'key-r' | 'key-s' | 'key-t' | 'key-u' | 'key-v' | 'key-w' | 'key-x' | 'key-y' | 'key-z' | 'digit-0' | 'digit-1' | 'digit-2' | 'digit-3' | 'digit-4' | 'digit-5' | 'digit-6' | 'digit-7' | 'digit-8' | 'digit-9' | 'space' | 'enter' | 'escape' | 'shift-left' | 'shift-right' | 'control-left' | 'control-right' | 'alt-left' | 'alt-right';
 export type RustyApplicationPointerButton = 'primary' | 'secondary' | 'middle';
 export type RustyApplicationControllerButton = 'button-0' | 'button-1' | 'button-2' | 'button-3' | 'button-4' | 'button-5' | 'button-6' | 'button-7' | 'button-8' | 'button-9' | 'button-10' | 'button-11' | 'button-12' | 'button-13' | 'button-14' | 'button-15';
 export type RustyApplicationControllerAxis = 'axis-0' | 'axis-1' | 'axis-2' | 'axis-3';
 export type RustyApplicationInputEdge = 'pressed' | 'released';
 export type RustyApplicationInputClearReason = 'focus-loss' | 'ingress-overflow' | 'interaction-mode-loss' | 'pointer-lock-loss' | 'restart' | 'control-revision-change' | 'dispose';
-/** Structural mirror of the Runtime Composition physical ingress wire. */
+/** Structural mirror of the Engine runtime physical ingress wire. */
 export type RustyApplicationRuntimeInputFact = {
     readonly kind: 'key';
     readonly code: RustyApplicationKeyboardControl;
