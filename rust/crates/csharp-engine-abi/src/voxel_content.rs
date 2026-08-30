@@ -2,10 +2,11 @@
 //!
 //! This family admits one complete, bounded voxel asset or object from a
 //! borrowed byte body and retains the validated owner value behind an opaque
-//! disposable handle. It deliberately has no relationship to the canonical
-//! Spatial session scene, meshes, renderer resources, or collision projection.
+//! disposable handle. An admitted asset can be explicitly published into a
+//! fresh canonical Spatial session through the named asset-to-scene operation;
+//! object presentation remains a separate renderer-neutral capability.
 
-use crate::{NativeByteSlice, NativeUtf8Slice};
+use crate::{NativeByteSlice, NativeSpatialSessionHandle, NativeUtf8Slice};
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -290,6 +291,58 @@ pub struct NativeVoxelAssetReadout {
     pub content_hash: NativeVoxelContentHash,
 }
 
+/// A fresh Spatial session may be initialized directly from one retained
+/// asset. The Engine resolves the retained owner and constructs the canonical
+/// collision/navigation scene; C# supplies no voxel mirror or mesh payload.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePublishVoxelAssetToSpatialRequest {
+    pub asset: NativeVoxelAssetHandle,
+    pub session: NativeSpatialSessionHandle,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelAssetSpatialPublishLeaseHandle {
+    pub value: u64,
+}
+
+/// One copied semantic palette row from the admitted asset. The UTF-8 slices
+/// borrow the matching publish lease only; generated C# copies them before it
+/// releases that lease.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelAssetSpatialPaletteRow {
+    pub material_slot: u32,
+    pub material_asset_id: NativeUtf8Slice,
+    pub display_name: NativeUtf8Slice,
+}
+
+/// Facts for one atomic asset-to-Spatial publication plus its bounded semantic
+/// palette lease. No retained owner handle or renderer resource crosses the
+/// boundary in this result.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelAssetSpatialPublishLease {
+    pub handle: NativeVoxelAssetSpatialPublishLeaseHandle,
+    pub palette: *const NativeVoxelAssetSpatialPaletteRow,
+    pub palette_len: usize,
+    pub revision_before: u64,
+    pub revision_after: u64,
+    pub voxel_size: f64,
+    pub chunk_size: u32,
+    pub solid_voxel_count: u64,
+    pub resident_chunk_count: u64,
+    pub authority_hash: u64,
+    pub projection_version: u64,
+    pub collision_revision: u64,
+    pub navigation_revision: u64,
+    pub mesh_revision: u64,
+    pub navigation_cell_count: u64,
+    pub voxel_data_hash: NativeVoxelContentHash,
+    pub content_hash: NativeVoxelContentHash,
+}
+
 /// Stable facts for one retained voxel object. Its opaque identity stays at the
 /// owning handle call boundary. Frame selection is object-local and cannot
 /// publish to Spatial or rendering.
@@ -437,6 +490,13 @@ pub type NativeAdmitVoxelAsset = unsafe extern "C" fn(
 pub type NativeDestroyVoxelAsset = unsafe extern "C" fn(*mut c_void, NativeVoxelAssetHandle) -> i32;
 pub type NativeReadVoxelAsset =
     unsafe extern "C" fn(*mut c_void, NativeVoxelAssetHandle, *mut NativeVoxelAssetReadout) -> i32;
+pub type NativePublishVoxelAssetToSpatial = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePublishVoxelAssetToSpatialRequest,
+    *mut NativeVoxelAssetSpatialPublishLease,
+) -> i32;
+pub type NativeDestroyVoxelAssetSpatialPublishLease =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelAssetSpatialPublishLeaseHandle) -> i32;
 pub type NativeAdmitVoxelObject = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAdmitVoxelObjectRequest,
@@ -551,6 +611,8 @@ pub struct NativeVoxelContentApi {
     pub admit_asset: NativeAdmitVoxelAsset,
     pub destroy_asset: NativeDestroyVoxelAsset,
     pub read_asset: NativeReadVoxelAsset,
+    pub publish_asset_to_spatial: NativePublishVoxelAssetToSpatial,
+    pub destroy_asset_spatial_publish_lease: NativeDestroyVoxelAssetSpatialPublishLease,
     pub admit_object: NativeAdmitVoxelObject,
     pub destroy_object: NativeDestroyVoxelObject,
     pub read_object: NativeReadVoxelObject,

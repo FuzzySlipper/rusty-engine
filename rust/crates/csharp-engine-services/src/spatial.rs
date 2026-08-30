@@ -7,7 +7,7 @@ use csharp_engine_abi::*;
 use engine_spatial::{
     CharacterCapsule, CharacterCollisionSource, CharacterContactFact, CharacterContactKind,
     CharacterControllerCommand, CharacterControllerConfig, CharacterControllerReceipt,
-    CharacterControllerService, CharacterGroundFact, CharacterObstacle,
+    CharacterControllerService, CharacterGroundFact, CharacterObstacle, MaterialVoxel,
     SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
     StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
     StaticMeshTransform, SurfaceMeshOptions, SurfaceMode, TriggerGeometrySource,
@@ -29,6 +29,7 @@ use svc_pathfinding::{
     VolumetricVerticalPolicy, WeightedNavPathError, WeightedNavPathOutcome,
     WeightedVolumetricNavPathError,
 };
+use voxel_asset::{resolve_voxel_asset, VoxelAsset};
 
 use crate::composition::{
     borrowed_slice, borrowed_utf8, native_quat, native_quat_value, native_vec3, native_vec3_value,
@@ -72,6 +73,42 @@ pub(crate) struct SpatialSession {
     last_character_receipt: Option<CharacterControllerReceipt>,
     triggers: TriggerVolumeSystem,
     last_trigger_facts: Vec<TriggerOverlapFact>,
+}
+
+/// Facts returned after an admitted asset becomes the canonical scene for a
+/// fresh Spatial session. The scene itself stays owned by the session; this
+/// value contains only fixed readout data needed by the voxel-content lease.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VoxelAssetSpatialPublishFacts {
+    pub(crate) revision_before: u64,
+    pub(crate) revision_after: u64,
+    pub(crate) voxel_size: f64,
+    pub(crate) chunk_size: u32,
+    pub(crate) solid_voxel_count: u64,
+    pub(crate) resident_chunk_count: u64,
+    pub(crate) authority_hash: u64,
+    pub(crate) projection_version: u64,
+    pub(crate) collision_revision: u64,
+    pub(crate) navigation_revision: u64,
+    pub(crate) mesh_revision: u64,
+    pub(crate) navigation_cell_count: u64,
+}
+
+/// Candidate scene and the exact session identity observed while preparing an
+/// asset publication. The candidate is not visible to collision consumers
+/// until `commit_voxel_asset` succeeds.
+#[derive(Debug)]
+pub(crate) struct PreparedVoxelAssetSpatialPublish {
+    expected_scene: Arc<VoxelCollisionScene>,
+    handle: NativeSpatialSessionHandle,
+    candidate: Arc<VoxelCollisionScene>,
+    facts: VoxelAssetSpatialPublishFacts,
+}
+
+impl PreparedVoxelAssetSpatialPublish {
+    pub(crate) const fn facts(&self) -> VoxelAssetSpatialPublishFacts {
+        self.facts
+    }
 }
 
 /// Trigger failures retain their original diagnostics until generated C# has
@@ -276,6 +313,109 @@ impl RuntimeSpatialBridge {
             .borrow_mut()
             .insert(value, scene);
         Ok(NativeSpatialSessionHandle { value })
+    }
+
+    /// Resolve an admitted VoxelAsset into the canonical Spatial scene for a
+    /// newly-created session. This is deliberately an initialization operation
+    /// rather than a replacement path: once any scene, history, navigation,
+    /// trigger, or world-origin state has been used, callers must choose one
+    /// of the existing named Spatial/Voxel operations instead.
+    pub(crate) fn prepare_voxel_asset(
+        &mut self,
+        handle: NativeSpatialSessionHandle,
+        asset: &VoxelAsset,
+    ) -> Result<PreparedVoxelAssetSpatialPublish, CsharpEngineServicesError> {
+        let scene_before = {
+            let session = self.session_mut(handle)?;
+            let scene = session.scene.as_ref();
+            if scene.voxel_size() != asset.grid.cell_size {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_ASSET_SPATIAL_COMPATIBILITY",
+                    "voxel asset cell size does not match the Spatial session",
+                ));
+            }
+            if scene.chunk_size() != asset.grid.chunk_size {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_ASSET_SPATIAL_COMPATIBILITY",
+                    "voxel asset chunk size does not match the Spatial session",
+                ));
+            }
+            if scene.source_revision().raw() != 0
+                || !session.voxel_history.is_empty()
+                || scene.solid_voxel_count() != 0
+                || scene.resident_chunk_count() != 0
+                || scene.projection_static_mesh_asset_count() != 0
+                || scene.projection_static_mesh_instance_count() != 0
+                || session.navigation.is_some()
+                || session.last_character_receipt.is_some()
+                || !session.triggers.definitions().next().is_none()
+                || !session.triggers.active_overlaps().next().is_none()
+                || !session.last_trigger_facts.is_empty()
+                || session.world_origin.origin() != core_space::WorldOrigin::ZERO
+                || session.world_origin.revision() != 0
+            {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_ASSET_SPATIAL_LIFECYCLE",
+                    "voxel asset staging requires a fresh, empty Spatial session",
+                ));
+            }
+            Arc::clone(&session.scene)
+        };
+
+        let cells = resolve_voxel_asset(asset).map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_VOXEL_ASSET_SPATIAL_RESOLVE", error.to_string())
+        })?;
+        let candidate = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+            asset.grid.cell_size,
+            asset.grid.chunk_size,
+            cells.into_iter().map(|cell| MaterialVoxel {
+                address: cell.coordinate,
+                material_slot: cell.material_slot,
+            }),
+            scene_before.mesh_options(),
+        )
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_VOXEL_ASSET_SPATIAL_BUILD", error.to_string())
+        })?;
+        let candidate = Arc::new(candidate);
+        let facts = VoxelAssetSpatialPublishFacts {
+            revision_before: scene_before.source_revision().raw(),
+            revision_after: candidate.source_revision().raw(),
+            voxel_size: candidate.voxel_size(),
+            chunk_size: candidate.chunk_size(),
+            solid_voxel_count: candidate.solid_voxel_count() as u64,
+            resident_chunk_count: candidate.resident_chunk_count() as u64,
+            authority_hash: candidate.authority_hash(),
+            projection_version: candidate.projection_version(),
+            collision_revision: candidate.projection_revisions().collision().raw(),
+            navigation_revision: candidate.projection_revisions().navigation().raw(),
+            mesh_revision: candidate.projection_revisions().mesh().raw(),
+            navigation_cell_count: candidate.navigation_cell_count() as u64,
+        };
+        Ok(PreparedVoxelAssetSpatialPublish {
+            expected_scene: scene_before,
+            handle,
+            candidate,
+            facts,
+        })
+    }
+
+    pub(crate) fn commit_voxel_asset(
+        &mut self,
+        prepared: PreparedVoxelAssetSpatialPublish,
+    ) -> Result<VoxelAssetSpatialPublishFacts, CsharpEngineServicesError> {
+        let session = self.session_mut(prepared.handle)?;
+        if !Arc::ptr_eq(&session.scene, &prepared.expected_scene) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_ASSET_SPATIAL_LIFECYCLE",
+                "voxel asset staging candidate was prepared from a changed Spatial session",
+            ));
+        }
+        session.scene = Arc::clone(&prepared.candidate);
+        session.voxel_history = engine_spatial::VoxelEditHistory::new(&prepared.candidate);
+        session.voxel_leases = engine_spatial::VoxelChunkLeaseRegistry::default();
+        self.publish_scene(prepared.handle, prepared.candidate);
+        Ok(prepared.facts)
     }
 
     fn replace_collision(

@@ -63,7 +63,11 @@ fn engine_api(
         perception: crate::perception::api(perception_bridge),
         world_origin: crate::world_origin::api(spatial_bridge),
         voxel: crate::voxel::api(spatial_bridge),
-        voxel_content: crate::voxel_content::api(voxel_content_bridge, appearance_bridge),
+        voxel_content: crate::voxel_content::api_with_spatial(
+            voxel_content_bridge,
+            appearance_bridge,
+            spatial_bridge,
+        ),
         voxel_scene_presentation: crate::voxel_scene_presentation::api(
             voxel_scene_presentation_bridge,
             appearance_bridge,

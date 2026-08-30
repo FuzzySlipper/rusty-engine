@@ -1,8 +1,9 @@
 //! Retained typed voxel artifacts behind the generated NativeAOT table.
 //!
 //! The bridge delegates validation and bounded runtime admission to the
-//! existing voxel artifact owners. It does not feed their contents into the
-//! canonical Spatial scene, collision, renderer, or a product-side store.
+//! existing voxel artifact owners. An explicit asset-to-Spatial operation
+//! feeds a retained asset into the canonical scene; presentation and material
+//! resource realization remain separate Engine-owned services.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -30,6 +31,7 @@ use voxel_object_runtime::{
 use crate::{
     appearance::RuntimeAppearanceBridge,
     composition::{borrowed_slice, borrowed_utf8, ABI_OK},
+    spatial::{RuntimeSpatialBridge, VoxelAssetSpatialPublishFacts},
     CsharpEngineServicesError,
 };
 
@@ -110,6 +112,18 @@ struct RetainedVoxelAnnotationEditLease {
     _readout: Vec<NativeVoxelAnnotationAffectedId>,
 }
 
+#[derive(Debug)]
+struct RetainedVoxelAssetSpatialPaletteRow {
+    material_asset_id: String,
+    display_name: String,
+}
+
+#[derive(Debug)]
+struct RetainedVoxelAssetSpatialPublishLease {
+    _palette: Vec<RetainedVoxelAssetSpatialPaletteRow>,
+    _readout: Vec<NativeVoxelAssetSpatialPaletteRow>,
+}
+
 pub(crate) struct RuntimeVoxelContentBridge {
     assets: BTreeMap<u64, Arc<VoxelAsset>>,
     objects: BTreeMap<u64, RetainedVoxelObject>,
@@ -117,15 +131,18 @@ pub(crate) struct RuntimeVoxelContentBridge {
     annotations: BTreeMap<u64, RetainedVoxelAnnotation>,
     annotation_region_leases: BTreeMap<u64, RetainedVoxelAnnotationRegionLease>,
     annotation_edit_leases: BTreeMap<u64, RetainedVoxelAnnotationEditLease>,
+    asset_spatial_publish_leases: BTreeMap<u64, RetainedVoxelAssetSpatialPublishLease>,
     next_asset: u64,
     next_object: u64,
     next_player: u64,
     next_annotation: u64,
     next_annotation_region_lease: u64,
     next_annotation_edit_lease: u64,
+    next_asset_spatial_publish_lease: u64,
     presentation: VoxelObjectPresentationState,
     staged_presentation: Option<RuntimeVoxelContentCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
+    spatial: Option<*mut RuntimeSpatialBridge>,
 }
 
 impl RuntimeVoxelContentBridge {
@@ -137,12 +154,14 @@ impl RuntimeVoxelContentBridge {
             annotations: BTreeMap::new(),
             annotation_region_leases: BTreeMap::new(),
             annotation_edit_leases: BTreeMap::new(),
+            asset_spatial_publish_leases: BTreeMap::new(),
             next_asset: 1,
             next_object: 1,
             next_player: 1,
             next_annotation: 1,
             next_annotation_region_lease: 1,
             next_annotation_edit_lease: 1,
+            next_asset_spatial_publish_lease: 1,
             presentation: VoxelObjectPresentationState {
                 projector: VoxelObjectRenderProjector::new(),
                 presentations: BTreeMap::new(),
@@ -150,7 +169,12 @@ impl RuntimeVoxelContentBridge {
             },
             staged_presentation: None,
             appearance: None,
+            spatial: None,
         }
+    }
+
+    pub(crate) fn bind_spatial(&mut self, spatial: &mut RuntimeSpatialBridge) {
+        self.spatial = Some(spatial as *mut RuntimeSpatialBridge);
     }
 
     fn insert_asset(&mut self, asset: VoxelAsset) -> Option<NativeVoxelAssetHandle> {
@@ -236,6 +260,62 @@ impl RuntimeVoxelContentBridge {
                 "voxel asset handle is not admitted",
             )
         })
+    }
+
+    fn prepare_asset_spatial_publish_lease(
+        &self,
+        value: u64,
+        asset: &VoxelAsset,
+        facts: VoxelAssetSpatialPublishFacts,
+        voxel_data_hash: NativeVoxelContentHash,
+        content_hash: NativeVoxelContentHash,
+    ) -> (
+        NativeVoxelAssetSpatialPublishLease,
+        RetainedVoxelAssetSpatialPublishLease,
+    ) {
+        let palette = asset
+            .material_palette
+            .iter()
+            .map(|binding| RetainedVoxelAssetSpatialPaletteRow {
+                material_asset_id: binding.material_asset_id.clone(),
+                display_name: binding.display_name.clone().unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
+        let readout = palette
+            .iter()
+            .zip(&asset.material_palette)
+            .map(|(row, binding)| NativeVoxelAssetSpatialPaletteRow {
+                material_slot: u32::from(binding.material_slot),
+                material_asset_id: native_utf8(&row.material_asset_id),
+                display_name: native_utf8(&row.display_name),
+            })
+            .collect::<Vec<_>>();
+        let lease = NativeVoxelAssetSpatialPublishLease {
+            handle: NativeVoxelAssetSpatialPublishLeaseHandle { value },
+            palette: readout.as_ptr(),
+            palette_len: readout.len(),
+            revision_before: facts.revision_before,
+            revision_after: facts.revision_after,
+            voxel_size: facts.voxel_size,
+            chunk_size: facts.chunk_size,
+            solid_voxel_count: facts.solid_voxel_count,
+            resident_chunk_count: facts.resident_chunk_count,
+            authority_hash: facts.authority_hash,
+            projection_version: facts.projection_version,
+            collision_revision: facts.collision_revision,
+            navigation_revision: facts.navigation_revision,
+            mesh_revision: facts.mesh_revision,
+            navigation_cell_count: facts.navigation_cell_count,
+            voxel_data_hash,
+            content_hash,
+        };
+        (
+            lease,
+            RetainedVoxelAssetSpatialPublishLease {
+                _palette: palette,
+                _readout: readout,
+            },
+        )
     }
 
     fn insert_annotation(
@@ -889,16 +969,33 @@ fn presentation_transform(value: NativeTransform) -> Result<Transform, CsharpEng
     Ok(transform)
 }
 
+#[cfg(test)]
 pub(crate) fn api(
     bridge: &mut RuntimeVoxelContentBridge,
     appearance: &mut RuntimeAppearanceBridge,
 ) -> NativeVoxelContentApi {
     bridge.bind_appearance(appearance);
+    api_impl(bridge)
+}
+
+pub(crate) fn api_with_spatial(
+    bridge: &mut RuntimeVoxelContentBridge,
+    appearance: &mut RuntimeAppearanceBridge,
+    spatial: &mut RuntimeSpatialBridge,
+) -> NativeVoxelContentApi {
+    bridge.bind_appearance(appearance);
+    bridge.bind_spatial(spatial);
+    api_impl(bridge)
+}
+
+fn api_impl(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentApi {
     NativeVoxelContentApi {
         context: (bridge as *mut RuntimeVoxelContentBridge).cast(),
         admit_asset,
         destroy_asset,
         read_asset,
+        publish_asset_to_spatial,
+        destroy_asset_spatial_publish_lease,
         admit_object,
         destroy_object,
         read_object,
@@ -988,6 +1085,79 @@ unsafe extern "C" fn read_asset(
             ABI_OK
         }
         Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn publish_asset_to_spatial(
+    context: *mut c_void,
+    request: *const NativePublishVoxelAssetToSpatialRequest,
+    output: *mut NativeVoxelAssetSpatialPublishLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let next_lease = match bridge.next_asset_spatial_publish_lease.checked_add(1) {
+        Some(value) => value,
+        None => return 0,
+    };
+    let asset = match bridge.asset_arc(request.asset) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let voxel_data_hash = match hash(&asset.voxel_data_hash) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let content_hash = match hash(&asset.content_hash) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let spatial = match bridge.spatial {
+        Some(value) if !value.is_null() => unsafe { &mut *value },
+        _ => return 0,
+    };
+    let prepared = match spatial.prepare_voxel_asset(request.session, &asset) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let facts = prepared.facts();
+    let (lease, retained) = bridge.prepare_asset_spatial_publish_lease(
+        bridge.next_asset_spatial_publish_lease,
+        &asset,
+        facts,
+        voxel_data_hash,
+        content_hash,
+    );
+    if spatial.commit_voxel_asset(prepared).is_err() {
+        return 0;
+    }
+    bridge.next_asset_spatial_publish_lease = next_lease;
+    let replaced = bridge
+        .asset_spatial_publish_leases
+        .insert(lease.handle.value, retained);
+    debug_assert!(replaced.is_none());
+    unsafe { *output = lease };
+    ABI_OK
+}
+
+unsafe extern "C" fn destroy_asset_spatial_publish_lease(
+    context: *mut c_void,
+    handle: NativeVoxelAssetSpatialPublishLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    if bridge
+        .asset_spatial_publish_leases
+        .remove(&handle.value)
+        .is_some()
+    {
+        ABI_OK
+    } else {
+        0
     }
 }
 
@@ -2427,6 +2597,140 @@ mod tests {
             unsafe { (api.read_object)(api.context, object_handle, &mut object_readout) },
             0
         );
+    }
+
+    #[test]
+    fn publishes_admitted_asset_into_fresh_spatial_session_with_palette_lease() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let spatial_api = crate::spatial::api(&mut spatial);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.create_session)(
+                    spatial_api.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+
+        let mut bridge = RuntimeVoxelContentBridge::new();
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let api = super::api_with_spatial(&mut bridge, &mut appearance, &mut spatial);
+        let body = encode_voxel_asset(&asset())
+            .expect("canonical asset")
+            .into_bytes();
+        let mut asset_handle = NativeVoxelAssetHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.admit_asset)(
+                    api.context,
+                    &NativeAdmitVoxelAssetRequest {
+                        bytes: NativeByteSlice {
+                            bytes: body.as_ptr(),
+                            len: body.len(),
+                        },
+                    },
+                    &mut asset_handle,
+                )
+            },
+            ABI_OK
+        );
+
+        let mut lease = unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishLease>() };
+        assert_eq!(
+            unsafe {
+                (api.publish_asset_to_spatial)(
+                    api.context,
+                    &NativePublishVoxelAssetToSpatialRequest {
+                        asset: asset_handle,
+                        session,
+                    },
+                    &mut lease,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(lease.revision_before, 0);
+        assert_eq!(lease.revision_after, 0);
+        assert_eq!(lease.solid_voxel_count, 1);
+        assert_eq!(lease.resident_chunk_count, 1);
+        assert_ne!(lease.authority_hash, 0);
+        assert_eq!(lease.palette_len, 1);
+        let palette_row = unsafe { &*lease.palette };
+        assert_eq!(palette_row.material_slot, 1);
+        assert_eq!(
+            unsafe {
+                std::str::from_utf8(std::slice::from_raw_parts(
+                    palette_row.material_asset_id.bytes,
+                    palette_row.material_asset_id.len,
+                ))
+            }
+            .expect("leased material id"),
+            "material/bridge-test"
+        );
+
+        let voxel_api = crate::voxel::api(&mut spatial);
+        let mut scene = NativeVoxelSceneReadout::default();
+        assert_eq!(
+            unsafe {
+                (voxel_api.read_scene)(
+                    voxel_api.context,
+                    NativeVoxelSceneReadRequest { session },
+                    &mut scene,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(scene.solid_voxel_count, lease.solid_voxel_count);
+        assert_eq!(scene.resident_chunk_count, lease.resident_chunk_count);
+        assert_eq!(scene.authority_hash, lease.authority_hash);
+        assert_eq!(scene.navigation_revision, lease.navigation_revision);
+
+        assert_eq!(
+            unsafe { (api.destroy_asset_spatial_publish_lease)(api.context, lease.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_asset_spatial_publish_lease)(api.context, lease.handle) },
+            0,
+            "publish leases have one exact release"
+        );
+
+        let before_rejected = scene;
+        let mut rejected = unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishLease>() };
+        assert_eq!(
+            unsafe {
+                (api.publish_asset_to_spatial)(
+                    api.context,
+                    &NativePublishVoxelAssetToSpatialRequest {
+                        asset: asset_handle,
+                        session,
+                    },
+                    &mut rejected,
+                )
+            },
+            0,
+            "a nonempty session cannot be initialized a second time"
+        );
+        let mut after_rejected = NativeVoxelSceneReadout::default();
+        assert_eq!(
+            unsafe {
+                (voxel_api.read_scene)(
+                    voxel_api.context,
+                    NativeVoxelSceneReadRequest { session },
+                    &mut after_rejected,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(after_rejected, before_rejected);
     }
 
     #[test]
