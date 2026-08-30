@@ -355,6 +355,26 @@ test('local transport rejects malformed typed output and bounded paths', () => {
   );
 });
 
+test('ordinary outputs honor the configured quota below the hard event bound', () => {
+  FakeEventSource.instances.length = 0;
+  const errors: ProductBrowserLocalTransportError[] = [];
+  const outputs: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+    maximumOutputBytes: 1,
+    onTransportError: (error) => errors.push(error),
+  });
+  adapter.subscribeOutputs((output) => outputs.push(output));
+  const stream = FakeEventSource.instances[0];
+  assert.ok(stream);
+  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+  assert.equal(outputs.length, 0);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.code, 'output_decode_failed');
+  adapter.dispose();
+});
+
 test('named output lag is a terminal typed failure and never reconnects', async () => {
   FakeEventSource.instances.length = 0;
   const terminalFailures: unknown[] = [];

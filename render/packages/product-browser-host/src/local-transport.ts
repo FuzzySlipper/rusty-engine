@@ -591,7 +591,10 @@ export function createProductBrowserLocalHttpAdapter(
                 { route: ROUTES.outputs },
               );
             }
-            publishOutput(decodeRuntimeOutput(parseBoundedJson(event.data, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES)));
+            publishOutput(decodeRuntimeOutput(parseBoundedJson(
+              event.data,
+              Math.min(maximumOutputBytes, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
+            )));
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
               ? cause

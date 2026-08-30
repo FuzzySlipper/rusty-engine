@@ -29026,7 +29026,7 @@ function kO(e = {}) {
 				}, s.addEventListener?.("rusty-output-fragment", l), s.onmessage = (e) => {
 					if (m === null) try {
 						if (u !== null) throw new $("output_decode_failed", "Product Browser local runtime interrupted an output fragment transfer", { route: QD.outputs });
-						A(dk(rk(e.data, eO)));
+						A(dk(rk(e.data, Math.min(a, eO))));
 					} catch (e) {
 						let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted an invalid output: ${e instanceof Error ? e.message : String(e)}`, {
 							cause: e,
