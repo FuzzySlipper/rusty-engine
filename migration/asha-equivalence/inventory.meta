@@ -1,9 +1,0 @@
-repository=git@github.com:FuzzySlipper/asha-engine.git
-commit=6462a6de20d48ea1a3b7456826804bd9507860a5
-generator=scripts/build-asha-equivalence-inventory.sh
-format=1
-items=2271
-files=183
-apis=1535
-tests=553
-inventory_sha256=eb83da934a802197cb4bffdab41068c4601eddc52f3040f016336ae49b5096fa

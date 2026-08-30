@@ -1,9 +1,0 @@
-item_id	kind	donor_crate	path	line	symbol
-file:engine-rs/crates/tools/state-inspector/Cargo.toml	file	state-inspector	engine-rs/crates/tools/state-inspector/Cargo.toml	0	-
-file:engine-rs/crates/tools/state-inspector/src/main.rs	file	state-inspector	engine-rs/crates/tools/state-inspector/src/main.rs	0	-
-test:engine-rs/crates/tools/state-inspector/src/main.rs:help_is_stable	test	state-inspector	engine-rs/crates/tools/state-inspector/src/main.rs	452	help_is_stable
-test:engine-rs/crates/tools/state-inspector/src/main.rs:valid_fixture_summary_reports_authority_counts	test	state-inspector	engine-rs/crates/tools/state-inspector/src/main.rs	461	valid_fixture_summary_reports_authority_counts
-test:engine-rs/crates/tools/state-inspector/src/main.rs:focused_entity_query_reports_capabilities_and_relations	test	state-inspector	engine-rs/crates/tools/state-inspector/src/main.rs	473	focused_entity_query_reports_capabilities_and_relations
-test:engine-rs/crates/tools/state-inspector/src/main.rs:missing_entity_exits_one	test	state-inspector	engine-rs/crates/tools/state-inspector/src/main.rs	485	missing_entity_exits_one
-test:engine-rs/crates/tools/state-inspector/src/main.rs:category_query_reports_ids	test	state-inspector	engine-rs/crates/tools/state-inspector/src/main.rs	494	category_query_reports_ids
-test:engine-rs/crates/tools/state-inspector/src/main.rs:malformed_snapshot_exits_two	test	state-inspector	engine-rs/crates/tools/state-inspector/src/main.rs	504	malformed_snapshot_exits_two
