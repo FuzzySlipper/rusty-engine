@@ -11,6 +11,7 @@ namespace DebugCommandCatalogFixture;
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource
 {
     private readonly FixtureModule _module = new();
+    private readonly FixtureDiagnosticsModule _diagnostics = new();
 
     internal Product()
     {
@@ -23,11 +24,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource
 
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)
     {
-        DebugCommandRegistrationResult registration = registrar.Register(_module);
-        if (!registration.Succeeded)
-        {
-            throw new InvalidOperationException(registration.Message);
-        }
+        Register(registrar.Register(_module));
+        Register(registrar.Register(_diagnostics));
     }
 
     public void Start() { }
@@ -37,6 +35,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource
     public void Restart() { }
     public void Shutdown() { }
     public void Dispose() { }
+
+    private static void Register(DebugCommandRegistrationResult registration)
+    {
+        if (!registration.Succeeded) throw new InvalidOperationException(registration.Message);
+    }
 }
 
 internal sealed class ProductWithoutModules : IEngineProduct
@@ -55,8 +58,8 @@ internal static class Program
     private static int Main()
     {
         IDebugCommandCatalog catalog = GeneratedDebugCommandCatalogFactory.Create(new Product());
-        Expect(catalog.Commands.Select(command => command.Name).SequenceEqual([
-            "fixture.add", "fixture.count", "fixture.reset"
+        Expect(catalog.Commands.Select(command => command.Name).Where(name => name.StartsWith("fixture.", StringComparison.Ordinal)).SequenceEqual([
+            "fixture.add", "fixture.count", "fixture.ping", "fixture.reset"
         ]), "catalog descriptors were not deterministic");
 
         Guid key = Guid.Parse("1e92d98d-2be3-4b8f-bec4-5b34fe696a23");
@@ -64,6 +67,7 @@ internal static class Program
         Expect(catalog.Execute("fixture.count") == DebugCommandResult.Success("7"), "first direct invocation failed");
         Expect(catalog.Execute("fixture.reset quoted-value") is { Succeeded: true }, "void command did not return success");
         Expect(catalog.Execute("fixture.count") == DebugCommandResult.Success("12"), "repeated invocation did not preserve the live module");
+        Expect(catalog.Execute("fixture.ping 42") == DebugCommandResult.Success("pong:42"), "second live module did not register and dispatch");
         Expect(catalog.Execute("fixture.add wrong Beta not-a-guid").Status == DebugCommandStatus.InvalidArguments, "invalid parsing did not return an explicit failure");
         Expect(catalog.Execute("fixture.unknown").Status == DebugCommandStatus.UnknownCommand, "unknown command did not return an explicit failure");
 

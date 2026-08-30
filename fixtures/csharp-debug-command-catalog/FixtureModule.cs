@@ -29,3 +29,9 @@ public sealed class FixtureModule : IDebugCommandModule
         _total = reason.Length;
     }
 }
+
+public sealed class FixtureDiagnosticsModule : IDebugCommandModule
+{
+    [DebugCommand("fixture.ping", Description = "Exercises a second live module registration.")]
+    public string Ping(int sequence) => $"pong:{sequence}";
+}

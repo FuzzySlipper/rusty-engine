@@ -292,11 +292,12 @@ internal static class DebugCommandCatalogGenerator
         foreach (INamedTypeSymbol module in modules)
         {
             string field = ModuleField(module);
-            source.Append("        if (module is ").Append(TypeName(module)).Append(" typed)").AppendLine();
+            string variable = ModuleVariable(module);
+            source.Append("        if (module is ").Append(TypeName(module)).Append(' ').Append(variable).AppendLine(")");
             source.AppendLine("        {");
             source.Append("            if (").Append(field).Append(" is not null) return new(DebugCommandRegistrationStatus.AlreadyRegistered, \"")
                 .Append(Escape(TypeDisplay(module))).AppendLine(" is already registered.\");");
-            source.Append("            ").Append(field).AppendLine(" = typed;");
+            source.Append("            ").Append(field).Append(" = ").Append(variable).AppendLine(";");
             source.Append("            return new(DebugCommandRegistrationStatus.Registered, \"").Append(Escape(TypeDisplay(module))).AppendLine(" registered.\");");
             source.AppendLine("        }");
         }
@@ -389,6 +390,9 @@ internal static class DebugCommandCatalogGenerator
 
     private static string ModuleField(INamedTypeSymbol type)
         => "_module_" + Identifier(type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+
+    private static string ModuleVariable(INamedTypeSymbol type)
+        => "typed_" + Identifier(type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
 
     private static string CommandIdentifier(Command command)
         => Identifier(command.Name + "_" + command.SortKey);
