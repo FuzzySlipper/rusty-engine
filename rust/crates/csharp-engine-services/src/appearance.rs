@@ -104,6 +104,7 @@ pub struct CsharpRenderResource {
     content_hash: String,
     path: String,
     bytes: Vec<u8>,
+    texture: Option<TextureDescriptor>,
     animated_mesh: Option<AnimatedMeshAsset>,
 }
 
@@ -120,7 +121,7 @@ pub enum CsharpRenderResourceKind {
 impl CsharpRenderResource {
     fn admit_texture(path: String, bytes: Vec<u8>) -> Result<Self, CsharpEngineServicesError> {
         let path = renderer_path(path, ".png")?;
-        let descriptor = TextureDescriptor::admit_png_rgba8_resource(
+        let mut descriptor = TextureDescriptor::admit_png_rgba8_resource(
             "texture/csharp-product".to_owned(),
             &bytes,
             TextureFilter::Nearest,
@@ -135,6 +136,7 @@ impl CsharpRenderResource {
         })?;
         let content_hash = descriptor
             .content_hash
+            .clone()
             .expect("resource-backed texture has a content hash");
         let identity = format!(
             "texture/csharp-product-{}",
@@ -142,13 +144,30 @@ impl CsharpRenderResource {
                 .strip_prefix("sha256:")
                 .expect("Engine texture hash uses SHA-256")
         );
+        descriptor.id = identity.clone();
+        descriptor.validate().map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_TEXTURE",
+                format!("renderer texture identity is invalid: {error:?}"),
+            )
+        })?;
+        let resource_identity = match descriptor.payload.as_ref().map(|payload| &payload.source) {
+            Some(TexturePayloadSource::Resource { resource }) => resource.clone(),
+            _ => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_RENDER_RESOURCE_TEXTURE",
+                    "renderer texture payload did not retain its content resource identity",
+                ))
+            }
+        };
         admit_bundle_resource(&path, &bytes)?;
         Ok(Self {
             kind: CsharpRenderResourceKind::Texture,
-            identity,
+            identity: resource_identity,
             content_hash,
             path,
             bytes,
+            texture: Some(descriptor),
             animated_mesh: None,
         })
     }
@@ -175,6 +194,7 @@ impl CsharpRenderResource {
             content_hash,
             path,
             bytes,
+            texture: None,
             animated_mesh: None,
         })
     }
@@ -203,6 +223,7 @@ impl CsharpRenderResource {
             content_hash,
             path,
             bytes,
+            texture: None,
             animated_mesh: None,
         })
     }
@@ -235,6 +256,7 @@ impl CsharpRenderResource {
             content_hash,
             path,
             bytes,
+            texture: None,
             animated_mesh: None,
         })
     }
@@ -296,6 +318,7 @@ impl CsharpRenderResource {
             content_hash,
             path,
             bytes,
+            texture: None,
             animated_mesh: Some(imported.animated_mesh),
         })
     }
@@ -357,6 +380,7 @@ impl CsharpRenderResource {
             content_hash,
             path,
             bytes,
+            texture: None,
             animated_mesh: Some(imported.animated_mesh),
         })
     }
@@ -367,6 +391,12 @@ impl CsharpRenderResource {
     pub fn identity(&self) -> &str {
         &self.identity
     }
+    pub(crate) fn asset_identity(&self) -> &str {
+        self.texture
+            .as_ref()
+            .map(|texture| texture.id.as_str())
+            .unwrap_or(&self.identity)
+    }
     pub fn content_hash(&self) -> &str {
         &self.content_hash
     }
@@ -375,6 +405,9 @@ impl CsharpRenderResource {
     }
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+    pub(crate) fn texture(&self) -> Option<&TextureDescriptor> {
+        self.texture.as_ref()
     }
     pub(crate) fn animated_mesh(&self) -> Option<&AnimatedMeshAsset> {
         self.animated_mesh.as_ref()
@@ -792,7 +825,7 @@ impl RuntimeAppearanceCall {
                 "sky background requires a selected texture resource",
             ));
         }
-        Ok(resource.identity().to_owned())
+        Ok(resource.asset_identity().to_owned())
     }
 }
 
@@ -1248,10 +1281,11 @@ impl RuntimeAppearanceBridge {
     /// Resolves one live C# material into an Engine-owned descriptor for a
     /// separate retained presentation family. The caller copies the returned
     /// value; it never retains this Appearance handle or any product pointer.
-    pub(crate) fn voxel_material_descriptor(
+    pub(crate) fn voxel_material_projection(
         &mut self,
         material: NativeMaterialHandle,
-    ) -> Result<RenderMaterialDescriptor, CsharpEngineServicesError> {
+    ) -> Result<(RenderMaterialDescriptor, Option<TextureDescriptor>), CsharpEngineServicesError>
+    {
         let staged = self.staged_mut()?;
         let id = staged.state.materials.get(&material.value).ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -1259,7 +1293,7 @@ impl RuntimeAppearanceBridge {
                 "voxel-object material handle is not live",
             )
         })?;
-        staged
+        let material = staged
             .state
             .projector
             .resources_mut()
@@ -1272,7 +1306,34 @@ impl RuntimeAppearanceBridge {
                     "CSHARP_VOXEL_PRESENTATION_MATERIAL",
                     "voxel-object material descriptor is not retained",
                 )
+            })?;
+        let texture = material
+            .texture
+            .as_ref()
+            .and_then(|identity| {
+                staged
+                    .state
+                    .render_resources
+                    .iter()
+                    .find(|resource| resource.asset_identity() == identity)
             })
+            .and_then(CsharpRenderResource::texture)
+            .cloned();
+        if material.texture.is_some() && texture.is_none() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_PRESENTATION_TEXTURE",
+                "voxel material texture descriptor is not retained",
+            ));
+        }
+        Ok((material, texture))
+    }
+
+    pub(crate) fn voxel_material_descriptor(
+        &mut self,
+        material: NativeMaterialHandle,
+    ) -> Result<RenderMaterialDescriptor, CsharpEngineServicesError> {
+        self.voxel_material_projection(material)
+            .map(|(material, _)| material)
     }
 
     fn staged_mut(&mut self) -> Result<&mut RuntimeAppearanceCall, CsharpEngineServicesError> {
@@ -1606,7 +1667,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         Ok(BillboardTextureRef {
-            asset: resource.identity().to_owned(),
+            asset: resource.asset_identity().to_owned(),
             content_hash: resource.content_hash().to_owned(),
         })
     }
@@ -1983,12 +2044,12 @@ impl RuntimeAppearanceBridge {
         })?;
         let id = format!("material/csharp-{handle}");
         let descriptor = material_descriptor(id.clone(), request, &staged.state.render_resources)?;
-        staged
-            .state
-            .projector
-            .resources_mut()
-            .materials
-            .push(descriptor);
+        let texture = texture_descriptor_for_material(&descriptor, &staged.state.render_resources)?;
+        let resources = staged.state.projector.resources_mut();
+        if let Some(texture) = texture {
+            retain_texture_descriptor(&mut resources.textures, texture)?;
+        }
+        resources.materials.push(descriptor);
         staged.state.materials.insert(handle, id);
         Ok(NativeMaterialHandle { value: handle })
     }
@@ -2014,10 +2075,12 @@ impl RuntimeAppearanceBridge {
             request.replacement,
             &staged.state.render_resources,
         )?;
-        let material = staged
-            .state
-            .projector
-            .resources_mut()
+        let texture = texture_descriptor_for_material(&descriptor, &staged.state.render_resources)?;
+        let resources = staged.state.projector.resources_mut();
+        if let Some(texture) = texture {
+            retain_texture_descriptor(&mut resources.textures, texture)?;
+        }
+        let material = resources
             .materials
             .iter_mut()
             .find(|material| material.id == id)
@@ -4712,10 +4775,11 @@ fn presentation_assets(
             )
         })
         .map(|resource| {
+            let asset_identity = resource.asset_identity().to_owned();
             (
-                resource.identity().to_owned(),
+                asset_identity.clone(),
                 ResolvedRenderAsset {
-                    id: resource.identity().to_owned(),
+                    id: asset_identity,
                     kind: match resource.kind() {
                         CsharpRenderResourceKind::Texture => RenderAssetKind::Texture,
                         CsharpRenderResourceKind::Font => RenderAssetKind::Font,
@@ -6246,7 +6310,7 @@ fn material_descriptor(
                 "material texture must be an admitted texture resource",
             ));
         }
-        Some(resource.identity().to_owned())
+        Some(resource.asset_identity().to_owned())
     };
     let descriptor = RenderMaterialDescriptor {
         schema_version: 1,
@@ -6266,6 +6330,44 @@ fn material_descriptor(
         CsharpEngineServicesError::new("CSHARP_MATERIAL", format!("material is invalid: {error:?}"))
     })?;
     Ok(descriptor)
+}
+
+fn texture_descriptor_for_material(
+    material: &RenderMaterialDescriptor,
+    resources: &[CsharpRenderResource],
+) -> Result<Option<TextureDescriptor>, CsharpEngineServicesError> {
+    let Some(identity) = material.texture.as_deref() else {
+        return Ok(None);
+    };
+    resources
+        .iter()
+        .find(|resource| resource.asset_identity() == identity)
+        .and_then(CsharpRenderResource::texture)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_MATERIAL_TEXTURE",
+                "material texture descriptor is not retained",
+            )
+        })
+}
+
+fn retain_texture_descriptor(
+    textures: &mut Vec<TextureDescriptor>,
+    texture: TextureDescriptor,
+) -> Result<(), CsharpEngineServicesError> {
+    if let Some(retained) = textures.iter().find(|retained| retained.id == texture.id) {
+        if retained != &texture {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_MATERIAL_TEXTURE",
+                "retained texture identity resolved to different immutable facts",
+            ));
+        }
+        return Ok(());
+    }
+    textures.push(texture);
+    Ok(())
 }
 
 #[cfg(test)]

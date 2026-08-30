@@ -12,7 +12,9 @@ use std::{
 
 use csharp_engine_abi::*;
 use engine_spatial::VoxelCollisionScene;
-use render_model::{RenderFrameDiff, RenderMaterialDescriptor, Transform};
+use render_model::{
+    RenderDiff, RenderFrameDiff, RenderMaterialDescriptor, TextureDescriptor, Transform,
+};
 use render_projection::{voxel_material_id, VoxelProjectionInstance, VoxelRenderProjector};
 
 use crate::{
@@ -26,6 +28,7 @@ use crate::{
 struct RetainedVoxelScenePresentation {
     session: NativeSpatialSessionHandle,
     materials: BTreeMap<u16, RenderMaterialDescriptor>,
+    textures: BTreeMap<String, TextureDescriptor>,
     projector: VoxelRenderProjector,
 }
 
@@ -126,7 +129,7 @@ impl RuntimeVoxelScenePresentationBridge {
         request: NativeProjectVoxelSceneRequest,
     ) -> Result<NativeVoxelScenePresentationHandle, CsharpEngineServicesError> {
         let scene = self.spatial.scene(request.session)?;
-        let materials =
+        let (materials, textures) =
             self.materials_for_scene(&scene, request.materials, request.materials_len)?;
         let staged = self.staged_mut()?;
         let value = staged.state.next_presentation;
@@ -141,6 +144,7 @@ impl RuntimeVoxelScenePresentationBridge {
             RetainedVoxelScenePresentation {
                 session: request.session,
                 materials,
+                textures,
                 projector: VoxelRenderProjector::new(),
             },
         );
@@ -185,15 +189,16 @@ impl RuntimeVoxelScenePresentationBridge {
                 )
             })?;
         let scene = self.spatial.scene(session)?;
-        let materials =
+        let (materials, textures) =
             self.materials_for_scene(&scene, request.materials, request.materials_len)?;
         let staged = self.staged_mut()?;
-        staged
+        let presentation = staged
             .state
             .presentations
             .get_mut(&request.presentation.value)
-            .expect("presentation existence was checked before material resolution")
-            .materials = materials;
+            .expect("presentation existence was checked before material resolution");
+        presentation.materials = materials;
+        presentation.textures = textures;
         self.refresh(request.presentation)
     }
 
@@ -246,7 +251,13 @@ impl RuntimeVoxelScenePresentationBridge {
         scene: &VoxelCollisionScene,
         pointer: *const NativeVoxelSceneMaterialBinding,
         len: usize,
-    ) -> Result<BTreeMap<u16, RenderMaterialDescriptor>, CsharpEngineServicesError> {
+    ) -> Result<
+        (
+            BTreeMap<u16, RenderMaterialDescriptor>,
+            BTreeMap<String, TextureDescriptor>,
+        ),
+        CsharpEngineServicesError,
+    > {
         // SAFETY: generated C# pins this bounded typed array for the direct
         // callback. Resolved descriptors are copied before returning.
         let bindings = unsafe { borrowed_slice(pointer, len, "voxel scene material bindings")? };
@@ -276,14 +287,23 @@ impl RuntimeVoxelScenePresentationBridge {
             ));
         }
         let appearance = self.appearance_mut()?;
-        slots
+        let resolved = slots
             .into_iter()
             .map(|(slot, material)| {
-                let mut descriptor = appearance.voxel_material_descriptor(material)?;
+                let (mut descriptor, texture) = appearance.voxel_material_projection(material)?;
                 descriptor.id = voxel_material_id(slot);
-                Ok((slot, descriptor))
+                Ok((slot, descriptor, texture))
             })
-            .collect()
+            .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
+        let materials = resolved
+            .iter()
+            .map(|(slot, material, _)| (*slot, material.clone()))
+            .collect();
+        let textures = resolved
+            .into_iter()
+            .filter_map(|(_, _, texture)| texture.map(|texture| (texture.id.clone(), texture)))
+            .collect();
+        Ok((materials, textures))
     }
 }
 
@@ -309,8 +329,50 @@ fn project_presentation(
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_PRESENTATION", format!("{error:?}"))
         })?;
+    let mut frame = result.frame;
+    let used_textures = frame
+        .ops
+        .iter()
+        .filter_map(|operation| match operation {
+            RenderDiff::DefineMaterial { material } => material.texture.clone(),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if !used_textures.is_empty() {
+        let mut operations = used_textures
+            .into_iter()
+            .map(|identity| {
+                presentation
+                    .textures
+                    .get(&identity)
+                    .cloned()
+                    .map(|texture| RenderDiff::DefineTexture { texture })
+                    .ok_or_else(|| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_VOXEL_SCENE_PRESENTATION_TEXTURE",
+                            "projected voxel material referenced an unavailable texture descriptor",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let publication = frame.publication.take();
+        operations.append(&mut frame.ops);
+        frame = if let Some(publication) = publication {
+            RenderFrameDiff::try_from_published_ops(
+                publication.stream,
+                publication.base_revision,
+                publication.revision,
+                operations,
+            )
+        } else {
+            RenderFrameDiff::try_from_ops(operations)
+        }
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_PRESENTATION", format!("{error:?}"))
+        })?;
+    }
     Ok((
-        result.frame,
+        frame,
         NativeVoxelScenePresentationReadout {
             present: true,
             source_revision: scene.source_revision().raw(),
@@ -692,14 +754,52 @@ mod tests {
             ABI_OK
         );
         let staged = bridge.take_staged_call().expect("textured projection");
-        assert!(staged.frames.iter().any(|frame| {
-            frame.ops.iter().any(|operation| {
-                matches!(
-                    operation,
-                    RenderDiff::DefineMaterial { material }
-                        if material.texture.as_deref().is_some_and(|texture| texture.starts_with("texture/"))
-                )
+        let frame = staged
+            .frames
+            .iter()
+            .find(|frame| {
+                frame
+                    .ops
+                    .iter()
+                    .any(|operation| matches!(operation, RenderDiff::DefineTexture { .. }))
             })
-        }));
+            .expect("voxel scene frame defines the selected texture");
+        let (texture_index, texture) = frame
+            .ops
+            .iter()
+            .enumerate()
+            .find_map(|(index, operation)| match operation {
+                RenderDiff::DefineTexture { texture } => Some((index, texture)),
+                _ => None,
+            })
+            .expect("matching texture descriptor");
+        let (material_index, material_texture) = frame
+            .ops
+            .iter()
+            .enumerate()
+            .find_map(|(index, operation)| match operation {
+                RenderDiff::DefineMaterial { material } => {
+                    material.texture.as_deref().map(|texture| (index, texture))
+                }
+                _ => None,
+            })
+            .expect("textured material descriptor");
+        let texture_id = texture.id.clone();
+        assert_eq!(material_texture, texture_id);
+        assert!(texture_index < material_index);
+        let payload_resource = match texture.payload.as_ref().map(|payload| &payload.source) {
+            Some(render_model::TexturePayloadSource::Resource { resource }) => resource.clone(),
+            _ => panic!("texture descriptor did not retain a resource payload"),
+        };
+        assert!(payload_resource.starts_with("texture-resource/"));
+        let staged_appearance = appearance.take_staged_call().expect("staged appearance");
+        appearance.commit(staged_appearance);
+        let selected = appearance
+            .state
+            .render_resources
+            .first()
+            .expect("selected texture resource");
+        assert_eq!(selected.identity(), payload_resource);
+        assert_eq!(selected.asset_identity(), texture_id);
     }
 }
