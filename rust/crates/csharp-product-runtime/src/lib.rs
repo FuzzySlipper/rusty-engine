@@ -173,6 +173,7 @@ struct LoadedProductApi {
     start: NativeProductAction,
     update: NativeProductUpdate,
     complete_timeline: NativeProductCompleteTimeline,
+    complete_call: NativeProductCompleteCall,
     pause: NativeProductAction,
     resume: NativeProductAction,
     restart: NativeProductAction,
@@ -222,6 +223,7 @@ impl LoadedProductApi {
             start: required_function(product.start, "start")?,
             update: required_function(product.update, "update")?,
             complete_timeline: required_function(product.complete_timeline, "complete_timeline")?,
+            complete_call: required_function(product.complete_call, "complete_call")?,
             pause: required_function(product.pause, "pause")?,
             resume: required_function(product.resume, "resume")?,
             restart: required_function(product.restart, "restart")?,
@@ -378,6 +380,7 @@ impl CsharpProductRuntime {
             Err(error) => {
                 services.discard_call();
                 if !handle.is_null() {
+                    complete_product_call(&api, handle, false, false);
                     // SAFETY: a failing create may still have returned an owned
                     // handle; releasing it is part of the fixed ownership ABI.
                     unsafe { (api.destroy)(handle) };
@@ -393,6 +396,7 @@ impl CsharpProductRuntime {
             Err(error) => {
                 services.discard_call();
                 if !handle.is_null() {
+                    complete_product_call(&api, handle, false, false);
                     // SAFETY: successful create produced this owned product handle.
                     unsafe { (api.destroy)(handle) };
                 }
@@ -400,6 +404,7 @@ impl CsharpProductRuntime {
             }
         };
         if handle.is_null() {
+            services.discard_call();
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_CREATE_HANDLE",
                 "rusty_product_create succeeded but returned a null product handle",
@@ -409,9 +414,17 @@ impl CsharpProductRuntime {
         // create output is serializable before committing its Engine state.
         // Start has the authoritative post-transition binding needed to tag
         // any create-time UI projection without holding this staged call open.
-        service_outputs(services.outputs(&staged))?;
+        if let Err(error) = service_outputs(services.outputs(&staged)) {
+            services.discard_call();
+            complete_product_call(&api, handle, false, false);
+            // SAFETY: create returned this owned handle, but its Engine output
+            // could not be admitted for commit.
+            unsafe { (api.destroy)(handle) };
+            return Err(error);
+        }
         let initial_output = Some(services.outputs(&staged));
         services.commit_call(staged);
+        complete_product_call(&api, handle, true, false);
         services.seal_resource_selection();
         let render_resources = match services
             .render_resources()
@@ -421,6 +434,7 @@ impl CsharpProductRuntime {
         {
             Ok(resources) => resources,
             Err(error) => {
+                complete_product_call(&api, handle, false, true);
                 // SAFETY: create returned this owned handle and admission
                 // failed before the runtime could retain it.
                 unsafe { (api.destroy)(handle) };
@@ -1159,21 +1173,21 @@ impl CsharpProductRuntime {
         ) {
             Ok(result) => result,
             Err(error) => {
-                self.services.discard_call();
+                self.discard_staged_call();
                 return Err(error);
             }
         };
         let staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
-                self.services.discard_call();
+                self.discard_staged_call();
                 return Err(error.into());
             }
         };
         let mut outputs = match service_outputs(self.services.outputs(&staged)) {
             Ok(outputs) => outputs,
             Err(error) => {
-                self.services.discard_call();
+                self.discard_staged_call();
                 return Err(error);
             }
         };
@@ -1181,6 +1195,7 @@ impl CsharpProductRuntime {
         // conversion must preserve the input for the caller's failure path.
         self.pending_inputs.clear();
         self.services.commit_call(staged);
+        complete_product_call(&self.api, self.handle, true, false);
 
         if result == NativeProductUpdateResult::ReportFault {
             // Product results are intentionally applied only after the completed
@@ -1244,6 +1259,14 @@ impl CsharpProductRuntime {
         self.update(facts)
     }
 
+    /// Roll native service state back before making generated managed wrappers
+    /// retryable again. This ordering prevents a managed retry from observing
+    /// a half-discarded Engine transaction.
+    fn discard_staged_call(&mut self) {
+        self.services.discard_call();
+        complete_product_call(&self.api, self.handle, false, false);
+    }
+
     fn action<F, T>(
         &mut self,
         action: NativeProductAction,
@@ -1257,14 +1280,14 @@ impl CsharpProductRuntime {
         match call_action(action, self.handle, operation) {
             Ok(()) => {}
             Err(error) => {
-                self.services.discard_call();
+                self.discard_staged_call();
                 return Err(error);
             }
         }
         let mut staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
-                self.services.discard_call();
+                self.discard_staged_call();
                 return Err(error.into());
             }
         };
@@ -1272,11 +1295,11 @@ impl CsharpProductRuntime {
         // changed. The later UI retag is infallible: it changes only the
         // already-typed runtime binding of an already validated envelope.
         if let Err(error) = service_outputs(self.services.outputs(&staged)) {
-            self.services.discard_call();
+            self.discard_staged_call();
             return Err(error);
         }
         if let Err(error) = transition(&mut self.lifecycle) {
-            self.services.discard_call();
+            self.discard_staged_call();
             return Err(lifecycle_error(error));
         }
         let binding = ui_binding(&self.lifecycle);
@@ -1299,6 +1322,7 @@ impl CsharpProductRuntime {
                 .expect("rebinding typed UI identity cannot invalidate prevalidated output"),
         );
         self.services.commit_call(staged);
+        complete_product_call(&self.api, self.handle, true, false);
         Ok(outputs)
     }
 
@@ -1719,12 +1743,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let accepted = match call_complete_timeline(&self.api, self.handle, &native) {
             Ok(accepted) => accepted,
             Err(error) => {
-                self.services.discard_call();
+                self.discard_staged_call();
                 return Err(self.runtime_error(error));
             }
         };
         if !accepted {
-            self.services.discard_call();
+            self.discard_staged_call();
             let result = ProductDevTimelineCompletionResult::rejected(
                 ticket,
                 "C# product rejected timeline completion",
@@ -1735,18 +1759,19 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
-                self.services.discard_call();
+                self.discard_staged_call();
                 return Err(self.runtime_error(error.into()));
             }
         };
         let outputs = match service_outputs(self.services.outputs(&staged)) {
             Ok(outputs) => outputs,
             Err(error) => {
-                self.services.discard_call();
+                self.discard_staged_call();
                 return Err(self.runtime_error(error));
             }
         };
         self.services.commit_call(staged);
+        complete_product_call(&self.api, self.handle, true, false);
         let result =
             ProductDevTimelineCompletionResult::accepted(ticket, self.binding(), self.readout())
                 .map_err(host_runtime_error)?;
@@ -1990,6 +2015,10 @@ impl Drop for CsharpProductRuntime {
             // other Rust path destroys it. Native exceptions must not cross ABI.
             let _ = unsafe { (self.api.shutdown)(self.handle) };
         }
+        // Product Dispose may release Engine leases. Mark the generated
+        // coordinator terminal before it runs so final teardown is locally
+        // idempotent and never starts a fresh staged native call.
+        complete_product_call(&self.api, self.handle, false, true);
         // SAFETY: destroy runs exactly once before the `Library` field drops.
         unsafe { (self.api.destroy)(self.handle) };
         self.handle = ptr::null_mut();
@@ -2391,6 +2420,20 @@ fn call_complete_timeline(
             format!("C# product returned invalid timeline acceptance value {value}"),
         )),
     }
+}
+
+fn complete_product_call(
+    api: &LoadedProductApi,
+    handle: *mut c_void,
+    committed: bool,
+    terminal: bool,
+) {
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: `handle` is retained by the runtime. Completion is a fixed,
+    // non-throwing generated acknowledgement and does not borrow Rust data.
+    unsafe { (api.complete_call)(handle, u8::from(committed), u8::from(terminal)) };
 }
 
 fn native_utf8(value: &str) -> NativeUtf8Slice {

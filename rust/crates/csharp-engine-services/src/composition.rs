@@ -307,6 +307,7 @@ impl EngineServiceSet {
         self.appearance.begin_call();
         self.audio.begin_call();
         self.camera_view.begin_call();
+        self.dynamics.begin_call();
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
         self.voxel_scene_presentation.begin_call();
@@ -351,6 +352,7 @@ impl EngineServiceSet {
         self.appearance.discard_call();
         self.audio.discard_call();
         self.camera_view.discard_call();
+        self.dynamics.discard_call();
         self.ui.discard_call();
         self.voxel_content.discard_call();
         self.voxel_scene_presentation.discard_call();
@@ -360,6 +362,7 @@ impl EngineServiceSet {
         let appearance = self.appearance.take_staged_call()?;
         let audio = self.audio.take_staged_call()?;
         let camera_view = self.camera_view.take_staged_call()?;
+        self.dynamics.take_staged_call()?;
         // Sky resources are owned and admitted by Appearance. Resolve the
         // cross-family handle while both staged states are available, before
         // either state can be committed or turned into host output.
@@ -383,6 +386,7 @@ impl EngineServiceSet {
         self.appearance.commit(call.appearance);
         self.audio.commit(call.audio);
         self.camera_view.commit(call.camera_view);
+        self.dynamics.commit_call();
         self.ui.commit(call.ui);
         self.voxel_content.commit_call(call.voxel_content);
         self.voxel_scene_presentation

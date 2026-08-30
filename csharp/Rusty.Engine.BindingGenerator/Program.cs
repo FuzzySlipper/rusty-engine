@@ -445,8 +445,9 @@ internal static class Emit
             string owner = SafeType(handle).Replace("Handle", "", StringComparison.Ordinal);
             output.AppendLine($"public sealed class {owner} : IDisposable").AppendLine("{");
             string handleType = SafeType(handle);
-            output.AppendLine($"    public {owner}({handleType} handle, Action dispose) {{ Handle = handle; _dispose = dispose ?? throw new ArgumentNullException(nameof(dispose)); }}");
-            output.AppendLine($"    public {handleType} Handle {{ get; }}").AppendLine("    private readonly object _disposeGate = new();").AppendLine("    private Action? _dispose;").AppendLine("    public void Dispose() { lock (_disposeGate) { Action? dispose = _dispose; if (dispose is null) return; dispose(); _dispose = null; } }").AppendLine("}").AppendLine();
+            output.AppendLine($"    public {owner}({handleType} handle, Action dispose) : this(handle, dispose, static () => false, static (commit, _) => commit()) {{ }}");
+            output.AppendLine($"    public {owner}({handleType} handle, Action dispose, Func<bool> isTerminal, Action<Action, Action> stageRelease) {{ Handle = handle; _dispose = dispose ?? throw new ArgumentNullException(nameof(dispose)); _isTerminal = isTerminal ?? throw new ArgumentNullException(nameof(isTerminal)); _stageRelease = stageRelease ?? throw new ArgumentNullException(nameof(stageRelease)); }}");
+            output.AppendLine($"    public {handleType} Handle {{ get; }}").AppendLine("    private readonly object _disposeGate = new();").AppendLine("    private readonly Func<bool> _isTerminal;").AppendLine("    private readonly Action<Action, Action> _stageRelease;").AppendLine("    private Action? _dispose;").AppendLine("    private bool _pending;").AppendLine("    public void Dispose() { lock (_disposeGate) { Action? dispose = _dispose; if (dispose is null || _pending) return; if (_isTerminal()) { _dispose = null; return; } dispose(); _pending = true; _stageRelease(CommitRelease, RollbackRelease); } }").AppendLine("    private void CommitRelease() { lock (_disposeGate) { _dispose = null; _pending = false; } }").AppendLine("    private void RollbackRelease() { lock (_disposeGate) { _pending = false; } }").AppendLine("}").AppendLine();
         }
         output.AppendLine("public sealed class UiValue").AppendLine("{");
         output.AppendLine("    public UiValue(ReadOnlyMemory<StructuredValueNode> nodes, ReadOnlyMemory<uint> edges, uint root, ReadOnlyMemory<byte> utf8) { Nodes = nodes; Edges = edges; Root = root; Utf8 = utf8; }");
@@ -501,7 +502,9 @@ internal static class Emit
         foreach (Service service in model.Services)
         {
             output.AppendLine($"internal unsafe sealed class {service.Name}ServiceImplementation : I{SafeServiceName(service.Name)}Service").AppendLine("{");
-            output.AppendLine($"    private readonly Native{service.Name}Api _native;").AppendLine($"    internal {service.Name}ServiceImplementation(Native{service.Name}Api native) => _native = native;");
+            output.AppendLine($"    private readonly Native{service.Name}Api _native;");
+            if (UsesCommitAwareRelease(service)) output.AppendLine("    private readonly LeaseReleaseCoordinator _leaseReleases;").AppendLine($"    internal {service.Name}ServiceImplementation(Native{service.Name}Api native, LeaseReleaseCoordinator leaseReleases) {{ _native = native; _leaseReleases = leaseReleases; }}");
+            else output.AppendLine($"    internal {service.Name}ServiceImplementation(Native{service.Name}Api native) => _native = native;");
             foreach ((string name, string callbackName) in service.Operations)
             {
                 Callback callback = model.Callbacks[callbackName];
@@ -661,7 +664,7 @@ internal static class Emit
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
             output.AppendLine($"        return new {returnType}(NativeConversions.FromNative(ownedResult), () =>").AppendLine("        {");
             EmitDestroy(output, model, service, destroyOperation, "ownedResult", "            ");
-            output.AppendLine("        });");
+            output.AppendLine(UsesCommitAwareRelease(service) ? "        }, _leaseReleases.IsTerminal, _leaseReleases.Stage);" : "        });");
         }
         else output.AppendLine("        return NativeConversions.FromNative(rawResult);");
         output.AppendLine("    }").AppendLine();
@@ -682,6 +685,12 @@ internal static class Emit
         output.AppendLine("        }").AppendLine("    }").AppendLine();
         return output.ToString();
     }
+
+    // Only these families stage retained-destroy effects with EngineServiceSet
+    // today. Other generated owners retain the established immediate local
+    // disposal path so a later product-call rollback never revives a native
+    // handle that was already destroyed.
+    private static bool UsesCommitAwareRelease(Service service) => service.Name is "Appearance" or "CameraView" or "Ui" or "Dynamics";
 
     private static string EmitBorrowedRequestMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature, string requestName, string result, string[] leading)
     {
@@ -774,7 +783,7 @@ internal static class Emit
             output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
             output.AppendLine($"        return new {returnType}(NativeConversions.FromNative(ownedResult), () =>").AppendLine("        {");
             EmitDestroy(output, model, service, destroyOperation, "ownedResult", "            ");
-            output.AppendLine("        });");
+            output.AppendLine(UsesCommitAwareRelease(service) ? "        }, _leaseReleases.IsTerminal, _leaseReleases.Stage);" : "        });");
         }
         else output.AppendLine("        return NativeConversions.FromNative(rawResult);");
         for (int index = closers.Count - 1; index >= 0; index--) output.AppendLine(closers[index]);
