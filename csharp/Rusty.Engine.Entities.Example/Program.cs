@@ -689,11 +689,14 @@ sealed class SpatialServiceFake : ISpatialService
     public NavigationReplaceReceipt ReplaceVoxelNavigation(NavigationVoxelReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationTraversalReplaceReceipt ReplaceNavigationTraversal(NavigationTraversalReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationTraversalReplaceReceipt ClearNavigationTraversal(NavigationTraversalClearRequest arg0) => throw new NotSupportedException();
+    public NavigationVolumetricTraversalReplaceReceipt ReplaceVolumetricNavigationTraversal(NavigationVolumetricTraversalReplaceRequest arg0) => throw new NotSupportedException();
+    public NavigationVolumetricTraversalReplaceReceipt ClearVolumetricNavigationTraversal(NavigationVolumetricTraversalClearRequest arg0) => throw new NotSupportedException();
     public NavigationProjectionReadout ReadNavigationProjection(NavigationProjectionReadRequest arg0) => throw new NotSupportedException();
     public NavigationPathReadout RequestNavigationPath(NavigationPathRequest arg0) => throw new NotSupportedException();
     public NavigationWeightedPathReadout RequestWeightedNavigationPath(NavigationWeightedPathRequest arg0) => throw new NotSupportedException();
     public NavigationPathCellAtReceipt ReadNavigationPathCellAt(NavigationPathCellAtRequest arg0) => throw new NotSupportedException();
     public NavigationPathReadout RequestVolumetricNavigationPath(NavigationVolumetricPathRequest arg0) => throw new NotSupportedException();
+    public NavigationVolumetricWeightedPathReadout RequestWeightedVolumetricNavigationPath(NavigationVolumetricWeightedPathRequest arg0) => throw new NotSupportedException();
     public void ClearNavigation(NavigationClearRequest arg0) => throw new NotSupportedException();
     public CharacterControllerConfig DefaultCharacterControllerConfig() => default;
 
