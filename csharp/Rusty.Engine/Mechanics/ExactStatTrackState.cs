@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace Rusty.Engine.Mechanics;
 
 /// <summary>How a dependent track current value follows a changed stat maximum.</summary>
@@ -148,12 +150,26 @@ public sealed class ExactStatTrackState
         {
             ExactStatTrackCurrentPolicy.PreserveCurrent => _trackCurrent,
             ExactStatTrackCurrentPolicy.PreserveDistanceFromMaximum =>
-                prospectiveBounds.Maximum.CheckedSubtract(
-                    _trackBounds.Maximum.CheckedSubtract(_trackCurrent)),
+                ResolveDistanceFromMaximum(prospectiveBounds.Maximum),
             _ => throw new MechanicsException("Unknown exact stat-track current policy."),
         };
         EnsureInBounds(current, prospectiveBounds);
         return current;
+    }
+
+    private ExactValue ResolveDistanceFromMaximum(ExactValue prospectiveMaximum)
+    {
+        BigInteger reconciledRaw = (BigInteger)prospectiveMaximum.Raw
+            - _trackBounds.Maximum.Raw
+            + _trackCurrent.Raw;
+        if (reconciledRaw < -ExactValue.MaximumAbsolute
+            || reconciledRaw > ExactValue.MaximumAbsolute)
+        {
+            throw new MechanicsArithmeticException(
+                "The distance-preserving exact track current is outside the exact value domain.");
+        }
+
+        return new ExactValue((long)reconciledRaw);
     }
 
     private void EnsureRevision(ulong? expectedRevision)

@@ -115,6 +115,10 @@ static void ExerciseContinuousStatEvaluation()
 
 static void ExerciseExactStatTrackSourceChanges()
 {
+    const long BoundaryOldMaximum = 900_000_000_000;
+    const long BoundaryOldCurrent = -900_000_000_000;
+    const long BoundaryNewMaximum = 1_000_000_000_000;
+    const long BoundaryNewCurrent = -800_000_000_000;
     StatId maximum = StatId.Parse("health-maximum");
     ExactStatDefinition stat = new(maximum, new ExactValue(0), new ExactValue(1_000));
     ExactTrackDefinition track = new(
@@ -190,6 +194,26 @@ static void ExerciseExactStatTrackSourceChanges()
             expectedRevision: state.Revision),
         "stranding stat-track source change was accepted");
     Require(state.Read() == beforeRejected, "rejected stat-track source change partially mutated state");
+
+    StatId boundaryMaximum = StatId.Parse("boundary-maximum");
+    ExactStatTrackState boundaryState = new(
+        new ExactStatDefinition(
+            boundaryMaximum,
+            new ExactValue(-ExactValue.MaximumAbsolute),
+            new ExactValue(ExactValue.MaximumAbsolute)),
+        new ExactValue(BoundaryOldMaximum),
+        [],
+        new ExactTrackDefinition(
+            TrackId.Parse("boundary-track"),
+            new ExactValue(-ExactValue.MaximumAbsolute),
+            new ExactTrackMaximum.FromStat(boundaryMaximum)),
+        new ExactValue(BoundaryOldCurrent));
+    ExactStatTrackChangeReceipt boundaryExpansion = boundaryState.ApplySourceChange(
+        new ExactValue(BoundaryNewMaximum),
+        [],
+        ExactStatTrackCurrentPolicy.PreserveDistanceFromMaximum);
+    Require(boundaryExpansion.After.TrackCurrent.Raw == BoundaryNewCurrent,
+        "distance-preserving expansion rejected a valid final exact-track current");
 }
 
 static void ExerciseExactTrackAtomicity()
