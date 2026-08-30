@@ -945,9 +945,12 @@ impl RuntimeDynamicsBridge {
             {
                 Ok((*world, *entity))
             }
-            Some(BodySlot::Active { .. }) | Some(BodySlot::Tombstoned) => Err(
-                CsharpEngineServicesError::new("CSHARP_DYNAMICS_BODY", "body handle was tombstoned"),
-            ),
+            Some(BodySlot::Active { .. }) | Some(BodySlot::Tombstoned) => {
+                Err(CsharpEngineServicesError::new(
+                    "CSHARP_DYNAMICS_BODY",
+                    "body handle was tombstoned",
+                ))
+            }
             None => Err(unknown("body", handle)),
         }
     }
@@ -2086,8 +2089,12 @@ mod tests {
 
         bridge.begin_call();
         bridge.destroy_body(first_body).expect("stage body destroy");
-        bridge.destroy_world(second_world).expect("stage world destroy");
-        assert!(bridge.read(NativeDynamicsReadRequest { body: first_body }).is_err());
+        bridge
+            .destroy_world(second_world)
+            .expect("stage world destroy");
+        assert!(bridge
+            .read(NativeDynamicsReadRequest { body: first_body })
+            .is_err());
         assert!(bridge
             .read(NativeDynamicsReadRequest { body: second_body })
             .is_err());
@@ -2099,18 +2106,28 @@ mod tests {
         assert!(bridge
             .read(NativeDynamicsReadRequest { body: second_body })
             .is_ok());
-        assert!(bridge.read(NativeDynamicsReadRequest { body: first_body }).is_ok());
+        assert!(bridge
+            .read(NativeDynamicsReadRequest { body: first_body })
+            .is_ok());
         bridge.begin_call();
-        bridge.destroy_body(first_body).expect("restage body destroy");
-        bridge.destroy_world(second_world).expect("restage world destroy");
+        bridge
+            .destroy_body(first_body)
+            .expect("restage body destroy");
+        bridge
+            .destroy_world(second_world)
+            .expect("restage world destroy");
         bridge.commit_call();
 
-        assert!(bridge.read(NativeDynamicsReadRequest { body: first_body }).is_err());
+        assert!(bridge
+            .read(NativeDynamicsReadRequest { body: first_body })
+            .is_err());
         assert!(bridge
             .read(NativeDynamicsReadRequest { body: second_body })
             .is_err());
         // Matching generated IDisposable calls are harmless after commit.
-        bridge.destroy_body(first_body).expect("committed body tombstone");
+        bridge
+            .destroy_body(first_body)
+            .expect("committed body tombstone");
         bridge
             .destroy_world(second_world)
             .expect("committed world tombstone");
