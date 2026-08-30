@@ -28,7 +28,7 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
     fileURLToPath(new URL('../artifacts/product-browser-host/product-browser-host.js', import.meta.url)),
     'utf8',
   );
-  const generatedAssets = productBrowserBundleAssets({
+  const generatedAssets = exposeBundleHost(productBrowserBundleAssets({
     engineHostModule,
     uiModule: './ui/main.js',
     runtimeAdapterModule: './runtime-adapter.js',
@@ -37,7 +37,7 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
       expectedStream: 'product.local',
       expectedContract: 'product.local.current',
     },
-  });
+  }));
   const rendererResources = rendererPreloadResources();
   const requests: string[] = [];
   const server = await createBundleServer(generatedAssets, rendererResources, requests);
@@ -57,6 +57,11 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
     expect(requests.indexOf('GET /__rusty/product/runtime/outputs'))
       .toBeLessThan(requests.indexOf('POST /__rusty/product/runtime/lifecycle/start'));
     await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+    await expect.poll(() => readStartupRendererProof(page)).not.toBeNull();
+    const pixels = await readStartupRendererProof(page);
+    expect(pixels).not.toBeNull();
+    expect(pixels!.composed[2]).toBeGreaterThan(pixels!.composed[0]! + 20);
+    expect(pixels!.composed[2]).toBeGreaterThan(pixels!.unoccupied[2]! + 20);
     await expect.poll(() => requests.some((request) => request === 'GET /renderer-preload.json')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/%C3%A9.png')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/theme.wav')).toBe(true);
@@ -301,7 +306,7 @@ function initialRuntimeOutputs(): readonly unknown[] {
             transform: {
               translation: [0, 0, -4],
               rotation: [0, 0, 0, 1],
-              scale: [1, 1, 1],
+              scale: [2, 2, 2],
             },
             visible: true,
             layer: 'scene',
@@ -330,7 +335,7 @@ function initialRuntimeOutputs(): readonly unknown[] {
           cameraId: 'camera.startup',
           order: 0,
           target: { kind: 'primary' },
-          viewport: { x: 0, y: 0, width: 1, height: 1 },
+          viewport: { x: 0.5, y: 0, width: 0.5, height: 1 },
         }],
         presentations: [],
       },
@@ -347,6 +352,59 @@ function initialRuntimeOutputs(): readonly unknown[] {
       },
     },
   ];
+}
+
+function exposeBundleHost(
+  assets: readonly ProductBrowserBundleAsset[],
+): readonly ProductBrowserBundleAsset[] {
+  return assets.map((asset) => {
+    if (asset.name !== 'main.js') return asset;
+    const content = asset.content.replace(
+      'void host;',
+      'globalThis.__rustyBundleHost = host;',
+    );
+    if (content === asset.content) {
+      throw new Error('generated Product Bundle host exposure marker is missing');
+    }
+    return Object.freeze({ ...asset, content });
+  });
+}
+
+async function readStartupRendererProof(page: Page): Promise<{
+  readonly composed: readonly number[];
+  readonly unoccupied: readonly number[];
+} | null> {
+  return page.evaluate(() => {
+    const testWindow = globalThis as typeof globalThis & {
+      readonly __rustyBundleHost?: {
+        readonly application: {
+          readonly renderer: { readonly renderOnce: (timeMs?: number) => void };
+        };
+      };
+    };
+    const host = testWindow.__rustyBundleHost;
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      'canvas[data-rusty-application-renderer="engine-owned"]',
+    );
+    if (host === undefined || canvas === null) return null;
+    host.application.renderer.renderOnce(1);
+    const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    if (context === null) return null;
+    const read = (x: number): readonly number[] => {
+      const pixel = new Uint8Array(4);
+      context.readPixels(
+        Math.floor(context.drawingBufferWidth * x),
+        Math.floor(context.drawingBufferHeight * 0.5),
+        1,
+        1,
+        context.RGBA,
+        context.UNSIGNED_BYTE,
+        pixel,
+      );
+      return [...pixel];
+    };
+    return { composed: read(0.75), unoccupied: read(0.25) };
+  });
 }
 
 interface RendererPreloadResource {
