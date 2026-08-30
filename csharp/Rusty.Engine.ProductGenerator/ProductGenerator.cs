@@ -66,7 +66,9 @@ public sealed class ProductGenerator : IIncrementalGenerator
             using System.Collections.Generic;
             using System.Runtime.CompilerServices;
             using System.Runtime.InteropServices;
+            using System.Text;
             using Rusty.Engine;
+            using Rusty.Engine.Debugging;
 
             namespace Rusty.Engine.NativeProduct;
 
@@ -160,9 +162,11 @@ public sealed class ProductGenerator : IIncrementalGenerator
             internal sealed class ProductLifetime
             {
                 private IEngineProduct? _product;
+                private readonly IDebugCommandCatalog _debugCatalog;
                 private readonly LeaseReleaseCoordinator _leaseReleases;
-                internal ProductLifetime(IEngineProduct product, LeaseReleaseCoordinator leaseReleases) { _product = product; _leaseReleases = leaseReleases; }
+                internal ProductLifetime(IEngineProduct product, LeaseReleaseCoordinator leaseReleases) { _product = product; _debugCatalog = GeneratedDebugCommandCatalogFactory.Create(product); _leaseReleases = leaseReleases; }
                 internal IEngineProduct Product => _product ?? throw new ObjectDisposedException(nameof(ProductLifetime));
+                internal IDebugCommandCatalog DebugCatalog => _product is null ? throw new ObjectDisposedException(nameof(ProductLifetime)) : _debugCatalog;
                 internal void CompleteCall(bool committed, bool terminal) => _leaseReleases.Complete(committed, terminal);
                 internal void Dispose()
                 {
@@ -187,6 +191,8 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     api->destroy = &Destroy;
                     api->complete_timeline = &CompleteTimeline;
                     api->complete_call = &CompleteCall;
+                    api->execute_debug = &ExecuteDebug;
+                    api->release_debug_result = &ReleaseDebugResult;
                     return 1;
                 }
 
@@ -284,6 +290,38 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static int ExecuteDebug(void* handle, NativeUtf8Slice* command, NativeProductDebugResult* result)
+                {
+                    try
+                    {
+                        if (command is null || result is null || (command->len != 0 && command->bytes is null) || command->len > MaxDebugCommandBytes) return 2;
+                        *result = default;
+                        string commandLine = StrictUtf8.GetString(new ReadOnlySpan<byte>(command->bytes, checked((int)command->len)));
+                        DebugCommandResult commandResult = Get(handle).DebugCatalog.Execute(commandLine);
+                        byte[] message = StrictUtf8.GetBytes(commandResult.Message ?? string.Empty);
+                        if (message.Length > MaxDebugResultBytes) return 2;
+                        byte* owned = message.Length == 0 ? null : (byte*)NativeMemory.Alloc((nuint)message.Length);
+                        if (message.Length != 0 && owned is null) return 99;
+                        if (message.Length != 0) message.CopyTo(new Span<byte>(owned, message.Length));
+                        result->succeeded = commandResult.Succeeded ? (byte)1 : (byte)0;
+                        result->message = new NativeUtf8Slice { bytes = owned, len = (nuint)message.Length };
+                        return 1;
+                    }
+                    catch { return 99; }
+                }
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static void ReleaseDebugResult(void* handle, NativeProductDebugResult result)
+                {
+                    try
+                    {
+                        if (handle is null) return;
+                        NativeMemory.Free(result.message.bytes);
+                    }
+                    catch { }
+                }
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static void Destroy(void* handle)
                 {
                     if (handle is null) return;
@@ -311,6 +349,10 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     if (handle is null) throw new ArgumentNullException(nameof(handle));
                     return (ProductLifetime)GCHandle.FromIntPtr((nint)handle).Target!;
                 }
+
+                private const int MaxDebugCommandBytes = 64 * 1024;
+                private const int MaxDebugResultBytes = 64 * 1024;
+                private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
                 private static ProductContentFile[] CopyContent(NativeContentFile* source, nuint count)
                 {

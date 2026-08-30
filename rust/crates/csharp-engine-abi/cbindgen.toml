@@ -618,6 +618,7 @@ include = [
     "NativeContentStoreApi",
     "NativeEngineApi",
     "NativeProductCreateArgs",
+    "NativeProductDebugResult",
     "NativeProductApi",
     "NativeProductBind",
 ]

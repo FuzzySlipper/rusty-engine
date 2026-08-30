@@ -1124,6 +1124,30 @@ pub type NativeProductCompleteTimeline =
 pub type NativeProductCompleteCall = unsafe extern "C" fn(*mut c_void, u8, u8);
 pub type NativeProductDestroy = unsafe extern "C" fn(*mut c_void);
 
+/// Product-owned outcome for one generated live-debug command execution.
+///
+/// `message` is allocated by the managed product and stays valid until the
+/// matching `NativeProductReleaseDebugResult` callback consumes it.  Rust
+/// copies it before release; it does not retain product-owned debug output.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeProductDebugResult {
+    /// `1` is a completed command; `0` is a semantic command failure.
+    /// ABI failure is reported by the callback's return status instead.
+    pub succeeded: u8,
+    pub message: NativeUtf8Slice,
+}
+
+/// Executes one borrowed UTF-8 command through the generated product catalog.
+pub type NativeProductExecuteDebug =
+    unsafe extern "C" fn(*mut c_void, *const NativeUtf8Slice, *mut NativeProductDebugResult) -> i32;
+
+/// Releases the exact product-owned UTF-8 buffer returned by
+/// [`NativeProductExecuteDebug`].  Rust calls this after every callback that
+/// may have initialized the result, including an ABI failure.
+pub type NativeProductReleaseDebugResult =
+    unsafe extern "C" fn(*mut c_void, NativeProductDebugResult);
+
 /// Product functions supplied to Rust by the one NativeAOT bootstrap export.
 /// Nullable fields let Rust receive and inspect an initially empty table safely.
 #[repr(C)]
@@ -1148,6 +1172,14 @@ pub struct NativeProductApi {
         unsafe extern "C" fn(*mut c_void, *const NativeProductTimelineCompletion, *mut u8) -> i32,
     >,
     pub complete_call: Option<unsafe extern "C" fn(*mut c_void, u8, u8)>,
+    pub execute_debug: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *const NativeUtf8Slice,
+            *mut NativeProductDebugResult,
+        ) -> i32,
+    >,
+    pub release_debug_result: Option<unsafe extern "C" fn(*mut c_void, NativeProductDebugResult)>,
 }
 
 pub type NativeProductBind = unsafe extern "C" fn(*mut NativeProductApi) -> i32;

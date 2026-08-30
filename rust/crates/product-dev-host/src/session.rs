@@ -4,9 +4,10 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 use crate::{
-    CanonicalU64, ProductDevHostError, ProductDevInputBatch, ProductDevLifecycleOperation,
-    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeReceipt,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    CanonicalU64, ProductDevDebugResult, ProductDevHostError, ProductDevInputBatch,
+    ProductDevLifecycleOperation, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevRuntimeError, ProductDevRuntimeReceipt, ProductDevTimelineCompletion,
+    ProductDevTimelineCompletionResult,
 };
 
 /// One serialized, transport-neutral session over a generated Product
@@ -42,6 +43,16 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     ) -> Result<ProductDevRuntimeReceipt<crate::ProductDevInputResult>, ProductDevRuntimeError>
     {
         self.with_runtime(|runtime| runtime.input(batch))
+    }
+
+    /// Executes a product-owned generated debug command under the same mutex
+    /// as lifecycle and update work. This is the initial direct safe point;
+    /// no separate debug runtime or scheduler is introduced.
+    pub fn execute_debug(
+        &self,
+        command: &str,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
+        self.with_runtime(|runtime| runtime.execute_debug(command))
     }
 
     /// Strictly admits an input wire array, then forwards the validated batch
@@ -150,7 +161,11 @@ fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread};
+    use std::{
+        sync::{mpsc, Arc},
+        thread,
+        time::Duration,
+    };
 
     use super::*;
     use crate::ProductDevOperationKind;
@@ -331,5 +346,28 @@ mod tests {
         .join();
         let error = session.admit_demand_step().unwrap_err();
         assert_eq!(error.code(), "DEV_HOST_RUNTIME_POISONED");
+    }
+
+    #[test]
+    fn debug_execution_uses_the_same_runtime_serialization_lock() {
+        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime));
+        let guard = session.lock_for_test();
+        let (sent, received) = mpsc::channel();
+        let blocked = Arc::clone(&session);
+        let join = thread::spawn(move || {
+            let result = blocked.execute_debug("fixture.count");
+            sent.send(result.map(|_| ())).expect("send debug result");
+        });
+        assert!(
+            received.recv_timeout(Duration::from_millis(25)).is_err(),
+            "debug operation bypassed the lifecycle/update serialization lock"
+        );
+        drop(guard);
+        let error = received
+            .recv_timeout(Duration::from_secs(1))
+            .expect("debug operation completed after lock release")
+            .expect_err("fixture does not implement debug execution");
+        assert_eq!(error.code(), "DEV_HOST_DEBUG_UNSUPPORTED");
+        join.join().expect("debug worker");
     }
 }

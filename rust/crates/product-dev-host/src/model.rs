@@ -157,6 +157,7 @@ pub enum ProductDevOperationKind {
     AdmitExternalStep,
     ReportAudioFeedback,
     ReportAnimationFeedback,
+    ExecuteDebug,
 }
 
 /// Bounded, host-realized audio facts. These are observations from the
@@ -688,6 +689,37 @@ pub struct ProductDevOperationResult {
     readout: Option<ProductDevRuntimeReadout>,
     #[serde(skip_serializing_if = "Option::is_none")]
     diagnostic: Option<String>,
+}
+
+/// One bounded result returned by a product-owned generated debug catalog.
+/// A failed command is a completed product operation, not a host/ABI failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevDebugResult {
+    succeeded: bool,
+    message: String,
+}
+
+impl ProductDevDebugResult {
+    pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
+    pub fn new(succeeded: bool, message: String) -> Result<Self, ProductDevHostError> {
+        if message.len() > Self::MAX_MESSAGE_BYTES {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_DEBUG_RESULT_BOUNDS",
+                "debug result exceeds the host result bound",
+            ));
+        }
+        Ok(Self { succeeded, message })
+    }
+
+    pub const fn succeeded(&self) -> bool {
+        self.succeeded
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 impl ProductDevOperationResult {
@@ -1372,6 +1404,20 @@ pub trait ProductDevRuntime: Send + 'static {
         &mut self,
         batch: ProductDevInputBatch,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError>;
+
+    /// Executes one bounded product-owned generated debug command between
+    /// normal runtime operations. A semantic command failure remains a typed
+    /// result; ABI/callback failures are runtime errors.
+    fn execute_debug(
+        &mut self,
+        _command: &str,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
+        Err(ProductDevRuntimeError::new(
+            "DEV_HOST_DEBUG_UNSUPPORTED",
+            "live debug commands are not supported by this runtime",
+        )
+        .expect("fixed debug unsupported diagnostic"))
+    }
 
     fn advance_realtime(
         &mut self,

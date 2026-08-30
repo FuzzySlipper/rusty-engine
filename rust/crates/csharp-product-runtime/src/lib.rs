@@ -31,10 +31,10 @@ use product_dev_host::{
     CanonicalU64, ProductDevAnimationCueDefinition, ProductDevAnimationCueSignalDomain,
     ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult,
     ProductDevAudioCompletionSource, ProductDevAudioFeedback, ProductDevAudioFeedbackFact,
-    ProductDevAudioFeedbackResult, ProductDevControlOperation, ProductDevInputBatch,
-    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRendererResource, ProductDevRuntime,
-    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
+    ProductDevAudioFeedbackResult, ProductDevControlOperation, ProductDevDebugResult,
+    ProductDevInputBatch, ProductDevInputResult, ProductDevLifecycleOperation,
+    ProductDevOperationKind, ProductDevOperationResult, ProductDevRendererResource,
+    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
@@ -71,6 +71,8 @@ const EXTERNAL_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::E
 const MAX_CONTENT_FILES: usize = 8_192;
 const MAX_CONTENT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_CONTENT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_DEBUG_COMMAND_BYTES: usize = 64 * 1024;
+const MAX_DEBUG_RESULT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub struct CsharpProductRuntimeError {
@@ -195,6 +197,7 @@ struct LoadedProductApi {
     restart: NativeProductAction,
     shutdown: NativeProductAction,
     destroy: NativeProductDestroy,
+    debug: Option<(NativeProductExecuteDebug, NativeProductReleaseDebugResult)>,
 }
 
 impl LoadedProductApi {
@@ -342,8 +345,30 @@ impl LoadedProductApi {
             restart: required_function(product.restart, "restart")?,
             shutdown: required_function(product.shutdown, "shutdown")?,
             destroy: required_function(product.destroy, "destroy")?,
+            debug: optional_callback_pair(
+                product.execute_debug,
+                product.release_debug_result,
+                "execute_debug",
+                "release_debug_result",
+            )?,
             host,
         })
+    }
+}
+
+fn optional_callback_pair<T, U>(
+    first: Option<T>,
+    second: Option<U>,
+    first_name: &str,
+    second_name: &str,
+) -> Result<Option<(T, U)>, CsharpProductRuntimeError> {
+    match (first, second) {
+        (Some(first), Some(second)) => Ok(Some((first, second))),
+        (None, None) => Ok(None),
+        _ => Err(CsharpProductRuntimeError::new(
+            "CSHARP_CALLBACK_PAIR",
+            format!("product supplied only one of optional callbacks `{first_name}` and `{second_name}`"),
+        )),
     }
 }
 
@@ -1800,6 +1825,56 @@ impl ProductDevRuntime for CsharpProductRuntime {
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
 
+    fn execute_debug(
+        &mut self,
+        command: &str,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
+        if command.len() > MAX_DEBUG_COMMAND_BYTES {
+            return Err(ProductDevRuntimeError::new(
+                "CSHARP_DEBUG_INPUT_BOUNDS",
+                "debug command exceeds the generated callback input bound",
+            )
+            .expect("fixed debug input diagnostic"));
+        }
+        let Some((execute, release)) = self.api.debug else {
+            return Err(ProductDevRuntimeError::new(
+                "CSHARP_DEBUG_UNSUPPORTED",
+                "the loaded product does not expose generated live-debug callbacks",
+            )
+            .expect("fixed debug unsupported diagnostic"));
+        };
+
+        // Debug commands may use ordinary generated Engine services. Keep
+        // their Engine transaction identical to a product action: a completed
+        // callback (including a semantic command failure) commits; an ABI or
+        // copying failure rolls back and acknowledges that outcome explicitly.
+        self.services.begin_call(ui_binding(&self.lifecycle));
+        let result = match call_debug(execute, release, self.handle, command) {
+            Ok(result) => result,
+            Err(error) => {
+                self.discard_staged_call();
+                return Err(self.runtime_error(error));
+            }
+        };
+        let staged = match self.services.take_call() {
+            Ok(staged) => staged,
+            Err(error) => {
+                self.discard_staged_call();
+                return Err(self.runtime_error(error.into()));
+            }
+        };
+        let outputs = match service_outputs(self.services.outputs(&staged)) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                self.discard_staged_call();
+                return Err(self.runtime_error(error));
+            }
+        };
+        self.services.commit_call(staged);
+        complete_product_call(&self.api, self.handle, true, false);
+        ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
+    }
+
     fn advance_realtime(
         &mut self,
         observed_time_ns: CanonicalU64,
@@ -2583,6 +2658,79 @@ fn call_update(
     let status = unsafe { (api.update)(handle, &args, &mut result) };
     checked_status(status, "update")?;
     Ok(result)
+}
+
+fn call_debug(
+    execute: NativeProductExecuteDebug,
+    release: NativeProductReleaseDebugResult,
+    handle: *mut c_void,
+    command: &str,
+) -> Result<ProductDevDebugResult, CsharpProductRuntimeError> {
+    let input = native_utf8(command);
+    let mut native = NativeProductDebugResult::default();
+    // SAFETY: `input` borrows `command` for this immediate call; `native` is
+    // writable for the exact callback. The generated product must not retain
+    // either borrowed input pointer.
+    let status = unsafe { execute(handle, &input, &mut native) };
+    // The callback owns any initialized result fields even when it reports an
+    // ABI failure. Release unconditionally before converting the status so a
+    // failed callback cannot strand a managed allocation.
+    let copied = if status == ABI_OK {
+        copy_debug_result(native)
+    } else {
+        match checked_status(status, "execute_debug") {
+            Err(error) => Err(error),
+            Ok(()) => unreachable!("only non-success debug callback statuses reach this branch"),
+        }
+    };
+    // SAFETY: this exact generated release callback owns the returned result
+    // allocation. It is called once for every callback invocation, including
+    // zero/default results and non-success statuses.
+    unsafe { release(handle, native) };
+    copied
+}
+
+fn copy_debug_result(
+    native: NativeProductDebugResult,
+) -> Result<ProductDevDebugResult, CsharpProductRuntimeError> {
+    let succeeded = match native.succeeded {
+        0 => false,
+        1 => true,
+        value => {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_DEBUG_RESULT_STATUS",
+                format!("generated debug callback returned invalid success flag {value}"),
+            ));
+        }
+    };
+    if native.message.len > MAX_DEBUG_RESULT_BYTES {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_DEBUG_RESULT_BOUNDS",
+            "generated debug callback result exceeds the host result bound",
+        ));
+    }
+    if native.message.len != 0 && native.message.bytes.is_null() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_DEBUG_RESULT_POINTER",
+            "generated debug callback returned a null message with nonzero length",
+        ));
+    }
+    // SAFETY: the generated callback guarantees this product-owned allocation
+    // remains live until its matching release callback below. The length is
+    // bounded before the slice is formed.
+    let bytes = if native.message.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(native.message.bytes, native.message.len) }
+    };
+    let message = std::str::from_utf8(bytes).map_err(|error| {
+        CsharpProductRuntimeError::new(
+            "CSHARP_DEBUG_RESULT_UTF8",
+            format!("generated debug callback returned invalid UTF-8: {error}"),
+        )
+    })?;
+    ProductDevDebugResult::new(succeeded, message.to_owned())
+        .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail().to_owned()))
 }
 
 fn call_complete_timeline(
@@ -3658,9 +3806,170 @@ fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Mutex,
+    };
 
     static CONTENT_FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+    static DEBUG_FIXTURE_GATE: Mutex<()> = Mutex::new(());
+    static DEBUG_RELEASES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn debug_semantic_failure(
+        _handle: *mut c_void,
+        _command: *const NativeUtf8Slice,
+        result: *mut NativeProductDebugResult,
+    ) -> i32 {
+        let message = b"unknown command";
+        // SAFETY: fixture receives the call helper's writable out pointer and
+        // exposes a static byte string until its matching fixture release.
+        unsafe {
+            *result = NativeProductDebugResult {
+                succeeded: 0,
+                message: NativeUtf8Slice {
+                    bytes: message.as_ptr(),
+                    len: message.len(),
+                },
+            };
+        }
+        ABI_OK
+    }
+
+    unsafe extern "C" fn debug_success(
+        _handle: *mut c_void,
+        _command: *const NativeUtf8Slice,
+        result: *mut NativeProductDebugResult,
+    ) -> i32 {
+        let message = b"fixture command executed";
+        // SAFETY: fixture receives the call helper's writable out pointer and
+        // exposes a static byte string until its matching fixture release.
+        unsafe {
+            *result = NativeProductDebugResult {
+                succeeded: 1,
+                message: NativeUtf8Slice {
+                    bytes: message.as_ptr(),
+                    len: message.len(),
+                },
+            };
+        }
+        ABI_OK
+    }
+
+    unsafe extern "C" fn debug_abi_failure_after_result(
+        _handle: *mut c_void,
+        _command: *const NativeUtf8Slice,
+        result: *mut NativeProductDebugResult,
+    ) -> i32 {
+        let message = b"allocated before failure";
+        // SAFETY: fixture receives the call helper's writable out pointer and
+        // deliberately initializes it before an ABI failure.
+        unsafe {
+            *result = NativeProductDebugResult {
+                succeeded: 1,
+                message: NativeUtf8Slice {
+                    bytes: message.as_ptr(),
+                    len: message.len(),
+                },
+            };
+        }
+        99
+    }
+
+    unsafe extern "C" fn release_debug_fixture(
+        _handle: *mut c_void,
+        _result: NativeProductDebugResult,
+    ) {
+        DEBUG_RELEASES.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn debug_callback_preserves_semantic_failure_and_releases_once_after_abi_failure() {
+        let _guard = DEBUG_FIXTURE_GATE.lock().expect("debug fixture gate");
+        DEBUG_RELEASES.store(0, Ordering::SeqCst);
+
+        let success = call_debug(
+            debug_success,
+            release_debug_fixture,
+            ptr::null_mut(),
+            "fixture.count",
+        )
+        .expect("successful debug result");
+        assert!(success.succeeded());
+        assert_eq!(success.message(), "fixture command executed");
+        assert_eq!(DEBUG_RELEASES.load(Ordering::SeqCst), 1);
+
+        let semantic = call_debug(
+            debug_semantic_failure,
+            release_debug_fixture,
+            ptr::null_mut(),
+            "fixture.unknown",
+        )
+        .expect("semantic debug result");
+        assert!(!semantic.succeeded());
+        assert_eq!(semantic.message(), "unknown command");
+        assert_eq!(DEBUG_RELEASES.load(Ordering::SeqCst), 2);
+
+        let error = call_debug(
+            debug_abi_failure_after_result,
+            release_debug_fixture,
+            ptr::null_mut(),
+            "fixture.unknown",
+        )
+        .expect_err("ABI failure remains a runtime error");
+        assert_eq!(error.code(), "CSHARP_PRODUCT_CALL");
+        assert_eq!(DEBUG_RELEASES.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn debug_result_rejects_invalid_utf8_and_callback_pair_requires_both_members() {
+        let invalid_utf8 = NativeProductDebugResult {
+            succeeded: 1,
+            message: NativeUtf8Slice {
+                bytes: b"\xff".as_ptr(),
+                len: 1,
+            },
+        };
+        assert_eq!(
+            copy_debug_result(invalid_utf8)
+                .expect_err("invalid UTF-8 result")
+                .code(),
+            "CSHARP_DEBUG_RESULT_UTF8"
+        );
+        let oversized = NativeProductDebugResult {
+            succeeded: 1,
+            message: NativeUtf8Slice {
+                bytes: b"x".as_ptr(),
+                len: MAX_DEBUG_RESULT_BYTES + 1,
+            },
+        };
+        assert_eq!(
+            copy_debug_result(oversized)
+                .expect_err("oversized result")
+                .code(),
+            "CSHARP_DEBUG_RESULT_BOUNDS"
+        );
+        assert!(
+            optional_callback_pair::<NativeProductExecuteDebug, NativeProductReleaseDebugResult>(
+                None,
+                None,
+                "execute_debug",
+                "release_debug_result",
+            )
+            .expect("older product accepts absent pair")
+            .is_none()
+        );
+        assert_eq!(
+            optional_callback_pair(
+                Some(debug_semantic_failure as NativeProductExecuteDebug),
+                None::<NativeProductReleaseDebugResult>,
+                "execute_debug",
+                "release_debug_result",
+            )
+            .expect_err("mismatched pair rejects")
+            .code(),
+            "CSHARP_CALLBACK_PAIR"
+        );
+    }
 
     #[test]
     fn animation_cue_definition_output_maps_to_the_typed_product_dev_snapshot() {
