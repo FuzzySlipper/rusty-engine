@@ -337,6 +337,16 @@ pub(crate) fn flatten_model_scene(
             "preserved TEXCOORD values do not align with imported positions",
         ));
     }
+    if matches!(
+        degenerate_policy,
+        DegenerateTrianglePolicy::DropForVisualMetadata
+    ) {
+        compact_vertices_to_retained_triangles(
+            &mut positions,
+            &mut texture_coordinates,
+            &mut triangles,
+        )?;
+    }
     validate_triangles(&positions, &triangles)?;
 
     Ok(ImportedStaticMesh {
@@ -359,6 +369,49 @@ pub(crate) fn flatten_model_scene(
             .cloned()
             .collect(),
     })
+}
+
+fn compact_vertices_to_retained_triangles(
+    positions: &mut Vec<[f64; 3]>,
+    texture_coordinates: &mut BTreeMap<u32, Vec<Option<[f64; 2]>>>,
+    triangles: &mut [ImportedTriangle],
+) -> Result<(), ConversionError> {
+    let mut referenced = vec![false; positions.len()];
+    for triangle in triangles.iter() {
+        for index in triangle.indices {
+            referenced[index as usize] = true;
+        }
+    }
+
+    let mut remap = vec![u32::MAX; positions.len()];
+    let mut compacted_positions = Vec::with_capacity(positions.len());
+    for (old_index, position) in positions.iter().copied().enumerate() {
+        if !referenced[old_index] {
+            continue;
+        }
+        remap[old_index] = u32::try_from(compacted_positions.len()).map_err(|_| {
+            ConversionError::one(
+                "conversion.resourceLimit",
+                "source.positions",
+                "compacted visual metadata vertex index exceeds u32",
+            )
+        })?;
+        compacted_positions.push(position);
+    }
+    for triangle in triangles {
+        triangle.indices = triangle.indices.map(|index| remap[index as usize]);
+    }
+    *positions = compacted_positions;
+
+    for coordinates in texture_coordinates.values_mut() {
+        let original = std::mem::take(coordinates);
+        *coordinates = original
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, coordinate)| referenced[index].then_some(coordinate))
+            .collect();
+    }
+    Ok(())
 }
 
 fn collect_texture_set_indices(
@@ -540,10 +593,12 @@ pub(super) fn ensure_total_limit(
 
 #[cfg(test)]
 mod tests {
+    use crate::source::mesh_metadata;
+
     use super::{
         flatten_model_scene, identity_matrix, triangle_is_degenerate, validate_triangles,
         DegenerateTrianglePolicy, ImportedMaterial, ImportedModelMesh, ImportedModelNode,
-        ImportedModelPrimitive, ImportedModelScene, ImportedTriangle,
+        ImportedModelPrimitive, ImportedModelScene, ImportedTextureCoordinates, ImportedTriangle,
     };
 
     const TRIANGLE: ImportedTriangle = ImportedTriangle {
@@ -574,9 +629,12 @@ mod tests {
                         [0.0, 0.0, 0.0],
                         [1.0, 0.0, 0.0],
                         [0.0, 1.0, 0.0],
-                        [2.0, 0.0, 0.0],
+                        [1_000_000.0, 0.0, 0.0],
                     ],
-                    texture_coordinates: Vec::new(),
+                    texture_coordinates: vec![ImportedTextureCoordinates {
+                        source_set_index: 0,
+                        coordinates: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [99.0, 99.0]],
+                    }],
                     indices: vec![0, 1, 2, 0, 1, 3],
                 }],
             }],
@@ -615,9 +673,21 @@ mod tests {
 
         assert_eq!(mesh.triangles.len(), 1);
         assert_eq!(mesh.triangles[0].indices, [0, 1, 2]);
+        assert_eq!(mesh.positions.len(), 3);
+        assert_eq!(
+            mesh.positions,
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        );
         assert_eq!(mesh.primitive_groups.len(), 1);
         assert_eq!(mesh.primitive_groups[0].triangle_count, 1);
         assert_eq!(mesh.materials.len(), 1);
+        assert_eq!(
+            mesh.texture_coordinates[0].coordinates,
+            vec![Some([0.0, 0.0]), Some([1.0, 0.0]), Some([0.0, 1.0])]
+        );
+        let metadata = mesh_metadata(&scene, &mesh).unwrap();
+        assert_eq!(metadata.source_bounds.min, [0.0, 0.0, 0.0]);
+        assert_eq!(metadata.source_bounds.max, [1.0, 1.0, 0.0]);
     }
 
     #[test]
