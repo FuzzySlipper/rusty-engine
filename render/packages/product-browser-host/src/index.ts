@@ -1,3 +1,5 @@
+import { rendererResourceContentHash as applicationResourceContentHash } from '@rusty-engine/application-host';
+
 export {
   PRODUCT_BROWSER_HOST_ARTIFACT,
   PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE,
@@ -13,7 +15,12 @@ export {
   ProductBrowserLocalTransportError,
   createProductBrowserLocalHttpAdapter,
 } from './local-transport.js';
-export { rendererResourceContentHash } from '@rusty-engine/application-host';
+export function rendererResourceContentHash(
+  data: ArrayBuffer,
+  expected: string,
+): Promise<string> {
+  return applicationResourceContentHash(data, expected);
+}
 export type {
   ProductBrowserBundleAsset,
   ProductBrowserBundleAssetName,

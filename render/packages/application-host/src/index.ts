@@ -1,3 +1,5 @@
+import { rendererResourceContentHash as rendererHostResourceContentHash } from '@rusty-engine/renderer-host';
+
 export {
   RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION,
   RustyApplicationHostError,
@@ -12,7 +14,12 @@ export {
 export {
   mountRustyDeveloperCommandShell,
 } from './developer-command-shell.js';
-export { rendererResourceContentHash } from '@rusty-engine/renderer-host';
+export function rendererResourceContentHash(
+  data: ArrayBuffer,
+  expected: string,
+): Promise<string> {
+  return rendererHostResourceContentHash(data, expected);
+}
 export {
   RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION,
   RustyDeveloperCommandClientError,
