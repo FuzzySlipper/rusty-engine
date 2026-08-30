@@ -151,25 +151,36 @@ pub fn texture_coordinate_source_hash(
 pub fn flatten_static_scene(
     scene: &ImportedModelScene,
 ) -> Result<ImportedStaticMesh, ConversionError> {
-    flatten_model_scene(scene, |node, _mesh, primitive| {
-        primitive
-            .positions
-            .iter()
-            .map(|position| {
-                transform_point(node.model_transform, *position).ok_or_else(|| {
-                    ConversionError::one(
-                        "conversion.invalidTransform",
-                        format!("source.nodes[{}].transform", node.source_node_index),
-                        "composed node transform produced a non-finite position",
-                    )
+    flatten_model_scene(
+        scene,
+        DegenerateTrianglePolicy::Reject,
+        |node, _mesh, primitive| {
+            primitive
+                .positions
+                .iter()
+                .map(|position| {
+                    transform_point(node.model_transform, *position).ok_or_else(|| {
+                        ConversionError::one(
+                            "conversion.invalidTransform",
+                            format!("source.nodes[{}].transform", node.source_node_index),
+                            "composed node transform produced a non-finite position",
+                        )
+                    })
                 })
-            })
-            .collect()
-    })
+                .collect()
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum DegenerateTrianglePolicy {
+    Reject,
+    DropForVisualMetadata,
 }
 
 pub(crate) fn flatten_model_scene(
     scene: &ImportedModelScene,
+    degenerate_policy: DegenerateTrianglePolicy,
     mut positions_for_primitive: impl FnMut(
         &ImportedModelNode,
         &ImportedModelMesh,
@@ -186,6 +197,7 @@ pub(crate) fn flatten_model_scene(
     let mut primitive_groups = Vec::new();
     let mut used_materials = BTreeSet::new();
     let mut mesh_instance_count = 0usize;
+    let mut source_index_count = 0usize;
 
     for node in &scene.nodes {
         let Some(mesh_index) = node.source_mesh_index else {
@@ -233,11 +245,12 @@ pub(crate) fn flatten_model_scene(
                 "source.positions",
             )?;
             ensure_total_limit(
-                triangles.len().saturating_mul(3),
+                source_index_count,
                 primitive.indices.len(),
                 MAX_CONVERSION_SOURCE_INDICES,
                 "source.indices",
             )?;
+            source_index_count += primitive.indices.len();
             let vertex_offset = u32::try_from(positions.len()).map_err(|_| {
                 ConversionError::one(
                     "conversion.resourceLimit",
@@ -263,31 +276,47 @@ pub(crate) fn flatten_model_scene(
                     "primitive triangle start exceeds u32",
                 )
             })?;
-            triangles.extend(primitive.indices.as_chunks::<3>().0.iter().map(|triangle| {
-                ImportedTriangle {
+            for indices in primitive.indices.as_chunks::<3>().0 {
+                let triangle = ImportedTriangle {
                     indices: [
-                        triangle[0] + vertex_offset,
-                        triangle[1] + vertex_offset,
-                        triangle[2] + vertex_offset,
+                        indices[0] + vertex_offset,
+                        indices[1] + vertex_offset,
+                        indices[2] + vertex_offset,
                     ],
                     source_material_slot: primitive.source_material_slot,
+                };
+                let [a, b, c] = triangle.indices;
+                if matches!(
+                    degenerate_policy,
+                    DegenerateTrianglePolicy::DropForVisualMetadata
+                ) && (a == b
+                    || b == c
+                    || c == a
+                    || triangle_is_degenerate(&positions, &triangle))
+                {
+                    continue;
                 }
-            }));
-            primitive_groups.push(ImportedPrimitiveGroup {
-                source_node_index: node.source_node_index,
-                source_mesh_index: mesh.source_mesh_index,
-                source_primitive_index: primitive.source_primitive_index,
-                source_material_slot: primitive.source_material_slot,
-                triangle_start,
-                triangle_count: u32::try_from(primitive.indices.len() / 3).map_err(|_| {
+                triangles.push(triangle);
+            }
+            let triangle_count =
+                u32::try_from(triangles.len() - triangle_start as usize).map_err(|_| {
                     ConversionError::one(
                         "conversion.resourceLimit",
                         "source.groups",
                         "primitive triangle count exceeds u32",
                     )
-                })?,
-            });
-            used_materials.insert(primitive.source_material_slot);
+                })?;
+            if triangle_count > 0 {
+                primitive_groups.push(ImportedPrimitiveGroup {
+                    source_node_index: node.source_node_index,
+                    source_mesh_index: mesh.source_mesh_index,
+                    source_primitive_index: primitive.source_primitive_index,
+                    source_material_slot: primitive.source_material_slot,
+                    triangle_start,
+                    triangle_count,
+                });
+                used_materials.insert(primitive.source_material_slot);
+            }
         }
     }
 
@@ -511,12 +540,85 @@ pub(super) fn ensure_total_limit(
 
 #[cfg(test)]
 mod tests {
-    use super::{triangle_is_degenerate, validate_triangles, ImportedTriangle};
+    use super::{
+        flatten_model_scene, identity_matrix, triangle_is_degenerate, validate_triangles,
+        DegenerateTrianglePolicy, ImportedMaterial, ImportedModelMesh, ImportedModelNode,
+        ImportedModelPrimitive, ImportedModelScene, ImportedTriangle,
+    };
 
     const TRIANGLE: ImportedTriangle = ImportedTriangle {
         indices: [0, 1, 2],
         source_material_slot: 0,
     };
+
+    fn scene_with_one_valid_and_one_degenerate_triangle() -> ImportedModelScene {
+        ImportedModelScene {
+            source_scene_index: 0,
+            source_scene_name: None,
+            nodes: vec![ImportedModelNode {
+                source_node_index: 0,
+                source_node_name: None,
+                parent_node_index: None,
+                child_node_indices: Vec::new(),
+                source_mesh_index: Some(0),
+                local_transform: identity_matrix(),
+                model_transform: identity_matrix(),
+            }],
+            meshes: vec![ImportedModelMesh {
+                source_mesh_index: 0,
+                source_mesh_name: None,
+                primitives: vec![ImportedModelPrimitive {
+                    source_primitive_index: 0,
+                    source_material_slot: 0,
+                    positions: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [2.0, 0.0, 0.0],
+                    ],
+                    texture_coordinates: Vec::new(),
+                    indices: vec![0, 1, 2, 0, 1, 3],
+                }],
+            }],
+            materials: vec![ImportedMaterial {
+                source_material_slot: 0,
+                source_material_name: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn strict_flattening_still_rejects_degenerate_source_faces() {
+        let scene = scene_with_one_valid_and_one_degenerate_triangle();
+        let error = flatten_model_scene(
+            &scene,
+            DegenerateTrianglePolicy::Reject,
+            |_node, _mesh, primitive| Ok(primitive.positions.clone()),
+        )
+        .unwrap_err();
+
+        assert!(error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "conversion.invalidGeometry"));
+    }
+
+    #[test]
+    fn visual_metadata_flattening_drops_only_degenerate_source_faces() {
+        let scene = scene_with_one_valid_and_one_degenerate_triangle();
+        let mesh = flatten_model_scene(
+            &scene,
+            DegenerateTrianglePolicy::DropForVisualMetadata,
+            |_node, _mesh, primitive| Ok(primitive.positions.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(mesh.triangles.len(), 1);
+        assert_eq!(mesh.triangles[0].indices, [0, 1, 2]);
+        assert_eq!(mesh.primitive_groups.len(), 1);
+        assert_eq!(mesh.primitive_groups[0].triangle_count, 1);
+        assert_eq!(mesh.materials.len(), 1);
+    }
 
     #[test]
     fn legitimate_triangle_admission_is_uniform_scale_invariant() {

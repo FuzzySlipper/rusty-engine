@@ -183,6 +183,22 @@ pub fn import_mesh_source(
 pub fn import_animated_mesh_source(
     request: &MeshSourceImportRequest,
 ) -> Result<ImportedAnimatedMeshSource, ConversionError> {
+    import_animated_mesh_source_with(request, false)
+}
+
+/// Imports the exact animated source for runtime visual-resource metadata.
+/// Degenerate faces are omitted only from the derived bind-pose mesh; ordinary
+/// voxel conversion and animation sampling remain strict.
+pub fn import_animated_mesh_source_for_visual_metadata(
+    request: &MeshSourceImportRequest,
+) -> Result<ImportedAnimatedMeshSource, ConversionError> {
+    import_animated_mesh_source_with(request, true)
+}
+
+fn import_animated_mesh_source_with(
+    request: &MeshSourceImportRequest,
+    visual_metadata: bool,
+) -> Result<ImportedAnimatedMeshSource, ConversionError> {
     validate_import_request(request, AssetKind::AnimatedMesh)?;
     if request.mesh_primitive.is_some() {
         return Err(ConversionError::one(
@@ -196,13 +212,15 @@ pub fn import_animated_mesh_source(
     let model = match request.format {
         MeshSourceFormat::Glb => import_animated_glb(&request.source_bytes)?,
     };
-    let bind_pose = sample_animation_bind_pose(
-        &model,
-        &AnimationBindPoseRequest {
-            expected_source_sha256: source_hash.clone(),
-            anchor_policy: AnimationAnchorPolicy::PreserveSourceSpace,
-        },
-    )?;
+    let bind_request = AnimationBindPoseRequest {
+        expected_source_sha256: source_hash.clone(),
+        anchor_policy: AnimationAnchorPolicy::PreserveSourceSpace,
+    };
+    let bind_pose = if visual_metadata {
+        crate::animation::sample_animation_bind_pose_for_visual_metadata(&model, &bind_request)?
+    } else {
+        sample_animation_bind_pose(&model, &bind_request)?
+    };
     let metadata = mesh_metadata(&model.scene, &bind_pose.mesh)?;
     let source = ImportedMeshSource {
         receipt: MeshSourceImportReceipt {

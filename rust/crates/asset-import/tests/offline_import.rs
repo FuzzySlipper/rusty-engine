@@ -473,7 +473,7 @@ fn binary_glb_closure_packs_external_image_and_admits_embedded_clips() {
 }
 
 #[test]
-fn exact_loading_bay_closure_packs_before_the_independent_geometry_boundary() {
+fn exact_loading_bay_closure_admits_visual_metadata_and_embedded_clips() {
     let png = BASE64
         .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL95wAAAABJRU5ErkJggg==")
         .unwrap();
@@ -493,10 +493,27 @@ fn exact_loading_bay_closure_packs_before_the_independent_geometry_boundary() {
         &packed.glb_bytes,
         &ImportContext::default(),
     );
-    assert!(imported.assets.is_none());
-    assert_eq!(imported.diagnostics.len(), 1, "{:?}", imported.diagnostics);
-    assert_eq!(imported.diagnostics[0].code, ImportCode::MalformedSource);
-    assert!(imported.diagnostics[0].message.contains("degenerate"));
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+    let assets = imported.assets.unwrap();
+    assert_eq!(assets.runtime_resource_bytes, packed.glb_bytes);
+    assets.animated_mesh.validate().unwrap();
+    assert_eq!(
+        assets
+            .animated_mesh
+            .clips
+            .iter()
+            .map(|clip| clip.id.as_str())
+            .collect::<Vec<_>>(),
+        ["toggle-on", "toggle-off", "toggle"]
+    );
+    assert!(!assets.animated_mesh.embedded_material_slots.is_empty());
+    assert!(assets
+        .animated_mesh
+        .bounds
+        .min
+        .iter()
+        .chain(assets.animated_mesh.bounds.max.iter())
+        .all(|value| value.is_finite()));
 }
 
 #[test]

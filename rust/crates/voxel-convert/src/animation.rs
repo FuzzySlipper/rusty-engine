@@ -265,3 +265,10 @@ pub fn sample_animation_bind_pose(
 ) -> Result<AnimationBindPoseReceipt, crate::ConversionError> {
     sample::sample_animation_bind_pose(model, request)
 }
+
+pub(crate) fn sample_animation_bind_pose_for_visual_metadata(
+    model: &ImportedAnimatedModel,
+    request: &AnimationBindPoseRequest,
+) -> Result<AnimationBindPoseReceipt, crate::ConversionError> {
+    sample::sample_animation_bind_pose_for_visual_metadata(model, request)
+}

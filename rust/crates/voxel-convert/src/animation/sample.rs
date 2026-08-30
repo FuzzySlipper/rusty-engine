@@ -9,7 +9,10 @@ use super::{
     MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES, MAX_ANIMATION_SAMPLE_FRAMES,
     MAX_ANIMATION_SAMPLE_RATE_HZ,
 };
-use crate::import::{flatten_model_scene, identity_matrix, multiply_matrices, transform_point};
+use crate::import::{
+    flatten_model_scene, identity_matrix, multiply_matrices, transform_point,
+    DegenerateTrianglePolicy,
+};
 use crate::{ConversionError, ImportedModelMesh, ImportedModelNode, ImportedModelPrimitive};
 
 mod interpolation;
@@ -142,7 +145,12 @@ fn sample_timestamps(
     let mut snapshots = Vec::with_capacity(timestamps.len());
     for timestamp_microseconds in timestamps {
         let pose = evaluate_pose(model, Some(clip), timestamp_microseconds)?;
-        let mesh = deform_pose(model, &pose, anchor_policy)?;
+        let mesh = deform_pose(
+            model,
+            &pose,
+            anchor_policy,
+            DegenerateTrianglePolicy::Reject,
+        )?;
         snapshots.push(AnimationMeshSnapshot {
             timestamp_microseconds,
             mesh,
@@ -191,7 +199,33 @@ pub(super) fn sample_animation_bind_pose(
 ) -> Result<AnimationBindPoseReceipt, ConversionError> {
     let estimate = preflight_animation_bind_pose(model, request)?;
     let pose = evaluate_pose(model, None, 0)?;
-    let mesh = deform_pose(model, &pose, request.anchor_policy)?;
+    let mesh = deform_pose(
+        model,
+        &pose,
+        request.anchor_policy,
+        DegenerateTrianglePolicy::Reject,
+    )?;
+    Ok(AnimationBindPoseReceipt {
+        source_sha256: model.source_sha256.clone(),
+        anchor_policy: request.anchor_policy,
+        deformation_work: estimate.deformation_work,
+        estimated_materialized_snapshot_bytes: estimate.materialized_snapshot_bytes,
+        mesh,
+    })
+}
+
+pub(super) fn sample_animation_bind_pose_for_visual_metadata(
+    model: &ImportedAnimatedModel,
+    request: &AnimationBindPoseRequest,
+) -> Result<AnimationBindPoseReceipt, ConversionError> {
+    let estimate = preflight_animation_bind_pose(model, request)?;
+    let pose = evaluate_pose(model, None, 0)?;
+    let mesh = deform_pose(
+        model,
+        &pose,
+        request.anchor_policy,
+        DegenerateTrianglePolicy::DropForVisualMetadata,
+    )?;
     Ok(AnimationBindPoseReceipt {
         source_sha256: model.source_sha256.clone(),
         anchor_policy: request.anchor_policy,
@@ -506,10 +540,12 @@ fn deform_pose(
     model: &ImportedAnimatedModel,
     pose: &EvaluatedPose,
     anchor_policy: AnimationAnchorPolicy,
+    degenerate_policy: DegenerateTrianglePolicy,
 ) -> Result<crate::ImportedStaticMesh, ConversionError> {
     let anchor_correction = anchor_correction(model, pose, anchor_policy)?;
     flatten_model_scene(
         &model.scene,
+        degenerate_policy,
         |node: &ImportedModelNode, mesh: &ImportedModelMesh, primitive: &ImportedModelPrimitive| {
             deform_primitive(model, pose, anchor_correction, node, mesh, primitive)
         },

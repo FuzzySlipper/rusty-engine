@@ -65,12 +65,13 @@ pub use query::{
     VoxelModelWindowSample, MAX_MODEL_WINDOW_CELLS, MAX_MODEL_WINDOW_SAMPLES,
 };
 pub use source::{
-    decode_mesh_source_import_request, import_animated_mesh_source, import_mesh_source,
-    source_sha256, ImportedAnimatedMeshSource, ImportedMeshSource, MeshSourceBounds,
-    MeshSourceFormat, MeshSourceGroup, MeshSourceImportReceipt, MeshSourceImportRequest,
-    MeshSourceMaterialSlot, MeshSourceMetadata, MeshSourceNode, MeshSourceRef,
-    MeshSourceTextureCoordinates, MAX_MESH_IMPORT_REQUEST_BYTES, MAX_MESH_PRIMITIVE_BYTES,
-    MAX_MESH_SOURCE_ASSET_ID_BYTES, MAX_MESH_SOURCE_PATH_BYTES,
+    decode_mesh_source_import_request, import_animated_mesh_source,
+    import_animated_mesh_source_for_visual_metadata, import_mesh_source, source_sha256,
+    ImportedAnimatedMeshSource, ImportedMeshSource, MeshSourceBounds, MeshSourceFormat,
+    MeshSourceGroup, MeshSourceImportReceipt, MeshSourceImportRequest, MeshSourceMaterialSlot,
+    MeshSourceMetadata, MeshSourceNode, MeshSourceRef, MeshSourceTextureCoordinates,
+    MAX_MESH_IMPORT_REQUEST_BYTES, MAX_MESH_PRIMITIVE_BYTES, MAX_MESH_SOURCE_ASSET_ID_BYTES,
+    MAX_MESH_SOURCE_PATH_BYTES,
 };
 pub use store::{convert_and_install, decode_conversion_request, MAX_CONVERSION_REQUEST_BYTES};
 pub use voxel_asset::{

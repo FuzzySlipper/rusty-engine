@@ -16,8 +16,8 @@ use render_model::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use voxel_convert::{
-    import_animated_mesh_source, import_mesh_source, AnimationChannelValues, AnimationProperty,
-    MeshSourceFormat, MeshSourceImportRequest, MAX_CONVERSION_SOURCE_BYTES,
+    import_animated_mesh_source_for_visual_metadata, import_mesh_source, AnimationChannelValues,
+    AnimationProperty, MeshSourceFormat, MeshSourceImportRequest, MAX_CONVERSION_SOURCE_BYTES,
 };
 
 use crate::{
@@ -148,7 +148,7 @@ pub fn import_animated_glb_asset(
         channel_count,
         keyframe_count,
     ) = if parsed.document.animations().next().is_some() {
-        let imported = match import_animated_mesh_source(&animated_request) {
+        let imported = match import_animated_mesh_source_for_visual_metadata(&animated_request) {
             Ok(imported) => imported,
             Err(error) => {
                 diagnostics.extend(error.diagnostics().iter().map(|item| {

@@ -7024,6 +7024,62 @@ mod tests {
     }
 
     #[test]
+    fn loading_bay_button_external_texture_reaches_direct_playback() {
+        const BUTTON_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-factory-kit/button-floor-square.glb"
+        );
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert(
+            "loading-bay/button-floor-square.glb".to_owned(),
+            Arc::from(BUTTON_GLB),
+        );
+        content_resources.insert(
+            "loading-bay/Textures/colormap.png".to_owned(),
+            Arc::from(RGBA_PNG),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let resource_path = b"content/loading-bay/button-floor-square.glb";
+        let clip = b"toggle-on";
+
+        bridge.begin_call();
+        let resource = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: resource_path.as_ptr(),
+                    len: resource_path.len(),
+                },
+            })
+            .expect("Loading Bay GLB closure is admitted");
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .expect("Loading Bay animated appearance");
+        let instance = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance,
+                object_id: 91,
+            })
+            .expect("Loading Bay animation instance");
+        bridge
+            .set_animation_playback(&NativeAnimationPlaybackRequest {
+                instance,
+                kind: NativeAnimationPlaybackKind::Play,
+                clip: NativeUtf8Slice {
+                    bytes: clip.as_ptr(),
+                    len: clip.len(),
+                },
+                loop_mode: NativeAnimationLoopMode::Repeat,
+                speed: 1.0,
+                weight: 1.0,
+                restart: true,
+                fade_seconds: 0.0,
+                has_fade: false,
+                normalized_time: 0.0,
+            })
+            .expect("Loading Bay embedded clip playback");
+    }
+
+    #[test]
     fn animated_external_image_closure_missing_or_wrong_case_is_fail_atomic() {
         const CHARACTER_GLB: &[u8] = include_bytes!(
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
