@@ -19,7 +19,8 @@ use crate::{
     CanonicalU64, ProductDevBundle, ProductDevControlOperation, ProductDevHostError,
     ProductDevInputBatch, ProductDevLifecycleOperation, ProductDevOperationKind,
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
-    ProductDevTimelineCompletion, MAX_CONNECTIONS, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    ProductDevTimelineCompletion, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
+    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
     MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
     PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
@@ -714,7 +715,13 @@ fn handle_sse<R: ProductDevRuntime>(
             break;
         }
         for event in snapshot.events {
-            let payload = format!("id: {}\ndata: {}\n\n", event.id, event.json);
+            let payload = match event.event {
+                Some(name) => format!(
+                    "id: {}\nevent: {}\ndata: {}\n\n",
+                    event.id, name, event.json
+                ),
+                None => format!("id: {}\ndata: {}\n\n", event.id, event.json),
+            };
             if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
                 return;
             }
@@ -727,6 +734,7 @@ fn handle_sse<R: ProductDevRuntime>(
 #[derive(Default)]
 struct OutputBus {
     next_id: u64,
+    next_transfer_id: u64,
     events: VecDeque<OutputEvent>,
     floor_cursor: u64,
     active_binding: Option<crate::ProductDevRuntimeBinding>,
@@ -740,6 +748,7 @@ struct PendingBaseline {
 
 struct OutputEvent {
     id: u64,
+    event: Option<&'static str>,
     json: String,
 }
 
@@ -758,6 +767,7 @@ impl OutputBus {
                 .filter(|event| event.id > cursor)
                 .map(|event| OutputEvent {
                     id: event.id,
+                    event: event.event,
                     json: event.json.clone(),
                 })
                 .collect(),
@@ -802,7 +812,7 @@ fn push_outputs(
                     "a baseline completion does not match its binding",
                 ));
             }
-            append_output_events(&mut bus, pending.outputs)?;
+            append_output_events(&mut bus, pending.binding, pending.outputs)?;
             bus.active_binding = Some(binding);
             continue;
         }
@@ -816,43 +826,124 @@ fn push_outputs(
                 "incremental output arrived before a complete binding baseline",
             ));
         }
-        append_output_events(&mut bus, vec![output])?;
+        let binding = bus.active_binding.expect("active binding was checked");
+        append_output_events(&mut bus, binding, vec![output])?;
     }
     Ok(())
 }
 
 fn append_output_events(
     bus: &mut OutputBus,
+    binding: crate::ProductDevRuntimeBinding,
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<(), ProductDevHostError> {
-    let encoded = outputs
-        .into_iter()
-        .map(|output| {
-            let encoded = serde_json::to_string(&output).map_err(|error| {
+    let mut encoded_events = Vec::new();
+    let mut next_transfer_id = bus.next_transfer_id;
+    for output in outputs {
+        let encoded = serde_json::to_string(&output).map_err(|error| {
+            ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string())
+        })?;
+        if encoded.len() > MAX_OUTPUT_AGGREGATE_BYTES {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_OUTPUT_BOUNDS",
+                "output aggregate exceeds host bound",
+            ));
+        }
+        if encoded.len() <= MAX_OUTPUT_EVENT_BYTES {
+            encoded_events.push(EncodedOutputEvent {
+                event: None,
+                json: encoded,
+            });
+            continue;
+        }
+        next_transfer_id = next_transfer_id.checked_add(1).ok_or_else(|| {
+            ProductDevHostError::new("DEV_HOST_OUTPUT_ID", "output transfer sequence exhausted")
+        })?;
+        let slices = fragment_slices(&encoded);
+        for (fragment_index, data) in slices.iter().enumerate() {
+            let fragment = OutputFragment {
+                schema_version: 1,
+                transfer_id: CanonicalU64::new(next_transfer_id),
+                runtime: binding,
+                fragment_index,
+                fragment_count: slices.len(),
+                aggregate_bytes: encoded.len(),
+                data,
+            };
+            let json = serde_json::to_string(&fragment).map_err(|error| {
                 ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string())
             })?;
-            if encoded.len() > MAX_OUTPUT_EVENT_BYTES {
+            if json.len() > MAX_OUTPUT_EVENT_BYTES {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_OUTPUT_BOUNDS",
-                    "output event exceeds host bound",
+                    "output fragment exceeds host event bound",
                 ));
             }
-            Ok(encoded)
-        })
-        .collect::<Result<Vec<_>, ProductDevHostError>>()?;
-    for json in encoded {
-        let id = bus.next_id.checked_add(1).ok_or_else(|| {
+            encoded_events.push(EncodedOutputEvent {
+                event: Some("rusty-output-fragment"),
+                json,
+            });
+        }
+    }
+    if encoded_events.len() > MAX_OUTPUT_QUEUE_ITEMS {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_OUTPUT_BATCH_BOUNDS",
+            "encoded output batch exceeds the retained event count",
+        ));
+    }
+    let final_id = bus
+        .next_id
+        .checked_add(encoded_events.len() as u64)
+        .ok_or_else(|| {
             ProductDevHostError::new("DEV_HOST_OUTPUT_ID", "output sequence exhausted")
         })?;
-        bus.next_id = id;
+    for encoded in encoded_events {
+        bus.next_id += 1;
         if bus.events.len() == MAX_OUTPUT_QUEUE_ITEMS {
             if let Some(evicted) = bus.events.pop_front() {
                 bus.floor_cursor = evicted.id;
             }
         }
-        bus.events.push_back(OutputEvent { id, json });
+        bus.events.push_back(OutputEvent {
+            id: bus.next_id,
+            event: encoded.event,
+            json: encoded.json,
+        });
     }
+    debug_assert_eq!(bus.next_id, final_id);
+    bus.next_transfer_id = next_transfer_id;
     Ok(())
+}
+
+struct EncodedOutputEvent {
+    event: Option<&'static str>,
+    json: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutputFragment<'a> {
+    schema_version: u8,
+    transfer_id: CanonicalU64,
+    runtime: crate::ProductDevRuntimeBinding,
+    fragment_index: usize,
+    fragment_count: usize,
+    aggregate_bytes: usize,
+    data: &'a str,
+}
+
+fn fragment_slices(encoded: &str) -> Vec<&str> {
+    let mut slices = Vec::new();
+    let mut start = 0;
+    while start < encoded.len() {
+        let mut end = (start + MAX_OUTPUT_FRAGMENT_DATA_BYTES).min(encoded.len());
+        while !encoded.is_char_boundary(end) {
+            end -= 1;
+        }
+        slices.push(&encoded[start..end]);
+        start = end;
+    }
+    slices
 }
 
 struct CounterGuard<'a> {
@@ -877,6 +968,75 @@ fn try_acquire(counter: &AtomicUsize, maximum: usize) -> bool {
             (current < maximum).then_some(current + 1)
         })
         .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding() -> crate::ProductDevRuntimeBinding {
+        crate::ProductDevRuntimeBinding {
+            instance_id: CanonicalU64::new(7),
+            generation: CanonicalU64::new(1),
+            control_revision: CanonicalU64::new(2),
+        }
+    }
+
+    #[test]
+    fn oversized_output_uses_bounded_ordered_fragments_while_small_output_stays_simple() {
+        let mut bus = OutputBus::default();
+        append_output_events(
+            &mut bus,
+            binding(),
+            vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"payload": "small"}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(bus.events.len(), 1);
+        assert_eq!(bus.events[0].event, None);
+
+        append_output_events(
+            &mut bus,
+            binding(),
+            vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_EVENT_BYTES + 1)}),
+            )],
+        )
+        .unwrap();
+        let fragments = bus.events.iter().skip(1).collect::<Vec<_>>();
+        assert!(fragments.len() > 1);
+        assert!(fragments.iter().all(|event| {
+            event.event == Some("rusty-output-fragment")
+                && event.json.len() <= MAX_OUTPUT_EVENT_BYTES
+        }));
+        let decoded = fragments
+            .iter()
+            .map(|event| serde_json::from_str::<serde_json::Value>(&event.json).unwrap())
+            .collect::<Vec<_>>();
+        assert!(decoded.iter().enumerate().all(|(index, value)| {
+            value["fragmentIndex"] == index
+                && value["fragmentCount"] == fragments.len()
+                && value["runtime"]["generation"] == "1"
+        }));
+    }
+
+    #[test]
+    fn oversized_aggregate_is_rejected_without_publishing_partial_events() {
+        let mut bus = OutputBus::default();
+        let error = append_output_events(
+            &mut bus,
+            binding(),
+            vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_AGGREGATE_BYTES + 1)}),
+            )],
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BOUNDS");
+        assert!(bus.events.is_empty());
+        assert_eq!(bus.next_id, 0);
+        assert_eq!(bus.next_transfer_id, 0);
+    }
 }
 
 struct HttpRequest {

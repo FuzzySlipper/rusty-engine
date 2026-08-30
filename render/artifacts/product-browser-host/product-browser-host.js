@@ -28324,7 +28324,7 @@ async function gD(e) {
 		if (await g, d !== null || e.autoStart !== !1 && (await n.waitUntilOutputSubscriptionReady?.(), d !== null || (A(await r.enqueue(() => n.lifecycle({ kind: "start" })), "startup_failed"), d !== null))) throw d;
 		u = !0, i = "ready", v(), E();
 	} catch (e) {
-		let t = x(e, "startup_failed");
+		let t = d ?? x(e, "startup_failed");
 		c?.(), c = null, s?.(), s = null;
 		try {
 			await n.dispose();
@@ -28814,7 +28814,7 @@ var XD = "/__rusty/product/runtime/", ZD = "rusty.product.local-runtime-transpor
 	audioFeedback: "audio-feedback",
 	animationFeedback: "animation-feedback",
 	outputs: "outputs"
-}), $D = 512 * 1024, eO = 256 * 1024, tO = $D, nO = eO, rO = 16 * 1024 * 1024, iO = "18446744073709551615", aO = 1024, oO = 128, sO = 128, cO = 128, lO = 96, uO = 64, dO = 1024, fO = 256, pO = 64 * 1024, mO = 4096, hO = 32, gO = 256, _O = 128, vO = 128, yO = /* @__PURE__ */ new Set([
+}), $D = 512 * 1024, eO = 256 * 1024, tO = 16 * 1024 * 1024, nO = 96 * 1024, rO = 256, iO = $D, aO = tO, oO = 16 * 1024 * 1024, sO = "18446744073709551615", cO = 1024, lO = 128, uO = 128, dO = 128, fO = 96, pO = 64, mO = 1024, hO = 256, gO = 64 * 1024, _O = 4096, vO = 32, yO = 256, bO = 128, xO = 128, SO = /* @__PURE__ */ new Set([
 	...Array.from({ length: 26 }, (e, t) => `key-${String.fromCharCode(97 + t)}`),
 	...Array.from({ length: 10 }, (e, t) => `digit-${String(t)}`),
 	"space",
@@ -28826,11 +28826,11 @@ var XD = "/__rusty/product/runtime/", ZD = "rusty.product.local-runtime-transpor
 	"control-right",
 	"alt-left",
 	"alt-right"
-]), bO = /* @__PURE__ */ new Set([
+]), CO = /* @__PURE__ */ new Set([
 	"primary",
 	"secondary",
 	"middle"
-]), xO = new Set(Array.from({ length: 16 }, (e, t) => `button-${String(t)}`)), SO = new Set(Array.from({ length: 4 }, (e, t) => `axis-${String(t)}`)), CO = /* @__PURE__ */ new Set(["pressed", "released"]), wO = /* @__PURE__ */ new Set([
+]), wO = new Set(Array.from({ length: 16 }, (e, t) => `button-${String(t)}`)), TO = new Set(Array.from({ length: 4 }, (e, t) => `axis-${String(t)}`)), EO = /* @__PURE__ */ new Set(["pressed", "released"]), DO = /* @__PURE__ */ new Set([
 	"focus-loss",
 	"ingress-overflow",
 	"interaction-mode-loss",
@@ -28838,7 +28838,7 @@ var XD = "/__rusty/product/runtime/", ZD = "rusty.product.local-runtime-transpor
 	"restart",
 	"control-revision-change",
 	"dispose"
-]), TO = /* @__PURE__ */ new Set([
+]), OO = /* @__PURE__ */ new Set([
 	"invalidDescriptor",
 	"assetMissing",
 	"assetKindMismatch",
@@ -28858,29 +28858,29 @@ var XD = "/__rusty/product/runtime/", ZD = "rusty.product.local-runtime-transpor
 		super(t, n), this.name = "ProductBrowserLocalTransportError", this.code = e, this.route = n?.route ?? null;
 	}
 };
-function EO(e = {}) {
-	let t = kO(e.basePath ?? "/__rusty/product/runtime/"), n = e.fetch ?? DO(), r = e.eventSource ?? OO(), i = AO(e.maximumResponseBytes ?? tO, "maximumResponseBytes", $D), a = AO(e.maximumOutputBytes ?? nO, "maximumOutputBytes", eO), o = !1, s = null, c = null, l = null, u = null, d = null, f = /* @__PURE__ */ new Set(), p = /* @__PURE__ */ new Set(), m = new AbortController(), h = () => {
+function kO(e = {}) {
+	let t = MO(e.basePath ?? "/__rusty/product/runtime/"), n = e.fetch ?? AO(), r = e.eventSource ?? jO(), i = NO(e.maximumResponseBytes ?? iO, "maximumResponseBytes", $D), a = NO(e.maximumOutputBytes ?? aO, "maximumOutputBytes", tO), o = !1, s = null, c = null, l = null, u = null, d = null, f = null, p = null, m = null, h = /* @__PURE__ */ new Set(), g = /* @__PURE__ */ new Set(), _ = new AbortController(), v = () => {
 		if (o) throw new $("disposed", "Product Browser local runtime transport is disposed");
-		if (d !== null) throw new $("stream_failed", d.diagnostic, { route: QD.outputs });
-	}, g = (t) => {
+		if (m !== null) throw new $("stream_failed", m.diagnostic, { route: QD.outputs });
+	}, y = (t) => {
 		try {
 			e.onTransportError?.(t);
 		} catch {}
-	}, _ = (e, t) => {
-		if (d === null) {
-			d = Object.freeze({ ...e }), s !== null && (c !== null && (s.removeEventListener?.("rusty-output-lag", c), c = null), s.close(), s = null), u?.(), u = null, l = null, g(t);
-			for (let e of [...p]) try {
-				e(d);
+	}, b = (e, t) => {
+		if (m === null) {
+			m = Object.freeze({ ...e }), s !== null && (c !== null && (s.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s.removeEventListener?.("rusty-output-fragment", l), l = null), s.close(), s = null), u = null, p?.(), p = null, f = null, y(t);
+			for (let e of [...g]) try {
+				e(m);
 			} catch (e) {
-				g(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+				y(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
 					cause: e,
 					route: QD.outputs
 				}));
 			}
 		}
-	}, v = async (e, r, a) => {
-		h();
-		let o = `${t}${e}`, s = VO(r, i, e), c;
+	}, x = async (e, r, a) => {
+		v();
+		let o = `${t}${e}`, s = WO(r, i, e), c;
 		try {
 			c = await n(o, {
 				method: "POST",
@@ -28890,7 +28890,7 @@ function EO(e = {}) {
 					"content-type": "application/json"
 				},
 				body: s,
-				signal: m.signal
+				signal: _.signal
 			});
 		} catch (t) {
 			throw new $("request_failed", `Product Browser local runtime request failed for ${e}: ${t instanceof Error ? t.message : String(t)}`, {
@@ -28899,7 +28899,7 @@ function EO(e = {}) {
 			});
 		}
 		if (!(c.headers.get("content-type")?.toLowerCase() ?? "").startsWith("application/json")) throw new $("response_decode_failed", `Product Browser local runtime response for ${e} must use application/json`, { route: e });
-		let l = await BO(c, i, e);
+		let l = await UO(c, i, e);
 		if (!c.ok) throw new $("request_failed", `Product Browser local runtime rejected ${e} with HTTP ${String(c.status)}`, { route: e });
 		let u;
 		try {
@@ -28911,167 +28911,206 @@ function EO(e = {}) {
 			});
 		}
 		try {
-			return h(), a(u);
+			return v(), a(u);
 		} catch (t) {
 			throw t instanceof $ ? t : new $("response_decode_failed", `Product Browser local runtime returned an invalid response for ${e}: ${t instanceof Error ? t.message : String(t)}`, {
 				cause: t,
 				route: e
 			});
 		}
+	}, S = (e) => x(QD.lifecycle[e.kind], {}, (t) => ok(t, e.kind)), C = (e) => x(QD.input, { batch: GO(e) }, sk), w = (e) => {
+		let t = qO(e);
+		return x(QD.audioFeedback, t, (e) => ck(e, t.runtime, t.facts));
+	}, T = (e) => {
+		let t = YO(e);
+		return x(QD.animationFeedback, t, (e) => lk(e, t.runtime, t.facts));
+	}, E = (e) => x(QD.advanceRealtime, { observedTimeNs: PO(e, "observedTimeNs") }, (e) => ok(e, "advance-realtime")), D = () => x(QD.admitDemandStep, {}, (e) => ok(e, "admit-demand-step")), O = (e) => x(QD.admitExternalStep, { step: PO(e, "step") }, (e) => ok(e, "admit-external-step")), k = (e) => {
+		let t = $O(e);
+		return x(QD.completeTimeline, t, (e) => uk(e, t.ticket));
+	}, A = (e) => {
+		e.kind === "binding" && (d = e.runtime);
+		for (let t of [...h]) try {
+			t(e);
+		} catch (e) {
+			y(new $("stream_failed", `Product Browser local runtime output listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+				cause: e,
+				route: QD.outputs
+			}));
+		}
+	}, ee = (e) => {
+		let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted invalid output fragments: ${e instanceof Error ? e.message : String(e)}`, {
+			cause: e,
+			route: QD.outputs
+		});
+		b({
+			kind: "runtime-failure",
+			diagnostic: t.message
+		}, t);
 	};
 	return Object.freeze({
-		lifecycle: (e) => v(QD.lifecycle[e.kind], {}, (t) => nk(t, e.kind)),
-		input: (e) => v(QD.input, { batch: HO(e) }, rk),
-		reportAudioFeedback: (e) => {
-			let t = WO(e);
-			return v(QD.audioFeedback, t, (e) => ik(e, t.runtime, t.facts));
-		},
-		reportAnimationFeedback: (e) => {
-			let t = KO(e);
-			return v(QD.animationFeedback, t, (e) => ak(e, t.runtime, t.facts));
-		},
-		advanceRealtime: (e) => v(QD.advanceRealtime, { observedTimeNs: jO(e, "observedTimeNs") }, (e) => nk(e, "advance-realtime")),
-		admitDemandStep: () => v(QD.admitDemandStep, {}, (e) => nk(e, "admit-demand-step")),
-		admitExternalStep: (e) => v(QD.admitExternalStep, { step: jO(e, "step") }, (e) => nk(e, "admit-external-step")),
-		completeTimeline: (e) => {
-			let t = XO(e);
-			return v(QD.completeTimeline, t, (e) => ok(e, t.ticket));
-		},
+		lifecycle: S,
+		input: C,
+		reportAudioFeedback: w,
+		reportAnimationFeedback: T,
+		advanceRealtime: E,
+		admitDemandStep: D,
+		admitExternalStep: O,
+		completeTimeline: k,
 		subscribeTerminalFailures: (e) => {
 			if (typeof e != "function") throw new $("invalid_options", "Product Browser local runtime terminal-failure listener must be a function");
-			if (d !== null) {
+			if (m !== null) {
 				try {
-					e(d);
+					e(m);
 				} catch (e) {
-					g(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+					y(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
 						cause: e,
 						route: QD.outputs
 					}));
 				}
 				return () => void 0;
 			}
-			p.add(e);
+			g.add(e);
 			let t = !0;
 			return () => {
-				t && (t = !1, p.delete(e));
+				t && (t = !1, g.delete(e));
 			};
 		},
 		subscribeOutputs: (e) => {
-			if (h(), typeof e != "function") throw new $("invalid_options", "Product Browser local runtime output listener must be a function");
-			if (f.add(e), s === null) try {
-				l = new Promise((e) => {
-					u = e;
+			if (v(), typeof e != "function") throw new $("invalid_options", "Product Browser local runtime output listener must be a function");
+			if (h.add(e), s === null) try {
+				f = new Promise((e) => {
+					p = e;
 				}), s = new r(`${t}${QD.outputs}`), s.onopen = () => {
-					u?.(), u = null;
+					p?.(), p = null;
 				}, c = (e) => {
 					try {
-						let t = tk(e.data, a);
-						_(t, new $("stream_failed", t.diagnostic, { route: QD.outputs }));
+						let t = ak(e.data, a);
+						b(t, new $("stream_failed", t.diagnostic, { route: QD.outputs }));
 					} catch (e) {
 						let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted an invalid output-lag event: ${e instanceof Error ? e.message : String(e)}`, {
 							cause: e,
 							route: QD.outputs
 						});
-						_({
+						b({
 							kind: "output-lag",
 							diagnostic: t.message
 						}, t);
 					}
-				}, s.addEventListener?.("rusty-output-lag", c), s.onmessage = (e) => {
-					if (d === null) try {
-						let t = sk(ek(e.data, a));
-						for (let e of [...f]) try {
-							e(t);
-						} catch (e) {
-							g(new $("stream_failed", `Product Browser local runtime output listener failed: ${e instanceof Error ? e.message : String(e)}`, {
-								cause: e,
-								route: QD.outputs
-							}));
+				}, s.addEventListener?.("rusty-output-lag", c), l = (e) => {
+					if (m === null) try {
+						let t = ik(rk(e.data, eO), a);
+						if (d === null || !_k(t.runtime, d)) throw TypeError("output fragment runtime binding is stale or unavailable");
+						if (u === null) {
+							if (t.fragmentIndex !== 0) throw TypeError("output fragment transfer must begin at index zero");
+							u = {
+								transferId: t.transferId,
+								runtime: t.runtime,
+								fragmentCount: t.fragmentCount,
+								aggregateBytes: t.aggregateBytes,
+								nextIndex: 0,
+								byteLength: 0,
+								data: []
+							};
 						}
+						let n = u;
+						if (n.transferId !== t.transferId || !_k(n.runtime, t.runtime) || n.fragmentCount !== t.fragmentCount || n.aggregateBytes !== t.aggregateBytes || n.nextIndex !== t.fragmentIndex) throw TypeError("output fragments are duplicated, reordered, or from another transfer");
+						if (n.data.push(t.data), n.byteLength += new TextEncoder().encode(t.data).byteLength, n.nextIndex += 1, n.byteLength > n.aggregateBytes) throw TypeError("output fragments exceed their declared aggregate length");
+						if (n.nextIndex === n.fragmentCount) {
+							if (n.byteLength !== n.aggregateBytes) throw TypeError("output fragment transfer ended before its declared aggregate length");
+							let e = n.data.join("");
+							u = null, A(dk(rk(e, a)));
+						}
+					} catch (e) {
+						ee(e);
+					}
+				}, s.addEventListener?.("rusty-output-fragment", l), s.onmessage = (e) => {
+					if (m === null) try {
+						if (u !== null) throw new $("output_decode_failed", "Product Browser local runtime interrupted an output fragment transfer", { route: QD.outputs });
+						A(dk(rk(e.data, eO)));
 					} catch (e) {
 						let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted an invalid output: ${e instanceof Error ? e.message : String(e)}`, {
 							cause: e,
 							route: QD.outputs
 						});
-						g(t);
+						u === null ? y(t) : ee(t);
 					}
 				}, s.onerror = (e) => {
-					if (d !== null) return;
+					if (m !== null) return;
 					let t = new $("stream_failed", `Product Browser local runtime output stream failed${e instanceof Error ? `: ${e.message}` : ""}`, { route: QD.outputs });
-					g(t);
+					y(t);
 				};
 			} catch (t) {
-				throw f.delete(e), s?.close(), s = null, c = null, u?.(), u = null, l = null, new $("stream_failed", `Product Browser local runtime output stream could not start: ${t instanceof Error ? t.message : String(t)}`, {
+				throw h.delete(e), s?.close(), s = null, c = null, l = null, u = null, p?.(), p = null, f = null, new $("stream_failed", `Product Browser local runtime output stream could not start: ${t instanceof Error ? t.message : String(t)}`, {
 					cause: t,
 					route: QD.outputs
 				});
 			}
 			let n = !0;
 			return () => {
-				n && (n = !1, f.delete(e), f.size === 0 && (c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), s?.close(), s = null, u?.(), u = null, l = null));
+				n && (n = !1, h.delete(e), h.size === 0 && (c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s?.removeEventListener?.("rusty-output-fragment", l), l = null), s?.close(), s = null, u = null, p?.(), p = null, f = null));
 			};
 		},
 		waitUntilOutputSubscriptionReady: async () => {
-			if (h(), s === null || l === null) throw new $("stream_failed", "Product Browser local runtime output subscription has not started", { route: QD.outputs });
-			await l, h();
+			if (v(), s === null || f === null) throw new $("stream_failed", "Product Browser local runtime output subscription has not started", { route: QD.outputs });
+			await f, v();
 		},
 		dispose: () => {
-			o || (o = !0, m.abort(), c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), s?.close(), s = null, u?.(), u = null, l = null, f.clear(), p.clear());
+			o || (o = !0, _.abort(), c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s?.removeEventListener?.("rusty-output-fragment", l), l = null), s?.close(), s = null, u = null, p?.(), p = null, f = null, h.clear(), g.clear());
 		}
 	});
 }
-function DO() {
+function AO() {
 	let e = globalThis.fetch;
 	if (typeof e != "function") throw new $("invalid_options", "Product Browser local runtime transport requires fetch");
 	return e.bind(globalThis);
 }
-function OO() {
+function jO() {
 	let e = globalThis.EventSource;
 	if (typeof e != "function") throw new $("invalid_options", "Product Browser local runtime transport requires EventSource");
 	return e;
 }
-function kO(e) {
+function MO(e) {
 	if (typeof e != "string" || e.length === 0 || e.length > 256 || !e.startsWith("/") || e.startsWith("//") || e.includes("\\") || e.includes("..") || e.includes("%") || e.includes("?") || e.includes("#") || !e.endsWith("/")) throw new $("invalid_options", "Product Browser local runtime basePath must be a same-origin absolute path ending in /");
 	return e;
 }
-function AO(e, t, n = rO) {
+function NO(e, t, n = oO) {
 	if (!Number.isSafeInteger(e) || e < 1 || e > n) throw new $("invalid_options", `${t} must be a positive safe integer no greater than ${String(n)}`);
 	return e;
 }
-function jO(e, t) {
-	if (typeof e != "string" || !/^(?:0|[1-9]\d{0,19})$/u.test(e) || e.length === 20 && e > iO) throw new $("invalid_options", `${t} must be a canonical unsigned 64-bit decimal string`);
+function PO(e, t) {
+	if (typeof e != "string" || !/^(?:0|[1-9]\d{0,19})$/u.test(e) || e.length === 20 && e > sO) throw new $("invalid_options", `${t} must be a canonical unsigned 64-bit decimal string`);
 	return e;
 }
-function MO(e, t) {
+function FO(e, t) {
 	if (!Number.isSafeInteger(e) || e < 0 || e > 4294967295) throw new $("invalid_options", `${t} must be an unsigned 32-bit integer`);
 	return e;
 }
-function NO(e, t) {
-	return PO(e, t);
+function IO(e, t) {
+	return LO(e, t);
 }
-function PO(e, t) {
+function LO(e, t) {
 	if (typeof e != "string" || new TextEncoder().encode(e).byteLength > 128 || !/^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(e)) throw new $("invalid_options", `${t} must be a 1..128 byte lowercase runtime identity`);
 	return e;
 }
-function FO(e, t, n = 256) {
+function RO(e, t, n = 256) {
 	if (typeof e != "string" || e.length === 0 || new TextEncoder().encode(e).byteLength > n || /[\u0000-\u001f\u007f]/u.test(e)) throw TypeError(`${t} must be a bounded string without control characters`);
 	return e;
 }
-function IO(e, t, n = -Infinity, r = Infinity) {
+function zO(e, t, n = -Infinity, r = Infinity) {
 	if (typeof e != "number" || !Number.isFinite(e) || e < n || e > r) throw TypeError(`${t} must be a finite number within [${String(n)}, ${String(r)}]`);
 	return e;
 }
-function LO(e) {
-	return RO(e, "input edge", CO);
+function BO(e) {
+	return VO(e, "input edge", EO);
 }
-function RO(e, t, n) {
+function VO(e, t, n) {
 	if (typeof e != "string" || !n.has(e)) throw TypeError(`${t} is not in the closed runtime input catalog`);
 	return e;
 }
-function zO(e, t) {
+function HO(e, t) {
 	return Object.prototype.hasOwnProperty.call(e, t);
 }
-async function BO(e, t, n) {
+async function UO(e, t, n) {
 	let r = e.body?.getReader();
 	if (r === void 0) {
 		let r;
@@ -29103,7 +29142,7 @@ async function BO(e, t, n) {
 	}
 	return o;
 }
-function VO(e, t, n) {
+function WO(e, t, n) {
 	let r;
 	try {
 		r = JSON.stringify(e);
@@ -29117,33 +29156,33 @@ function VO(e, t, n) {
 	if (new TextEncoder().encode(r).byteLength > t) throw new $("invalid_options", `Product Browser local runtime request for ${n} exceeds ${String(t)} bytes`, { route: n });
 	return r;
 }
-function HO(e) {
-	let t = gk(e, "runtime input batch");
-	if (t.length > aO) throw new $("invalid_options", `runtime input batch must contain 0..${String(aO)} entries`);
+function GO(e) {
+	let t = bk(e, "runtime input batch");
+	if (t.length > cO) throw new $("invalid_options", `runtime input batch must contain 0..${String(cO)} entries`);
 	let n = [];
 	for (let e = 0; e < t.length; e += 1) {
 		let r = Object.getOwnPropertyDescriptor(t, String(e));
 		if (r === void 0 || !("value" in r)) throw new $("invalid_options", `runtime input batch entry ${String(e)} cannot be a getter or hole`);
-		n.push(UO(r.value));
+		n.push(KO(r.value));
 	}
 	return Object.freeze(n);
 }
-function UO(e) {
-	let t = hk(e, "runtime input envelope"), n = {
-		runtime: fk(t.runtime),
-		sequence: jO(t.sequence, "sequence"),
-		context: PO(t.context, "context")
+function KO(e) {
+	let t = yk(e, "runtime input envelope"), n = {
+		runtime: gk(t.runtime),
+		sequence: PO(t.sequence, "sequence"),
+		context: LO(t.context, "context")
 	};
-	if (zO(t, "fact")) return _k(t, [
+	if (HO(t, "fact")) return xk(t, [
 		"runtime",
 		"sequence",
 		"context",
 		"fact"
 	], "runtime input ingress"), Object.freeze({
 		...n,
-		fact: JO(t.fact)
+		fact: ZO(t.fact)
 	});
-	if (zO(t, "intent")) return _k(t, [
+	if (HO(t, "intent")) return xk(t, [
 		"runtime",
 		"sequence",
 		"context",
@@ -29151,41 +29190,41 @@ function UO(e) {
 		"value"
 	], "runtime direct intent claim"), Object.freeze({
 		...n,
-		intent: PO(t.intent, "intent"),
-		value: YO(t.value)
+		intent: LO(t.intent, "intent"),
+		value: QO(t.value)
 	});
 	throw TypeError("runtime input envelope must contain fact or intent");
 }
-function WO(e) {
-	let t = hk(e, "audio feedback");
-	if (_k(t, [
+function qO(e) {
+	let t = yk(e, "audio feedback");
+	if (xk(t, [
 		"runtime",
 		"replaceOwner",
 		"evictedFactCount",
 		"facts"
 	], "audio feedback"), typeof t.replaceOwner != "boolean") throw TypeError("audio feedback replaceOwner must be boolean");
-	let n = gk(t.facts, "audio feedback facts");
-	if (n.length > oO) throw new $("invalid_options", `audio feedback facts must contain 0..${String(oO)} entries`);
+	let n = bk(t.facts, "audio feedback facts");
+	if (n.length > lO) throw new $("invalid_options", `audio feedback facts must contain 0..${String(lO)} entries`);
 	let r = [];
 	for (let e = 0; e < n.length; e += 1) {
 		let t = Object.getOwnPropertyDescriptor(n, String(e));
 		if (t === void 0 || !("value" in t)) throw new $("invalid_options", `audio feedback fact ${String(e)} cannot be a getter or hole`);
-		r.push(GO(t.value));
+		r.push(JO(t.value));
 	}
 	return Object.freeze({
-		runtime: fk(t.runtime),
+		runtime: gk(t.runtime),
 		replaceOwner: t.replaceOwner,
-		evictedFactCount: jO(t.evictedFactCount, "audio feedback evictedFactCount"),
+		evictedFactCount: PO(t.evictedFactCount, "audio feedback evictedFactCount"),
 		facts: Object.freeze(r)
 	});
 }
-function GO(e) {
-	let t = hk(e, "audio feedback fact"), n = {
-		factId: jO(t.factId, "audio feedback factId"),
-		sequence: MO(t.sequence, "audio feedback sequence")
+function JO(e) {
+	let t = yk(e, "audio feedback fact"), n = {
+		factId: PO(t.factId, "audio feedback factId"),
+		sequence: FO(t.sequence, "audio feedback sequence")
 	};
 	if (t.kind === "naturalCompletion") {
-		if (t.source === "oneShot") return _k(t, [
+		if (t.source === "oneShot") return xk(t, [
 			"kind",
 			"source",
 			"factId",
@@ -29195,9 +29234,9 @@ function GO(e) {
 			kind: "naturalCompletion",
 			source: "oneShot",
 			...n,
-			signalHandle: jO(t.signalHandle, "audio feedback signalHandle")
+			signalHandle: PO(t.signalHandle, "audio feedback signalHandle")
 		});
-		if (t.source === "retainedVoice") return _k(t, [
+		if (t.source === "retainedVoice") return xk(t, [
 			"kind",
 			"source",
 			"factId",
@@ -29207,11 +29246,11 @@ function GO(e) {
 			kind: "naturalCompletion",
 			source: "retainedVoice",
 			...n,
-			voiceHandle: jO(t.voiceHandle, "audio feedback voiceHandle")
+			voiceHandle: PO(t.voiceHandle, "audio feedback voiceHandle")
 		});
 		throw TypeError("audio feedback natural completion source is invalid");
 	}
-	if (t.kind === "diagnostic") return _k(t, [
+	if (t.kind === "diagnostic") return xk(t, [
 		"kind",
 		"factId",
 		"code",
@@ -29220,31 +29259,31 @@ function GO(e) {
 	], "audio feedback diagnostic"), Object.freeze({
 		kind: "diagnostic",
 		...n,
-		code: RO(t.code, "audio feedback diagnostic code", TO),
-		voiceHandle: t.voiceHandle === null ? null : jO(t.voiceHandle, "audio feedback diagnostic voiceHandle")
+		code: VO(t.code, "audio feedback diagnostic code", OO),
+		voiceHandle: t.voiceHandle === null ? null : PO(t.voiceHandle, "audio feedback diagnostic voiceHandle")
 	});
 	throw TypeError("audio feedback fact kind is not admitted");
 }
-function KO(e) {
-	let t = hk(e, "animation feedback");
-	if (_k(t, [
+function YO(e) {
+	let t = yk(e, "animation feedback");
+	if (xk(t, [
 		"runtime",
 		"replaceOwner",
 		"evictedFactCount",
 		"facts"
 	], "animation feedback"), typeof t.replaceOwner != "boolean") throw TypeError("animation feedback replaceOwner must be boolean");
-	let n = gk(t.facts, "animation feedback facts");
-	if (n.length > sO) throw new $("invalid_options", "animation feedback exceeds 128 facts");
+	let n = bk(t.facts, "animation feedback facts");
+	if (n.length > uO) throw new $("invalid_options", "animation feedback exceeds 128 facts");
 	return Object.freeze({
-		runtime: fk(t.runtime),
+		runtime: gk(t.runtime),
 		replaceOwner: t.replaceOwner,
-		evictedFactCount: jO(t.evictedFactCount, "animation feedback evictedFactCount"),
-		facts: Object.freeze(n.map((e) => qO(e)))
+		evictedFactCount: PO(t.evictedFactCount, "animation feedback evictedFactCount"),
+		facts: Object.freeze(n.map((e) => XO(e)))
 	});
 }
-function qO(e) {
-	let t = hk(e, "animation feedback fact"), n = jO(t.factId, "animation feedback factId");
-	if (t.kind === "playbackObservation") return _k(t, [
+function XO(e) {
+	let t = yk(e, "animation feedback fact"), n = PO(t.factId, "animation feedback factId");
+	if (t.kind === "playbackObservation") return xk(t, [
 		"kind",
 		"factId",
 		"objectId",
@@ -29256,14 +29295,14 @@ function qO(e) {
 	], "animation playback observation"), Object.freeze({
 		kind: "playbackObservation",
 		factId: n,
-		objectId: jO(t.objectId, "animation feedback objectId"),
-		generation: jO(t.generation, "animation feedback generation"),
-		sequence: MO(t.sequence, "animation feedback sequence"),
-		status: FO(t.status, "animation playback status"),
-		selectedClip: t.selectedClip === null ? null : FO(t.selectedClip, "animation selected clip"),
-		sampledAtSeconds: t.sampledAtSeconds === null ? null : IO(t.sampledAtSeconds, "animation sample seconds", 0, Number.MAX_VALUE)
+		objectId: PO(t.objectId, "animation feedback objectId"),
+		generation: PO(t.generation, "animation feedback generation"),
+		sequence: FO(t.sequence, "animation feedback sequence"),
+		status: RO(t.status, "animation playback status"),
+		selectedClip: t.selectedClip === null ? null : RO(t.selectedClip, "animation selected clip"),
+		sampledAtSeconds: t.sampledAtSeconds === null ? null : zO(t.sampledAtSeconds, "animation sample seconds", 0, Number.MAX_VALUE)
 	});
-	if (t.kind === "naturalCompletion") return _k(t, [
+	if (t.kind === "naturalCompletion") return xk(t, [
 		"kind",
 		"factId",
 		"objectId",
@@ -29272,12 +29311,12 @@ function qO(e) {
 	], "animation natural completion"), Object.freeze({
 		kind: "naturalCompletion",
 		factId: n,
-		objectId: jO(t.objectId, "animation feedback objectId"),
-		generation: jO(t.generation, "animation feedback generation"),
-		clip: FO(t.clip, "animation completion clip")
+		objectId: PO(t.objectId, "animation feedback objectId"),
+		generation: PO(t.generation, "animation feedback generation"),
+		clip: RO(t.clip, "animation completion clip")
 	});
 	if (t.kind === "cue") {
-		_k(t, [
+		xk(t, [
 			"kind",
 			"factId",
 			"objectId",
@@ -29289,21 +29328,21 @@ function qO(e) {
 			"signalDomain",
 			"signalId"
 		], "animation cue");
-		let e = RO(t.signalDomain, "animation cue signal domain", /* @__PURE__ */ new Set(["audio", "particle"]));
+		let e = VO(t.signalDomain, "animation cue signal domain", /* @__PURE__ */ new Set(["audio", "particle"]));
 		return Object.freeze({
 			kind: "cue",
 			factId: n,
-			objectId: jO(t.objectId, "animation feedback objectId"),
-			generation: jO(t.generation, "animation feedback generation"),
-			cueId: FO(t.cueId, "animation cue id"),
-			clip: FO(t.clip, "animation cue clip"),
-			markerSeconds: IO(t.markerSeconds, "animation cue marker", 0, Number.MAX_VALUE),
-			sampledAtSeconds: IO(t.sampledAtSeconds, "animation cue sample", 0, Number.MAX_VALUE),
+			objectId: PO(t.objectId, "animation feedback objectId"),
+			generation: PO(t.generation, "animation feedback generation"),
+			cueId: RO(t.cueId, "animation cue id"),
+			clip: RO(t.clip, "animation cue clip"),
+			markerSeconds: zO(t.markerSeconds, "animation cue marker", 0, Number.MAX_VALUE),
+			sampledAtSeconds: zO(t.sampledAtSeconds, "animation cue sample", 0, Number.MAX_VALUE),
 			signalDomain: e,
-			signalId: FO(t.signalId, "animation cue signal id")
+			signalId: RO(t.signalId, "animation cue signal id")
 		});
 	}
-	if (t.kind === "stopped") return _k(t, [
+	if (t.kind === "stopped") return xk(t, [
 		"kind",
 		"factId",
 		"objectId",
@@ -29313,12 +29352,12 @@ function qO(e) {
 	], "animation stopped observation"), Object.freeze({
 		kind: "stopped",
 		factId: n,
-		objectId: jO(t.objectId, "animation feedback objectId"),
-		generation: jO(t.generation, "animation feedback generation"),
-		sequence: MO(t.sequence, "animation feedback sequence"),
-		reason: RO(t.reason, "animation stop reason", /* @__PURE__ */ new Set(["destroyed", "teardown"]))
+		objectId: PO(t.objectId, "animation feedback objectId"),
+		generation: PO(t.generation, "animation feedback generation"),
+		sequence: FO(t.sequence, "animation feedback sequence"),
+		reason: VO(t.reason, "animation stop reason", /* @__PURE__ */ new Set(["destroyed", "teardown"]))
 	});
-	if (t.kind === "diagnostic") return _k(t, [
+	if (t.kind === "diagnostic") return xk(t, [
 		"kind",
 		"factId",
 		"objectId",
@@ -29328,179 +29367,179 @@ function qO(e) {
 	], "animation diagnostic"), Object.freeze({
 		kind: "diagnostic",
 		factId: n,
-		objectId: t.objectId === null ? null : jO(t.objectId, "animation feedback objectId"),
-		generation: t.generation === null ? null : jO(t.generation, "animation feedback generation"),
-		code: FO(t.code, "animation diagnostic code"),
-		sequence: MO(t.sequence, "animation diagnostic sequence")
+		objectId: t.objectId === null ? null : PO(t.objectId, "animation feedback objectId"),
+		generation: t.generation === null ? null : PO(t.generation, "animation feedback generation"),
+		code: RO(t.code, "animation diagnostic code"),
+		sequence: FO(t.sequence, "animation diagnostic sequence")
 	});
 	throw TypeError("animation feedback fact kind is not admitted");
 }
-function JO(e) {
-	let t = hk(e, "runtime input fact"), n = t.kind;
+function ZO(e) {
+	let t = yk(e, "runtime input fact"), n = t.kind;
 	switch (n) {
-		case "key": return _k(t, [
+		case "key": return xk(t, [
 			"kind",
 			"code",
 			"edge"
 		], "key input fact"), Object.freeze({
 			kind: n,
-			code: RO(t.code, "key code", yO),
-			edge: LO(t.edge)
+			code: VO(t.code, "key code", SO),
+			edge: BO(t.edge)
 		});
-		case "pointer-button": return _k(t, [
+		case "pointer-button": return xk(t, [
 			"kind",
 			"button",
 			"edge"
 		], "pointer-button input fact"), Object.freeze({
 			kind: n,
-			button: RO(t.button, "pointer button", bO),
-			edge: LO(t.edge)
+			button: VO(t.button, "pointer button", CO),
+			edge: BO(t.edge)
 		});
-		case "pointer-delta": return _k(t, [
+		case "pointer-delta": return xk(t, [
 			"kind",
 			"x",
 			"y"
 		], "pointer-delta input fact"), Object.freeze({
 			kind: n,
-			x: IO(t.x, "pointer delta x", -256, 256),
-			y: IO(t.y, "pointer delta y", -256, 256)
+			x: zO(t.x, "pointer delta x", -256, 256),
+			y: zO(t.y, "pointer delta y", -256, 256)
 		});
-		case "wheel": return _k(t, [
+		case "wheel": return xk(t, [
 			"kind",
 			"x",
 			"y"
 		], "wheel input fact"), Object.freeze({
 			kind: n,
-			x: IO(t.x, "wheel x", -256, 256),
-			y: IO(t.y, "wheel y", -256, 256)
+			x: zO(t.x, "wheel x", -256, 256),
+			y: zO(t.y, "wheel y", -256, 256)
 		});
-		case "controller-button": return _k(t, [
+		case "controller-button": return xk(t, [
 			"kind",
 			"button",
 			"edge"
 		], "controller-button input fact"), Object.freeze({
 			kind: n,
-			button: RO(t.button, "controller button", xO),
-			edge: LO(t.edge)
+			button: VO(t.button, "controller button", wO),
+			edge: BO(t.edge)
 		});
-		case "controller-axis": return _k(t, [
+		case "controller-axis": return xk(t, [
 			"kind",
 			"axis",
 			"value"
 		], "controller-axis input fact"), Object.freeze({
 			kind: n,
-			axis: RO(t.axis, "controller axis", SO),
-			value: IO(t.value, "controller axis value", -1, 1)
+			axis: VO(t.axis, "controller axis", TO),
+			value: zO(t.value, "controller axis value", -1, 1)
 		});
-		case "clear": return _k(t, ["kind", "reason"], "clear input fact"), Object.freeze({
+		case "clear": return xk(t, ["kind", "reason"], "clear input fact"), Object.freeze({
 			kind: n,
-			reason: RO(t.reason, "input clear reason", wO)
+			reason: VO(t.reason, "input clear reason", DO)
 		});
 		default: throw TypeError("runtime input fact kind is not admitted");
 	}
 }
-function YO(e) {
-	let t = hk(e, "runtime intent value");
+function QO(e) {
+	let t = yk(e, "runtime intent value");
 	switch (t.kind) {
 		case "digital":
-			if (_k(t, ["kind", "active"], "digital intent value"), typeof t.active != "boolean") throw TypeError("digital intent active must be boolean");
+			if (xk(t, ["kind", "active"], "digital intent value"), typeof t.active != "boolean") throw TypeError("digital intent active must be boolean");
 			return Object.freeze({
 				kind: "digital",
 				active: t.active
 			});
-		case "axis": return _k(t, ["kind", "value"], "axis intent value"), Object.freeze({
+		case "axis": return xk(t, ["kind", "value"], "axis intent value"), Object.freeze({
 			kind: "axis",
-			value: IO(t.value, "axis intent value", -1, 1)
+			value: zO(t.value, "axis intent value", -1, 1)
 		});
 		default: throw TypeError("runtime intent value kind is not admitted");
 	}
 }
-function XO(e) {
-	let t = hk(e, "timeline completion");
-	_k(t, [
+function $O(e) {
+	let t = yk(e, "timeline completion");
+	xk(t, [
 		"ticket",
 		"runtime",
 		"correlation",
 		"outcome",
 		"provenance"
 	], "timeline completion");
-	let n = hk(t.outcome, "timeline completion outcome");
-	if (_k(n, ["kind", "data"], "timeline completion outcome"), n.kind !== "success" && n.kind !== "failure") throw TypeError("timeline completion outcome kind is invalid");
-	let r = hk(t.provenance, "timeline completion provenance");
-	_k(r, ["correlation", "detail"], "timeline completion provenance");
-	let i = PO(t.correlation, "timeline correlation"), a = PO(r.correlation, "provenance correlation");
+	let n = yk(t.outcome, "timeline completion outcome");
+	if (xk(n, ["kind", "data"], "timeline completion outcome"), n.kind !== "success" && n.kind !== "failure") throw TypeError("timeline completion outcome kind is invalid");
+	let r = yk(t.provenance, "timeline completion provenance");
+	xk(r, ["correlation", "detail"], "timeline completion provenance");
+	let i = LO(t.correlation, "timeline correlation"), a = LO(r.correlation, "provenance correlation");
 	if (i !== a) throw TypeError("timeline provenance correlation must match completion correlation");
 	let o = {
 		kind: n.kind,
-		...zO(n, "data") ? { data: ZO(n.data) } : {}
+		...HO(n, "data") ? { data: ek(n.data) } : {}
 	}, s = {
 		correlation: a,
-		...zO(r, "detail") ? { detail: ZO(r.detail) } : {}
+		...HO(r, "detail") ? { detail: ek(r.detail) } : {}
 	};
 	return Object.freeze({
-		ticket: jO(t.ticket, "timeline ticket"),
-		runtime: fk(t.runtime),
+		ticket: PO(t.ticket, "timeline ticket"),
+		runtime: gk(t.runtime),
 		correlation: i,
 		outcome: Object.freeze(o),
 		provenance: Object.freeze(s)
 	});
 }
-function ZO(e) {
-	let t = QO(e);
-	if (new TextEncoder().encode(JSON.stringify(t)).byteLength > mO) throw TypeError(`timeline opaque data exceeds ${String(mO)} bytes`);
+function ek(e) {
+	let t = tk(e);
+	if (new TextEncoder().encode(JSON.stringify(t)).byteLength > _O) throw TypeError(`timeline opaque data exceeds ${String(_O)} bytes`);
 	return t;
 }
-function QO(e, t = 0, n = { nodes: 0 }) {
-	if (t > hO) throw TypeError("timeline opaque data exceeds the runtime-timeline depth bound");
-	if (n.nodes += 1, n.nodes > gO) throw TypeError("timeline opaque data exceeds the runtime-timeline node bound");
+function tk(e, t = 0, n = { nodes: 0 }) {
+	if (t > vO) throw TypeError("timeline opaque data exceeds the runtime-timeline depth bound");
+	if (n.nodes += 1, n.nodes > yO) throw TypeError("timeline opaque data exceeds the runtime-timeline node bound");
 	if (e === null || typeof e == "boolean") return e;
-	if (typeof e == "string") return FO(e, "timeline JSON string", mO);
-	if (typeof e == "number") return IO(e, "timeline JSON number");
+	if (typeof e == "string") return RO(e, "timeline JSON string", _O);
+	if (typeof e == "number") return zO(e, "timeline JSON number");
 	if (Array.isArray(e)) {
-		let r = gk(e, "timeline JSON array");
-		if (r.length > _O) throw TypeError("timeline opaque data array exceeds the runtime-timeline bound");
+		let r = bk(e, "timeline JSON array");
+		if (r.length > bO) throw TypeError("timeline opaque data array exceeds the runtime-timeline bound");
 		let i = [];
 		for (let e = 0; e < r.length; e += 1) {
 			let a = Object.getOwnPropertyDescriptor(r, String(e));
 			if (a === void 0 || !("value" in a)) throw TypeError(`timeline JSON array entry ${String(e)} cannot be a getter or hole`);
-			i.push(QO(a.value, t + 1, n));
+			i.push(tk(a.value, t + 1, n));
 		}
 		return Object.freeze(i);
 	}
-	let r = hk(e, "timeline JSON object"), i = Reflect.ownKeys(r);
-	if (i.length > vO) throw TypeError("timeline opaque data object exceeds the runtime-timeline bound");
+	let r = yk(e, "timeline JSON object"), i = Reflect.ownKeys(r);
+	if (i.length > xO) throw TypeError("timeline opaque data object exceeds the runtime-timeline bound");
 	let a = Object.create(null);
 	for (let e of i) {
 		if (typeof e != "string") throw TypeError("timeline JSON object cannot contain symbol keys");
 		let i = Object.getOwnPropertyDescriptor(r, e);
 		if (i === void 0 || !("value" in i)) throw TypeError(`timeline JSON object field ${e} cannot be a getter`);
-		a[e] = QO(i.value, t + 1, n);
+		a[e] = tk(i.value, t + 1, n);
 	}
 	return Object.freeze(a);
 }
-function $O(e, t = 0) {
-	if (t > uO) throw TypeError("JSON value exceeds the transport depth bound");
+function nk(e, t = 0) {
+	if (t > pO) throw TypeError("JSON value exceeds the transport depth bound");
 	if (e === null || typeof e == "boolean") return e;
-	if (typeof e == "string") return FO(e, "JSON string", pO);
-	if (typeof e == "number") return IO(e, "JSON number");
+	if (typeof e == "string") return RO(e, "JSON string", gO);
+	if (typeof e == "number") return zO(e, "JSON number");
 	if (Array.isArray(e)) {
-		let n = gk(e, "JSON array");
-		if (n.length > dO) throw TypeError("JSON array exceeds the transport bound");
+		let n = bk(e, "JSON array");
+		if (n.length > mO) throw TypeError("JSON array exceeds the transport bound");
 		let r = [];
 		for (let e = 0; e < n.length; e += 1) {
 			let i = Object.getOwnPropertyDescriptor(n, String(e));
 			if (i === void 0 || !("value" in i)) throw TypeError(`JSON array entry ${String(e)} cannot be a getter or hole`);
-			r.push($O(i.value, t + 1));
+			r.push(nk(i.value, t + 1));
 		}
 		return Object.freeze(r);
 	}
-	let n = hk(e, "JSON object"), r = Object.keys(n);
-	if (r.length > fO) throw TypeError("JSON object exceeds the transport key bound");
+	let n = yk(e, "JSON object"), r = Object.keys(n);
+	if (r.length > hO) throw TypeError("JSON object exceeds the transport key bound");
 	let i = Object.create(null);
-	for (let e of r) i[e] = $O(n[e], t + 1);
+	for (let e of r) i[e] = nk(n[e], t + 1);
 	return Object.freeze(i);
 }
-function ek(e, t) {
+function rk(e, t) {
 	if (typeof e != "string" || new TextEncoder().encode(e).byteLength > t) throw new $("output_decode_failed", `Product Browser local runtime output exceeds ${String(t)} bytes`, { route: QD.outputs });
 	try {
 		return JSON.parse(e);
@@ -29511,17 +29550,44 @@ function ek(e, t) {
 		});
 	}
 }
-function tk(e, t) {
-	let n = hk(ek(e, t), "output-lag event");
-	if (_k(n, ["code"], "output-lag event"), n.code !== "DEV_HOST_OUTPUT_LAG") throw new $("output_decode_failed", "Product Browser local runtime output-lag event code is invalid", { route: QD.outputs });
+function ik(e, t) {
+	let n = yk(e, "output fragment");
+	if (xk(n, [
+		"schemaVersion",
+		"transferId",
+		"runtime",
+		"fragmentIndex",
+		"fragmentCount",
+		"aggregateBytes",
+		"data"
+	], "output fragment"), n.schemaVersion !== 1) throw TypeError("output fragment schemaVersion must equal 1");
+	if (!Number.isSafeInteger(n.fragmentCount) || n.fragmentCount < 2 || n.fragmentCount > rO) throw TypeError("output fragment count is outside the retained stream bound");
+	let r = n.fragmentCount;
+	if (!Number.isSafeInteger(n.fragmentIndex) || n.fragmentIndex < 0 || n.fragmentIndex >= r) throw TypeError("output fragment index is outside its transfer");
+	if (!Number.isSafeInteger(n.aggregateBytes) || n.aggregateBytes <= eO || n.aggregateBytes > t) throw TypeError("output fragment aggregate length is outside the configured bound");
+	if (typeof n.data != "string") throw TypeError("output fragment data must be text");
+	let i = new TextEncoder().encode(n.data).byteLength;
+	if (i === 0 || i > nO) throw TypeError("output fragment data is outside the event payload bound");
+	return {
+		transferId: PO(n.transferId, "output fragment transferId"),
+		runtime: gk(n.runtime),
+		fragmentIndex: n.fragmentIndex,
+		fragmentCount: r,
+		aggregateBytes: n.aggregateBytes,
+		data: n.data
+	};
+}
+function ak(e, t) {
+	let n = yk(rk(e, t), "output-lag event");
+	if (xk(n, ["code"], "output-lag event"), n.code !== "DEV_HOST_OUTPUT_LAG") throw new $("output_decode_failed", "Product Browser local runtime output-lag event code is invalid", { route: QD.outputs });
 	return Object.freeze({
 		kind: "output-lag",
 		diagnostic: "Product Browser local runtime output stream lost retained output; a fresh snapshot is required"
 	});
 }
-function nk(e, t) {
-	let n = hk(e, "operation result");
-	if (_k(n, [
+function ok(e, t) {
+	let n = yk(e, "operation result");
+	if (xk(n, [
 		"accepted",
 		"operation",
 		"binding",
@@ -29536,49 +29602,49 @@ function nk(e, t) {
 	return {
 		accepted: n.accepted,
 		operation: t,
-		...n.binding === void 0 ? {} : { binding: fk(n.binding) },
-		...n.nextInputSequence === void 0 ? {} : { nextInputSequence: jO(n.nextInputSequence, "operation nextInputSequence") },
-		...n.readout === void 0 ? {} : { readout: mk(n.readout) },
-		...n.diagnostic === void 0 ? {} : { diagnostic: vk(n.diagnostic) }
+		...n.binding === void 0 ? {} : { binding: gk(n.binding) },
+		...n.nextInputSequence === void 0 ? {} : { nextInputSequence: PO(n.nextInputSequence, "operation nextInputSequence") },
+		...n.readout === void 0 ? {} : { readout: vk(n.readout) },
+		...n.diagnostic === void 0 ? {} : { diagnostic: Sk(n.diagnostic) }
 	};
 }
-function rk(e) {
-	let t = hk(e, "input result");
-	if (_k(t, [
+function sk(e) {
+	let t = yk(e, "input result");
+	if (xk(t, [
 		"accepted",
 		"count",
 		"binding",
 		"readout",
 		"diagnostic"
 	], "input result"), t.accepted !== !0 && t.accepted !== !1) throw TypeError("accepted must be boolean");
-	if (!Number.isSafeInteger(t.count) || t.count < 0 || t.count > aO) throw TypeError(`count must be a non-negative integer no greater than ${String(aO)}`);
+	if (!Number.isSafeInteger(t.count) || t.count < 0 || t.count > cO) throw TypeError(`count must be a non-negative integer no greater than ${String(cO)}`);
 	if (t.accepted === !1 && (t.binding !== void 0 || t.readout !== void 0)) throw TypeError("rejected input result cannot include binding or readout");
 	if (t.accepted === !0 && t.diagnostic !== void 0) throw TypeError("accepted input result cannot include diagnostic");
 	return {
 		accepted: t.accepted,
 		count: t.count,
-		...t.binding === void 0 ? {} : { binding: fk(t.binding) },
-		...t.readout === void 0 ? {} : { readout: mk(t.readout) },
-		...t.diagnostic === void 0 ? {} : { diagnostic: vk(t.diagnostic) }
+		...t.binding === void 0 ? {} : { binding: gk(t.binding) },
+		...t.readout === void 0 ? {} : { readout: vk(t.readout) },
+		...t.diagnostic === void 0 ? {} : { diagnostic: Sk(t.diagnostic) }
 	};
 }
-function ik(e, t, n) {
-	let r = hk(e, "audio feedback result");
-	if (_k(r, [
+function ck(e, t, n) {
+	let r = yk(e, "audio feedback result");
+	if (xk(r, [
 		"accepted",
 		"runtime",
 		"acceptedThroughFactId",
 		"diagnostic"
 	], "audio feedback result"), r.accepted !== !0 && r.accepted !== !1) throw TypeError("audio feedback accepted must be boolean");
-	let i = fk(r.runtime);
-	if (!pk(i, t)) throw TypeError("audio feedback result runtime does not match request runtime");
+	let i = gk(r.runtime);
+	if (!_k(i, t)) throw TypeError("audio feedback result runtime does not match request runtime");
 	let a = n.length === 0 ? void 0 : n[n.length - 1].factId;
 	if (r.accepted === !1) {
 		if (r.acceptedThroughFactId !== void 0) throw TypeError("rejected audio feedback cannot include acceptedThroughFactId");
 		return Object.freeze({
 			accepted: !1,
 			runtime: i,
-			...r.diagnostic === void 0 ? {} : { diagnostic: vk(r.diagnostic) }
+			...r.diagnostic === void 0 ? {} : { diagnostic: Sk(r.diagnostic) }
 		});
 	}
 	if (r.diagnostic !== void 0) throw TypeError("accepted audio feedback cannot include diagnostic");
@@ -29589,7 +29655,7 @@ function ik(e, t, n) {
 			runtime: i
 		});
 	}
-	let o = jO(r.acceptedThroughFactId, "audio feedback acceptedThroughFactId");
+	let o = PO(r.acceptedThroughFactId, "audio feedback acceptedThroughFactId");
 	if (o !== a) throw TypeError("audio feedback acknowledgement boundary does not match submitted facts");
 	return Object.freeze({
 		accepted: !0,
@@ -29597,23 +29663,23 @@ function ik(e, t, n) {
 		acceptedThroughFactId: o
 	});
 }
-function ak(e, t, n) {
-	let r = hk(e, "animation feedback result");
-	if (_k(r, [
+function lk(e, t, n) {
+	let r = yk(e, "animation feedback result");
+	if (xk(r, [
 		"accepted",
 		"runtime",
 		"acceptedThroughFactId",
 		"diagnostic"
 	], "animation feedback result"), r.accepted !== !0 && r.accepted !== !1) throw TypeError("animation feedback accepted must be boolean");
-	let i = fk(r.runtime);
-	if (!pk(i, t)) throw TypeError("animation feedback result runtime does not match request runtime");
+	let i = gk(r.runtime);
+	if (!_k(i, t)) throw TypeError("animation feedback result runtime does not match request runtime");
 	let a = n.length === 0 ? void 0 : n[n.length - 1].factId;
 	if (!r.accepted) {
 		if (r.acceptedThroughFactId !== void 0) throw TypeError("rejected animation feedback cannot include acceptedThroughFactId");
 		return Object.freeze({
 			accepted: !1,
 			runtime: i,
-			...r.diagnostic === void 0 ? {} : { diagnostic: vk(r.diagnostic) }
+			...r.diagnostic === void 0 ? {} : { diagnostic: Sk(r.diagnostic) }
 		});
 	}
 	if (r.diagnostic !== void 0) throw TypeError("accepted animation feedback cannot include diagnostic");
@@ -29624,7 +29690,7 @@ function ak(e, t, n) {
 			runtime: i
 		});
 	}
-	let o = jO(r.acceptedThroughFactId, "animation feedback acceptedThroughFactId");
+	let o = PO(r.acceptedThroughFactId, "animation feedback acceptedThroughFactId");
 	if (o !== a) throw TypeError("animation feedback acknowledgement boundary does not match submitted facts");
 	return Object.freeze({
 		accepted: !0,
@@ -29632,73 +29698,73 @@ function ak(e, t, n) {
 		acceptedThroughFactId: o
 	});
 }
-function ok(e, t) {
-	let n = hk(e, "timeline completion result");
-	if (_k(n, [
+function uk(e, t) {
+	let n = yk(e, "timeline completion result");
+	if (xk(n, [
 		"accepted",
 		"ticket",
 		"binding",
 		"readout",
 		"diagnostic"
 	], "timeline completion result"), n.accepted !== !0 && n.accepted !== !1) throw TypeError("accepted must be boolean");
-	let r = jO(n.ticket, "timeline result ticket");
+	let r = PO(n.ticket, "timeline result ticket");
 	if (r !== t) throw TypeError("ticket does not match completion request");
 	if (n.accepted === !1 && (n.binding !== void 0 || n.readout !== void 0)) throw TypeError("rejected timeline result cannot include binding or readout");
 	if (n.accepted === !0 && n.diagnostic !== void 0) throw TypeError("accepted timeline result cannot include diagnostic");
 	return {
 		accepted: n.accepted,
 		ticket: r,
-		...n.binding === void 0 ? {} : { binding: fk(n.binding) },
-		...n.readout === void 0 ? {} : { readout: mk(n.readout) },
-		...n.diagnostic === void 0 ? {} : { diagnostic: vk(n.diagnostic) }
+		...n.binding === void 0 ? {} : { binding: gk(n.binding) },
+		...n.readout === void 0 ? {} : { readout: vk(n.readout) },
+		...n.diagnostic === void 0 ? {} : { diagnostic: Sk(n.diagnostic) }
 	};
 }
-function sk(e) {
-	let t = hk(e, "runtime output");
+function dk(e) {
+	let t = yk(e, "runtime output");
 	switch (t.kind) {
-		case "binding": return _k(t, [
+		case "binding": return xk(t, [
 			"kind",
 			"runtime",
 			"nextInputSequence"
 		], "binding output"), {
 			kind: "binding",
-			runtime: fk(t.runtime),
-			nextInputSequence: jO(t.nextInputSequence, "binding nextInputSequence")
+			runtime: gk(t.runtime),
+			nextInputSequence: PO(t.nextInputSequence, "binding nextInputSequence")
 		};
-		case "frame": return _k(t, ["kind", "frame"], "frame output"), {
+		case "frame": return xk(t, ["kind", "frame"], "frame output"), {
 			kind: "frame",
-			frame: uk(t.frame, "frame")
+			frame: mk(t.frame, "frame")
 		};
-		case "view-composition": return _k(t, ["kind", "composition"], "view composition output"), {
+		case "view-composition": return xk(t, ["kind", "composition"], "view composition output"), {
 			kind: "view-composition",
-			composition: lk(t.composition)
+			composition: pk(t.composition)
 		};
-		case "animation-cue-definitions": return _k(t, ["kind", "definitions"], "animation cue definitions output"), {
+		case "animation-cue-definitions": return xk(t, ["kind", "definitions"], "animation cue definitions output"), {
 			kind: "animation-cue-definitions",
-			definitions: ck(t.definitions)
+			definitions: fk(t.definitions)
 		};
-		case "presentation": return _k(t, ["kind", "frame"], "presentation output"), {
+		case "presentation": return xk(t, ["kind", "frame"], "presentation output"), {
 			kind: "presentation",
-			frame: uk(t.frame, "presentation")
+			frame: mk(t.frame, "presentation")
 		};
-		case "ui-projection": return _k(t, ["kind", "envelope"], "UI projection output"), {
+		case "ui-projection": return xk(t, ["kind", "envelope"], "UI projection output"), {
 			kind: "ui-projection",
-			envelope: dk(t.envelope)
+			envelope: hk(t.envelope)
 		};
-		case "runtime-readout": return _k(t, ["kind", "readout"], "runtime readout output"), {
+		case "runtime-readout": return xk(t, ["kind", "readout"], "runtime readout output"), {
 			kind: "runtime-readout",
-			readout: mk(t.readout)
+			readout: vk(t.readout)
 		};
 		default: throw TypeError("runtime output kind is not admitted");
 	}
 }
-function ck(e) {
-	let t = gk(e, "animation cue definitions");
-	if (t.length > cO) throw TypeError("animation cue definition replacement exceeds 128 definitions");
+function fk(e) {
+	let t = bk(e, "animation cue definitions");
+	if (t.length > dO) throw TypeError("animation cue definition replacement exceeds 128 definitions");
 	let n = /* @__PURE__ */ new Set();
 	return Object.freeze(t.map((e) => {
-		let t = hk(e, "animation cue definition");
-		_k(t, [
+		let t = yk(e, "animation cue definition");
+		xk(t, [
 			"cueId",
 			"asset",
 			"clip",
@@ -29706,7 +29772,7 @@ function ck(e) {
 			"signalDomain",
 			"signalId"
 		], "animation cue definition");
-		let r = FO(t.cueId, "animation cue id", lO), i = FO(t.asset, "animation cue asset", lO), a = FO(t.clip, "animation cue clip", lO), o = FO(t.signalId, "animation cue signal id", lO), s = RO(t.signalDomain, "animation cue signal domain", /* @__PURE__ */ new Set(["audio", "particle"])), c = IO(t.atSeconds, "animation cue marker", 0, Number.MAX_VALUE), l = JSON.stringify([
+		let r = RO(t.cueId, "animation cue id", fO), i = RO(t.asset, "animation cue asset", fO), a = RO(t.clip, "animation cue clip", fO), o = RO(t.signalId, "animation cue signal id", fO), s = VO(t.signalDomain, "animation cue signal domain", /* @__PURE__ */ new Set(["audio", "particle"])), c = zO(t.atSeconds, "animation cue marker", 0, Number.MAX_VALUE), l = JSON.stringify([
 			i,
 			a,
 			r
@@ -29724,15 +29790,15 @@ function ck(e) {
 		});
 	}));
 }
-function lk(e) {
+function pk(e) {
 	return RD(e);
 }
-function uk(e, t) {
-	return hk(e, t);
+function mk(e, t) {
+	return yk(e, t);
 }
-function dk(e) {
-	let t = hk(e, "UI projection");
-	if (_k(t, [
+function hk(e) {
+	let t = yk(e, "UI projection");
+	if (xk(t, [
 		"artifact",
 		"runtime",
 		"sequence",
@@ -29742,31 +29808,31 @@ function dk(e) {
 	], "UI projection"), t.artifact !== "rusty.product.ui-projection") throw TypeError("UI projection artifact is invalid");
 	return {
 		artifact: "rusty.product.ui-projection",
-		runtime: fk(t.runtime),
-		sequence: jO(t.sequence, "sequence"),
-		stream: NO(t.stream, "stream"),
-		contract: NO(t.contract, "contract"),
-		value: $O(t.value)
+		runtime: gk(t.runtime),
+		sequence: PO(t.sequence, "sequence"),
+		stream: IO(t.stream, "stream"),
+		contract: IO(t.contract, "contract"),
+		value: nk(t.value)
 	};
 }
-function fk(e) {
-	let t = hk(e, "runtime identity");
-	return _k(t, [
+function gk(e) {
+	let t = yk(e, "runtime identity");
+	return xk(t, [
 		"instanceId",
 		"generation",
 		"controlRevision"
 	], "runtime identity"), {
-		instanceId: jO(t.instanceId, "instanceId"),
-		generation: jO(t.generation, "generation"),
-		controlRevision: jO(t.controlRevision, "controlRevision")
+		instanceId: PO(t.instanceId, "instanceId"),
+		generation: PO(t.generation, "generation"),
+		controlRevision: PO(t.controlRevision, "controlRevision")
 	};
 }
-function pk(e, t) {
+function _k(e, t) {
 	return e.instanceId === t.instanceId && e.generation === t.generation && e.controlRevision === t.controlRevision;
 }
-function mk(e) {
-	let t = hk(e, "runtime readout");
-	if (_k(t, [
+function vk(e) {
+	let t = yk(e, "runtime readout");
+	if (xk(t, [
 		"artifact",
 		"runtime",
 		"mode",
@@ -29788,19 +29854,19 @@ function mk(e) {
 	if (t.scaledRemainder !== null && (!Number.isSafeInteger(t.scaledRemainder) || t.scaledRemainder < 0 || t.scaledRemainder > 4294967295)) throw TypeError("runtime readout scaledRemainder must be a u32 or null");
 	return {
 		artifact: "rusty.product.runtime-readout",
-		runtime: fk(t.runtime),
+		runtime: gk(t.runtime),
 		mode: n,
 		state: r,
-		admittedSimulationSteps: jO(t.admittedSimulationSteps, "admittedSimulationSteps"),
-		admittedPresentations: jO(t.admittedPresentations, "admittedPresentations"),
-		droppedRealtimeSteps: jO(t.droppedRealtimeSteps, "droppedRealtimeSteps"),
-		clockRegressions: jO(t.clockRegressions, "clockRegressions"),
+		admittedSimulationSteps: PO(t.admittedSimulationSteps, "admittedSimulationSteps"),
+		admittedPresentations: PO(t.admittedPresentations, "admittedPresentations"),
+		droppedRealtimeSteps: PO(t.droppedRealtimeSteps, "droppedRealtimeSteps"),
+		clockRegressions: PO(t.clockRegressions, "clockRegressions"),
 		scaledRemainder: t.scaledRemainder,
-		lastObservedTimeNs: t.lastObservedTimeNs === null ? null : jO(t.lastObservedTimeNs, "lastObservedTimeNs"),
+		lastObservedTimeNs: t.lastObservedTimeNs === null ? null : PO(t.lastObservedTimeNs, "lastObservedTimeNs"),
 		fault: i
 	};
 }
-function hk(e, t) {
+function yk(e, t) {
 	if (typeof e != "object" || !e || Array.isArray(e)) throw TypeError(`${t} must be an object`);
 	let n = Object.getPrototypeOf(e);
 	if (n !== Object.prototype && n !== null) throw TypeError(`${t} must be a plain object`);
@@ -29811,7 +29877,7 @@ function hk(e, t) {
 	}
 	return e;
 }
-function gk(e, t) {
+function bk(e, t) {
 	if (!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype) throw TypeError(`${t} must be a plain array`);
 	let n = Object.getOwnPropertyDescriptor(e, "length");
 	if (n === void 0 || !("value" in n) || n.value !== e.length || n.enumerable !== !1 || n.configurable !== !1) throw TypeError(`${t} has a non-canonical length descriptor`);
@@ -29823,20 +29889,20 @@ function gk(e, t) {
 	}
 	return e;
 }
-function _k(e, t, n) {
+function xk(e, t, n) {
 	for (let r of Reflect.ownKeys(e)) {
 		if (typeof r != "string") throw TypeError(`${n} cannot contain symbol keys`);
 		if (!t.includes(r)) throw TypeError(`${n} contains unknown field ${r}`);
 	}
 }
-function vk(e) {
+function Sk(e) {
 	if (typeof e != "string" || e.length === 0 || new TextEncoder().encode(e).byteLength > 1024) throw TypeError("diagnostic must be a non-empty string no greater than 1024 bytes");
 	return e;
 }
 //#endregion
 //#region packages/product-browser-host/src/index.ts
-function yk(e, t) {
+function Ck(e, t) {
 	return sD(e, t);
 }
 //#endregion
-export { kD as PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE, uD as PRODUCT_BROWSER_HOST_ARTIFACT, XD as PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH, ZD as PRODUCT_BROWSER_LOCAL_TRANSPORT_ARTIFACT, fD as ProductBrowserHostError, $ as ProductBrowserLocalTransportError, EO as createProductBrowserLocalHttpAdapter, dD as createProductBrowserRuntimeTransport, gD as mountProductBrowserHost, AD as productBrowserBundleAssets, jD as productBrowserBundleDescriptor, yk as rendererResourceContentHash };
+export { kD as PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE, uD as PRODUCT_BROWSER_HOST_ARTIFACT, XD as PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH, ZD as PRODUCT_BROWSER_LOCAL_TRANSPORT_ARTIFACT, fD as ProductBrowserHostError, $ as ProductBrowserLocalTransportError, kO as createProductBrowserLocalHttpAdapter, dD as createProductBrowserRuntimeTransport, gD as mountProductBrowserHost, AD as productBrowserBundleAssets, jD as productBrowserBundleDescriptor, Ck as rendererResourceContentHash };

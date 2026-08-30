@@ -15,10 +15,10 @@ export interface ProductBrowserLocalEventSource {
         readonly data: string;
     }) => void) | null;
     onerror: ((event: unknown) => void) | null;
-    readonly addEventListener?: (type: 'rusty-output-lag', listener: (event: {
+    readonly addEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: {
         readonly data: string;
     }) => void) => void;
-    readonly removeEventListener?: (type: 'rusty-output-lag', listener: (event: {
+    readonly removeEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: {
         readonly data: string;
     }) => void) => void;
     readonly close: () => void;

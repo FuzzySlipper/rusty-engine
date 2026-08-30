@@ -57,6 +57,11 @@ pub const MAX_BUNDLE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_OUTPUT_QUEUE_ITEMS: usize = 256;
 /// Upper bound for one output event after JSON encoding.
 pub const MAX_OUTPUT_EVENT_BYTES: usize = 256 * 1024;
+/// Upper bound for one complete typed output before bounded SSE fragmentation.
+pub const MAX_OUTPUT_AGGREGATE_BYTES: usize = 16 * 1024 * 1024;
+/// Payload target for one fragment. The serialized fragment envelope remains
+/// below `MAX_OUTPUT_EVENT_BYTES` even when JSON quotes and escapes the slice.
+pub const MAX_OUTPUT_FRAGMENT_DATA_BYTES: usize = 96 * 1024;
 /// Upper bound for live accepted TCP connections, including SSE clients.
 pub const MAX_CONNECTIONS: usize = 32;
 /// Upper bound for simultaneous SSE subscribers.

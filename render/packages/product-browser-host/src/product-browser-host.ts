@@ -973,7 +973,10 @@ export async function mountProductBrowserHost(
     publishHealth();
     scheduleRendererFeedbackFlush();
   } catch (cause) {
-    const error = reportFailure(cause, 'startup_failed');
+    // Output delivery can fail and close the shared transport while the
+    // lifecycle response is still in flight. Preserve that first concrete
+    // failure instead of replacing it with the resulting aborted fetch.
+    const error = failure ?? reportFailure(cause, 'startup_failed');
     unsubscribeTerminalFailures?.();
     unsubscribeTerminalFailures = null;
     unsubscribeOutputs?.();

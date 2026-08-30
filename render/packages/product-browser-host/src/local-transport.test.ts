@@ -41,11 +41,11 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
     this.closed = true;
   }
 
-  addEventListener(type: 'rusty-output-lag', listener: (event: { readonly data: string }) => void): void {
+  addEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: { readonly data: string }) => void): void {
     this.namedListeners.set(type, listener);
   }
 
-  removeEventListener(type: 'rusty-output-lag', listener: (event: { readonly data: string }) => void): void {
+  removeEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: { readonly data: string }) => void): void {
     if (this.namedListeners.get(type) === listener) this.namedListeners.delete(type);
   }
 
@@ -59,6 +59,10 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
 
   emitLag(value: unknown = { code: 'DEV_HOST_OUTPUT_LAG' }): void {
     this.namedListeners.get('rusty-output-lag')?.({ data: JSON.stringify(value) });
+  }
+
+  emitFragment(value: unknown): void {
+    this.namedListeners.get('rusty-output-fragment')?.({ data: JSON.stringify(value) });
   }
 }
 
@@ -243,6 +247,82 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'disposed',
   );
 });
+
+test('large retained output fragments publish once after complete ordered reassembly', () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const outputs: unknown[] = [];
+  adapter.subscribeOutputs((output) => outputs.push(output));
+  const stream = FakeEventSource.instances[0]!;
+  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+  const encoded = JSON.stringify({ kind: 'frame', frame: { payload: 'x'.repeat(300_000) } });
+  const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
+  chunks.forEach((data, fragmentIndex) => stream.emitFragment({
+    schemaVersion: 1,
+    transferId: '1',
+    runtime: RUNTIME,
+    fragmentIndex,
+    fragmentCount: chunks.length,
+    aggregateBytes: new TextEncoder().encode(encoded).byteLength,
+    data,
+  }));
+  assert.equal(outputs.length, 2);
+  assert.equal((outputs[1] as { kind: string }).kind, 'frame');
+  assert.equal(((outputs[1] as { frame: { payload: string } }).frame.payload).length, 300_000);
+  adapter.dispose();
+});
+
+test('output fragments fail closed on missing, duplicate, stale, oversized, and interrupted transfers', () => {
+  const cases: readonly ((stream: FakeEventSource) => void)[] = [
+    (stream) => stream.emitFragment(fragment({ fragmentIndex: 1 })),
+    (stream) => {
+      const first = fragment();
+      stream.emitFragment(first);
+      stream.emitFragment(first);
+    },
+    (stream) => stream.emitFragment(fragment({ runtime: { ...RUNTIME, generation: '2' } })),
+    (stream) => stream.emitFragment(fragment({ aggregateBytes: 16 * 1024 * 1024 + 1 })),
+    (stream) => {
+      stream.emitFragment(fragment());
+      stream.emit({ kind: 'runtime-readout', readout: READOUT });
+    },
+  ];
+  for (const exercise of cases) {
+    FakeEventSource.instances.length = 0;
+    const adapter = createProductBrowserLocalHttpAdapter({
+      fetch: async () => response({}),
+      eventSource: FakeEventSource,
+    });
+    const outputs: unknown[] = [];
+    const failures: unknown[] = [];
+    adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
+    adapter.subscribeOutputs((output) => outputs.push(output));
+    const stream = FakeEventSource.instances[0]!;
+    stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+    exercise(stream);
+    assert.equal(outputs.length, 1);
+    assert.equal(failures.length, 1);
+    assert.equal((failures[0] as { kind: string }).kind, 'runtime-failure');
+    assert.equal(stream.closed, true);
+    adapter.dispose();
+  }
+});
+
+function fragment(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    transferId: '1',
+    runtime: RUNTIME,
+    fragmentIndex: 0,
+    fragmentCount: 3,
+    aggregateBytes: 300_000,
+    data: 'x'.repeat(98_304),
+    ...overrides,
+  };
+}
 
 test('local transport rejects malformed typed output and bounded paths', () => {
   const errors: ProductBrowserLocalTransportError[] = [];

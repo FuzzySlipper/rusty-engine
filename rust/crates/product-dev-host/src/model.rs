@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    ProductDevHostError, ProductDevRuntimeError, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    ProductDevHostError, ProductDevRuntimeError, MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
 };
 
 /// Fixed Engine-owned local-runtime route prefix consumed by product-browser-host.
@@ -1214,6 +1214,13 @@ impl ProductDevAnimationCueDefinition {
 }
 
 impl ProductDevRuntimeOutput {
+    #[cfg(test)]
+    pub(crate) fn test_frame_value(frame: Value) -> Self {
+        Self {
+            wire: ProductDevRuntimeOutputWire::Frame { frame },
+        }
+    }
+
     pub fn binding(runtime: ProductDevRuntimeBinding, next_input_sequence: CanonicalU64) -> Self {
         Self {
             wire: ProductDevRuntimeOutputWire::Binding {
@@ -1425,10 +1432,10 @@ impl<T> ProductDevRuntimeReceipt<T> {
             let encoded = serde_json::to_vec(output).map_err(|error| {
                 ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string())
             })?;
-            if encoded.len() > MAX_OUTPUT_EVENT_BYTES {
+            if encoded.len() > MAX_OUTPUT_AGGREGATE_BYTES {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_OUTPUT_BOUNDS",
-                    "runtime receipt output exceeds the maximum event byte length",
+                    "runtime receipt output exceeds the maximum aggregate byte length",
                 ));
             }
         }
