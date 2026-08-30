@@ -12,7 +12,6 @@
     "test:compiled": "node --test 'dist/**/*.test.js'"
   },
   "devDependencies": {
-    "@rusty-engine/developer-command-client": "workspace:*",
     "@rusty-engine/render-contracts": "workspace:*",
     "@rusty-engine/renderer-host": "workspace:*",
     "@types/node": "^24.0.0"

@@ -97,7 +97,6 @@ def main() -> None:
             "render/**",
             "rust/crates/render-host-contracts/**",
             "rust/crates/renderer-webview-host/**",
-            "rust/crates/developer-command/**",
             "scripts/verify-render-artifacts.sh",
             "scripts/verify-renderer-webview-host.sh",
         },
@@ -111,11 +110,6 @@ def main() -> None:
             "render",
             "studio",
         },
-        "render/artifacts/developer-command-client/index.js": {"render"},
-        "render/packages/developer-command-client/src/index.ts": {
-            "render",
-        },
-        "rust/crates/developer-command/src/wire.rs": {"render", "verify"},
         "rust/crates/renderer-webview-host/artifacts/renderer-webview.js": {"render"},
         "rust/crates/renderer-webview-host/src/lib.rs": {"render", "verify"},
         "rust/crates/entity-state/src/lib.rs": {"studio", "verify"},
@@ -185,7 +179,7 @@ def main() -> None:
     artifact_gate = read(root, "scripts/verify-render-artifacts.sh")
     if artifact_gate.count('run build\n') != 1:
         fail("combined artifact gate must perform exactly one renderer build")
-    for artifact in ("application-host", "developer-command-client", "renderer-webview.js"):
+    for artifact in ("application-host", "renderer-webview.js"):
         if artifact not in artifact_gate:
             fail(f"combined artifact gate does not check {artifact}")
 
@@ -195,7 +189,6 @@ def main() -> None:
         fail("renderer root does not expose compiled-test and browser-typecheck phases")
     for package in (
         "application-host",
-        "developer-command-client",
         "render-contracts",
         "render-projection",
         "renderer-host",

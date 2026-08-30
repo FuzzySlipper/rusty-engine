@@ -13,11 +13,6 @@
   "files": [
     "application-content.d.ts",
     "application-host.d.ts",
-    "developer-command-client.d.ts",
-    "developer-command-client.js",
-    "developer-command-shell.d.ts",
-    "generated-developer-command-contract.d.ts",
-    "generated-developer-command-contract.js",
     "index.d.ts",
     "index.js",
     "input-ingress.d.ts",

@@ -11,7 +11,7 @@
     "bundle:application-host-artifact": "vite build --config vite.application-host.config.ts && node scripts/publish-application-host-artifact.mjs",
     "bundle:product-browser-host-artifact": "vite build --config vite.product-browser-host.config.ts && node scripts/publish-product-browser-host-artifact.mjs",
     "build:webview-artifact": "vite build --config vite.webview.config.ts",
-    "boundary": "node scripts/check-boundaries.mjs && node scripts/check-product-playtest-fixture.mjs && node scripts/generate-developer-command-contract.mjs --check && node scripts/verify-developer-command-artifacts.mjs",
+    "boundary": "node scripts/check-boundaries.mjs && node scripts/check-product-playtest-fixture.mjs",
     "check:voxel-vignette": "node scripts/check-voxel-vignette-playtest.mjs",
     "typecheck": "tsc --build packages/*/tsconfig.json && tsc --project tsconfig.browser.json --noEmit",
     "typecheck:browser": "tsc --project tsconfig.browser.json --noEmit",

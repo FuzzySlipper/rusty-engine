@@ -11,43 +11,12 @@ export {
   RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES,
   RustyApplicationContentError,
 } from './application-content.js';
-export {
-  mountRustyDeveloperCommandShell,
-} from './developer-command-shell.js';
 export function rendererResourceContentHash(
   data: ArrayBuffer,
   expected: string,
 ): Promise<string> {
   return rendererHostResourceContentHash(data, expected);
 }
-export {
-  RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION,
-  RustyDeveloperCommandClientError,
-  createRustyDeveloperCommandClient,
-  validateRustyDeveloperCommandWireValue,
-} from '@rusty-engine/developer-command-client';
-export type {
-  RustyDeveloperCommandAdapter,
-  RustyDeveloperCommandClient,
-  RustyDeveloperCommandClientOptions,
-  RustyDeveloperCommandDescriptor,
-  RustyDeveloperCommandDiscovery,
-  RustyDeveloperCommandExtension,
-  RustyDeveloperCommandHistoryEntry,
-  RustyDeveloperCommandLane,
-  RustyDeveloperCommandOutcome,
-  RustyDeveloperCommandRequest,
-  RustyDeveloperCommandResponse,
-  RustyDeveloperCommandSequence,
-  RustyDeveloperCommandSchemaBinding,
-  RustyDeveloperCommandValueSchema,
-  RustyDeveloperCommandWireField,
-  RustyDeveloperCommandWireSchema,
-} from '@rusty-engine/developer-command-client';
-export type {
-  RustyDeveloperCommandShell,
-  RustyDeveloperCommandShellOptions,
-} from './developer-command-shell.js';
 export type {
   RustyApplicationAudioResumeReceipt,
   RustyApplicationAudioDiagnostic,

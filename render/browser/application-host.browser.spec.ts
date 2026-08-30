@@ -12,10 +12,6 @@ declare global {
     __rustyApplicationPendingIncremental?: unknown;
     __rustyApplicationPendingReplacement?: Promise<unknown>;
     __rustyIndicatorMeterNode?: Element | null;
-    __rustyDeveloperCommandLastPayload?: unknown;
-    __rustyDeveloperCommandExecuteCount?: number;
-    __rustyDeveloperCommandDiscoveryGate?: Promise<void>;
-    __rustyDeveloperCommandReleaseDiscovery?: () => void;
     __rustyApplicationRiggedFixtureUrl?: string;
     __rustyApplicationUiContextShape?: {
       readonly keys: readonly string[];
@@ -467,103 +463,6 @@ test('application-host public frames hold an admitted skinned mesh at exact norm
   expect(samples.atStart).not.toBe(samples.atMiddle);
   expect(samples.atMiddle).not.toBe(samples.atEnd);
   expect(samples.heldAfterAdvance).toBe(samples.atEnd);
-});
-
-test('public application-host console invokes inspect, play, and admin without interrupting rendering', async ({ page }) => {
-  await page.goto('/browser/application-host.html');
-  await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');
-  const shell = page.locator('[data-rusty-developer-command-shell="v1"]');
-  await expect(shell.getByRole('button', { name: 'Developer commands' })).toBeVisible();
-  await shell.getByRole('button', { name: 'Developer commands' }).click();
-  await expect.poll(() => page.evaluate(() => window.__rustyApplicationHost?.ui.interactionMode()))
-    .toBe('interface');
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('runtime browser-proof');
-  const before = await publishedSurfaceSnapshot(page);
-  const command = shell.getByLabel('Developer command', { exact: true });
-  const parameters = shell.getByLabel('Developer command parameters');
-
-  await expect(command.locator('option[value="product.inspect.help-only"]')).toBeDisabled();
-  await shell.getByRole('button', { name: 'Developer commands' }).click();
-  await expect.poll(() => page.evaluate(() => window.__rustyApplicationHost?.ui.interactionMode()))
-    .toBe('gameplay');
-  await shell.getByRole('button', { name: 'Developer commands' }).click();
-
-  await command.selectOption('product.inspect.entity');
-  await expect(parameters).toBeHidden();
-  const inspectEntity = shell.locator('[data-developer-command-fields] input[data-command-field="entity"]');
-  const dispatchesBeforeNoncanonicalInspect = await page.evaluate(() => window.__rustyDeveloperCommandExecuteCount);
-  await inspectEntity.fill('00');
-  await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('Failed');
-  expect(await page.evaluate(() => window.__rustyDeveloperCommandExecuteCount))
-    .toBe(dispatchesBeforeNoncanonicalInspect);
-  await assertPublishedSurfaceRemains(page, before);
-
-  await inspectEntity.fill('7');
-  await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('Success');
-
-  await command.selectOption('product.admin.stat.set-base');
-  await expect(parameters).toBeVisible();
-  await parameters.fill('{bad json');
-  await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('Malformed parameters');
-
-  await command.selectOption('product.play.probe');
-  await expect(parameters).toBeHidden();
-  await shell.locator('[data-developer-command-fields] input[data-command-field="target"]').fill('goblin');
-  await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('Success');
-
-  await command.selectOption('product.admin.effect.remove');
-  await expect(parameters).toBeHidden();
-  await shell.locator('[data-developer-command-fields] input[data-command-field="operation"]').fill('operation');
-  const entity = shell.locator('[data-developer-command-fields] input[data-command-field="entity"]');
-  await expect(entity).toHaveAttribute('type', 'text');
-  await expect(entity).toHaveValue('0');
-  await entity.fill('1');
-  await shell.locator('[data-developer-command-fields] input[data-command-field="instance"]').fill('other');
-  await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('product_rejected');
-  await shell.locator('[data-developer-command-fields] input[data-command-field="instance"]').fill('effect');
-  await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('Success');
-  expect(await page.evaluate(() => window.__rustyDeveloperCommandLastPayload)).toEqual({
-    operation: 'operation', entity: '1', instance: 'effect',
-  });
-  const dispatchedBeforeMalformedDecimal = await page.evaluate(() =>
-    window.__rustyDeveloperCommandExecuteCount,
-  );
-  await entity.fill('not-a-number');
-  await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('Failed');
-  expect(await page.evaluate(() => window.__rustyDeveloperCommandExecuteCount))
-    .toBe(dispatchedBeforeMalformedDecimal);
-  await entity.fill('01');
-  await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('Failed');
-  expect(await page.evaluate(() => window.__rustyDeveloperCommandExecuteCount))
-    .toBe(dispatchedBeforeMalformedDecimal);
-  expect(await page.evaluate(() => window.__rustyDeveloperCommandLastPayload)).toEqual({
-    operation: 'operation', entity: '1', instance: 'effect',
-  });
-  await shell.getByRole('button', { name: 'Export sequence' }).click();
-  await expect(shell.locator('[data-developer-command-history]')).toContainText('not deterministic replay');
-  await assertPublishedSurfaceRemains(page, before);
-
-  // Close the ordinary shell, then hold its next discovery response until the
-  // entire application has gone away.
-  await shell.getByRole('button', { name: 'Developer commands' }).click();
-  await page.evaluate(() => {
-    window.__rustyDeveloperCommandDiscoveryGate = new Promise<void>((resolve) => {
-      window.__rustyDeveloperCommandReleaseDiscovery = resolve;
-    });
-  });
-  await shell.getByRole('button', { name: 'Developer commands' }).click();
-  await page.evaluate(() => window.__rustyApplicationHost?.dispose());
-  await page.evaluate(() => window.__rustyDeveloperCommandReleaseDiscovery?.());
-  await expect(shell).toHaveCount(0);
-  await expect(page.locator('[data-rusty-application-host]')).toHaveCount(0);
 });
 
 test('public application host realizes and refreshes structured world indicators', async ({ page }) => {

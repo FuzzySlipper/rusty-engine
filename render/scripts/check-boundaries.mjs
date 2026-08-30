@@ -2,7 +2,6 @@ import { readFileSync, readdirSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
 const packages = new Map([
-  ['developer-command-client', { dependencies: [], peers: [], preparesGitConsumer: true }],
   ['application-host', { dependencies: [], peers: [], preparesGitConsumer: false }],
   ['product-browser-host', {
     dependencies: [],
@@ -55,15 +54,6 @@ for (const [name, expected] of packages) {
 const applicationArtifact = JSON.parse(
   readFileSync(new URL('artifacts/application-host/package.json', root), 'utf8'),
 );
-const developerCommandArtifact = JSON.parse(
-  readFileSync(new URL('artifacts/developer-command-client/package.json', root), 'utf8'),
-);
-if (developerCommandArtifact.name !== '@rusty-engine/developer-command-client') {
-  throw new Error('developer-command client artifact must keep its public package identity');
-}
-for (const file of developerCommandArtifact.files) {
-  readFileSync(new URL(`artifacts/developer-command-client/${file}`, root), 'utf8');
-}
 const productBrowserArtifact = JSON.parse(
   readFileSync(new URL('artifacts/product-browser-host/package.json', root), 'utf8'),
 );
@@ -80,12 +70,6 @@ const productBrowserRuntime = readFileSync(
 if (productBrowserRuntime.split(/\r?\n/u).some((line) => /^\s*(?:import|export)\b/u.test(line)
   && /['"]@rusty-engine\//u.test(line))) {
   throw new Error('product browser host artifact leaked a bare Engine package import');
-}
-for (const file of ['index.js', 'index.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.js']) {
-  const source = readFileSync(new URL(`artifacts/application-host/${file}`, root), 'utf8');
-  if (source.includes('@rusty-engine/developer-command-client')) {
-    throw new Error(`application-host artifact ${file} leaked external developer-command client dependency`);
-  }
 }
 assertKeys(
   'application-host artifact',

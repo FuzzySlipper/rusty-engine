@@ -1,5 +1,4 @@
 import { type RustyApplicationContent } from './application-content.js';
-import { type RustyDeveloperCommandShellOptions } from './developer-command-shell.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
 import { type RustyApplicationInputPort, type RustyApplicationRuntimeInputOptions, type RustyApplicationRuntimeIntentValue } from './input-ingress.js';
 import { type RustyApplicationUiProjectionOptions, type RustyApplicationUiProjectionPort, type RustyApplicationUiProjectionReadout, type RustyApplicationUiProjectionView } from './ui-projection.js';
@@ -632,8 +631,6 @@ export interface RustyApplicationHostOptions {
     readonly mountUi: RustyApplicationUiMount;
     /** Optional finite inclusive aspect interval for one shared, clipped presentation frame. */
     readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
-    /** Optional Engine-owned console UI over a product-supplied command adapter. */
-    readonly developerCommands?: RustyDeveloperCommandShellOptions;
     readonly renderer?: RustyApplicationRendererOptions;
     readonly loadingLabel?: string;
     readonly failureLabel?: string;

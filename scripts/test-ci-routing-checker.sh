@@ -10,7 +10,7 @@ cp -a "$REPO_ROOT/.github/workflows" "$PROBE_ROOT/.github/workflows"
 cp "$REPO_ROOT/scripts/verify-render.sh" "$PROBE_ROOT/scripts/verify-render.sh"
 cp "$REPO_ROOT/scripts/verify-render-artifacts.sh" "$PROBE_ROOT/scripts/verify-render-artifacts.sh"
 cp "$REPO_ROOT/render/package.json" "$PROBE_ROOT/render/package.json"
-for package in application-host developer-command-client render-contracts render-projection renderer-host renderer-three; do
+for package in application-host render-contracts render-projection renderer-host renderer-three; do
   mkdir -p "$PROBE_ROOT/render/packages/$package"
   cp "$REPO_ROOT/render/packages/$package/package.json" "$PROBE_ROOT/render/packages/$package/package.json"
 done

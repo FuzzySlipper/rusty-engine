@@ -95,7 +95,7 @@ const expectedOwners = new Set([
   'core-assets', 'core-ids', 'core-math', 'core-space', 'core-time', 'core-voxel',
   'csharp-engine-abi', 'csharp-engine-services', 'csharp-product-runtime',
   'engine-inspector', 'engine-spatial',
-  'developer-command', 'entity-state', 'environment-authoring', 'product-dev-host', 'render-model',
+  'entity-state', 'environment-authoring', 'product-dev-host', 'render-model',
   'render-host-contracts', 'render-presentation', 'render-projection', 'renderer-webview-host',
   'runtime-input', 'runtime-lifecycle', 'runtime-timeline', 'runtime-ui',
   'svc-collision', 'svc-mesh', 'svc-pathfinding',

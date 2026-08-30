@@ -44,21 +44,12 @@ importers:
 
   packages/application-host:
     devDependencies:
-      '@rusty-engine/developer-command-client':
-        specifier: workspace:*
-        version: link:../developer-command-client
       '@rusty-engine/render-contracts':
         specifier: workspace:*
         version: link:../render-contracts
       '@rusty-engine/renderer-host':
         specifier: workspace:*
         version: link:../renderer-host
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-
-  packages/developer-command-client:
-    devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3

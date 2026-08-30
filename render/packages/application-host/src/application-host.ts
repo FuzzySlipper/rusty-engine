@@ -20,11 +20,6 @@ import {
   type RustyApplicationContent,
 } from './application-content.js';
 import {
-  mountRustyDeveloperCommandShell,
-  type RustyDeveloperCommandShell,
-  type RustyDeveloperCommandShellOptions,
-} from './developer-command-shell.js';
-import {
   resolvePresentationFrameGeometry,
   validatePresentationAspectBounds,
   type RustyApplicationPresentationAspectBounds,
@@ -810,8 +805,6 @@ export interface RustyApplicationHostOptions {
   readonly mountUi: RustyApplicationUiMount;
   /** Optional finite inclusive aspect interval for one shared, clipped presentation frame. */
   readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
-  /** Optional Engine-owned console UI over a product-supplied command adapter. */
-  readonly developerCommands?: RustyDeveloperCommandShellOptions;
   readonly renderer?: RustyApplicationRendererOptions;
   readonly loadingLabel?: string;
   readonly failureLabel?: string;
@@ -929,7 +922,6 @@ async function mountRustyApplicationWithEnvironment(
   let surface: RendererSurface | null = null;
   let input: RustyApplicationManagedInputIngress | null = null;
   let uiOwner: RustyApplicationUiOwner | null = null;
-  let developerCommandShell: RustyDeveloperCommandShell | null = null;
   let removeListeners = (): void => undefined;
   let disposed = false;
   let closing = false;
@@ -1493,16 +1485,6 @@ async function mountRustyApplicationWithEnvironment(
     });
     const mounted = await options.mountUi(layout.ui, uiContext);
     uiOwner = mounted ?? null;
-    if (options.developerCommands !== undefined) {
-      developerCommandShell = mountRustyDeveloperCommandShell(layout.ui, {
-        ...options.developerCommands,
-        enterInterface: () => {
-          const prior = interactionMode;
-          setInteractionMode('interface');
-          return () => { if (!disposed) setInteractionMode(prior); };
-        },
-      });
-    }
     layout.loading.remove();
     layout.host.dataset['state'] = 'ready';
     root.dataset['rustyApplicationState'] = 'ready';
@@ -1510,7 +1492,6 @@ async function mountRustyApplicationWithEnvironment(
     disposed = true;
     const cleanupFailures = await cleanupApplicationOwners(
       uiOwner,
-      developerCommandShell,
       input,
       uiProjection,
       removeListeners,
@@ -1563,7 +1544,6 @@ async function mountRustyApplicationWithEnvironment(
         disposed = true;
         const cleanupFailures = await cleanupApplicationOwners(
           uiOwner,
-          developerCommandShell,
           input,
           uiProjection,
           removeListeners,
@@ -1576,7 +1556,6 @@ async function mountRustyApplicationWithEnvironment(
           removePresentationResizeListener,
         );
         uiOwner = null;
-        developerCommandShell = null;
         input = null;
         surface = null;
         activeAudio = null;
@@ -1861,7 +1840,6 @@ function requestPointerLock(canvas: HTMLCanvasElement): void {
 
 async function cleanupApplicationOwners(
   uiOwner: RustyApplicationUiOwner | null,
-  developerCommandShell: RustyDeveloperCommandShell | null,
   input: RustyApplicationManagedInputIngress | null,
   uiProjection: RustyApplicationUiProjectionPort | null,
   removeListeners: () => void,
@@ -1876,11 +1854,6 @@ async function cleanupApplicationOwners(
   const failures: unknown[] = [];
   try {
     await uiOwner?.dispose();
-  } catch (cause) {
-    failures.push(cause);
-  }
-  try {
-    developerCommandShell?.dispose();
   } catch (cause) {
     failures.push(cause);
   }

@@ -16,7 +16,6 @@ members = [
     "rust/crates/asset-catalog",
     "rust/crates/content-store",
     "rust/crates/content-store-host",
-    "rust/crates/developer-command",
     "rust/crates/environment-authoring",
     "rust/crates/engine-inspector",
     "rust/crates/render-model",
@@ -63,7 +62,6 @@ authored-scene = { path = "rust/crates/authored-scene" }
 asset-catalog = { path = "rust/crates/asset-catalog" }
 content-store = { path = "rust/crates/content-store" }
 content-store-host = { path = "rust/crates/content-store-host" }
-developer-command = { path = "rust/crates/developer-command" }
 environment-authoring = { path = "rust/crates/environment-authoring" }
 engine-inspector = { path = "rust/crates/engine-inspector" }
 engine-spatial = { path = "rust/crates/engine-spatial" }
