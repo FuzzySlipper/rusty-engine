@@ -5,6 +5,7 @@ packages:
   - '../render/packages/render-projection'
   - '../render/packages/renderer-host'
   - '../render/packages/renderer-three'
+  - '../render/packages/live-debug-client'
 
 allowBuilds:
   '@parcel/watcher': true

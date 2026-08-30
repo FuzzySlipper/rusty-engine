@@ -1,0 +1,18 @@
+{
+  "name": "live-debug-panel",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/live-debug-panel/src",
+  "targets": {
+    "build": {
+      "command": "pnpm --filter @rusty-engine/live-debug-panel run build"
+    },
+    "typecheck": {
+      "command": "pnpm --filter @rusty-engine/live-debug-panel run typecheck"
+    },
+    "test": {
+      "command": "pnpm --filter @rusty-engine/live-debug-panel run test"
+    }
+  },
+  "tags": ["scope:engine", "type:ui"]
+}

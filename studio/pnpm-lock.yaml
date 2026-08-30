@@ -76,6 +76,15 @@ importers:
         specifier: ^8.40.0
         version: 8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
 
+  ../render/packages/live-debug-client:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   ../render/packages/render-contracts:
     devDependencies:
       '@types/node':
@@ -179,6 +188,25 @@ importers:
       '@rusty-engine/studio-voxel-editor':
         specifier: workspace:*
         version: link:../voxel-editor
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  libs/live-debug-panel:
+    dependencies:
+      '@angular/common':
+        specifier: ~21.2.0
+        version: 21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@angular/core':
+        specifier: ~21.2.0
+        version: 21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2)
+      '@angular/forms':
+        specifier: ~21.2.0
+        version: 21.2.18(@angular/common@21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(@angular/platform-browser@21.2.18(@angular/common@21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2)))(rxjs@7.8.2)
+    devDependencies:
+      '@rusty-engine/live-debug-client':
+        specifier: workspace:*
+        version: link:../../../render/packages/live-debug-client
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3

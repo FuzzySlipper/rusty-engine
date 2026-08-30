@@ -12,6 +12,7 @@
     "baseUrl": ".",
     "paths": {
       "@rusty-engine/studio-adapter-client": ["libs/adapter-client/src/index.ts"],
+      "@rusty-engine/live-debug-panel": ["libs/live-debug-panel/src/index.ts"],
       "@rusty-engine/studio-editor-shell": ["libs/editor-shell/src/index.ts"],
       "@rusty-engine/studio-user-settings": ["libs/user-settings/src/index.ts"],
       "@rusty-engine/studio-viewport": ["libs/viewport/src/index.ts"],
