@@ -998,6 +998,15 @@ pub struct NativeCharacterControllerCommand {
     pub sequence: u64,
 }
 
+/// Complete values borrowed for validation only. The Engine retains neither
+/// the configuration nor the command and performs no controller mutation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCharacterControllerValidationRequest {
+    pub config: NativeCharacterControllerConfig,
+    pub command: NativeCharacterControllerCommand,
+}
+
 /// One product-authored collider borrowed for a single character proposal.
 /// Bounds are translation-offset AABBs local to `transform`; rotation is used
 /// by platform carry and scale must remain one. The Engine retains neither

@@ -12,9 +12,9 @@ use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec};
 use csharp_engine_abi::*;
 use engine_spatial::{
     CharacterCapsule, CharacterCollisionSource, CharacterContactFact, CharacterContactKind,
-    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerReceipt,
-    CharacterControllerService, CharacterGroundFact, CharacterObstacle, MaterialVoxel,
-    SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
+    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
+    CharacterControllerReceipt, CharacterControllerService, CharacterGroundFact, CharacterObstacle,
+    MaterialVoxel, SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
     StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
     StaticMeshTransform, SurfaceMeshOptions, SurfaceMode, TriggerGeometrySource,
     TriggerOverlapFact, TriggerOverlapFactKind, TriggerReconcileCause, TriggerVolumeError,
@@ -46,6 +46,9 @@ use crate::composition::{
 const MAX_SPATIAL_QUERY_ENTITIES: usize = engine_spatial::MAX_OCCLUSION_QUERY_ENTITIES;
 const MAX_SPATIAL_QUERY_IGNORED_ENTITIES: usize = engine_spatial::MAX_OCCLUSION_IGNORED_ENTITIES;
 const SPATIAL_SERVICE: &[u8] = b"Spatial";
+const VALIDATE_CHARACTER_CONTROLLER_CONFIG_OPERATION: &[u8] = b"ValidateCharacterControllerConfig";
+const VALIDATE_CHARACTER_CONTROLLER_COMMAND_OPERATION: &[u8] =
+    b"ValidateCharacterControllerCommand";
 const REGISTER_TRIGGER_OPERATION: &[u8] = b"RegisterTrigger";
 const RECONCILE_TRIGGERS_OPERATION: &[u8] = b"ReconcileTriggers";
 const MAX_TRIGGER_OPERATION_DIAGNOSTICS: usize = 64;
@@ -208,6 +211,11 @@ struct SpatialTriggerDiagnosticValue {
 enum SpatialTriggerOperationError {
     Service(CsharpEngineServicesError),
     Trigger(TriggerVolumeError),
+}
+
+enum SpatialCharacterValidationError {
+    Service(CsharpEngineServicesError),
+    Controller(CharacterControllerError),
 }
 
 impl SpatialTriggerDiagnosticLease {
@@ -1537,6 +1545,31 @@ impl RuntimeSpatialBridge {
         native_character_config(CharacterControllerConfig::responsive_fps())
     }
 
+    fn validate_character_controller_config(
+        &self,
+        value: NativeCharacterControllerConfig,
+    ) -> Result<(), SpatialCharacterValidationError> {
+        character_config(value)
+            .map_err(SpatialCharacterValidationError::Service)?
+            .validate()
+            .map_err(|error| {
+                SpatialCharacterValidationError::Controller(
+                    CharacterControllerError::InvalidConfig(error),
+                )
+            })
+    }
+
+    fn validate_character_controller_command(
+        &self,
+        request: NativeCharacterControllerValidationRequest,
+    ) -> Result<(), SpatialCharacterValidationError> {
+        let config =
+            character_config(request.config).map_err(SpatialCharacterValidationError::Service)?;
+        character_command(request.command)
+            .validate_against(&config)
+            .map_err(SpatialCharacterValidationError::Controller)
+    }
+
     fn read_character_controller(
         &mut self,
         request: NativeCharacterControllerReadRequest,
@@ -2023,6 +2056,36 @@ impl RuntimeSpatialBridge {
                 source: String::new(),
             }],
         };
+        self.retain_spatial_operation_diagnostic(values)
+    }
+
+    fn retain_character_validation_diagnostic(
+        &mut self,
+        error: &SpatialCharacterValidationError,
+    ) -> Option<NativeEngineDiagnosticLease> {
+        let value = match error {
+            SpatialCharacterValidationError::Service(error) => SpatialTriggerDiagnosticValue {
+                code: error.code().to_owned(),
+                message: bounded_trigger_diagnostic_text(error.detail()),
+                source: String::new(),
+            },
+            SpatialCharacterValidationError::Controller(error) => SpatialTriggerDiagnosticValue {
+                code: error.code().to_owned(),
+                message: bounded_trigger_diagnostic_text(&error.to_string()),
+                source: match error {
+                    CharacterControllerError::InvalidConfig(error) => error.field.to_owned(),
+                    CharacterControllerError::InvalidCommand => "command".to_owned(),
+                    _ => String::new(),
+                },
+            },
+        };
+        self.retain_spatial_operation_diagnostic(vec![value])
+    }
+
+    fn retain_spatial_operation_diagnostic(
+        &mut self,
+        values: Vec<SpatialTriggerDiagnosticValue>,
+    ) -> Option<NativeEngineDiagnosticLease> {
         let lease = SpatialTriggerDiagnosticLease::new(values)?;
         let value = self.next_trigger_diagnostic_lease;
         self.next_trigger_diagnostic_lease = value.checked_add(1)?;
@@ -3152,6 +3215,86 @@ unsafe extern "C" fn default_character_controller_config(
     ABI_OK
 }
 
+unsafe extern "C" fn validate_character_controller_config(
+    context: *mut c_void,
+    config: *const NativeCharacterControllerConfig,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: the receipt is borrowed for this direct call and starts without
+    // a retained diagnostic on every observable path.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || config.is_null() {
+        return 0;
+    }
+    // SAFETY: context and config are borrowed only for this direct callback.
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.validate_character_controller_config(unsafe { *config }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            retain_character_validation_error(
+                bridge,
+                &error,
+                receipt,
+                VALIDATE_CHARACTER_CONTROLLER_CONFIG_OPERATION,
+            );
+            0
+        }
+    }
+}
+
+unsafe extern "C" fn validate_character_controller_command(
+    context: *mut c_void,
+    request: *const NativeCharacterControllerValidationRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: the receipt is borrowed for this direct call and starts without
+    // a retained diagnostic on every observable path.
+    unsafe { *receipt = std::mem::zeroed() };
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    // SAFETY: context and request are borrowed only for this direct callback.
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.validate_character_controller_command(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            retain_character_validation_error(
+                bridge,
+                &error,
+                receipt,
+                VALIDATE_CHARACTER_CONTROLLER_COMMAND_OPERATION,
+            );
+            0
+        }
+    }
+}
+
+fn retain_character_validation_error(
+    bridge: &mut RuntimeSpatialBridge,
+    error: &SpatialCharacterValidationError,
+    receipt: *mut NativeOperationErrorReceipt,
+    operation: &'static [u8],
+) {
+    if let Some(diagnostics) = bridge.retain_character_validation_diagnostic(error) {
+        // SAFETY: receipt was checked by the direct callback and names only
+        // this independently retained Spatial diagnostic lease.
+        unsafe {
+            *receipt = NativeOperationErrorReceipt {
+                service: native_utf8(SPATIAL_SERVICE),
+                operation: native_utf8(operation),
+                status: 0,
+                diagnostics,
+            };
+        }
+    }
+}
+
 unsafe extern "C" fn read_character_controller(
     context: *mut c_void,
     request: NativeCharacterControllerReadRequest,
@@ -3494,6 +3637,8 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         request_volumetric_navigation_path,
         clear_navigation,
         default_character_controller_config,
+        validate_character_controller_config,
+        validate_character_controller_command,
         propose_character_step,
         read_character_controller,
         read_character_contact_at,
@@ -4348,6 +4493,101 @@ mod tests {
             ABI_OK
         );
         session
+    }
+
+    #[test]
+    fn character_validation_uses_proposal_rules_without_mutating_session_state() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let mut config: NativeCharacterControllerConfig = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { (api.default_character_controller_config)(api.context, &mut config) },
+            ABI_OK
+        );
+
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.validate_character_controller_config)(api.context, &config, &mut receipt)
+            },
+            ABI_OK
+        );
+        let command = NativeCharacterControllerCommand {
+            planar_intent: NativeVec2::default(),
+            heading_yaw_radians: 0.0,
+            jump_pressed: false,
+            jump_held: false,
+            crouch_requested: false,
+            external_velocity: NativeVec3::default(),
+            external_impulse: NativeVec3::default(),
+            step_seconds: 1.0 / 60.0,
+            sequence: 1,
+        };
+        let mut request = NativeCharacterControllerValidationRequest { config, command };
+        assert_eq!(
+            unsafe {
+                (api.validate_character_controller_command)(api.context, &request, &mut receipt)
+            },
+            ABI_OK
+        );
+        assert!(bridge.sessions.is_empty());
+
+        let assert_rejected = |receipt: &mut NativeOperationErrorReceipt,
+                               status: i32,
+                               expected_code: &str,
+                               expected_source: &str| {
+            assert_eq!(status, 0);
+            assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+            let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
+            assert_eq!(copied_utf8(diagnostic.code), expected_code);
+            assert_eq!(copied_utf8(diagnostic.source), expected_source);
+            assert_eq!(
+                unsafe {
+                    (api.destroy_operation_diagnostic_lease)(
+                        api.context,
+                        receipt.diagnostics.handle,
+                    )
+                },
+                ABI_OK
+            );
+            *receipt = unsafe { std::mem::zeroed() };
+        };
+
+        let mut invalid_config = config;
+        invalid_config.shape.crouched_height = invalid_config.shape.radius;
+        let status = unsafe {
+            (api.validate_character_controller_config)(api.context, &invalid_config, &mut receipt)
+        };
+        assert_rejected(
+            &mut receipt,
+            status,
+            "invalid-character-controller-config",
+            "shape.crouchedHeight",
+        );
+
+        request.command.planar_intent.x = 1.01;
+        let status = unsafe {
+            (api.validate_character_controller_command)(api.context, &request, &mut receipt)
+        };
+        assert_rejected(
+            &mut receipt,
+            status,
+            "invalid-character-controller-command",
+            "command",
+        );
+
+        request.command.planar_intent.x = 0.0;
+        request.command.step_seconds = 0.5;
+        let status = unsafe {
+            (api.validate_character_controller_command)(api.context, &request, &mut receipt)
+        };
+        assert_rejected(
+            &mut receipt,
+            status,
+            "invalid-character-controller-command",
+            "command",
+        );
+        assert!(bridge.sessions.is_empty());
     }
 
     #[test]

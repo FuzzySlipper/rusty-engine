@@ -701,6 +701,8 @@ sealed class SpatialServiceFake : ISpatialService
     public NavigationVolumetricWeightedPathReadout RequestWeightedVolumetricNavigationPath(NavigationVolumetricWeightedPathRequest arg0) => throw new NotSupportedException();
     public void ClearNavigation(NavigationClearRequest arg0) => throw new NotSupportedException();
     public CharacterControllerConfig DefaultCharacterControllerConfig() => default;
+    public void ValidateCharacterControllerConfig(CharacterControllerConfig arg0) => throw new NotSupportedException();
+    public void ValidateCharacterControllerCommand(CharacterControllerValidationRequest arg0) => throw new NotSupportedException();
 
     public CharacterStepReceipt ProposeCharacterStep(CharacterStepRequest request)
     {

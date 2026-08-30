@@ -192,6 +192,16 @@ pub type NativeClearNavigation =
     unsafe extern "C" fn(*mut c_void, NativeNavigationClearRequest) -> i32;
 pub type NativeDefaultCharacterControllerConfig =
     unsafe extern "C" fn(*mut c_void, *mut NativeCharacterControllerConfig) -> i32;
+pub type NativeValidateCharacterControllerConfig = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCharacterControllerConfig,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeValidateCharacterControllerCommand = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCharacterControllerValidationRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeProposeCharacterStep = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCharacterStepRequest,
@@ -780,6 +790,8 @@ pub struct NativeSpatialApi {
     pub request_volumetric_navigation_path: NativeRequestVolumetricNavigationPath,
     pub clear_navigation: NativeClearNavigation,
     pub default_character_controller_config: NativeDefaultCharacterControllerConfig,
+    pub validate_character_controller_config: NativeValidateCharacterControllerConfig,
+    pub validate_character_controller_command: NativeValidateCharacterControllerCommand,
     pub propose_character_step: NativeProposeCharacterStep,
     pub read_character_controller: NativeReadCharacterController,
     pub read_character_contact_at: NativeReadCharacterContactAt,

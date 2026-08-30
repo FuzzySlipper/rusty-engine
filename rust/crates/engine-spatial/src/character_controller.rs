@@ -344,6 +344,19 @@ impl CharacterControllerCommand {
             sequence,
         }
     }
+
+    /// Validates this complete command against the same configuration and
+    /// admission envelope used by an actual character-controller proposal.
+    /// This performs no scene lookup and mutates no controller state.
+    pub fn validate_against(
+        self,
+        config: &CharacterControllerConfig,
+    ) -> Result<(), CharacterControllerError> {
+        config
+            .validate()
+            .map_err(CharacterControllerError::InvalidConfig)?;
+        validate_command(self, config)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -627,10 +640,7 @@ impl CharacterControllerService {
         command: CharacterControllerCommand,
         obstacle_overrides: &[CharacterObstacle],
     ) -> Result<PreparedCharacterControllerStep, CharacterControllerError> {
-        config
-            .validate()
-            .map_err(CharacterControllerError::InvalidConfig)?;
-        validate_command(command, config)?;
+        command.validate_against(config)?;
         let core = entities
             .core(entity)
             .ok_or(CharacterControllerError::UnknownEntity { entity })?;

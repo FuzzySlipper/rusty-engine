@@ -656,6 +656,34 @@ public sealed class Product : IEngineProduct
         CharacterSupport noSupport = new(false, CharacterSupportLifecycle.Active, 0, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One));
         CharacterControllerCommand firstCommand = new(
             Vector2.Zero, 0, false, false, false, Vector3.Zero, Vector3.Zero, 1.0f / 60.0f, 1);
+        _engine.Spatial.ValidateCharacterControllerConfig(config);
+        _engine.Spatial.ValidateCharacterControllerCommand(new CharacterControllerValidationRequest(config, firstCommand));
+        Require(!_engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(_spatial)).Present,
+            "character validation mutated controller state before a proposal");
+
+        CharacterControllerConfig invalidShape = config with
+        {
+            Shape = config.Shape with { CrouchedHeight = config.Shape.Radius },
+        };
+        ExpectCharacterValidationFailure(
+            () => _engine.Spatial.ValidateCharacterControllerConfig(invalidShape),
+            "invalid-character-controller-config",
+            "shape.crouchedHeight");
+        ExpectCharacterValidationFailure(
+            () => _engine.Spatial.ValidateCharacterControllerCommand(new CharacterControllerValidationRequest(
+                config,
+                firstCommand with { PlanarIntent = new Vector2(1.01f, 0) })),
+            "invalid-character-controller-command",
+            "command");
+        ExpectCharacterValidationFailure(
+            () => _engine.Spatial.ValidateCharacterControllerCommand(new CharacterControllerValidationRequest(
+                config,
+                firstCommand with { StepSeconds = 0.5f })),
+            "invalid-character-controller-command",
+            "command");
+        Require(!_engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(_spatial)).Present,
+            "rejected character validation mutated controller state");
+
         CharacterStepReceipt first = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
             _spatial, new Vector3(0, 3, 0), motion, noSupport,
             ReadOnlyMemory<CharacterObstacle>.Empty, config, firstCommand));
@@ -675,6 +703,26 @@ public sealed class Product : IEngineProduct
         Require(!contact.Present || contact.Contact.Present, "indexed character contact readout was incoherent");
         CharacterDynamicImpulseAtReceipt impulse = _engine.Spatial.ReadCharacterDynamicImpulseAt(new CharacterDynamicImpulseAtRequest(_spatial, 0));
         Require(!impulse.Present || impulse.Proposal.Entity != 0, "indexed dynamic impulse readout was incoherent");
+    }
+
+    private static void ExpectCharacterValidationFailure(
+        Action action,
+        string expectedCode,
+        string expectedSource)
+    {
+        try
+        {
+            action();
+            throw new InvalidOperationException("invalid character controller values were accepted");
+        }
+        catch (EngineCallException error)
+        {
+            ReadOnlySpan<EngineDiagnostic> diagnostics = error.Diagnostics.Span;
+            Require(diagnostics.Length == 1
+                && diagnostics[0].Code == expectedCode
+                && diagnostics[0].Source == expectedSource,
+                "character validation did not preserve its Engine diagnostic");
+        }
     }
 
     private void ExerciseLook()
