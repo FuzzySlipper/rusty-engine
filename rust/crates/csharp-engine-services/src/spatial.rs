@@ -347,6 +347,7 @@ impl RuntimeSpatialBridge {
                 || scene.projection_static_mesh_asset_count() != 0
                 || scene.projection_static_mesh_instance_count() != 0
                 || session.navigation.is_some()
+                || session.navigation_revision != 0
                 || session.last_character_receipt.is_some()
                 || !session.triggers.definitions().next().is_none()
                 || !session.triggers.active_overlaps().next().is_none()

@@ -459,6 +459,18 @@ fn sprite_atlas_copies_frames_resolves_readout_and_releases_with_appearance() {
         .open_resource(&tests::resource_request("atlas.png"))
         .expect("atlas texture")
         .handle;
+    assert_eq!(
+        unsafe {
+            bridge.create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture: NativeRenderResourceHandle::default(),
+                frames: frames.as_ptr(),
+                frames_len: frames.len(),
+            })
+        }
+        .expect_err("zero cannot alias the first admitted texture")
+        .code(),
+        "CSHARP_RENDER_RESOURCE_HANDLE"
+    );
     let atlas = unsafe {
         bridge
             .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
@@ -2554,6 +2566,12 @@ impl RuntimeAppearanceBridge {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SPRITE_ATLAS_FRAMES",
                 "sprite atlas must contain between one and 4096 frames",
+            ));
+        }
+        if request.texture.value == 0 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_HANDLE",
+                "invalid resource handle",
             ));
         }
         let resource = self.resource(request.texture.value)?.clone();

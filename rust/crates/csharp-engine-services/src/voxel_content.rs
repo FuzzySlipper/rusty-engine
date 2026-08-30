@@ -2731,6 +2731,98 @@ mod tests {
             ABI_OK
         );
         assert_eq!(after_rejected, before_rejected);
+
+        let mut navigation_used_session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.create_session)(
+                    spatial_api.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut navigation_used_session,
+                )
+            },
+            ABI_OK
+        );
+        let walkable = [NativePlanarNavCell::default()];
+        let mut navigation_receipt = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.replace_navigation)(
+                    spatial_api.context,
+                    &NativeNavigationReplaceRequest {
+                        session: navigation_used_session,
+                        config: NativePlanarNavConfig {
+                            grid_id: 1,
+                            cell_size: 1.0,
+                            chunk_size: 8,
+                            max_step_cells: 1,
+                        },
+                        cells: walkable.as_ptr(),
+                        cells_len: walkable.len(),
+                    },
+                    &mut navigation_receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (spatial_api.clear_navigation)(
+                    spatial_api.context,
+                    NativeNavigationClearRequest {
+                        session: navigation_used_session,
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let mut navigation_scene_before = NativeVoxelSceneReadout::default();
+        assert_eq!(
+            unsafe {
+                (voxel_api.read_scene)(
+                    voxel_api.context,
+                    NativeVoxelSceneReadRequest {
+                        session: navigation_used_session,
+                    },
+                    &mut navigation_scene_before,
+                )
+            },
+            ABI_OK
+        );
+        let mut navigation_rejected =
+            unsafe { std::mem::zeroed::<NativeVoxelAssetSpatialPublishLease>() };
+        assert_eq!(
+            unsafe {
+                (api.publish_asset_to_spatial)(
+                    api.context,
+                    &NativePublishVoxelAssetToSpatialRequest {
+                        asset: asset_handle,
+                        session: navigation_used_session,
+                    },
+                    &mut navigation_rejected,
+                )
+            },
+            0,
+            "a session with prior navigation lifecycle use is not fresh"
+        );
+        let mut navigation_scene_after = NativeVoxelSceneReadout::default();
+        assert_eq!(
+            unsafe {
+                (voxel_api.read_scene)(
+                    voxel_api.context,
+                    NativeVoxelSceneReadRequest {
+                        session: navigation_used_session,
+                    },
+                    &mut navigation_scene_after,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(navigation_scene_after, navigation_scene_before);
     }
 
     #[test]

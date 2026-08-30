@@ -789,6 +789,11 @@ sealed class AppearanceServiceFake : IAppearanceService
     public void UpdateStaticMeshMaterials(StaticMeshMaterialUpdateRequest arg0) => throw new NotSupportedException();
     public Appearance CreateSprite(SpriteAppearanceRequest arg0) => throw new NotSupportedException();
     public Appearance ReplaceSprite(SpriteAppearanceReplaceRequest arg0) => throw new NotSupportedException();
+    public SpriteAtlas CreateSpriteAtlas(SpriteAtlasCreateRequest arg0) => throw new NotSupportedException();
+    public Appearance CreateSpriteFromAtlas(SpriteFromAtlasRequest arg0) => throw new NotSupportedException();
+    public Appearance ReplaceSpriteFromAtlas(SpriteFromAtlasReplaceRequest arg0) => throw new NotSupportedException();
+    public void SetSpriteFrame(SpriteFrameUpdateRequest arg0) => throw new NotSupportedException();
+    public SpriteReadout ReadSprite(Appearance arg0) => throw new NotSupportedException();
 
     public void PublishSnapshot(ReadOnlySpan<AppearanceFact> values)
     {
