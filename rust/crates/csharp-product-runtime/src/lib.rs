@@ -1,4 +1,4 @@
-//! Deliberately permissive loader for one trusted NativeAOT C# product.
+//! Deliberately permissive loader for one trusted C# product.
 //!
 //! This is the Engine's direct product runtime, not a hostile plugin boundary or
 //! compatibility protocol. The product is first-party trusted code. This adapter
@@ -22,6 +22,11 @@ use csharp_engine_services::{
     CsharpRenderResource, CsharpRenderResourceKind, EngineServiceSet,
 };
 use libloading::Library;
+use netcorehost::{
+    hostfxr::{HostfxrContext, InitializedForRuntimeConfig},
+    nethost,
+    pdcstring::PdCString,
+};
 use product_dev_host::{
     CanonicalU64, ProductDevAnimationCueDefinition, ProductDevAnimationCueSignalDomain,
     ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult,
@@ -164,11 +169,22 @@ impl From<CsharpProductRuntimeError> for ProductDevRuntimeError {
     }
 }
 
-struct LoadedProductApi {
+enum LoadedProductHost {
     // NativeAOT initializes process-wide managed runtime support. It does not
     // provide a safe shared-library unload contract, so a successfully created
     // product keeps its library mapped until process exit after destroy.
-    library: Option<Library>,
+    NativeAot(Option<Library>),
+    // The hostfxr context owns the initialized CoreCLR lifetime. Its managed
+    // function pointers remain callable until the product has been destroyed.
+    CoreClr { _host: CoreclrProductHost },
+}
+
+struct CoreclrProductHost {
+    _context: HostfxrContext<InitializedForRuntimeConfig>,
+}
+
+struct LoadedProductApi {
+    host: LoadedProductHost,
     create: NativeProductCreate,
     start: NativeProductAction,
     update: NativeProductUpdate,
@@ -182,7 +198,7 @@ struct LoadedProductApi {
 }
 
 impl LoadedProductApi {
-    fn load(path: &Path) -> Result<Self, CsharpProductRuntimeError> {
+    fn load_nativeaot(path: &Path) -> Result<Self, CsharpProductRuntimeError> {
         // SAFETY: Loading is the explicitly requested trusted-first-party
         // product boundary. `Library` remains owned by `Self` until after the
         // product instance has been destroyed in `CsharpProductRuntime::drop`.
@@ -214,10 +230,107 @@ impl LoadedProductApi {
                 })
         }
         let bind: NativeProductBind = unsafe { symbol(&library, b"rusty_product_bind\0") }?;
+        Self::from_bound_product(
+            product_from_bind(bind)?,
+            LoadedProductHost::NativeAot(Some(library)),
+        )
+    }
+
+    fn load_coreclr(
+        assembly_path: &Path,
+        runtime_config_path: &Path,
+    ) -> Result<Self, CsharpProductRuntimeError> {
+        let assembly = coreclr_path(
+            assembly_path,
+            "CSHARP_CORECLR_ASSEMBLY",
+            "managed product assembly",
+        )?;
+        let runtime_config = coreclr_path(
+            runtime_config_path,
+            "CSHARP_CORECLR_RUNTIMECONFIG",
+            "managed product runtimeconfig",
+        )?;
+        let assembly_name = assembly_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_CORECLR_ASSEMBLY",
+                    format!(
+                        "managed product assembly `{}` needs a UTF-8 file stem",
+                        assembly_path.display()
+                    ),
+                )
+            })?;
+        let type_label = format!("Rusty.Engine.NativeProduct.ProductExports, {assembly_name}");
+        let type_name = PdCString::from_os_str(&type_label).map_err(|error| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_CORECLR_BIND_EXPORT",
+                format!("could not encode generated product export type: {error}"),
+            )
+        })?;
+        let method_name = PdCString::from_os_str("Bind").expect("fixed managed method name");
+        let hostfxr = nethost::load_hostfxr().map_err(|error| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_CORECLR_HOSTFXR",
+                format!("could not locate/load hostfxr: {error}"),
+            )
+        })?;
+        let context = hostfxr
+            .initialize_for_runtime_config(&runtime_config)
+            .map_err(|error| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_CORECLR_RUNTIMECONFIG",
+                    format!(
+                        "could not initialize CoreCLR from `{}`: {error}",
+                        runtime_config_path.display()
+                    ),
+                )
+            })?;
+        let loader = context
+            .get_delegate_loader_for_assembly(assembly)
+            .map_err(|error| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_CORECLR_BIND_EXPORT",
+                    format!(
+                        "could not prepare generated product export from `{}`: {error}",
+                        assembly_path.display()
+                    ),
+                )
+            })?;
+        // `ProductExports.Bind` is generated with UnmanagedCallersOnly and
+        // `CallConvCdecl`; on the supported x64 hosts `system` is the native
+        // ABI used by hostfxr's typed delegate loader.
+        type CoreclrProductBind = unsafe extern "system" fn(*mut NativeProductApi) -> i32;
+        let bind = loader
+            .get_function_with_unmanaged_callers_only::<CoreclrProductBind>(
+                &type_name,
+                &method_name,
+            )
+            .map_err(|error| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_CORECLR_BIND_EXPORT",
+                    format!("generated export `{type_label}.Bind` is unavailable: {error}",),
+                )
+            })?;
         let mut product = NativeProductApi::default();
-        // SAFETY: `product` is a writable generated table with exact C layout.
-        let status = unsafe { bind(&mut product) };
+        // SAFETY: `product` is a writable generated table with exact C layout
+        // and `bind` is the hostfxr-resolved generated UCO entry point.
+        let status = unsafe { (*bind)(&mut product) };
         checked_status(status, "bind")?;
+        Self::from_bound_product(
+            product,
+            LoadedProductHost::CoreClr {
+                _host: CoreclrProductHost { _context: context },
+            },
+        )
+    }
+
+    fn from_bound_product(
+        product: NativeProductApi,
+        host: LoadedProductHost,
+    ) -> Result<Self, CsharpProductRuntimeError> {
         Ok(Self {
             create: required_function(product.create, "create")?,
             start: required_function(product.start, "start")?,
@@ -229,9 +342,41 @@ impl LoadedProductApi {
             restart: required_function(product.restart, "restart")?,
             shutdown: required_function(product.shutdown, "shutdown")?,
             destroy: required_function(product.destroy, "destroy")?,
-            library: Some(library),
+            host,
         })
     }
+}
+
+fn product_from_bind(
+    bind: NativeProductBind,
+) -> Result<NativeProductApi, CsharpProductRuntimeError> {
+    let mut product = NativeProductApi::default();
+    // SAFETY: `product` is a writable generated table with exact C layout.
+    let status = unsafe { bind(&mut product) };
+    checked_status(status, "bind")?;
+    Ok(product)
+}
+
+fn coreclr_path(
+    path: &Path,
+    code: &'static str,
+    label: &str,
+) -> Result<PdCString, CsharpProductRuntimeError> {
+    if !path.is_file() {
+        return Err(CsharpProductRuntimeError::new(
+            code,
+            format!("{label} `{}` is not a file", path.display()),
+        ));
+    }
+    PdCString::from_os_str(path.as_os_str()).map_err(|error| {
+        CsharpProductRuntimeError::new(
+            code,
+            format!(
+                "{label} `{}` has an unsupported path: {error}",
+                path.display()
+            ),
+        )
+    })
 }
 
 fn required_function<T>(function: Option<T>, name: &str) -> Result<T, CsharpProductRuntimeError> {
@@ -258,11 +403,11 @@ pub struct CsharpProductRuntime {
 }
 
 // The development host serializes every call with one mutex. The native handle
-// has no ambient access from Rust and is destroyed before the process-lifetime
-// NativeAOT library mapping is retained for process exit.
+// has no ambient access from Rust and is destroyed before the retained product
+// host is released (or the NativeAOT mapping is retained for process exit).
 unsafe impl Send for CsharpProductRuntime {}
 
-/// Callback state remains Engine-owned for the complete NativeAOT runtime lifetime.
+/// Callback state remains Engine-owned for the complete loaded-product lifetime.
 /// A C# call only borrows its value arena; Rust copies it into envelopes and commits
 impl CsharpProductRuntime {
     /// Renderer resources selected by product creation before host startup.
@@ -270,7 +415,7 @@ impl CsharpProductRuntime {
         &self.render_resources
     }
 
-    /// Loads one C# library and creates its authoritative product state.
+    /// Loads one NativeAOT C# library and creates its authoritative product state.
     pub fn load(
         library_path: impl AsRef<Path>,
         content_root: impl AsRef<Path>,
@@ -280,11 +425,47 @@ impl CsharpProductRuntime {
         Self::load_admitted(library_path, content, config)
     }
 
-    /// Loads one product from content already read and admitted before host startup.
+    /// Loads one NativeAOT product from content already read and admitted before host startup.
     pub fn load_admitted(
         library_path: impl AsRef<Path>,
         content: CsharpProductContent,
         config: CsharpProductRuntimeConfig,
+    ) -> Result<Self, CsharpProductRuntimeError> {
+        Self::load_admitted_with(content, config, || {
+            LoadedProductApi::load_nativeaot(library_path.as_ref())
+        })
+    }
+
+    /// Loads one ordinary managed C# product through the development-only
+    /// CoreCLR hostfxr path. The product still binds the generated native table
+    /// and executes against the same Engine services as NativeAOT.
+    pub fn load_coreclr(
+        assembly_path: impl AsRef<Path>,
+        runtime_config_path: impl AsRef<Path>,
+        content_root: impl AsRef<Path>,
+        config: CsharpProductRuntimeConfig,
+    ) -> Result<Self, CsharpProductRuntimeError> {
+        let content = CsharpProductContent::admit(content_root)?;
+        Self::load_coreclr_admitted(assembly_path, runtime_config_path, content, config)
+    }
+
+    /// Loads a managed CoreCLR product from content already read and admitted
+    /// before host startup.
+    pub fn load_coreclr_admitted(
+        assembly_path: impl AsRef<Path>,
+        runtime_config_path: impl AsRef<Path>,
+        content: CsharpProductContent,
+        config: CsharpProductRuntimeConfig,
+    ) -> Result<Self, CsharpProductRuntimeError> {
+        Self::load_admitted_with(content, config, || {
+            LoadedProductApi::load_coreclr(assembly_path.as_ref(), runtime_config_path.as_ref())
+        })
+    }
+
+    fn load_admitted_with(
+        content: CsharpProductContent,
+        config: CsharpProductRuntimeConfig,
+        load_api: impl FnOnce() -> Result<LoadedProductApi, CsharpProductRuntimeError>,
     ) -> Result<Self, CsharpProductRuntimeError> {
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
         let content_store_root = prepare_content_store_root(config.content_store_root.as_deref())?;
@@ -335,7 +516,7 @@ impl CsharpProductRuntime {
             physical_mappings: native_physical_mappings.as_ptr(),
             physical_mappings_len: native_physical_mappings.len(),
         };
-        let api = LoadedProductApi::load(library_path.as_ref())?;
+        let api = load_api()?;
         let CsharpProductContent {
             files: content,
             appearance_catalog,
@@ -2025,8 +2206,10 @@ impl Drop for CsharpProductRuntime {
         // A NativeAOT shared library may retain runtime worker infrastructure
         // beyond its exported destroy function. Process-lifetime mapping keeps
         // Drop safe while preserving the required product destroy ordering.
-        if let Some(library) = self.api.library.take() {
-            std::mem::forget(library);
+        if let LoadedProductHost::NativeAot(library) = &mut self.api.host {
+            if let Some(library) = library.take() {
+                std::mem::forget(library);
+            }
         }
     }
 }

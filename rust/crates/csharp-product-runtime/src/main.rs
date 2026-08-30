@@ -36,9 +36,20 @@ fn main() -> Result<(), String> {
     let args = Arguments::parse()?;
     let content =
         CsharpProductContent::admit(&args.content_dir).map_err(|error| error.to_string())?;
-    let mut runtime =
-        CsharpProductRuntime::load_admitted(&args.library, content, args.runtime_config())
-            .map_err(|error| error.to_string())?;
+    let mut runtime = match args.loader {
+        ProductLoader::NativeAot => {
+            CsharpProductRuntime::load_admitted(&args.library, content, args.runtime_config())
+        }
+        ProductLoader::CoreClr => CsharpProductRuntime::load_coreclr_admitted(
+            &args.library,
+            args.runtime_config_path
+                .as_ref()
+                .expect("CoreCLR arguments require a runtimeconfig path"),
+            content,
+            args.runtime_config(),
+        ),
+    }
+    .map_err(|error| error.to_string())?;
     let bundle = load_bundle(&args.bundle_dir, runtime.render_resources())?;
     if args.exercise {
         runtime
@@ -67,12 +78,17 @@ fn main() -> Result<(), String> {
             return Err("loopback product host did not serve index.html".to_owned());
         }
         println!(
-            "NativeAOT lifecycle and loopback host exercise passed at {}",
+            "{} lifecycle and loopback host exercise passed at {}",
+            args.loader.label(),
             host.origin()
         );
         host.shutdown().map_err(|error| error.to_string())?;
     } else {
-        println!("C# NativeAOT product host listening at {}", host.origin());
+        println!(
+            "C# {} product host listening at {}",
+            args.loader.label(),
+            host.origin()
+        );
         println!("Press Ctrl+C to stop.");
         wait_for_process_termination();
     }
@@ -88,8 +104,11 @@ fn wait_for_process_termination() -> ! {
     }
 }
 
+#[derive(Debug)]
 struct Arguments {
+    loader: ProductLoader,
     library: PathBuf,
+    runtime_config_path: Option<PathBuf>,
     bundle_dir: PathBuf,
     content_dir: PathBuf,
     port: u16,
@@ -102,7 +121,30 @@ struct Arguments {
     exercise: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
+enum ProductLoader {
+    NativeAot,
+    CoreClr,
+}
+
+impl ProductLoader {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "nativeaot" => Ok(Self::NativeAot),
+            "coreclr" => Ok(Self::CoreClr),
+            _ => Err("--loader must be nativeaot or coreclr".to_owned()),
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::NativeAot => "NativeAOT",
+            Self::CoreClr => "CoreCLR",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 enum RuntimeMode {
     Realtime,
     Demand,
@@ -189,6 +231,8 @@ impl Arguments {
 
     fn parse_from(values: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut library = None;
+        let mut loader = None;
+        let mut runtime_config_path = None;
         let mut bundle_dir = None;
         let mut content_dir = None;
         let mut port = 0;
@@ -202,7 +246,9 @@ impl Arguments {
         let mut values = values.into_iter();
         while let Some(arg) = values.next() {
             match arg.as_str() {
+                "--loader" => loader = Some(ProductLoader::parse(&values.next().ok_or("--loader requires a value")?)?),
                 "--library" => library = values.next().map(PathBuf::from),
+                "--runtimeconfig" => runtime_config_path = values.next().map(PathBuf::from),
                 "--bundle-dir" => bundle_dir = values.next().map(PathBuf::from),
                 "--content-dir" => content_dir = values.next().map(PathBuf::from),
                 "--port" => port = values.next().ok_or("--port requires a value")?.parse().map_err(|_| "--port must be a u16")?,
@@ -233,13 +279,15 @@ impl Arguments {
                 }
                 "--exercise" => exercise = true,
                 "--help" => return Err(format!(
-                    "usage: csharp-product-runtime --library <product.so> --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--exercise]\n\n{PHYSICAL_MAPPING_USAGE}"
+                    "usage: csharp-product-runtime [--loader <nativeaot|coreclr>] --library <product.so|product.dll> [--runtimeconfig <product.runtimeconfig.json>] --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--exercise]\n\nThe default loader is `nativeaot`, preserving the existing shared-library workflow and its generated `rusty_product_bind` symbol. Select `coreclr` explicitly for development-only managed loading; it requires --runtimeconfig and resolves the same generated NativeProductApi bind entry point through nethost/hostfxr.\n\n{PHYSICAL_MAPPING_USAGE}"
                 )),
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
         }
         let arguments = Self {
+            loader: loader.unwrap_or(ProductLoader::NativeAot),
             library: library.ok_or("--library is required")?,
+            runtime_config_path,
             bundle_dir: bundle_dir.ok_or("--bundle-dir is required")?,
             content_dir: content_dir.ok_or("--content-dir is required")?,
             port,
@@ -251,6 +299,18 @@ impl Arguments {
             content_store_root,
             exercise,
         };
+        match (arguments.loader, &arguments.runtime_config_path) {
+            (ProductLoader::CoreClr, None) => {
+                return Err(
+                    "--loader coreclr requires --runtimeconfig <product.runtimeconfig.json>"
+                        .to_owned(),
+                );
+            }
+            (ProductLoader::NativeAot, Some(_)) => {
+                return Err("--runtimeconfig is only valid with --loader coreclr".to_owned());
+            }
+            _ => {}
+        }
         arguments.validate_input_configuration()?;
         Ok(arguments)
     }
@@ -617,6 +677,7 @@ mod tests {
         .expect("normal mapping declaration parses");
 
         assert!(!args.exercise);
+        assert!(matches!(args.loader, ProductLoader::NativeAot));
         let (intents, mappings) = args.input_configuration();
         assert_eq!(
             mappings
@@ -787,5 +848,32 @@ mod tests {
     fn help_documents_the_physical_mapping_vocabulary() {
         let error = parse_test_error(&["--help"]);
         assert!(error.contains(PHYSICAL_MAPPING_USAGE));
+    }
+
+    #[test]
+    fn parser_requires_an_explicit_coreclr_runtimeconfig() {
+        let missing = Arguments::parse_from(
+            [
+                "--loader",
+                "coreclr",
+                "--library",
+                "product.dll",
+                "--bundle-dir",
+                "bundle",
+                "--content-dir",
+                "content",
+                "--mode",
+                "demand",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
+        assert!(missing
+            .expect_err("CoreCLR without runtimeconfig is rejected")
+            .contains("requires --runtimeconfig"));
+
+        let native_with_runtimeconfig =
+            parse_test_error(&["--runtimeconfig", "product.runtimeconfig.json"]);
+        assert!(native_with_runtimeconfig.contains("only valid with --loader coreclr"));
     }
 }
