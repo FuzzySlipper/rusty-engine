@@ -381,8 +381,8 @@ internal static class Emit
         output.AppendLine("    public ProductUpdateFacts Facts { get; }");
         output.AppendLine("    public ReadOnlySpan<ProductInputEvent> Input { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public sealed class ProductCreateContext").AppendLine("{");
-        output.AppendLine("    public ProductCreateContext(IEngineContext engine, ProductContent content, ProductInputConfiguration input) { Engine = engine ?? throw new ArgumentNullException(nameof(engine)); Content = content ?? throw new ArgumentNullException(nameof(content)); Input = input ?? throw new ArgumentNullException(nameof(input)); }");
-        output.AppendLine("    public IEngineContext Engine { get; }").AppendLine("    public ProductContent Content { get; }").AppendLine("    public ProductInputConfiguration Input { get; }").AppendLine("}").AppendLine();
+        output.AppendLine("    public ProductCreateContext(IEngineContext engine, ProductContent content, ProductInputConfiguration input, Debugging.DebugExecutionContext? debugging = null) { Engine = engine ?? throw new ArgumentNullException(nameof(engine)); Content = content ?? throw new ArgumentNullException(nameof(content)); Input = input ?? throw new ArgumentNullException(nameof(input)); Debugging = debugging ?? new Debugging.DebugExecutionContext(); }");
+        output.AppendLine("    public IEngineContext Engine { get; }").AppendLine("    public ProductContent Content { get; }").AppendLine("    public ProductInputConfiguration Input { get; }").AppendLine("    public Debugging.DebugExecutionContext Debugging { get; }").AppendLine("}").AppendLine();
         output.AppendLine("public sealed class ProductContent").AppendLine("{");
         output.AppendLine("    public ProductContent(ReadOnlyMemory<ProductContentFile> files) => Files = files;");
         output.AppendLine("    public ReadOnlyMemory<ProductContentFile> Files { get; }").AppendLine("}").AppendLine();

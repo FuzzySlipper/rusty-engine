@@ -164,15 +164,52 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 private IEngineProduct? _product;
                 private readonly IDebugCommandCatalog _debugCatalog;
                 private readonly LeaseReleaseCoordinator _leaseReleases;
-                internal ProductLifetime(IEngineProduct product, LeaseReleaseCoordinator leaseReleases) { _product = product; _debugCatalog = GeneratedDebugCommandCatalogFactory.Create(product); _leaseReleases = leaseReleases; }
+                private readonly object _debuggingGate = new();
+                private Action<ProductDebugExecutionContext>? _pendingDebugging;
+                internal ProductLifetime(IEngineProduct product, LeaseReleaseCoordinator leaseReleases, ProductDebugExecutionContext debugging) { _product = product; _debugCatalog = GeneratedDebugCommandCatalogFactory.Create(product); _leaseReleases = leaseReleases; Debugging = debugging; }
                 internal IEngineProduct Product => _product ?? throw new ObjectDisposedException(nameof(ProductLifetime));
                 internal IDebugCommandCatalog DebugCatalog => _product is null ? throw new ObjectDisposedException(nameof(ProductLifetime)) : _debugCatalog;
-                internal void CompleteCall(bool committed, bool terminal) => _leaseReleases.Complete(committed, terminal);
+                internal ProductDebugExecutionContext Debugging { get; }
+                internal void StageDebugging(Action<ProductDebugExecutionContext> apply)
+                {
+                    lock (_debuggingGate)
+                    {
+                        if (_pendingDebugging is not null) throw new InvalidOperationException("A product callback debug transition is still awaiting completion.");
+                        _pendingDebugging = apply;
+                    }
+                }
+                internal void CompleteCall(bool committed, bool terminal)
+                {
+                    Action<ProductDebugExecutionContext>? pending;
+                    lock (_debuggingGate)
+                    {
+                        pending = _pendingDebugging;
+                        _pendingDebugging = null;
+                    }
+                    try
+                    {
+                        _leaseReleases.Complete(committed, terminal);
+                    }
+                    finally
+                    {
+                        if (committed) pending?.Invoke(Debugging);
+                    }
+                }
                 internal void Dispose()
                 {
                     _leaseReleases.Complete(false, true);
                     System.Threading.Interlocked.Exchange(ref _product, null)?.Dispose();
                 }
+            }
+
+            internal sealed class ProductDebugExecutionContext : DebugExecutionContext
+            {
+                internal void RecordStarted() => RecordLifecycleState(ProductLifecycleState.Running, clearLatestUpdate: false);
+                internal void RecordPaused() => RecordLifecycleState(ProductLifecycleState.Paused, clearLatestUpdate: false);
+                internal void RecordResumed() => RecordLifecycleState(ProductLifecycleState.Running, clearLatestUpdate: false);
+                internal void RecordRestarted() => RecordLifecycleState(ProductLifecycleState.Running, clearLatestUpdate: true);
+                internal void RecordShutdown() => RecordLifecycleState(ProductLifecycleState.Shutdown, clearLatestUpdate: false);
+                internal void RecordUpdated(ProductUpdateFacts facts) => RecordUpdate(facts);
             }
 
             internal static unsafe class ProductExports
@@ -207,8 +244,9 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         ProductContent content = new(CopyContent(args->content, args->content_len));
                         ProductInputConfiguration input = CopyInputConfiguration(args->input);
                         LeaseReleaseCoordinator leaseReleases = new();
-                        IEngineProduct product = new {{type}}(new ProductCreateContext(new EngineContext(args->engine, leaseReleases), content, input));
-                        lifetime = new ProductLifetime(product, leaseReleases);
+                        ProductDebugExecutionContext debugging = new();
+                        IEngineProduct product = new {{type}}(new ProductCreateContext(new EngineContext(args->engine, leaseReleases), content, input, debugging));
+                        lifetime = new ProductLifetime(product, leaseReleases, debugging);
                         *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(lifetime));
                         return 1;
                     }
@@ -221,7 +259,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Start(void* handle) => Invoke(handle, static product => product.Start());
+                private static int Start(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Start(); lifetime.StageDebugging(static debugging => debugging.RecordStarted()); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int Update(void* handle, NativeProductUpdateArgs* args, NativeProductUpdateResult* result)
@@ -230,29 +268,32 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     {
                         if (args is null || result is null || (args->event_count != 0 && args->events is null)) return 2;
                         *result = NativeProductUpdateResult.NativeProductUpdateResult_None;
-                        ProductUpdateResult productResult = Get(handle).Product.Update(new ProductUpdate(NativeConversions.FromNative(args->facts), CopyInput(args->events, args->event_count)));
+                        ProductLifetime lifetime = Get(handle);
+                        ProductUpdateFacts facts = NativeConversions.FromNative(args->facts);
+                        ProductUpdateResult productResult = lifetime.Product.Update(new ProductUpdate(facts, CopyInput(args->events, args->event_count)));
                         *result = productResult switch
                         {
                             ProductUpdateResult.None => NativeProductUpdateResult.NativeProductUpdateResult_None,
                             ProductUpdateResult.ReportFault => NativeProductUpdateResult.NativeProductUpdateResult_ReportFault,
                             _ => throw new ArgumentOutOfRangeException(nameof(productResult)),
                         };
+                        lifetime.StageDebugging(debugging => debugging.RecordUpdated(facts));
                         return 1;
                     }
                     catch { return 99; }
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Pause(void* handle) => Invoke(handle, static product => product.Pause());
+                private static int Pause(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Pause(); lifetime.StageDebugging(static debugging => debugging.RecordPaused()); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Resume(void* handle) => Invoke(handle, static product => product.Resume());
+                private static int Resume(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Resume(); lifetime.StageDebugging(static debugging => debugging.RecordResumed()); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Restart(void* handle) => Invoke(handle, static product => product.Restart());
+                private static int Restart(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Restart(); lifetime.StageDebugging(static debugging => debugging.RecordRestarted()); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-                private static int Shutdown(void* handle) => Invoke(handle, static product => product.Shutdown());
+                private static int Shutdown(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Shutdown(); lifetime.StageDebugging(static debugging => debugging.RecordShutdown()); });
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int CompleteTimeline(void* handle, NativeProductTimelineCompletion* completion, byte* accepted)
@@ -410,9 +451,9 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     }
                 }
 
-                private static int Invoke(void* handle, Action<IEngineProduct> action)
+                private static int Invoke(void* handle, Action<ProductLifetime> action)
                 {
-                    try { action(Get(handle).Product); return 1; }
+                    try { action(Get(handle)); return 1; }
                     catch { return 99; }
                 }
 
