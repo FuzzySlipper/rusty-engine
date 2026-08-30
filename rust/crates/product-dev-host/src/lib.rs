@@ -33,12 +33,13 @@ pub use model::{
     ProductDevAnimationFeedback, ProductDevAnimationFeedbackFact,
     ProductDevAnimationFeedbackResult, ProductDevAudioCompletionSource, ProductDevAudioFeedback,
     ProductDevAudioFeedbackFact, ProductDevAudioFeedbackResult, ProductDevControlOperation,
-    ProductDevDebugResult, ProductDevInputBatch, ProductDevInputResult,
-    ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevOperationResult,
-    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeFault, ProductDevRuntimeMode,
-    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
-    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
-    PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
+    ProductDevDebugCatalog, ProductDevDebugCommandDescriptor,
+    ProductDevDebugCommandParameterDescriptor, ProductDevDebugResult, ProductDevInputBatch,
+    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
+    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeFault,
+    ProductDevRuntimeMode, ProductDevRuntimeOutput, ProductDevRuntimeReadout,
+    ProductDevRuntimeReceipt, ProductDevRuntimeState, ProductDevTimelineCompletion,
+    ProductDevTimelineCompletionResult, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use session::ProductDevOperationOwner;
 

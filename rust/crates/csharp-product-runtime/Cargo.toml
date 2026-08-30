@@ -7,6 +7,7 @@ edition.workspace = true
 libloading = "0.8.9"
 netcorehost = { version = "=0.22.0", default-features = false, features = ["nethost-download", "net10_0"] }
 serde_json.workspace = true
+serde.workspace = true
 csharp-engine-abi.workspace = true
 csharp-engine-services.workspace = true
 product-dev-host.workspace = true

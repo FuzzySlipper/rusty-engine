@@ -700,6 +700,90 @@ pub struct ProductDevDebugResult {
     message: String,
 }
 
+/// Read-only product-generated descriptor data for live-debug completion and
+/// help. It is never a dispatch schema: command invocation remains the single
+/// explicit `execute_debug` operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevDebugCatalog {
+    available: bool,
+    commands: Vec<ProductDevDebugCommandDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevDebugCommandDescriptor {
+    name: String,
+    description: String,
+    parameters: Vec<ProductDevDebugCommandParameterDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevDebugCommandParameterDescriptor {
+    name: String,
+    #[serde(rename = "type")]
+    type_name: String,
+}
+
+impl ProductDevDebugCatalog {
+    pub const MAX_COMMANDS: usize = 256;
+    pub const MAX_PARAMETERS_PER_COMMAND: usize = 16;
+    const MAX_TEXT_BYTES: usize = 1_024;
+
+    pub const fn unavailable() -> Self {
+        Self {
+            available: false,
+            commands: Vec::new(),
+        }
+    }
+
+    pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
+        let catalog: Self = serde_json::from_slice(bytes).map_err(|_| {
+            ProductDevHostError::new(
+                "DEV_HOST_DEBUG_CATALOG_DECODE",
+                "generated debug catalog descriptor payload is invalid",
+            )
+        })?;
+        catalog.validate()?;
+        Ok(catalog)
+    }
+
+    fn validate(&self) -> Result<(), ProductDevHostError> {
+        if !self.available || self.commands.len() > Self::MAX_COMMANDS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_DEBUG_CATALOG_BOUNDS",
+                "generated debug catalog availability or command count is invalid",
+            ));
+        }
+        for command in &self.commands {
+            validate_debug_descriptor_text(&command.name)?;
+            validate_debug_descriptor_text(&command.description)?;
+            if command.parameters.len() > Self::MAX_PARAMETERS_PER_COMMAND {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_DEBUG_CATALOG_BOUNDS",
+                    "generated debug catalog command has too many parameters",
+                ));
+            }
+            for parameter in &command.parameters {
+                validate_debug_descriptor_text(&parameter.name)?;
+                validate_debug_descriptor_text(&parameter.type_name)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_debug_descriptor_text(value: &str) -> Result<(), ProductDevHostError> {
+    if value.len() > ProductDevDebugCatalog::MAX_TEXT_BYTES || value.contains('\0') {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_DEBUG_CATALOG_BOUNDS",
+            "generated debug catalog descriptor text is invalid",
+        ));
+    }
+    Ok(())
+}
+
 impl ProductDevDebugResult {
     pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
@@ -1417,6 +1501,19 @@ pub trait ProductDevRuntime: Send + 'static {
             "live debug commands are not supported by this runtime",
         )
         .expect("fixed debug unsupported diagnostic"))
+    }
+
+    /// Returns generated product catalog descriptor data when this product
+    /// exports it. Older products remain loadable and report unavailable.
+    fn describe_debug(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugCatalog>, ProductDevRuntimeError> {
+        ProductDevRuntimeReceipt::new(ProductDevDebugCatalog::unavailable(), Vec::new()).map_err(
+            |error| {
+                ProductDevRuntimeError::new(error.code(), error.detail())
+                    .expect("fixed catalog unavailable diagnostic")
+            },
+        )
     }
 
     fn advance_realtime(

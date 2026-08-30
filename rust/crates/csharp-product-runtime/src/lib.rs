@@ -198,6 +198,7 @@ struct LoadedProductApi {
     shutdown: NativeProductAction,
     destroy: NativeProductDestroy,
     debug: Option<(NativeProductExecuteDebug, NativeProductReleaseDebugResult)>,
+    debug_describe: Option<(NativeProductDescribeDebug, NativeProductReleaseDebugResult)>,
 }
 
 impl LoadedProductApi {
@@ -351,6 +352,14 @@ impl LoadedProductApi {
                 "execute_debug",
                 "release_debug_result",
             )?,
+            // Descriptor publication was added after execute/release. Keep an
+            // older execute/release-only product loadable: `describe_debug`
+            // is optional, but if it is present it shares the exact existing
+            // result-release callback.
+            debug_describe: optional_describe_callback(
+                product.describe_debug,
+                product.release_debug_result,
+            )?,
             host,
         })
     }
@@ -369,6 +378,23 @@ fn optional_callback_pair<T, U>(
             "CSHARP_CALLBACK_PAIR",
             format!("product supplied only one of optional callbacks `{first_name}` and `{second_name}`"),
         )),
+    }
+}
+
+fn optional_describe_callback(
+    describe: Option<NativeProductDescribeDebug>,
+    release: Option<NativeProductReleaseDebugResult>,
+) -> Result<
+    Option<(NativeProductDescribeDebug, NativeProductReleaseDebugResult)>,
+    CsharpProductRuntimeError,
+> {
+    match (describe, release) {
+        (Some(describe), Some(release)) => Ok(Some((describe, release))),
+        (Some(_), None) => Err(CsharpProductRuntimeError::new(
+            "CSHARP_CALLBACK_PAIR",
+            "product supplied describe_debug without release_debug_result",
+        )),
+        (None, _) => Ok(None),
     }
 }
 
@@ -1875,6 +1901,32 @@ impl ProductDevRuntime for CsharpProductRuntime {
         ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
     }
 
+    fn describe_debug(
+        &mut self,
+    ) -> Result<
+        ProductDevRuntimeReceipt<product_dev_host::ProductDevDebugCatalog>,
+        ProductDevRuntimeError,
+    > {
+        let Some((describe, release)) = self.api.debug_describe else {
+            return ProductDevRuntimeReceipt::new(
+                product_dev_host::ProductDevDebugCatalog::unavailable(),
+                Vec::new(),
+            )
+            .map_err(host_runtime_error);
+        };
+        let result = call_describe_debug(describe, release, self.handle)
+            .map_err(|error| self.runtime_error(error))?;
+        let catalog =
+            product_dev_host::ProductDevDebugCatalog::decode_json(result.message().as_bytes())
+                .map_err(|error| {
+                    self.runtime_error(CsharpProductRuntimeError::new(
+                        error.code(),
+                        error.detail().to_owned(),
+                    ))
+                })?;
+        ProductDevRuntimeReceipt::new(catalog, Vec::new()).map_err(host_runtime_error)
+    }
+
     fn advance_realtime(
         &mut self,
         observed_time_ns: CanonicalU64,
@@ -2688,6 +2740,38 @@ fn call_debug(
     // zero/default results and non-success statuses.
     unsafe { release(handle, native) };
     copied
+}
+
+fn call_describe_debug(
+    describe: NativeProductDescribeDebug,
+    release: NativeProductReleaseDebugResult,
+    handle: *mut c_void,
+) -> Result<ProductDevDebugResult, CsharpProductRuntimeError> {
+    let mut native = NativeProductDebugResult::default();
+    // SAFETY: `native` is writable for this exact callback. Returned product
+    // memory is copied before the matching release below.
+    let status = unsafe { describe(handle, &mut native) };
+    let copied = if status == ABI_OK {
+        copy_debug_result(native)
+    } else {
+        match checked_status(status, "describe_debug") {
+            Err(error) => Err(error),
+            Ok(()) => {
+                unreachable!("only non-success descriptor callback statuses reach this branch")
+            }
+        }
+    };
+    // SAFETY: the same generated result-release function owns descriptor
+    // result allocations, including a result initialized before ABI failure.
+    unsafe { release(handle, native) };
+    let result = copied?;
+    if !result.succeeded() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_DEBUG_DESCRIBE",
+            "generated debug descriptor callback reported semantic failure",
+        ));
+    }
+    Ok(result)
 }
 
 fn copy_debug_result(
@@ -3969,6 +4053,12 @@ mod tests {
             .code(),
             "CSHARP_CALLBACK_PAIR"
         );
+        assert!(optional_describe_callback(
+            None,
+            Some(release_debug_fixture as NativeProductReleaseDebugResult),
+        )
+        .expect("older execute/release-only product keeps descriptor publication absent")
+        .is_none());
     }
 
     #[test]

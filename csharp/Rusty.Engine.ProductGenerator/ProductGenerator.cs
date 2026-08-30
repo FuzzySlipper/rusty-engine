@@ -192,6 +192,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     api->complete_timeline = &CompleteTimeline;
                     api->complete_call = &CompleteCall;
                     api->execute_debug = &ExecuteDebug;
+                    api->describe_debug = &DescribeDebug;
                     api->release_debug_result = &ReleaseDebugResult;
                     return 1;
                 }
@@ -298,16 +299,87 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         *result = default;
                         string commandLine = StrictUtf8.GetString(new ReadOnlySpan<byte>(command->bytes, checked((int)command->len)));
                         DebugCommandResult commandResult = Get(handle).DebugCatalog.Execute(commandLine);
-                        byte[] message = StrictUtf8.GetBytes(commandResult.Message ?? string.Empty);
-                        if (message.Length > MaxDebugResultBytes) return 2;
-                        byte* owned = message.Length == 0 ? null : (byte*)NativeMemory.Alloc((nuint)message.Length);
-                        if (message.Length != 0 && owned is null) return 99;
-                        if (message.Length != 0) message.CopyTo(new Span<byte>(owned, message.Length));
-                        result->succeeded = commandResult.Succeeded ? (byte)1 : (byte)0;
-                        result->message = new NativeUtf8Slice { bytes = owned, len = (nuint)message.Length };
-                        return 1;
+                        return SetDebugResult(result, commandResult.Succeeded, commandResult.Message ?? string.Empty);
                     }
                     catch { return 99; }
+                }
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static int DescribeDebug(void* handle, NativeProductDebugResult* result)
+                {
+                    try
+                    {
+                        if (result is null) return 2;
+                        *result = default;
+                        return SetDebugResult(result, true, EncodeDebugCatalog(Get(handle).DebugCatalog.Commands));
+                    }
+                    catch { return 99; }
+                }
+
+                private static int SetDebugResult(NativeProductDebugResult* result, bool succeeded, string message)
+                {
+                    byte[] bytes = StrictUtf8.GetBytes(message);
+                    if (bytes.Length > MaxDebugResultBytes) return 2;
+                    byte* owned = bytes.Length == 0 ? null : (byte*)NativeMemory.Alloc((nuint)bytes.Length);
+                    if (bytes.Length != 0 && owned is null) return 99;
+                    if (bytes.Length != 0) bytes.CopyTo(new Span<byte>(owned, bytes.Length));
+                    result->succeeded = succeeded ? (byte)1 : (byte)0;
+                    result->message = new NativeUtf8Slice { bytes = owned, len = (nuint)bytes.Length };
+                    return 1;
+                }
+
+                // Descriptor data is generated product catalog output only. The
+                // host treats this JSON as read-only help/completion data and
+                // never uses it for invocation or method discovery.
+                private static string EncodeDebugCatalog(IReadOnlyList<DebugCommandDescriptor> commands)
+                {
+                    StringBuilder output = new();
+                    output.Append("{\"available\":true,\"commands\":[");
+                    for (int index = 0; index < commands.Count; index++)
+                    {
+                        if (index != 0) output.Append(',');
+                        DebugCommandDescriptor command = commands[index];
+                        output.Append("{\"name\":");
+                        AppendJsonString(output, command.Name);
+                        output.Append(",\"description\":");
+                        AppendJsonString(output, command.Description);
+                        output.Append(",\"parameters\":[");
+                        for (int parameterIndex = 0; parameterIndex < command.Parameters.Count; parameterIndex++)
+                        {
+                            if (parameterIndex != 0) output.Append(',');
+                            DebugCommandParameterDescriptor parameter = command.Parameters[parameterIndex];
+                            output.Append("{\"name\":");
+                            AppendJsonString(output, parameter.Name);
+                            output.Append(",\"type\":");
+                            AppendJsonString(output, parameter.TypeName);
+                            output.Append('}');
+                        }
+                        output.Append("]}");
+                    }
+                    return output.Append("]}").ToString();
+                }
+
+                private static void AppendJsonString(StringBuilder output, string value)
+                {
+                    output.Append('"');
+                    foreach (char character in value)
+                    {
+                        switch (character)
+                        {
+                            case '"': output.Append("\\\""); break;
+                            case '\\': output.Append("\\\\"); break;
+                            case '\b': output.Append("\\b"); break;
+                            case '\f': output.Append("\\f"); break;
+                            case '\n': output.Append("\\n"); break;
+                            case '\r': output.Append("\\r"); break;
+                            case '\t': output.Append("\\t"); break;
+                            default:
+                                if (character < ' ') output.Append("\\u").Append(((int)character).ToString("x4", System.Globalization.CultureInfo.InvariantCulture));
+                                else output.Append(character);
+                                break;
+                        }
+                    }
+                    output.Append('"');
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

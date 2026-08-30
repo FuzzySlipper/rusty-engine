@@ -1142,6 +1142,13 @@ pub struct NativeProductDebugResult {
 pub type NativeProductExecuteDebug =
     unsafe extern "C" fn(*mut c_void, *const NativeUtf8Slice, *mut NativeProductDebugResult) -> i32;
 
+/// Reads the generated product-owned live-debug catalog as bounded UTF-8
+/// descriptor data. This is deliberately separate from command execution:
+/// callers may use the returned data for help and completion, but it never
+/// participates in dispatch.
+pub type NativeProductDescribeDebug =
+    unsafe extern "C" fn(*mut c_void, *mut NativeProductDebugResult) -> i32;
+
 /// Releases the exact product-owned UTF-8 buffer returned by
 /// [`NativeProductExecuteDebug`].  Rust calls this after every callback that
 /// may have initialized the result, including an ABI failure.
@@ -1179,6 +1186,8 @@ pub struct NativeProductApi {
             *mut NativeProductDebugResult,
         ) -> i32,
     >,
+    pub describe_debug:
+        Option<unsafe extern "C" fn(*mut c_void, *mut NativeProductDebugResult) -> i32>,
     pub release_debug_result: Option<unsafe extern "C" fn(*mut c_void, NativeProductDebugResult)>,
 }
 

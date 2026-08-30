@@ -63,6 +63,15 @@ importers:
         specifier: ^24.0.0
         version: 24.13.3
 
+  packages/live-debug-client:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   packages/product-browser-host:
     devDependencies:
       '@rusty-engine/application-host':

@@ -35,6 +35,7 @@ pub struct ProductDevHostConfig {
     pub port: u16,
     pub bundle: ProductDevBundle,
     bind_host: Ipv4Addr,
+    live_debug_enabled: bool,
 }
 
 impl ProductDevHostConfig {
@@ -43,6 +44,7 @@ impl ProductDevHostConfig {
             port,
             bundle,
             bind_host: Ipv4Addr::LOCALHOST,
+            live_debug_enabled: false,
         }
     }
 
@@ -51,6 +53,14 @@ impl ProductDevHostConfig {
     /// den-serve that publishes the resulting LAN origin.
     pub fn with_bind_host(mut self, bind_host: Ipv4Addr) -> Self {
         self.bind_host = bind_host;
+        self
+    }
+
+    /// Explicitly admits the trusted first-party product live-debug routes.
+    /// They are absent by default so ordinary dev hosts do not expose a
+    /// command endpoint accidentally.
+    pub fn with_live_debug(mut self, enabled: bool) -> Self {
+        self.live_debug_enabled = enabled;
         self
     }
 }
@@ -79,6 +89,7 @@ impl ProductDevHost {
             shutdown: Arc::clone(&shutdown),
             bind_host: config.bind_host,
             expected_port: address.port(),
+            live_debug_enabled: config.live_debug_enabled,
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
         });
@@ -157,6 +168,7 @@ struct HostState<R> {
     shutdown: Arc<AtomicBool>,
     bind_host: Ipv4Addr,
     expected_port: u16,
+    live_debug_enabled: bool,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
 }
@@ -244,6 +256,23 @@ fn dispatch_request<R: ProductDevRuntime>(
     request: HttpRequest,
 ) -> HttpResponse {
     if request.method == "GET" {
+        if request.path == "/__rusty/product/runtime/debug/catalog" {
+            if !state.live_debug_enabled {
+                return HttpResponse::error(
+                    404,
+                    "DEV_HOST_ROUTE_NOT_FOUND",
+                    "route is not admitted",
+                );
+            }
+            if !request.body.is_empty() {
+                return HttpResponse::error(
+                    400,
+                    "DEV_HOST_GET_BODY",
+                    "GET requests cannot carry a body",
+                );
+            }
+            return invoke_debug_catalog(state);
+        }
         if request.body.is_empty() {
             if let Some(entry) = state.bundle.get(&request.path) {
                 return HttpResponse::bytes(200, entry.content_type(), entry.bytes().to_vec());
@@ -258,6 +287,17 @@ fn dispatch_request<R: ProductDevRuntime>(
             "DEV_HOST_METHOD",
             "route requires its exact admitted method",
         );
+    }
+    if request.path == "/__rusty/product/runtime/debug/execute" {
+        if !state.live_debug_enabled {
+            return debug_text_error(404, "live debug route is not admitted");
+        }
+        if request.headers.get("content-type").map(String::as_str)
+            != Some("text/plain; charset=utf-8")
+        {
+            return debug_text_error(415, "debug execution requires text/plain; charset=utf-8");
+        }
+        return invoke_debug_execute(state, &request.body);
     }
     if request.headers.get("content-type").map(String::as_str) != Some("application/json") {
         return HttpResponse::error(
@@ -304,6 +344,58 @@ fn dispatch_request<R: ProductDevRuntime>(
         }
         _ => HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
     }
+}
+
+fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpResponse {
+    let mut runtime = match state.runtime.lock() {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            return HttpResponse::error(
+                500,
+                "DEV_HOST_RUNTIME_POISONED",
+                "runtime serialization lock is poisoned",
+            )
+        }
+    };
+    let receipt = match runtime.describe_debug() {
+        Ok(receipt) => receipt,
+        Err(error) => return HttpResponse::error(500, error.code(), error.diagnostic()),
+    };
+    drop(runtime);
+    let (catalog, outputs) = receipt.into_parts();
+    if let Err(error) = push_outputs(&state.outputs, outputs) {
+        return HttpResponse::error(503, error.code(), error.detail());
+    }
+    json_response(200, &catalog)
+}
+
+fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
+    if body.len() > crate::ProductDevDebugResult::MAX_MESSAGE_BYTES {
+        return debug_text_error(413, "debug command exceeds host bound");
+    }
+    let command = match std::str::from_utf8(body) {
+        Ok(command) => command,
+        Err(_) => return debug_text_error(400, "debug command body must be valid UTF-8"),
+    };
+    let mut runtime = match state.runtime.lock() {
+        Ok(runtime) => runtime,
+        Err(_) => return debug_text_error(500, "runtime serialization lock is poisoned"),
+    };
+    let receipt = match runtime.execute_debug(command) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            return debug_text_error(500, &format!("{}: {}", error.code(), error.diagnostic()))
+        }
+    };
+    drop(runtime);
+    let (result, outputs) = receipt.into_parts();
+    if let Err(error) = push_outputs(&state.outputs, outputs) {
+        return debug_text_error(503, &format!("{}: {}", error.code(), error.detail()));
+    }
+    HttpResponse::text(
+        if result.succeeded() { 200 } else { 422 },
+        result.message().to_owned(),
+    )
 }
 
 fn invoke_lifecycle<R: ProductDevRuntime>(
@@ -1013,6 +1105,14 @@ impl HttpResponse {
         }
     }
 
+    fn text(status: u16, text: String) -> Self {
+        Self::bytes(
+            status,
+            "text/plain; charset=utf-8",
+            bounded_text(&text, 64 * 1024).into_bytes(),
+        )
+    }
+
     fn error(status: u16, code: &str, detail: &str) -> Self {
         let code = bounded_text(code, 128);
         let detail = bounded_text(detail, 512);
@@ -1024,6 +1124,10 @@ impl HttpResponse {
         .into_bytes();
         Self::bytes(status, "application/json", body)
     }
+}
+
+fn debug_text_error(status: u16, detail: &str) -> HttpResponse {
+    HttpResponse::text(status, detail.to_owned())
 }
 
 fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<()> {

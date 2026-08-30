@@ -724,6 +724,7 @@ dependencies = [
  "runtime-lifecycle",
  "runtime-timeline",
  "runtime-ui",
+ "serde",
  "serde_json",
 ]
 

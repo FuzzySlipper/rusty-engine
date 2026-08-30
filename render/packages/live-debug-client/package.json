@@ -1,0 +1,12 @@
+{
+  "name": "@rusty-engine/live-debug-client",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" } },
+  "files": ["dist"],
+  "scripts": { "build": "tsc --build", "typecheck": "tsc --build", "test": "tsc --build && node --test 'dist/**/*.test.js'" },
+  "devDependencies": { "@types/node": "^24.0.0", "typescript": "^5.8.3" }
+}

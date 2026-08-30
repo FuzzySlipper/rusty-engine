@@ -58,7 +58,9 @@ fn main() -> Result<(), String> {
     }
     let host = ProductDevHost::start(
         runtime,
-        ProductDevHostConfig::new(args.port, bundle).with_bind_host(args.bind_host),
+        ProductDevHostConfig::new(args.port, bundle)
+            .with_bind_host(args.bind_host)
+            .with_live_debug(args.live_debug),
     )
     .map_err(|error| error.to_string())?;
     if args.exercise {
@@ -118,6 +120,7 @@ struct Arguments {
     physical_mappings: Vec<RuntimeInputMapping>,
     persistence_root: Option<PathBuf>,
     content_store_root: Option<PathBuf>,
+    live_debug: bool,
     exercise: bool,
 }
 
@@ -242,6 +245,7 @@ impl Arguments {
         let mut physical_mappings = Vec::new();
         let mut persistence_root = None;
         let mut content_store_root = None;
+        let mut live_debug = false;
         let mut exercise = false;
         let mut values = values.into_iter();
         while let Some(arg) = values.next() {
@@ -264,6 +268,7 @@ impl Arguments {
                 "--content-store-root" => {
                     content_store_root = Some(PathBuf::from(values.next().ok_or("--content-store-root requires a value")?))
                 }
+                "--live-debug" => live_debug = true,
                 "--direct-intent" => direct_intents.push(parse_direct_intent(
                     &values.next().ok_or("--direct-intent requires id=digital, id=axis, or id=payload:contract")?,
                 )?),
@@ -279,7 +284,7 @@ impl Arguments {
                 }
                 "--exercise" => exercise = true,
                 "--help" => return Err(format!(
-                    "usage: csharp-product-runtime [--loader <nativeaot|coreclr>] --library <product.so|product.dll> [--runtimeconfig <product.runtimeconfig.json>] --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--exercise]\n\nThe default loader is `nativeaot`, preserving the existing shared-library workflow and its generated `rusty_product_bind` symbol. Select `coreclr` explicitly for development-only managed loading; it requires --runtimeconfig and resolves the same generated NativeProductApi bind entry point through nethost/hostfxr.\n\n{PHYSICAL_MAPPING_USAGE}"
+                    "usage: csharp-product-runtime [--loader <nativeaot|coreclr>] --library <product.so|product.dll> [--runtimeconfig <product.runtimeconfig.json>] --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--live-debug] [--exercise]\n\n`--live-debug` explicitly admits the trusted product live-debug HTTP routes; they are absent by default. The default loader is `nativeaot`, preserving the existing shared-library workflow and its generated `rusty_product_bind` symbol. Select `coreclr` explicitly for development-only managed loading; it requires --runtimeconfig and resolves the same generated NativeProductApi bind entry point through nethost/hostfxr.\n\n{PHYSICAL_MAPPING_USAGE}"
                 )),
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
@@ -297,6 +302,7 @@ impl Arguments {
             physical_mappings,
             persistence_root,
             content_store_root,
+            live_debug,
             exercise,
         };
         match (arguments.loader, &arguments.runtime_config_path) {
