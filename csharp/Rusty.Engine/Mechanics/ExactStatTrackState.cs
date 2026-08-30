@@ -28,6 +28,35 @@ public sealed record ExactStatTrackChangeReceipt(
     ExactStatTrackSnapshot After,
     ExactStatTrackCurrentPolicy CurrentPolicy);
 
+/// <summary>Typed description of one dependent-track current mutation.</summary>
+public abstract record ExactStatTrackCurrentMutation
+{
+    public sealed record Set(
+        ExactValue Requested,
+        ExactValue Resolved,
+        ExactTrackSetPolicy Policy) : ExactStatTrackCurrentMutation;
+
+    public sealed record Spend(
+        ExactValue RequestedAmount,
+        ExactValue AppliedAmount) : ExactStatTrackCurrentMutation;
+
+    public sealed record Restore(
+        ExactValue RequestedAmount,
+        ExactValue AppliedAmount) : ExactStatTrackCurrentMutation;
+}
+
+/// <summary>Read-only result of preparing one dependent-track current mutation.</summary>
+public sealed record ExactStatTrackCurrentMutationPreview(
+    ExactStatTrackSnapshot Before,
+    ExactStatTrackSnapshot After,
+    ExactStatTrackCurrentMutation Mutation);
+
+/// <summary>Committed evidence for one dependent-track current mutation.</summary>
+public sealed record ExactStatTrackCurrentMutationReceipt(
+    ExactStatTrackSnapshot Before,
+    ExactStatTrackSnapshot After,
+    ExactStatTrackCurrentMutation Mutation);
+
 /// <summary>
 /// Engine-owned exact state for one stat and one track whose maximum derives
 /// from that stat. Product code supplies the base, sources, and current-value
@@ -85,7 +114,7 @@ public sealed class ExactStatTrackState
         ulong? expectedRevision = null)
     {
         EnsureRevision(expectedRevision);
-        ulong revisionAfter = checked(Revision + 1);
+        ulong revisionAfter = NextRevision();
         IReadOnlyList<ExactSource> copiedSources = CopySources(prospectiveSources);
         ExactStatEvaluation prospectiveStat = ExactStatEvaluator.Evaluate(
             StatDefinition,
@@ -122,6 +151,77 @@ public sealed class ExactStatTrackState
             currentPolicy,
             expectedRevision).Publish();
 
+    public ExactStatTrackCurrentMutationCandidate PrepareSetCurrent(
+        ExactValue requested,
+        ExactTrackSetPolicy policy,
+        ulong? expectedRevision = null)
+    {
+        EnsureRevision(expectedRevision);
+        ExactValue resolved = policy switch
+        {
+            ExactTrackSetPolicy.RejectOutOfBounds => RequireInBounds(requested),
+            ExactTrackSetPolicy.ClampToBounds => requested.Clamp(
+                _trackBounds.Minimum,
+                _trackBounds.Maximum),
+            _ => throw new MechanicsException("Unknown exact stat-track set policy."),
+        };
+        return PrepareCurrentMutation(
+            resolved,
+            new ExactStatTrackCurrentMutation.Set(requested, resolved, policy),
+            expectedRevision);
+    }
+
+    public ExactStatTrackCurrentMutationReceipt SetCurrent(
+        ExactValue requested,
+        ExactTrackSetPolicy policy,
+        ulong? expectedRevision = null) =>
+        PrepareSetCurrent(requested, policy, expectedRevision).Publish();
+
+    public ExactStatTrackCurrentMutationCandidate PrepareSpend(
+        ExactValue requestedAmount,
+        ulong? expectedRevision = null)
+    {
+        EnsureRevision(expectedRevision);
+        ExactValue amount = requestedAmount.RequireNonNegative();
+        long availableRaw = _trackCurrent.Raw - _trackBounds.Minimum.Raw;
+        if (amount.Raw > availableRaw)
+        {
+            throw new MechanicsException("The dependent exact track does not have enough value to spend.");
+        }
+        ExactValue after = _trackCurrent.CheckedSubtract(amount);
+        return PrepareCurrentMutation(
+            after,
+            new ExactStatTrackCurrentMutation.Spend(amount, amount),
+            expectedRevision);
+    }
+
+    public ExactStatTrackCurrentMutationReceipt Spend(
+        ExactValue amount,
+        ulong? expectedRevision = null) =>
+        PrepareSpend(amount, expectedRevision).Publish();
+
+    public ExactStatTrackCurrentMutationCandidate PrepareRestore(
+        ExactValue requestedAmount,
+        ulong? expectedRevision = null)
+    {
+        EnsureRevision(expectedRevision);
+        ExactValue amount = requestedAmount.RequireNonNegative();
+        long availableRaw = _trackBounds.Maximum.Raw - _trackCurrent.Raw;
+        ExactValue applied = amount.Raw > availableRaw
+            ? new ExactValue(availableRaw)
+            : amount;
+        ExactValue after = _trackCurrent.CheckedAdd(applied);
+        return PrepareCurrentMutation(
+            after,
+            new ExactStatTrackCurrentMutation.Restore(amount, applied),
+            expectedRevision);
+    }
+
+    public ExactStatTrackCurrentMutationReceipt Restore(
+        ExactValue amount,
+        ulong? expectedRevision = null) =>
+        PrepareRestore(amount, expectedRevision).Publish();
+
     internal ExactStatTrackChangeReceipt Publish(
         ulong expectedRevision,
         ExactValue prospectiveBase,
@@ -140,6 +240,42 @@ public sealed class ExactStatTrackState
         _trackBounds = prospectiveBounds;
         Revision = preview.After.Revision;
         return new ExactStatTrackChangeReceipt(preview.Before, Read(), preview.CurrentPolicy);
+    }
+
+    internal ExactStatTrackCurrentMutationReceipt PublishCurrentMutation(
+        ulong expectedRevision,
+        ExactValue prospectiveCurrent,
+        ExactStatTrackCurrentMutationPreview preview)
+    {
+        EnsureRevision(expectedRevision);
+        EnsureInBounds(prospectiveCurrent, _trackBounds);
+        _trackCurrent = prospectiveCurrent;
+        Revision = preview.After.Revision;
+        return new ExactStatTrackCurrentMutationReceipt(
+            preview.Before,
+            Read(),
+            preview.Mutation);
+    }
+
+    private ExactStatTrackCurrentMutationCandidate PrepareCurrentMutation(
+        ExactValue prospectiveCurrent,
+        ExactStatTrackCurrentMutation mutation,
+        ulong? expectedRevision)
+    {
+        EnsureRevision(expectedRevision);
+        EnsureInBounds(prospectiveCurrent, _trackBounds);
+        ulong revisionAfter = NextRevision();
+        ExactStatTrackSnapshot before = Read();
+        ExactStatTrackSnapshot after = Snapshot(
+            revisionAfter,
+            _stat,
+            prospectiveCurrent,
+            _trackBounds);
+        return new ExactStatTrackCurrentMutationCandidate(
+            this,
+            Revision,
+            prospectiveCurrent,
+            new ExactStatTrackCurrentMutationPreview(before, after, mutation));
     }
 
     private ExactValue ResolveCurrent(
@@ -181,6 +317,20 @@ public sealed class ExactStatTrackState
         }
     }
 
+    private ulong NextRevision()
+    {
+        try
+        {
+            return checked(Revision + 1);
+        }
+        catch (OverflowException exception)
+        {
+            throw new MechanicsArithmeticException(
+                "The exact stat-track revision is exhausted.",
+                exception);
+        }
+    }
+
     private static IReadOnlyList<ExactSource> CopySources(IEnumerable<ExactSource> sources)
     {
         ArgumentNullException.ThrowIfNull(sources);
@@ -212,12 +362,56 @@ public sealed class ExactStatTrackState
         }
     }
 
+    private ExactValue RequireInBounds(ExactValue current)
+    {
+        EnsureInBounds(current, _trackBounds);
+        return current;
+    }
+
     private static ExactStatTrackSnapshot Snapshot(
         ulong revision,
         ExactStatEvaluation stat,
         ExactValue trackCurrent,
         ExactTrackBounds trackBounds) =>
         new(revision, stat, trackCurrent, trackBounds);
+}
+
+/// <summary>Detached current mutation that publishes only at its captured pair revision.</summary>
+public sealed class ExactStatTrackCurrentMutationCandidate
+{
+    private readonly ExactStatTrackState _owner;
+    private readonly ulong _expectedRevision;
+    private readonly ExactValue _prospectiveCurrent;
+    private bool _published;
+
+    internal ExactStatTrackCurrentMutationCandidate(
+        ExactStatTrackState owner,
+        ulong expectedRevision,
+        ExactValue prospectiveCurrent,
+        ExactStatTrackCurrentMutationPreview preview)
+    {
+        _owner = owner;
+        _expectedRevision = expectedRevision;
+        _prospectiveCurrent = prospectiveCurrent;
+        Preview = preview;
+    }
+
+    public ExactStatTrackCurrentMutationPreview Preview { get; }
+
+    public ExactStatTrackCurrentMutationReceipt Publish()
+    {
+        if (_published)
+        {
+            throw new InvalidOperationException(
+                "The exact stat-track current mutation candidate was already published.");
+        }
+        ExactStatTrackCurrentMutationReceipt receipt = _owner.PublishCurrentMutation(
+            _expectedRevision,
+            _prospectiveCurrent,
+            Preview);
+        _published = true;
+        return receipt;
+    }
 }
 
 /// <summary>Detached stat/track candidate that publishes only at its captured owner revision.</summary>

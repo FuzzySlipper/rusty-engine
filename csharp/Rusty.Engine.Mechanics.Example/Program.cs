@@ -12,6 +12,7 @@ const double ContinuousBonus = 0.25;
 ExerciseTypedValues();
 ExerciseExactStatEvaluation();
 ExerciseExactStatTrackSourceChanges();
+ExerciseExactStatTrackCurrentMutations();
 ExerciseContinuousStatEvaluation();
 ExerciseExactTrackAtomicity();
 ExerciseContinuousTrackAtomicity();
@@ -214,6 +215,159 @@ static void ExerciseExactStatTrackSourceChanges()
         ExactStatTrackCurrentPolicy.PreserveDistanceFromMaximum);
     Require(boundaryExpansion.After.TrackCurrent.Raw == BoundaryNewCurrent,
         "distance-preserving expansion rejected a valid final exact-track current");
+}
+
+static void ExerciseExactStatTrackCurrentMutations()
+{
+    const long InitialMaximum = 100;
+    const long InitialCurrent = 60;
+    const long ExpandedMaximum = 130;
+    StatId maximum = StatId.Parse("current-mutation-maximum");
+    ExactStatDefinition stat = new(
+        maximum,
+        new ExactValue(0),
+        new ExactValue(ExactValue.MaximumAbsolute));
+    ExactTrackDefinition track = new(
+        TrackId.Parse("current-mutation-track"),
+        new ExactValue(0),
+        new ExactTrackMaximum.FromStat(maximum));
+    ExactStatTrackState state = new(
+        stat,
+        new ExactValue(InitialMaximum),
+        [],
+        track,
+        new ExactValue(InitialCurrent));
+
+    ExactStatTrackSnapshot beforeRejectedSet = state.Read();
+    ExpectMechanicsError(
+        () => state.SetCurrent(
+            new ExactValue(InitialMaximum + 1),
+            ExactTrackSetPolicy.RejectOutOfBounds,
+            expectedRevision: 0),
+        "out-of-bounds managed current set was accepted");
+    Require(state.Read() == beforeRejectedSet,
+        "rejected managed current set changed the stat-track pair");
+
+    ExactStatTrackCurrentMutationReceipt clamped = state.SetCurrent(
+        new ExactValue(-1),
+        ExactTrackSetPolicy.ClampToBounds,
+        expectedRevision: 0);
+    Require(clamped.Before.Revision == 0
+        && clamped.After.Revision == 1
+        && clamped.Before.TrackCurrent.Raw == InitialCurrent
+        && clamped.After.TrackCurrent.Raw == 0
+        && clamped.Mutation is ExactStatTrackCurrentMutation.Set { Resolved.Raw: 0 },
+        "managed current clamp receipt was incoherent");
+
+    ExactStatTrackSnapshot beforeRejectedSpend = state.Read();
+    ExpectMechanicsError(
+        () => state.Spend(new ExactValue(1), expectedRevision: 1),
+        "insufficient managed current spend was accepted");
+    ExpectMechanicsError(
+        () => state.Spend(new ExactValue(-1), expectedRevision: 1),
+        "negative managed current spend was accepted");
+    ExpectMechanicsError(
+        () => state.Restore(new ExactValue(-1), expectedRevision: 1),
+        "negative managed current restore was accepted");
+    Require(state.Read() == beforeRejectedSpend,
+        "rejected managed current amount changed the stat-track pair");
+
+    ExactStatTrackCurrentMutationReceipt restored = state.Restore(
+        new ExactValue(InitialMaximum + 50),
+        expectedRevision: 1);
+    Require(restored.After.Revision == 2
+        && restored.After.TrackCurrent.Raw == InitialMaximum
+        && restored.Mutation is ExactStatTrackCurrentMutation.Restore
+        {
+            RequestedAmount.Raw: InitialMaximum + 50,
+            AppliedAmount.Raw: InitialMaximum,
+        },
+        "managed current restore did not saturate at the resolved maximum");
+
+    ExactStatTrackChangeCandidate staleSource = state.PrepareSourceChange(
+        new ExactValue(120),
+        [],
+        ExactStatTrackCurrentPolicy.PreserveCurrent,
+        expectedRevision: 2);
+    state.SetCurrent(
+        new ExactValue(70),
+        ExactTrackSetPolicy.RejectOutOfBounds,
+        expectedRevision: 2);
+    ExactStatTrackSnapshot beforeStaleSource = state.Read();
+    ExpectMechanicsError(
+        () => staleSource.Publish(),
+        "source-change candidate published over a current mutation");
+    Require(state.Read() == beforeStaleSource,
+        "stale source-change candidate partially changed the stat-track pair");
+
+    ExactStatTrackCurrentMutationCandidate staleCurrent = state.PrepareSpend(
+        new ExactValue(10),
+        expectedRevision: 3);
+    ExactStatTrackChangeReceipt expanded = state.ApplySourceChange(
+        new ExactValue(ExpandedMaximum),
+        [],
+        ExactStatTrackCurrentPolicy.PreserveCurrent,
+        expectedRevision: 3);
+    Require(expanded.After.Revision == 4
+        && expanded.After.TrackBounds.Maximum.Raw == ExpandedMaximum
+        && expanded.After.TrackCurrent.Raw == 70,
+        "source change did not retain current mutation state in the shared revision domain");
+    ExactStatTrackSnapshot beforeStaleCurrent = state.Read();
+    ExpectMechanicsError(
+        () => staleCurrent.Publish(),
+        "current-mutation candidate published over a source change");
+    Require(state.Read() == beforeStaleCurrent,
+        "stale current-mutation candidate partially changed the stat-track pair");
+
+    ExactStatTrackCurrentMutationCandidate once = state.PrepareRestore(
+        new ExactValue(10),
+        expectedRevision: 4);
+    ExactStatTrackCurrentMutationReceipt onceReceipt = once.Publish();
+    Require(onceReceipt.Before.Revision == 4
+        && onceReceipt.After.Revision == 5
+        && onceReceipt.After.TrackCurrent.Raw == 80,
+        "published current-mutation receipt was incoherent");
+    ExpectInvalidOperation(() => once.Publish(), "current-mutation candidate published twice");
+    Require(state.Revision == 5 && state.Read().TrackCurrent.Raw == 80,
+        "repeated current-mutation publication changed state");
+
+    StatId exactLimitMaximum = StatId.Parse("exact-limit-maximum");
+    ExactStatTrackState exactLimitState = new(
+        new ExactStatDefinition(
+            exactLimitMaximum,
+            new ExactValue(-ExactValue.MaximumAbsolute),
+            new ExactValue(ExactValue.MaximumAbsolute)),
+        new ExactValue(ExactValue.MaximumAbsolute),
+        [],
+        new ExactTrackDefinition(
+            TrackId.Parse("exact-limit-track"),
+            new ExactValue(-ExactValue.MaximumAbsolute),
+            new ExactTrackMaximum.FromStat(exactLimitMaximum)),
+        ExactValue.Zero);
+    ExactStatTrackCurrentMutationReceipt exactSpend = exactLimitState.Spend(
+        new ExactValue(ExactValue.MaximumAbsolute));
+    ExactStatTrackCurrentMutationReceipt exactRestore = exactLimitState.Restore(
+        new ExactValue(ExactValue.MaximumAbsolute));
+    Require(exactSpend.After.TrackCurrent.Raw == -ExactValue.MaximumAbsolute
+        && exactRestore.After.TrackCurrent == ExactValue.Zero,
+        "managed current mutation failed at the exact value limits");
+
+    ExactStatTrackState exhausted = new(
+        stat,
+        new ExactValue(InitialMaximum),
+        [],
+        track,
+        new ExactValue(InitialCurrent),
+        revision: ulong.MaxValue);
+    ExactStatTrackSnapshot beforeExhausted = exhausted.Read();
+    ExpectMechanicsError(
+        () => exhausted.PrepareSetCurrent(
+            new ExactValue(50),
+            ExactTrackSetPolicy.RejectOutOfBounds,
+            expectedRevision: ulong.MaxValue),
+        "exhausted managed stat-track revision advanced");
+    Require(exhausted.Read() == beforeExhausted,
+        "revision overflow changed the managed stat-track pair");
 }
 
 static void ExerciseExactTrackAtomicity()
@@ -529,6 +683,20 @@ static void ExpectMechanicsError(Action action, string message)
     }
     catch (Exception exception) when (
         exception is MechanicsException or MechanicsArithmeticException or ArgumentException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
+}
+
+static void ExpectInvalidOperation(Action action, string message)
+{
+    try
+    {
+        action();
+    }
+    catch (InvalidOperationException)
     {
         return;
     }
