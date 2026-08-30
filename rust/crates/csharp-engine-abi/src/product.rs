@@ -1186,9 +1186,11 @@ pub struct NativeProductApi {
             *mut NativeProductDebugResult,
         ) -> i32,
     >,
+    pub release_debug_result: Option<unsafe extern "C" fn(*mut c_void, NativeProductDebugResult)>,
+    /// Appended after the established execute/release pair so products built
+    /// against the preceding table keep their release callback offset.
     pub describe_debug:
         Option<unsafe extern "C" fn(*mut c_void, *mut NativeProductDebugResult) -> i32>,
-    pub release_debug_result: Option<unsafe extern "C" fn(*mut c_void, NativeProductDebugResult)>,
 }
 
 pub type NativeProductBind = unsafe extern "C" fn(*mut NativeProductApi) -> i32;

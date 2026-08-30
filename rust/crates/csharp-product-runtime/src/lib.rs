@@ -3899,6 +3899,79 @@ mod tests {
     static DEBUG_FIXTURE_GATE: Mutex<()> = Mutex::new(());
     static DEBUG_RELEASES: AtomicUsize = AtomicUsize::new(0);
 
+    // This is the complete table as generated at 11b1319, before descriptor
+    // publication existed. Its final execute/release fields must remain an
+    // exact prefix of the current ABI table.
+    #[repr(C)]
+    #[derive(Default)]
+    struct PriorDebugProductApi {
+        create: Option<NativeProductCreate>,
+        start: Option<NativeProductAction>,
+        update: Option<NativeProductUpdate>,
+        pause: Option<NativeProductAction>,
+        resume: Option<NativeProductAction>,
+        restart: Option<NativeProductAction>,
+        shutdown: Option<NativeProductAction>,
+        destroy: Option<NativeProductDestroy>,
+        complete_timeline: Option<NativeProductCompleteTimeline>,
+        complete_call: Option<NativeProductCompleteCall>,
+        execute_debug: Option<NativeProductExecuteDebug>,
+        release_debug_result: Option<NativeProductReleaseDebugResult>,
+    }
+
+    unsafe extern "C" fn prior_create(
+        _args: *const NativeProductCreateArgs,
+        _handle: *mut *mut c_void,
+    ) -> i32 {
+        ABI_OK
+    }
+
+    unsafe extern "C" fn prior_action(_handle: *mut c_void) -> i32 {
+        ABI_OK
+    }
+
+    unsafe extern "C" fn prior_update(
+        _handle: *mut c_void,
+        _args: *const NativeProductUpdateArgs,
+        _result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        ABI_OK
+    }
+
+    unsafe extern "C" fn prior_timeline(
+        _handle: *mut c_void,
+        _completion: *const NativeProductTimelineCompletion,
+        _accepted: *mut u8,
+    ) -> i32 {
+        ABI_OK
+    }
+
+    unsafe extern "C" fn prior_complete_call(_handle: *mut c_void, _committed: u8, _terminal: u8) {}
+
+    unsafe extern "C" fn prior_destroy(_handle: *mut c_void) {}
+
+    unsafe extern "C" fn prior_bind(api: *mut PriorDebugProductApi) -> i32 {
+        // SAFETY: this is a test-only bind callback writing the exact prior
+        // table layout into storage provided by its caller.
+        unsafe {
+            *api = PriorDebugProductApi {
+                create: Some(prior_create),
+                start: Some(prior_action),
+                update: Some(prior_update),
+                pause: Some(prior_action),
+                resume: Some(prior_action),
+                restart: Some(prior_action),
+                shutdown: Some(prior_action),
+                destroy: Some(prior_destroy),
+                complete_timeline: Some(prior_timeline),
+                complete_call: Some(prior_complete_call),
+                execute_debug: Some(debug_success),
+                release_debug_result: Some(release_debug_fixture),
+            };
+        }
+        ABI_OK
+    }
+
     unsafe extern "C" fn debug_semantic_failure(
         _handle: *mut c_void,
         _command: *const NativeUtf8Slice,
@@ -4059,6 +4132,26 @@ mod tests {
         )
         .expect("older execute/release-only product keeps descriptor publication absent")
         .is_none());
+    }
+
+    #[test]
+    fn prior_execute_release_debug_table_remains_a_loadable_current_prefix() {
+        assert_eq!(
+            std::mem::size_of::<PriorDebugProductApi>(),
+            std::mem::offset_of!(NativeProductApi, describe_debug),
+            "describe_debug must be appended after the prior execute/release table",
+        );
+        let mut current = NativeProductApi::default();
+        // SAFETY: the test writes only the established prefix fields through
+        // the historical bind signature; `current` remains zero-initialized
+        // for the appended descriptor callback.
+        let status = unsafe { prior_bind((&mut current as *mut NativeProductApi).cast()) };
+        assert_eq!(status, ABI_OK);
+        let loaded =
+            LoadedProductApi::from_bound_product(current, LoadedProductHost::NativeAot(None))
+                .expect("an execute/release-only prior product remains loadable");
+        assert!(loaded.debug.is_some());
+        assert!(loaded.debug_describe.is_none());
     }
 
     #[test]
