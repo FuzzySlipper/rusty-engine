@@ -19,6 +19,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(context.CompilationProvider, static (output, compilation) =>
         {
+            DebugCommandCatalogGenerator.Generate(output, compilation);
             INamedTypeSymbol[] candidates = compilation.Assembly.GetAttributes()
                 .Where(attribute => attribute.AttributeClass?.ToDisplayString() == ProductAttribute)
                 .Select(ProductType)

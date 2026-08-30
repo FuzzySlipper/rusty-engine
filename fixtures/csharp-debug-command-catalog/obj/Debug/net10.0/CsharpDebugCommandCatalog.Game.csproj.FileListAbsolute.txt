@@ -1,0 +1,16 @@
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/bin/Debug/net10.0/CsharpDebugCommandCatalog.Game.deps.json
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/bin/Debug/net10.0/CsharpDebugCommandCatalog.Game.dll
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/bin/Debug/net10.0/CsharpDebugCommandCatalog.Game.pdb
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/bin/Debug/net10.0/Rusty.Engine.dll
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/bin/Debug/net10.0/Rusty.Engine.pdb
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDebugCommandCatalog.Game.csproj.AssemblyReference.cache
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDebugCommandCatalog.Game.GeneratedMSBuildEditorConfig.editorconfig
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDebugCommandCatalog.Game.AssemblyInfoInputs.cache
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDebugCommandCatalog.Game.AssemblyInfo.cs
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDebugCommandCatalog.Game.csproj.CoreCompileInputs.cache
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDebugCommandCatalog.Game.sourcelink.json
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDe.D72ECB9F.Up2Date
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDebugCommandCatalog.Game.dll
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/refint/CsharpDebugCommandCatalog.Game.dll
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/CsharpDebugCommandCatalog.Game.pdb
+/home/dev/rusty-engine/fixtures/csharp-debug-command-catalog/obj/Debug/net10.0/ref/CsharpDebugCommandCatalog.Game.dll

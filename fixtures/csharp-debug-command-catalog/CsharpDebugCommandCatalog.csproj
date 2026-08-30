@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="FixtureModule.cs" />
+    <ProjectReference Include="../../csharp/Rusty.Engine/Rusty.Engine.csproj" />
+    <ProjectReference Include="CsharpDebugCommandCatalog.Game.csproj" />
+    <ProjectReference Include="../../csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>
