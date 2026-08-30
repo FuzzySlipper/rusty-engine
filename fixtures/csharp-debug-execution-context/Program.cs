@@ -20,6 +20,8 @@ internal static class Program
         void* handle = null;
         Expect(api.create(&create, &handle) == 1 && handle is not null, "generated product bootstrap did not create the product");
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Created, HasObservedUpdate: false, Generation: null, ControlRevision: null }, "create fabricated update facts");
+        Observe(api.observe_runtime, handle, ProductLifecycleState.Created, generation: 17, controlRevision: 0);
+        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Created, HasObservedUpdate: false, Generation: 17, ControlRevision: 0 }, "committed create binding was not retained");
 
         FixtureProduct.FailNext("start");
         Expect(api.start(handle) == 99, "failed start did not cross the generated error path");
@@ -28,6 +30,7 @@ internal static class Program
         Expect(api.start(handle) == 1, "successful start failed");
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Created, HasObservedUpdate: false }, "successful start published before completion");
         api.complete_call(handle, 1, 0);
+        Observe(api.observe_runtime, handle, ProductLifecycleState.Running, generation: 17, controlRevision: 1);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: false }, "start did not retain running/no-update state");
 
         NativeProductUpdateArgs update = new()
@@ -57,13 +60,28 @@ internal static class Program
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: false }, "uncommitted update changed retained facts");
         Expect(api.update(handle, &update, &updateResult) == 1, "committed update callback failed");
         api.complete_call(handle, 1, 0);
+        Observe(api.observe_runtime, handle, ProductLifecycleState.Running, generation: 17, controlRevision: 23);
         Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: true, Generation: 17, ControlRevision: 23, LatestUpdateFacts: var copied }
             && copied == new ProductUpdateFacts(ProductUpdateMode.Realtime, ProductLifecycleState.Running, 17, 23, 29, 31, 60, 1, 0, 1.0 / 60.0), "successful update facts were not copied");
 
         AssertLifecycleFailureThenSuccess("pause", api.pause, api.complete_call, handle, ProductLifecycleState.Paused, expectUpdate: true);
+        Observe(api.observe_runtime, handle, ProductLifecycleState.Paused, generation: 17, controlRevision: 24);
+        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Paused, Generation: 17, ControlRevision: 24 }, "committed pause binding was not retained");
         AssertLifecycleFailureThenSuccess("resume", api.resume, api.complete_call, handle, ProductLifecycleState.Running, expectUpdate: true);
+        Observe(api.observe_runtime, handle, ProductLifecycleState.Running, generation: 17, controlRevision: 25);
+        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, Generation: 17, ControlRevision: 25 }, "committed resume binding was not retained");
+
+        // ReportFault has no managed lifecycle callback. Only the appended
+        // Rust-owned observation can make this committed state visible.
+        Observe(api.observe_runtime, handle, ProductLifecycleState.Faulted, generation: 17, controlRevision: 26);
+        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Faulted, Generation: 17, ControlRevision: 26 }, "host-only fault was not retained");
+
         AssertLifecycleFailureThenSuccess("restart", api.restart, api.complete_call, handle, ProductLifecycleState.Running, expectUpdate: false);
+        Observe(api.observe_runtime, handle, ProductLifecycleState.Running, generation: 18, controlRevision: 27);
+        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Running, HasObservedUpdate: false, Generation: 18, ControlRevision: 27 }, "restart retained stale generation facts");
         AssertLifecycleFailureThenSuccess("shutdown", api.shutdown, api.complete_call, handle, ProductLifecycleState.Shutdown, expectUpdate: false);
+        Observe(api.observe_runtime, handle, ProductLifecycleState.Shutdown, generation: 18, controlRevision: 28);
+        Expect(Snapshot is { LifecycleState: ProductLifecycleState.Shutdown, Generation: 18, ControlRevision: 28 }, "committed shutdown binding was not retained");
 
         api.destroy(handle);
         return 0;
@@ -93,6 +111,24 @@ internal static class Program
 
     private static DebugExecutionSnapshot Snapshot => FixtureProduct.Debugging?.Snapshot
         ?? throw new InvalidOperationException("product did not retain its debug execution context");
+
+    private static unsafe void Observe(
+        delegate* unmanaged[Cdecl]<void*, NativeProductRuntimeFacts*, void> observe,
+        void* handle,
+        ProductLifecycleState state,
+        ulong generation,
+        ulong controlRevision)
+    {
+        Expect(observe != null, "generated product bootstrap did not publish the committed runtime observer");
+        NativeProductRuntimeFacts facts = new()
+        {
+            lifecycle_state = (NativeProductLifecycleState)(uint)state,
+            instance_id = 1,
+            generation = generation,
+            control_revision = controlRevision,
+        };
+        observe(handle, &facts);
+    }
 
     private static void Expect(bool condition, string message)
     {

@@ -1122,6 +1122,13 @@ pub type NativeProductCompleteTimeline =
 /// destruction, when managed wrappers must become locally inert without
 /// attempting another staged native destroy.
 pub type NativeProductCompleteCall = unsafe extern "C" fn(*mut c_void, u8, u8);
+/// Copies the Rust-owned lifecycle state after a host transition has committed.
+///
+/// This observer is optional so products generated before committed lifecycle
+/// publication remain loadable. It is notification-only and cannot influence
+/// the already committed host transition.
+pub type NativeProductObserveRuntime =
+    unsafe extern "C" fn(*mut c_void, *const NativeProductRuntimeFacts);
 pub type NativeProductDestroy = unsafe extern "C" fn(*mut c_void);
 
 /// Product-owned outcome for one generated live-debug command execution.
@@ -1191,6 +1198,10 @@ pub struct NativeProductApi {
     /// against the preceding table keep their release callback offset.
     pub describe_debug:
         Option<unsafe extern "C" fn(*mut c_void, *mut NativeProductDebugResult) -> i32>,
+    /// Appended optional committed-state observer. Rust calls this only after
+    /// the authoritative lifecycle transition has committed.
+    pub observe_runtime:
+        Option<unsafe extern "C" fn(*mut c_void, *const NativeProductRuntimeFacts)>,
 }
 
 pub type NativeProductBind = unsafe extern "C" fn(*mut NativeProductApi) -> i32;

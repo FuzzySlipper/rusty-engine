@@ -210,6 +210,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 internal void RecordRestarted() => RecordLifecycleState(ProductLifecycleState.Running, clearLatestUpdate: true);
                 internal void RecordShutdown() => RecordLifecycleState(ProductLifecycleState.Shutdown, clearLatestUpdate: false);
                 internal void RecordUpdated(ProductUpdateFacts facts) => RecordUpdate(facts);
+                internal void ApplyCommittedRuntime(ProductRuntimeFacts facts) => RecordCommittedRuntime(facts);
             }
 
             internal static unsafe class ProductExports
@@ -231,6 +232,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     api->execute_debug = &ExecuteDebug;
                     api->describe_debug = &DescribeDebug;
                     api->release_debug_result = &ReleaseDebugResult;
+                    api->observe_runtime = &ObserveRuntime;
                     return 1;
                 }
 
@@ -327,6 +329,17 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     {
                         if (handle is null || committed > 1 || terminal > 1) return;
                         Get(handle).CompleteCall(committed != 0, terminal != 0);
+                    }
+                    catch { }
+                }
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static void ObserveRuntime(void* handle, NativeProductRuntimeFacts* facts)
+                {
+                    try
+                    {
+                        if (handle is null || facts is null) return;
+                        Get(handle).Debugging.ApplyCommittedRuntime(NativeConversions.FromNative(*facts));
                     }
                     catch { }
                 }

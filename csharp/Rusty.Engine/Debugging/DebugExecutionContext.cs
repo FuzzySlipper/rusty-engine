@@ -1,16 +1,15 @@
 namespace Rusty.Engine.Debugging;
 
 /// <summary>
-/// Retains the product lifecycle facts most recently delivered by the generated
-/// NativeAOT bootstrap. Product-owned debug modules can read this context without
-/// retaining a borrowed <see cref="ProductUpdate"/> or inferring host state.
-/// Host-only transitions without a completed product callback, including a host
-/// <c>ReportFault</c>, are intentionally not fabricated here.
+/// Retains committed Rust-owned lifecycle facts and the most recently delivered
+/// product update. Product-owned debug modules can read this context without
+/// retaining borrowed callback data or inferring host state.
 /// </summary>
 public class DebugExecutionContext
 {
     private readonly object _gate = new();
     private ProductLifecycleState _lifecycleState = ProductLifecycleState.Created;
+    private ProductRuntimeBinding? _runtimeBinding;
     private ProductUpdateFacts? _latestUpdateFacts;
 
     /// <summary>
@@ -23,7 +22,7 @@ public class DebugExecutionContext
         {
             lock (_gate)
             {
-                return new DebugExecutionSnapshot(_lifecycleState, _latestUpdateFacts);
+                return new DebugExecutionSnapshot(_lifecycleState, _runtimeBinding, _latestUpdateFacts);
             }
         }
     }
@@ -38,6 +37,25 @@ public class DebugExecutionContext
         {
             _lifecycleState = lifecycleState;
             if (clearLatestUpdate)
+            {
+                _latestUpdateFacts = null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Copies one authoritative host snapshot after Rust has committed the
+    /// lifecycle or control transition.
+    /// </summary>
+    protected void RecordCommittedRuntime(ProductRuntimeFacts facts)
+    {
+        lock (_gate)
+        {
+            bool generationChanged = _runtimeBinding is { } previous
+                && previous.Generation != facts.Generation;
+            _lifecycleState = facts.LifecycleState;
+            _runtimeBinding = new ProductRuntimeBinding(facts.InstanceId, facts.Generation, facts.ControlRevision);
+            if (generationChanged)
             {
                 _latestUpdateFacts = null;
             }
@@ -60,16 +78,17 @@ public class DebugExecutionContext
 
 /// <summary>
 /// Immutable retained debug facts from one product execution context. Lifecycle
-/// state is current; update facts, generation, and control revision are absent
-/// until a product update has completed successfully.
+/// state and runtime binding come from the latest committed Rust observation;
+/// update facts remain absent until a product update completes successfully.
 /// </summary>
 public readonly record struct DebugExecutionSnapshot(
     ProductLifecycleState LifecycleState,
+    ProductRuntimeBinding? RuntimeBinding,
     ProductUpdateFacts? LatestUpdateFacts)
 {
     public bool HasObservedUpdate => LatestUpdateFacts.HasValue;
 
-    public ulong? Generation => LatestUpdateFacts?.Generation;
+    public ulong? Generation => RuntimeBinding?.Generation ?? LatestUpdateFacts?.Generation;
 
-    public ulong? ControlRevision => LatestUpdateFacts?.ControlRevision;
+    public ulong? ControlRevision => RuntimeBinding?.ControlRevision ?? LatestUpdateFacts?.ControlRevision;
 }

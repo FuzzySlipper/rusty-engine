@@ -59,6 +59,20 @@ pub struct NativeProductUpdateFacts {
     pub fixed_delta_seconds: f64,
 }
 
+/// Rust-owned lifecycle facts published only after a host transition commits.
+///
+/// Unlike update facts, this snapshot also covers host-only operations such as
+/// fault reporting and control replacement. The managed product copies it and
+/// must not retain the borrowed pointer supplied to its callback.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeProductRuntimeFacts {
+    pub lifecycle_state: NativeProductLifecycleState,
+    pub instance_id: u64,
+    pub generation: u64,
+    pub control_revision: u64,
+}
+
 /// Explicit typed update facts and its borrowed input slice.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

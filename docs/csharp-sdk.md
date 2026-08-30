@@ -41,6 +41,10 @@ lets product code accept or reject the product-owned ticket meaning.
 - `Update(ProductUpdate)` receives Engine-owned update facts and copied input
   events, then returns `ProductUpdateResult` when it needs a supported host
   action.
+- `ProductCreateContext.Debugging.Snapshot` retains the latest committed
+  Rust-owned lifecycle state and runtime binding, including host-only fault and
+  control transitions. Its optional latest-update facts remain the last copied
+  update delivery rather than a fabricated host callback.
 - The runtime, not the product, drives lifecycle transitions and owns host
   integration. Do not create another central game loop or advance Engine time
   yourself.

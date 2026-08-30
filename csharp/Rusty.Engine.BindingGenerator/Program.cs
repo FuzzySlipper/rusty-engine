@@ -391,6 +391,7 @@ internal static class Emit
         output.AppendLine("public readonly record struct InputContext(ReadOnlyMemory<byte> Value);");
         output.AppendLine("public readonly record struct InputSequence(ulong Value);");
         output.AppendLine("public readonly record struct ProductTimelineBinding(ulong InstanceId, ulong Generation, ulong ControlRevision);");
+        output.AppendLine("public readonly record struct ProductRuntimeBinding(ulong InstanceId, ulong Generation, ulong ControlRevision);");
         output.AppendLine("public readonly record struct ProductTimelineCompletion(ulong Ticket, ProductTimelineBinding Binding, ReadOnlyMemory<byte> Correlation, ProductTimelineOutcome Outcome, ReadOnlyMemory<byte>? OutcomeData, ReadOnlyMemory<byte> ProvenanceCorrelation, ReadOnlyMemory<byte>? ProvenanceDetail);");
         output.AppendLine("public readonly record struct ProductInputDescriptor(ReadOnlyMemory<byte> Id, InputValueKind ValueKind, ReadOnlyMemory<byte> PayloadContract);");
         output.AppendLine("public readonly record struct ProductInputMapping(ReadOnlyMemory<byte> Id, ReadOnlyMemory<byte> Intent, InputTriggerKind TriggerKind, InputEdge Edge, InputAxis Axis, KeyboardControl Keyboard, PointerButton PointerButton, ControllerButton ControllerButton, ControllerAxis ControllerAxis, ReadOnlyMemory<KeyboardControl> Chord, InputContext Context);");

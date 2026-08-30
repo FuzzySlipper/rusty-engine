@@ -353,6 +353,7 @@ include = [
     "NativeProductUpdateResult",
     "NativeProductLifecycleState",
     "NativeProductUpdateFacts",
+    "NativeProductRuntimeFacts",
     "NativeKeyedRngRequest",
     "NativeKeyedRngReceipt",
     "NativeScopedRngCreateRequest",

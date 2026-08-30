@@ -199,6 +199,7 @@ struct LoadedProductApi {
     destroy: NativeProductDestroy,
     debug: Option<(NativeProductExecuteDebug, NativeProductReleaseDebugResult)>,
     debug_describe: Option<(NativeProductDescribeDebug, NativeProductReleaseDebugResult)>,
+    observe_runtime: Option<NativeProductObserveRuntime>,
 }
 
 impl LoadedProductApi {
@@ -360,6 +361,7 @@ impl LoadedProductApi {
                 product.describe_debug,
                 product.release_debug_result,
             )?,
+            observe_runtime: product.observe_runtime,
             host,
         })
     }
@@ -657,6 +659,7 @@ impl CsharpProductRuntime {
         let initial_output = Some(services.outputs(&staged));
         services.commit_call(staged);
         complete_product_call(&api, handle, true, false);
+        observe_product_runtime(&api, handle, lifecycle.readout());
         services.seal_resource_selection();
         let render_resources = match services
             .render_resources()
@@ -1444,6 +1447,7 @@ impl CsharpProductRuntime {
             ));
             outputs.push(ProductDevRuntimeOutput::complete_baseline(binding));
         }
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         Ok(outputs)
     }
 
@@ -1555,6 +1559,7 @@ impl CsharpProductRuntime {
         );
         self.services.commit_call(staged);
         complete_product_call(&self.api, self.handle, true, false);
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         Ok(outputs)
     }
 
@@ -1777,6 +1782,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(lifecycle_runtime_error)?;
                 self.rebind_input(InputClearReason::ControlRevisionChange)
                     .map_err(|error| self.runtime_error(error))?;
+                observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
                 self.receipt(
                     ProductDevOperationKind::ReportFault,
                     self.tag_complete_baseline(Vec::new()),
@@ -1817,6 +1823,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .map_err(lifecycle_runtime_error)?;
         self.rebind_input(InputClearReason::ControlRevisionChange)
             .map_err(|error| self.runtime_error(error))?;
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         self.receipt(
             operation.operation_kind(),
             self.tag_complete_baseline(Vec::new()),
@@ -2849,6 +2856,25 @@ fn complete_product_call(
     // SAFETY: `handle` is retained by the runtime. Completion is a fixed,
     // non-throwing generated acknowledgement and does not borrow Rust data.
     unsafe { (api.complete_call)(handle, u8::from(committed), u8::from(terminal)) };
+}
+
+fn observe_product_runtime(
+    api: &LoadedProductApi,
+    handle: *mut c_void,
+    readout: RuntimeLifecycleReadout,
+) {
+    let Some(observe) = api.observe_runtime else {
+        return;
+    };
+    let facts = NativeProductRuntimeFacts {
+        lifecycle_state: native_lifecycle_state(readout.state()),
+        instance_id: readout.instance_id().value(),
+        generation: readout.generation().value(),
+        control_revision: readout.control_revision().value(),
+    };
+    // SAFETY: the generated observer borrows `facts` for this call only and
+    // copies it into managed state. The product handle stays live until Drop.
+    unsafe { observe(handle, &facts) };
 }
 
 fn native_utf8(value: &str) -> NativeUtf8Slice {
@@ -4152,6 +4178,12 @@ mod tests {
                 .expect("an execute/release-only prior product remains loadable");
         assert!(loaded.debug.is_some());
         assert!(loaded.debug_describe.is_none());
+        assert!(loaded.observe_runtime.is_none());
+        assert!(
+            std::mem::offset_of!(NativeProductApi, observe_runtime)
+                > std::mem::offset_of!(NativeProductApi, describe_debug),
+            "committed runtime observer must remain an appended optional field",
+        );
     }
 
     #[test]
