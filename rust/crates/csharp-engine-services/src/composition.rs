@@ -634,9 +634,9 @@ mod tests {
         let valid = br#"{
             "schemaVersion":1,
             "staticMeshArtifactId":"mesh/example",
-            "bounds":{"min":[0.0,0.0,0.0],"max":[2.0,1.0,2.0]},
+            "bounds":{"min":[0.0,0.0,0.0],"max":[3.0,20.0,2.0]},
             "collision":{"positions":[[0.0,0.0,0.0],[2.0,0.0,0.0],[0.0,0.0,2.0]],"triangles":[[0,1,2]]},
-            "navigation":{"id":"navigation/example","config":{"schemaVersion":1,"cellSize":1.0,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1},"cells":[{"column":0,"row":0,"level":0,"supportHeight":0.0,"walkable":true}]}
+            "navigation":{"id":"navigation/example","config":{"schemaVersion":1,"cellSize":0.8,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1},"cells":[{"column":0,"row":0,"level":51,"supportHeight":12.8,"walkable":true},{"column":1,"row":0,"level":51,"supportHeight":12.8,"walkable":true},{"column":2,"row":0,"level":51,"supportHeight":12.8,"walkable":true}]}
         }"#;
         let invalid = br#"{
             "schemaVersion":1,
@@ -705,7 +705,36 @@ mod tests {
         assert_eq!(receipt.content_reference_value, valid_reference.value);
         assert_eq!(receipt.collision_vertex_count, 3);
         assert_eq!(receipt.collision_triangle_count, 1);
-        assert_eq!(receipt.navigation_cell_count, 1);
+        assert_eq!(receipt.navigation_cell_count, 3);
+
+        let mut step = NativeNavigationStepReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.propose_navigation_step)(
+                    api.spatial.context,
+                    NativeNavigationStepRequest {
+                        session,
+                        from: NativeVec3 {
+                            x: 0.4,
+                            y: 12.8,
+                            z: 0.4,
+                        },
+                        target: NativeVec3 {
+                            x: 2.0,
+                            y: 12.8,
+                            z: 0.4,
+                        },
+                        max_step_units: 0.5,
+                        max_visited: 32,
+                    },
+                    &mut step,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(step.outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(step.next_path_cell.y, 51);
+        assert!((step.next_waypoint.y - 12.8).abs() < f32::EPSILON);
 
         let mut readout = NativeSpatialContentArtifactReadout::default();
         assert_eq!(

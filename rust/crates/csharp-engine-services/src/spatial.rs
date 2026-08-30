@@ -245,8 +245,14 @@ struct NavigationState {
     require_solid_floor: bool,
     traversal: NavTraversalOverlay,
     volumetric_traversal: VolumetricNavTraversalOverlay,
+    vertical_mapping: Option<NavigationVerticalMapping>,
     revision: u64,
     last_path: Vec<VoxelCoord>,
+}
+
+struct NavigationVerticalMapping {
+    level_quantum: f64,
+    support_heights: BTreeMap<VoxelCoord, f64>,
 }
 
 impl NavigationState {
@@ -264,6 +270,34 @@ impl NavigationState {
             NavigationSource::HostWalkableCells => None,
             NavigationSource::VoxelDerived(scene) => Some(scene.voxel_world()),
         }
+    }
+
+    fn world_cell(&self, position: Vec3) -> VoxelCoord {
+        let base = self
+            .projection
+            .grid()
+            .world_to_voxel(core_space::WorldPos::new(
+                f64::from(position.x),
+                f64::from(position.y),
+                f64::from(position.z),
+            ));
+        let Some(vertical) = &self.vertical_mapping else {
+            return base;
+        };
+        let [x, _, z] = base.to_array();
+        let level = (f64::from(position.y) / vertical.level_quantum).round() as i64;
+        VoxelCoord::new(x, level, z)
+    }
+
+    fn cell_center(&self, cell: VoxelCoord) -> Vec3 {
+        let center = self.projection.grid().voxel_center_world(cell);
+        let y = self
+            .vertical_mapping
+            .as_ref()
+            .and_then(|vertical| vertical.support_heights.get(&cell))
+            .copied()
+            .unwrap_or(center.y);
+        Vec3::new(center.x as f32, y as f32, center.z as f32)
     }
 }
 
@@ -658,6 +692,21 @@ impl RuntimeSpatialBridge {
         let navigation_cell_count = navigation_projection.walkable_len() as u64;
         let navigation_projection_hash = navigation_projection.projection_hash();
         let navigation_traversal = NavTraversalOverlay::empty(&navigation_projection);
+        let navigation_vertical_mapping = NavigationVerticalMapping {
+            level_quantum: artifact.navigation.config.level_quantum,
+            support_heights: artifact
+                .navigation
+                .cells
+                .iter()
+                .filter(|cell| cell.walkable)
+                .map(|cell| {
+                    (
+                        VoxelCoord::new(cell.column, cell.level, cell.row),
+                        cell.support_height,
+                    )
+                })
+                .collect(),
+        };
 
         let asset_id = spatial_content_asset_id(content.sha256);
         let (assets, instances) = if artifact.collision.positions.is_empty() {
@@ -709,6 +758,7 @@ impl RuntimeSpatialBridge {
                 require_solid_floor: false,
                 traversal: navigation_traversal,
                 volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
+                vertical_mapping: Some(navigation_vertical_mapping),
                 revision: navigation_revision,
                 last_path: Vec::new(),
             };
@@ -826,6 +876,7 @@ impl RuntimeSpatialBridge {
             require_solid_floor: false,
             traversal,
             volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
+            vertical_mapping: None,
             revision: navigation_revision,
             last_path: Vec::new(),
         });
@@ -892,6 +943,7 @@ impl RuntimeSpatialBridge {
             require_solid_floor: request.require_solid_floor,
             traversal,
             volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
+            vertical_mapping: None,
             revision: navigation_revision,
             last_path: Vec::new(),
         });
@@ -1366,22 +1418,8 @@ impl RuntimeSpatialBridge {
                 NativeNavigationPathOutcome::NonFinitePosition,
             ));
         }
-        let start = navigation
-            .projection
-            .grid()
-            .world_to_voxel(core_space::WorldPos::new(
-                f64::from(from.x),
-                f64::from(from.y),
-                f64::from(from.z),
-            ));
-        let goal = navigation
-            .projection
-            .grid()
-            .world_to_voxel(core_space::WorldPos::new(
-                f64::from(target.x),
-                f64::from(target.y),
-                f64::from(target.z),
-            ));
+        let start = navigation.world_cell(from);
+        let goal = navigation.world_cell(target);
         let path = find_path_with_policy(
             &navigation.projection,
             NavPathQuery {
@@ -1411,8 +1449,7 @@ impl RuntimeSpatialBridge {
         let step_target = if next_cell == goal {
             target
         } else {
-            let center = navigation.projection.grid().voxel_center_world(next_cell);
-            Vec3::new(center.x as f32, center.y as f32, center.z as f32)
+            navigation.cell_center(next_cell)
         };
         let movement = propose_direct_nav_movement(DirectNavMovementRequest {
             from,
