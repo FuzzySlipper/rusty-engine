@@ -20,7 +20,9 @@ use voxel_convert::{
     MeshSourceFormat, MeshSourceImportRequest, MAX_CONVERSION_SOURCE_BYTES,
 };
 
-use crate::{ImportCode, ImportContext, ImportDiagnostic, SourceUri};
+use crate::{
+    gltf_package::glb_json_document, ImportCode, ImportContext, ImportDiagnostic, SourceUri,
+};
 
 pub const SUPPORTED_ANIMATED_GLB_VERSION: u32 = 2;
 pub const MAX_ANIMATED_GLB_MATERIALS: usize = 256;
@@ -713,50 +715,6 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
 
 fn is_admitted_extension(extension: &str) -> bool {
     matches!(extension, "KHR_materials_unlit" | "KHR_texture_transform")
-}
-
-fn glb_json_document(source: &[u8], locus: &str) -> Result<serde_json::Value, ImportDiagnostic> {
-    const GLB_HEADER_BYTES: usize = 12;
-    const CHUNK_HEADER_BYTES: usize = 8;
-    const JSON_CHUNK_TYPE: u32 = 0x4e4f_534a;
-    if source.len() < GLB_HEADER_BYTES + CHUNK_HEADER_BYTES || &source[..4] != b"glTF" {
-        return Err(ImportDiagnostic::error(
-            ImportCode::InvalidContainer,
-            locus,
-            "source does not contain a binary glTF header and JSON chunk",
-            "export a valid binary glTF 2.0 file",
-        ));
-    }
-    let version = u32::from_le_bytes(source[4..8].try_into().expect("fixed header slice"));
-    let declared_length =
-        u32::from_le_bytes(source[8..12].try_into().expect("fixed header slice")) as usize;
-    let json_length =
-        u32::from_le_bytes(source[12..16].try_into().expect("fixed chunk header slice")) as usize;
-    let chunk_type =
-        u32::from_le_bytes(source[16..20].try_into().expect("fixed chunk header slice"));
-    let json_end = (GLB_HEADER_BYTES + CHUNK_HEADER_BYTES)
-        .checked_add(json_length)
-        .filter(|end| *end <= source.len());
-    if version != SUPPORTED_ANIMATED_GLB_VERSION
-        || declared_length != source.len()
-        || chunk_type != JSON_CHUNK_TYPE
-        || json_end.is_none()
-    {
-        return Err(ImportDiagnostic::error(
-            ImportCode::InvalidContainer,
-            locus,
-            "GLB header, version, declared length, or JSON chunk is invalid",
-            "export a valid binary glTF 2.0 file",
-        ));
-    }
-    serde_json::from_slice(&source[20..json_end.expect("checked JSON end")]).map_err(|error| {
-        ImportDiagnostic::error(
-            ImportCode::InvalidContainer,
-            locus,
-            format!("GLB JSON chunk is invalid: {error}"),
-            "repair the embedded glTF JSON document",
-        )
-    })
 }
 
 fn extension_names(

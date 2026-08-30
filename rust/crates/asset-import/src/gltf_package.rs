@@ -25,6 +25,12 @@ pub struct GltfSourceClosure {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlbSourceClosure {
+    pub root_glb: Vec<u8>,
+    pub resources: Vec<GltfResource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackedGltfSource {
     pub glb_bytes: Vec<u8>,
     /// SHA-256 over the root bytes and sorted canonical external resources.
@@ -37,8 +43,19 @@ pub struct PackedGltfSource {
 /// Data URIs stay inside the root document and are deliberately omitted.
 pub fn gltf_relative_resource_uris(root_json: &[u8]) -> Result<Vec<String>, ImportDiagnostic> {
     let parsed = parse_root(root_json)?;
+    relative_resource_uris(&parsed)
+}
+
+/// Returns the canonical relative resources referenced by a binary GLB root.
+/// Its embedded BIN chunk remains part of the root and is not returned here.
+pub fn glb_relative_resource_uris(root_glb: &[u8]) -> Result<Vec<String>, ImportDiagnostic> {
+    let parsed = parse_glb_root(root_glb)?;
+    relative_resource_uris(&parsed)
+}
+
+fn relative_resource_uris(parsed: &gltf::Gltf) -> Result<Vec<String>, ImportDiagnostic> {
     let mut authored_by_canonical = BTreeMap::<String, String>::new();
-    for (path, uri) in document_resource_uris(&parsed) {
+    for (path, uri) in document_resource_uris(parsed) {
         if uri.starts_with("data:") {
             continue;
         }
@@ -177,6 +194,139 @@ pub fn admit_gltf_source(source: &GltfSourceClosure) -> Result<PackedGltfSource,
     })
 }
 
+/// Validates a complete immutable binary GLB closure and packs its embedded
+/// BIN chunk plus any bounded relative buffers/images into one self-contained
+/// GLB for the ordinary renderer resource path.
+pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, ImportDiagnostic> {
+    let parsed = parse_glb_root(&source.root_glb)?;
+    let expected_uris = glb_relative_resource_uris(&source.root_glb)?;
+    let resources = validate_resources(&source.resources)?;
+    require_exact_resources(&expected_uris, &resources)?;
+
+    let mut root = glb_json_document(&source.root_glb, "source")?;
+    let root_object = root.as_object_mut().ok_or_else(|| {
+        error(
+            ImportCode::InvalidContainer,
+            "source",
+            "GLB JSON root must be an object",
+            "export a valid binary glTF 2.0 document",
+        )
+    })?;
+
+    let embedded = parsed.blob.clone().ok_or_else(|| {
+        error(
+            ImportCode::InvalidContainer,
+            "source",
+            "binary GLB closure requires one embedded BIN chunk",
+            "embed the primary buffer in the binary glTF root",
+        )
+    })?;
+    let mut embedded_seen = false;
+    let mut packed_bin = Vec::new();
+    let mut buffer_offsets = Vec::new();
+    for buffer in parsed.document.buffers() {
+        align_four(&mut packed_bin);
+        let bytes = match buffer.source() {
+            BufferSource::Bin if !embedded_seen => {
+                embedded_seen = true;
+                embedded.clone()
+            }
+            BufferSource::Bin => {
+                return Err(error(
+                    ImportCode::InvalidContainer,
+                    format!("source.buffers[{}]", buffer.index()),
+                    "binary GLB closure has more than one embedded buffer",
+                    "retain one embedded BIN buffer and use relative resources for any others",
+                ));
+            }
+            BufferSource::Uri(uri) => resolve_uri_bytes(
+                uri,
+                &format!("source.buffers[{}].uri", buffer.index()),
+                &resources,
+                DataKind::Buffer,
+            )?,
+        };
+        if matches!(buffer.source(), BufferSource::Uri(_)) && bytes.len() != buffer.length() {
+            return Err(error(
+                ImportCode::InvalidContainer,
+                format!("source.buffers[{}].byteLength", buffer.index()),
+                format!(
+                    "declared byteLength {} does not match resolved byte count {}",
+                    buffer.length(),
+                    bytes.len()
+                ),
+                "repair the buffer byteLength or referenced resource bytes",
+            ));
+        }
+        buffer_offsets.push(packed_bin.len());
+        packed_bin.extend_from_slice(&bytes);
+    }
+    if !embedded_seen {
+        return Err(error(
+            ImportCode::InvalidContainer,
+            "source.buffers",
+            "binary GLB closure did not reference its embedded BIN chunk",
+            "retain the primary embedded GLB buffer",
+        ));
+    }
+
+    rewrite_buffer_views(root_object, &buffer_offsets)?;
+    embed_uri_images(root_object, &parsed, &resources, &mut packed_bin)?;
+    root_object.insert(
+        "buffers".to_owned(),
+        Value::Array(vec![Value::Object(Map::from_iter([(
+            "byteLength".to_owned(),
+            Value::from(packed_bin.len() as u64),
+        )]))]),
+    );
+    let json = serde_json::to_vec(&root).map_err(|failure| {
+        error(
+            ImportCode::InvalidContainer,
+            "source",
+            format!("canonical GLB JSON could not be encoded: {failure}"),
+            "repair the source document",
+        )
+    })?;
+    let glb_bytes = encode_glb(json, packed_bin)?;
+    let total = closure_byte_count_parts(source.root_glb.len(), &source.resources)?;
+    Ok(PackedGltfSource {
+        glb_bytes,
+        source_hash: closure_hash(&source.root_glb, &resources),
+        source_byte_count: total,
+        external_resource_uris: expected_uris,
+    })
+}
+
+fn require_exact_resources(
+    expected_uris: &[String],
+    resources: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), ImportDiagnostic> {
+    let supplied_uris = resources.keys().cloned().collect::<Vec<_>>();
+    if expected_uris == supplied_uris {
+        return Ok(());
+    }
+    let missing = expected_uris
+        .iter()
+        .find(|uri| !resources.contains_key(*uri));
+    let extra = supplied_uris
+        .iter()
+        .find(|uri| !expected_uris.contains(uri));
+    let message = if let Some(uri) = missing {
+        format!("referenced resource `{uri}` is missing")
+    } else {
+        format!(
+            "resource `{}` is not referenced by the glTF document",
+            extra.expect("unequal sets have a difference")
+        )
+    };
+    Err(error(
+        ImportCode::ExternalResource,
+        "source.resources",
+        message,
+        "provide exactly the bounded resource closure referenced by the root document",
+    ))
+}
+
 fn parse_root(root_json: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
     if root_json.is_empty() || root_json.len() > MAX_SOURCE_BYTES {
         return Err(error(
@@ -203,6 +353,37 @@ fn parse_root(root_json: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
             "source",
             "glTF source closure root must be JSON rather than a GLB container",
             "send .glb sources through the existing binary import path",
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_glb_root(root_glb: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
+    if root_glb.is_empty() || root_glb.len() > MAX_SOURCE_BYTES {
+        return Err(error(
+            ImportCode::SourceTooLarge,
+            "source",
+            format!(
+                "GLB root byte count {} is outside 1..={MAX_SOURCE_BYTES}",
+                root_glb.len()
+            ),
+            "supply one bounded binary GLB root",
+        ));
+    }
+    let parsed = gltf::Gltf::from_slice(root_glb).map_err(|failure| {
+        error(
+            ImportCode::InvalidContainer,
+            "source",
+            format!("invalid binary glTF 2.0 source: {failure}"),
+            "export a valid binary glTF 2.0 document",
+        )
+    })?;
+    if parsed.blob.is_none() {
+        return Err(error(
+            ImportCode::InvalidContainer,
+            "source",
+            "binary GLB closure root must contain an embedded BIN chunk",
+            "send JSON glTF sources through the existing JSON closure path",
         ));
     }
     Ok(parsed)
@@ -575,16 +756,66 @@ fn hash_field(hasher: &mut Sha256, name: &[u8], bytes: &[u8]) {
 }
 
 fn closure_byte_count(source: &GltfSourceClosure) -> Result<u64, ImportDiagnostic> {
-    source
-        .resources
+    closure_byte_count_parts(source.root_json.len(), &source.resources)
+}
+
+fn closure_byte_count_parts(
+    root_bytes: usize,
+    resources: &[GltfResource],
+) -> Result<u64, ImportDiagnostic> {
+    resources
         .iter()
-        .try_fold(source.root_json.len() as u64, |total, resource| {
+        .try_fold(root_bytes as u64, |total, resource| {
             total
                 .checked_add(resource.bytes.len() as u64)
                 .ok_or_else(|| {
                     resource_limit("source.resources", "source closure byte count overflowed")
                 })
         })
+}
+
+pub(crate) fn glb_json_document(source: &[u8], locus: &str) -> Result<Value, ImportDiagnostic> {
+    const GLB_HEADER_BYTES: usize = 12;
+    const CHUNK_HEADER_BYTES: usize = 8;
+    const JSON_CHUNK_TYPE: u32 = 0x4e4f_534a;
+    if source.len() < GLB_HEADER_BYTES + CHUNK_HEADER_BYTES || &source[..4] != b"glTF" {
+        return Err(error(
+            ImportCode::InvalidContainer,
+            locus,
+            "source does not contain a binary glTF header and JSON chunk",
+            "export a valid binary glTF 2.0 file",
+        ));
+    }
+    let version = u32::from_le_bytes(source[4..8].try_into().expect("fixed header slice"));
+    let declared_length =
+        u32::from_le_bytes(source[8..12].try_into().expect("fixed header slice")) as usize;
+    let json_length =
+        u32::from_le_bytes(source[12..16].try_into().expect("fixed chunk header slice")) as usize;
+    let chunk_type =
+        u32::from_le_bytes(source[16..20].try_into().expect("fixed chunk header slice"));
+    let json_end = (GLB_HEADER_BYTES + CHUNK_HEADER_BYTES)
+        .checked_add(json_length)
+        .filter(|end| *end <= source.len());
+    if version != 2
+        || declared_length != source.len()
+        || chunk_type != JSON_CHUNK_TYPE
+        || json_end.is_none()
+    {
+        return Err(error(
+            ImportCode::InvalidContainer,
+            locus,
+            "GLB header, version, declared length, or JSON chunk is invalid",
+            "export a valid binary glTF 2.0 file",
+        ));
+    }
+    serde_json::from_slice(&source[20..json_end.expect("checked JSON end")]).map_err(|failure| {
+        error(
+            ImportCode::InvalidContainer,
+            locus,
+            format!("GLB JSON chunk is invalid: {failure}"),
+            "repair the embedded glTF JSON document",
+        )
+    })
 }
 
 fn align_four(bytes: &mut Vec<u8>) {

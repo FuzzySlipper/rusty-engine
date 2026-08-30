@@ -1,5 +1,8 @@
 use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesError, ABI_OK};
-use asset_import::{import_animated_glb_asset, ImportContext, SourceUri};
+use asset_import::{
+    admit_glb_source, glb_relative_resource_uris, import_animated_glb_asset, GlbSourceClosure,
+    GltfResource, ImportContext, SourceUri,
+};
 use csharp_engine_abi::*;
 use render_model::*;
 use render_presentation::{
@@ -673,6 +676,62 @@ fn admit_bundle_resource(path: &str, bytes: &[u8]) -> Result<(), CsharpEngineSer
         ));
     }
     Ok(())
+}
+
+fn pack_animated_glb_closure(
+    root_path: &str,
+    root_bytes: &[u8],
+    content_resources: &BTreeMap<String, Arc<[u8]>>,
+) -> Result<Vec<u8>, CsharpEngineServicesError> {
+    let resource_uris = glb_relative_resource_uris(root_bytes).map_err(|diagnostic| {
+        CsharpEngineServicesError::new(
+            "CSHARP_ANIMATION_GLB_CLOSURE",
+            format!(
+                "{}: {} ({:?})",
+                diagnostic.locus, diagnostic.message, diagnostic.code
+            ),
+        )
+    })?;
+    if resource_uris.is_empty() {
+        return Ok(root_bytes.to_vec());
+    }
+    let directory = root_path
+        .rsplit_once('/')
+        .map_or("", |(directory, _)| directory);
+    let resources = resource_uris
+        .into_iter()
+        .map(|uri| {
+            let content_path = if directory.is_empty() {
+                uri.clone()
+            } else {
+                format!("{directory}/{uri}")
+            };
+            let bytes = content_resources.get(&content_path).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_GLB_CLOSURE",
+                    format!("animated GLB dependency `{content_path}` is missing"),
+                )
+            })?;
+            Ok(GltfResource {
+                uri,
+                bytes: bytes.to_vec(),
+            })
+        })
+        .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
+    admit_glb_source(&GlbSourceClosure {
+        root_glb: root_bytes.to_vec(),
+        resources,
+    })
+    .map(|packed| packed.glb_bytes)
+    .map_err(|diagnostic| {
+        CsharpEngineServicesError::new(
+            "CSHARP_ANIMATION_GLB_CLOSURE",
+            format!(
+                "{}: {} ({:?})",
+                diagnostic.locus, diagnostic.message, diagnostic.code
+            ),
+        )
+    })
 }
 
 fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesError> {
@@ -3135,8 +3194,9 @@ impl RuntimeAppearanceBridge {
                 )
             })?;
         let browser_path = format!("content/{relative_path}");
-        let resource =
-            CsharpRenderResource::admit_animated_mesh(browser_path.clone(), bytes.to_vec())?;
+        let packed =
+            pack_animated_glb_closure(&relative_path, bytes.as_ref(), &self.content_resources)?;
+        let resource = CsharpRenderResource::admit_animated_mesh(browser_path.clone(), packed)?;
         let handle =
             self.stage_resource(resource, [browser_path, relative_path, requested_path])?;
         Ok(NativeRenderResourceHandle { value: handle })
@@ -3189,8 +3249,10 @@ impl RuntimeAppearanceBridge {
                 )
             })?;
         let browser_path = format!("content/{relative_path}");
+        let packed =
+            pack_animated_glb_closure(&relative_path, bytes.as_ref(), &self.content_resources)?;
         let resource =
-            CsharpRenderResource::admit_animation_clip_pack(browser_path.clone(), bytes.to_vec())?;
+            CsharpRenderResource::admit_animation_clip_pack(browser_path.clone(), packed)?;
         let handle =
             self.stage_resource(resource, [browser_path, relative_path, requested_path])?;
         Ok(NativeRenderResourceHandle { value: handle })
@@ -6374,6 +6436,32 @@ fn retain_texture_descriptor(
 mod tests {
     use super::*;
 
+    fn external_image_glb(source: &[u8], uri: &str) -> Vec<u8> {
+        assert_eq!(&source[..4], b"glTF");
+        let json_length = u32::from_le_bytes(source[12..16].try_into().unwrap()) as usize;
+        let old_json_end = 20 + json_length;
+        let mut root: serde_json::Value =
+            serde_json::from_slice(&source[20..old_json_end]).unwrap();
+        let image = root["images"][0].as_object_mut().unwrap();
+        image.remove("bufferView");
+        image.remove("mimeType");
+        image.insert("uri".to_owned(), serde_json::Value::String(uri.to_owned()));
+        let mut json = serde_json::to_vec(&root).unwrap();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let total = 12 + 8 + json.len() + source.len() - old_json_end;
+        let mut rewritten = Vec::with_capacity(total);
+        rewritten.extend_from_slice(b"glTF");
+        rewritten.extend_from_slice(&2u32.to_le_bytes());
+        rewritten.extend_from_slice(&(total as u32).to_le_bytes());
+        rewritten.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        rewritten.extend_from_slice(&0x4e4f_534au32.to_le_bytes());
+        rewritten.extend_from_slice(&json);
+        rewritten.extend_from_slice(&source[old_json_end..]);
+        rewritten
+    }
+
     fn inert_particle_collision() -> NativePresentationParticleCollision {
         NativePresentationParticleCollision {
             radius: 0.0,
@@ -6864,6 +6952,110 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn animated_external_image_closure_is_packed_before_direct_playback() {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let external = external_image_glb(CHARACTER_GLB, "Textures/character.png");
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert(
+            "actors/character.glb".to_owned(),
+            Arc::from(external.as_slice()),
+        );
+        content_resources.insert(
+            "actors/Textures/character.png".to_owned(),
+            Arc::from(RGBA_PNG),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let resource_path = b"content/actors/character.glb";
+        let clip = b"idle";
+
+        bridge.begin_call();
+        let resource = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: resource_path.as_ptr(),
+                    len: resource_path.len(),
+                },
+            })
+            .expect("external image closure is admitted");
+        let packed = bridge
+            .staged
+            .as_ref()
+            .unwrap()
+            .state
+            .render_resources
+            .first()
+            .unwrap();
+        assert!(glb_relative_resource_uris(&packed.bytes)
+            .unwrap()
+            .is_empty());
+        assert_ne!(packed.bytes, external);
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .expect("animated appearance");
+        let instance = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance,
+                object_id: 77,
+            })
+            .expect("animation instance");
+        bridge
+            .set_animation_playback(&NativeAnimationPlaybackRequest {
+                instance,
+                kind: NativeAnimationPlaybackKind::Play,
+                clip: NativeUtf8Slice {
+                    bytes: clip.as_ptr(),
+                    len: clip.len(),
+                },
+                loop_mode: NativeAnimationLoopMode::Repeat,
+                speed: 1.0,
+                weight: 1.0,
+                restart: true,
+                fade_seconds: 0.0,
+                has_fade: false,
+                normalized_time: 0.0,
+            })
+            .expect("embedded clip playback");
+    }
+
+    #[test]
+    fn animated_external_image_closure_missing_or_wrong_case_is_fail_atomic() {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let external = external_image_glb(CHARACTER_GLB, "Textures/character.png");
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert(
+            "actors/character.glb".to_owned(),
+            Arc::from(external.as_slice()),
+        );
+        content_resources.insert(
+            "actors/textures/character.png".to_owned(),
+            Arc::from(RGBA_PNG),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let resource_path = b"content/actors/character.glb";
+
+        bridge.begin_call();
+        let error = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: resource_path.as_ptr(),
+                    len: resource_path.len(),
+                },
+            })
+            .expect_err("dependency lookup preserves authored case");
+        assert_eq!(error.code(), "CSHARP_ANIMATION_GLB_CLOSURE");
+        let staged = bridge.staged.as_ref().unwrap();
+        assert!(staged.state.render_resources.is_empty());
+        assert!(staged.state.resource_paths.is_empty());
+        assert!(staged.outputs.is_empty());
     }
 
     #[test]

@@ -420,6 +420,86 @@ fn exact_loading_bay_fixture_reaches_the_independent_external_image_boundary() {
 }
 
 #[test]
+fn binary_glb_closure_packs_external_image_and_admits_embedded_clips() {
+    let png = BASE64
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL95wAAAABJRU5ErkJggg==")
+        .unwrap();
+    let external_character = rewrite_glb_json(ANIMATED_GLB, |root| {
+        let image = root["images"][0].as_object_mut().unwrap();
+        image.remove("bufferView");
+        image.remove("mimeType");
+        image.insert(
+            "uri".to_owned(),
+            serde_json::Value::String("Textures/character.png".to_owned()),
+        );
+    });
+    let closure = GlbSourceClosure {
+        root_glb: external_character.clone(),
+        resources: vec![GltfResource {
+            uri: "Textures/character.png".to_owned(),
+            bytes: png,
+        }],
+    };
+    assert_eq!(
+        glb_relative_resource_uris(&external_character).unwrap(),
+        ["Textures/character.png"]
+    );
+    let first = admit_glb_source(&closure).unwrap();
+    let second = admit_glb_source(&closure).unwrap();
+    assert_eq!(first, second);
+    assert_ne!(first.glb_bytes, external_character);
+    assert!(glb_relative_resource_uris(&first.glb_bytes)
+        .unwrap()
+        .is_empty());
+    assert_eq!(first.external_resource_uris, ["Textures/character.png"]);
+    assert_eq!(
+        first.source_byte_count,
+        (external_character.len() + closure.resources[0].bytes.len()) as u64
+    );
+
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("content/actors/character.glb".to_owned()),
+        &first.glb_bytes,
+        &ImportContext::default(),
+    );
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+    let descriptor = imported.assets.unwrap().animated_mesh;
+    let clips = descriptor
+        .clips
+        .iter()
+        .map(|clip| clip.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(clips, ["idle", "run", "jump"]);
+}
+
+#[test]
+fn exact_loading_bay_closure_packs_before_the_independent_geometry_boundary() {
+    let png = BASE64
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL95wAAAABJRU5ErkJggg==")
+        .unwrap();
+    let packed = admit_glb_source(&GlbSourceClosure {
+        root_glb: LOADING_BAY_BUTTON_GLB.to_vec(),
+        resources: vec![GltfResource {
+            uri: "Textures/colormap.png".to_owned(),
+            bytes: png,
+        }],
+    })
+    .unwrap();
+    assert!(glb_relative_resource_uris(&packed.glb_bytes)
+        .unwrap()
+        .is_empty());
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("content/loading-bay/button-floor-square.glb".to_owned()),
+        &packed.glb_bytes,
+        &ImportContext::default(),
+    );
+    assert!(imported.assets.is_none());
+    assert_eq!(imported.diagnostics.len(), 1, "{:?}", imported.diagnostics);
+    assert_eq!(imported.diagnostics[0].code, ImportCode::MalformedSource);
+    assert!(imported.diagnostics[0].message.contains("degenerate"));
+}
+
+#[test]
 fn zero_clip_unlit_glb_uses_the_existing_mesh_resource_lifecycle() {
     let uri = SourceUri::RelativePath("content/environment/static-unlit-triangle.glb".to_owned());
     let source = static_unlit_glb();
