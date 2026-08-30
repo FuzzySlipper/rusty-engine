@@ -11,6 +11,7 @@ const double ContinuousBonus = 0.25;
 
 ExerciseTypedValues();
 ExerciseExactStatEvaluation();
+ExerciseExactStatTrackSourceChanges();
 ExerciseContinuousStatEvaluation();
 ExerciseExactTrackAtomicity();
 ExerciseContinuousTrackAtomicity();
@@ -110,6 +111,85 @@ static void ExerciseContinuousStatEvaluation()
         new ContinuousValue(ContinuousBase),
         [source]);
     Require(evaluation.Value.Value == 0.75, "continuous stat addition was not retained");
+}
+
+static void ExerciseExactStatTrackSourceChanges()
+{
+    StatId maximum = StatId.Parse("health-maximum");
+    ExactStatDefinition stat = new(maximum, new ExactValue(0), new ExactValue(1_000));
+    ExactTrackDefinition track = new(
+        TrackId.Parse("health"),
+        new ExactValue(0),
+        new ExactTrackMaximum.FromStat(maximum));
+    ExactStatTrackState state = new(
+        stat,
+        new ExactValue(100),
+        [],
+        track,
+        new ExactValue(60));
+
+    ExactStatTrackChangeCandidate preserve = state.PrepareSourceChange(
+        new ExactValue(120),
+        [],
+        ExactStatTrackCurrentPolicy.PreserveCurrent,
+        expectedRevision: 0);
+    Require(state.Revision == 0 && state.Read().TrackBounds.Maximum.Raw == 100,
+        "stat-track preview mutated live state");
+    Require(preserve.Preview.After.Stat.Base.Raw == 120
+        && preserve.Preview.After.TrackBounds.Maximum.Raw == 120
+        && preserve.Preview.After.TrackCurrent.Raw == 60,
+        "stat-track preserve preview was incorrect");
+    ExactStatTrackChangeReceipt preserved = preserve.Publish();
+    Require(preserved.Before.Revision == 0 && preserved.After.Revision == 1
+        && preserved.After.TrackCurrent.Raw == 60,
+        "stat-track preserve publish receipt was incorrect");
+
+    ExactStatTrackChangeCandidate stale = state.PrepareSourceChange(
+        new ExactValue(130),
+        [],
+        ExactStatTrackCurrentPolicy.PreserveCurrent,
+        expectedRevision: 1);
+    ExactStatTrackChangeReceipt increased = state.ApplySourceChange(
+        new ExactValue(150),
+        [],
+        ExactStatTrackCurrentPolicy.PreserveDistanceFromMaximum,
+        expectedRevision: 1);
+    Require(increased.After.TrackCurrent.Raw == 90
+        && increased.After.TrackBounds.Maximum.Raw == 150,
+        "stat-track maximum expansion did not preserve distance from maximum");
+
+    ExactStatTrackSnapshot beforeStale = state.Read();
+    ExpectMechanicsError(() => stale.Publish(), "stale stat-track candidate was published");
+    Require(state.Read() == beforeStale, "stale stat-track candidate partially mutated state");
+
+    ExactSource advancement = new(
+        new IntrinsicSourceIdentity(new EntityId(1), SourceInstanceId.Parse("level-advance")),
+        SourceDefinitionId.Parse("level-advance"),
+        priority: 0,
+        [new ExactStatContributionDefinition(
+            maximum,
+            StackingGroupId.Parse("health-maximum-advancement"),
+            MechanicsStackingPolicy.Sum,
+            new ExactStatContribution.Add(new ExactValue(10)))]);
+    ExactStatTrackChangeReceipt sourceChanged = state.ApplySourceChange(
+        new ExactValue(150),
+        [advancement],
+        ExactStatTrackCurrentPolicy.PreserveDistanceFromMaximum,
+        expectedRevision: 2);
+    Require(sourceChanged.After.Stat.Value.Raw == 160
+        && sourceChanged.After.TrackCurrent.Raw == 100
+        && sourceChanged.After.Stat.Decisions.Single().Outcome == MechanicsDecisionOutcome.Applied,
+        "stat source replacement did not reconcile the dependent track");
+
+    ExactStatTrackSnapshot beforeRejected = state.Read();
+    ExpectMechanicsError(
+        () => state.ApplySourceChange(
+            new ExactValue(50),
+            [],
+            ExactStatTrackCurrentPolicy.PreserveCurrent,
+            expectedRevision: state.Revision),
+        "stranding stat-track source change was accepted");
+    Require(state.Read() == beforeRejected, "rejected stat-track source change partially mutated state");
 }
 
 static void ExerciseExactTrackAtomicity()
