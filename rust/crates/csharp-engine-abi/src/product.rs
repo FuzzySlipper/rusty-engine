@@ -118,6 +118,16 @@ pub type NativeReplaceCollision = unsafe extern "C" fn(
     *const NativeCollisionReplaceRequest,
     *mut NativeCollisionReplaceReceipt,
 ) -> i32;
+pub type NativeReplaceSpatialContentArtifact = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpatialContentArtifactReplaceRequest,
+    *mut NativeSpatialContentArtifactReplaceReceipt,
+) -> i32;
+pub type NativeReadSpatialContentArtifact = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpatialContentArtifactReadRequest,
+    *mut NativeSpatialContentArtifactReadout,
+) -> i32;
 pub type NativeReplaceNavigation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeNavigationReplaceRequest,
@@ -754,6 +764,8 @@ pub struct NativeSpatialApi {
     pub create_session: NativeCreateSpatialSession,
     pub destroy_session: NativeDestroySpatialSession,
     pub replace_collision: NativeReplaceCollision,
+    pub replace_content_artifact: NativeReplaceSpatialContentArtifact,
+    pub read_content_artifact: NativeReadSpatialContentArtifact,
     pub replace_navigation: NativeReplaceNavigation,
     pub replace_voxel_navigation: NativeReplaceVoxelNavigation,
     pub replace_navigation_traversal: NativeReplaceNavigationTraversal,

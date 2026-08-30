@@ -378,6 +378,59 @@ pub struct NativeCollisionReplaceReceipt {
     pub projection_hash: u64,
 }
 
+/// Replaces retained collision and planar navigation from one immutable
+/// Engine-admitted spatial artifact. The content reference is borrowed for
+/// this call; the resulting Spatial state retains copied mechanism facts and
+/// immutable source identity only.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialContentArtifactReplaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub content: NativeContentReferenceHandle,
+    pub navigation_grid_id: u64,
+    pub navigation_chunk_size: u32,
+    pub navigation_max_step_cells: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpatialContentArtifactReplaceReceipt {
+    /// Non-owning identity of the Content reference used for this admission.
+    /// The original managed `ContentReference` retains sole disposal ownership.
+    pub content_reference_value: u64,
+    pub content_sha256: NativeContentSha256,
+    pub collision_revision_before: u64,
+    pub collision_revision_after: u64,
+    pub navigation_revision: u64,
+    pub collision_vertex_count: u64,
+    pub collision_triangle_count: u64,
+    pub navigation_cell_count: u64,
+    pub collision_projection_hash: u64,
+    pub navigation_projection_hash: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialContentArtifactReadRequest {
+    pub session: NativeSpatialSessionHandle,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpatialContentArtifactReadout {
+    pub present: bool,
+    /// Non-owning identity of the Content reference used for this admission.
+    pub content_reference_value: u64,
+    pub content_sha256: NativeContentSha256,
+    pub collision_revision: u64,
+    pub navigation_revision: u64,
+    pub collision_vertex_count: u64,
+    pub collision_triangle_count: u64,
+    pub navigation_cell_count: u64,
+    pub collision_projection_hash: u64,
+    pub navigation_projection_hash: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePlanarNavConfig {

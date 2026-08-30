@@ -22,6 +22,7 @@ render-host-contracts.workspace = true
 render-projection.workspace = true
 runtime-ui.workspace = true
 runtime-lifecycle.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 svc-pathfinding.workspace = true
 svc-spatial.workspace = true

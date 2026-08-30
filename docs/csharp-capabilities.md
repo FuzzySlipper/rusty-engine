@@ -27,7 +27,7 @@ the ignored `obj/Generated` output is produced by
 | `Dynamics` | Own native dynamics worlds, bodies, contacts, stepping, and collision binding. |
 | `Motion` | Resolve reusable motion requests. |
 | `Kinematic` | Integrate kinematic movement and run bounded motion operations. |
-| `Spatial` | Own collision, navigation, character movement proposals, voxel picking, spatial queries, and triggers. Navigation includes distinct planar and volumetric traversal overlays plus bounded weighted queries. |
+| `Spatial` | Own collision, navigation, character movement proposals, voxel picking, spatial queries, and triggers. It can atomically admit collision plus planar navigation from an immutable Engine `ContentReference`; navigation also includes distinct planar and volumetric traversal overlays plus bounded weighted queries. |
 | `Perception` | Query reusable visibility facts; the product retains AI and awareness policy. |
 | `WorldOrigin` | Prepare, inspect, and commit world-origin rebases. |
 | `Voxel` | Read and mutate Engine-owned voxel state. |

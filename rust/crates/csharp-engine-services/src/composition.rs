@@ -265,10 +265,11 @@ impl EngineServiceSet {
         persistence_root: Option<PathBuf>,
         content_store_root: Option<PathBuf>,
     ) -> Result<Self, CsharpEngineServicesError> {
-        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut spatial = crate::spatial::RuntimeSpatialBridge::new();
         let perception = crate::perception::RuntimePerceptionBridge::new(&spatial);
         let dynamics = crate::dynamics::RuntimeDynamicsBridge::new(spatial.collision_source());
         let content = Box::new(RuntimeContentBridge::new(content_resources.clone()));
+        spatial.bind_content(&content);
         let mut authored_content = RuntimeAuthoredContentBridge::new();
         authored_content.bind_content(&content);
         let mut content_store = Box::new(crate::content_store::RuntimeContentStoreBridge::new(
@@ -624,5 +625,166 @@ mod tests {
         assert_eq!(retry.navigation_revision, 2);
         let staged = services.take_call().expect("unrelated staged families");
         services.commit_call(staged);
+    }
+
+    #[test]
+    fn content_backed_spatial_replacement_is_identified_and_fail_atomic() {
+        let valid_path = "spatial/example/collision-navigation.json";
+        let invalid_path = "spatial/example/invalid-collision-navigation.json";
+        let valid = br#"{
+            "schemaVersion":1,
+            "staticMeshArtifactId":"mesh/example",
+            "bounds":{"min":[0.0,0.0,0.0],"max":[2.0,1.0,2.0]},
+            "collision":{"positions":[[0.0,0.0,0.0],[2.0,0.0,0.0],[0.0,0.0,2.0]],"triangles":[[0,1,2]]},
+            "navigation":{"id":"navigation/example","config":{"schemaVersion":1,"cellSize":1.0,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1},"cells":[{"column":0,"row":0,"level":0,"supportHeight":0.0,"walkable":true}]}
+        }"#;
+        let invalid = br#"{
+            "schemaVersion":1,
+            "staticMeshArtifactId":"mesh/invalid",
+            "bounds":{"min":[0.0,0.0,0.0],"max":[2.0,1.0,2.0]},
+            "collision":{"positions":[[0.0,0.0,0.0],[2.0,0.0,0.0],[0.0,0.0,2.0]],"triangles":[[0,1,9]]},
+            "navigation":{"id":"navigation/invalid","config":{"schemaVersion":1,"cellSize":1.0,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1},"cells":[]}
+        }"#;
+        let mut content = BTreeMap::new();
+        content.insert(valid_path.to_owned(), Arc::<[u8]>::from(valid.as_slice()));
+        content.insert(
+            invalid_path.to_owned(),
+            Arc::<[u8]>::from(invalid.as_slice()),
+        );
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            content,
+            None,
+            None,
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.create_session)(
+                    api.spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        let mut valid_reference = NativeContentReferenceHandle::default();
+        let valid_open = NativeContentOpenRequest {
+            path: NativeUtf8Slice {
+                bytes: valid_path.as_ptr(),
+                len: valid_path.len(),
+            },
+        };
+        assert_eq!(
+            unsafe {
+                (api.content.open_reference)(api.content.context, &valid_open, &mut valid_reference)
+            },
+            ABI_OK
+        );
+        let request = NativeSpatialContentArtifactReplaceRequest {
+            session,
+            content: valid_reference,
+            navigation_grid_id: 7,
+            navigation_chunk_size: 8,
+            navigation_max_step_cells: 1,
+        };
+        let mut receipt = NativeSpatialContentArtifactReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.replace_content_artifact)(api.spatial.context, &request, &mut receipt)
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.content_reference_value, valid_reference.value);
+        assert_eq!(receipt.collision_vertex_count, 3);
+        assert_eq!(receipt.collision_triangle_count, 1);
+        assert_eq!(receipt.navigation_cell_count, 1);
+
+        let mut readout = NativeSpatialContentArtifactReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.read_content_artifact)(
+                    api.spatial.context,
+                    NativeSpatialContentArtifactReadRequest { session },
+                    &mut readout,
+                )
+            },
+            ABI_OK
+        );
+        assert!(readout.present);
+        assert_eq!(readout.content_sha256, receipt.content_sha256);
+        assert_eq!(
+            readout.collision_projection_hash,
+            receipt.collision_projection_hash
+        );
+        assert_eq!(
+            readout.navigation_projection_hash,
+            receipt.navigation_projection_hash
+        );
+
+        let mut invalid_reference = NativeContentReferenceHandle::default();
+        let invalid_open = NativeContentOpenRequest {
+            path: NativeUtf8Slice {
+                bytes: invalid_path.as_ptr(),
+                len: invalid_path.len(),
+            },
+        };
+        assert_eq!(
+            unsafe {
+                (api.content.open_reference)(
+                    api.content.context,
+                    &invalid_open,
+                    &mut invalid_reference,
+                )
+            },
+            ABI_OK
+        );
+        let invalid_request = NativeSpatialContentArtifactReplaceRequest {
+            content: invalid_reference,
+            ..request
+        };
+        let mut rejected = NativeSpatialContentArtifactReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.replace_content_artifact)(
+                    api.spatial.context,
+                    &invalid_request,
+                    &mut rejected,
+                )
+            },
+            0
+        );
+        let mut after_rejection = NativeSpatialContentArtifactReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.read_content_artifact)(
+                    api.spatial.context,
+                    NativeSpatialContentArtifactReadRequest { session },
+                    &mut after_rejection,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(after_rejection, readout);
+
+        assert_eq!(
+            unsafe { (api.content.destroy_reference)(api.content.context, valid_reference) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.spatial.replace_content_artifact)(api.spatial.context, &request, &mut rejected)
+            },
+            0,
+            "a stale Content reference was accepted"
+        );
+        services.discard_call();
     }
 }

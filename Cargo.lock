@@ -526,6 +526,7 @@ dependencies = [
  "render-projection",
  "runtime-lifecycle",
  "runtime-ui",
+ "serde",
  "serde_json",
  "sha2",
  "svc-pathfinding",

@@ -1,4 +1,10 @@
-use std::{cell::RefCell, collections::BTreeMap, ffi::c_void, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    ffi::c_void,
+    rc::Rc,
+    sync::Arc,
+};
 
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
@@ -18,6 +24,7 @@ use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityAuthoringService, EntityDefinition,
     EntityState, EntityTransform, Quat,
 };
+use serde::Deserialize;
 use svc_pathfinding::{
     build_nav_projection, find_path_with_policy, find_volumetric_path,
     find_weighted_path_with_policy, find_weighted_volumetric_path, propose_direct_nav_movement,
@@ -43,6 +50,77 @@ const REGISTER_TRIGGER_OPERATION: &[u8] = b"RegisterTrigger";
 const RECONCILE_TRIGGERS_OPERATION: &[u8] = b"ReconcileTriggers";
 const MAX_TRIGGER_OPERATION_DIAGNOSTICS: usize = 64;
 const MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES: usize = 512;
+const MAX_SPATIAL_CONTENT_BYTES: usize = 128 * 1024 * 1024;
+const MAX_SPATIAL_CONTENT_VERTICES: usize = 1_000_000;
+const MAX_SPATIAL_CONTENT_TRIANGLES: usize = 1_000_000;
+const MAX_SPATIAL_CONTENT_NAVIGATION_CELLS: usize = 1_000_000;
+const MAX_SPATIAL_CONTENT_COORDINATE: i64 = 10_000_000;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SpatialContentArtifact {
+    schema_version: u32,
+    static_mesh_artifact_id: String,
+    bounds: SpatialContentBounds,
+    collision: SpatialContentCollision,
+    navigation: SpatialContentNavigation,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SpatialContentBounds {
+    min: [f64; 3],
+    max: [f64; 3],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SpatialContentCollision {
+    positions: Vec<[f64; 3]>,
+    triangles: Vec<[u32; 3]>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SpatialContentNavigation {
+    id: String,
+    config: SpatialContentNavigationConfig,
+    cells: Vec<SpatialContentNavigationCell>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SpatialContentNavigationConfig {
+    schema_version: u32,
+    cell_size: f64,
+    level_quantum: f64,
+    maximum_slope_degrees: f64,
+    required_headroom: f64,
+    support_probe_drop: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SpatialContentNavigationCell {
+    column: i64,
+    row: i64,
+    level: i64,
+    support_height: f64,
+    walkable: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SpatialContentIdentity {
+    content_reference: NativeContentReferenceHandle,
+    content_sha256: NativeContentSha256,
+    collision_revision: u64,
+    navigation_revision: u64,
+    collision_vertex_count: u64,
+    collision_triangle_count: u64,
+    navigation_cell_count: u64,
+    collision_projection_hash: u64,
+    navigation_projection_hash: u64,
+}
 
 /// Engine-owned collision/navigation mechanisms. Player and game state never
 /// live here: a character proposal builds its EntityState only for the call.
@@ -51,6 +129,7 @@ pub(crate) struct RuntimeSpatialBridge {
     pub(crate) voxel_history_exports: BTreeMap<u64, Arc<[u8]>>,
     trigger_diagnostic_leases: BTreeMap<u64, SpatialTriggerDiagnosticLease>,
     collision_source: SpatialCollisionSource,
+    content: Option<*const crate::content::RuntimeContentBridge>,
     next_session: u64,
     pub(crate) next_voxel_history_export: u64,
     next_trigger_diagnostic_lease: u64,
@@ -69,6 +148,7 @@ pub(crate) struct SpatialSession {
     pub(crate) last_voxel_dirty_chunks: Vec<[i64; 3]>,
     navigation: Option<NavigationState>,
     navigation_revision: u64,
+    content_artifact: Option<SpatialContentIdentity>,
     controller: CharacterControllerService,
     last_character_receipt: Option<CharacterControllerReceipt>,
     triggers: TriggerVolumeSystem,
@@ -234,6 +314,7 @@ impl RuntimeSpatialBridge {
             voxel_history_exports: BTreeMap::new(),
             trigger_diagnostic_leases: BTreeMap::new(),
             collision_source: SpatialCollisionSource::new(),
+            content: None,
             next_session: 1,
             next_voxel_history_export: 1,
             next_trigger_diagnostic_lease: 1,
@@ -246,6 +327,10 @@ impl RuntimeSpatialBridge {
 
     pub(crate) fn collision_source(&self) -> SpatialCollisionSource {
         self.collision_source.clone()
+    }
+
+    pub(crate) fn bind_content(&mut self, content: &crate::content::RuntimeContentBridge) {
+        self.content = Some(content as *const crate::content::RuntimeContentBridge);
     }
 
     pub(crate) fn publish_scene(
@@ -302,6 +387,7 @@ impl RuntimeSpatialBridge {
                 world_origin: engine_spatial::WorldOriginState::default(),
                 navigation: None,
                 navigation_revision: 0,
+                content_artifact: None,
                 controller: CharacterControllerService::default(),
                 last_character_receipt: None,
                 triggers: TriggerVolumeSystem::default(),
@@ -508,6 +594,7 @@ impl RuntimeSpatialBridge {
                 })?;
             let candidate = Arc::new(candidate);
             session.scene = Arc::clone(&candidate);
+            session.content_artifact = None;
             (candidate, receipt)
         };
         self.collision_source
@@ -520,6 +607,166 @@ impl RuntimeSpatialBridge {
             asset_count: receipt.asset_count as u64,
             instance_count: receipt.instance_count as u64,
             projection_hash: receipt.projection_hash,
+        })
+    }
+
+    fn replace_content_artifact(
+        &mut self,
+        request: &NativeSpatialContentArtifactReplaceRequest,
+    ) -> Result<NativeSpatialContentArtifactReplaceReceipt, CsharpEngineServicesError> {
+        let content_owner = self.content.ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPATIAL_CONTENT_OWNER",
+                "Spatial has no Engine Content owner",
+            )
+        })?;
+        // SAFETY: EngineServiceSet binds this pointer to its boxed Content
+        // owner. Generated service calls are serialized and the immutable
+        // retained entry is cloned before Spatial mutates its own state.
+        let content = unsafe { &*content_owner }
+            .retained_content(request.content)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPATIAL_CONTENT_REFERENCE",
+                    "unknown or stale content reference",
+                )
+            })?;
+        let artifact = parse_spatial_content_artifact(&content.path, &content.bytes)?;
+        let navigation_grid = navigation_grid(NativePlanarNavConfig {
+            grid_id: request.navigation_grid_id,
+            cell_size: artifact.navigation.config.cell_size,
+            chunk_size: request.navigation_chunk_size,
+            max_step_cells: request.navigation_max_step_cells,
+        })?;
+        let navigation_policy = PlanarNavNeighborPolicy {
+            max_step_cells: u8::try_from(request.navigation_max_step_cells).map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_NAVIGATION_CONFIG",
+                    "maximum navigation step exceeded u8",
+                )
+            })?,
+        };
+        let navigation_projection = NavProjection::from_walkable_cells(
+            navigation_grid,
+            artifact
+                .navigation
+                .cells
+                .iter()
+                .filter(|cell| cell.walkable)
+                .map(|cell| VoxelCoord::new(cell.column, cell.level, cell.row)),
+        );
+        let navigation_cell_count = navigation_projection.walkable_len() as u64;
+        let navigation_projection_hash = navigation_projection.projection_hash();
+        let navigation_traversal = NavTraversalOverlay::empty(&navigation_projection);
+
+        let asset_id = spatial_content_asset_id(content.sha256);
+        let (assets, instances) = if artifact.collision.positions.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            let asset = StaticMeshColliderAsset::new(
+                StaticMeshAssetId(asset_id),
+                artifact.collision.positions.clone(),
+                artifact.collision.triangles.clone(),
+            )
+            .map_err(|error| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPATIAL_CONTENT_COLLISION",
+                    format!("{error:?}"),
+                )
+            })?;
+            let instance = StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(asset_id),
+                asset: asset.id,
+                expected_geometry_hash: asset.geometry_hash,
+                transform: StaticMeshTransform::IDENTITY,
+            };
+            (vec![asset], vec![instance])
+        };
+        let collision_vertex_count = artifact.collision.positions.len() as u64;
+        let collision_triangle_count = artifact.collision.triangles.len() as u64;
+
+        let (scene, identity, collision_revision_before) = {
+            let session = self.session_mut(request.session)?;
+            let mut candidate = (*session.scene).clone();
+            let collision = candidate
+                .replace_static_mesh_colliders(
+                    candidate.static_mesh_collision_revision(),
+                    assets,
+                    instances,
+                )
+                .map_err(|error| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_SPATIAL_CONTENT_COLLISION",
+                        format!("{error:?}"),
+                    )
+                })?;
+            let navigation_revision = next_navigation_revision(session.navigation_revision)?;
+            let navigation = NavigationState {
+                source: NavigationSource::HostWalkableCells,
+                projection: navigation_projection,
+                policy: navigation_policy,
+                agent_height_voxels: 0,
+                require_solid_floor: false,
+                traversal: navigation_traversal,
+                volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
+                revision: navigation_revision,
+                last_path: Vec::new(),
+            };
+            let identity = SpatialContentIdentity {
+                content_reference: request.content,
+                content_sha256: content.sha256,
+                collision_revision: collision.revision_after,
+                navigation_revision,
+                collision_vertex_count,
+                collision_triangle_count,
+                navigation_cell_count,
+                collision_projection_hash: collision.projection_hash,
+                navigation_projection_hash,
+            };
+            let scene = Arc::new(candidate);
+            session.scene = Arc::clone(&scene);
+            session.navigation_revision = navigation_revision;
+            session.navigation = Some(navigation);
+            session.content_artifact = Some(identity);
+            (scene, identity, collision.revision_before)
+        };
+        self.collision_source
+            .scenes
+            .borrow_mut()
+            .insert(request.session.value, scene);
+        Ok(NativeSpatialContentArtifactReplaceReceipt {
+            content_reference_value: identity.content_reference.value,
+            content_sha256: identity.content_sha256,
+            collision_revision_before,
+            collision_revision_after: identity.collision_revision,
+            navigation_revision: identity.navigation_revision,
+            collision_vertex_count: identity.collision_vertex_count,
+            collision_triangle_count: identity.collision_triangle_count,
+            navigation_cell_count: identity.navigation_cell_count,
+            collision_projection_hash: identity.collision_projection_hash,
+            navigation_projection_hash: identity.navigation_projection_hash,
+        })
+    }
+
+    fn read_content_artifact(
+        &mut self,
+        request: NativeSpatialContentArtifactReadRequest,
+    ) -> Result<NativeSpatialContentArtifactReadout, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let Some(identity) = session.content_artifact else {
+            return Ok(NativeSpatialContentArtifactReadout::default());
+        };
+        Ok(NativeSpatialContentArtifactReadout {
+            present: true,
+            content_reference_value: identity.content_reference.value,
+            content_sha256: identity.content_sha256,
+            collision_revision: session.scene.static_mesh_collision_revision(),
+            navigation_revision: session.navigation_revision,
+            collision_vertex_count: identity.collision_vertex_count,
+            collision_triangle_count: identity.collision_triangle_count,
+            navigation_cell_count: identity.navigation_cell_count,
+            collision_projection_hash: identity.collision_projection_hash,
+            navigation_projection_hash: identity.navigation_projection_hash,
         })
     }
 
@@ -582,6 +829,7 @@ impl RuntimeSpatialBridge {
             revision: navigation_revision,
             last_path: Vec::new(),
         });
+        session.content_artifact = None;
         Ok(receipt)
     }
 
@@ -647,6 +895,7 @@ impl RuntimeSpatialBridge {
             revision: navigation_revision,
             last_path: Vec::new(),
         });
+        session.content_artifact = None;
         Ok(receipt)
     }
 
@@ -1094,6 +1343,7 @@ impl RuntimeSpatialBridge {
         let session = self.session_mut(request.session)?;
         session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
         session.navigation = None;
+        session.content_artifact = None;
         Ok(())
     }
 
@@ -2560,6 +2810,42 @@ unsafe extern "C" fn replace_spatial_collision(
     }
 }
 
+unsafe extern "C" fn replace_spatial_content_artifact(
+    context: *mut c_void,
+    request: *const NativeSpatialContentArtifactReplaceRequest,
+    receipt: *mut NativeSpatialContentArtifactReplaceReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || receipt.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.replace_content_artifact(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn read_spatial_content_artifact(
+    context: *mut c_void,
+    request: NativeSpatialContentArtifactReadRequest,
+    readout: *mut NativeSpatialContentArtifactReadout,
+) -> i32 {
+    if context.is_null() || readout.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.read_content_artifact(request) {
+        Ok(value) => {
+            unsafe { *readout = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 unsafe extern "C" fn replace_spatial_navigation(
     context: *mut c_void,
     request: *const NativeNavigationReplaceRequest,
@@ -3155,6 +3441,8 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         create_session: create_spatial_session,
         destroy_session: destroy_spatial_session,
         replace_collision: replace_spatial_collision,
+        replace_content_artifact: replace_spatial_content_artifact,
+        read_content_artifact: read_spatial_content_artifact,
         replace_navigation: replace_spatial_navigation,
         replace_voxel_navigation: replace_spatial_voxel_navigation,
         replace_navigation_traversal: replace_spatial_navigation_traversal,
@@ -3190,6 +3478,180 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         read_trigger_overlap_at,
         read_trigger_fact_at,
     }
+}
+
+fn parse_spatial_content_artifact(
+    path: &str,
+    bytes: &[u8],
+) -> Result<SpatialContentArtifact, CsharpEngineServicesError> {
+    if bytes.is_empty() || bytes.len() > MAX_SPATIAL_CONTENT_BYTES {
+        return Err(spatial_error(
+            "CSHARP_SPATIAL_CONTENT_QUOTA",
+            format!("spatial artifact '{path}' was empty or exceeded the byte quota"),
+        ));
+    }
+    let artifact: SpatialContentArtifact = serde_json::from_slice(bytes).map_err(|error| {
+        spatial_error(
+            "CSHARP_SPATIAL_CONTENT_SCHEMA",
+            format!("spatial artifact '{path}' was not canonical schema JSON: {error}"),
+        )
+    })?;
+    if artifact.schema_version != 1 || artifact.navigation.config.schema_version != 1 {
+        return Err(spatial_error(
+            "CSHARP_SPATIAL_CONTENT_SCHEMA",
+            "spatial artifact schema version was unsupported",
+        ));
+    }
+    validate_spatial_content_id(&artifact.static_mesh_artifact_id, "static mesh artifact id")?;
+    validate_spatial_content_id(&artifact.navigation.id, "navigation id")?;
+
+    for axis in 0..3 {
+        let min = artifact.bounds.min[axis];
+        let max = artifact.bounds.max[axis];
+        if !min.is_finite()
+            || !max.is_finite()
+            || min > max
+            || min.abs() > MAX_SPATIAL_CONTENT_COORDINATE as f64
+            || max.abs() > MAX_SPATIAL_CONTENT_COORDINATE as f64
+        {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_CONTENT_BOUNDS",
+                "spatial artifact bounds were invalid or outside Engine limits",
+            ));
+        }
+    }
+    if artifact.collision.positions.len() > MAX_SPATIAL_CONTENT_VERTICES
+        || artifact.collision.triangles.len() > MAX_SPATIAL_CONTENT_TRIANGLES
+        || artifact.navigation.cells.len() > MAX_SPATIAL_CONTENT_NAVIGATION_CELLS
+    {
+        return Err(spatial_error(
+            "CSHARP_SPATIAL_CONTENT_QUOTA",
+            "spatial artifact exceeded geometry or navigation quotas",
+        ));
+    }
+    if artifact.collision.positions.is_empty() != artifact.collision.triangles.is_empty() {
+        return Err(spatial_error(
+            "CSHARP_SPATIAL_CONTENT_COLLISION",
+            "collision positions and triangles must both be empty or both be populated",
+        ));
+    }
+    for position in &artifact.collision.positions {
+        if position.iter().enumerate().any(|(axis, value)| {
+            !value.is_finite()
+                || *value < artifact.bounds.min[axis]
+                || *value > artifact.bounds.max[axis]
+        }) {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_CONTENT_COLLISION",
+                "collision position was non-finite or outside declared bounds",
+            ));
+        }
+    }
+    for triangle in &artifact.collision.triangles {
+        if triangle.iter().any(|index| {
+            usize::try_from(*index)
+                .map(|index| index >= artifact.collision.positions.len())
+                .unwrap_or(true)
+        }) || triangle[0] == triangle[1]
+            || triangle[0] == triangle[2]
+            || triangle[1] == triangle[2]
+        {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_CONTENT_COLLISION",
+                "collision triangle had invalid or repeated vertex indices",
+            ));
+        }
+    }
+
+    let config = &artifact.navigation.config;
+    if !config.cell_size.is_finite()
+        || config.cell_size <= 0.0
+        || !config.level_quantum.is_finite()
+        || config.level_quantum <= 0.0
+        || !config.maximum_slope_degrees.is_finite()
+        || !(0.0..=90.0).contains(&config.maximum_slope_degrees)
+        || !config.required_headroom.is_finite()
+        || config.required_headroom <= 0.0
+        || !config.support_probe_drop.is_finite()
+        || config.support_probe_drop < 0.0
+    {
+        return Err(spatial_error(
+            "CSHARP_SPATIAL_CONTENT_NAVIGATION",
+            "navigation derivation configuration was invalid",
+        ));
+    }
+    let mut identities = BTreeSet::new();
+    for cell in &artifact.navigation.cells {
+        let identity = (cell.column, cell.row, cell.level);
+        if !identities.insert(identity) {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_CONTENT_NAVIGATION",
+                "navigation cell identities were not unique",
+            ));
+        }
+        if [cell.column, cell.row, cell.level]
+            .into_iter()
+            .any(|value| {
+                !(-MAX_SPATIAL_CONTENT_COORDINATE..=MAX_SPATIAL_CONTENT_COORDINATE).contains(&value)
+            })
+            || !cell.support_height.is_finite()
+            || cell.support_height < artifact.bounds.min[1]
+            || cell.support_height > artifact.bounds.max[1]
+        {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_CONTENT_NAVIGATION",
+                "navigation cell was non-finite or outside declared bounds",
+            ));
+        }
+        let expected_level = (cell.support_height / config.level_quantum).round();
+        if expected_level < i64::MIN as f64
+            || expected_level > i64::MAX as f64
+            || expected_level as i64 != cell.level
+        {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_CONTENT_NAVIGATION",
+                "navigation cell level did not match its support height",
+            ));
+        }
+        let x = (cell.column as f64 + 0.5) * config.cell_size;
+        let z = (cell.row as f64 + 0.5) * config.cell_size;
+        if !x.is_finite()
+            || !z.is_finite()
+            || x < artifact.bounds.min[0] - config.cell_size
+            || x > artifact.bounds.max[0] + config.cell_size
+            || z < artifact.bounds.min[2] - config.cell_size
+            || z > artifact.bounds.max[2] + config.cell_size
+        {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_CONTENT_NAVIGATION",
+                "navigation cell footprint was outside declared bounds",
+            ));
+        }
+    }
+    Ok(artifact)
+}
+
+fn validate_spatial_content_id(value: &str, label: &str) -> Result<(), CsharpEngineServicesError> {
+    if value.is_empty()
+        || value.len() > 512
+        || value
+            .bytes()
+            .any(|value| value.is_ascii_control() || value.is_ascii_whitespace())
+    {
+        return Err(spatial_error(
+            "CSHARP_SPATIAL_CONTENT_IDENTITY",
+            format!("{label} was empty, oversized, or contained whitespace/control bytes"),
+        ));
+    }
+    Ok(())
+}
+
+fn spatial_content_asset_id(digest: NativeContentSha256) -> u64 {
+    let value = digest.word0
+        ^ digest.word1.rotate_left(13)
+        ^ digest.word2.rotate_left(29)
+        ^ digest.word3.rotate_left(47);
+    value.max(1)
 }
 
 fn spatial_error(code: &'static str, detail: impl Into<String>) -> CsharpEngineServicesError {

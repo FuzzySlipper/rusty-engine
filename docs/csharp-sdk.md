@@ -81,6 +81,15 @@ creating the session; it chooses only the Engine-derived mesh posture and is
 retained through subsequent voxel changes. Changing the mode of an existing
 session is not currently a C# API.
 
+Use `Spatial.ReplaceContentArtifact` when offline conversion has already
+published the canonical collision/navigation JSON through Engine Content. The
+Engine resolves the retained `ContentReference`, validates and copies its
+bounded geometry and signed multilevel navigation facts, and replaces both
+projections as one operation. The returned digest, revisions, counts, and
+projection hashes—and `ReadContentArtifact`—identify the admitted source.
+Products still choose the content and navigation grid policy; they do not read
+the bytes, rebuild raw array requests, or infer collision from a visual mesh.
+
 `CharacterStepRequest.Obstacles` is a borrowed, call-local list of active
 product-authored colliders. Give each obstacle its stable entity identity,
 current transform, local bounds, collision participation, and motion facts;

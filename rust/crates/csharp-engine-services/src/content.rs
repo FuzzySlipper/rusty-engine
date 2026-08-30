@@ -16,6 +16,13 @@ struct AdmittedContent {
     bytes: Arc<[u8]>,
 }
 
+#[derive(Clone)]
+pub(crate) struct RetainedContent {
+    pub(crate) path: String,
+    pub(crate) sha256: NativeContentSha256,
+    pub(crate) bytes: Arc<[u8]>,
+}
+
 struct ContentReferenceInfoLease {
     // Keeps `reference.path` alive until the matching lease is released.
     _path: String,
@@ -76,6 +83,19 @@ impl RuntimeContentBridge {
         self.references
             .get(&reference.value)
             .map(|content| Arc::clone(&content.bytes))
+    }
+
+    pub(crate) fn retained_content(
+        &self,
+        reference: NativeContentReferenceHandle,
+    ) -> Option<RetainedContent> {
+        self.references
+            .get(&reference.value)
+            .map(|content| RetainedContent {
+                path: content.path.clone(),
+                sha256: content.sha256,
+                bytes: Arc::clone(&content.bytes),
+            })
     }
 
     fn read_info(
