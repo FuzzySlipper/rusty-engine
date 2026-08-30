@@ -136,14 +136,12 @@ impl CsharpRenderResource {
         let content_hash = descriptor
             .content_hash
             .expect("resource-backed texture has a content hash");
-        let identity = match descriptor
-            .payload
-            .expect("resource-backed texture has a payload")
-            .source
-        {
-            render_model::TexturePayloadSource::Resource { resource } => resource,
-            render_model::TexturePayloadSource::Inline { .. } => unreachable!("resource admission"),
-        };
+        let identity = format!(
+            "texture/csharp-product-{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("Engine texture hash uses SHA-256")
+        );
         admit_bundle_resource(&path, &bytes)?;
         Ok(Self {
             kind: CsharpRenderResourceKind::Texture,

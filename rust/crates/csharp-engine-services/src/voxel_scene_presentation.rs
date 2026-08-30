@@ -447,6 +447,7 @@ mod tests {
     use crate::{appearance::RuntimeAppearanceBridge, spatial::RuntimeSpatialBridge};
     use render_model::RenderDiff;
     use render_projection::RuntimeAppearanceCatalog;
+    use std::sync::Arc;
 
     fn session_with_voxel(spatial: &mut RuntimeSpatialBridge) -> NativeSpatialSessionHandle {
         let spatial_api = crate::spatial::api(spatial);
@@ -605,6 +606,100 @@ mod tests {
                 .ops
                 .iter()
                 .any(|operation| matches!(operation, RenderDiff::Destroy { .. }))
+        }));
+    }
+
+    #[test]
+    fn open_texture_material_projects_through_voxel_scene_presentation() {
+        const TEXTURE: &[u8] = include_bytes!(
+            "../../../../fixtures/render/depth-splat/texture-5f34c8db37048eeb5df2b0eaf29f0098f489025c09f1f3ff0d4308eb6e43c34b.png"
+        );
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = session_with_voxel(&mut spatial);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        let mut resources = BTreeMap::new();
+        resources.insert("surface.png".to_owned(), Arc::from(TEXTURE));
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), resources);
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let path = b"surface.png";
+        let mut resource = NativeRenderResourceInfo::default();
+        assert_eq!(
+            unsafe {
+                crate::appearance::open_render_resource(
+                    (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
+                    &NativeRenderResourceRequest {
+                        path: NativeUtf8Slice {
+                            bytes: path.as_ptr(),
+                            len: path.len(),
+                        },
+                    },
+                    &mut resource,
+                )
+            },
+            ABI_OK
+        );
+        let mut material = NativeMaterialHandle::default();
+        assert_eq!(
+            unsafe {
+                crate::appearance::create_material(
+                    (&mut appearance as *mut RuntimeAppearanceBridge).cast(),
+                    NativeMaterialRequest {
+                        color: NativeColor {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                        texture: resource.handle,
+                        roughness: 1.0,
+                        texture_tint: NativeColor {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                        emission_color: NativeVec3::default(),
+                        emission_intensity: 0.0,
+                        double_sided: false,
+                    },
+                    &mut material,
+                )
+            },
+            ABI_OK
+        );
+
+        let api = super::api(&mut bridge, &mut appearance);
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        let mut presentation = NativeVoxelScenePresentationHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.project_scene)(
+                    api.context,
+                    &NativeProjectVoxelSceneRequest {
+                        session,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                    &mut presentation,
+                )
+            },
+            ABI_OK
+        );
+        let staged = bridge.take_staged_call().expect("textured projection");
+        assert!(staged.frames.iter().any(|frame| {
+            frame.ops.iter().any(|operation| {
+                matches!(
+                    operation,
+                    RenderDiff::DefineMaterial { material }
+                        if material.texture.as_deref().is_some_and(|texture| texture.starts_with("texture/"))
+                )
+            })
         }));
     }
 }
