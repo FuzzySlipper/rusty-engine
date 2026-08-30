@@ -20,15 +20,17 @@ import {
   appendLiveDebugTranscript,
   commandSummary,
   historyCommand,
+  type LiveDebugPanelPresentation,
   type LiveDebugTranscriptEntry,
 } from './live-debug-panel-model.js';
 
-export type LiveDebugPanelPresentation = 'inline' | 'dock' | 'overlay';
+export type { LiveDebugPanelPresentation } from './live-debug-panel-model.js';
 
 type LiveDebugConnectionState = 'disconnected' | 'connecting' | 'ready' | 'unavailable' | 'error';
 
 const LIVE_DEBUG_PANEL_MAX_HISTORY_ENTRIES = 64;
 const LIVE_DEBUG_PANEL_MAX_COMPLETIONS = 12;
+let nextLiveDebugPanelInstance = 1;
 
 /**
  * Optional developer UI for the product-owned live-debug host. It has no
@@ -60,9 +62,9 @@ const LIVE_DEBUG_PANEL_MAX_COMPLETIONS = 12;
         </p>
 
         <form class="rusty-live-debug-panel__form" (ngSubmit)="execute()">
-          <label for="rusty-live-debug-command">Command</label>
+          <label [attr.for]="commandInputId">Command</label>
           <input
-            id="rusty-live-debug-command"
+            [attr.id]="commandInputId"
             name="command"
             autocomplete="off"
             spellcheck="false"
@@ -70,14 +72,14 @@ const LIVE_DEBUG_PANEL_MAX_COMPLETIONS = 12;
             (ngModelChange)="command.set($event)"
             (keydown)="onCommandKeydown($event)"
             [disabled]="connection() !== 'ready' || executing()"
-            aria-describedby="rusty-live-debug-hint"
+            [attr.aria-describedby]="commandHintId"
           >
           <button type="submit" [disabled]="connection() !== 'ready' || executing() || command().trim().length === 0">
             {{ executing() ? 'Running…' : 'Run' }}
           </button>
         </form>
 
-        <p id="rusty-live-debug-hint" class="rusty-live-debug-panel__hint" *ngIf="completionHint() as hint">
+        <p [attr.id]="commandHintId" class="rusty-live-debug-panel__hint" *ngIf="completionHint() as hint">
           {{ hint }}
         </p>
         <ul class="rusty-live-debug-panel__completions" *ngIf="completions().length > 0" aria-label="Command completions">
@@ -90,11 +92,11 @@ const LIVE_DEBUG_PANEL_MAX_COMPLETIONS = 12;
         </ul>
 
         <div class="rusty-live-debug-panel__transcript-actions">
-          <strong id="rusty-live-debug-transcript-label">Responses</strong>
+          <strong [attr.id]="transcriptLabelId">Responses</strong>
           <button type="button" (click)="clearTranscript()" [disabled]="transcript().length === 0">Clear</button>
           <button type="button" (click)="copyTranscript()" [disabled]="transcript().length === 0">Copy</button>
         </div>
-        <ol class="rusty-live-debug-panel__transcript" role="log" aria-live="polite" aria-labelledby="rusty-live-debug-transcript-label">
+        <ol class="rusty-live-debug-panel__transcript" role="log" aria-live="polite" [attr.aria-labelledby]="transcriptLabelId">
           <li *ngFor="let entry of transcript()" [class.rusty-live-debug-panel__response--failure]="!entry.succeeded">
             <code>&gt; {{ entry.command }}</code>
             <pre>{{ entry.message }}</pre>
@@ -132,6 +134,11 @@ export class LiveDebugPanelComponent {
   /** A packaged host can retain transport ownership by supplying this input. */
   readonly transport = input<LiveDebugTransport | null>(null);
   readonly presentation = input<LiveDebugPanelPresentation>('inline');
+
+  /** IDs are instance-local so separately mounted panels remain accessible. */
+  readonly commandInputId = `rusty-live-debug-command-${nextLiveDebugPanelInstance}`;
+  readonly commandHintId = `rusty-live-debug-hint-${nextLiveDebugPanelInstance}`;
+  readonly transcriptLabelId = `rusty-live-debug-transcript-label-${nextLiveDebugPanelInstance++}`;
 
   readonly connection = signal<LiveDebugConnectionState>('disconnected');
   readonly error = signal('');

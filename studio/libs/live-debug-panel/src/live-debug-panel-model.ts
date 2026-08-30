@@ -2,6 +2,9 @@ import type { LiveDebugCommandDescriptor } from '@rusty-engine/live-debug-client
 
 export const LIVE_DEBUG_PANEL_MAX_TRANSCRIPT_ENTRIES = 128;
 
+/** The optional panel's DOM-only placement; it has no product-state meaning. */
+export type LiveDebugPanelPresentation = 'inline' | 'dock' | 'overlay';
+
 export interface LiveDebugTranscriptEntry {
   readonly command: string;
   readonly message: string;

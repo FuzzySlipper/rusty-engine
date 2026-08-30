@@ -1,5 +1,6 @@
 /target/
 /node_modules/
+/studio/libs/live-debug-panel/.browser-build/
 /render/**/node_modules/
 /render/.nx/
 /render/dist/

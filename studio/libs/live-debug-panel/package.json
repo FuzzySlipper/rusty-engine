@@ -15,10 +15,13 @@
   "scripts": {
     "prebuild": "pnpm --dir ../.. --filter @rusty-engine/live-debug-client run build",
     "build": "ngc --project tsconfig.build.json",
+    "prebuild:browser-artifact": "pnpm --dir ../.. --filter @rusty-engine/live-debug-client run build",
+    "build:browser-artifact": "ngc --project tsconfig.browser-artifact.json && node ../../scripts/build-live-debug-panel-artifact.mjs",
     "prepare": "pnpm run build",
     "pretypecheck": "pnpm --dir ../.. --filter @rusty-engine/live-debug-client run build",
     "typecheck": "tsc --project tsconfig.json --noEmit",
-    "test": "pnpm run build && node --test 'dist/**/*.test.js'"
+    "test": "pnpm run build && node --test 'dist/**/*.test.js'",
+    "test:browser-artifact": "pnpm run build:browser-artifact && node --test test/browser-artifact.test.mjs"
   },
   "dependencies": {
     "@angular/common": "~21.2.0",

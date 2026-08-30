@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "outDir": ".browser-build"
+  },
+  "include": [
+    "src/browser-mount.ts",
+    "src/live-debug-panel.component.ts",
+    "src/live-debug-panel-model.ts"
+  ],
+  "angularCompilerOptions": {
+    "compilationMode": "full",
+    "enableI18nLegacyMessageIdFormat": false,
+    "strictInjectionParameters": true,
+    "strictInputAccessModifiers": true,
+    "strictTemplates": true
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@rusty-engine/live-debug-panel-browser",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "live-debug-client.d.ts",
+    "live-debug-panel-model.d.ts"
+  ]
+}
