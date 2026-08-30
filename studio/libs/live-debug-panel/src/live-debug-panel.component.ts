@@ -5,6 +5,7 @@ import {
   computed,
   effect,
   input,
+  type OnDestroy,
   signal,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -128,7 +129,7 @@ let nextLiveDebugPanelInstance = 1;
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class LiveDebugPanelComponent {
+export class LiveDebugPanelComponent implements OnDestroy {
   /** The host must opt in before this component creates or uses a transport. */
   readonly enabled = input(false);
   /** A packaged host can retain transport ownership by supplying this input. */
@@ -260,6 +261,10 @@ export class LiveDebugPanelComponent {
     } catch (error: unknown) {
       this.error.set(`Could not copy responses: ${errorMessage(error)}`);
     }
+  }
+
+  ngOnDestroy(): void {
+    this.disconnect();
   }
 
   private disconnect(): void {

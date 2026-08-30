@@ -15,7 +15,7 @@ test('browser artifact mounts independently and routes through an injected trans
   const server = createServer(async (request, response) => {
     if (request.url === '/fixture.html') {
       response.writeHead(200, { 'content-type': 'text/html' });
-      response.end('<main><div id="ready"></div><div id="inert"></div></main>');
+      response.end('<main><div id="ready"></div><div id="inert"></div><div id="hanging"></div></main>');
       return;
     }
     if (request.url === '/index.js') {
@@ -39,6 +39,7 @@ test('browser artifact mounts independently and routes through an injected trans
     const { mountLiveDebugPanel } = await import('/index.js');
     let catalogCalls = 0;
     const commands = [];
+    let hangingSignal;
     const transport = {
       async catalog() {
         catalogCalls += 1;
@@ -61,21 +62,37 @@ test('browser artifact mounts independently and routes through an injected trans
       enabled: false,
       transport,
     });
+    const hanging = await mountLiveDebugPanel(document.querySelector('#hanging'), {
+      enabled: true,
+      transport: {
+        catalog: transport.catalog,
+        execute(_command, signal) {
+          hangingSignal = signal;
+          return new Promise(() => {});
+        },
+      },
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const input = document.querySelector('#ready input');
     input.value = 'inspect';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#ready form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    const hangingInput = document.querySelector('#hanging input');
+    hangingInput.value = 'inspect';
+    hangingInput.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#hanging form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     const ids = [...document.querySelectorAll('input')].map((element) => element.id);
     const transcript = document.querySelector('#ready [role="log"]')?.textContent;
     ready.dispose();
     inert.dispose();
-    return { catalogCalls, commands, ids, transcript };
+    hanging.dispose();
+    return { catalogCalls, commands, hangingAborted: hangingSignal?.aborted, ids, transcript };
   });
 
-  assert.equal(result.catalogCalls, 1, 'the disabled panel must stay inert');
+  assert.equal(result.catalogCalls, 2, 'the disabled panel must stay inert');
   assert.deepEqual(result.commands, ['inspect']);
+  assert.equal(result.hangingAborted, true, 'disposing a panel must abort its in-flight command');
   assert.equal(new Set(result.ids).size, result.ids.length, 'mounted panels must not reuse DOM IDs');
   assert.match(result.transcript ?? '', /ran inspect/);
 });
