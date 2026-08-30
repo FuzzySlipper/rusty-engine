@@ -476,6 +476,45 @@ public sealed class EntityWorld : IDisposable
         return new EntityWorldDiagnostics(_state.Revision, _state.NextEntityValue, false, _state.Entities.Count, active, disabled, tombstoned, components);
     }
 
+    /// <summary>
+    /// Captures the identity, relation, revision, and component-presence facts needed by the
+    /// Engine-managed live debug module. This deliberately excludes component values and is
+    /// internal so it cannot become a general untyped EntityWorld access surface.
+    /// </summary>
+    internal EntityWorldDebugSnapshot CaptureDebugSnapshot()
+    {
+        ThrowIfDisposed();
+        var entities = new List<EntityWorldDebugEntitySnapshot>(_state.Entities.Count);
+        foreach ((ulong value, EntityRecord record) in _state.Entities)
+        {
+            EntityId entity = new(value);
+            var components = new List<EntityWorldDebugComponentPresence>();
+            foreach (ComponentTable table in _state.Tables.Values)
+            {
+                if (table.Contains(entity))
+                {
+                    components.Add(new EntityWorldDebugComponentPresence(
+                        table.Descriptor.Key,
+                        table.Descriptor,
+                        table.RevisionFor(entity)));
+                }
+            }
+
+            EntityId? container = _state.Containment.TryGetValue(value, out ulong containerValue)
+                ? new EntityId(containerValue)
+                : null;
+            IReadOnlyList<EntityId> children = _state.ContainedChildren.TryGetValue(value, out SortedSet<ulong>? contained)
+                ? contained.Select(child => new EntityId(child)).ToArray()
+                : [];
+            entities.Add(new EntityWorldDebugEntitySnapshot(entity, record.Lifecycle, record.Revision, container, children, components.ToArray()));
+        }
+
+        EntityWorldDebugComponentFamily[] componentFamilies = _state.Tables.Values
+            .Select(table => new EntityWorldDebugComponentFamily(table.Descriptor.Key, table.Descriptor))
+            .ToArray();
+        return new EntityWorldDebugSnapshot(_state.Revision, _state.NextEntityValue, entities.ToArray(), componentFamilies);
+    }
+
     public void Dispose()
     {
         if (_staging)
@@ -851,6 +890,8 @@ public sealed class EntityWorld : IDisposable
         internal ComponentType Descriptor { get; }
         internal abstract ComponentTable Clone(bool forSnapshot);
         internal abstract ComponentTable CreateEmpty();
+        internal abstract bool Contains(EntityId entity);
+        internal abstract ulong RevisionFor(EntityId entity);
         internal abstract bool Remove(EntityId entity);
         internal abstract void InvalidateRevisions();
         internal abstract void RebaseRevisionsAfter(ComponentTable current, IEnumerable<EntityId> entities);
@@ -885,7 +926,7 @@ public sealed class EntityWorld : IDisposable
 
         internal override ComponentTable CreateEmpty() => new ComponentTable<T>(TypedDescriptor);
 
-        internal bool Contains(EntityId entity) => _values.ContainsKey(entity.Value);
+        internal override bool Contains(EntityId entity) => _values.ContainsKey(entity.Value);
 
         internal bool TryGet(EntityId entity, out T value) => _values.TryGetValue(entity.Value, out value);
 
@@ -906,7 +947,7 @@ public sealed class EntityWorld : IDisposable
             return true;
         }
 
-        internal ulong RevisionFor(EntityId entity) => _revisions.GetValueOrDefault(entity.Value);
+        internal override ulong RevisionFor(EntityId entity) => _revisions.GetValueOrDefault(entity.Value);
 
         internal IReadOnlyList<EntityWorldComponentSlot<T>> CaptureSlots(IEnumerable<EntityId> entities)
         {
