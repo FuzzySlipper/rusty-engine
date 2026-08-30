@@ -1,4 +1,4 @@
-import type { PresentationFrameDiff, RenderFrameDiff, RendererViewComposition } from '@rusty-engine/render-contracts';
+import type { PresentationFrameDiff, RenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   RendererAnimationHost,
   RendererAudioHost,
@@ -10,7 +10,6 @@ import {
   type RendererSurface,
   type RendererSurfaceOptions,
   type RendererSurfaceResourceOptions,
-  type RendererAnimationClipCueDefinition,
 } from '@rusty-engine/renderer-host';
 import {
   RustyApplicationContentError,
@@ -60,10 +59,81 @@ export type RustyApplicationInteractionMode =
 export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
 /** A Rust-projected typed presentation diff. Strict decoding remains Engine-owned. */
 export type RustyApplicationPresentationFrame = Readonly<Record<string, unknown>>;
+export interface RustyApplicationViewCompositionCamera {
+  readonly id: string;
+  readonly pose: {
+    readonly position: readonly [number, number, number];
+    readonly pitchDegrees: number;
+    readonly yawDegrees: number;
+  };
+  readonly basis?: {
+    readonly forward: readonly [number, number, number];
+    readonly right: readonly [number, number, number];
+    readonly up: readonly [number, number, number];
+  };
+  readonly projection:
+    | { readonly kind: 'perspective'; readonly fovYDegrees: number; readonly near: number; readonly far: number }
+    | { readonly kind: 'orthographic'; readonly verticalSize: number; readonly near: number; readonly far: number };
+}
+
+export interface RustyApplicationViewCompositionTarget {
+  readonly id: string;
+  readonly revision: number;
+  readonly width: number;
+  readonly height: number;
+  readonly color: 'rgba8_srgb';
+  readonly depth: 'depth24' | 'none';
+  readonly sampling: 'linear' | 'nearest';
+}
+
+export interface RustyApplicationViewCompositionViewport {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface RustyApplicationViewCompositionView {
+  readonly id: string;
+  readonly cameraId: string;
+  readonly target:
+    | { readonly kind: 'primary' }
+    | { readonly kind: 'offscreen'; readonly targetId: string; readonly targetRevision: number };
+  readonly viewport: RustyApplicationViewCompositionViewport;
+  readonly order: number;
+}
+
+export interface RustyApplicationViewCompositionPresentation {
+  readonly id: string;
+  readonly sourceTargetId: string;
+  readonly sourceTargetRevision: number;
+  readonly destination: {
+    readonly kind: 'primary';
+    readonly viewport: RustyApplicationViewCompositionViewport;
+  };
+  readonly order: number;
+}
+
 /** Typed Engine view composition, realized by the Engine renderer against its current surface. */
-export type RustyApplicationViewComposition = RendererViewComposition;
+export interface RustyApplicationViewComposition {
+  readonly schemaVersion: 1;
+  readonly cameras: readonly RustyApplicationViewCompositionCamera[];
+  readonly targets: readonly RustyApplicationViewCompositionTarget[];
+  readonly views: readonly RustyApplicationViewCompositionView[];
+  readonly presentations: readonly RustyApplicationViewCompositionPresentation[];
+}
+
 /** A product-provided marker snapshot realized only by the Engine animation host. */
-export type RustyApplicationAnimationCueDefinition = RendererAnimationClipCueDefinition;
+export interface RustyApplicationAnimationCueDefinition {
+  readonly cueId: string;
+  readonly asset: string;
+  readonly clip: string;
+  readonly atSeconds: number;
+  readonly signal: {
+    readonly domain: 'audio' | 'particle';
+    readonly id: string;
+  };
+}
 
 export interface RustyApplicationCameraPose {
   readonly position: readonly [number, number, number];
@@ -478,6 +548,141 @@ export interface RustyApplicationAudioResumeReceipt {
   readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
 }
 
+export type RustyApplicationAudioDiagnosticCode =
+  | 'invalidDescriptor'
+  | 'assetMissing'
+  | 'assetKindMismatch'
+  | 'contentHashMismatch'
+  | 'duplicateSignal'
+  | 'duplicateHandle'
+  | 'unknownHandle'
+  | 'unavailableHost'
+  | 'audioContextBlocked'
+  | 'decodeFailed'
+  | 'hostFailure';
+
+export interface RustyApplicationAudioDiagnostic {
+  readonly code: RustyApplicationAudioDiagnosticCode;
+  readonly sequence: number;
+  readonly handle: number | null;
+  readonly message: string;
+}
+
+export type RustyApplicationAudioRealizedFact =
+  | {
+      readonly kind: 'naturalCompletion';
+      readonly factId: number;
+      readonly source: 'oneShot';
+      readonly sequence: number;
+      readonly signalHandle: number;
+    }
+  | {
+      readonly kind: 'naturalCompletion';
+      readonly factId: number;
+      readonly source: 'retainedVoice';
+      readonly sequence: number;
+      readonly handle: number;
+    }
+  | {
+      readonly kind: 'diagnostic';
+      readonly factId: number;
+      readonly diagnostic: RustyApplicationAudioDiagnostic;
+    };
+
+export interface RustyApplicationAudioRealizedFactsReadout {
+  readonly retainedFactCount: number;
+  readonly evictedFactCount: number;
+  readonly facts: readonly RustyApplicationAudioRealizedFact[];
+}
+
+export type RustyApplicationAnimationDiagnosticCode =
+  | 'invalidDescriptor'
+  | 'duplicateHandle'
+  | 'unknownHandle'
+  | 'unknownTarget'
+  | 'assetMissing'
+  | 'contentHashMismatch'
+  | 'clipMissing'
+  | 'incompatibleRig'
+  | 'invalidBlendWeight'
+  | 'invalidTransition'
+  | 'staleRevision'
+  | 'unavailableHost'
+  | 'compatibilityFallback'
+  | 'hostFailure';
+
+export interface RustyApplicationAnimationDiagnostic {
+  readonly code: RustyApplicationAnimationDiagnosticCode;
+  readonly sequence: number;
+  readonly handle: number | null;
+  readonly target: number | null;
+  readonly message: string;
+}
+
+export type RustyApplicationAnimationRealizedFact =
+  | {
+      readonly kind: 'playbackObservation';
+      readonly factId: number;
+      readonly objectId: number;
+      readonly generation: number;
+      readonly sequence: number;
+      readonly status: 'unavailable' | 'not_started' | 'playing' | 'paused' | 'sampled' | 'stopped';
+      readonly selectedClip: string | null;
+      readonly sampledAtSeconds: number | null;
+    }
+  | {
+      readonly kind: 'diagnostic';
+      readonly factId: number;
+      readonly objectId: number | null;
+      readonly generation: number | null;
+      readonly diagnostic: RustyApplicationAnimationDiagnostic;
+    }
+  | {
+      readonly kind: 'cue';
+      readonly factId: number;
+      readonly objectId: number;
+      readonly generation: number;
+      readonly cueId: string;
+      readonly clip: string;
+      readonly markerSeconds: number;
+      readonly sampledAtSeconds: number;
+      readonly signal: RustyApplicationAnimationCueDefinition['signal'];
+    }
+  | {
+      readonly kind: 'stopped';
+      readonly factId: number;
+      readonly objectId: number;
+      readonly generation: number;
+      readonly sequence: number;
+      readonly reason: 'destroyed' | 'teardown';
+    }
+  | {
+      readonly kind: 'naturalCompletion';
+      readonly factId: number;
+      readonly objectId: number;
+      readonly generation: number;
+      readonly clip: string;
+    };
+
+export interface RustyApplicationAnimationRealizedFactsReadout {
+  readonly retainedFactCount: number;
+  readonly evictedFactCount: number;
+  readonly facts: readonly RustyApplicationAnimationRealizedFact[];
+}
+
+export interface RustyApplicationViewCompositionReceipt {
+  readonly applied: boolean;
+  readonly diagnostics: readonly {
+    readonly code:
+      | 'invalid_view_composition'
+      | 'stale_target_revision'
+      | 'surface_disposed'
+      | 'target_allocation_failed';
+    readonly message: string;
+  }[];
+  readonly revision: number;
+}
+
 export interface RustyApplicationRendererPort {
   readonly applyFrame: (frame: RustyApplicationFrame) => RustyApplicationFrameReceipt;
   readonly applyPresentation: (
@@ -488,17 +693,17 @@ export interface RustyApplicationRendererPort {
     definitions: readonly RustyApplicationAnimationCueDefinition[],
   ) => RustyApplicationFrameReceipt;
   /** Read Engine-realized audio facts without exposing the browser audio owner. */
-  readonly audioRealizedFacts: () => ReturnType<RendererSurface['audioRealizedFacts']>;
-  readonly animationRealizedFacts: () => ReturnType<RendererSurface['animationRealizedFacts']>;
+  readonly audioRealizedFacts: () => RustyApplicationAudioRealizedFactsReadout | null;
+  readonly animationRealizedFacts: () => RustyApplicationAnimationRealizedFactsReadout | null;
   /** Acknowledge only the submitted Engine-realized audio fact range. */
-  readonly acknowledgeAudioRealizedFacts: RendererSurface['acknowledgeAudioRealizedFacts'];
-  readonly acknowledgeAnimationRealizedFacts: RendererSurface['acknowledgeAnimationRealizedFacts'];
+  readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
+  readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;
   /** Invalidate the realized-audio owner when a product runtime binding changes. */
-  readonly resetAudioRealizationOwner: RendererSurface['resetAudioRealizationOwner'];
-  readonly resetAnimationRealizationOwner: RendererSurface['resetAnimationRealizationOwner'];
+  readonly resetAudioRealizationOwner: () => boolean;
+  readonly resetAnimationRealizationOwner: () => boolean;
   readonly configureViews: (
     composition: RustyApplicationViewComposition,
-  ) => ReturnType<RendererSurface['configureViews']>;
+  ) => RustyApplicationViewCompositionReceipt;
   /** Replace product content with the Engine-owned empty/default retained frame. */
   readonly clear: () => Promise<void>;
   /** Create an experimental depth-enhanced sprite attachment on the current renderer surface. */
