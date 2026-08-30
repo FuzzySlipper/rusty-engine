@@ -506,3 +506,123 @@ impl std::fmt::Display for CsharpEngineServicesError {
     }
 }
 impl std::error::Error for CsharpEngineServicesError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
+
+    fn binding() -> RuntimeUiRuntimeBinding {
+        RuntimeUiRuntimeBinding::new(
+            RuntimeInstanceId::new(1),
+            RuntimeGeneration::new(1),
+            RuntimeControlRevision::new(1),
+        )
+    }
+
+    fn navigation_request(
+        session: NativeSpatialSessionHandle,
+        cells: &[NativePlanarNavCell],
+        chunk_size: u32,
+    ) -> NativeNavigationReplaceRequest {
+        NativeNavigationReplaceRequest {
+            session,
+            config: NativePlanarNavConfig {
+                grid_id: 1,
+                cell_size: 1.0,
+                chunk_size,
+                max_step_cells: 1,
+            },
+            cells: cells.as_ptr(),
+            cells_len: cells.len(),
+        }
+    }
+
+    #[test]
+    fn spatial_mutation_survives_later_call_failure_and_outer_discard() {
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            None,
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.create_session)(
+                    api.spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        let cells = [NativePlanarNavCell::default()];
+        let mut first = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.replace_navigation)(
+                    api.spatial.context,
+                    &navigation_request(session, &cells, 8),
+                    &mut first,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(first.navigation_revision, 1);
+
+        let mut rejected = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.replace_navigation)(
+                    api.spatial.context,
+                    &navigation_request(session, &cells, 0),
+                    &mut rejected,
+                )
+            },
+            0,
+            "the later generated call would throw and fail the product callback"
+        );
+        services.discard_call();
+
+        let api = services.api();
+        let mut after_discard = NativeNavigationProjectionReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.read_navigation_projection)(
+                    api.spatial.context,
+                    NativeNavigationProjectionReadRequest { session },
+                    &mut after_discard,
+                )
+            },
+            ABI_OK
+        );
+        assert!(after_discard.present);
+        assert_eq!(after_discard.navigation_revision, first.navigation_revision);
+        assert_eq!(after_discard.projection_hash, first.projection_hash);
+
+        services.begin_call(binding());
+        let api = services.api();
+        let mut retry = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.replace_navigation)(
+                    api.spatial.context,
+                    &navigation_request(session, &cells, 8),
+                    &mut retry,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(retry.navigation_revision, 2);
+        let staged = services.take_call().expect("unrelated staged families");
+        services.commit_call(staged);
+    }
+}

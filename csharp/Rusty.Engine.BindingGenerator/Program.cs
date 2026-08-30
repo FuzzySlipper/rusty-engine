@@ -356,6 +356,13 @@ internal static class Emit
         output.AppendLine("}").AppendLine();
         foreach (Service service in model.Services)
         {
+            if (service.Name is "Spatial" or "Voxel")
+            {
+                output.AppendLine("/// <summary>");
+                output.AppendLine("/// Mutable operations in this service are operation-atomic and commit immediately.");
+                output.AppendLine("/// A later failure in the same product callback does not roll them back; a product callback is not a transaction over Spatial/Voxel state.");
+                output.AppendLine("/// </summary>");
+            }
             output.AppendLine($"public interface I{SafeServiceName(service.Name)}Service").AppendLine("{");
             foreach ((string name, string callbackName) in service.Operations)
             {

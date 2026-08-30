@@ -49,6 +49,17 @@ lets product code accept or reject the product-owned ticket meaning.
   data; a product that does not own timeline tickets may leave the default
   rejecting implementation in place.
 
+A product callback is not a transaction over every Engine service. Each
+generated service operation preserves its own validation and failure
+atomicity, while only service families that explicitly stage call output are
+committed or discarded with the outer callback. Mutable `Spatial` and `Voxel`
+operations commit immediately: if one succeeds and product code or a later
+Engine call fails, the earlier mutation remains authoritative. Validate
+product policy before issuing mutations, retain returned revisions/receipts,
+and make retry behavior explicit. Use a named prepared/commit API when a
+multi-owner change genuinely requires coordination; do not assume an exception
+rewinds an Engine world.
+
 Current `IEngineContext` properties are named service families generated from
 the ABI: look, dynamics, motion, kinematic, spatial, perception, world origin,
 voxel, voxel content and presentation, content, authored content, appearance,
