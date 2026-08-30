@@ -28271,7 +28271,7 @@ function gD(e) {
 var _D = "rusty.product.browser-host";
 function vD(e) {
 	if (typeof e != "object" || !e) throw TypeError("Product Browser Host runtime adapter must be an object");
-	return ND(e.lifecycle, "lifecycle"), ND(e.input, "input"), ND(e.reportAudioFeedback, "reportAudioFeedback"), ND(e.reportAnimationFeedback, "reportAnimationFeedback"), ND(e.advanceRealtime, "advanceRealtime"), e.completeTimeline !== void 0 && ND(e.completeTimeline, "completeTimeline"), e.subscribeTerminalFailures !== void 0 && ND(e.subscribeTerminalFailures, "subscribeTerminalFailures"), ND(e.subscribeOutputs, "subscribeOutputs"), ND(e.dispose, "dispose"), Object.freeze({
+	return ND(e.lifecycle, "lifecycle"), ND(e.input, "input"), ND(e.reportAudioFeedback, "reportAudioFeedback"), ND(e.reportAnimationFeedback, "reportAnimationFeedback"), ND(e.advanceRealtime, "advanceRealtime"), e.completeTimeline !== void 0 && ND(e.completeTimeline, "completeTimeline"), e.subscribeTerminalFailures !== void 0 && ND(e.subscribeTerminalFailures, "subscribeTerminalFailures"), ND(e.subscribeOutputs, "subscribeOutputs"), e.waitUntilOutputSubscriptionReady !== void 0 && ND(e.waitUntilOutputSubscriptionReady, "waitUntilOutputSubscriptionReady"), ND(e.dispose, "dispose"), Object.freeze({
 		lifecycle: e.lifecycle,
 		input: e.input,
 		reportAudioFeedback: e.reportAudioFeedback,
@@ -28282,6 +28282,7 @@ function vD(e) {
 		...e.completeTimeline === void 0 ? {} : { completeTimeline: e.completeTimeline },
 		...e.subscribeTerminalFailures === void 0 ? {} : { subscribeTerminalFailures: e.subscribeTerminalFailures },
 		subscribeOutputs: e.subscribeOutputs,
+		...e.waitUntilOutputSubscriptionReady === void 0 ? {} : { waitUntilOutputSubscriptionReady: e.waitUntilOutputSubscriptionReady },
 		dispose: e.dispose
 	});
 }
@@ -28527,7 +28528,7 @@ async function CD(e) {
 		});
 		let t = _.splice(0, _.length);
 		for (let e of t) O(e);
-		if (await g, d !== null || e.autoStart !== !1 && (k(await r.enqueue(() => n.lifecycle({ kind: "start" })), "startup_failed"), d !== null)) throw d;
+		if (await g, d !== null || e.autoStart !== !1 && (await n.waitUntilOutputSubscriptionReady?.(), d !== null || (k(await r.enqueue(() => n.lifecycle({ kind: "start" })), "startup_failed"), d !== null))) throw d;
 		u = !0, i = "ready", v(), E();
 	} catch (e) {
 		let t = x(e, "startup_failed");
@@ -29065,27 +29066,27 @@ var rO = "/__rusty/product/runtime/", iO = "rusty.product.local-runtime-transpor
 	}
 };
 function NO(e = {}) {
-	let t = IO(e.basePath ?? "/__rusty/product/runtime/"), n = e.fetch ?? PO(), r = e.eventSource ?? FO(), i = LO(e.maximumResponseBytes ?? cO, "maximumResponseBytes", oO), a = LO(e.maximumOutputBytes ?? lO, "maximumOutputBytes", sO), o = !1, s = null, c = null, l = null, u = /* @__PURE__ */ new Set(), d = /* @__PURE__ */ new Set(), f = new AbortController(), p = () => {
+	let t = IO(e.basePath ?? "/__rusty/product/runtime/"), n = e.fetch ?? PO(), r = e.eventSource ?? FO(), i = LO(e.maximumResponseBytes ?? cO, "maximumResponseBytes", oO), a = LO(e.maximumOutputBytes ?? lO, "maximumOutputBytes", sO), o = !1, s = null, c = null, l = null, u = null, d = null, f = /* @__PURE__ */ new Set(), p = /* @__PURE__ */ new Set(), m = new AbortController(), h = () => {
 		if (o) throw new $("disposed", "Product Browser local runtime transport is disposed");
-		if (l !== null) throw new $("stream_failed", l.diagnostic, { route: aO.outputs });
-	}, m = (t) => {
+		if (d !== null) throw new $("stream_failed", d.diagnostic, { route: aO.outputs });
+	}, g = (t) => {
 		try {
 			e.onTransportError?.(t);
 		} catch {}
-	}, h = (e, t) => {
-		if (l === null) {
-			l = Object.freeze({ ...e }), s !== null && (c !== null && (s.removeEventListener?.("rusty-output-lag", c), c = null), s.close(), s = null), m(t);
-			for (let e of [...d]) try {
-				e(l);
+	}, _ = (e, t) => {
+		if (d === null) {
+			d = Object.freeze({ ...e }), s !== null && (c !== null && (s.removeEventListener?.("rusty-output-lag", c), c = null), s.close(), s = null), u?.(), u = null, l = null, g(t);
+			for (let e of [...p]) try {
+				e(d);
 			} catch (e) {
-				m(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+				g(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
 					cause: e,
 					route: aO.outputs
 				}));
 			}
 		}
-	}, g = async (e, r, a) => {
-		p();
+	}, v = async (e, r, a) => {
+		h();
 		let o = `${t}${e}`, s = JO(r, i, e), c;
 		try {
 			c = await n(o, {
@@ -29096,7 +29097,7 @@ function NO(e = {}) {
 					"content-type": "application/json"
 				},
 				body: s,
-				signal: f.signal
+				signal: m.signal
 			});
 		} catch (t) {
 			throw new $("request_failed", `Product Browser local runtime request failed for ${e}: ${t instanceof Error ? t.message : String(t)}`, {
@@ -29117,7 +29118,7 @@ function NO(e = {}) {
 			});
 		}
 		try {
-			return p(), a(u);
+			return h(), a(u);
 		} catch (t) {
 			throw t instanceof $ ? t : new $("response_decode_failed", `Product Browser local runtime returned an invalid response for ${e}: ${t instanceof Error ? t.message : String(t)}`, {
 				cause: t,
@@ -29126,66 +29127,70 @@ function NO(e = {}) {
 		}
 	};
 	return Object.freeze({
-		lifecycle: (e) => g(aO.lifecycle[e.kind], {}, (t) => lk(t, e.kind)),
-		input: (e) => g(aO.input, { batch: YO(e) }, uk),
+		lifecycle: (e) => v(aO.lifecycle[e.kind], {}, (t) => lk(t, e.kind)),
+		input: (e) => v(aO.input, { batch: YO(e) }, uk),
 		reportAudioFeedback: (e) => {
 			let t = ZO(e);
-			return g(aO.audioFeedback, t, (e) => dk(e, t.runtime, t.facts));
+			return v(aO.audioFeedback, t, (e) => dk(e, t.runtime, t.facts));
 		},
 		reportAnimationFeedback: (e) => {
 			let t = $O(e);
-			return g(aO.animationFeedback, t, (e) => fk(e, t.runtime, t.facts));
+			return v(aO.animationFeedback, t, (e) => fk(e, t.runtime, t.facts));
 		},
-		advanceRealtime: (e) => g(aO.advanceRealtime, { observedTimeNs: RO(e, "observedTimeNs") }, (e) => lk(e, "advance-realtime")),
-		admitDemandStep: () => g(aO.admitDemandStep, {}, (e) => lk(e, "admit-demand-step")),
-		admitExternalStep: (e) => g(aO.admitExternalStep, { step: RO(e, "step") }, (e) => lk(e, "admit-external-step")),
+		advanceRealtime: (e) => v(aO.advanceRealtime, { observedTimeNs: RO(e, "observedTimeNs") }, (e) => lk(e, "advance-realtime")),
+		admitDemandStep: () => v(aO.admitDemandStep, {}, (e) => lk(e, "admit-demand-step")),
+		admitExternalStep: (e) => v(aO.admitExternalStep, { step: RO(e, "step") }, (e) => lk(e, "admit-external-step")),
 		completeTimeline: (e) => {
 			let t = rk(e);
-			return g(aO.completeTimeline, t, (e) => pk(e, t.ticket));
+			return v(aO.completeTimeline, t, (e) => pk(e, t.ticket));
 		},
 		subscribeTerminalFailures: (e) => {
 			if (typeof e != "function") throw new $("invalid_options", "Product Browser local runtime terminal-failure listener must be a function");
-			if (l !== null) {
+			if (d !== null) {
 				try {
-					e(l);
+					e(d);
 				} catch (e) {
-					m(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+					g(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
 						cause: e,
 						route: aO.outputs
 					}));
 				}
 				return () => void 0;
 			}
-			d.add(e);
+			p.add(e);
 			let t = !0;
 			return () => {
-				t && (t = !1, d.delete(e));
+				t && (t = !1, p.delete(e));
 			};
 		},
 		subscribeOutputs: (e) => {
-			if (p(), typeof e != "function") throw new $("invalid_options", "Product Browser local runtime output listener must be a function");
-			if (u.add(e), s === null) try {
-				s = new r(`${t}${aO.outputs}`), c = (e) => {
+			if (h(), typeof e != "function") throw new $("invalid_options", "Product Browser local runtime output listener must be a function");
+			if (f.add(e), s === null) try {
+				l = new Promise((e) => {
+					u = e;
+				}), s = new r(`${t}${aO.outputs}`), s.onopen = () => {
+					u?.(), u = null;
+				}, c = (e) => {
 					try {
 						let t = ck(e.data, a);
-						h(t, new $("stream_failed", t.diagnostic, { route: aO.outputs }));
+						_(t, new $("stream_failed", t.diagnostic, { route: aO.outputs }));
 					} catch (e) {
 						let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted an invalid output-lag event: ${e instanceof Error ? e.message : String(e)}`, {
 							cause: e,
 							route: aO.outputs
 						});
-						h({
+						_({
 							kind: "output-lag",
 							diagnostic: t.message
 						}, t);
 					}
 				}, s.addEventListener?.("rusty-output-lag", c), s.onmessage = (e) => {
-					if (l === null) try {
+					if (d === null) try {
 						let t = mk(sk(e.data, a));
-						for (let e of [...u]) try {
+						for (let e of [...f]) try {
 							e(t);
 						} catch (e) {
-							m(new $("stream_failed", `Product Browser local runtime output listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+							g(new $("stream_failed", `Product Browser local runtime output listener failed: ${e instanceof Error ? e.message : String(e)}`, {
 								cause: e,
 								route: aO.outputs
 							}));
@@ -29195,26 +29200,30 @@ function NO(e = {}) {
 							cause: e,
 							route: aO.outputs
 						});
-						m(t);
+						g(t);
 					}
 				}, s.onerror = (e) => {
-					if (l !== null) return;
+					if (d !== null) return;
 					let t = new $("stream_failed", `Product Browser local runtime output stream failed${e instanceof Error ? `: ${e.message}` : ""}`, { route: aO.outputs });
-					m(t);
+					g(t);
 				};
 			} catch (t) {
-				throw u.delete(e), s?.close(), s = null, c = null, new $("stream_failed", `Product Browser local runtime output stream could not start: ${t instanceof Error ? t.message : String(t)}`, {
+				throw f.delete(e), s?.close(), s = null, c = null, u?.(), u = null, l = null, new $("stream_failed", `Product Browser local runtime output stream could not start: ${t instanceof Error ? t.message : String(t)}`, {
 					cause: t,
 					route: aO.outputs
 				});
 			}
 			let n = !0;
 			return () => {
-				n && (n = !1, u.delete(e), u.size === 0 && (c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), s?.close(), s = null));
+				n && (n = !1, f.delete(e), f.size === 0 && (c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), s?.close(), s = null, u?.(), u = null, l = null));
 			};
 		},
+		waitUntilOutputSubscriptionReady: async () => {
+			if (h(), s === null || l === null) throw new $("stream_failed", "Product Browser local runtime output subscription has not started", { route: aO.outputs });
+			await l, h();
+		},
 		dispose: () => {
-			o || (o = !0, f.abort(), c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), s?.close(), s = null, u.clear(), d.clear());
+			o || (o = !0, m.abort(), c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), s?.close(), s = null, u?.(), u = null, l = null, f.clear(), p.clear());
 		}
 	});
 }

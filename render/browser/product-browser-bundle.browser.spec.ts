@@ -54,7 +54,9 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
     await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
     await expect.poll(() => requests.some((request) => request === 'GET /__rusty/product/runtime/outputs')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'POST /__rusty/product/runtime/lifecycle/start')).toBe(true);
-    await expect.poll(() => requests.some((request) => request.startsWith('POST /__rusty/product/runtime/advance-realtime'))).toBe(true);
+    expect(requests.indexOf('GET /__rusty/product/runtime/outputs'))
+      .toBeLessThan(requests.indexOf('POST /__rusty/product/runtime/lifecycle/start'));
+    await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
     await expect.poll(() => requests.some((request) => request === 'GET /renderer-preload.json')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/%C3%A9.png')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/theme.wav')).toBe(true);
@@ -167,6 +169,7 @@ async function createBundleServer(
   rendererResources: readonly RendererPreloadResource[],
   requests: string[],
 ): Promise<Server> {
+  const runtimeStream: { response: ServerResponse | null } = { response: null };
   const assetMap = new Map<string, { readonly body: string | Uint8Array; readonly contentType: string }>();
   for (const asset of generatedAssets) {
     assetMap.set(`/${asset.name}`, { body: asset.content, contentType: contentTypeFor(asset.name) });
@@ -202,7 +205,7 @@ async function createBundleServer(
   });
 
   const server = createServer((request, response) => {
-    void handleRequest(request, response, assetMap, requests);
+    void handleRequest(request, response, assetMap, requests, runtimeStream);
   });
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
@@ -220,6 +223,7 @@ async function handleRequest(
   response: ServerResponse,
   assets: ReadonlyMap<string, { readonly body: string | Uint8Array; readonly contentType: string }>,
   requests: string[],
+  runtimeStream: { response: ServerResponse | null },
 ): Promise<void> {
   const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
   requests.push(`${request.method ?? 'GET'} ${pathname}`);
@@ -229,21 +233,11 @@ async function handleRequest(
       connection: 'keep-alive',
       'content-type': 'text/event-stream; charset=utf-8',
     });
-    response.write([
-      { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' },
-      { kind: 'runtime-readout', readout: READOUT },
-      {
-        kind: 'ui-projection',
-        envelope: {
-          artifact: 'rusty.product.ui-projection',
-          runtime: RUNTIME,
-          sequence: '0',
-          stream: 'product.local',
-          contract: 'product.local.current',
-          value: { status: 'ready' },
-        },
-      },
-    ].map((value) => `data: ${JSON.stringify(value)}\n\n`).join(''));
+    response.flushHeaders();
+    runtimeStream.response = response;
+    response.once('close', () => {
+      if (runtimeStream.response === response) runtimeStream.response = null;
+    });
     return;
   }
   if (pathname.startsWith('/__rusty/product/runtime/') && request.method === 'POST') {
@@ -260,9 +254,15 @@ async function handleRequest(
         // server only records a deterministic Rust-shaped response.
       }
       const operation = pathname.slice('/__rusty/product/runtime/'.length);
+      if (operation === 'lifecycle/start') {
+        runtimeStream.response?.write(initialRuntimeOutputs()
+          .map((value) => `data: ${JSON.stringify(value)}\n\n`).join(''));
+      }
       const result = operation === 'input'
         ? { accepted: true, count: inputCount, binding: RUNTIME, readout: READOUT }
-        : {
+        : operation === 'audio-feedback' || operation === 'animation-feedback'
+          ? { accepted: true, runtime: RUNTIME }
+          : {
             accepted: true,
             operation: operation === 'lifecycle/start' ? 'start' : 'advance-realtime',
             binding: RUNTIME,
@@ -281,6 +281,72 @@ async function handleRequest(
   }
   response.writeHead(200, { 'content-type': asset.contentType });
   response.end(asset.body);
+}
+
+function initialRuntimeOutputs(): readonly unknown[] {
+  return [
+    { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' },
+    { kind: 'runtime-readout', readout: READOUT },
+    {
+      kind: 'frame',
+      frame: {
+        schemaVersion: 1,
+        ops: [{
+          op: 'create',
+          handle: 1,
+          parent: null,
+          node: {
+            geometry: { kind: 'cube' },
+            material: { color: [0.15, 0.55, 0.95, 1], wireframe: false },
+            transform: {
+              translation: [0, 0, -4],
+              rotation: [0, 0, 0, 1],
+              scale: [1, 1, 1],
+            },
+            visible: true,
+            layer: 'scene',
+            metadata: {
+              sourceEntity: null,
+              sourceSceneNode: null,
+              tags: [],
+              label: 'startup-readiness-proof',
+            },
+          },
+        }],
+      },
+    },
+    {
+      kind: 'view-composition',
+      composition: {
+        schemaVersion: 1,
+        cameras: [{
+          id: 'camera.startup',
+          pose: { position: [0, 0, 0], pitchDegrees: 0, yawDegrees: 0 },
+          projection: { kind: 'perspective', fovYDegrees: 60, near: 0.1, far: 100 },
+        }],
+        targets: [],
+        views: [{
+          id: 'view.startup',
+          cameraId: 'camera.startup',
+          order: 0,
+          target: { kind: 'primary' },
+          viewport: { x: 0, y: 0, width: 1, height: 1 },
+        }],
+        presentations: [],
+      },
+    },
+    {
+      kind: 'ui-projection',
+      envelope: {
+        artifact: 'rusty.product.ui-projection',
+        runtime: RUNTIME,
+        sequence: '0',
+        stream: 'product.local',
+        contract: 'product.local.current',
+        value: { status: 'ready' },
+      },
+    },
+  ];
 }
 
 interface RendererPreloadResource {

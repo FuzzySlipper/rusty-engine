@@ -27,6 +27,7 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
   static readonly instances: FakeEventSource[] = [];
   readonly namedListeners = new Map<string, (event: { readonly data: string }) => void>();
   readonly url: string;
+  onopen: ((event: unknown) => void) | null = null;
   onmessage: ((event: { readonly data: string }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
   closed = false;
@@ -50,6 +51,10 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
 
   emit(output: unknown): void {
     this.onmessage?.({ data: JSON.stringify(output) });
+  }
+
+  open(): void {
+    this.onopen?.({});
   }
 
   emitLag(value: unknown = { code: 'DEV_HOST_OUTPUT_LAG' }): void {
@@ -136,6 +141,15 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   const isolatedOutputs: unknown[] = [];
   const isolatedUnsubscribe = adapter.subscribeOutputs((output) => isolatedOutputs.push(output));
   assert.equal(FakeEventSource.instances[0]?.url, `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}outputs`);
+  let outputSubscriptionReady = false;
+  const readiness = adapter.waitUntilOutputSubscriptionReady?.().then(() => {
+    outputSubscriptionReady = true;
+  });
+  await Promise.resolve();
+  assert.equal(outputSubscriptionReady, false);
+  FakeEventSource.instances[0]!.open();
+  await readiness;
+  assert.equal(outputSubscriptionReady, true);
   FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
   FakeEventSource.instances[0]!.emit({ kind: 'runtime-readout', readout: READOUT });
   assert.equal(outputs.length, 2);

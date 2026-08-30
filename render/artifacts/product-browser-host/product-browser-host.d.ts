@@ -232,6 +232,8 @@ export interface ProductBrowserRuntimeAdapter {
     readonly completeTimeline?: (completion: ProductBrowserTimelineCompletion) => Promise<ProductBrowserTimelineCompletionResult>;
     readonly subscribeTerminalFailures?: (listener: ProductBrowserRuntimeTerminalFailureListener) => () => void;
     readonly subscribeOutputs: (listener: ProductBrowserRuntimeOutputListener) => () => void;
+    /** Resolves once an asynchronous output subscription can receive runtime publications. */
+    readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
     readonly dispose: () => Promise<void> | void;
 }
 /** The transport kept by the generated bridge and consumed by the host. */
@@ -246,6 +248,7 @@ export interface ProductBrowserRuntimeTransport {
     readonly completeTimeline?: NonNullable<ProductBrowserRuntimeAdapter['completeTimeline']>;
     readonly subscribeTerminalFailures?: NonNullable<ProductBrowserRuntimeAdapter['subscribeTerminalFailures']>;
     readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
+    readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
     readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
 }
 export declare function createProductBrowserRuntimeTransport(adapter: ProductBrowserRuntimeAdapter): ProductBrowserRuntimeTransport;

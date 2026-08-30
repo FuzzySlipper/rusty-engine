@@ -10,6 +10,7 @@ export declare const PRODUCT_BROWSER_LOCAL_TRANSPORT_ARTIFACT: "rusty.product.lo
 export type ProductBrowserLocalFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 /** Minimal EventSource shape kept injectable for deterministic headless tests. */
 export interface ProductBrowserLocalEventSource {
+    onopen: ((event: unknown) => void) | null;
     onmessage: ((event: {
         readonly data: string;
     }) => void) | null;

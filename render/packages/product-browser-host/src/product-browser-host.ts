@@ -250,6 +250,8 @@ export interface ProductBrowserRuntimeAdapter {
   readonly subscribeOutputs: (
     listener: ProductBrowserRuntimeOutputListener,
   ) => () => void;
+  /** Resolves once an asynchronous output subscription can receive runtime publications. */
+  readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
   readonly dispose: () => Promise<void> | void;
 }
 
@@ -265,6 +267,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly completeTimeline?: NonNullable<ProductBrowserRuntimeAdapter['completeTimeline']>;
   readonly subscribeTerminalFailures?: NonNullable<ProductBrowserRuntimeAdapter['subscribeTerminalFailures']>;
   readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
+  readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
   readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
 }
 
@@ -286,6 +289,9 @@ export function createProductBrowserRuntimeTransport(
     requireFunction(adapter.subscribeTerminalFailures, 'subscribeTerminalFailures');
   }
   requireFunction(adapter.subscribeOutputs, 'subscribeOutputs');
+  if (adapter.waitUntilOutputSubscriptionReady !== undefined) {
+    requireFunction(adapter.waitUntilOutputSubscriptionReady, 'waitUntilOutputSubscriptionReady');
+  }
   requireFunction(adapter.dispose, 'dispose');
   return Object.freeze({
     lifecycle: adapter.lifecycle,
@@ -300,6 +306,9 @@ export function createProductBrowserRuntimeTransport(
       ? {}
       : { subscribeTerminalFailures: adapter.subscribeTerminalFailures }),
     subscribeOutputs: adapter.subscribeOutputs,
+    ...(adapter.waitUntilOutputSubscriptionReady === undefined
+      ? {}
+      : { waitUntilOutputSubscriptionReady: adapter.waitUntilOutputSubscriptionReady }),
     dispose: adapter.dispose,
   });
 }
@@ -953,6 +962,8 @@ export async function mountProductBrowserHost(
     await rendererOutputTail;
     if (failure !== null) throw failure;
     if (options.autoStart !== false) {
+      await transport.waitUntilOutputSubscriptionReady?.();
+      if (failure !== null) throw failure;
       const result = await queue.enqueue(() => transport.lifecycle({ kind: 'start' }));
       applyOperationResult(result, 'startup_failed');
       if (failure !== null) throw failure;

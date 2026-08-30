@@ -169,6 +169,7 @@ export type ProductBrowserLocalFetch = (
 
 /** Minimal EventSource shape kept injectable for deterministic headless tests. */
 export interface ProductBrowserLocalEventSource {
+  onopen: ((event: unknown) => void) | null;
   onmessage: ((event: { readonly data: string }) => void) | null;
   onerror: ((event: unknown) => void) | null;
   readonly addEventListener?: (
@@ -248,6 +249,8 @@ export function createProductBrowserLocalHttpAdapter(
   let disposed = false;
   let stream: ProductBrowserLocalEventSource | null = null;
   let streamLagListener: ((event: { readonly data: string }) => void) | null = null;
+  let outputSubscriptionReady: Promise<void> | null = null;
+  let resolveOutputSubscriptionReady: (() => void) | null = null;
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
   const listeners = new Set<(output: ProductBrowserRuntimeOutput) => void>();
   const terminalFailureListeners = new Set<ProductBrowserRuntimeTerminalFailureListener>();
@@ -293,6 +296,9 @@ export function createProductBrowserLocalHttpAdapter(
       stream.close();
       stream = null;
     }
+    resolveOutputSubscriptionReady?.();
+    resolveOutputSubscriptionReady = null;
+    outputSubscriptionReady = null;
     reportTransportError(error);
     for (const listener of [...terminalFailureListeners]) {
       try {
@@ -440,7 +446,14 @@ export function createProductBrowserLocalHttpAdapter(
     listeners.add(listener);
     if (stream === null) {
       try {
+        outputSubscriptionReady = new Promise<void>((resolve) => {
+          resolveOutputSubscriptionReady = resolve;
+        });
         stream = new eventSourceConstructor(`${basePath}${ROUTES.outputs}`);
+        stream.onopen = () => {
+          resolveOutputSubscriptionReady?.();
+          resolveOutputSubscriptionReady = null;
+        };
         streamLagListener = (event) => {
           try {
             const failure = decodeOutputLagEvent(event.data, maximumOutputBytes);
@@ -513,6 +526,9 @@ export function createProductBrowserLocalHttpAdapter(
         stream?.close();
         stream = null;
         streamLagListener = null;
+        resolveOutputSubscriptionReady?.();
+        resolveOutputSubscriptionReady = null;
+        outputSubscriptionReady = null;
         throw new ProductBrowserLocalTransportError(
           'stream_failed',
           `Product Browser local runtime output stream could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -532,8 +548,24 @@ export function createProductBrowserLocalHttpAdapter(
         }
         stream?.close();
         stream = null;
+        resolveOutputSubscriptionReady?.();
+        resolveOutputSubscriptionReady = null;
+        outputSubscriptionReady = null;
       }
     };
+  };
+
+  const waitUntilOutputSubscriptionReady = async (): Promise<void> => {
+    ensureOpen();
+    if (stream === null || outputSubscriptionReady === null) {
+      throw new ProductBrowserLocalTransportError(
+        'stream_failed',
+        'Product Browser local runtime output subscription has not started',
+        { route: ROUTES.outputs },
+      );
+    }
+    await outputSubscriptionReady;
+    ensureOpen();
   };
 
   const subscribeTerminalFailures = (
@@ -576,6 +608,9 @@ export function createProductBrowserLocalHttpAdapter(
     }
     stream?.close();
     stream = null;
+    resolveOutputSubscriptionReady?.();
+    resolveOutputSubscriptionReady = null;
+    outputSubscriptionReady = null;
     listeners.clear();
     terminalFailureListeners.clear();
   };
@@ -591,6 +626,7 @@ export function createProductBrowserLocalHttpAdapter(
     completeTimeline,
     subscribeTerminalFailures,
     subscribeOutputs,
+    waitUntilOutputSubscriptionReady,
     dispose,
   });
 }
