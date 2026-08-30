@@ -3590,6 +3590,91 @@ function diagnosticSkinnedMeshSource(
   }]);
 }
 
+function rewriteGlbJson(
+  source: Uint8Array,
+  mutate: (root: unknown) => void,
+): ArrayBuffer {
+  const sourceView = new DataView(source.buffer, source.byteOffset, source.byteLength);
+  assert.equal(sourceView.getUint32(0, true), 0x46546c67);
+  const jsonLength = sourceView.getUint32(12, true);
+  const oldJsonEnd = 20 + jsonLength;
+  const root = JSON.parse(new TextDecoder().decode(source.subarray(20, oldJsonEnd))) as unknown;
+  mutate(root);
+  const encoded = new TextEncoder().encode(JSON.stringify(root));
+  const paddedLength = Math.ceil(encoded.byteLength / 4) * 4;
+  const remainder = source.subarray(oldJsonEnd);
+  const totalLength = 20 + paddedLength + remainder.byteLength;
+  const rewritten = new Uint8Array(totalLength);
+  const view = new DataView(rewritten.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, totalLength, true);
+  view.setUint32(12, paddedLength, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  rewritten.fill(0x20, 20, 20 + paddedLength);
+  rewritten.set(encoded, 20);
+  rewritten.set(remainder, 20 + paddedLength);
+  return rewritten.buffer;
+}
+
+void test('animated GLB loader realizes KHR_texture_transform from retained source bytes', async () => {
+  const testGlobal = globalThis as unknown as {
+    self: unknown;
+    createImageBitmap?: (blob: Blob, options?: ImageBitmapOptions) => Promise<ImageBitmap>;
+  };
+  const priorSelf = testGlobal.self;
+  const priorCreateImageBitmap = testGlobal.createImageBitmap;
+  testGlobal.self = globalThis;
+  testGlobal.createImageBitmap = async () => ({ width: 1, height: 1, close() {} }) as ImageBitmap;
+  const priorWarn = console.warn;
+  const priorError = console.error;
+  console.warn = () => undefined;
+  console.error = () => undefined;
+  try {
+    const source = readFileSync(
+      resolve(import.meta.dirname, '../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb'),
+    );
+    const data = rewriteGlbJson(source, (untypedRoot) => {
+      const root = untypedRoot as {
+        extensionsUsed: string[];
+        materials: Array<{
+          pbrMetallicRoughness: {
+            baseColorTexture: { extensions?: Record<string, unknown> };
+          };
+        }>;
+      };
+      root.extensionsUsed.push('KHR_texture_transform');
+      root.materials[0]!.pbrMetallicRoughness.baseColorTexture.extensions = {
+        KHR_texture_transform: {
+          offset: [-0.25, 0.5],
+          rotation: 0.75,
+          scale: [2, -3],
+          texCoord: 0,
+        },
+      };
+    });
+    const resource = await loadAnimatedMeshGlbResource(
+      'mesh-animation/transformed-character',
+      data,
+      undefined,
+      [{ slot: 0, sourceMaterialSlot: 0 }],
+    );
+    const material = resource.embeddedMaterialSlots?.get(0)?.materials[0] as THREE.MeshBasicMaterial;
+    assert.ok(material.map instanceof THREE.Texture);
+    assert.deepEqual(material.map.offset.toArray(), [-0.25, 0.5]);
+    assert.equal(material.map.rotation, 0.75);
+    assert.deepEqual(material.map.repeat.toArray(), [2, -3]);
+    assert.equal(material.map.channel, 0);
+    assert.deepEqual(resource.clips.map((clip) => clip.name).sort(), ['idle', 'jump', 'run']);
+  } finally {
+    console.warn = priorWarn;
+    console.error = priorError;
+    testGlobal.self = priorSelf;
+    if (priorCreateImageBitmap === undefined) delete testGlobal.createImageBitmap;
+    else testGlobal.createImageBitmap = priorCreateImageBitmap;
+  }
+});
+
 void test('committed animated GLB instances share GPU resources while playback remains independent', async () => {
   const testGlobal = globalThis as unknown as { self: unknown };
   const priorSelf = testGlobal.self;

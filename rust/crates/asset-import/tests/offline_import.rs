@@ -10,6 +10,7 @@ use render_model::{
     pack_mesh_resources, AnimatedMeshAsset, CollisionResolution, MeshPayloadSource,
     MeshResourceEncoding, MESH_RESOURCE_MAGIC_V2,
 };
+use sha2::Digest;
 use svc_collision::{
     Ray, StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
     StaticMeshCollisionProjection, StaticMeshInstanceId, StaticMeshTransform,
@@ -46,6 +47,11 @@ const TEXTURED_VALID: &str = r#"{
 const ANIMATED_GLB: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+));
+
+const LOADING_BAY_BUTTON_GLB: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../fixtures/render/assets/kenney-factory-kit/button-floor-square.glb"
 ));
 
 const STATIC_UNLIT_GLB_BASE64: &str = include_str!(concat!(
@@ -309,6 +315,108 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
     assert!(rig.structural_root_ids.len() > 1);
     assert!(rig.designated_motion_root_ids.is_empty());
     assert!(!rig.authored_pose_translation_joint_ids.is_empty());
+}
+
+#[test]
+fn animated_glb_admits_bounded_texture_transform_and_retains_exact_bytes() {
+    let source = rewrite_glb_json(ANIMATED_GLB, |root| {
+        root["extensionsUsed"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::Value::String(
+                "KHR_texture_transform".to_owned(),
+            ));
+        root["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["extensions"] = serde_json::json!({
+            "KHR_texture_transform": {
+                "offset": [-0.25, 0.5],
+                "rotation": 0.75,
+                "scale": [2.0, -3.0],
+                "texCoord": 0
+            }
+        });
+    });
+    let uri = SourceUri::RelativePath("content/actors/transformed-character.glb".to_owned());
+    let imported = import_animated_glb_asset(&uri, &source, &ImportContext::default());
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+    let assets = imported.assets.expect("bounded transform is admitted");
+    assert_eq!(assets.runtime_resource_bytes, source);
+    assert_eq!(
+        assets.receipt.source_hash,
+        format!("sha256:{:x}", sha2::Sha256::digest(&source))
+    );
+    assert_eq!(assets.receipt.clip_count, 3);
+}
+
+#[test]
+fn animated_glb_rejects_malformed_or_unrealizable_texture_transforms_atomically() {
+    let cases = [
+        (
+            serde_json::json!({"offset": [0.0]}),
+            ImportCode::InvalidContainer,
+        ),
+        (
+            serde_json::json!({"rotation": "quarter-turn"}),
+            ImportCode::InvalidContainer,
+        ),
+        (
+            serde_json::json!({"scale": [1_000_001.0, 1.0]}),
+            ImportCode::ResourceLimit,
+        ),
+        (
+            serde_json::json!({"texCoord": 4}),
+            ImportCode::UnsupportedFeature,
+        ),
+        (
+            serde_json::json!({"center": [0.5, 0.5]}),
+            ImportCode::UnsupportedFeature,
+        ),
+    ];
+    for (transform, expected_code) in cases {
+        let source = rewrite_glb_json(ANIMATED_GLB, |root| {
+            root["extensionsUsed"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::Value::String(
+                    "KHR_texture_transform".to_owned(),
+                ));
+            root["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["extensions"] =
+                serde_json::json!({"KHR_texture_transform": transform});
+        });
+        let plan = plan_animated_glb_import(
+            &SourceUri::RelativePath("content/actors/invalid-transform.glb".to_owned()),
+            &source,
+            &ImportContext::default(),
+            ImportMode::DryRun,
+            None,
+            None,
+        );
+        assert!(plan.has_errors);
+        assert!(plan.files.is_empty());
+        assert!(
+            plan.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == expected_code),
+            "{:?}",
+            plan.diagnostics
+        );
+    }
+}
+
+#[test]
+fn exact_loading_bay_fixture_reaches_the_independent_external_image_boundary() {
+    assert_eq!(
+        format!("{:x}", sha2::Sha256::digest(LOADING_BAY_BUTTON_GLB)),
+        "f32def1dd9a57939b096d64361fc5058a8ba240a0394951e8681fb7326ebdeb6"
+    );
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("content/loading-bay/button-floor-square.glb".to_owned()),
+        LOADING_BAY_BUTTON_GLB,
+        &ImportContext::default(),
+    );
+    assert!(imported.assets.is_none());
+    assert_eq!(imported.diagnostics.len(), 1, "{:?}", imported.diagnostics);
+    assert_eq!(imported.diagnostics[0].code, ImportCode::ExternalResource);
+    assert_eq!(imported.diagnostics[0].locus, "source.images[0]");
 }
 
 #[test]
@@ -1214,6 +1322,28 @@ fn test_glb(json: &str, bin: &[u8]) -> Vec<u8> {
     bytes.extend_from_slice(&0x004e_4942u32.to_le_bytes());
     bytes.extend_from_slice(&bin);
     bytes
+}
+
+fn rewrite_glb_json(source: &[u8], mutate: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+    assert_eq!(&source[..4], b"glTF");
+    let json_length = u32::from_le_bytes(source[12..16].try_into().unwrap()) as usize;
+    let old_json_end = 20 + json_length;
+    let mut root: serde_json::Value = serde_json::from_slice(&source[20..old_json_end]).unwrap();
+    mutate(&mut root);
+    let mut json = serde_json::to_vec(&root).unwrap();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let total = 12 + 8 + json.len() + source.len() - old_json_end;
+    let mut rewritten = Vec::with_capacity(total);
+    rewritten.extend_from_slice(b"glTF");
+    rewritten.extend_from_slice(&2u32.to_le_bytes());
+    rewritten.extend_from_slice(&(total as u32).to_le_bytes());
+    rewritten.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    rewritten.extend_from_slice(&0x4e4f_534au32.to_le_bytes());
+    rewritten.extend_from_slice(&json);
+    rewritten.extend_from_slice(&source[old_json_end..]);
+    rewritten
 }
 
 fn static_triangle_glb() -> Vec<u8> {

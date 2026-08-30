@@ -29,6 +29,12 @@ pub const MAX_ANIMATED_GLB_IMAGES: usize = 256;
 pub const MAX_ANIMATED_GLB_JOINTS: usize = 4_096;
 pub const MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+/// Three's admitted animated-mesh path realizes TEXCOORD_0 through TEXCOORD_3.
+pub const MAX_ANIMATED_GLB_TEXTURE_COORD_SET: u64 = 3;
+/// Keeps authored UV transforms finite and prevents extreme values from
+/// crossing the retained renderer boundary. Negative offset, rotation, and
+/// scale remain valid within this absolute bound.
+pub const MAX_ANIMATED_GLB_TEXTURE_TRANSFORM_COMPONENT: f64 = 1_000_000.0;
 
 /// The admitted GLB's embedded animation classification. Both variants retain
 /// the existing GLB mesh resource and `AnimatedMeshAsset` wire lifecycle; this
@@ -568,13 +574,14 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
             "supply one bounded binary GLB source",
         ));
     }
-    for extension in required_extensions(source, locus)? {
-        if extension != "KHR_materials_unlit" {
+    let json_document = glb_json_document(source, locus)?;
+    for extension in extension_names(&json_document, "extensionsRequired")? {
+        if !is_admitted_extension(&extension) {
             return Err(ImportDiagnostic::error(
                 ImportCode::UnsupportedFeature,
                 "source.extensionsRequired",
                 format!("required GLB extension `{extension}` is not admitted"),
-                "export core glTF 2.0 data or KHR_materials_unlit only",
+                "export core glTF 2.0 data or an admitted material extension",
             ));
         }
     }
@@ -596,25 +603,26 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
     }
     let document = &parsed.document;
     for extension in document.extensions_used() {
-        if extension != "KHR_materials_unlit" {
+        if !is_admitted_extension(extension) {
             return Err(ImportDiagnostic::error(
                 ImportCode::UnsupportedFeature,
                 "source.extensionsUsed",
                 format!("GLB extension `{extension}` is not admitted"),
-                "export core glTF 2.0 data or KHR_materials_unlit only",
+                "export core glTF 2.0 data or an admitted material extension",
             ));
         }
     }
     for extension in document.extensions_required() {
-        if extension != "KHR_materials_unlit" {
+        if !is_admitted_extension(extension) {
             return Err(ImportDiagnostic::error(
                 ImportCode::UnsupportedFeature,
                 "source.extensionsRequired",
                 format!("required GLB extension `{extension}` is not admitted"),
-                "export core glTF 2.0 data or KHR_materials_unlit only",
+                "export core glTF 2.0 data or an admitted material extension",
             ));
         }
     }
+    validate_texture_transforms(&json_document)?;
     for buffer in document.buffers() {
         if let BufferSource::Uri(uri) = buffer.source() {
             return Err(ImportDiagnostic::error(
@@ -703,7 +711,11 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
     Ok(parsed)
 }
 
-fn required_extensions(source: &[u8], locus: &str) -> Result<Vec<String>, ImportDiagnostic> {
+fn is_admitted_extension(extension: &str) -> bool {
+    matches!(extension, "KHR_materials_unlit" | "KHR_texture_transform")
+}
+
+fn glb_json_document(source: &[u8], locus: &str) -> Result<serde_json::Value, ImportDiagnostic> {
     const GLB_HEADER_BYTES: usize = 12;
     const CHUNK_HEADER_BYTES: usize = 8;
     const JSON_CHUNK_TYPE: u32 = 0x4e4f_534a;
@@ -737,41 +749,184 @@ fn required_extensions(source: &[u8], locus: &str) -> Result<Vec<String>, Import
             "export a valid binary glTF 2.0 file",
         ));
     }
-    let value: serde_json::Value = serde_json::from_slice(
-        &source[20..json_end.expect("checked JSON end")],
-    )
-    .map_err(|error| {
+    serde_json::from_slice(&source[20..json_end.expect("checked JSON end")]).map_err(|error| {
         ImportDiagnostic::error(
             ImportCode::InvalidContainer,
             locus,
             format!("GLB JSON chunk is invalid: {error}"),
             "repair the embedded glTF JSON document",
         )
-    })?;
-    let Some(required) = value.get("extensionsRequired") else {
+    })
+}
+
+fn extension_names(
+    document: &serde_json::Value,
+    property: &str,
+) -> Result<Vec<String>, ImportDiagnostic> {
+    let Some(extensions) = document.get(property) else {
         return Ok(Vec::new());
     };
-    let required = required.as_array().ok_or_else(|| {
+    let extensions = extensions.as_array().ok_or_else(|| {
         ImportDiagnostic::error(
             ImportCode::InvalidContainer,
-            "source.extensionsRequired",
-            "extensionsRequired must be an array",
+            format!("source.{property}"),
+            format!("{property} must be an array"),
             "repair the embedded glTF JSON document",
         )
     })?;
-    required
+    extensions
         .iter()
         .map(|extension| {
             extension.as_str().map(str::to_owned).ok_or_else(|| {
                 ImportDiagnostic::error(
                     ImportCode::InvalidContainer,
-                    "source.extensionsRequired",
-                    "required extension names must be strings",
+                    format!("source.{property}"),
+                    format!("{property} names must be strings"),
                     "repair the embedded glTF JSON document",
                 )
             })
         })
         .collect()
+}
+
+fn validate_texture_transforms(document: &serde_json::Value) -> Result<(), ImportDiagnostic> {
+    let Some(materials) = document
+        .get("materials")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(());
+    };
+    for (material_index, material) in materials.iter().enumerate() {
+        let texture_infos = [
+            (
+                "pbrMetallicRoughness.baseColorTexture",
+                material.pointer("/pbrMetallicRoughness/baseColorTexture"),
+            ),
+            (
+                "pbrMetallicRoughness.metallicRoughnessTexture",
+                material.pointer("/pbrMetallicRoughness/metallicRoughnessTexture"),
+            ),
+            ("normalTexture", material.get("normalTexture")),
+            ("occlusionTexture", material.get("occlusionTexture")),
+            ("emissiveTexture", material.get("emissiveTexture")),
+        ];
+        for (property, texture_info) in texture_infos {
+            let Some(transform) =
+                texture_info.and_then(|value| value.pointer("/extensions/KHR_texture_transform"))
+            else {
+                continue;
+            };
+            let path = format!(
+                "source.materials[{material_index}].{property}.extensions.KHR_texture_transform"
+            );
+            validate_texture_transform(transform, &path)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_texture_transform(
+    transform: &serde_json::Value,
+    path: &str,
+) -> Result<(), ImportDiagnostic> {
+    let object = transform
+        .as_object()
+        .ok_or_else(|| invalid_texture_transform(path, "texture transform must be an object"))?;
+    for property in object.keys() {
+        if !matches!(
+            property.as_str(),
+            "offset" | "rotation" | "scale" | "texCoord" | "extensions" | "extras"
+        ) {
+            return Err(ImportDiagnostic::error(
+                ImportCode::UnsupportedFeature,
+                format!("{path}.{property}"),
+                format!("texture transform property `{property}` is not supported"),
+                "use offset, rotation, scale, texCoord, extensions, or extras only",
+            ));
+        }
+    }
+    if let Some(offset) = object.get("offset") {
+        validate_texture_transform_pair(offset, &format!("{path}.offset"))?;
+    }
+    if let Some(rotation) = object.get("rotation") {
+        validate_texture_transform_number(rotation, &format!("{path}.rotation"))?;
+    }
+    if let Some(scale) = object.get("scale") {
+        validate_texture_transform_pair(scale, &format!("{path}.scale"))?;
+    }
+    if let Some(tex_coord) = object.get("texCoord") {
+        let Some(tex_coord) = tex_coord.as_u64() else {
+            return Err(invalid_texture_transform(
+                &format!("{path}.texCoord"),
+                "texture coordinate override must be a non-negative integer",
+            ));
+        };
+        if tex_coord > MAX_ANIMATED_GLB_TEXTURE_COORD_SET {
+            return Err(ImportDiagnostic::error(
+                ImportCode::UnsupportedFeature,
+                format!("{path}.texCoord"),
+                format!(
+                    "texture coordinate set {tex_coord} exceeds renderer support through TEXCOORD_{MAX_ANIMATED_GLB_TEXTURE_COORD_SET}"
+                ),
+                "author the texture against TEXCOORD_0 through TEXCOORD_3",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_texture_transform_pair(
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), ImportDiagnostic> {
+    let Some(values) = value.as_array().filter(|values| values.len() == 2) else {
+        return Err(invalid_texture_transform(
+            path,
+            "texture transform vector must contain exactly two numbers",
+        ));
+    };
+    for (index, value) in values.iter().enumerate() {
+        validate_texture_transform_number(value, &format!("{path}[{index}]"))?;
+    }
+    Ok(())
+}
+
+fn validate_texture_transform_number(
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), ImportDiagnostic> {
+    let Some(value) = value.as_f64() else {
+        return Err(invalid_texture_transform(
+            path,
+            "texture transform component must be a finite number",
+        ));
+    };
+    if !value.is_finite() {
+        return Err(ImportDiagnostic::error(
+            ImportCode::NonFiniteValue,
+            path,
+            "texture transform component must be finite",
+            "author a finite UV transform",
+        ));
+    }
+    if value.abs() > MAX_ANIMATED_GLB_TEXTURE_TRANSFORM_COMPONENT {
+        return Err(resource_limit(
+            path,
+            &format!(
+                "texture transform component {value} exceeds absolute bound {MAX_ANIMATED_GLB_TEXTURE_TRANSFORM_COMPONENT}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn invalid_texture_transform(path: &str, message: &str) -> ImportDiagnostic {
+    ImportDiagnostic::error(
+        ImportCode::InvalidContainer,
+        path,
+        message,
+        "repair the KHR_texture_transform texture-info payload",
+    )
 }
 
 fn source_identity(
@@ -898,5 +1053,48 @@ fn failed(diagnostics: Vec<ImportDiagnostic>) -> AnimatedGlbImportOutcome {
     AnimatedGlbImportOutcome {
         assets: None,
         diagnostics,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texture_transform_validation_covers_every_core_texture_info() {
+        let transform = serde_json::json!({
+            "offset": [-1_000_000.0, 1_000_000.0],
+            "rotation": 0.25,
+            "scale": [-2.0, 3.0],
+            "texCoord": 3,
+            "extras": {"fixture": true}
+        });
+        let mut document = serde_json::json!({
+            "materials": [{
+                "pbrMetallicRoughness": {
+                    "baseColorTexture": {"extensions": {"KHR_texture_transform": transform.clone()}},
+                    "metallicRoughnessTexture": {"extensions": {"KHR_texture_transform": transform.clone()}}
+                },
+                "normalTexture": {"extensions": {"KHR_texture_transform": transform.clone()}},
+                "occlusionTexture": {"extensions": {"KHR_texture_transform": transform.clone()}},
+                "emissiveTexture": {"extensions": {"KHR_texture_transform": transform}}
+            }]
+        });
+        validate_texture_transforms(&document).expect("all core texture-info transforms");
+
+        for pointer in [
+            "/materials/0/pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform",
+            "/materials/0/pbrMetallicRoughness/metallicRoughnessTexture/extensions/KHR_texture_transform",
+            "/materials/0/normalTexture/extensions/KHR_texture_transform",
+            "/materials/0/occlusionTexture/extensions/KHR_texture_transform",
+            "/materials/0/emissiveTexture/extensions/KHR_texture_transform",
+        ] {
+            let original = document.pointer(pointer).unwrap().clone();
+            *document.pointer_mut(pointer).unwrap() = serde_json::json!({"texCoord": 4});
+            let diagnostic = validate_texture_transforms(&document)
+                .expect_err("each texture-info location is validated");
+            assert_eq!(diagnostic.code, ImportCode::UnsupportedFeature);
+            *document.pointer_mut(pointer).unwrap() = original;
+        }
     }
 }

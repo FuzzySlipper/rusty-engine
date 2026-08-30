@@ -95,7 +95,7 @@ sha2 = "0.10"
 base64 = "0.22"
 wry = "0.56"
 stats_alloc = "0.1.10"
-gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit"] }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_texture_transform"] }
 cap-std = "3"
 tempfile = "3"
 fs2 = "0.4"
