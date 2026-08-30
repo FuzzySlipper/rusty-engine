@@ -36,6 +36,7 @@ const MAX_INLINE_MESH_RESOURCE_BYTES: u32 = MAX_RENDER_RESOURCE_BYTES as u32;
 const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
 const MAX_ANIMATION_CUE_DEFINITIONS: usize = 128;
 const MAX_ANIMATION_CUE_TEXT_BYTES: usize = 96;
+const MAX_SPRITE_ATLAS_FRAMES: usize = 4_096;
 
 /// Copied, bounded product animation facts for the existing browser animation
 /// host. The Engine retains this snapshot; no C# string remains borrowed after
@@ -386,6 +387,227 @@ impl CsharpRenderResource {
     }
 }
 
+#[cfg(test)]
+fn atlas_sprite_request(
+    atlas: NativeSpriteAtlasHandle,
+    frame_id: u32,
+) -> NativeSpriteFromAtlasRequest {
+    NativeSpriteFromAtlasRequest {
+        atlas,
+        frame_id,
+        pivot: NativeVec2::default(),
+        size: NativeVec2 { x: 1.0, y: 1.0 },
+        billboard: NativeBillboardMode::Spherical,
+        size_mode: NativeSpriteSizeMode::World,
+        render_order: 3,
+        depth: NativeSpriteDepthPolicy::Default,
+        tint: NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        },
+    }
+}
+
+#[cfg(test)]
+fn legacy_sprite_request(texture: NativeRenderResourceHandle) -> NativeSpriteAppearanceRequest {
+    NativeSpriteAppearanceRequest {
+        texture,
+        uv_min: NativeVec2::default(),
+        uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+        pivot: NativeVec2::default(),
+        size: NativeVec2 { x: 1.0, y: 1.0 },
+        billboard: NativeBillboardMode::None,
+        size_mode: NativeSpriteSizeMode::World,
+        render_order: 0,
+        depth: NativeSpriteDepthPolicy::Default,
+        tint: NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        },
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn sprite_atlas_copies_frames_resolves_readout_and_releases_with_appearance() {
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let frames = [
+        NativeSpriteAtlasFrame {
+            frame_id: 7,
+            uv_min: NativeVec2::default(),
+            uv_max: NativeVec2 { x: 0.5, y: 1.0 },
+            has_size: true,
+            size: NativeVec2 { x: 16.0, y: 32.0 },
+        },
+        NativeSpriteAtlasFrame {
+            frame_id: 9,
+            uv_min: NativeVec2 { x: 0.5, y: 0.0 },
+            uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+            has_size: false,
+            size: NativeVec2::default(),
+        },
+    ];
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    let atlas = unsafe {
+        bridge
+            .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture,
+                frames: frames.as_ptr(),
+                frames_len: frames.len(),
+            })
+            .expect("atlas")
+    };
+    let sprite = bridge
+        .create_sprite_from_atlas(atlas_sprite_request(atlas, 7))
+        .expect("atlas sprite");
+    assert_eq!(
+        bridge.read_sprite(sprite).expect("initial frame").size.x,
+        16.0
+    );
+    bridge
+        .set_sprite_frame(NativeSpriteFrameUpdateRequest {
+            appearance: sprite,
+            frame_id: 9,
+        })
+        .expect("select second frame");
+    let readout = bridge.read_sprite(sprite).expect("selected frame");
+    assert_eq!(readout.atlas.value, atlas.value);
+    assert_eq!(readout.frame_id, 9);
+    assert_eq!(readout.uv_min.x, 0.5);
+    assert!(!readout.has_size);
+    assert_eq!(
+        bridge
+            .destroy_sprite_atlas(atlas)
+            .expect_err("atlas in use")
+            .code(),
+        "CSHARP_SPRITE_ATLAS_IN_USE"
+    );
+    bridge
+        .destroy_appearance(sprite)
+        .expect("release sprite lease");
+    bridge.destroy_sprite_atlas(atlas).expect("release atlas");
+}
+
+#[cfg(test)]
+#[test]
+fn atlas_sprite_failures_and_legacy_replacement_leave_or_release_the_lease() {
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let frames = [NativeSpriteAtlasFrame {
+        frame_id: 4,
+        uv_min: NativeVec2::default(),
+        uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+        has_size: false,
+        size: NativeVec2::default(),
+    }];
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    let atlas = unsafe {
+        bridge
+            .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture,
+                frames: frames.as_ptr(),
+                frames_len: frames.len(),
+            })
+            .expect("atlas")
+    };
+    let sprite = bridge
+        .create_sprite_from_atlas(atlas_sprite_request(atlas, 4))
+        .expect("atlas sprite");
+    assert_eq!(
+        bridge
+            .set_sprite_frame(NativeSpriteFrameUpdateRequest {
+                appearance: sprite,
+                frame_id: 99,
+            })
+            .expect_err("unknown frame")
+            .code(),
+        "CSHARP_SPRITE_ATLAS_FRAME"
+    );
+    assert_eq!(
+        bridge
+            .read_sprite(sprite)
+            .expect("unchanged sprite")
+            .frame_id,
+        4
+    );
+    assert_eq!(
+        bridge
+            .replace_sprite_from_atlas(NativeSpriteFromAtlasReplaceRequest {
+                appearance: sprite,
+                replacement: atlas_sprite_request(atlas, 99),
+            })
+            .expect_err("unknown replacement frame")
+            .code(),
+        "CSHARP_SPRITE_ATLAS_FRAME"
+    );
+    assert_eq!(
+        bridge
+            .read_sprite(sprite)
+            .expect("replacement left sprite intact")
+            .frame_id,
+        4
+    );
+    let mut invalid_descriptor = atlas_sprite_request(atlas, 4);
+    invalid_descriptor.size.x = 0.0;
+    assert_eq!(
+        bridge
+            .replace_sprite_from_atlas(NativeSpriteFromAtlasReplaceRequest {
+                appearance: sprite,
+                replacement: invalid_descriptor,
+            })
+            .expect_err("invalid replacement descriptor")
+            .code(),
+        "CSHARP_SPRITE_ATLAS_FRAME"
+    );
+    assert_eq!(
+        bridge
+            .read_sprite(sprite)
+            .expect("invalid descriptor left sprite intact")
+            .frame_id,
+        4
+    );
+    let primitive = bridge
+        .create_primitive(tests::primitive_request())
+        .expect("primitive");
+    assert_eq!(
+        bridge
+            .set_sprite_frame(NativeSpriteFrameUpdateRequest {
+                appearance: primitive,
+                frame_id: 4,
+            })
+            .expect_err("wrong appearance kind")
+            .code(),
+        "CSHARP_SPRITE_ATLAS_APPEARANCE"
+    );
+    let replacement = bridge
+        .replace_sprite(NativeSpriteAppearanceReplaceRequest {
+            appearance: sprite,
+            replacement: legacy_sprite_request(texture),
+        })
+        .expect("legacy replacement validates before releasing atlas sprite");
+    assert_ne!(replacement.value, sprite.value);
+    bridge
+        .destroy_sprite_atlas(atlas)
+        .expect("legacy replacement released atlas lease");
+}
+
 fn renderer_path(path: String, extension: &str) -> Result<String, CsharpEngineServicesError> {
     if !path.starts_with("content/") || !path.ends_with(extension) {
         return Err(CsharpEngineServicesError::new(
@@ -446,6 +668,10 @@ pub(crate) struct RuntimeAppearanceState {
     pub(crate) render_resources: Vec<CsharpRenderResource>,
     resource_paths: BTreeMap<String, u64>,
     resource_identities: BTreeMap<String, u64>,
+    sprite_atlases: BTreeMap<u64, RuntimeSpriteAtlas>,
+    sprite_atlas_appearances: BTreeMap<u64, BTreeSet<u64>>,
+    sprite_appearance_atlases: BTreeMap<u64, u64>,
+    next_sprite_atlas: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
     animation_graphs: BTreeMap<u64, AnimationGraphBuilder>,
@@ -460,6 +686,13 @@ pub(crate) struct RuntimeAppearanceState {
     particle_projector: ParticleProjector,
     billboards: BTreeMap<u64, BillboardHandle>,
     emitters: BTreeMap<u64, ParticleEmitterHandle>,
+}
+
+#[derive(Clone)]
+struct RuntimeSpriteAtlas {
+    asset: String,
+    texture_asset: String,
+    frames: BTreeMap<u32, SpriteFrameRect>,
 }
 
 pub(crate) struct RuntimeAppearanceCall {
@@ -589,6 +822,10 @@ impl RuntimeAppearanceBridge {
                 render_resources: Vec::new(),
                 resource_paths: BTreeMap::new(),
                 resource_identities: BTreeMap::new(),
+                sprite_atlases: BTreeMap::new(),
+                sprite_atlas_appearances: BTreeMap::new(),
+                sprite_appearance_atlases: BTreeMap::new(),
+                next_sprite_atlas: 1,
                 animated_appearances: BTreeMap::new(),
                 animation_instances: BTreeMap::new(),
                 animation_graphs: BTreeMap::new(),
@@ -1850,6 +2087,15 @@ impl RuntimeAppearanceBridge {
         };
         staged.state.appearance_materials.remove(&appearance.value);
         staged.state.animated_appearances.remove(&appearance.value);
+        if let Some(atlas) = staged
+            .state
+            .sprite_appearance_atlases
+            .remove(&appearance.value)
+        {
+            if let Some(appearances) = staged.state.sprite_atlas_appearances.get_mut(&atlas) {
+                appearances.remove(&appearance.value);
+            }
+        }
         staged.state.projector.remove_appearance(&identity);
         Ok(())
     }
@@ -2299,6 +2545,404 @@ impl RuntimeAppearanceBridge {
         })
     }
 
+    unsafe fn create_sprite_atlas(
+        &mut self,
+        request: &NativeSpriteAtlasCreateRequest,
+    ) -> Result<NativeSpriteAtlasHandle, CsharpEngineServicesError> {
+        let frames = borrowed_slice(request.frames, request.frames_len, "sprite atlas frames")?;
+        if frames.is_empty() || frames.len() > MAX_SPRITE_ATLAS_FRAMES {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_ATLAS_FRAMES",
+                "sprite atlas must contain between one and 4096 frames",
+            ));
+        }
+        let resource = self.resource(request.texture.value)?.clone();
+        if resource.kind() != CsharpRenderResourceKind::Texture {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_ATLAS_RESOURCE",
+                "sprite atlas requires a texture resource",
+            ));
+        }
+        let handle = self.staged_mut()?.state.next_sprite_atlas;
+        let texture_asset = format!("texture/atlas-{handle}");
+        let asset = format!("sprite/atlas-{handle}");
+        let texture = TextureDescriptor::admit_png_rgba8_resource(
+            texture_asset.clone(),
+            resource.bytes(),
+            TextureFilter::Nearest,
+            TextureWrap::Clamp,
+            1,
+        )
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_ATLAS_TEXTURE", format!("{error:?}"))
+        })?;
+        let atlas = SpriteAtlasDescriptor {
+            id: asset.clone(),
+            texture: texture_asset.clone(),
+            frames: frames
+                .iter()
+                .map(|frame| SpriteFrameRect {
+                    frame: frame.frame_id,
+                    uv_min: native_vec2(frame.uv_min),
+                    uv_max: native_vec2(frame.uv_max),
+                    size: frame.has_size.then(|| native_vec2(frame.size)),
+                })
+                .collect(),
+        };
+        atlas.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_ATLAS_FRAME", format!("{error:?}"))
+        })?;
+        let copied_frames = atlas
+            .frames
+            .iter()
+            .cloned()
+            .map(|frame| (frame.frame, frame))
+            .collect();
+        let staged = self.staged_mut()?;
+        staged.state.next_sprite_atlas = handle.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_ATLAS_HANDLE",
+                "sprite atlas handle overflow",
+            )
+        })?;
+        staged
+            .state
+            .projector
+            .resources_mut()
+            .textures
+            .push(texture);
+        staged
+            .state
+            .projector
+            .resources_mut()
+            .sprite_atlases
+            .push(atlas);
+        staged.state.sprite_atlases.insert(
+            handle,
+            RuntimeSpriteAtlas {
+                asset,
+                texture_asset,
+                frames: copied_frames,
+            },
+        );
+        staged
+            .state
+            .sprite_atlas_appearances
+            .insert(handle, BTreeSet::new());
+        Ok(NativeSpriteAtlasHandle { value: handle })
+    }
+
+    fn destroy_sprite_atlas(
+        &mut self,
+        atlas: NativeSpriteAtlasHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let entry = staged
+            .state
+            .sprite_atlases
+            .get(&atlas.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_HANDLE",
+                    "sprite atlas is not live",
+                )
+            })?;
+        if staged
+            .state
+            .sprite_atlas_appearances
+            .get(&atlas.value)
+            .is_some_and(|appearances| !appearances.is_empty())
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_ATLAS_IN_USE",
+                "dispose or replace appearances using this sprite atlas before disposing it",
+            ));
+        }
+        staged.state.sprite_atlases.remove(&atlas.value);
+        staged.state.sprite_atlas_appearances.remove(&atlas.value);
+        let resources = staged.state.projector.resources_mut();
+        resources
+            .sprite_atlases
+            .retain(|candidate| candidate.id != entry.asset);
+        resources
+            .textures
+            .retain(|candidate| candidate.id != entry.texture_asset);
+        Ok(())
+    }
+
+    fn sprite_atlas(
+        &self,
+        atlas: NativeSpriteAtlasHandle,
+    ) -> Result<RuntimeSpriteAtlas, CsharpEngineServicesError> {
+        let state = self
+            .staged
+            .as_ref()
+            .map(|call| &call.state)
+            .unwrap_or(&self.state);
+        state
+            .sprite_atlases
+            .get(&atlas.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_HANDLE",
+                    "sprite atlas is not live",
+                )
+            })
+    }
+
+    fn sprite_from_atlas(
+        &self,
+        request: NativeSpriteFromAtlasRequest,
+    ) -> Result<(RuntimeSpriteAtlas, SpriteInstanceDescriptor), CsharpEngineServicesError> {
+        let atlas = self.sprite_atlas(request.atlas)?;
+        if !atlas.frames.contains_key(&request.frame_id) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_ATLAS_FRAME",
+                "sprite frame is not defined by the atlas",
+            ));
+        }
+        let sprite = sprite_instance_descriptor(
+            atlas.asset.clone(),
+            request.frame_id,
+            request.pivot,
+            request.size,
+            request.billboard,
+            request.size_mode,
+            request.render_order,
+            request.depth,
+            request.tint,
+        );
+        sprite.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_ATLAS_FRAME", format!("{error:?}"))
+        })?;
+        Ok((atlas.clone(), sprite))
+    }
+
+    fn create_sprite_from_atlas(
+        &mut self,
+        request: NativeSpriteFromAtlasRequest,
+    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        let (_, sprite) = self.sprite_from_atlas(request)?;
+        let appearance = self.allocate_appearance(Appearance::Sprite { sprite })?;
+        let staged = self.staged_mut()?;
+        staged
+            .state
+            .sprite_atlas_appearances
+            .entry(request.atlas.value)
+            .or_default()
+            .insert(appearance.value);
+        staged
+            .state
+            .sprite_appearance_atlases
+            .insert(appearance.value, request.atlas.value);
+        Ok(appearance)
+    }
+
+    fn replace_sprite_from_atlas(
+        &mut self,
+        request: NativeSpriteFromAtlasReplaceRequest,
+    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        // Resolve the new retained atlas and frame before releasing the prior
+        // owner, so stale/wrong-kind/frame failures cannot disturb it.
+        self.sprite_from_atlas(request.replacement)?;
+        self.ensure_live_appearance(request.appearance)?;
+        self.destroy_appearance(request.appearance)?;
+        self.create_sprite_from_atlas(request.replacement)
+    }
+
+    fn set_sprite_frame(
+        &mut self,
+        request: NativeSpriteFrameUpdateRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let atlas_handle = *staged
+            .state
+            .sprite_appearance_atlases
+            .get(&request.appearance.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_APPEARANCE",
+                    "appearance is not an atlas-backed sprite",
+                )
+            })?;
+        let atlas = staged
+            .state
+            .sprite_atlases
+            .get(&atlas_handle)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_HANDLE",
+                    "sprite atlas is not live",
+                )
+            })?;
+        if !atlas.frames.contains_key(&request.frame_id) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_ATLAS_FRAME",
+                "sprite frame is not defined by the atlas",
+            ));
+        }
+        let identity = staged
+            .state
+            .appearances
+            .get(&request.appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance is not live")
+            })?;
+        match staged.state.projector.appearance_mut(&identity) {
+            Some(Appearance::Sprite { sprite }) => sprite.frame = request.frame_id,
+            _ => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_APPEARANCE",
+                    "appearance is not a sprite",
+                ))
+            }
+        }
+        Ok(())
+    }
+
+    fn read_sprite(
+        &mut self,
+        appearance: NativeAppearanceHandle,
+    ) -> Result<NativeSpriteReadout, CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let atlas_handle = *staged
+            .state
+            .sprite_appearance_atlases
+            .get(&appearance.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_APPEARANCE",
+                    "appearance is not an atlas-backed sprite",
+                )
+            })?;
+        let atlas = staged
+            .state
+            .sprite_atlases
+            .get(&atlas_handle)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_HANDLE",
+                    "sprite atlas is not live",
+                )
+            })?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&appearance.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance is not live")
+            })?;
+        let frame_id = match staged.state.projector.appearance_mut(identity) {
+            Some(Appearance::Sprite { sprite }) => sprite.frame,
+            _ => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_APPEARANCE",
+                    "appearance is not a sprite",
+                ))
+            }
+        };
+        let frame = atlas.frames.get(&frame_id).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_ATLAS_FRAME",
+                "sprite frame is not defined by the atlas",
+            )
+        })?;
+        Ok(NativeSpriteReadout {
+            atlas: NativeSpriteAtlasReference {
+                value: atlas_handle,
+            },
+            frame_id,
+            uv_min: NativeVec2 {
+                x: frame.uv_min[0],
+                y: frame.uv_min[1],
+            },
+            uv_max: NativeVec2 {
+                x: frame.uv_max[0],
+                y: frame.uv_max[1],
+            },
+            has_size: frame.size.is_some(),
+            size: frame
+                .size
+                .map(|size| NativeVec2 {
+                    x: size[0],
+                    y: size[1],
+                })
+                .unwrap_or_default(),
+        })
+    }
+
+    fn ensure_live_appearance(
+        &mut self,
+        appearance: NativeAppearanceHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if self
+            .staged_mut()?
+            .state
+            .appearances
+            .contains_key(&appearance.value)
+        {
+            Ok(())
+        } else {
+            Err(CsharpEngineServicesError::new(
+                "CSHARP_APPEARANCE_HANDLE",
+                "appearance is not live",
+            ))
+        }
+    }
+
+    fn validate_legacy_sprite_request(
+        &self,
+        request: NativeSpriteAppearanceRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let resource = self.resource(request.texture.value)?.clone();
+        if resource.kind() != CsharpRenderResourceKind::Texture {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_RESOURCE",
+                "sprite appearance requires a texture resource",
+            ));
+        }
+        let texture = TextureDescriptor::admit_png_rgba8_resource(
+            "texture/legacy-validation".to_owned(),
+            resource.bytes(),
+            TextureFilter::Nearest,
+            TextureWrap::Clamp,
+            1,
+        )
+        .map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_TEXTURE", format!("{error:?}"))
+        })?;
+        let atlas = SpriteAtlasDescriptor {
+            id: "sprite/legacy-validation".to_owned(),
+            texture: texture.id,
+            frames: vec![SpriteFrameRect {
+                frame: 0,
+                uv_min: native_vec2(request.uv_min),
+                uv_max: native_vec2(request.uv_max),
+                size: None,
+            }],
+        };
+        atlas.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
+        })?;
+        let sprite = sprite_instance_descriptor(
+            atlas.id,
+            0,
+            request.pivot,
+            request.size,
+            request.billboard,
+            request.size_mode,
+            request.render_order,
+            request.depth,
+            request.tint,
+        );
+        sprite.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
+        })
+    }
+
     fn create_sprite(
         &mut self,
         request: NativeSpriteAppearanceRequest,
@@ -2333,44 +2977,36 @@ impl RuntimeAppearanceBridge {
                 size: None,
             }],
         };
+        let sprite = sprite_instance_descriptor(
+            atlas_id,
+            0,
+            request.pivot,
+            request.size,
+            request.billboard,
+            request.size_mode,
+            request.render_order,
+            request.depth,
+            request.tint,
+        );
+        sprite.validate().map_err(|error| {
+            CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
+        })?;
         {
             let resources = self.staged_mut()?.state.projector.resources_mut();
             resources.textures.push(texture);
             resources.sprite_atlases.push(atlas);
         }
-        let billboard = match request.billboard {
-            NativeBillboardMode::None => BillboardMode::None,
-            NativeBillboardMode::Spherical => BillboardMode::Spherical,
-            NativeBillboardMode::Cylindrical => BillboardMode::Cylindrical,
-        };
-        let size_mode = match request.size_mode {
-            NativeSpriteSizeMode::World => SpriteSizeMode::World,
-            NativeSpriteSizeMode::Pixel => SpriteSizeMode::Pixel,
-        };
-        let depth = match request.depth {
-            NativeSpriteDepthPolicy::Default => SpriteDepthPolicy::Default,
-            NativeSpriteDepthPolicy::DepthTestOff => SpriteDepthPolicy::DepthTestOff,
-            NativeSpriteDepthPolicy::DepthWriteOff => SpriteDepthPolicy::DepthWriteOff,
-        };
-        self.allocate_appearance(Appearance::Sprite {
-            sprite: SpriteInstanceDescriptor {
-                asset: atlas_id,
-                frame: 0,
-                pivot: native_vec2(request.pivot),
-                size: native_vec2(request.size),
-                size_mode,
-                billboard,
-                tint: native_color(request.tint),
-                render_order: request.render_order,
-                depth,
-                shading: SpriteShading::Unlit,
-                material: SpriteMaterialDescriptor::default(),
-                visible: true,
-                transform: Transform::IDENTITY,
-                attachment: SpriteAttachment::default(),
-                metadata: RenderMetadata::default(),
-            },
-        })
+        self.allocate_appearance(Appearance::Sprite { sprite })
+    }
+
+    fn replace_sprite(
+        &mut self,
+        request: NativeSpriteAppearanceReplaceRequest,
+    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        self.validate_legacy_sprite_request(request.replacement)?;
+        self.ensure_live_appearance(request.appearance)?;
+        self.destroy_appearance(request.appearance)?;
+        self.create_sprite(request.replacement)
     }
 
     fn open_animated_mesh(
@@ -4702,10 +5338,75 @@ pub(crate) unsafe extern "C" fn replace_sprite_appearance(
     request: NativeSpriteAppearanceReplaceRequest,
     result: *mut NativeAppearanceHandle,
 ) -> i32 {
-    appearance_result(context, result, |bridge| {
-        bridge.destroy_appearance(request.appearance)?;
-        bridge.create_sprite(request.replacement)
+    appearance_result(context, result, |bridge| bridge.replace_sprite(request))
+}
+
+pub(crate) unsafe extern "C" fn create_sprite_atlas(
+    context: *mut c_void,
+    request: *const NativeSpriteAtlasCreateRequest,
+    result: *mut NativeSpriteAtlasHandle,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    sprite_atlas_result(context, result, |bridge| unsafe {
+        bridge.create_sprite_atlas(&*request)
     })
+}
+
+pub(crate) unsafe extern "C" fn destroy_sprite_atlas(
+    context: *mut c_void,
+    atlas: NativeSpriteAtlasHandle,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.destroy_sprite_atlas(atlas))
+}
+
+pub(crate) unsafe extern "C" fn create_sprite_from_atlas(
+    context: *mut c_void,
+    request: NativeSpriteFromAtlasRequest,
+    result: *mut NativeAppearanceHandle,
+) -> i32 {
+    appearance_result(context, result, |bridge| {
+        bridge.create_sprite_from_atlas(request)
+    })
+}
+
+pub(crate) unsafe extern "C" fn replace_sprite_from_atlas(
+    context: *mut c_void,
+    request: NativeSpriteFromAtlasReplaceRequest,
+    result: *mut NativeAppearanceHandle,
+) -> i32 {
+    appearance_result(context, result, |bridge| {
+        bridge.replace_sprite_from_atlas(request)
+    })
+}
+
+pub(crate) unsafe extern "C" fn set_sprite_frame(
+    context: *mut c_void,
+    request: NativeSpriteFrameUpdateRequest,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.set_sprite_frame(request))
+}
+
+pub(crate) unsafe extern "C" fn read_sprite(
+    context: *mut c_void,
+    appearance: NativeAppearanceHandle,
+    result: *mut NativeSpriteReadout,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match bridge.read_sprite(appearance) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
 }
 
 pub(crate) unsafe extern "C" fn destroy_appearance(
@@ -4848,6 +5549,29 @@ fn material_result(
     action: impl FnOnce(
         &mut RuntimeAppearanceBridge,
     ) -> Result<NativeMaterialHandle, CsharpEngineServicesError>,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match action(bridge) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+fn sprite_atlas_result(
+    context: *mut c_void,
+    result: *mut NativeSpriteAtlasHandle,
+    action: impl FnOnce(
+        &mut RuntimeAppearanceBridge,
+    ) -> Result<NativeSpriteAtlasHandle, CsharpEngineServicesError>,
 ) -> i32 {
     if context.is_null() || result.is_null() {
         return 0;
@@ -5428,6 +6152,47 @@ fn native_color(value: NativeColor) -> [f32; 4] {
     [value.r, value.g, value.b, value.a]
 }
 
+fn sprite_instance_descriptor(
+    asset: String,
+    frame: u32,
+    pivot: NativeVec2,
+    size: NativeVec2,
+    billboard: NativeBillboardMode,
+    size_mode: NativeSpriteSizeMode,
+    render_order: i32,
+    depth: NativeSpriteDepthPolicy,
+    tint: NativeColor,
+) -> SpriteInstanceDescriptor {
+    SpriteInstanceDescriptor {
+        asset,
+        frame,
+        pivot: native_vec2(pivot),
+        size: native_vec2(size),
+        size_mode: match size_mode {
+            NativeSpriteSizeMode::World => SpriteSizeMode::World,
+            NativeSpriteSizeMode::Pixel => SpriteSizeMode::Pixel,
+        },
+        billboard: match billboard {
+            NativeBillboardMode::None => BillboardMode::None,
+            NativeBillboardMode::Spherical => BillboardMode::Spherical,
+            NativeBillboardMode::Cylindrical => BillboardMode::Cylindrical,
+        },
+        tint: native_color(tint),
+        render_order,
+        depth: match depth {
+            NativeSpriteDepthPolicy::Default => SpriteDepthPolicy::Default,
+            NativeSpriteDepthPolicy::DepthTestOff => SpriteDepthPolicy::DepthTestOff,
+            NativeSpriteDepthPolicy::DepthWriteOff => SpriteDepthPolicy::DepthWriteOff,
+        },
+        shading: SpriteShading::Unlit,
+        material: SpriteMaterialDescriptor::default(),
+        visible: true,
+        transform: Transform::IDENTITY,
+        attachment: SpriteAttachment::default(),
+        metadata: RenderMetadata::default(),
+    }
+}
+
 fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
     RenderMaterialDescriptor {
         schema_version: 1,
@@ -5502,14 +6267,14 @@ mod tests {
         }
     }
 
-    const RGBA_PNG: &[u8] = &[
+    pub(super) const RGBA_PNG: &[u8] = &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6,
         0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68,
         255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
         130,
     ];
 
-    fn resource_request(path: &'static str) -> NativeRenderResourceRequest {
+    pub(super) fn resource_request(path: &'static str) -> NativeRenderResourceRequest {
         NativeRenderResourceRequest {
             path: NativeUtf8Slice {
                 bytes: path.as_ptr(),
@@ -5518,7 +6283,7 @@ mod tests {
         }
     }
 
-    fn primitive_request() -> NativePrimitiveAppearanceRequest {
+    pub(super) fn primitive_request() -> NativePrimitiveAppearanceRequest {
         NativePrimitiveAppearanceRequest {
             geometry: NativePrimitiveGeometry::Cube,
             wireframe: false,

@@ -422,6 +422,27 @@ pub type NativeReplaceSpriteAppearance = unsafe extern "C" fn(
     NativeSpriteAppearanceReplaceRequest,
     *mut NativeAppearanceHandle,
 ) -> i32;
+pub type NativeCreateSpriteAtlas = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpriteAtlasCreateRequest,
+    *mut NativeSpriteAtlasHandle,
+) -> i32;
+pub type NativeDestroySpriteAtlas =
+    unsafe extern "C" fn(*mut c_void, NativeSpriteAtlasHandle) -> i32;
+pub type NativeCreateSpriteFromAtlas = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpriteFromAtlasRequest,
+    *mut NativeAppearanceHandle,
+) -> i32;
+pub type NativeReplaceSpriteFromAtlas = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpriteFromAtlasReplaceRequest,
+    *mut NativeAppearanceHandle,
+) -> i32;
+pub type NativeSetSpriteFrame =
+    unsafe extern "C" fn(*mut c_void, NativeSpriteFrameUpdateRequest) -> i32;
+pub type NativeReadSprite =
+    unsafe extern "C" fn(*mut c_void, NativeAppearanceHandle, *mut NativeSpriteReadout) -> i32;
 pub type NativeDestroyAppearance = unsafe extern "C" fn(*mut c_void, NativeAppearanceHandle) -> i32;
 pub type NativePublishAppearanceSnapshot =
     unsafe extern "C" fn(*mut c_void, *const NativeAppearanceFact, usize) -> i32;
@@ -811,6 +832,12 @@ pub struct NativeAppearanceApi {
     pub update_static_mesh_materials: NativeUpdateStaticMeshMaterials,
     pub create_sprite: NativeCreateSpriteAppearance,
     pub replace_sprite: NativeReplaceSpriteAppearance,
+    pub create_sprite_atlas: NativeCreateSpriteAtlas,
+    pub destroy_sprite_atlas: NativeDestroySpriteAtlas,
+    pub create_sprite_from_atlas: NativeCreateSpriteFromAtlas,
+    pub replace_sprite_from_atlas: NativeReplaceSpriteFromAtlas,
+    pub set_sprite_frame: NativeSetSpriteFrame,
+    pub read_sprite: NativeReadSprite,
     pub destroy_appearance: NativeDestroyAppearance,
     pub publish_snapshot: NativePublishAppearanceSnapshot,
     pub create_light: NativeCreateLight,

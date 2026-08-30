@@ -175,6 +175,90 @@ pub struct NativeRenderResourceInfo {
     pub byte_length: u32,
 }
 
+/// A retained immutable sprite atlas assembled from one already-admitted
+/// texture. The atlas owns frame metadata; texture bytes remain owned by the
+/// RenderResource admission path.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpriteAtlasHandle {
+    pub value: u64,
+}
+
+/// A copied atlas identity returned by a sprite readout. This is deliberately
+/// not an owning handle and cannot dispose the retained atlas.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpriteAtlasReference {
+    pub value: u64,
+}
+
+/// One bounded frame supplied while creating a retained sprite atlas.
+/// `frame_id` is the stable selector used by sprite operations.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteAtlasFrame {
+    pub frame_id: u32,
+    pub uv_min: NativeVec2,
+    pub uv_max: NativeVec2,
+    pub has_size: bool,
+    pub size: NativeVec2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteAtlasCreateRequest {
+    pub texture: NativeRenderResourceHandle,
+    /// Borrowed only for this direct call. Rust copies every frame before
+    /// retaining the atlas.
+    pub frames: *const NativeSpriteAtlasFrame,
+    pub frames_len: usize,
+}
+
+/// A sprite appearance request that selects a frame from a retained atlas.
+/// Other presentation fields intentionally mirror the existing low-level
+/// sprite request so both paths use the same renderer projection.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteFromAtlasRequest {
+    pub atlas: NativeSpriteAtlasHandle,
+    pub frame_id: u32,
+    pub pivot: NativeVec2,
+    pub size: NativeVec2,
+    pub billboard: NativeBillboardMode,
+    pub size_mode: NativeSpriteSizeMode,
+    pub render_order: i32,
+    pub depth: NativeSpriteDepthPolicy,
+    pub tint: NativeColor,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteFromAtlasReplaceRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub replacement: NativeSpriteFromAtlasRequest,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteFrameUpdateRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub frame_id: u32,
+}
+
+/// Renderer-neutral readout for an atlas-backed sprite appearance. UV and
+/// optional presentation size are copied facts; backend resources remain
+/// private to Engine.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpriteReadout {
+    pub atlas: NativeSpriteAtlasReference,
+    pub frame_id: u32,
+    pub uv_min: NativeVec2,
+    pub uv_max: NativeVec2,
+    pub has_size: bool,
+    pub size: NativeVec2,
+}
+
 /// Renderer-neutral PBR-like material values. Texture handle zero means an
 /// untextured material. The Engine resolves resource identity and validates
 /// the resulting retained material descriptor.

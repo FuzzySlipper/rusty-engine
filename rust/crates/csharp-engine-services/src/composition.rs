@@ -28,13 +28,14 @@ use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
 pub(crate) const ABI_OK: i32 = 1;
 use crate::appearance::{
     create_light, create_material, create_primitive_appearance, create_sprite_appearance,
-    create_static_mesh_appearance, create_static_mesh_from_content_appearance, destroy_appearance,
-    destroy_light, destroy_material, open_render_resource, publish_appearance_snapshot, read_light,
-    read_presentation, replace_light, replace_material, replace_primitive_appearance,
-    replace_sprite_appearance, replace_static_mesh_appearance,
-    replace_static_mesh_from_content_appearance, update_light, update_material,
-    update_static_mesh_materials, AnimationCueDefinition, CsharpRenderResource,
-    RuntimeAppearanceBridge, RuntimeAppearanceCall,
+    create_sprite_atlas, create_sprite_from_atlas, create_static_mesh_appearance,
+    create_static_mesh_from_content_appearance, destroy_appearance, destroy_light,
+    destroy_material, destroy_sprite_atlas, open_render_resource, publish_appearance_snapshot,
+    read_light, read_presentation, read_sprite, replace_light, replace_material,
+    replace_primitive_appearance, replace_sprite_appearance, replace_sprite_from_atlas,
+    replace_static_mesh_appearance, replace_static_mesh_from_content_appearance, set_sprite_frame,
+    update_light, update_material, update_static_mesh_materials, AnimationCueDefinition,
+    CsharpRenderResource, RuntimeAppearanceBridge, RuntimeAppearanceCall,
 };
 
 fn engine_api(
@@ -86,6 +87,12 @@ fn engine_api(
             update_static_mesh_materials,
             create_sprite: create_sprite_appearance,
             replace_sprite: replace_sprite_appearance,
+            create_sprite_atlas,
+            destroy_sprite_atlas,
+            create_sprite_from_atlas,
+            replace_sprite_from_atlas,
+            set_sprite_frame,
+            read_sprite,
             destroy_appearance,
             publish_snapshot: publish_appearance_snapshot,
             create_light,
