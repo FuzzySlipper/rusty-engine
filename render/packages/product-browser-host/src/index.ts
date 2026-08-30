@@ -13,6 +13,7 @@ export {
   ProductBrowserLocalTransportError,
   createProductBrowserLocalHttpAdapter,
 } from './local-transport.js';
+export { rendererResourceContentHash } from '@rusty-engine/application-host';
 export type {
   ProductBrowserBundleAsset,
   ProductBrowserBundleAssetName,

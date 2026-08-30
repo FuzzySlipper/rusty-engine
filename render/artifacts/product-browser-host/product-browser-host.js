@@ -28760,7 +28760,7 @@ function ID(e) {
 		Object.freeze({
 			name: "main.js",
 			content: [
-				`import { mountProductBrowserHost } from './${FD}';`,
+				`import { mountProductBrowserHost, rendererResourceContentHash } from './${FD}';`,
 				"import { createProductBridge } from './bridge.js';",
 				`import { mountProductUi } from '${e.uiModule}';`,
 				"",
@@ -28837,12 +28837,12 @@ function ID(e) {
 				"  if (url.origin !== new URL(import.meta.url).origin) throw new Error('generated renderer resource must remain same-origin');",
 				"  const response = await fetch(url, { cache: 'no-store' });",
 				"  if (!response.ok) throw new Error(`generated renderer resource ${resource.identity} is unavailable`);",
-				"  const bytes = new Uint8Array(await response.arrayBuffer());",
+				"  const data = await response.arrayBuffer();",
+				"  const bytes = new Uint8Array(data);",
 				"  if (bytes.byteLength !== resource.byteLength) throw new Error(`generated renderer resource ${resource.identity} length mismatch`);",
 				"  if (bytes.byteLength === 0 || (resource.mediaType === 'image/png' && !hasPngSignature(bytes)) || (resource.mediaType === 'audio/wav' && !hasWavSignature(bytes)) || (resource.mediaType === 'application/octet-stream' && !hasMeshResourceHeader(bytes)) || (resource.mediaType === 'model/gltf-binary' && !hasGlbHeader(bytes))) throw new Error(`generated renderer resource ${resource.identity} media mismatch`);",
-				"  if (typeof crypto === 'undefined' || crypto.subtle === undefined) throw new Error('Web Crypto SHA-256 is required for generated renderer preload');",
-				"  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).map((byte) => byte.toString(16).padStart(2, '0')).join('');",
-				"  if (resource.contentHash !== `sha256:${digest}`) throw new Error(`generated renderer resource ${resource.identity} hash mismatch`);",
+				"  const digest = await rendererResourceContentHash(data, resource.contentHash);",
+				"  if (resource.contentHash !== digest) throw new Error(`generated renderer resource ${resource.identity} hash mismatch`);",
 				"  return Object.freeze({ identity: resource.identity, contentHash: resource.contentHash, mediaType: resource.mediaType, bytes });",
 				"}",
 				"",
@@ -30029,4 +30029,4 @@ function wk(e) {
 	return e;
 }
 //#endregion
-export { FD as PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE, gD as PRODUCT_BROWSER_HOST_ARTIFACT, nO as PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH, rO as PRODUCT_BROWSER_LOCAL_TRANSPORT_ARTIFACT, vD as ProductBrowserHostError, $ as ProductBrowserLocalTransportError, MO as createProductBrowserLocalHttpAdapter, _D as createProductBrowserRuntimeTransport, SD as mountProductBrowserHost, ID as productBrowserBundleAssets, LD as productBrowserBundleDescriptor };
+export { FD as PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE, gD as PRODUCT_BROWSER_HOST_ARTIFACT, nO as PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH, rO as PRODUCT_BROWSER_LOCAL_TRANSPORT_ARTIFACT, vD as ProductBrowserHostError, $ as ProductBrowserLocalTransportError, MO as createProductBrowserLocalHttpAdapter, _D as createProductBrowserRuntimeTransport, SD as mountProductBrowserHost, ID as productBrowserBundleAssets, LD as productBrowserBundleDescriptor, tS as rendererResourceContentHash };

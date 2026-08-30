@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import {
   productBrowserBundleAssets,
   type ProductBrowserBundleAsset,
@@ -60,6 +60,73 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/theme.wav')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/packed.rmesh')).toBe(true);
     expect(pageErrors).toEqual([]);
+  } finally {
+    await closeBundleServer(server);
+  }
+});
+
+test('generated bundle admits valid resources without Web Crypto subtle', async ({ page }) => {
+  await removeWebCryptoSubtle(page);
+  const engineHostModule = await readFile(
+    fileURLToPath(new URL('../artifacts/product-browser-host/product-browser-host.js', import.meta.url)),
+    'utf8',
+  );
+  const generatedAssets = productBrowserBundleAssets({
+    engineHostModule,
+    uiModule: './ui/main.js',
+    runtimeAdapterModule: './runtime-adapter.js',
+    lifecycleMode: 'realtime',
+    uiProjection: {
+      expectedStream: 'product.local',
+      expectedContract: 'product.local.current',
+    },
+  });
+  const server = await createBundleServer(generatedAssets, rendererPreloadResources(), []);
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('no-Web-Crypto Product Bundle server did not expose a TCP address');
+  }
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  try {
+    await page.goto(`http://127.0.0.1:${String(address.port)}/index.html`);
+    await expect.poll(() => pageErrors).toEqual([]);
+    await expect(page.locator('#bundle-state')).toHaveText('projection: product.local.current');
+    await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => globalThis.crypto.subtle)).toBeUndefined();
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await closeBundleServer(server);
+  }
+});
+
+test('generated bundle preserves renderer hash mismatch without Web Crypto subtle', async ({ page }) => {
+  await removeWebCryptoSubtle(page);
+  const engineHostModule = await readFile(
+    fileURLToPath(new URL('../artifacts/product-browser-host/product-browser-host.js', import.meta.url)),
+    'utf8',
+  );
+  const generatedAssets = productBrowserBundleAssets({
+    engineHostModule,
+    uiModule: './ui/main.js',
+    runtimeAdapterModule: './runtime-adapter.js',
+    lifecycleMode: 'realtime',
+  });
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  const server = await createBundleServer(
+    generatedAssets,
+    rendererPreloadResources({ tamperedTextureBytes: true }),
+    [],
+  );
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('tampered no-Web-Crypto Product Bundle server did not expose a TCP address');
+  }
+  try {
+    await page.goto(`http://127.0.0.1:${String(address.port)}/index.html`);
+    await expect.poll(() => pageErrors.some((error) => error.includes('hash mismatch'))).toBe(true);
+    await expect.poll(() => page.evaluate(() => globalThis.crypto.subtle)).toBeUndefined();
   } finally {
     await closeBundleServer(server);
   }
@@ -226,7 +293,7 @@ interface RendererPreloadResource {
 }
 
 function rendererPreloadResources(
-  options: { readonly invalidMeshHeader?: boolean } = {},
+  options: { readonly invalidMeshHeader?: boolean; readonly tamperedTextureBytes?: boolean } = {},
 ): readonly RendererPreloadResource[] {
   const png = Uint8Array.from(Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL95wAAAABJRU5ErkJggg==',
@@ -237,11 +304,22 @@ function rendererPreloadResources(
   wav.set([87, 65, 86, 69], 8);
   const mesh = packedMeshResourceBytes();
   if (options.invalidMeshHeader === true) mesh[12] = 0;
+  const texture = preloadResource('texture', 'image/png', 'content/renderer/é.png', png);
+  if (options.tamperedTextureBytes === true) png[8] = png[8]! ^ 1;
   return Object.freeze([
-    preloadResource('texture', 'image/png', 'content/renderer/é.png', png),
+    texture,
     preloadResource('audio', 'audio/wav', 'content/renderer/theme.wav', wav),
     preloadResource('mesh', 'application/octet-stream', 'content/renderer/packed.rmesh', mesh),
   ]);
+}
+
+async function removeWebCryptoSubtle(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis.crypto, 'subtle', {
+      configurable: true,
+      value: undefined,
+    });
+  });
 }
 
 function preloadResource(

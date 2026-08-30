@@ -1,6 +1,7 @@
 export { RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, RustyApplicationHostError, mountRustyApplication, } from './application-host.js';
 export { RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, RustyApplicationContentError, } from './application-content.js';
 export { mountRustyDeveloperCommandShell, } from './developer-command-shell.js';
+export { rendererResourceContentHash } from '@rusty-engine/renderer-host';
 export { RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, RustyDeveloperCommandClientError, createRustyDeveloperCommandClient, validateRustyDeveloperCommandWireValue, } from './developer-command-client.js';
 export type { RustyDeveloperCommandAdapter, RustyDeveloperCommandClient, RustyDeveloperCommandClientOptions, RustyDeveloperCommandDescriptor, RustyDeveloperCommandDiscovery, RustyDeveloperCommandExtension, RustyDeveloperCommandHistoryEntry, RustyDeveloperCommandLane, RustyDeveloperCommandOutcome, RustyDeveloperCommandRequest, RustyDeveloperCommandResponse, RustyDeveloperCommandSequence, RustyDeveloperCommandSchemaBinding, RustyDeveloperCommandValueSchema, RustyDeveloperCommandWireField, RustyDeveloperCommandWireSchema, } from './developer-command-client.js';
 export type { RustyDeveloperCommandShell, RustyDeveloperCommandShellOptions, } from './developer-command-shell.js';

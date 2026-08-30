@@ -12,6 +12,7 @@ export {
 export {
   mountRustyDeveloperCommandShell,
 } from './developer-command-shell.js';
+export { rendererResourceContentHash } from '@rusty-engine/renderer-host';
 export {
   RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION,
   RustyDeveloperCommandClientError,

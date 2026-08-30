@@ -256,7 +256,10 @@ test('bundle assets are fixed JS composition roots and descriptor bytes are repr
   assert.match(first[1]!.content, /initialInteractionMode: 'gameplay'/u);
   assert.match(first[1]!.content, /renderer-preload\.json/u);
   assert.match(first[1]!.content, /renderer: \{ initialContent: rendererInitialContent \}/u);
-  assert.match(first[1]!.content, /crypto\.subtle\.digest\('SHA-256'/u);
+  assert.match(first[1]!.content, /mountProductBrowserHost, rendererResourceContentHash/u);
+  assert.match(first[1]!.content, /await rendererResourceContentHash\(data, resource\.contentHash\)/u);
+  assert.match(first[1]!.content, /resource\.contentHash !== digest/u);
+  assert.doesNotMatch(first[1]!.content, /crypto\.subtle/u);
   assert.match(first[1]!.content, /PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_COUNT/u);
   assert.match(first[1]!.content, /PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_TOTAL_BYTES/u);
   assert.match(first[1]!.content, /PRODUCT_RENDERER_PRELOAD_MESH_MAX_TOTAL_BYTES/u);
