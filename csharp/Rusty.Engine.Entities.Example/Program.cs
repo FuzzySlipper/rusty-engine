@@ -738,6 +738,7 @@ sealed class SpatialServiceFake : ISpatialService
     public CharacterContactAtReceipt ReadCharacterContactAt(CharacterContactAtRequest arg0) => throw new NotSupportedException();
     public CharacterDynamicImpulseAtReceipt ReadCharacterDynamicImpulseAt(CharacterDynamicImpulseAtRequest arg0) => throw new NotSupportedException();
     public NavigationStepReceipt ProposeNavigationStep(NavigationStepRequest arg0) => throw new NotSupportedException();
+    public NavigationStepReceipt EvaluateNavigationStep(NavigationStepRequest arg0) => throw new NotSupportedException();
     public SpatialProjectionReadout ReadProjection(SpatialProjectionReadRequest arg0) => throw new NotSupportedException();
     public SpatialQueryReceipt ContainsPoint(SpatialContainsPointRequest arg0) => throw new NotSupportedException();
     public SpatialHit CastRay(SpatialRaycastRequest arg0) => throw new NotSupportedException();
@@ -798,6 +799,11 @@ sealed class AppearanceServiceFake : IAppearanceService
     public Appearance ReplaceSpriteFromAtlas(SpriteFromAtlasReplaceRequest arg0) => throw new NotSupportedException();
     public void SetSpriteFrame(SpriteFrameUpdateRequest arg0) => throw new NotSupportedException();
     public SpriteReadout ReadSprite(Appearance arg0) => throw new NotSupportedException();
+    public SpritePlayback CreateSpritePlayback(SpritePlaybackCreateRequest arg0) => throw new NotSupportedException();
+    public SpritePlaybackReadout ControlSpritePlayback(SpritePlaybackControlRequest arg0) => throw new NotSupportedException();
+    public SpritePlaybackAdvanceLeaseReceipt AdvanceSpritePlayback(SpritePlaybackAdvanceRequest arg0) => throw new NotSupportedException();
+    public SpritePlaybackSample SampleSpritePlayback(SpritePlaybackSampleRequest arg0) => throw new NotSupportedException();
+    public SpritePlaybackReadout ReadSpritePlayback(SpritePlayback arg0) => throw new NotSupportedException();
 
     public void PublishSnapshot(ReadOnlySpan<AppearanceFact> values)
     {

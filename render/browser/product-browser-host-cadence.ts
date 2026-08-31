@@ -61,6 +61,20 @@ const mountUi: RustyApplicationUiMount = (uiRoot) => {
 const adapter: ProductBrowserRuntimeAdapter = {
   lifecycle: async (operation) => ({ accepted: true, operation: operation.kind, binding: runtime }),
   input: async (batch) => ({ accepted: true, count: batch.length, binding: runtime }),
+  reportAudioFeedback: async (feedback) => ({
+    accepted: true,
+    runtime: feedback.runtime,
+    ...(feedback.facts.at(-1) === undefined
+      ? {}
+      : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
+  }),
+  reportAnimationFeedback: async (feedback) => ({
+    accepted: true,
+    runtime: feedback.runtime,
+    ...(feedback.facts.at(-1) === undefined
+      ? {}
+      : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
+  }),
   advanceRealtime: async (observedTimeNs) => {
     window.__rustyProductCadenceAdvanceCalls = (window.__rustyProductCadenceAdvanceCalls ?? 0) + 1;
     const active = (window.__rustyProductCadenceActiveRequests ?? 0) + 1;

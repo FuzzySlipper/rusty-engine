@@ -17,6 +17,20 @@ const adapter: ProductBrowserRuntimeAdapter = {
     throw new Error(startupDiagnostic);
   },
   input: async (batch) => ({ accepted: true, count: batch.length }),
+  reportAudioFeedback: async (feedback) => ({
+    accepted: true,
+    runtime: feedback.runtime,
+    ...(feedback.facts.at(-1) === undefined
+      ? {}
+      : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
+  }),
+  reportAnimationFeedback: async (feedback) => ({
+    accepted: true,
+    runtime: feedback.runtime,
+    ...(feedback.facts.at(-1) === undefined
+      ? {}
+      : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
+  }),
   advanceRealtime: async () => ({ accepted: true, operation: 'advance-realtime' }),
   subscribeOutputs: () => () => undefined,
   dispose: () => { root.dataset['transportDisposed'] = 'true'; },

@@ -85,6 +85,15 @@ creating the session; it chooses only the Engine-derived mesh posture and is
 retained through subsequent voxel changes. Changing the mode of an existing
 session is not currently a C# API.
 
+`Spatial.EvaluateNavigationStep` evaluates one bounded planar-navigation step
+against the retained session projection and returns the same typed outcome,
+next-waypoint, path-cell, and path facts as `ProposeNavigationStep`. Evaluation
+does not update the retained navigation path, revisions, projections, or other
+session state, so product code can use its facts before deciding whether to
+issue a separate stateful operation. `ProposeNavigationStep` remains the
+stateful path proposal and updates the retained path on success or clears it
+for its existing failure outcomes.
+
 Use `Spatial.ReplaceContentArtifact` when offline conversion has already
 published the canonical collision/navigation JSON through Engine Content. The
 Engine resolves the retained `ContentReference`, validates and copies its

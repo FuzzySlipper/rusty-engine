@@ -227,6 +227,11 @@ pub type NativeProposeNavigationStep = unsafe extern "C" fn(
     NativeNavigationStepRequest,
     *mut NativeNavigationStepReceipt,
 ) -> i32;
+pub type NativeEvaluateNavigationStep = unsafe extern "C" fn(
+    *mut c_void,
+    NativeNavigationStepRequest,
+    *mut NativeNavigationStepReceipt,
+) -> i32;
 pub type NativeReadSpatialProjection = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialProjectionReadRequest,
@@ -826,6 +831,7 @@ pub struct NativeSpatialApi {
     pub read_character_contact_at: NativeReadCharacterContactAt,
     pub read_character_dynamic_impulse_at: NativeReadCharacterDynamicImpulseAt,
     pub propose_navigation_step: NativeProposeNavigationStep,
+    pub evaluate_navigation_step: NativeEvaluateNavigationStep,
     pub read_projection: NativeReadSpatialProjection,
     pub contains_point: NativeSpatialContainsPoint,
     pub cast_ray: NativeSpatialRaycast,

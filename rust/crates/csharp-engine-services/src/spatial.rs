@@ -1418,76 +1418,103 @@ impl RuntimeSpatialBridge {
                 ..Default::default()
             });
         };
-        let from = native_vec3_value(request.from);
-        let target = native_vec3_value(request.target);
-        if !finite_vec3(from) || !finite_vec3(target) {
-            return Ok(navigation_step_failure(
-                navigation,
-                NativeNavigationPathOutcome::NonFinitePosition,
-            ));
-        }
-        let start = navigation.world_cell(from);
-        let goal = navigation.world_cell(target);
-        let path = find_path_with_policy(
-            &navigation.projection,
-            NavPathQuery {
-                start,
-                goal,
-                max_visited: request.max_visited as usize,
-            },
-            navigation.policy,
+        let (receipt, path) = evaluate_navigation_step_facts(navigation, request);
+        navigation.last_path = path;
+        Ok(receipt)
+    }
+
+    fn evaluate_navigation(
+        &mut self,
+        request: NativeNavigationStepRequest,
+    ) -> Result<NativeNavigationStepReceipt, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let Some(navigation) = session.navigation.as_ref() else {
+            return Ok(NativeNavigationStepReceipt {
+                outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
+                ..Default::default()
+            });
+        };
+        Ok(evaluate_navigation_step_facts(navigation, request).0)
+    }
+}
+
+fn evaluate_navigation_step_facts(
+    navigation: &NavigationState,
+    request: NativeNavigationStepRequest,
+) -> (NativeNavigationStepReceipt, Vec<VoxelCoord>) {
+    let from = native_vec3_value(request.from);
+    let target = native_vec3_value(request.target);
+    if !finite_vec3(from) || !finite_vec3(target) {
+        return (
+            navigation_step_failure(navigation, NativeNavigationPathOutcome::NonFinitePosition),
+            Vec::new(),
         );
-        let path = match path {
-            Ok(path) => path,
-            Err(error) => {
-                return Ok(navigation_step_failure(
-                    navigation,
-                    navigation_outcome(error),
-                ))
-            }
-        };
-        if path.outcome == NavPathOutcome::NoPath {
-            navigation.last_path.clear();
-            return Ok(navigation_step_failure(
-                navigation,
-                NativeNavigationPathOutcome::NoPath,
-            ));
+    }
+    let start = navigation.world_cell(from);
+    let goal = navigation.world_cell(target);
+    let path = find_path_with_policy(
+        &navigation.projection,
+        NavPathQuery {
+            start,
+            goal,
+            max_visited: request.max_visited as usize,
+        },
+        navigation.policy,
+    );
+    let path = match path {
+        Ok(path) => path,
+        Err(error) => {
+            return (
+                navigation_step_failure(navigation, navigation_outcome(error)),
+                Vec::new(),
+            )
         }
-        let next_cell = path.path.get(1).copied().unwrap_or(start);
-        let step_target = if next_cell == goal {
-            target
-        } else {
-            navigation.cell_center(next_cell)
-        };
-        let movement = propose_direct_nav_movement(DirectNavMovementRequest {
-            from,
-            target: step_target,
-            max_step_units: request.max_step_units,
-        });
-        let movement = match movement {
-            Ok(movement) => movement,
-            Err(error) => {
-                let outcome = match error.label() {
-                    "nonFinitePosition" => NativeNavigationPathOutcome::NonFinitePosition,
-                    _ => NativeNavigationPathOutcome::InvalidStep,
-                };
-                return Ok(navigation_step_failure(navigation, outcome));
-            }
-        };
-        navigation.last_path = path.path;
-        Ok(NativeNavigationStepReceipt {
+    };
+    if path.outcome == NavPathOutcome::NoPath {
+        return (
+            navigation_step_failure(navigation, NativeNavigationPathOutcome::NoPath),
+            Vec::new(),
+        );
+    }
+    let next_cell = path.path.get(1).copied().unwrap_or(start);
+    let step_target = if next_cell == goal {
+        target
+    } else {
+        navigation.cell_center(next_cell)
+    };
+    let movement = propose_direct_nav_movement(DirectNavMovementRequest {
+        from,
+        target: step_target,
+        max_step_units: request.max_step_units,
+    });
+    let movement = match movement {
+        Ok(movement) => movement,
+        Err(error) => {
+            let outcome = match error.label() {
+                "nonFinitePosition" => NativeNavigationPathOutcome::NonFinitePosition,
+                _ => NativeNavigationPathOutcome::InvalidStep,
+            };
+            return (navigation_step_failure(navigation, outcome), Vec::new());
+        }
+    };
+    let path_len = u32::try_from(path.path.len()).unwrap_or(u32::MAX);
+    (
+        NativeNavigationStepReceipt {
             outcome: NativeNavigationPathOutcome::Reached,
             next_waypoint: native_vec3(movement.next_waypoint),
             next_path_cell: native_nav_cell(next_cell),
             reached: u32::from(next_cell == goal && movement.reached),
             visited: path.visited as u32,
-            path_len: navigation.last_path.len() as u32,
+            path_len,
             navigation_revision: navigation.revision,
             projection_hash: navigation.projection.projection_hash(),
             path_hash: path.path_hash,
-        })
-    }
+        },
+        path.path,
+    )
+}
 
+impl RuntimeSpatialBridge {
     fn propose_character(
         &mut self,
         request: NativeCharacterStepRequest,
@@ -3368,6 +3395,24 @@ unsafe extern "C" fn propose_navigation_step(
     }
 }
 
+unsafe extern "C" fn evaluate_navigation_step(
+    context: *mut c_void,
+    request: NativeNavigationStepRequest,
+    receipt: *mut NativeNavigationStepReceipt,
+) -> i32 {
+    if context.is_null() || receipt.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.evaluate_navigation(request) {
+        Ok(value) => {
+            unsafe { *receipt = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
 unsafe extern "C" fn read_projection(
     context: *mut c_void,
     request: NativeSpatialProjectionReadRequest,
@@ -3644,6 +3689,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         read_character_contact_at,
         read_character_dynamic_impulse_at,
         propose_navigation_step,
+        evaluate_navigation_step,
         read_projection,
         contains_point,
         cast_ray,
@@ -3992,10 +4038,9 @@ fn volumetric_config(value: NativeNavigationVolumetricConfig) -> VolumetricNavCo
 }
 
 fn navigation_step_failure(
-    navigation: &mut NavigationState,
+    navigation: &NavigationState,
     outcome: NativeNavigationPathOutcome,
 ) -> NativeNavigationStepReceipt {
-    navigation.last_path.clear();
     NativeNavigationStepReceipt {
         outcome,
         navigation_revision: navigation.revision,
@@ -4493,6 +4538,287 @@ mod tests {
             ABI_OK
         );
         session
+    }
+
+    fn replace_navigation(
+        api: &NativeSpatialApi,
+        session: NativeSpatialSessionHandle,
+        cells: &[NativePlanarNavCell],
+    ) {
+        let mut receipt = NativeNavigationReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.replace_navigation)(
+                    api.context,
+                    &NativeNavigationReplaceRequest {
+                        session,
+                        config: NativePlanarNavConfig {
+                            grid_id: 1,
+                            cell_size: 1.0,
+                            chunk_size: 8,
+                            max_step_cells: 1,
+                        },
+                        cells: cells.as_ptr(),
+                        cells_len: cells.len(),
+                    },
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+    }
+
+    fn navigation_step_request(
+        session: NativeSpatialSessionHandle,
+        max_visited: u32,
+    ) -> NativeNavigationStepRequest {
+        NativeNavigationStepRequest {
+            session,
+            from: NativeVec3 {
+                x: 0.5,
+                y: 0.5,
+                z: 0.5,
+            },
+            target: NativeVec3 {
+                x: 2.5,
+                y: 0.5,
+                z: 0.5,
+            },
+            max_step_units: 0.5,
+            max_visited,
+        }
+    }
+
+    fn navigation_state_fingerprint(
+        bridge: &RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+    ) -> (u64, u64, u64, u64, u64, u64, Vec<VoxelCoord>) {
+        let session = bridge.sessions.get(&session.value).expect("live session");
+        let navigation = session.navigation.as_ref().expect("installed navigation");
+        (
+            session.navigation_revision,
+            navigation.revision,
+            navigation.projection.projection_hash(),
+            navigation.traversal.overlay_hash(),
+            navigation.volumetric_traversal.overlay_hash(),
+            session.scene.static_mesh_collision_revision(),
+            navigation.last_path.clone(),
+        )
+    }
+
+    #[test]
+    fn evaluate_navigation_step_returns_typed_facts_without_retained_state_mutation() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let cells = [
+            NativePlanarNavCell { x: 0, y: 0, z: 0 },
+            NativePlanarNavCell { x: 1, y: 0, z: 0 },
+            NativePlanarNavCell { x: 2, y: 0, z: 0 },
+        ];
+        replace_navigation(&api, session, &cells);
+
+        let mut proposal = NativeNavigationStepReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.propose_navigation_step)(
+                    api.context,
+                    navigation_step_request(session, 32),
+                    &mut proposal,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(proposal.outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(proposal.path_len, 3);
+        let retained = navigation_state_fingerprint(&bridge, session);
+        assert_eq!(
+            retained.6.len(),
+            3,
+            "proposal establishes the path sentinel"
+        );
+
+        let assert_unchanged =
+            |receipt: NativeNavigationStepReceipt, expected: NativeNavigationPathOutcome| {
+                assert_eq!(receipt.outcome, expected);
+                assert_eq!(navigation_state_fingerprint(&bridge, session), retained);
+            };
+
+        let mut receipt = NativeNavigationStepReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    navigation_step_request(session, 32),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_unchanged(receipt, NativeNavigationPathOutcome::Reached);
+
+        let mut non_finite = navigation_step_request(session, 32);
+        non_finite.from.x = f32::NAN;
+        assert_eq!(
+            unsafe { (api.evaluate_navigation_step)(api.context, non_finite, &mut receipt) },
+            ABI_OK
+        );
+        assert_unchanged(receipt, NativeNavigationPathOutcome::NonFinitePosition);
+
+        let mut invalid_step = navigation_step_request(session, 32);
+        invalid_step.max_step_units = 0.0;
+        assert_eq!(
+            unsafe { (api.evaluate_navigation_step)(api.context, invalid_step, &mut receipt) },
+            ABI_OK
+        );
+        assert_unchanged(receipt, NativeNavigationPathOutcome::InvalidStep);
+
+        assert_eq!(
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    navigation_step_request(session, 0),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_unchanged(receipt, NativeNavigationPathOutcome::InvalidQueryBudget);
+
+        assert_eq!(
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    navigation_step_request(session, 2),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_unchanged(receipt, NativeNavigationPathOutcome::Reached);
+
+        assert_eq!(
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    navigation_step_request(session, 1),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_unchanged(receipt, NativeNavigationPathOutcome::NoPath);
+
+        let invalid_session = NativeSpatialSessionHandle { value: u64::MAX };
+        assert_eq!(
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    navigation_step_request(invalid_session, 32),
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_eq!(navigation_state_fingerprint(&bridge, session), retained);
+    }
+
+    #[test]
+    fn evaluate_navigation_step_retains_a_path_sentinel_for_unreachable_and_missing_projection() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let cells = [
+            NativePlanarNavCell { x: 0, y: 0, z: 0 },
+            NativePlanarNavCell { x: 2, y: 0, z: 0 },
+        ];
+        replace_navigation(&api, session, &cells);
+        bridge
+            .sessions
+            .get_mut(&session.value)
+            .expect("live session")
+            .navigation
+            .as_mut()
+            .expect("installed navigation")
+            .last_path = vec![VoxelCoord::new(0, 0, 0), VoxelCoord::new(2, 0, 0)];
+        let retained = navigation_state_fingerprint(&bridge, session);
+
+        let mut receipt = NativeNavigationStepReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    navigation_step_request(session, 32),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.outcome, NativeNavigationPathOutcome::NoPath);
+        assert_eq!(navigation_state_fingerprint(&bridge, session), retained);
+
+        let no_navigation = create_session(&api);
+        let no_navigation_revision = bridge
+            .sessions
+            .get(&no_navigation.value)
+            .expect("live session")
+            .navigation_revision;
+        assert_eq!(
+            unsafe {
+                (api.evaluate_navigation_step)(
+                    api.context,
+                    navigation_step_request(no_navigation, 32),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            receipt.outcome,
+            NativeNavigationPathOutcome::ProjectionUnavailable
+        );
+        let missing = bridge
+            .sessions
+            .get(&no_navigation.value)
+            .expect("live session");
+        assert!(missing.navigation.is_none());
+        assert_eq!(missing.navigation_revision, no_navigation_revision);
+    }
+
+    #[test]
+    fn propose_navigation_step_still_updates_the_retained_path() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let api = api(&mut bridge);
+        let session = create_session(&api);
+        let cells = [
+            NativePlanarNavCell { x: 0, y: 0, z: 0 },
+            NativePlanarNavCell { x: 1, y: 0, z: 0 },
+            NativePlanarNavCell { x: 2, y: 0, z: 0 },
+        ];
+        replace_navigation(&api, session, &cells);
+
+        let mut receipt = NativeNavigationStepReceipt::default();
+        assert_eq!(
+            unsafe {
+                (api.propose_navigation_step)(
+                    api.context,
+                    navigation_step_request(session, 32),
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(navigation_state_fingerprint(&bridge, session).6.len(), 3);
+
+        let mut invalid_step = navigation_step_request(session, 32);
+        invalid_step.max_step_units = 0.0;
+        assert_eq!(
+            unsafe { (api.propose_navigation_step)(api.context, invalid_step, &mut receipt) },
+            ABI_OK
+        );
+        assert_eq!(receipt.outcome, NativeNavigationPathOutcome::InvalidStep);
+        assert!(navigation_state_fingerprint(&bridge, session).6.is_empty());
     }
 
     #[test]
