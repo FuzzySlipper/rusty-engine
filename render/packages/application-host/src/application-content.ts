@@ -235,9 +235,8 @@ export function prepareRustyApplicationContent(
 
 export function rustyApplicationAudioResourceResolver(
   content: PreparedRustyApplicationContent,
-): RendererAudioResourceResolver | null {
+): RendererAudioResourceResolver {
   const audio = content.resources.filter((resource) => resource.kind === 'audio');
-  if (audio.length === 0) return null;
   const entries = new Map(audio.map((resource) => [resource.contentHash, resource]));
   return (clip) => {
     const entry = entries.get(clip.contentHash);

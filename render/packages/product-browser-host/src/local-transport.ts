@@ -173,15 +173,15 @@ export type ProductBrowserLocalFetch = (
 /** Minimal EventSource shape kept injectable for deterministic headless tests. */
 export interface ProductBrowserLocalEventSource {
   onopen: ((event: unknown) => void) | null;
-  onmessage: ((event: { readonly data: string }) => void) | null;
+  onmessage: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null;
   onerror: ((event: unknown) => void) | null;
   readonly addEventListener?: (
     type: 'rusty-output-lag' | 'rusty-output-fragment',
-    listener: (event: { readonly data: string }) => void,
+    listener: (event: { readonly data: string; readonly lastEventId: string }) => void,
   ) => void;
   readonly removeEventListener?: (
     type: 'rusty-output-lag' | 'rusty-output-fragment',
-    listener: (event: { readonly data: string }) => void,
+    listener: (event: { readonly data: string; readonly lastEventId: string }) => void,
   ) => void;
   readonly close: () => void;
 }
@@ -261,13 +261,18 @@ export function createProductBrowserLocalHttpAdapter(
   );
   let disposed = false;
   let stream: ProductBrowserLocalEventSource | null = null;
-  let streamLagListener: ((event: { readonly data: string }) => void) | null = null;
-  let streamFragmentListener: ((event: { readonly data: string }) => void) | null = null;
+  let streamLagListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
+  let streamFragmentListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
   let pendingFragment: PendingOutputFragment | null = null;
   let currentOutputBinding: RustyApplicationRuntimeIdentity | null = null;
   let outputSubscriptionReady: Promise<void> | null = null;
   let resolveOutputSubscriptionReady: (() => void) | null = null;
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
+  let observedOutputSequence = 0n;
+  const outputSequenceWaiters = new Set<{
+    readonly through: bigint;
+    readonly resolve: () => void;
+  }>();
   const listeners = new Set<(output: ProductBrowserRuntimeOutput) => void>();
   const terminalFailureListeners = new Set<ProductBrowserRuntimeTerminalFailureListener>();
   const abortController = new AbortController();
@@ -298,6 +303,57 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
+  const wakeOutputSequenceWaiters = (): void => {
+    for (const waiter of [...outputSequenceWaiters]) {
+      outputSequenceWaiters.delete(waiter);
+      waiter.resolve();
+    }
+  };
+
+  const settleOutputSequenceWaiters = (): void => {
+    for (const waiter of [...outputSequenceWaiters]) {
+      if (waiter.through > observedOutputSequence) continue;
+      outputSequenceWaiters.delete(waiter);
+      waiter.resolve();
+    }
+  };
+
+  const observeOutputSequence = (value: string): void => {
+    const sequence = decodeOutputSequence(value, 'output event id', 'output_decode_failed');
+    if (sequence <= observedOutputSequence) {
+      throw new ProductBrowserLocalTransportError(
+        'output_decode_failed',
+        'Product Browser local runtime output event ids must be strictly increasing',
+        { route: ROUTES.outputs },
+      );
+    }
+    observedOutputSequence = sequence;
+    settleOutputSequenceWaiters();
+  };
+
+  const waitUntilOutputSequence = async (through: bigint): Promise<void> => {
+    if (through <= observedOutputSequence) return;
+    ensureOpen();
+    if (stream === null) {
+      throw new ProductBrowserLocalTransportError(
+        'stream_failed',
+        'Product Browser local runtime response named output that cannot be observed without an active subscription',
+        { route: ROUTES.outputs },
+      );
+    }
+    await new Promise<void>((resolve) => {
+      outputSequenceWaiters.add({ through, resolve });
+    });
+    ensureOpen();
+    if (through > observedOutputSequence) {
+      throw new ProductBrowserLocalTransportError(
+        'stream_failed',
+        'Product Browser local runtime output subscription closed before the response boundary was observed',
+        { route: ROUTES.outputs },
+      );
+    }
+  };
+
   const reportTerminalFailure = (
     failure: ProductBrowserRuntimeTerminalFailure,
     error: ProductBrowserLocalTransportError,
@@ -317,6 +373,7 @@ export function createProductBrowserLocalHttpAdapter(
       stream = null;
     }
     pendingFragment = null;
+    wakeOutputSequenceWaiters();
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
     outputSubscriptionReady = null;
@@ -383,9 +440,10 @@ export function createProductBrowserLocalHttpAdapter(
         { cause, route },
       );
     }
+    let decoded: T;
     try {
       ensureOpen();
-      return decode(value);
+      decoded = decode(value);
     } catch (cause) {
       if (cause instanceof ProductBrowserLocalTransportError) throw cause;
       throw new ProductBrowserLocalTransportError(
@@ -394,6 +452,17 @@ export function createProductBrowserLocalHttpAdapter(
         { cause, route },
       );
     }
+    const outputThroughHeader = response.headers.get('x-rusty-output-through');
+    if (outputThroughHeader !== null) {
+      const outputThrough = decodeOutputSequence(
+        outputThroughHeader,
+        'X-Rusty-Output-Through response header',
+        'response_decode_failed',
+        route,
+      );
+      await waitUntilOutputSequence(outputThrough);
+    }
+    return decoded;
   };
 
   const lifecycle = (operation: ProductBrowserLifecycleOperation): Promise<ProductBrowserRuntimeOperationResult> =>
@@ -576,6 +645,7 @@ export function createProductBrowserLocalHttpAdapter(
               pendingFragment = null;
               publishOutput(decodeRuntimeOutput(parseBoundedJson(encoded, maximumOutputBytes)));
             }
+            observeOutputSequence(event.lastEventId);
           } catch (cause) {
             failFragmentStream(cause);
           }
@@ -595,6 +665,7 @@ export function createProductBrowserLocalHttpAdapter(
               event.data,
               Math.min(maximumOutputBytes, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
             )));
+            observeOutputSequence(event.lastEventId);
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
               ? cause
@@ -603,8 +674,7 @@ export function createProductBrowserLocalHttpAdapter(
                 `Product Browser local runtime emitted an invalid output: ${cause instanceof Error ? cause.message : String(cause)}`,
                 { cause, route: ROUTES.outputs },
               );
-            if (pendingFragment !== null) failFragmentStream(error);
-            else reportTransportError(error);
+            failFragmentStream(error);
           }
         };
         stream.onerror = (event) => {
@@ -625,6 +695,7 @@ export function createProductBrowserLocalHttpAdapter(
         streamLagListener = null;
         streamFragmentListener = null;
         pendingFragment = null;
+        wakeOutputSequenceWaiters();
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
         outputSubscriptionReady = null;
@@ -652,6 +723,7 @@ export function createProductBrowserLocalHttpAdapter(
         stream?.close();
         stream = null;
         pendingFragment = null;
+        wakeOutputSequenceWaiters();
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
         outputSubscriptionReady = null;
@@ -717,6 +789,7 @@ export function createProductBrowserLocalHttpAdapter(
     stream?.close();
     stream = null;
     pendingFragment = null;
+    wakeOutputSequenceWaiters();
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
     outputSubscriptionReady = null;
@@ -785,6 +858,23 @@ function validateMaximumBytes(value: number, name: string, maximum = MAXIMUM_CON
     );
   }
   return value;
+}
+
+function decodeOutputSequence(
+  value: string,
+  name: string,
+  code: 'response_decode_failed' | 'output_decode_failed',
+  route: string = ROUTES.outputs,
+): bigint {
+  if (!/^(?:0|[1-9]\d{0,19})$/u.test(value)
+    || (value.length === UINT64_MAX_DECIMAL.length && value > UINT64_MAX_DECIMAL)) {
+    throw new ProductBrowserLocalTransportError(
+      code,
+      `${name} must be canonical unsigned 64-bit decimal text`,
+      { route },
+    );
+  }
+  return BigInt(value);
 }
 
 function requireU64Text(value: unknown, name: string): string {

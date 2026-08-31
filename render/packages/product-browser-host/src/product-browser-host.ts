@@ -340,6 +340,113 @@ export interface ProductBrowserHostOptions {
   readonly autoStart?: boolean;
 }
 
+const PRODUCT_BROWSER_INITIAL_RENDERER_FRAME_TIMEOUT_MS = 10_000;
+
+/** @internal Reports whether admitted animation bytes still need their first semantic frame. */
+export function productBrowserInitialRendererFrameRequired(
+  renderer: ProductBrowserHostOptions['renderer'],
+): boolean {
+  const content = renderer?.initialContent;
+  if (content === undefined || !Array.isArray(content.resources)) return false;
+  const hasAnimationPreload = content.resources.some((resource) =>
+    /^(animated-mesh|clip-pack)-resource\//u.test(resource.identity));
+  if (!hasAnimationPreload || !Array.isArray(content.frame['ops'])) return false;
+  return !content.frame['ops'].some((operation) => typeof operation === 'object'
+    && operation !== null
+    && (operation as { readonly op?: unknown }).op === 'defineAnimatedMesh');
+}
+
+/** @internal Binds admitted preload bytes to one retained frame without mutating caller state. */
+export function bindProductBrowserInitialRendererFrame(
+  renderer: NonNullable<ProductBrowserHostOptions['renderer']>,
+  frame: RustyApplicationFrame,
+): NonNullable<ProductBrowserHostOptions['renderer']> {
+  if (renderer.initialContent === undefined) {
+    throw new ProductBrowserHostError(
+      'invalid_options',
+      'initial renderer frame binding requires admitted initial content',
+    );
+  }
+  return Object.freeze({
+    ...renderer,
+    initialContent: Object.freeze({
+      ...renderer.initialContent,
+      frame,
+    }),
+  });
+}
+
+/** @internal Folds only the pre-publication retained diffs into the mount frame. */
+export function prepareProductBrowserInitialRendererBaseline(
+  outputs: readonly ProductBrowserRuntimeOutput[],
+  requiredFrame: RustyApplicationFrame,
+): {
+  readonly frame: RustyApplicationFrame;
+  readonly remainingOutputs: readonly ProductBrowserRuntimeOutput[];
+} {
+  const firstPublishedFrameIndex = outputs.findIndex((output) => output.kind === 'frame'
+    && output.frame['publication'] !== undefined);
+  const seedLimit = firstPublishedFrameIndex < 0 ? outputs.length : firstPublishedFrameIndex;
+  const seedIndexes = new Set<number>();
+  const seedFrames: RustyApplicationFrame[] = [];
+  for (let index = 0; index < seedLimit; index += 1) {
+    const output = outputs[index];
+    if (output?.kind !== 'frame') continue;
+    seedIndexes.add(index);
+    seedFrames.push(output.frame);
+  }
+  if (!seedFrames.some((frame) => frame === requiredFrame)) {
+    throw new ProductBrowserHostError(
+      'startup_failed',
+      'initial retained renderer frame was not preserved before published frame diffs',
+    );
+  }
+  const seedOps = seedFrames.flatMap((frame) => [...(frame['ops'] as readonly unknown[])]);
+  const seededDefinitions = new Set(seedOps.flatMap((operation) => {
+    const signature = retainedDefinitionSignature(operation);
+    return signature === null ? [] : [signature];
+  }));
+  const frame = Object.freeze({
+    schemaVersion: 1,
+    ops: Object.freeze(seedOps),
+  }) as RustyApplicationFrame;
+  const remainingOutputs = outputs.flatMap((output, index): ProductBrowserRuntimeOutput[] => {
+    if (seedIndexes.has(index)) return [];
+    if (output.kind !== 'frame') return [output];
+    const originalOps = output.frame['ops'] as readonly unknown[];
+    const ops = originalOps.filter((operation) => {
+      const signature = retainedDefinitionSignature(operation);
+      return signature === null || !seededDefinitions.has(signature);
+    });
+    if (ops.length === originalOps.length) return [output];
+    const publication = output.frame['publication'];
+    return [{
+      ...output,
+      frame: Object.freeze({
+        ...output.frame,
+        ops: Object.freeze(ops),
+        ...(typeof publication === 'object' && publication !== null
+          ? {
+              publication: Object.freeze({
+                ...publication,
+                operationCount: ops.length,
+              }),
+            }
+          : {}),
+      }),
+    }];
+  });
+  return Object.freeze({ frame, remainingOutputs: Object.freeze(remainingOutputs) });
+}
+
+function retainedDefinitionSignature(operation: unknown): string | null {
+  if (typeof operation !== 'object' || operation === null) return null;
+  const kind = (operation as { readonly op?: unknown }).op;
+  return typeof kind === 'string' && kind.startsWith('define')
+    ? JSON.stringify(operation)
+    : null;
+}
+
 export interface ProductBrowserUiProjectionOptions {
   readonly expectedStream?: string;
   readonly expectedContract: string;
@@ -597,6 +704,49 @@ export async function mountProductBrowserHost(
   let rendererOutputTail: Promise<void> = Promise.resolve();
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
   const maximumPendingOutputs = 64;
+  const requiresInitialRendererFrame = productBrowserInitialRendererFrameRequired(options.renderer);
+  let initialRendererFrameGate: Promise<
+    | { readonly accepted: true; readonly frame: RustyApplicationFrame }
+    | { readonly accepted: false; readonly error: ProductBrowserHostError }
+  > | null = null;
+  let settleInitialRendererFrame: ((result:
+    | { readonly accepted: true; readonly frame: RustyApplicationFrame }
+    | { readonly accepted: false; readonly error: ProductBrowserHostError }
+  ) => void) | null = null;
+  let initialRendererFrameTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  if (requiresInitialRendererFrame) {
+    if (options.autoStart === false) {
+      throw new ProductBrowserHostError(
+        'invalid_options',
+        'animation preloads without initial definitions require automatic runtime start',
+      );
+    }
+    initialRendererFrameGate = new Promise((resolve) => {
+      settleInitialRendererFrame = resolve;
+    });
+    initialRendererFrameTimeout = setTimeout(() => {
+      const settle = settleInitialRendererFrame;
+      settleInitialRendererFrame = null;
+      initialRendererFrameTimeout = null;
+      settle?.({
+        accepted: false,
+        error: new ProductBrowserHostError(
+          'startup_failed',
+          'runtime did not publish an initial retained frame for admitted animation resources',
+        ),
+      });
+    }, PRODUCT_BROWSER_INITIAL_RENDERER_FRAME_TIMEOUT_MS);
+  }
+
+  const settleInitialRendererFrameFailure = (error: ProductBrowserHostError): void => {
+    if (settleInitialRendererFrame === null) return;
+    if (initialRendererFrameTimeout !== null) clearTimeout(initialRendererFrameTimeout);
+    initialRendererFrameTimeout = null;
+    const settle = settleInitialRendererFrame;
+    settleInitialRendererFrame = null;
+    settle({ accepted: false, error });
+  };
 
   // These are deliberately small, product-neutral observation markers. They
   // let an outer host prove that a mounted runtime is still making accepted
@@ -671,6 +821,7 @@ export async function mountProductBrowserHost(
     code: ProductBrowserHostError['code'],
   ): ProductBrowserHostError => {
     const error = reportFailure(cause, code);
+    settleInitialRendererFrameFailure(error);
     closeTransport();
     return error;
   };
@@ -714,6 +865,13 @@ export async function mountProductBrowserHost(
         return;
       }
       pendingOutputs.push(output);
+      if (output.kind === 'frame' && settleInitialRendererFrame !== null) {
+        if (initialRendererFrameTimeout !== null) clearTimeout(initialRendererFrameTimeout);
+        initialRendererFrameTimeout = null;
+        const settle = settleInitialRendererFrame;
+        settleInitialRendererFrame = null;
+        settle({ accepted: true, frame: output.frame });
+      }
       return;
     }
     if (state === 'failed' || state === 'disposed') return;
@@ -917,6 +1075,31 @@ export async function mountProductBrowserHost(
   try {
     unsubscribeTerminalFailures = transport.subscribeTerminalFailures?.(applyTerminalFailure) ?? null;
     unsubscribeOutputs = transport.subscribeOutputs(applyOutput);
+    let renderer = options.renderer;
+    let runtimeStartedBeforeMount = false;
+    if (requiresInitialRendererFrame) {
+      await transport.waitUntilOutputSubscriptionReady?.();
+      if (failure !== null) throw failure;
+      const result = await queue.enqueue(() => transport.lifecycle({ kind: 'start' }));
+      applyOperationResult(result, 'startup_failed');
+      if (failure !== null) throw failure;
+      const initialFrameGate = initialRendererFrameGate;
+      if (initialFrameGate === null) {
+        throw new ProductBrowserHostError('startup_failed', 'initial renderer frame gate was unavailable');
+      }
+      const initialFrameResult = await initialFrameGate;
+      if (initialFrameResult.accepted === false) throw initialFrameResult.error;
+      const baseline = prepareProductBrowserInitialRendererBaseline(
+        pendingOutputs,
+        initialFrameResult.frame,
+      );
+      pendingOutputs.splice(0, pendingOutputs.length, ...baseline.remainingOutputs);
+      renderer = bindProductBrowserInitialRendererFrame(
+        options.renderer as NonNullable<ProductBrowserHostOptions['renderer']>,
+        baseline.frame,
+      );
+      runtimeStartedBeforeMount = true;
+    }
     application = await mountRustyApplication({
       root: options.root,
       mountUi: options.mountUi,
@@ -930,7 +1113,7 @@ export async function mountProductBrowserHost(
       ...(options.failureLabel === undefined ? {} : { failureLabel: options.failureLabel }),
       ...(runtimeInput === undefined ? {} : { runtimeInput }),
       ...(projection === undefined ? {} : { uiProjection: projection }),
-      ...(options.renderer === undefined
+      ...(renderer === undefined
         ? {
             renderer: {
               onCadence: (timeMs) => cadence?.enqueue(timeMs),
@@ -938,7 +1121,7 @@ export async function mountProductBrowserHost(
           }
         : {
             renderer: {
-              ...options.renderer,
+              ...renderer,
               onCadence: (timeMs) => cadence?.enqueue(timeMs),
             },
           }),
@@ -961,7 +1144,7 @@ export async function mountProductBrowserHost(
     for (const output of bufferedOutputs) applyOutput(output);
     await rendererOutputTail;
     if (failure !== null) throw failure;
-    if (options.autoStart !== false) {
+    if (options.autoStart !== false && !runtimeStartedBeforeMount) {
       await transport.waitUntilOutputSubscriptionReady?.();
       if (failure !== null) throw failure;
       const result = await queue.enqueue(() => transport.lifecycle({ kind: 'start' }));
@@ -977,6 +1160,7 @@ export async function mountProductBrowserHost(
     // lifecycle response is still in flight. Preserve that first concrete
     // failure instead of replacing it with the resulting aborted fetch.
     const error = failure ?? reportFailure(cause, 'startup_failed');
+    settleInitialRendererFrameFailure(error);
     unsubscribeTerminalFailures?.();
     unsubscribeTerminalFailures = null;
     unsubscribeOutputs?.();

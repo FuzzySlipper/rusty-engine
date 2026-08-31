@@ -13,13 +13,16 @@ export interface ProductBrowserLocalEventSource {
     onopen: ((event: unknown) => void) | null;
     onmessage: ((event: {
         readonly data: string;
+        readonly lastEventId: string;
     }) => void) | null;
     onerror: ((event: unknown) => void) | null;
     readonly addEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: {
         readonly data: string;
+        readonly lastEventId: string;
     }) => void) => void;
     readonly removeEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: {
         readonly data: string;
+        readonly lastEventId: string;
     }) => void) => void;
     readonly close: () => void;
 }

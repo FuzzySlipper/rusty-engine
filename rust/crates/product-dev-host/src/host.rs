@@ -364,10 +364,11 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
     };
     drop(runtime);
     let (catalog, outputs) = receipt.into_parts();
-    if let Err(error) = push_outputs(&state.outputs, outputs) {
-        return HttpResponse::error(503, error.code(), error.detail());
-    }
-    json_response(200, &catalog)
+    let output_through = match push_outputs(&state.outputs, outputs) {
+        Ok(output_through) => output_through,
+        Err(error) => return HttpResponse::error(503, error.code(), error.detail()),
+    };
+    json_response(200, &catalog).with_output_through(output_through)
 }
 
 fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
@@ -390,13 +391,17 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
     };
     drop(runtime);
     let (result, outputs) = receipt.into_parts();
-    if let Err(error) = push_outputs(&state.outputs, outputs) {
-        return debug_text_error(503, &format!("{}: {}", error.code(), error.detail()));
-    }
+    let output_through = match push_outputs(&state.outputs, outputs) {
+        Ok(output_through) => output_through,
+        Err(error) => {
+            return debug_text_error(503, &format!("{}: {}", error.code(), error.detail()))
+        }
+    };
     HttpResponse::text(
         if result.succeeded() { 200 } else { 422 },
         result.message().to_owned(),
     )
+    .with_output_through(output_through)
 }
 
 fn invoke_lifecycle<R: ProductDevRuntime>(
@@ -628,12 +633,13 @@ where
     };
     drop(runtime);
     let (result, outputs) = receipt.into_parts();
-    if let Err(error) = push_outputs(&state.outputs, outputs) {
-        return HttpResponse::error(503, error.code(), error.detail());
-    }
+    let output_through = match push_outputs(&state.outputs, outputs) {
+        Ok(output_through) => output_through,
+        Err(error) => return HttpResponse::error(503, error.code(), error.detail()),
+    };
     match serde_json::to_vec(&result) {
         Ok(bytes) if bytes.len() <= MAX_REQUEST_BODY_BYTES => {
-            HttpResponse::bytes(200, "application/json", bytes)
+            HttpResponse::bytes(200, "application/json", bytes).with_output_through(output_through)
         }
         Ok(_) => HttpResponse::error(
             500,
@@ -778,10 +784,7 @@ impl OutputBus {
 fn push_outputs(
     bus: &Mutex<OutputBus>,
     outputs: Vec<ProductDevRuntimeOutput>,
-) -> Result<(), ProductDevHostError> {
-    if outputs.is_empty() {
-        return Ok(());
-    }
+) -> Result<u64, ProductDevHostError> {
     let mut bus = bus.lock().map_err(|_| {
         ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
     })?;
@@ -829,7 +832,7 @@ fn push_outputs(
         let binding = bus.active_binding.expect("active binding was checked");
         append_output_events(&mut bus, binding, vec![output])?;
     }
-    Ok(())
+    Ok(bus.next_id)
 }
 
 fn append_output_events(
@@ -1254,6 +1257,7 @@ struct HttpResponse {
     status: u16,
     content_type: &'static str,
     body: Vec<u8>,
+    output_through: Option<u64>,
 }
 
 impl HttpResponse {
@@ -1262,7 +1266,13 @@ impl HttpResponse {
             status,
             content_type,
             body,
+            output_through: None,
         }
+    }
+
+    fn with_output_through(mut self, output_through: u64) -> Self {
+        self.output_through = Some(output_through);
+        self
     }
 
     fn text(status: u16, text: String) -> Self {
@@ -1309,6 +1319,9 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
     write!(stream, "HTTP/1.1 {} {}\r\n", response.status, reason)?;
     write!(stream, "Content-Type: {}\r\n", response.content_type)?;
     write!(stream, "Content-Length: {}\r\n", response.body.len())?;
+    if let Some(output_through) = response.output_through {
+        write!(stream, "X-Rusty-Output-Through: {output_through}\r\n")?;
+    }
     stream.write_all(
         b"Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
     )?;

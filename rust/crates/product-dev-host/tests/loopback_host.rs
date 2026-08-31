@@ -268,6 +268,7 @@ fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
         "POST /__rusty/product/runtime/lifecycle/start HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
     );
     assert!(start.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(start.contains("X-Rusty-Output-Through: 1\r\n"));
     assert!(start.contains("\"operation\":\"start\""));
     assert!(start.contains("\"instanceId\":\"7\""));
     assert!(start.contains("\"nextInputSequence\":\"0\""));

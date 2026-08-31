@@ -152,6 +152,17 @@ void test('application content admits bounded WAV resources and resolves immutab
   );
 });
 
+void test('audio resolver remains available for bus-only products without admitted clips', async () => {
+  const resolver = rustyApplicationAudioResourceResolver(prepareRustyApplicationContent({
+    frame: { schemaVersion: 1, ops: [] },
+    resources: [],
+  }));
+  await assert.rejects(
+    resolver({ asset: 'audio/missing', contentHash: `sha256:${'0'.repeat(64)}` }),
+    /audio resource audio\/missing .* is unavailable/u,
+  );
+});
+
 void test('application content rejects unsupported and undersized audio resources', () => {
   const bytes = new Uint8Array(44);
   const digest = createHash('sha256').update(bytes).digest('hex');

@@ -278,6 +278,15 @@ export interface ProductBrowserHostOptions {
     /** Start the Rust runtime after the Engine host has mounted. Defaults true. */
     readonly autoStart?: boolean;
 }
+/** @internal Reports whether admitted animation bytes still need their first semantic frame. */
+export declare function productBrowserInitialRendererFrameRequired(renderer: ProductBrowserHostOptions['renderer']): boolean;
+/** @internal Binds admitted preload bytes to one retained frame without mutating caller state. */
+export declare function bindProductBrowserInitialRendererFrame(renderer: NonNullable<ProductBrowserHostOptions['renderer']>, frame: RustyApplicationFrame): NonNullable<ProductBrowserHostOptions['renderer']>;
+/** @internal Folds only the pre-publication retained diffs into the mount frame. */
+export declare function prepareProductBrowserInitialRendererBaseline(outputs: readonly ProductBrowserRuntimeOutput[], requiredFrame: RustyApplicationFrame): {
+    readonly frame: RustyApplicationFrame;
+    readonly remainingOutputs: readonly ProductBrowserRuntimeOutput[];
+};
 export interface ProductBrowserUiProjectionOptions {
     readonly expectedStream?: string;
     readonly expectedContract: string;

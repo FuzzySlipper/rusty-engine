@@ -25,12 +25,13 @@ const READOUT = {
 
 class FakeEventSource implements ProductBrowserLocalEventSource {
   static readonly instances: FakeEventSource[] = [];
-  readonly namedListeners = new Map<string, (event: { readonly data: string }) => void>();
+  readonly namedListeners = new Map<string, (event: { readonly data: string; readonly lastEventId: string }) => void>();
   readonly url: string;
   onopen: ((event: unknown) => void) | null = null;
-  onmessage: ((event: { readonly data: string }) => void) | null = null;
+  onmessage: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
   closed = false;
+  nextEventId = 1;
 
   constructor(url: string) {
     this.url = url;
@@ -41,16 +42,16 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
     this.closed = true;
   }
 
-  addEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: { readonly data: string }) => void): void {
+  addEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
     this.namedListeners.set(type, listener);
   }
 
-  removeEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: { readonly data: string }) => void): void {
+  removeEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
     if (this.namedListeners.get(type) === listener) this.namedListeners.delete(type);
   }
 
-  emit(output: unknown): void {
-    this.onmessage?.({ data: JSON.stringify(output) });
+  emit(output: unknown, lastEventId = String(this.nextEventId++)): void {
+    this.onmessage?.({ data: JSON.stringify(output), lastEventId });
   }
 
   open(): void {
@@ -58,18 +59,21 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
   }
 
   emitLag(value: unknown = { code: 'DEV_HOST_OUTPUT_LAG' }): void {
-    this.namedListeners.get('rusty-output-lag')?.({ data: JSON.stringify(value) });
+    this.namedListeners.get('rusty-output-lag')?.({
+      data: JSON.stringify(value),
+      lastEventId: String(this.nextEventId++),
+    });
   }
 
-  emitFragment(value: unknown): void {
-    this.namedListeners.get('rusty-output-fragment')?.({ data: JSON.stringify(value) });
+  emitFragment(value: unknown, lastEventId = String(this.nextEventId++)): void {
+    this.namedListeners.get('rusty-output-fragment')?.({ data: JSON.stringify(value), lastEventId });
   }
 }
 
-function response(body: unknown, status = 200): Response {
+function response(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
   });
 }
 
@@ -246,6 +250,29 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     adapter.advanceRealtime('101'),
     (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'disposed',
   );
+});
+
+test('operation response waits for its exact retained-output cursor', async () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response(result('start'), 200, { 'x-rusty-output-through': '2' }),
+    eventSource: FakeEventSource,
+  });
+  const outputs: unknown[] = [];
+  adapter.subscribeOutputs((output) => outputs.push(output));
+  const operation = adapter.lifecycle({ kind: 'start' });
+  let settled = false;
+  void operation.then(() => { settled = true; });
+  await Promise.resolve();
+  const stream = FakeEventSource.instances[0]!;
+  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '1');
+  await Promise.resolve();
+  assert.equal(settled, false);
+  stream.emit({ kind: 'runtime-readout', readout: READOUT }, '2');
+  assert.equal((await operation).operation, 'start');
+  assert.equal(settled, true);
+  assert.equal(outputs.length, 2);
+  adapter.dispose();
 });
 
 test('large retained output fragments publish once after complete ordered reassembly', () => {

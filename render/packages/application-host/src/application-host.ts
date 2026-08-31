@@ -979,7 +979,7 @@ async function mountRustyApplicationWithEnvironment(
     canvas: HTMLCanvasElement,
     content: PreparedRustyApplicationContent,
   ): Promise<{
-    readonly audio: RendererAudioHost | null;
+    readonly audio: RendererAudioHost;
     readonly animation: RendererAnimationHost;
     readonly billboard: RendererBillboardHost;
     readonly particle: RendererParticleHost;
@@ -1015,9 +1015,10 @@ async function mountRustyApplicationWithEnvironment(
     const presentationUrls = new Set<string>();
     let particle: RendererParticleHost | null = null;
     try {
-      const audio = resolveAudio === null
-        ? null
-        : new RendererAudioHost({ resolveResource: resolveAudio });
+      // Bus controls are valid presentation operations even when a product has
+      // no admitted clips. Keep the Engine audio mechanism available and let
+      // its typed resolver reject only an actually missing clip request.
+      const audio = new RendererAudioHost({ resolveResource: resolveAudio });
       // The generic application host owns the renderer animation mechanism as
       // well as audio. Product Browser therefore observes only fixed typed
       // renderer facts, never a downstream animation substitute.
@@ -1059,7 +1060,7 @@ async function mountRustyApplicationWithEnvironment(
       });
       mounted.setPresentationHosts(new RendererPresentationHostSet({
         animation,
-        ...(audio === null ? {} : { audio }),
+        audio,
         billboard,
         particle,
       }));

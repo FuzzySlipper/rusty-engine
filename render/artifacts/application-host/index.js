@@ -26642,9 +26642,7 @@ function CT(e) {
 	});
 }
 function wT(e) {
-	let t = e.resources.filter((e) => e.kind === "audio");
-	if (t.length === 0) return null;
-	let n = new Map(t.map((e) => [e.contentHash, e]));
+	let t = e.resources.filter((e) => e.kind === "audio"), n = new Map(t.map((e) => [e.contentHash, e]));
 	return (e) => {
 		let t = n.get(e.contentHash);
 		return t === void 0 ? Promise.reject(/* @__PURE__ */ Error(`audio resource ${e.asset} (${e.contentHash}) is unavailable`)) : Promise.resolve({
@@ -27560,7 +27558,7 @@ async function rD(e, t) {
 			...e.renderer?.onCadence === void 0 ? {} : { onAnimationFrame: e.renderer.onCadence }
 		}), a = wT(r), o = /* @__PURE__ */ new Set(), s = null;
 		try {
-			let t = a === null ? null : new zC({ resolveResource: a }), n = new EC(i.animationProjection), l = new Map(r.resources.map((e) => [e.identity, e])), u = new Map(r.resources.map((e) => [e.contentHash, e])), d = new ow({
+			let t = new zC({ resolveResource: a }), n = new EC(i.animationProjection), l = new Map(r.resources.map((e) => [e.identity, e])), u = new Map(r.resources.map((e) => [e.contentHash, e])), d = new ow({
 				container: c.indicators,
 				projectWorld: (e) => ({
 					...i.projectWorldPoint(e),
@@ -27593,7 +27591,7 @@ async function rD(e, t) {
 				sink: i.createParticleSink()
 			}), i.setPresentationHosts(new wS({
 				animation: n,
-				...t === null ? {} : { audio: t },
+				audio: t,
 				billboard: d,
 				particle: s
 			})), {

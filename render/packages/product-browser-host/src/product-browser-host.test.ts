@@ -3,14 +3,23 @@ import test from 'node:test';
 import {
   ProductBrowserHostError,
   PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE,
+  bindProductBrowserInitialRendererFrame,
   createProductBrowserAudioFeedbackReporter,
   createProductBrowserRuntimeTransport,
   flushProductBrowserAudioFeedbackBeforeUpdate,
+  productBrowserInitialRendererFrameRequired,
+  prepareProductBrowserInitialRendererBaseline,
   productBrowserBundleAssets,
   productBrowserBundleDescriptor,
 } from './product-browser-host.js';
-import type { ProductBrowserRuntimeAdapter } from './product-browser-host.js';
-import type { RustyApplicationRuntimeInputEnvelope } from '@rusty-engine/application-host';
+import type {
+  ProductBrowserRuntimeAdapter,
+  ProductBrowserRuntimeOutput,
+} from './product-browser-host.js';
+import type {
+  RustyApplicationFrame,
+  RustyApplicationRuntimeInputEnvelope,
+} from '@rusty-engine/application-host';
 import { createProductBrowserCadence } from './realtime-cadence.js';
 
 const AUDIO_RUNTIME = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
@@ -46,6 +55,78 @@ test('fixed runtime transport preserves only named operations', async () => {
   assert.equal((await transport.input([])).count, 0);
   assert.equal((await transport.advanceRealtime('1000000')).operation, 'advance-realtime');
   assert.equal('call' in transport, false);
+});
+
+test('animation preloads bind to the first retained frame without replacing admitted bytes', () => {
+  const digest = 'a'.repeat(64);
+  const resources = Object.freeze([{
+    identity: `animated-mesh-resource/${digest}`,
+    contentHash: `sha256:${digest}`,
+    mediaType: 'model/gltf-binary',
+    bytes: new Uint8Array(20),
+  }]);
+  const renderer = {
+    initialContent: {
+      frame: { schemaVersion: 1, ops: [] },
+      resources,
+    },
+  } as const;
+  const retainedFrame = {
+    schemaVersion: 1,
+    ops: [{
+      op: 'defineAnimatedMesh',
+      asset: {
+        asset: 'mesh-animation/test', runtimeFormat: 'glb', contentHash: `sha256:${digest}`,
+        clips: [], defaultClip: null, materialSlots: [],
+        bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+      },
+    }],
+  } as unknown as RustyApplicationFrame;
+
+  assert.equal(productBrowserInitialRendererFrameRequired(renderer), true);
+  const bound = bindProductBrowserInitialRendererFrame(renderer, retainedFrame);
+  assert.equal(bound.initialContent?.frame, retainedFrame);
+  assert.equal(bound.initialContent?.resources, resources);
+  assert.notEqual(bound, renderer);
+  assert.equal(productBrowserInitialRendererFrameRequired(bound), false);
+  assert.equal(productBrowserInitialRendererFrameRequired({
+    initialContent: {
+      frame: { schemaVersion: 1, ops: [] },
+      resources: [{
+        ...resources[0]!,
+        identity: `texture-resource/${digest}`,
+        mediaType: 'image/png',
+      }],
+    },
+  }), false);
+});
+
+test('initial renderer baseline folds pre-publication diffs and removes only repeated definitions', () => {
+  const animatedDefinition = { op: 'defineAnimatedMesh', asset: { asset: 'mesh/test' } };
+  const animated = { schemaVersion: 1, ops: [animatedDefinition] } as unknown as RustyApplicationFrame;
+  const textureDefinition = { op: 'defineTexture', texture: { id: 'texture/test', version: 1 } };
+  const textures = { schemaVersion: 1, ops: [textureDefinition] } as unknown as RustyApplicationFrame;
+  const published = {
+    schemaVersion: 1,
+    publication: { stream: 'voxel:test', baseRevision: 0, revision: 1, operationCount: 2 },
+    ops: [textureDefinition, { op: 'create', handle: 1, node: {} }],
+  } as unknown as RustyApplicationFrame;
+  const outputs = [
+    { kind: 'frame', frame: animated },
+    { kind: 'frame', frame: textures },
+    { kind: 'frame', frame: published },
+  ] as readonly ProductBrowserRuntimeOutput[];
+
+  const baseline = prepareProductBrowserInitialRendererBaseline(outputs, animated);
+  assert.deepEqual(baseline.frame['ops'], [animatedDefinition, textureDefinition]);
+  assert.equal(baseline.remainingOutputs.length, 1);
+  const remaining = baseline.remainingOutputs[0];
+  assert.equal(remaining?.kind, 'frame');
+  if (remaining?.kind !== 'frame') throw new Error('expected retained frame');
+  assert.deepEqual(remaining.frame['ops'], [{ op: 'create', handle: 1, node: {} }]);
+  assert.deepEqual(remaining.frame['publication'], {
+    stream: 'voxel:test', baseRevision: 0, revision: 1, operationCount: 1,
+  });
 });
 
 test('audio feedback claims the initial owner, retries without loss, and acknowledges only the submitted range', async () => {
