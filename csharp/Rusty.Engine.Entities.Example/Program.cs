@@ -764,6 +764,12 @@ sealed class SpatialServiceFake : ISpatialService
             0);
     }
 
+    public SpatialTriggerLifecycleReceipt SetTriggerActive(SpatialTriggerSetActiveRequest request) =>
+        throw new NotSupportedException();
+
+    public SpatialTriggerRestoreReceipt RestoreTriggers(SpatialTriggerRestoreRequest request) =>
+        throw new NotSupportedException();
+
     public SpatialTriggerReadReceipt ReadTrigger(SpatialTriggerReadRequest arg0) => throw new NotSupportedException();
     public SpatialTriggerOverlapAtReceipt ReadTriggerOverlapAt(SpatialTriggerOverlapAtRequest arg0) => throw new NotSupportedException();
 

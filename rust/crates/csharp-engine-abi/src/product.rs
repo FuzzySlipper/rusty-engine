@@ -292,6 +292,18 @@ pub type NativeSpatialReconcileTriggers = unsafe extern "C" fn(
     *mut NativeSpatialTriggerReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSpatialSetTriggerActive = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpatialTriggerSetActiveRequest,
+    *mut NativeSpatialTriggerLifecycleReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSpatialRestoreTriggers = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpatialTriggerRestoreRequest,
+    *mut NativeSpatialTriggerRestoreReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeDestroySpatialOperationDiagnosticLease =
     unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeSpatialReadTrigger = unsafe extern "C" fn(
@@ -843,6 +855,8 @@ pub struct NativeSpatialApi {
     pub pick_voxel: NativeSpatialPickVoxel,
     pub register_trigger: NativeSpatialRegisterTrigger,
     pub reconcile_triggers: NativeSpatialReconcileTriggers,
+    pub set_trigger_active: NativeSpatialSetTriggerActive,
+    pub restore_triggers: NativeSpatialRestoreTriggers,
     pub destroy_operation_diagnostic_lease: NativeDestroySpatialOperationDiagnosticLease,
     pub read_trigger: NativeSpatialReadTrigger,
     pub read_trigger_overlap_at: NativeSpatialReadTriggerOverlapAt,

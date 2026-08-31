@@ -94,6 +94,19 @@ issue a separate stateful operation. `ProposeNavigationStep` remains the
 stateful path proposal and updates the retained path on success or clears it
 for its existing failure outcomes.
 
+Spatial trigger definitions remain registered for the session while their
+active state can change. `SetTriggerActive` is revision-guarded: deactivation
+removes current overlaps and publishes bounded exit facts, while reactivation
+publishes no synthetic enter—the next ordinary `ReconcileTriggers` observes
+real geometry and produces any new edge. `RestoreTriggers` accepts the complete
+active trigger ID set plus current projected colliders and replaces the active
+and overlap baseline without producing gameplay facts. Use `ReadTrigger` for
+the current active flag, revision, and overlap count, and consume facts only up
+to the count returned by the operation receipt. Unknown IDs, duplicate state
+changes, duplicate restore IDs, and stale revisions reject without changing
+the session. Disposing the Spatial session destroys the definitions, active
+set, overlaps, and fact history together.
+
 Use `Spatial.ReplaceContentArtifact` when offline conversion has already
 published the canonical collision/navigation JSON through Engine Content. The
 Engine resolves the retained `ContentReference`, validates and copies its

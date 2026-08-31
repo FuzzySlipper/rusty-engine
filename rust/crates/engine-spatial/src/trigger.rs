@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::trigger_geometry::live_aabb;
 
-pub const TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+pub const TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 pub const MAX_TRIGGER_DEFINITIONS: usize = 4_096;
 pub const MAX_ACTIVE_TRIGGER_OVERLAPS: usize = 1_000_000;
 const MAX_TRIGGER_READ_ITEMS: usize = 100_000;
@@ -139,6 +139,8 @@ pub enum TriggerVolumeDiagnosticCode {
     SnapshotVersion,
     SnapshotInvariant,
     QuotaExceeded,
+    StaleRevision,
+    DuplicateLifecycle,
     RevisionOverflow,
 }
 
@@ -158,6 +160,8 @@ impl TriggerVolumeDiagnosticCode {
             Self::SnapshotVersion => "trigger-snapshot-version",
             Self::SnapshotInvariant => "trigger-snapshot-invariant",
             Self::QuotaExceeded => "trigger-quota-exceeded",
+            Self::StaleRevision => "stale-trigger-revision",
+            Self::DuplicateLifecycle => "duplicate-trigger-lifecycle",
             Self::RevisionOverflow => "trigger-revision-overflow",
         }
     }
@@ -205,9 +209,30 @@ pub struct TriggerReconcileReceipt {
     pub diagnostics: Vec<TriggerVolumeDiagnostic>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerLifecycleReceipt {
+    pub trigger: EntityId,
+    pub active: bool,
+    pub revision_before: u64,
+    pub revision_after: u64,
+    pub removed_overlaps: Vec<TriggerOverlapPair>,
+    pub facts: Vec<TriggerOverlapFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerRestoreReceipt {
+    pub revision_before: u64,
+    pub revision_after: u64,
+    pub registered_count: usize,
+    pub active_count: usize,
+    pub active_overlaps: Vec<TriggerOverlapPair>,
+    pub diagnostics: Vec<TriggerVolumeDiagnostic>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TriggerVolumeSystem {
     definitions: BTreeMap<EntityId, KinematicTriggerDefinition>,
+    inactive_triggers: BTreeSet<EntityId>,
     active_overlaps: BTreeSet<TriggerOverlapPair>,
     revision: u64,
 }
@@ -260,8 +285,141 @@ impl TriggerVolumeSystem {
         self.active_overlaps.iter().copied()
     }
 
+    pub fn is_active(&self, trigger: EntityId) -> Result<bool, TriggerVolumeError> {
+        if !self.definitions.contains_key(&trigger) {
+            return Err(missing_definition(trigger));
+        }
+        Ok(!self.inactive_triggers.contains(&trigger))
+    }
+
+    pub fn active_trigger_count(&self) -> usize {
+        self.definitions.len() - self.inactive_triggers.len()
+    }
+
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub fn set_active(
+        &mut self,
+        trigger: EntityId,
+        expected_revision: u64,
+        active: bool,
+        tick: u64,
+    ) -> Result<TriggerLifecycleReceipt, TriggerVolumeError> {
+        self.require_revision(expected_revision)?;
+        let currently_active = self.is_active(trigger)?;
+        if currently_active == active {
+            return Err(TriggerVolumeError {
+                diagnostics: vec![diagnostic(
+                    TriggerVolumeDiagnosticCode::DuplicateLifecycle,
+                    Some(trigger),
+                    if active {
+                        "trigger is already active"
+                    } else {
+                        "trigger is already inactive"
+                    },
+                )],
+            });
+        }
+        let revision_before = self.revision;
+        let revision_after = next_revision(revision_before)?;
+        let removed_overlaps = if active {
+            self.inactive_triggers.remove(&trigger);
+            Vec::new()
+        } else {
+            self.inactive_triggers.insert(trigger);
+            let removed = overlaps_for(&self.active_overlaps, trigger);
+            for pair in &removed {
+                self.active_overlaps.remove(pair);
+            }
+            removed
+        };
+        let definition = &self.definitions[&trigger];
+        let facts = removed_overlaps
+            .iter()
+            .copied()
+            .map(|pair| TriggerOverlapFact {
+                kind: TriggerOverlapFactKind::Exit,
+                pair,
+                scope: definition.scope.clone(),
+                tags: definition.tags.clone(),
+                tick,
+                cause: TriggerReconcileCause::LifecycleChanged,
+            })
+            .collect();
+        self.revision = revision_after;
+        Ok(TriggerLifecycleReceipt {
+            trigger,
+            active,
+            revision_before,
+            revision_after,
+            removed_overlaps,
+            facts,
+        })
+    }
+
+    pub fn restore(
+        &mut self,
+        active_triggers: &[EntityId],
+        entities: &EntityState,
+        expected_revision: u64,
+    ) -> Result<TriggerRestoreReceipt, TriggerVolumeError> {
+        self.require_revision(expected_revision)?;
+        if active_triggers.len() > MAX_TRIGGER_DEFINITIONS {
+            return Err(TriggerVolumeError {
+                diagnostics: vec![diagnostic(
+                    TriggerVolumeDiagnosticCode::QuotaExceeded,
+                    None,
+                    format!("active trigger limit is {MAX_TRIGGER_DEFINITIONS}"),
+                )],
+            });
+        }
+        let active = active_triggers.iter().copied().collect::<BTreeSet<_>>();
+        if active.len() != active_triggers.len() {
+            return Err(TriggerVolumeError {
+                diagnostics: vec![diagnostic(
+                    TriggerVolumeDiagnosticCode::DuplicateLifecycle,
+                    None,
+                    "restore active trigger set contains a duplicate",
+                )],
+            });
+        }
+        if let Some(unknown) = active
+            .iter()
+            .find(|trigger| !self.definitions.contains_key(trigger))
+        {
+            return Err(missing_definition(*unknown));
+        }
+
+        let inactive_triggers = self
+            .definitions
+            .keys()
+            .copied()
+            .filter(|trigger| !active.contains(trigger))
+            .collect::<BTreeSet<_>>();
+        let mut candidate = self.clone();
+        candidate.inactive_triggers = inactive_triggers;
+        let (active_overlaps, diagnostics) = candidate.compute_overlaps(entities)?;
+        let changed = candidate.inactive_triggers != self.inactive_triggers
+            || active_overlaps != self.active_overlaps;
+        let revision_before = self.revision;
+        let revision_after = if changed {
+            next_revision(revision_before)?
+        } else {
+            revision_before
+        };
+        candidate.revision = revision_after;
+        candidate.active_overlaps = active_overlaps;
+        *self = candidate;
+        Ok(TriggerRestoreReceipt {
+            revision_before,
+            revision_after,
+            registered_count: self.definitions.len(),
+            active_count: self.active_trigger_count(),
+            active_overlaps: self.active_overlaps().collect(),
+            diagnostics,
+        })
     }
 
     pub fn reconcile(
@@ -287,15 +445,7 @@ impl TriggerVolumeSystem {
         let revision = if exits.is_empty() && enters.is_empty() {
             self.revision
         } else {
-            self.revision
-                .checked_add(1)
-                .ok_or_else(|| TriggerVolumeError {
-                    diagnostics: vec![diagnostic(
-                        TriggerVolumeDiagnosticCode::RevisionOverflow,
-                        None,
-                        "trigger overlap revision cannot advance",
-                    )],
-                })?
+            next_revision(self.revision)?
         };
         let mut facts = Vec::with_capacity(exits.len() + enters.len());
         for (kind, pairs) in [
@@ -371,6 +521,11 @@ impl TriggerVolumeSystem {
             schema_version: TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION,
             revision: self.revision,
             definitions: self.definitions.values().cloned().collect(),
+            inactive_triggers: self
+                .inactive_triggers
+                .iter()
+                .map(|value| value.raw())
+                .collect(),
             active_overlaps: self.active_overlaps().collect(),
         }
     }
@@ -379,7 +534,9 @@ impl TriggerVolumeSystem {
         snapshot: crate::TriggerVolumeSnapshot,
     ) -> Result<Self, TriggerVolumeError> {
         let mut diagnostics = Vec::new();
-        if snapshot.schema_version != TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION {
+        if snapshot.schema_version != 1
+            && snapshot.schema_version != TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION
+        {
             diagnostics.push(diagnostic(
                 TriggerVolumeDiagnosticCode::SnapshotVersion,
                 None,
@@ -440,11 +597,36 @@ impl TriggerVolumeSystem {
                 "overlaps must be sorted, unique, non-self, and reference definitions",
             ));
         }
+        let inactive_triggers = snapshot
+            .inactive_triggers
+            .iter()
+            .copied()
+            .map(EntityId::new)
+            .collect::<BTreeSet<_>>();
+        if inactive_triggers
+            .iter()
+            .map(|trigger| trigger.raw())
+            .collect::<Vec<_>>()
+            != snapshot.inactive_triggers
+            || inactive_triggers
+                .iter()
+                .any(|trigger| !definitions.contains_key(trigger))
+            || active_overlaps
+                .iter()
+                .any(|pair| inactive_triggers.contains(&pair.trigger_id()))
+        {
+            diagnostics.push(diagnostic(
+                TriggerVolumeDiagnosticCode::SnapshotInvariant,
+                None,
+                "inactive triggers must be sorted, unique, registered, and have no overlaps",
+            ));
+        }
         if !diagnostics.is_empty() {
             return Err(TriggerVolumeError { diagnostics });
         }
         Ok(Self {
             definitions,
+            inactive_triggers,
             active_overlaps,
             revision: snapshot.revision,
         })
@@ -460,6 +642,9 @@ impl TriggerVolumeSystem {
         let mut diagnostics = Vec::new();
         for definition in self.definitions.values() {
             let trigger = definition.trigger_id();
+            if self.inactive_triggers.contains(&trigger) {
+                continue;
+            }
             let Some(trigger_bounds) = live_aabb(
                 entities,
                 trigger,
@@ -505,6 +690,55 @@ impl TriggerVolumeSystem {
         diagnostics.dedup();
         Ok((next, diagnostics))
     }
+
+    fn require_revision(&self, expected_revision: u64) -> Result<(), TriggerVolumeError> {
+        if self.revision == expected_revision {
+            return Ok(());
+        }
+        Err(TriggerVolumeError {
+            diagnostics: vec![diagnostic(
+                TriggerVolumeDiagnosticCode::StaleRevision,
+                None,
+                format!(
+                    "expected trigger revision {expected_revision}, actual {}",
+                    self.revision
+                ),
+            )],
+        })
+    }
+}
+
+fn missing_definition(trigger: EntityId) -> TriggerVolumeError {
+    TriggerVolumeError {
+        diagnostics: vec![diagnostic(
+            TriggerVolumeDiagnosticCode::MissingDefinition,
+            Some(trigger),
+            "trigger definition is not registered",
+        )],
+    }
+}
+
+fn next_revision(revision: u64) -> Result<u64, TriggerVolumeError> {
+    revision.checked_add(1).ok_or_else(|| TriggerVolumeError {
+        diagnostics: vec![diagnostic(
+            TriggerVolumeDiagnosticCode::RevisionOverflow,
+            None,
+            "trigger revision cannot advance",
+        )],
+    })
+}
+
+fn overlaps_for(
+    overlaps: &BTreeSet<TriggerOverlapPair>,
+    trigger: EntityId,
+) -> Vec<TriggerOverlapPair> {
+    overlaps
+        .range(
+            TriggerOverlapPair::new(trigger, EntityId::new(0))
+                ..=TriggerOverlapPair::new(trigger, EntityId::new(u64::MAX)),
+        )
+        .copied()
+        .collect()
 }
 
 fn validate_definition(definition: &KinematicTriggerDefinition) -> Vec<TriggerVolumeDiagnostic> {

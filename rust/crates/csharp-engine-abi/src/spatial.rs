@@ -267,6 +267,53 @@ pub struct NativeSpatialTriggerReconcileRequest {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialTriggerSetActiveRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub trigger: u64,
+    pub expected_revision: u64,
+    pub active: bool,
+    pub tick: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialTriggerLifecycleReceipt {
+    pub trigger: u64,
+    pub active: bool,
+    pub revision_before: u64,
+    pub revision_after: u64,
+    pub removed_overlap_count: u32,
+    pub fact_count: u32,
+}
+
+/// Replaces the active-trigger and current-overlap baseline after product
+/// restore. The borrowed active IDs are the complete desired active set among
+/// the session's registered definitions. No enter or exit facts are emitted.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialTriggerRestoreRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub expected_revision: u64,
+    pub active_triggers: *const u64,
+    pub active_triggers_len: usize,
+    pub entities: *const NativeSpatialEntityCollider,
+    pub entities_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialTriggerRestoreReceipt {
+    pub revision_before: u64,
+    pub revision_after: u64,
+    pub registered_count: u32,
+    pub active_count: u32,
+    pub active_overlap_count: u32,
+    pub fact_count: u32,
+    pub diagnostic_count: u32,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeSpatialTriggerReceipt {
     pub tick: u64,
@@ -289,6 +336,7 @@ pub struct NativeSpatialTriggerReadRequest {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeSpatialTriggerReadReceipt {
     pub trigger: u64,
+    pub active: bool,
     pub revision: u64,
     pub overlap_count: u32,
 }

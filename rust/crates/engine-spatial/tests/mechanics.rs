@@ -309,6 +309,125 @@ fn trigger_snapshot_restore_preserves_pairs_without_duplicate_enter() {
 }
 
 #[test]
+fn trigger_lifecycle_retirement_is_revision_guarded_and_reactivation_is_deliberate() {
+    let (mut entities, mut triggers, trigger, subject) = trigger_fixture();
+    move_entity(&mut entities, subject, Vec3::ZERO);
+    let entered = triggers
+        .reconcile(&entities, 1, TriggerReconcileCause::Movement)
+        .unwrap();
+    assert_eq!(entered.revision, 1);
+
+    let retired = triggers.set_active(trigger, 1, false, 2).unwrap();
+    assert!(!retired.active);
+    assert_eq!((retired.revision_before, retired.revision_after), (1, 2));
+    assert_eq!(retired.removed_overlaps.len(), 1);
+    assert_eq!(retired.facts.len(), 1);
+    assert_eq!(retired.facts[0].kind, TriggerOverlapFactKind::Exit);
+    assert!(triggers
+        .current_overlaps(trigger, 1)
+        .unwrap()
+        .subjects
+        .is_empty());
+    let restored_inactive = decode_trigger_snapshot(&encode_trigger_snapshot(&triggers).unwrap())
+        .expect("inactive lifecycle state round-trips");
+    assert!(!restored_inactive.is_active(trigger).unwrap());
+
+    let unchanged = triggers.clone();
+    let duplicate = triggers.set_active(trigger, 2, false, 3).unwrap_err();
+    assert_eq!(
+        duplicate.diagnostics[0].code,
+        TriggerVolumeDiagnosticCode::DuplicateLifecycle
+    );
+    assert_eq!(triggers, unchanged);
+    let stale = triggers.set_active(trigger, 1, true, 3).unwrap_err();
+    assert_eq!(
+        stale.diagnostics[0].code,
+        TriggerVolumeDiagnosticCode::StaleRevision
+    );
+    assert_eq!(triggers, unchanged);
+    let unknown = triggers
+        .set_active(EntityId::new(999), 2, false, 3)
+        .unwrap_err();
+    assert_eq!(
+        unknown.diagnostics[0].code,
+        TriggerVolumeDiagnosticCode::MissingDefinition
+    );
+    assert_eq!(triggers, unchanged);
+
+    let reactivated = triggers.set_active(trigger, 2, true, 4).unwrap();
+    assert!(reactivated.active);
+    assert!(reactivated.facts.is_empty());
+    let reentered = triggers
+        .reconcile(&entities, 5, TriggerReconcileCause::Movement)
+        .unwrap();
+    assert_eq!(reentered.facts.len(), 1);
+    assert_eq!(reentered.facts[0].kind, TriggerOverlapFactKind::Enter);
+}
+
+#[test]
+fn trigger_restore_rebases_active_set_and_overlaps_without_edges() {
+    let trigger_a = EntityId::new(10);
+    let trigger_b = EntityId::new(11);
+    let subject = EntityId::new(20);
+    let entities = EntityState::from_definitions([
+        EntityDefinition::new(trigger_a, "zone a")
+            .with_transform(Vec3::ZERO)
+            .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5))
+            .with_collision(true, true),
+        EntityDefinition::new(trigger_b, "zone b")
+            .with_transform(Vec3::ZERO)
+            .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5))
+            .with_collision(true, true),
+        EntityDefinition::new(subject, "subject")
+            .with_transform(Vec3::ZERO)
+            .with_bounds(Vec3::splat(-0.25), Vec3::splat(0.25))
+            .with_collision(true, false),
+    ])
+    .unwrap();
+    let mut triggers = TriggerVolumeSystem::new([
+        KinematicTriggerDefinition::new(trigger_a, "zone.a", ["zone"]),
+        KinematicTriggerDefinition::new(trigger_b, "zone.b", ["zone"]),
+    ])
+    .unwrap();
+    let entered = triggers
+        .reconcile(&entities, 1, TriggerReconcileCause::Spawn)
+        .unwrap();
+    assert_eq!(entered.facts.len(), 2);
+
+    let restored = triggers.restore(&[trigger_b], &entities, 1).unwrap();
+    assert_eq!((restored.revision_before, restored.revision_after), (1, 2));
+    assert_eq!(restored.registered_count, 2);
+    assert_eq!(restored.active_count, 1);
+    assert_eq!(restored.active_overlaps.len(), 1);
+    assert_eq!(restored.active_overlaps[0].trigger_id(), trigger_b);
+    assert!(!triggers.is_active(trigger_a).unwrap());
+    assert!(triggers.is_active(trigger_b).unwrap());
+    let after = triggers
+        .reconcile(&entities, 2, TriggerReconcileCause::Restore)
+        .unwrap();
+    assert!(after.facts.is_empty());
+    assert_eq!(after.continued.len(), 1);
+
+    let unchanged = triggers.clone();
+    let duplicate = triggers
+        .restore(&[trigger_b, trigger_b], &entities, 2)
+        .unwrap_err();
+    assert_eq!(
+        duplicate.diagnostics[0].code,
+        TriggerVolumeDiagnosticCode::DuplicateLifecycle
+    );
+    assert_eq!(triggers, unchanged);
+    let unknown = triggers
+        .restore(&[EntityId::new(999)], &entities, 2)
+        .unwrap_err();
+    assert_eq!(
+        unknown.diagnostics[0].code,
+        TriggerVolumeDiagnosticCode::MissingDefinition
+    );
+    assert_eq!(triggers, unchanged);
+}
+
+#[test]
 fn malformed_definitions_stale_entities_and_read_quotas_are_typed() {
     let invalid = TriggerVolumeSystem::new([KinematicTriggerDefinition::new(
         EntityId::new(1),

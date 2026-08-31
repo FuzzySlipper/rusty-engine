@@ -14,6 +14,8 @@ pub struct TriggerVolumeSnapshot {
     pub schema_version: u32,
     pub revision: u64,
     pub definitions: Vec<KinematicTriggerDefinition>,
+    #[serde(default)]
+    pub inactive_triggers: Vec<u64>,
     pub active_overlaps: Vec<TriggerOverlapPair>,
 }
 
