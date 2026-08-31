@@ -275,6 +275,27 @@ test('operation response waits for its exact retained-output cursor', async () =
   adapter.dispose();
 });
 
+test('duplicate and decreasing output event ids fail before subscriber publication', () => {
+  for (const staleId of ['1', '0']) {
+    FakeEventSource.instances.length = 0;
+    const outputs: unknown[] = [];
+    const failures: unknown[] = [];
+    const adapter = createProductBrowserLocalHttpAdapter({
+      fetch: async () => response({}),
+      eventSource: FakeEventSource,
+    });
+    adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
+    adapter.subscribeOutputs((output) => outputs.push(output));
+    const stream = FakeEventSource.instances[0]!;
+    stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '1');
+    stream.emit({ kind: 'runtime-readout', readout: READOUT }, staleId);
+    assert.equal(outputs.length, 1);
+    assert.equal(failures.length, 1);
+    assert.equal(stream.closed, true);
+    adapter.dispose();
+  }
+});
+
 test('large retained output fragments publish once after complete ordered reassembly', () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -299,6 +320,35 @@ test('large retained output fragments publish once after complete ordered reasse
   assert.equal(outputs.length, 2);
   assert.equal((outputs[1] as { kind: string }).kind, 'frame');
   assert.equal(((outputs[1] as { frame: { payload: string } }).frame.payload).length, 300_000);
+  adapter.dispose();
+});
+
+test('duplicate final fragment event id fails before assembled output publication', () => {
+  FakeEventSource.instances.length = 0;
+  const outputs: unknown[] = [];
+  const failures: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
+  adapter.subscribeOutputs((output) => outputs.push(output));
+  const stream = FakeEventSource.instances[0]!;
+  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '1');
+  const encoded = JSON.stringify({ kind: 'frame', frame: { payload: 'x'.repeat(300_000) } });
+  const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
+  chunks.forEach((data, fragmentIndex) => stream.emitFragment({
+    schemaVersion: 1,
+    transferId: '1',
+    runtime: RUNTIME,
+    fragmentIndex,
+    fragmentCount: chunks.length,
+    aggregateBytes: new TextEncoder().encode(encoded).byteLength,
+    data,
+  }, fragmentIndex === chunks.length - 1 ? String(fragmentIndex) : String(fragmentIndex + 2)));
+  assert.equal(outputs.length, 1);
+  assert.equal(failures.length, 1);
+  assert.equal(stream.closed, true);
   adapter.dispose();
 });
 

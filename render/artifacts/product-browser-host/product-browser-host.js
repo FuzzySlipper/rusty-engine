@@ -29135,20 +29135,23 @@ function PO(e = {}) {
 						}
 						let n = u;
 						if (n.transferId !== t.transferId || !Ck(n.runtime, t.runtime) || n.fragmentCount !== t.fragmentCount || n.aggregateBytes !== t.aggregateBytes || n.nextIndex !== t.fragmentIndex) throw TypeError("output fragments are duplicated, reordered, or from another transfer");
-						if (n.data.push(t.data), n.byteLength += new TextEncoder().encode(t.data).byteLength, n.nextIndex += 1, n.byteLength > n.aggregateBytes) throw TypeError("output fragments exceed their declared aggregate length");
+						n.data.push(t.data), n.byteLength += new TextEncoder().encode(t.data).byteLength, n.nextIndex += 1;
+						let r = null;
+						if (n.byteLength > n.aggregateBytes) throw TypeError("output fragments exceed their declared aggregate length");
 						if (n.nextIndex === n.fragmentCount) {
 							if (n.byteLength !== n.aggregateBytes) throw TypeError("output fragment transfer ended before its declared aggregate length");
 							let e = n.data.join("");
-							u = null, ae(_k(lk(e, a)));
+							u = null, r = _k(lk(e, a));
 						}
-						w(e.lastEventId);
+						w(e.lastEventId), r !== null && ae(r);
 					} catch (e) {
 						oe(e);
 					}
 				}, s.addEventListener?.("rusty-output-fragment", l), s.onmessage = (e) => {
 					if (m === null) try {
 						if (u !== null) throw new $("output_decode_failed", "Product Browser local runtime interrupted an output fragment transfer", { route: rO.outputs });
-						ae(_k(lk(e.data, Math.min(a, aO)))), w(e.lastEventId);
+						let t = _k(lk(e.data, Math.min(a, aO)));
+						w(e.lastEventId), ae(t);
 					} catch (e) {
 						let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted an invalid output: ${e instanceof Error ? e.message : String(e)}`, {
 							cause: e,

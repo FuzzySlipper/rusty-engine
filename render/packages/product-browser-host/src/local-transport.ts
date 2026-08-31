@@ -634,6 +634,7 @@ export function createProductBrowserLocalHttpAdapter(
             pending.data.push(fragment.data);
             pending.byteLength += new TextEncoder().encode(fragment.data).byteLength;
             pending.nextIndex += 1;
+            let completedOutput: ProductBrowserRuntimeOutput | null = null;
             if (pending.byteLength > pending.aggregateBytes) {
               throw new TypeError('output fragments exceed their declared aggregate length');
             }
@@ -643,9 +644,10 @@ export function createProductBrowserLocalHttpAdapter(
               }
               const encoded = pending.data.join('');
               pendingFragment = null;
-              publishOutput(decodeRuntimeOutput(parseBoundedJson(encoded, maximumOutputBytes)));
+              completedOutput = decodeRuntimeOutput(parseBoundedJson(encoded, maximumOutputBytes));
             }
             observeOutputSequence(event.lastEventId);
+            if (completedOutput !== null) publishOutput(completedOutput);
           } catch (cause) {
             failFragmentStream(cause);
           }
@@ -661,11 +663,12 @@ export function createProductBrowserLocalHttpAdapter(
                 { route: ROUTES.outputs },
               );
             }
-            publishOutput(decodeRuntimeOutput(parseBoundedJson(
+            const output = decodeRuntimeOutput(parseBoundedJson(
               event.data,
               Math.min(maximumOutputBytes, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
-            )));
+            ));
             observeOutputSequence(event.lastEventId);
+            publishOutput(output);
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
               ? cause
