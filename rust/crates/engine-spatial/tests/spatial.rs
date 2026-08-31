@@ -1,14 +1,18 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use engine_spatial::{
-    CollisionSceneError, GeneratedRoomConfig, KinematicMotionSystem, MaterialVoxel, MotionAxis,
-    MotionFact, SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset,
-    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, SurfaceMeshLimits,
-    SurfaceMeshOptions, SurfaceMode, VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit,
-    VoxelEditApplyError, VoxelEditRejection, VoxelEditService, VoxelEditTransaction,
-    VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
+    CollisionSceneError, KinematicMotionSystem, MaterialVoxel, MotionAxis, MotionFact,
+    SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
+    StaticMeshInstanceId, StaticMeshTransform, SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode,
+    VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError,
+    VoxelEditRejection, VoxelEditService, VoxelEditTransaction, VoxelSourceRevision,
+    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
 };
 use entity_state::{EntityDefinition, EntityState};
+
+#[path = "support/generated_room.rs"]
+mod generated_room_fixture;
+use generated_room_fixture::{room_config, GeneratedRoomConfig, GeneratedRoomFixture};
 
 #[test]
 fn collision_queries_cover_chunks_negative_space_and_raycast() {
@@ -178,28 +182,32 @@ fn scene_admission_bounds_dense_chunk_allocation() {
 #[test]
 fn generated_room_is_deterministic_and_seed_changes_canonical_voxels_and_mesh() {
     let config = room_config(4);
-    let first = VoxelCollisionScene::from_generated_room(config).unwrap();
-    let repeated = VoxelCollisionScene::from_generated_room(config).unwrap();
-    let variation = VoxelCollisionScene::from_generated_room(room_config(9)).unwrap();
+    let first = GeneratedRoomFixture::new(config).unwrap();
+    let repeated = GeneratedRoomFixture::new(config).unwrap();
+    let variation = GeneratedRoomFixture::new(room_config(9)).unwrap();
 
-    assert_eq!(first.generated_room(), repeated.generated_room());
-    assert_eq!(first.material_voxels(), repeated.material_voxels());
-    assert_eq!(first.mesh_chunks(), repeated.mesh_chunks());
-    assert_ne!(
-        first.generated_room().unwrap().1.pillar_voxel,
-        variation.generated_room().unwrap().1.pillar_voxel,
+    assert_eq!(first.record, repeated.record);
+    assert_eq!(
+        first.scene.material_voxels(),
+        repeated.scene.material_voxels()
     );
-    assert_ne!(first.material_voxels(), variation.material_voxels());
+    assert_eq!(first.scene.mesh_chunks(), repeated.scene.mesh_chunks());
+    assert_ne!(first.record.pillar_voxel, variation.record.pillar_voxel,);
     assert_ne!(
-        first.mesh_chunks()[0].content_hash,
-        variation.mesh_chunks()[0].content_hash,
+        first.scene.material_voxels(),
+        variation.scene.material_voxels()
+    );
+    assert_ne!(
+        first.scene.mesh_chunks()[0].content_hash,
+        variation.scene.mesh_chunks()[0].content_hash,
     );
 }
 
 #[test]
 fn generated_pillar_drives_collision_navigation_and_visible_mesh_from_one_world() {
-    let scene = VoxelCollisionScene::from_generated_room(room_config(4)).unwrap();
-    let record = scene.generated_room().unwrap().1;
+    let fixture = GeneratedRoomFixture::new(room_config(4)).unwrap();
+    let scene = &fixture.scene;
+    let record = fixture.record;
     let [x, y, z] = record.pillar_voxel;
 
     assert!(scene
@@ -229,8 +237,9 @@ fn generated_pillar_drives_collision_navigation_and_visible_mesh_from_one_world(
 
 #[test]
 fn generated_exit_aperture_is_canonical_collision_navigation_and_mesh_empty_space() {
-    let scene = VoxelCollisionScene::from_generated_room(room_config(4)).unwrap();
-    let record = scene.generated_room().unwrap().1;
+    let fixture = GeneratedRoomFixture::new(room_config(4)).unwrap();
+    let scene = &fixture.scene;
+    let record = fixture.record;
 
     assert_eq!(record.exit_aperture_min, [3, 1, 11]);
     assert_eq!(record.exit_aperture_max_exclusive, [6, 3, 12]);
@@ -258,7 +267,7 @@ fn generated_exit_aperture_is_canonical_collision_navigation_and_mesh_empty_spac
 
 #[test]
 fn bounded_room_fixture_stays_one_chunk_with_reviewable_mesh_counts() {
-    let scene = VoxelCollisionScene::from_generated_room(GeneratedRoomConfig {
+    let fixture = GeneratedRoomFixture::new(GeneratedRoomConfig {
         seed: 41,
         voxel_size: 1.0,
         chunk_size: 32,
@@ -267,6 +276,7 @@ fn bounded_room_fixture_stays_one_chunk_with_reviewable_mesh_counts() {
         length: 20,
     })
     .unwrap();
+    let scene = &fixture.scene;
     let mesh = &scene.mesh_chunks()[0];
 
     assert_eq!(scene.resident_chunk_count(), 1);
@@ -276,8 +286,9 @@ fn bounded_room_fixture_stays_one_chunk_with_reviewable_mesh_counts() {
 
 #[test]
 fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
-    let mut scene = VoxelCollisionScene::from_generated_room(room_config(4)).unwrap();
-    let pillar = scene.generated_room().unwrap().1.pillar_voxel;
+    let fixture = GeneratedRoomFixture::new(room_config(4)).unwrap();
+    let pillar = fixture.record.pillar_voxel;
+    let mut scene = fixture.scene;
     let baseline_voxels = scene.material_voxels().to_vec();
     let baseline_mesh = scene.mesh_chunks().to_vec();
     let baseline_hash = scene.authority_hash();
@@ -311,7 +322,6 @@ fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
         .is_coherent_with(cleared.accepted_revision));
     assert_eq!(scene.source_revision(), cleared.accepted_revision);
     assert_eq!(scene.projection_revisions(), cleared.projections);
-    assert!(scene.generated_room().is_none());
     assert!(!scene.contains_point(voxel_center(pillar)));
     assert!(!scene.aabb_overlaps_solid(
         [pillar[0] as f64 + 0.1, 1.1, pillar[2] as f64 + 0.1],
@@ -352,7 +362,8 @@ fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
 
 #[test]
 fn rejected_edit_leaves_authority_and_every_projection_unchanged() {
-    let mut scene = VoxelCollisionScene::from_generated_room(room_config(4)).unwrap();
+    let fixture = GeneratedRoomFixture::new(room_config(4)).unwrap();
+    let mut scene = fixture.scene;
     let before_voxels = scene.material_voxels().to_vec();
     let before_mesh = scene.mesh_chunks().to_vec();
     let before_hash = scene.authority_hash();
@@ -654,15 +665,4 @@ fn voxel_center(address: [i64; 3]) -> [f64; 3] {
         address[1] as f64 + 0.5,
         address[2] as f64 + 0.5,
     ]
-}
-
-fn room_config(seed: u64) -> GeneratedRoomConfig {
-    GeneratedRoomConfig {
-        seed,
-        voxel_size: 1.0,
-        chunk_size: 16,
-        width: 7,
-        height: 4,
-        length: 10,
-    }
 }

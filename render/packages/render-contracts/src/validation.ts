@@ -773,6 +773,9 @@ function renderMaterial(input: unknown, path: string): void {
   color4(value['textureTint'], `${path}.textureTint`);
   color3(value['emissionColor'], `${path}.emissionColor`);
   nonNegativeFinite(value['emissionIntensity'], `${path}.emissionIntensity`);
+  // Compatibility-only producer metadata. Generic mesh texture coordinates are
+  // always supplied by the mesh payload; explicit planar/atlas behavior is
+  // carried by voxelSurface.mapping, where its mapping inputs are available.
   enumeration(value['uvStrategy'], `${path}.uvStrategy`, ['flat', 'planar', 'atlas'] as const);
   if (Object.hasOwn(value, 'alphaMode')) {
     const alpha = looseRecord(value['alphaMode'], `${path}.alphaMode`);

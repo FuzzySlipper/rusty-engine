@@ -7,6 +7,8 @@ import {
   RenderProjectionError,
 } from '@rusty-engine/render-projection';
 import type {
+  AnimatedMeshAsset,
+  AnimatedMeshInstanceDescriptor,
   Geometry,
   LightDescriptor,
   Material,
@@ -703,7 +705,8 @@ export class ThreeRenderer {
       textures: new Map(),
     };
     const selectedAnimatedClips = new Map<RenderHandle, string | null>();
-    const textureVersions = new Map([...this.#textures].map(([id, value]) => [id, value.version]));
+    const frameAnimatedDefinitions = new Map<string, AnimatedMeshAsset>();
+    const frameAnimatedInstances = new Map<RenderHandle, AnimatedMeshInstanceDescriptor>();
     const textureDescriptors = new Map(
       [...this.#textures].map(([id, value]) => [id, structuredClone(value)]),
     );
@@ -742,12 +745,6 @@ export class ThreeRenderer {
             this.#meshResourceSource,
           ));
         } else if (operation.op === 'defineTexture') {
-          const currentVersion = textureVersions.get(operation.texture.id);
-          if (currentVersion !== undefined && operation.texture.version <= currentVersion) {
-            throw new RenderApplyError(
-              `defineTexture: stale or duplicate version ${String(operation.texture.version)} for ${operation.texture.id}`,
-            );
-          }
           const previous = texturePayloads.get(operation.texture.id);
           const payload = operation.texture.payload;
           if (payload === undefined) {
@@ -773,7 +770,6 @@ export class ThreeRenderer {
             texturePayloads.set(operation.texture.id, retained.readout);
             prepared.textures.set(index, retained);
           }
-          textureVersions.set(operation.texture.id, operation.texture.version);
           textureDescriptors.set(operation.texture.id, structuredClone(operation.texture));
         } else if (operation.op === 'defineMaterial') {
           materialDescriptors.set(operation.material.id, structuredClone(operation.material));
@@ -781,6 +777,7 @@ export class ThreeRenderer {
           // Validate the exact source/hash/clip contract without allocating the
           // asset-scoped render template before the retained mutation.
           this.#animatedMeshes.validateDefinition(operation.asset);
+          frameAnimatedDefinitions.set(operation.asset.asset, operation.asset);
         } else if (operation.op === 'createAnimatedMeshInstance') {
           const playback = operation.instance.playback;
           if (playback?.kind === 'pause' || playback?.kind === 'resume') {
@@ -792,6 +789,16 @@ export class ThreeRenderer {
             operation.handle,
             playback?.kind === 'play' || playback?.kind === 'sample' ? playback.clip : null,
           );
+          const definedInFrame = frameAnimatedDefinitions.get(operation.instance.asset);
+          if (definedInFrame !== undefined) {
+            this.#animatedMeshes.validateInitialSampleForDefinition(
+              definedInFrame,
+              operation.instance,
+            );
+          } else {
+            this.#animatedMeshes.validateInitialSample(operation.instance);
+          }
+          frameAnimatedInstances.set(operation.handle, operation.instance);
         } else if (operation.op === 'setAnimatedMeshPlayback') {
           const currentClip = selectedAnimatedClips.has(operation.handle)
             ? selectedAnimatedClips.get(operation.handle) ?? null
@@ -808,6 +815,24 @@ export class ThreeRenderer {
             selectedAnimatedClips.set(operation.handle, operation.playback.clip);
           } else if (operation.playback.kind === 'stop') {
             selectedAnimatedClips.set(operation.handle, null);
+          }
+          if (operation.playback.kind === 'sample') {
+            const createdInFrame = frameAnimatedInstances.get(operation.handle);
+            if (createdInFrame !== undefined) {
+              const sampleInstance = { ...createdInFrame, playback: operation.playback };
+              const definedInFrame = frameAnimatedDefinitions.get(sampleInstance.asset);
+              if (definedInFrame !== undefined) {
+                this.#animatedMeshes.validateInitialSampleForDefinition(definedInFrame, sampleInstance);
+              } else {
+                this.#animatedMeshes.validateInitialSample(sampleInstance);
+              }
+            } else {
+              this.#animatedMeshes.validateSample(
+                operation.handle,
+                operation.playback.clip,
+                operation.playback.normalizedTime,
+              );
+            }
           }
         }
       }
@@ -2846,6 +2871,9 @@ function standardMaterial(
   texture?: THREE.Texture,
   textureDescriptor?: TextureDescriptor,
 ): THREE.MeshStandardMaterial {
+  // `uvStrategy` is legacy producer metadata. Generic materials always use
+  // baked mesh UVs; the only renderer-owned planar/repeat or atlas mapping is
+  // the typed voxelSurface specialization below.
   const tint = parameters?.textureTint ?? descriptor.textureTint;
   const emissionColor = parameters?.emissionColor ?? descriptor.emissionColor;
   const emissionIntensity = parameters?.emissionIntensity ?? descriptor.emissionIntensity;

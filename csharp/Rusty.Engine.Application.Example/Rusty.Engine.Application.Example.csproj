@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <Description>Managed application-helper proof harness; not a downstream product architecture template.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Rusty.Engine/Rusty.Engine.csproj" />

@@ -1,28 +1,11 @@
 //! Deterministic greedy visible-surface voxel mesher → [`MeshPayload`].
 //!
-//! # Lane
-//!
-//! `rust-service` — turns chunk voxel data (`svc-volume`) into a renderable
-//! [`MeshPayload`] (voxel-capability-06). The payload layout is co-designed with
-//! the render protocol (#2262) and the Three.js upload path (#2263); see
-//! `docs/voxel-mesh-seam.md` / ADR 0007. It does not own the protocol contract or
-//! touch the renderer.
-//!
-//! # This implementation
-//!
-//! Every solid voxel contributes the faces whose neighbour is non-opaque;
-//! internal faces (and border faces against resident neighbour chunks) are
-//! culled. Remaining coplanar faces with the same material and normal are
-//! greedily merged into deterministic rectangles. Runtime texture coordinates
-//! use the executable outward-facing basis in [`texture_mapping`] and are
-//! emitted by the same production rectangle path as positions and normals.
-//!
-//! Output is **deterministic**: material slot, `Direction6`, plane, row, and
-//! column order are all explicit. Rectangle growth prefers the positive
-//! in-plane `u` axis before the positive `v` axis. Separate `f32`
-//! position/normal/tile-coordinate streams + a `u32` index stream form a 1:1
-//! `BufferGeometry` match. Vertices are **chunk-local** (origin = chunk min corner); world
-//! placement is the render node transform.
+//! Every solid voxel contributes faces whose neighbour is non-opaque; internal
+//! faces and resident-neighbour seams are culled. Remaining coplanar faces with
+//! the same material and normal are merged into deterministic rectangles.
+//! Positions, normals, tile coordinates, indices, material groups, and bounds
+//! form a renderer-neutral mesh payload. Vertices are chunk-local; callers own
+//! world placement and renderer integration.
 
 #![forbid(unsafe_code)]
 

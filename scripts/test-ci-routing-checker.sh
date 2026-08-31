@@ -9,6 +9,7 @@ mkdir -p "$PROBE_ROOT/.github" "$PROBE_ROOT/scripts" "$PROBE_ROOT/render/package
 cp -a "$REPO_ROOT/.github/workflows" "$PROBE_ROOT/.github/workflows"
 cp "$REPO_ROOT/scripts/verify-render.sh" "$PROBE_ROOT/scripts/verify-render.sh"
 cp "$REPO_ROOT/scripts/verify-render-artifacts.sh" "$PROBE_ROOT/scripts/verify-render-artifacts.sh"
+cp "$REPO_ROOT/scripts/verify-csharp.sh" "$PROBE_ROOT/scripts/verify-csharp.sh"
 cp "$REPO_ROOT/render/package.json" "$PROBE_ROOT/render/package.json"
 for package in application-host render-contracts render-projection renderer-host renderer-three; do
   mkdir -p "$PROBE_ROOT/render/packages/$package"
@@ -47,9 +48,9 @@ sed -i '/^concurrency:/,/^permissions:/d' "$PROBE_ROOT.no-cancel/.github/workflo
 PROBE_ROOT="$PROBE_ROOT.no-cancel" expect_rejection "missing superseded-run cancellation"
 rm -rf "$PROBE_ROOT.no-cancel"
 
-cp -a "$PROBE_ROOT" "$PROBE_ROOT.duplicate-build"
-sed -i 's/ --artifacts-ready//' "$PROBE_ROOT.duplicate-build/scripts/verify-render.sh"
-PROBE_ROOT="$PROBE_ROOT.duplicate-build" expect_rejection "aggregate webview rebuild"
-rm -rf "$PROBE_ROOT.duplicate-build"
+cp -a "$PROBE_ROOT" "$PROBE_ROOT.missing-csharp"
+sed -i '/scripts\/verify-csharp.sh/d' "$PROBE_ROOT.missing-csharp/.github/workflows/verify.yml"
+PROBE_ROOT="$PROBE_ROOT.missing-csharp" expect_rejection "missing C# verification routing"
+rm -rf "$PROBE_ROOT.missing-csharp"
 
 echo "ci routing checker negative probes passed"

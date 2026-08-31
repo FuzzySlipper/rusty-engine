@@ -1,49 +1,10 @@
-//! Typed asset-reference vocabulary for the ASHA scene/world foundation.
+//! Typed asset-reference vocabulary for Rusty Engine content and services.
 //!
-//! # Lane
-//!
-//! `rust-foundation` — no knowledge of state, protocol, render, or TS packages.
-//!
-//! # Allowed dependencies
-//!
-//! None. Like [`core-ids`](../core_ids/index.html), this crate is `std`-only
-//! with zero external dependencies so every layer above it can validate asset
-//! references without pulling transitive baggage.
-//!
-//! # Scope (subtask #2314)
-//!
-//! This is the **vocabulary / validation seam** the scene/world document model
-//! (`scene-capability-01`) and the asset registry (`scene-capability-03`) agreed
-//! to co-design *before* their implementations diverge. It provides:
-//!
-//! * [`AssetKind`] — the closed set of asset kinds the scene docs need.
-//! * [`AssetId`] — a stable, kind-prefixed scoped-kebab-case identifier with
-//!   parse/validation that structurally rejects spaces, freeform strings,
-//!   unknown kinds, and bad segments.
-//! * [`AssetRef`] — a *typed* reference whose phantom kind lets the compiler
-//!   reject wrong-kind references, plus [`AssetReference`] for heterogeneous
-//!   dependency lists.
-//! * [`AssetVersionReq`] and [`AssetHash`] — minimal version-constraint and
-//!   content-hash vocabulary so a reference can be pinned/locked later.
-//!
-//! # Not in scope here (remains for the full asset registry, task #2311)
-//!
-//! Catalog manifests, asset **resolution** against a catalog, the asset
-//! dependency DAG + cycle detection, asset-lock generation, per-kind/per-context
-//! fallback policy, the material authority/style projection split, and
-//! hot-reload/update-one-asset APIs all belong to the full asset-registry work.
-//! This crate deliberately owns *identity and reference shape only*: it never
-//! reads a catalog, allocates IDs, or decides whether a referenced asset exists.
-//!
-//! Richer version semantics (semver ranges) and a committed hash algorithm are
-//! also deferred; [`AssetVersionReq`] and [`AssetHash`] are intentionally small.
-//!
-//! # TS border
-//!
-//! Asset references only cross the Rust/TS border once they are embedded in the
-//! scene-document and catalog shapes that TS authors. Those generated contracts
-//! land with the flat scene document (subtask #2315) and the catalog registry
-//! (task #2311); this crate adds no `protocol-*` / codegen surface on its own.
+//! This `std`-only foundation crate owns asset kinds, validated identifiers,
+//! typed references, version requirements, and content hashes. It does not
+//! resolve assets, read catalogs, allocate runtime resources, or decide whether
+//! a referenced asset exists; those responsibilities belong to content and
+//! resource services above this vocabulary layer.
 
 #![forbid(unsafe_code)]
 

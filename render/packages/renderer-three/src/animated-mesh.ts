@@ -399,6 +399,62 @@ export class AnimatedMeshRegistry {
     this.#validatedResource(asset);
   }
 
+  /**
+   * Run the fallible initial-sample path on a detached instance. This is used
+   * while a retained frame is still in preflight, before a later animation
+   * rejection could invalidate already-live Three resources.
+   */
+  validateInitialSample(instance: AnimatedMeshInstanceDescriptor): void {
+    if (instance.playback?.kind !== 'sample') return;
+    const probeHandle = -1 as RenderHandle;
+    const probe = {
+      ...instance,
+      // A preflight must not consume a source-entity generation.
+      metadata: { ...instance.metadata, sourceEntity: null },
+    };
+    let created = false;
+    try {
+      this.create(
+        probeHandle,
+        probe,
+        probe.materialOverrides.length === 0
+          ? undefined
+          : () => new THREE.MeshBasicMaterial(),
+      );
+      created = true;
+    } finally {
+      if (created) this.release(probeHandle);
+    }
+  }
+
+  /** Preflight an initial sample for an asset defined earlier in this frame. */
+  validateInitialSampleForDefinition(
+    asset: AnimatedMeshAsset,
+    instance: AnimatedMeshInstanceDescriptor,
+  ): void {
+    if (instance.playback?.kind !== 'sample') return;
+    const staged = new AnimatedMeshRegistry(this.#assetSource);
+    try {
+      staged.define(asset);
+      staged.validateInitialSample(instance);
+    } finally {
+      staged.dispose();
+    }
+  }
+
+  /** Preflight a held sample update against one already-retained instance. */
+  validateSample(handle: RenderHandle, clip: string, normalizedTime: number): void {
+    const instance = this.#requireInstance(handle, 'setAnimatedMeshPlayback');
+    this.validateInitialSample({
+      asset: instance.asset,
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      materialOverrides: [...instance.materialOverrides.values()].map((override) => override.binding),
+      playback: { kind: 'sample', clip, normalizedTime },
+      visible: true,
+      metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: null },
+    });
+  }
+
   /** Renderer-internal proof surface for the admitted template/instance map. */
   embeddedMaterialSlots(
     handle: RenderHandle,

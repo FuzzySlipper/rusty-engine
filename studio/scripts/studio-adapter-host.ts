@@ -78,6 +78,8 @@ export class StudioAdapterHost {
   #activeProjectFile: string | null = null;
   #selectionSerial: Promise<void> = Promise.resolve();
   #selectionBusy = false;
+  #closed = false;
+  #closePromise: Promise<void> | null = null;
   #nextRequestId = 1;
 
   private constructor(options: StudioAdapterHostOptions) {
@@ -129,6 +131,7 @@ export class StudioAdapterHost {
   }
 
   async selectProject(root: string, projectFile: string): Promise<void> {
+    this.#requireOpen();
     if (this.#fixedAdapter) return;
     return this.#queueSelection(() => this.#selectProjectIfNeeded(root, projectFile));
   }
@@ -166,6 +169,9 @@ export class StudioAdapterHost {
   }
 
   #queueSelection<Result>(operationFactory: () => Promise<Result>): Promise<Result> {
+    if (this.#closed) {
+      return Promise.reject(new Error('studio_adapter_host_closed: adapter host is closed'));
+    }
     if (this.#selectionBusy) {
       return Promise.reject(new Error('studio_adapter_switch_busy: another project selection is active'));
     }
@@ -180,6 +186,7 @@ export class StudioAdapterHost {
   }
 
   async #exchangeCurrent(requestLine: string): Promise<string> {
+    this.#requireOpen();
     const current = this.#current;
     if (current === null) {
       throw new Error('studio_adapter_not_selected: choose a project root with a .rusty-studio.json bootstrap');
@@ -206,9 +213,11 @@ export class StudioAdapterHost {
   }
 
   async #selectProjectIfNeeded(root: string, projectFile: string): Promise<void> {
+    this.#requireOpen();
     validateProjectSelection(root, projectFile);
     if (this.#fixedAdapter) return;
     const bootstrap = await readStudioAdapterBootstrap(root);
+    this.#requireOpen();
     const fingerprint = bootstrap.fingerprint;
     const current = this.#current;
     if (
@@ -219,6 +228,10 @@ export class StudioAdapterHost {
       return;
     }
     const candidate = await this.#startBootstrapAdapter(root, bootstrap.manifest, fingerprint);
+    if (this.#closed) {
+      await candidate.process.close();
+      throw new Error('studio_adapter_host_closed: adapter host closed during adapter startup');
+    }
     const previous = current;
     this.#pending = {
       previous,
@@ -232,6 +245,21 @@ export class StudioAdapterHost {
   }
 
   async close(): Promise<void> {
+    if (this.#closePromise !== null) return this.#closePromise;
+    // Freeze admission before the active selection reaches its next await.
+    // The serial close then owns every candidate that was already published.
+    this.#closed = true;
+    const close = this.#selectionSerial.then(() => this.#closeCurrent());
+    this.#selectionSerial = close.then(() => undefined, () => undefined);
+    this.#closePromise = close;
+    return close;
+  }
+
+  #requireOpen(): void {
+    if (this.#closed) throw new Error('studio_adapter_host_closed: adapter host is closed');
+  }
+
+  async #closeCurrent(): Promise<void> {
     const current = this.#current;
     const pending = this.#pending;
     this.#current = null;
@@ -251,6 +279,7 @@ export class StudioAdapterHost {
     request: Record<string, unknown>,
     responseLine: string,
   ): Promise<void> {
+    this.#requireOpen();
     const decoded = decodeStudioAdapterResponse(JSON.parse(responseLine) as unknown);
     if (decoded.type === 'projectOpened') {
       const current = this.#current;

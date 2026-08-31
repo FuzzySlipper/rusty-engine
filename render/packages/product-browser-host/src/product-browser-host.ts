@@ -282,6 +282,12 @@ export function createProductBrowserRuntimeTransport(
   requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
   requireFunction(adapter.reportAnimationFeedback, 'reportAnimationFeedback');
   requireFunction(adapter.advanceRealtime, 'advanceRealtime');
+  if (adapter.admitDemandStep !== undefined) {
+    requireFunction(adapter.admitDemandStep, 'admitDemandStep');
+  }
+  if (adapter.admitExternalStep !== undefined) {
+    requireFunction(adapter.admitExternalStep, 'admitExternalStep');
+  }
   if (adapter.completeTimeline !== undefined) {
     requireFunction(adapter.completeTimeline, 'completeTimeline');
   }

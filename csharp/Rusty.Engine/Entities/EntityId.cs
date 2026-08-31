@@ -13,6 +13,17 @@ public enum EntityLifecycle
     Tombstoned,
 }
 
+internal static class EntityLifecycleValidation
+{
+    internal static void EnsureDefined(EntityLifecycle lifecycle, string parameterName)
+    {
+        if (lifecycle is not (EntityLifecycle.Active or EntityLifecycle.Disabled or EntityLifecycle.Tombstoned))
+        {
+            throw new ArgumentOutOfRangeException(parameterName, lifecycle, "Entity lifecycle must be a declared value.");
+        }
+    }
+}
+
 public readonly record struct EntityRevision(EntityId Entity, ulong Revision);
 
 /// <summary>The result of one canonical containment mutation.</summary>

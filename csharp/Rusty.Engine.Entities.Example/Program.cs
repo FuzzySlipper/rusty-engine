@@ -15,6 +15,8 @@ using StateMachineTransition = Rusty.Engine.StateMachine.StateMachineTransition;
 using StateMachineTransitionReceipt = Rusty.Engine.StateMachine.StateMachineTransitionReceipt;
 using StateMachineTransitionRequest = Rusty.Engine.StateMachine.StateMachineTransitionRequest;
 
+// This executable is a deliberately broad managed-helper proof harness. It is not a recommended
+// product architecture or a template for assembling unrelated gameplay domains in one program.
 const uint HealthLocalComponentId = 1;
 const uint ArmorLocalComponentId = 2;
 const int InitialHealth = 10;
@@ -65,6 +67,7 @@ Require(world.Get(actor, health).Current == InitialHealth, "in-memory snapshot r
 Throws(() => world.Set(actor, health, new Health(9), healthRevision), "snapshot restore must invalidate old component guards");
 Require(world.Diagnostics().Components.Single(component => component.Key == health.Key).ValueCount == 1, "diagnostics lost the component table");
 
+ExerciseEntityWorldCandidateAndCopyContracts();
 ExerciseManagedRestorePlan(world, actor, pack, health, armor);
 ExerciseEntityPersistence(world, actor, health);
 ExerciseManagedMechanics();
@@ -93,11 +96,85 @@ static void Throws(Action action, string message)
     {
         action();
     }
-    catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+    catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or ObjectDisposedException)
     {
         return;
     }
     throw new InvalidOperationException(message);
+}
+
+static void ExerciseEntityWorldCandidateAndCopyContracts()
+{
+    const uint ReferenceValueLocalComponentId = 90;
+    const uint ValueLocalComponentId = 91;
+    ComponentType<ReferenceComponent> referenceValues = ComponentType<ReferenceComponent>.Create(
+        ProductComponentKeys.Create(ReferenceValueLocalComponentId),
+        snapshotCodec: static (in ReferenceComponent value) => new ReferenceComponent([.. value.Values]));
+    ComponentType<int> values = ComponentType<int>.Create(ProductComponentKeys.Create(ValueLocalComponentId));
+
+    Throws(
+        () => ComponentType<ReferenceComponent>.Create(ProductComponentKeys.Create(92)),
+        "reference-containing component registration did not require a deep-copy codec");
+
+    using var world = new EntityWorld([referenceValues, values]);
+    EntityId entity = world.Create();
+    int[] source = [1];
+    world.Set(entity, referenceValues, new ReferenceComponent(source));
+    source[0] = 99;
+    Require(world.Get(entity, referenceValues).Values[0] == 1,
+        "component ingress retained a caller-owned reference");
+
+    EntityWorldSnapshot snapshot = world.Snapshot();
+    ReferenceComponent read = world.Get(entity, referenceValues);
+    read.Values[0] = 77;
+    Require(world.Get(entity, referenceValues).Values[0] == 1,
+        "component reads leaked a mutable nested reference into live state");
+    world.Set(entity, referenceValues, new ReferenceComponent([3]));
+    world.Restore(snapshot, world.Revision);
+    Require(world.Get(entity, referenceValues).Values[0] == 1,
+        "snapshot retained a mutable nested component reference");
+
+    EntityWorldBatchCandidate staged = world.PrepareBatch(new EntityBatch()
+        .Mutate(candidate => candidate.Set(entity, referenceValues, new ReferenceComponent([2]))));
+    world.Set(entity, values, 1);
+    Throws(() => staged.Publish(), "stale batch candidate overwrote a later live mutation");
+    Throws(() => staged.Publish(), "stale batch candidate was marked published after its first failed attempt");
+    Require(world.Get(entity, referenceValues).Values[0] == 1 && world.Get(entity, values) == 1,
+        "stale batch candidate discarded live component state");
+
+    EntityWorldRestorePlan restorePlan = new(world.Revision, world.NextEntityValue);
+    foreach (EntityWorldEntityState state in world.CaptureEntities())
+    {
+        restorePlan.AddEntity(state);
+    }
+    restorePlan.AddComponentFamily(referenceValues, world.CaptureComponentFamily(referenceValues));
+    restorePlan.AddComponentFamily(values, world.CaptureComponentFamily(values));
+    EntityWorldRestoreCandidate restore = world.PrepareRestore(restorePlan, world.Revision);
+    world.Set(entity, values, 2);
+    Throws(() => restore.Publish(), "stale restore candidate overwrote a later live mutation");
+    Throws(() => restore.Publish(), "stale restore candidate was marked published after its first failed attempt");
+    Require(world.Get(entity, referenceValues).Values[0] == 1 && world.Get(entity, values) == 2,
+        "stale restore candidate discarded live state");
+
+    EntityWorldBatchCandidate published = world.PrepareBatch(new EntityBatch()
+        .Mutate(candidate => candidate.Set(entity, values, 3)));
+    published.Publish();
+    ulong revisionAfterFirstPublish = world.Revision;
+    published.Publish();
+    Require(world.Revision == revisionAfterFirstPublish && world.Get(entity, values) == 3,
+        "published batch candidate was not idempotent");
+
+    EntityWorldBatchCandidate concurrentlyPublished = world.PrepareBatch(new EntityBatch()
+        .Mutate(candidate => candidate.Set(entity, values, 4)));
+    ulong revisionBeforeConcurrentPublish = world.Revision;
+    Parallel.For(0, 8, _ => concurrentlyPublished.Publish());
+    Require(world.Revision == revisionBeforeConcurrentPublish + 1 && world.Get(entity, values) == 4,
+        "concurrent batch publication was not idempotent");
+
+    Throws(() => world.Create((EntityLifecycle)99), "create admitted an undeclared lifecycle value");
+    Throws(() => world.SetLifecycle(entity, (EntityLifecycle)99), "set lifecycle admitted an undeclared lifecycle value");
+    world.Dispose();
+    Throws(() => world.Diagnostics(), "disposed diagnostics did not follow the world disposal contract");
 }
 
 static void ValidateHealth(in Health health)
@@ -703,6 +780,8 @@ sealed class SpatialServiceFake : ISpatialService
     public CharacterControllerConfig DefaultCharacterControllerConfig() => default;
     public void ValidateCharacterControllerConfig(CharacterControllerConfig arg0) => throw new NotSupportedException();
     public void ValidateCharacterControllerCommand(CharacterControllerValidationRequest arg0) => throw new NotSupportedException();
+    public CharacterContinuationCheckpoint CaptureCharacterContinuation(CharacterContinuationCaptureRequest arg0) => throw new NotSupportedException();
+    public CharacterContinuationRestoreReceipt RestoreCharacterContinuation(CharacterContinuationRestoreRequest arg0) => throw new NotSupportedException();
 
     public CharacterStepReceipt ProposeCharacterStep(CharacterStepRequest request)
     {
@@ -1119,6 +1198,7 @@ sealed class KinematicServiceFake : IKinematicService
 
 readonly record struct Health(int Current);
 readonly record struct Armor(int Current);
+readonly record struct ReferenceComponent(int[] Values);
 readonly record struct EntityCheckpoint(int Health);
 
 sealed class EntityCheckpointCodec : IProductStateCodec<EntityCheckpoint>

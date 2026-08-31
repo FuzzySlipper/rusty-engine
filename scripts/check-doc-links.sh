@@ -25,4 +25,4 @@ if (( failed != 0 )); then
   exit 1
 fi
 
-echo "documentation links passed"
+echo "local Markdown links passed for README.md, AGENTS.md, and docs/"

@@ -618,6 +618,12 @@ export class RenderProjection {
   }
 
   #defineTexture(texture: TextureDescriptor): RenderProjectionInstruction {
+    const prior = this.#textures.get(texture.id);
+    if (prior !== undefined && texture.version <= prior.version) {
+      throw new RenderProjectionError(
+        `defineTexture: stale or duplicate version ${String(texture.version)} for ${texture.id}`,
+      );
+    }
     this.#textures.set(texture.id, clone(texture));
     return { op: 'defineTexture', texture: clone(texture) };
   }

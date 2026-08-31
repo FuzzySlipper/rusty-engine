@@ -6,13 +6,8 @@ cd "$REPO_ROOT"
 
 cargo fmt --all --check
 ./scripts/audit-standalone.sh
-./scripts/audit-render-isolation.sh
-./scripts/audit-studio-isolation.sh
 python3 ./scripts/dependency_boundary_check.py
 PYTHONDONTWRITEBYTECODE=1 python3 ./scripts/test_architecture_checks.py
-./scripts/check-doc-links.sh
-./scripts/check-render-completeness.sh --strict
-./scripts/test-render-completeness-checker.sh
 if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|RuntimeSession|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust; then
   echo "forbidden old runtime spine surfaced in active source" >&2
   exit 1

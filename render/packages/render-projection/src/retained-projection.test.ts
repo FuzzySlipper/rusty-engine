@@ -666,6 +666,32 @@ void test('applies every operation in the committed retained fixture', () => {
   assert.equal(projection.animatedMeshRefCount('mesh-animation/character'), 1);
 });
 
+void test('texture versions are admitted once by the neutral retained projection', () => {
+  const projection = new RenderProjection();
+  const texture = {
+    id: 'texture/versioned', width: 1, height: 1,
+    filter: 'nearest' as const, wrap: 'clamp' as const,
+    contentHash: null, version: 1,
+  };
+  projection.applyDiff({ op: 'defineTexture', texture });
+  const beforeDuplicate = projection.snapshot();
+
+  assert.throws(() => projection.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: { ...texture, version: 2 } },
+    createPrimitive(77, 'must-not-commit'),
+    { op: 'defineTexture', texture: { ...texture, version: 2 } },
+  ] }), /stale or duplicate version 2/u);
+  assert.deepEqual(projection.snapshot(), beforeDuplicate);
+
+  projection.applyDiff({ op: 'defineTexture', texture: { ...texture, version: 2 } });
+  const beforeStale = projection.snapshot();
+  assert.throws(
+    () => projection.applyDiff({ op: 'defineTexture', texture }),
+    /stale or duplicate version 1/u,
+  );
+  assert.deepEqual(projection.snapshot(), beforeStale);
+});
+
 void test('sky background replacement and clear are fail-atomic retained presentation', () => {
   const projection = new RenderProjection();
   assert.throws(

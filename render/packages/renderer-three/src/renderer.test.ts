@@ -2492,6 +2492,41 @@ void test('inline and resource PNG textures converge on one generic static-mesh 
   assert.deepEqual(source.released, source.acquired);
 });
 
+void test('generic materials use baked mesh UVs regardless of deprecated strategy metadata', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const expectedUv = [
+    [0, 0], [1, 0], [1, 1], [0, 1],
+  ];
+  for (const uvStrategy of ['flat', 'planar', 'atlas'] as const) {
+    const materialId = `material/baked-${uvStrategy}`;
+    const assetId = `mesh/baked-${uvStrategy}`;
+    const renderer = new ThreeRenderer();
+    renderer.applyFrame({ schemaVersion: 1, ops: [
+      { op: 'defineTexture', texture: textureDescriptor(bytes) },
+      { op: 'defineMaterial', material: { ...texturedMaterial(), id: materialId, uvStrategy } },
+      {
+        op: 'defineStaticMesh',
+        asset: {
+          ...texturedPlankAsset(), asset: assetId,
+          materialSlots: [{ slot: 0, material: materialId }],
+        },
+      },
+      {
+        op: 'createStaticMeshInstance', handle: renderHandle(4299), parent: null,
+        instance: crateInstance(assetId),
+      },
+    ] });
+    const mesh = renderer.objectFor(renderHandle(4299)) as THREE.Mesh;
+    const uv = mesh.geometry.getAttribute('uv') as THREE.BufferAttribute;
+    assert.deepEqual(
+      Array.from({ length: uv.count }, (_, index) => [uv.getX(index), uv.getY(index)]),
+      expectedUv,
+    );
+    assert.ok((mesh.material as THREE.MeshStandardMaterial).map instanceof THREE.Texture);
+    renderer.dispose();
+  }
+});
+
 void test('texture redefine is stale-safe and disposes replaced and final GPU resources exactly once', () => {
   const beforeBytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const afterBytes = rgbaPng(2, 1, [0, 0, 255, 255, 255, 255, 0, 255]);
@@ -4002,6 +4037,118 @@ void test('animated skinning inspection rejects an over-budget hierarchy before 
     /joint count exceeds 256/,
   );
   assert.deepEqual(renderer.animatedMeshPlayback(handle), before);
+  renderer.dispose();
+});
+
+void test('a rejected initial animated sample preserves live texture/material resources and releases preparation', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const source = new TestTextureResourceSource(bytes);
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({
+    animatedMeshSource: diagnosticSkinnedMeshSource(asset, 257, [[1, 0, 0, 0]]),
+    textureResourceSource: source,
+  });
+  const beforeTexture = textureDescriptor(bytes, 1, 'resource');
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: beforeTexture },
+    { op: 'defineMaterial', material: texturedMaterial() },
+    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
+    {
+      op: 'createStaticMeshInstance', handle: renderHandle(4290), parent: null,
+      instance: crateInstance('mesh/textured-plank'),
+    },
+    { op: 'defineAnimatedMesh', asset },
+  ] });
+  const mesh = renderer.objectFor(renderHandle(4290)) as THREE.Mesh;
+  const oldMaterial = mesh.material;
+  const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
+  const beforeSnapshot = renderer.snapshot();
+  const beforeDescriptor = renderer.textureDescriptor(beforeTexture.id);
+  const beforeResources = renderer.resourceStatistics();
+  const beforeReadout = renderer.textureResourceReadout();
+
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: textureDescriptor(bytes, 2, 'resource') },
+    {
+      op: 'defineMaterial',
+      material: { ...texturedMaterial(), color: [0.2, 0.7, 0.4, 1] },
+    },
+    {
+      op: 'createAnimatedMeshInstance', handle: renderHandle(4291), parent: null,
+      instance: {
+        asset: asset.asset,
+        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        materialOverrides: [],
+        playback: { kind: 'sample', clip: 'idle', normalizedTime: 0.5 },
+        visible: true,
+        metadata: { sourceEntity: 88, sourceSceneNode: null, tags: [], label: 'must-not-publish' },
+      },
+    },
+  ] }), /joint count exceeds 256/u);
+
+  assert.equal(mesh.material, oldMaterial);
+  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
+  assert.equal(renderer.animatedMeshPlayback(renderHandle(4291)), undefined);
+  assert.equal(renderer.snapshot(), beforeSnapshot);
+  assert.deepEqual(renderer.textureDescriptor(beforeTexture.id), beforeDescriptor);
+  assert.deepEqual(renderer.resourceStatistics(), beforeResources);
+  assert.deepEqual(renderer.textureResourceReadout(), beforeReadout);
+  assert.deepEqual(source.released, source.acquired, 'prepared resource borrows are always released');
+  renderer.dispose();
+});
+
+void test('a rejected animated sample update preserves live texture/material and handle state', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const source = new TestTextureResourceSource(bytes);
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({
+    animatedMeshSource: diagnosticSkinnedMeshSource(asset, 257, [[1, 0, 0, 0]]),
+    textureResourceSource: source,
+  });
+  const beforeTexture = textureDescriptor(bytes, 1, 'resource');
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: beforeTexture },
+    { op: 'defineMaterial', material: texturedMaterial() },
+    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
+    {
+      op: 'createStaticMeshInstance', handle: renderHandle(4292), parent: null,
+      instance: crateInstance('mesh/textured-plank'),
+    },
+    { op: 'defineAnimatedMesh', asset },
+    {
+      op: 'createAnimatedMeshInstance', handle: renderHandle(4293), parent: null,
+      instance: {
+        asset: asset.asset,
+        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        materialOverrides: [], playback: null, visible: true,
+        metadata: { sourceEntity: 89, sourceSceneNode: null, tags: [], label: 'live-animated' },
+      },
+    },
+  ] });
+  const mesh = renderer.objectFor(renderHandle(4292)) as THREE.Mesh;
+  const oldMaterial = mesh.material;
+  const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
+  const beforeSnapshot = renderer.snapshot();
+  const beforePlayback = renderer.animatedMeshPlayback(renderHandle(4293));
+  const beforeDescriptor = renderer.textureDescriptor(beforeTexture.id);
+  const beforeResources = renderer.resourceStatistics();
+
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: textureDescriptor(bytes, 2, 'resource') },
+    { op: 'defineMaterial', material: { ...texturedMaterial(), color: [0.8, 0.3, 0.1, 1] } },
+    {
+      op: 'setAnimatedMeshPlayback', handle: renderHandle(4293),
+      playback: { kind: 'sample', clip: 'idle', normalizedTime: 0.5 },
+    },
+  ] }), /joint count exceeds 256/u);
+
+  assert.equal(mesh.material, oldMaterial);
+  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
+  assert.equal(renderer.snapshot(), beforeSnapshot);
+  assert.deepEqual(renderer.animatedMeshPlayback(renderHandle(4293)), beforePlayback);
+  assert.deepEqual(renderer.textureDescriptor(beforeTexture.id), beforeDescriptor);
+  assert.deepEqual(renderer.resourceStatistics(), beforeResources);
+  assert.deepEqual(source.released, source.acquired, 'prepared resource borrows are always released');
   renderer.dispose();
 });
 

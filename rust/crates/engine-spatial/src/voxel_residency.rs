@@ -757,7 +757,6 @@ impl VoxelChunkResidencyService {
             scene.voxel_size,
             scene.chunk_size,
             candidate_world,
-            None,
             crate::SceneBuildRevision {
                 source: accepted_revision,
                 world_origin: scene.world_origin,

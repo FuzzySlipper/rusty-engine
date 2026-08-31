@@ -696,6 +696,31 @@ public sealed class Product : IEngineProduct
             "character proposal did not return Engine publication revisions");
         Require(second.Motion.LastCommandSequence == 2 && second.Motion.CollisionWorldHash != 0,
             "character continuity did not remain product-held across proposals");
+        using SpatialSession checkpointSource = _engine.Spatial.CreateSession(
+            new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
+        CharacterStepReceipt checkpointFirst = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
+            checkpointSource, new Vector3(0, 3, 0), motion, noSupport,
+            ReadOnlyMemory<CharacterObstacle>.Empty, config, firstCommand));
+        CharacterStepReceipt checkpointSecond = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
+            checkpointSource, checkpointFirst.Transform.Translation, checkpointFirst.Motion, noSupport,
+            ReadOnlyMemory<CharacterObstacle>.Empty, config, secondCommand));
+        CharacterContinuationCheckpoint checkpoint = _engine.Spatial.CaptureCharacterContinuation(
+            new CharacterContinuationCaptureRequest(checkpointSource, checkpointSecond.Generation));
+        using SpatialSession restoredSpatial = _engine.Spatial.CreateSession(
+            new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
+        CharacterContinuationRestoreReceipt restored = _engine.Spatial.RestoreCharacterContinuation(
+            new CharacterContinuationRestoreRequest(restoredSpatial, checkpoint));
+        CharacterControllerCommand thirdCommand = secondCommand with { Sequence = 3 };
+        CharacterStepReceipt uninterrupted = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
+            checkpointSource, checkpointSecond.Transform.Translation, checkpointSecond.Motion, noSupport,
+            ReadOnlyMemory<CharacterObstacle>.Empty, config, thirdCommand));
+        CharacterStepReceipt resumed = _engine.Spatial.ProposeCharacterStep(new CharacterStepRequest(
+            restoredSpatial, checkpointSecond.Transform.Translation, restored.Motion, noSupport,
+            ReadOnlyMemory<CharacterObstacle>.Empty, checkpoint.Config, thirdCommand));
+        Require(resumed.Motion.Grounded == uninterrupted.Motion.Grounded
+            && resumed.Motion.LastCommandSequence == uninterrupted.Motion.LastCommandSequence
+            && MathF.Abs(resumed.Transform.Translation.Y - uninterrupted.Transform.Translation.Y) < 0.0001f,
+            "restored character continuation did not match uninterrupted airborne motion");
         CharacterControllerReadout readout = _engine.Spatial.ReadCharacterController(new CharacterControllerReadRequest(_spatial));
         Require(readout.Present && readout.CommandSequence == 2 && readout.Generation == second.Generation,
             "character session readout did not describe the latest proposal");

@@ -803,19 +803,27 @@ fn push_outputs(
             continue;
         }
         if let Some(binding) = output.complete_baseline_marker() {
-            let Some(pending) = bus.pending_baseline.take() else {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_BASELINE",
-                    "a baseline completion arrived without its binding",
-                ));
+            let (pending_binding, pending_outputs) = {
+                let Some(pending) = bus.pending_baseline.as_ref() else {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_OUTPUT_BASELINE",
+                        "a baseline completion arrived without its binding",
+                    ));
+                };
+                if pending.binding != binding {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_OUTPUT_BASELINE",
+                        "a baseline completion does not match its binding",
+                    ));
+                }
+                (pending.binding, pending.outputs.clone())
             };
-            if pending.binding != binding {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_BASELINE",
-                    "a baseline completion does not match its binding",
-                ));
-            }
-            append_output_events(&mut bus, pending.binding, pending.outputs)?;
+            // Keep the baseline available until the complete expanded output
+            // batch has passed admission. Fragment encoding can reject after
+            // the marker arrives, and a retry must not turn that failure into
+            // a later incremental-without-baseline error.
+            append_output_events(&mut bus, pending_binding, pending_outputs)?;
+            bus.pending_baseline = None;
             bus.active_binding = Some(binding);
             continue;
         }
@@ -1039,6 +1047,58 @@ mod tests {
         assert!(bus.events.is_empty());
         assert_eq!(bus.next_id, 0);
         assert_eq!(bus.next_transfer_id, 0);
+    }
+
+    #[test]
+    fn rejected_fragmented_baseline_remains_pending_until_a_later_admission_succeeds() {
+        let runtime = binding();
+        let fragmented_payload =
+            "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1));
+        let bus = Mutex::new(OutputBus {
+            pending_baseline: Some(PendingBaseline {
+                binding: runtime,
+                outputs: vec![
+                    crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
+                    crate::model::ProductDevRuntimeOutput::test_frame_value(
+                        serde_json::json!({"payload": fragmented_payload}),
+                    ),
+                    crate::model::ProductDevRuntimeOutput::test_frame_value(
+                        serde_json::json!({"payload": "y".repeat(
+                            MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1),
+                        )}),
+                    ),
+                ],
+            }),
+            ..OutputBus::default()
+        });
+        let error = push_outputs(
+            &bus,
+            vec![crate::model::ProductDevRuntimeOutput::complete_baseline(
+                runtime,
+            )],
+        )
+        .expect_err("oversized baseline remains rejected");
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BATCH_BOUNDS");
+
+        let mut locked = bus.lock().expect("test bus lock");
+        let pending = locked
+            .pending_baseline
+            .as_mut()
+            .expect("rejected baseline remains pending");
+        assert_eq!(pending.binding, runtime);
+        pending.outputs.truncate(1);
+        drop(locked);
+        push_outputs(
+            &bus,
+            vec![crate::model::ProductDevRuntimeOutput::complete_baseline(
+                runtime,
+            )],
+        )
+        .expect("admitted baseline publishes atomically");
+        let locked = bus.lock().expect("test bus lock");
+        assert!(locked.pending_baseline.is_none());
+        assert_eq!(locked.active_binding, Some(runtime));
+        assert_eq!(locked.events.len(), 1);
     }
 }
 

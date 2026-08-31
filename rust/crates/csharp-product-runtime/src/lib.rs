@@ -1799,11 +1799,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(|error| self.runtime_error(error))?;
                 self.input_lane.dispose();
                 self.pending_inputs.clear();
+                // Once the callback transaction and Rust lifecycle transition
+                // have both committed, Drop must not replay Shutdown merely
+                // because serializing the host receipt later fails.
+                self.shutdown_called = true;
                 let receipt = self.receipt(
                     ProductDevOperationKind::Shutdown,
                     self.tag_complete_baseline(outputs),
                 );
-                self.shutdown_called = receipt.is_ok();
                 receipt
             }
         }
@@ -2327,9 +2330,23 @@ impl Drop for CsharpProductRuntime {
             return;
         }
         if !self.shutdown_called {
-            // SAFETY: `handle` was produced by this retained library, and no
-            // other Rust path destroys it. Native exceptions must not cross ABI.
-            let _ = unsafe { (self.api.shutdown)(self.handle) };
+            // Implicit shutdown has the same service-transaction composition
+            // as an explicit lifecycle action. In particular, a managed lease
+            // release cannot run outside a call and vanish before terminal
+            // disposal. Drop cannot return the rejection, so retain the
+            // transaction's discarded acknowledgement and make the failure
+            // observable on the owning process diagnostic stream.
+            if let Err(error) = self.action(
+                self.api.shutdown,
+                ProductDevOperationKind::Shutdown,
+                |lifecycle| lifecycle.shutdown(),
+            ) {
+                eprintln!("CsharpProductRuntime implicit shutdown rejected: {error}");
+            } else {
+                self.input_lane.dispose();
+                self.pending_inputs.clear();
+                self.shutdown_called = true;
+            }
         }
         // Product Dispose may release Engine leases. Mark the generated
         // coordinator terminal before it runs so final teardown is locally
@@ -3918,13 +3935,108 @@ fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDe
 mod tests {
     use super::*;
     use std::sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
         Mutex,
     };
 
     static CONTENT_FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
     static DEBUG_FIXTURE_GATE: Mutex<()> = Mutex::new(());
     static DEBUG_RELEASES: AtomicUsize = AtomicUsize::new(0);
+    static DROP_FIXTURE_GATE: Mutex<()> = Mutex::new(());
+    static DROP_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(ABI_OK);
+    static DROP_EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+    fn record_drop_event(event: &'static str) {
+        DROP_EVENTS.lock().expect("drop fixture events").push(event);
+    }
+
+    unsafe extern "C" fn drop_fixture_create(
+        _args: *const NativeProductCreateArgs,
+        handle: *mut *mut c_void,
+    ) -> i32 {
+        // SAFETY: the fixture provides a non-null opaque value which is never
+        // dereferenced by its callbacks.
+        unsafe { *handle = std::ptr::NonNull::<u8>::dangling().as_ptr().cast() };
+        ABI_OK
+    }
+
+    unsafe extern "C" fn drop_fixture_action(_handle: *mut c_void) -> i32 {
+        ABI_OK
+    }
+
+    unsafe extern "C" fn drop_fixture_shutdown(_handle: *mut c_void) -> i32 {
+        record_drop_event("shutdown");
+        DROP_CALLBACK_STATUS.load(Ordering::SeqCst)
+    }
+
+    unsafe extern "C" fn drop_fixture_update(
+        _handle: *mut c_void,
+        _args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        // SAFETY: the fixture owns the provided writable result pointer.
+        unsafe { *result = NativeProductUpdateResult::None };
+        ABI_OK
+    }
+
+    unsafe extern "C" fn drop_fixture_timeline(
+        _handle: *mut c_void,
+        _completion: *const NativeProductTimelineCompletion,
+        accepted: *mut u8,
+    ) -> i32 {
+        // SAFETY: the fixture owns the provided writable acceptance pointer.
+        unsafe { *accepted = 0 };
+        ABI_OK
+    }
+
+    unsafe extern "C" fn drop_fixture_complete_call(
+        _handle: *mut c_void,
+        committed: u8,
+        terminal: u8,
+    ) {
+        record_drop_event(match (committed, terminal) {
+            (1, 0) => "commit",
+            (0, 0) => "discard",
+            (0, 1) => "terminal",
+            _ => "invalid-completion",
+        });
+    }
+
+    unsafe extern "C" fn drop_fixture_destroy(_handle: *mut c_void) {
+        record_drop_event("destroy");
+    }
+
+    fn drop_fixture_api() -> LoadedProductApi {
+        LoadedProductApi {
+            host: LoadedProductHost::NativeAot(None),
+            create: drop_fixture_create,
+            start: drop_fixture_action,
+            update: drop_fixture_update,
+            complete_timeline: drop_fixture_timeline,
+            complete_call: drop_fixture_complete_call,
+            pause: drop_fixture_action,
+            resume: drop_fixture_action,
+            restart: drop_fixture_action,
+            shutdown: drop_fixture_shutdown,
+            destroy: drop_fixture_destroy,
+            debug: None,
+            debug_describe: None,
+            observe_runtime: None,
+        }
+    }
+
+    fn drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+        let root = content_fixture_root(label);
+        fs::create_dir_all(&root).expect("drop fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("drop fixture content");
+        let runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(RuntimeLifecycleConfig::Demand, Vec::new()),
+            || Ok(drop_fixture_api()),
+        )
+        .expect("drop fixture runtime");
+        (runtime, root)
+    }
 
     // This is the complete table as generated at 11b1319, before descriptor
     // publication existed. Its final execute/release fields must remain an
@@ -4102,6 +4214,39 @@ mod tests {
         .expect_err("ABI failure remains a runtime error");
         assert_eq!(error.code(), "CSHARP_PRODUCT_CALL");
         assert_eq!(DEBUG_RELEASES.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn implicit_shutdown_commits_its_service_transaction_before_terminal_disposal() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        DROP_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+        DROP_EVENTS.lock().expect("drop fixture events").clear();
+        let (runtime, root) = drop_fixture_runtime("implicit-shutdown-success");
+        DROP_EVENTS.lock().expect("drop fixture events").clear();
+
+        drop(runtime);
+        assert_eq!(
+            DROP_EVENTS.lock().expect("drop fixture events").as_slice(),
+            ["shutdown", "commit", "terminal", "destroy"],
+        );
+        fs::remove_dir_all(root).expect("remove drop fixture content");
+    }
+
+    #[test]
+    fn failed_implicit_shutdown_discards_before_terminal_disposal_without_replay() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        DROP_CALLBACK_STATUS.store(41, Ordering::SeqCst);
+        DROP_EVENTS.lock().expect("drop fixture events").clear();
+        let (runtime, root) = drop_fixture_runtime("implicit-shutdown-failure");
+        DROP_EVENTS.lock().expect("drop fixture events").clear();
+
+        drop(runtime);
+        assert_eq!(
+            DROP_EVENTS.lock().expect("drop fixture events").as_slice(),
+            ["shutdown", "discard", "terminal", "destroy"],
+        );
+        DROP_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+        fs::remove_dir_all(root).expect("remove drop fixture content");
     }
 
     #[test]

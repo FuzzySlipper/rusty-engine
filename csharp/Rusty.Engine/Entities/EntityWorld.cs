@@ -67,6 +67,7 @@ public sealed class EntityWorld : IDisposable
     public EntityId Create(EntityLifecycle lifecycle = EntityLifecycle.Active)
     {
         ThrowIfDisposed();
+        EntityLifecycleValidation.EnsureDefined(lifecycle, nameof(lifecycle));
         if (lifecycle == EntityLifecycle.Tombstoned)
         {
             throw new ArgumentOutOfRangeException(nameof(lifecycle), "New entities must be alive.");
@@ -111,6 +112,7 @@ public sealed class EntityWorld : IDisposable
     public void SetLifecycle(EntityId entity, EntityLifecycle lifecycle, EntityRevision? expectedRevision = null)
     {
         ThrowIfDisposed();
+        EntityLifecycleValidation.EnsureDefined(lifecycle, nameof(lifecycle));
         EntityRecord record = RequireEntity(entity);
         EnsureEntityRevision(entity, record, expectedRevision);
         if (record.Lifecycle == EntityLifecycle.Tombstoned)
@@ -349,7 +351,7 @@ public sealed class EntityWorld : IDisposable
         }
 
         ulong revisionBefore = _state.Revision;
-        WorldState stagedState = _state.Clone(forSnapshot: false);
+        WorldState stagedState = _state.Clone();
         var staged = new EntityWorld(stagedState, staging: true);
         foreach (Action<EntityWorld> mutation in batch.Mutations)
         {
@@ -363,13 +365,14 @@ public sealed class EntityWorld : IDisposable
         return new EntityWorldBatchCandidate(
             this,
             staged._state,
+            revisionBefore,
             new EntityBatchReceipt(revisionBefore, staged._state.Revision, batch.Mutations.Count));
     }
 
     public EntityWorldSnapshot Snapshot()
     {
         ThrowIfDisposed();
-        return new EntityWorldSnapshot(_state.Clone(forSnapshot: true));
+        return new EntityWorldSnapshot(_state.Clone());
     }
 
     /// <summary>Returns copied entity lifecycle and revision evidence in entity-id order.</summary>
@@ -423,11 +426,12 @@ public sealed class EntityWorld : IDisposable
             throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
         }
         EnsureSameRegistrations(snapshot.State);
-        WorldState restored = snapshot.State.Clone(forSnapshot: true);
+        ulong revisionBefore = _state.Revision;
+        WorldState restored = snapshot.State.Clone();
         restored.ValidateComponents();
         restored.ValidateContainment();
         restored.RebaseRevisionsAfter(_state);
-        return new EntityWorldRestoreCandidate(this, restored);
+        return new EntityWorldRestoreCandidate(this, restored, revisionBefore);
     }
 
     /// <summary>
@@ -445,9 +449,10 @@ public sealed class EntityWorld : IDisposable
             throw new InvalidOperationException($"World revision is stale: expected {expected}, actual {_state.Revision}.");
         }
 
+        ulong revisionBefore = _state.Revision;
         WorldState restored = BuildRestoreState(plan);
         restored.RebaseRevisionsAfter(_state);
-        return new EntityWorldRestoreCandidate(this, restored);
+        return new EntityWorldRestoreCandidate(this, restored, revisionBefore);
     }
 
     public EntityWorldDiagnostics Diagnostics(int maxEntitySample = MaximumDiagnosticSample)
@@ -473,7 +478,7 @@ public sealed class EntityWorld : IDisposable
         IReadOnlyList<ComponentTypeDiagnostics> components = _state.Tables.Values
             .Select(table => table.Diagnostics(maxEntitySample))
             .ToArray();
-        return new EntityWorldDiagnostics(_state.Revision, _state.NextEntityValue, false, _state.Entities.Count, active, disabled, tombstoned, components);
+        return new EntityWorldDiagnostics(_state.Revision, _state.NextEntityValue, _state.Entities.Count, active, disabled, tombstoned, components);
     }
 
     /// <summary>
@@ -676,10 +681,7 @@ public sealed class EntityWorld : IDisposable
                 throw new InvalidOperationException($"Restore contains duplicate entity {state.Id.Value}.");
             }
             EntityWorldRestorePlan.ValidateRevision(state.Revision, $"entity {state.Id.Value}");
-            if (state.Lifecycle is not (EntityLifecycle.Active or EntityLifecycle.Disabled or EntityLifecycle.Tombstoned))
-            {
-                throw new InvalidOperationException($"Restore entity {state.Id.Value} has an invalid lifecycle.");
-            }
+            EntityLifecycleValidation.EnsureDefined(state.Lifecycle, nameof(state.Lifecycle));
         }
 
         HashSet<ulong> containmentChildren = [];
@@ -750,9 +752,19 @@ public sealed class EntityWorld : IDisposable
         return Math.Max(saved, current) + 1;
     }
 
-    internal void PublishPreparedRestore(WorldState restored) => _state = restored;
+    internal void PublishPreparedRestore(WorldState restored, ulong preparedRevision)
+    {
+        ThrowIfDisposed();
+        EnsureWorldRevision(preparedRevision);
+        _state = restored;
+    }
 
-    internal void PublishPreparedBatch(WorldState state) => _state = state;
+    internal void PublishPreparedBatch(WorldState state, ulong preparedRevision)
+    {
+        ThrowIfDisposed();
+        EnsureWorldRevision(preparedRevision);
+        _state = state;
+    }
 
     internal sealed class WorldState
     {
@@ -763,7 +775,7 @@ public sealed class EntityWorld : IDisposable
         internal SortedDictionary<ulong, ulong> Containment { get; } = [];
         internal SortedDictionary<ulong, SortedSet<ulong>> ContainedChildren { get; } = [];
 
-        internal WorldState Clone(bool forSnapshot)
+        internal WorldState Clone()
         {
             var result = new WorldState { Revision = Revision, NextEntityValue = NextEntityValue };
             foreach ((ulong id, EntityRecord entity) in Entities)
@@ -772,7 +784,7 @@ public sealed class EntityWorld : IDisposable
             }
             foreach ((ComponentTypeKey key, ComponentTable table) in Tables)
             {
-                result.Tables.Add(key, table.Clone(forSnapshot));
+                result.Tables.Add(key, table.Clone());
             }
             foreach ((ulong child, ulong container) in Containment)
             {
@@ -888,7 +900,7 @@ public sealed class EntityWorld : IDisposable
     {
         protected ComponentTable(ComponentType descriptor) => Descriptor = descriptor;
         internal ComponentType Descriptor { get; }
-        internal abstract ComponentTable Clone(bool forSnapshot);
+        internal abstract ComponentTable Clone();
         internal abstract ComponentTable CreateEmpty();
         internal abstract bool Contains(EntityId entity);
         internal abstract ulong RevisionFor(EntityId entity);
@@ -906,11 +918,11 @@ public sealed class EntityWorld : IDisposable
 
         public ComponentTable(ComponentType<T> descriptor) : base(descriptor) { }
 
-        private ComponentTable(ComponentTable<T> source, bool forSnapshot) : base(source.TypedDescriptor)
+        private ComponentTable(ComponentTable<T> source) : base(source.TypedDescriptor)
         {
             foreach ((ulong entity, T value) in source._values)
             {
-                T copied = forSnapshot && TypedDescriptor.SnapshotCodec is ComponentSnapshotCodec<T> codec ? codec(in value) : value;
+                T copied = TypedDescriptor.CopyForDetachedUse(in value);
                 TypedDescriptor.Validate(in copied);
                 _values.Add(entity, copied);
             }
@@ -922,18 +934,28 @@ public sealed class EntityWorld : IDisposable
 
         private ComponentType<T> TypedDescriptor => (ComponentType<T>)Descriptor;
 
-        internal override ComponentTable Clone(bool forSnapshot) => new ComponentTable<T>(this, forSnapshot);
+        internal override ComponentTable Clone() => new ComponentTable<T>(this);
 
         internal override ComponentTable CreateEmpty() => new ComponentTable<T>(TypedDescriptor);
 
         internal override bool Contains(EntityId entity) => _values.ContainsKey(entity.Value);
 
-        internal bool TryGet(EntityId entity, out T value) => _values.TryGetValue(entity.Value, out value);
+        internal bool TryGet(EntityId entity, out T value)
+        {
+            if (!_values.TryGetValue(entity.Value, out T stored))
+            {
+                value = default;
+                return false;
+            }
+            value = TypedDescriptor.CopyForDetachedUse(in stored);
+            return true;
+        }
 
         internal void Set(EntityId entity, T value)
         {
-            TypedDescriptor.Validate(in value);
-            _values[entity.Value] = value;
+            T copied = TypedDescriptor.CopyForDetachedUse(in value);
+            TypedDescriptor.Validate(in copied);
+            _values[entity.Value] = copied;
             BumpRevision(entity);
         }
 
@@ -955,9 +977,9 @@ public sealed class EntityWorld : IDisposable
             foreach (EntityId entity in entities)
             {
                 bool present = _values.TryGetValue(entity.Value, out T value);
-                if (present && TypedDescriptor.SnapshotCodec is ComponentSnapshotCodec<T> codec)
+                if (present)
                 {
-                    value = codec(in value);
+                    value = TypedDescriptor.CopyForDetachedUse(in value);
                 }
                 result.Add(new EntityWorldComponentSlot<T>(entity, present, value, RevisionFor(entity)));
             }
@@ -970,7 +992,10 @@ public sealed class EntityWorld : IDisposable
             {
                 if (slot.Present)
                 {
-                    _values.Add(slot.Entity.Value, slot.Value);
+                    T value = slot.Value;
+                    T copied = TypedDescriptor.CopyForDetachedUse(in value);
+                    TypedDescriptor.Validate(in copied);
+                    _values.Add(slot.Entity.Value, copied);
                 }
                 _revisions.Add(slot.Entity.Value, slot.Revision);
             }
@@ -1008,7 +1033,8 @@ public sealed class EntityWorld : IDisposable
         {
             foreach ((ulong entity, T value) in _values)
             {
-                yield return (new EntityId(entity), value);
+                T copied = TypedDescriptor.CopyForDetachedUse(in value);
+                yield return (new EntityId(entity), copied);
             }
         }
 

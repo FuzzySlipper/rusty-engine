@@ -307,6 +307,20 @@ test('transport rejects an adapter with an arbitrary or missing operation surfac
     } as never),
     /subscribeTerminalFailures must be a function/u,
   );
+  assert.throws(
+    () => createProductBrowserRuntimeTransport({
+      ...adapter,
+      admitDemandStep: true,
+    } as never),
+    /admitDemandStep must be a function/u,
+  );
+  assert.throws(
+    () => createProductBrowserRuntimeTransport({
+      ...adapter,
+      admitExternalStep: true,
+    } as never),
+    /admitExternalStep must be a function/u,
+  );
 });
 
 test('bundle assets are fixed JS composition roots and descriptor bytes are reproducible', () => {

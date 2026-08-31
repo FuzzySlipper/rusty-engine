@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Generate the trusted NativeAOT ABI from the one Rust source of truth. The
-# tools are pinned here/at the repository tool manifest and are installed into
-# ignored local build paths; no generated source is checked in.
+# cbindgen and the managed ClangSharp parser are pinned here and in the
+# BindingGenerator project; generated source is written only to ignored local
+# build paths.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
@@ -27,17 +28,19 @@ if [[ ! -x "$cbindgen_bin" ]]; then
 fi
 
 if ! command -v clang >/dev/null 2>&1; then
-    echo "generate-csharp-native-bindings: clang is required by ClangSharpPInvokeGenerator" >&2
+    echo "generate-csharp-native-bindings: clang is required by BindingGenerator's ClangSharp parser" >&2
     exit 1
 fi
 clang_resource_dir=$(clang -print-resource-dir)
 
-dotnet tool restore --tool-manifest "$repo_root/.config/dotnet-tools.json" --verbosity quiet
-
 header="$output_dir/rusty_engine.h"
-bindings="$output_dir/NativeBindings.g.cs"
 contracts="$output_dir/EngineContracts.g.cs"
 values="$output_dir/EngineValues.g.cs"
+
+# Older runs emitted this ignored raw binding file. It is no longer part of the
+# generated surface, so remove it when reusing an output directory rather than
+# leaving stale source beside current bindings.
+rm -f -- "$output_dir/NativeBindings.g.cs"
 
 (
     cd "$crate_dir"
@@ -45,21 +48,6 @@ values="$output_dir/EngineValues.g.cs"
         --config cbindgen.toml \
         --crate csharp-engine-abi \
         --output "$header"
-)
-
-(
-    cd "$repo_root"
-    dotnet tool run \
-        ClangSharpPInvokeGenerator \
-        -f "$header" \
-        -o "$bindings" \
-        -n Rusty.Engine.Native \
-        -x c \
-        -rd "$(clang -print-resource-dir)" \
-        -c codegen=latest \
-        --generate helper-types \
-        --generate generated-code=none \
-        -e 'rusty_product_*'
 )
 
 dotnet run \

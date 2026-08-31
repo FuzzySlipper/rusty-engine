@@ -332,7 +332,20 @@ export interface SpriteAtlasDescriptor {
   readonly frames: readonly SpriteFrameRect[];
 }
 
-export type MaterialUvStrategy = 'flat' | 'planar' | 'atlas';
+/**
+ * Legacy producer annotation retained solely so existing encoded material
+ * records remain readable. Generic mesh textures always consume the authored
+ * UV attribute from their mesh payload; these values do not select a renderer
+ * projection. New generic material producers must supply baked mesh UVs.
+ *
+ * Real repeat/atlas mapping belongs to {@link VoxelSurfaceMappingDescriptor},
+ * whose scale, origin, region, and texture provenance make those operations
+ * unambiguous.
+ */
+export type DeprecatedMaterialUvStrategy = 'flat' | 'planar' | 'atlas';
+
+/** @deprecated Use baked generic mesh UVs; see `DeprecatedMaterialUvStrategy`. */
+export type MaterialUvStrategy = DeprecatedMaterialUvStrategy;
 
 export type VoxelSurfaceAlphaMode =
   | { readonly kind: 'opaque' }
@@ -393,6 +406,11 @@ export interface RenderMaterialDescriptor {
   readonly textureTint: Vec4;
   readonly emissionColor: Vec3;
   readonly emissionIntensity: number;
+  /**
+   * @deprecated Compatibility-only producer metadata. Generic renderer paths
+   * use the mesh payload's baked UV attribute; use `voxelSurface.mapping` for
+   * explicit planar repeat or atlas behavior.
+   */
   readonly uvStrategy: MaterialUvStrategy;
   readonly alphaMode?: { readonly kind: 'opaque' | 'blend' }
     | { readonly kind: 'mask'; readonly cutoff: number };

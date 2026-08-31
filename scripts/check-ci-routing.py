@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the repository-owned CI routing and single-pass renderer contract."""
+"""Check the repository-owned CI routing for active verification lanes."""
 
 from __future__ import annotations
 
@@ -83,9 +83,17 @@ def main() -> None:
             "Cargo.lock",
             "rust/**",
             "!rust/crates/renderer-webview-host/artifacts/**",
+            "csharp/**",
+            "fixtures/csharp-*/**",
+            "rust/crates/csharp-engine-abi/**",
+            "rust/crates/csharp-engine-services/**",
+            "rust/crates/csharp-product-runtime/**",
+            "scripts/generate-csharp-native-bindings.sh",
+            "scripts/test-csharp-binding-generator-lease-fixture.sh",
+            "scripts/verify-csharp.sh",
             "scripts/verify.sh",
         },
-        {"render/**", "studio/**", "rules/**"},
+        {"render/**", "studio/**", "migration/**"},
     )
     if "paths-ignore:" in workflows["verify"]:
         fail("verify must use explicit owner paths instead of a repository-wide paths-ignore")
@@ -104,7 +112,14 @@ def main() -> None:
     )
 
     routing_cases = {
-        "fixtures/render/depth-splat-comparison-v1.json": {"render", "verify"},
+        "fixtures/render/depth-splat-comparison-v1.json": {"render"},
+        "fixtures/csharp-nativeaot-trial/Product.cs": {"verify"},
+        "csharp/Rusty.Engine/Mechanics/Inventory.cs": {"verify"},
+        "rust/crates/csharp-engine-abi/src/lib.rs": {"verify"},
+        "rust/crates/csharp-engine-services/src/lib.rs": {"verify"},
+        "rust/crates/csharp-product-runtime/src/lib.rs": {"verify"},
+        "scripts/generate-csharp-native-bindings.sh": {"verify"},
+        "scripts/test-csharp-binding-generator-lease-fixture.sh": {"verify"},
         "render/browser/application-host.browser.spec.ts": {"render"},
         "render/packages/renderer-three/src/backend.ts": {
             "render",
@@ -160,6 +175,17 @@ def main() -> None:
         if "uses: Swatinem/rust-cache@v2" not in workflow or "shared-key: engine-ci" not in workflow:
             fail(f"{name} does not participate in the bounded shared Rust cache")
 
+    csharp_gate = read(root, "scripts/verify-csharp.sh")
+    for required in (
+        'dotnet restore "$NATIVE_AOT_PROJECT" --runtime linux-x64',
+        'dotnet restore "$MANAGED_PROJECT"',
+        'dotnet build "$MANAGED_PROJECT" --no-restore',
+        'dotnet publish "$NATIVE_AOT_PROJECT"',
+        '--runtime linux-x64',
+    ):
+        if required not in csharp_gate:
+            fail(f"C# verification gate is missing {required}")
+
     aggregate = read(root, "scripts/verify-render.sh")
     if 'install --frozen-lockfile --ignore-scripts' not in aggregate:
         fail("local renderer dependency admission must not compile workspace packages")
@@ -172,9 +198,8 @@ def main() -> None:
     ):
         if required not in aggregate:
             fail(f"aggregate renderer gate is missing {required}")
-    for duplicate in ("verify-application-host-artifact.sh", "run verify"):
-        if duplicate in aggregate:
-            fail(f"aggregate renderer gate reintroduced duplicate path {duplicate}")
+    if "run verify" in aggregate:
+        fail("aggregate renderer gate recursively invokes an unrelated verify path")
 
     artifact_gate = read(root, "scripts/verify-render-artifacts.sh")
     if artifact_gate.count('run build\n') != 1:

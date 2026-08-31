@@ -1084,6 +1084,55 @@ pub struct NativeCharacterStepRequest {
     pub command: NativeCharacterControllerCommand,
 }
 
+/// Captures the latest admitted controller continuation from one Spatial
+/// session. `expected_generation` prevents a caller from checkpointing a
+/// newer controller result by mistake.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterContinuationCaptureRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub expected_generation: u64,
+}
+
+/// Durable, copied controller continuation facts. This is a value, never a
+/// native lease or session handle: product persistence may retain it, then
+/// restore it only into a compatible newly-created Spatial session. The
+/// source identity and generation are diagnostic provenance from the capture;
+/// compatibility is established by the typed config, motion, target-session,
+/// and canonical-content checks rather than by resolving an old native handle.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCharacterContinuationCheckpoint {
+    pub source_session_identity: u64,
+    pub source_generation: u64,
+    pub spatial_session_fingerprint: u64,
+    pub content_authority_hash: u64,
+    pub config_fingerprint: u64,
+    pub config: NativeCharacterControllerConfig,
+    pub motion: NativeCharacterMotion,
+}
+
+/// Restores a copied continuation after the product has restored its authored
+/// pose and recreated compatible Spatial content. The checkpoint carries its
+/// own controller configuration so the Engine can reject corruption or drift
+/// before returning the next-call motion value.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCharacterContinuationRestoreRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub checkpoint: NativeCharacterContinuationCheckpoint,
+}
+
+/// The Engine-confirmed continuation to supply to the next character step.
+/// Current support transforms remain product-authored, call-local facts and
+/// must be resubmitted with that later step.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCharacterContinuationRestoreReceipt {
+    pub source_generation: u64,
+    pub motion: NativeCharacterMotion,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeCharacterContact {

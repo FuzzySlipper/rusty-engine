@@ -1,6 +1,7 @@
 using Rusty.Engine;
 using Rusty.Engine.Application;
 
+// This executable is a focused helper proof harness, not a recommended product root or architecture template.
 var engine = new ExampleEngineContext();
 var scheduler = new SimulationScheduler();
 var defaultOrder = new List<string>();

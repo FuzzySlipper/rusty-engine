@@ -127,6 +127,21 @@ entities or collider records. Collision uses the existing translation-offset
 AABB posture with unit scale; obstacle rotation participates in platform carry
 but does not rotate the collider volume.
 
+To save an admitted character continuation, call
+`CaptureCharacterContinuation` with the latest `CharacterStepReceipt.Generation`
+and persist the copied `CharacterContinuationCheckpoint` beside the
+product-owned pose and look. After recreating a compatible `SpatialSession`
+and its canonical content, call `RestoreCharacterContinuation`; use its
+returned `Motion` and the checkpoint's `Config` for the next
+`ProposeCharacterStep`, while supplying current product-authored support and
+obstacle facts as usual. The Engine rejects stale source generations, invalid
+motion, changed session configuration, and changed canonical content before
+returning a continuation. A checkpoint is a plain value, not a session lease;
+it cannot restore into a disposed or already-used target session. Its source
+session identity and generation are copied diagnostic provenance, not a native
+handle that remains resolvable after save/load; target compatibility comes from
+the typed configuration, motion, session, and canonical-content checks.
+
 ## Values, leases, and native lifetime
 
 The public C# layer turns direct service calls into typed requests, receipts,

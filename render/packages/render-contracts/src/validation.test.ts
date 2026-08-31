@@ -53,6 +53,16 @@ void test('strict TypeScript decoders accept the committed Rust render fixtures'
   assert.equal(billboard.op.descriptor.content.kind, 'structured');
 });
 
+void test('legacy generic UV strategy values remain wire-compatible baked-UV metadata', () => {
+  const frame = mutableFixture('retained-frame-v1.json');
+  const material = (frame['ops'] as Array<Record<string, unknown>>)
+    .find((operation) => operation['op'] === 'defineMaterial')!['material'] as Record<string, unknown>;
+  for (const uvStrategy of ['flat', 'planar', 'atlas']) {
+    material['uvStrategy'] = uvStrategy;
+    assert.doesNotThrow(() => decodeRenderFrameDiff(frame));
+  }
+});
+
 void test('held animated samples accept inclusive boundaries and reject malformed normalized times', () => {
   const sample = (normalizedTime: unknown) => ({
     schemaVersion: 1,

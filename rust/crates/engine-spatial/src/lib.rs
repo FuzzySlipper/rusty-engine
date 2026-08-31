@@ -151,7 +151,6 @@ use svc_pathfinding::{
     DirectNavMovementRequest, NavError, NavProjection, NavProjectionConfig,
     ProjectedDirectNavMovementError, ProjectedDirectNavMovementRequest,
 };
-use svc_rng::{RngSeed, ScopedRng};
 use svc_spatial::VoxelWorld;
 use svc_volume::{VolumeError, VoxelChunk};
 
@@ -160,31 +159,6 @@ use svc_volume::{VolumeError, VoxelChunk};
 pub const MAX_MOTION_DELTA_SECONDS: f32 = 1.0;
 pub const MAX_CHUNK_SIZE: u32 = 64;
 pub const MAX_SOLID_VOXELS: usize = 1_000_000;
-pub const GENERATED_ROOM_VERSION: u32 = 2;
-const GENERATED_ROOM_SCOPE: &str = "rusty-engine.generated-room.v1";
-const GENERATED_EXIT_WIDTH: u32 = 3;
-const GENERATED_EXIT_HEIGHT: u32 = 2;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GeneratedRoomConfig {
-    pub seed: u64,
-    pub voxel_size: f64,
-    pub chunk_size: u32,
-    pub width: u32,
-    pub height: u32,
-    pub length: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GeneratedRoomRecord {
-    pub generator_version: u32,
-    pub output_hash: u64,
-    pub pillar_voxel: [i64; 3],
-    pub accent_voxel: [i64; 3],
-    pub exit_aperture_min: [i64; 3],
-    pub exit_aperture_max_exclusive: [i64; 3],
-    pub solid_voxel_count: usize,
-}
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
@@ -240,12 +214,6 @@ pub struct VoxelChunkMeshUpdate {
     pub removed_chunks: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GeneratedRoomError {
-    TooSmall,
-    ExceedsChunk,
-}
-
 /// Static collision authority plus its query-optimized derived projection.
 ///
 /// Keeping both layers together preserves the important invariant that the
@@ -262,7 +230,6 @@ pub struct VoxelCollisionScene {
     mesh_chunks: Vec<VoxelMeshChunk>,
     mesh_options: SurfaceMeshOptions,
     mesh_update: VoxelChunkMeshUpdate,
-    generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
     source_revision: VoxelSourceRevision,
     projection_revisions: VoxelProjectionRevisions,
     authority_hash: u64,
@@ -295,7 +262,6 @@ impl std::fmt::Debug for VoxelCollisionScene {
             .field("chunk_size", &self.chunk_size)
             .field("solid_voxel_count", &self.solid_voxels.len())
             .field("mesh_chunk_count", &self.mesh_chunks.len())
-            .field("generated_room", &self.generated_room)
             .field("source_revision", &self.source_revision)
             .field("authority_hash", &self.authority_hash)
             .field("world_origin", &self.world_origin)
@@ -328,7 +294,6 @@ pub enum CollisionSceneError {
         second: u16,
     },
     InvalidMaterialVoxel(VoxelAuthorityValidationError),
-    Generation(GeneratedRoomError),
     Mesh(MeshError),
     NavigationProjection(NavError),
     StaticMeshRebase(StaticMeshCollisionError),
@@ -391,7 +356,6 @@ impl VoxelCollisionScene {
                 address,
                 material_slot: 1,
             }),
-            None,
             SurfaceMeshOptions::default(),
         )
     }
@@ -409,7 +373,6 @@ impl VoxelCollisionScene {
                 address,
                 material_slot: 1,
             }),
-            None,
             mesh_options,
         )
     }
@@ -423,7 +386,6 @@ impl VoxelCollisionScene {
             voxel_size,
             chunk_size,
             voxels,
-            None,
             SurfaceMeshOptions::default(),
         )
     }
@@ -434,7 +396,7 @@ impl VoxelCollisionScene {
         voxels: impl IntoIterator<Item = MaterialVoxel>,
         mesh_options: SurfaceMeshOptions,
     ) -> Result<Self, CollisionSceneError> {
-        Self::build(voxel_size, chunk_size, voxels, None, mesh_options)
+        Self::build(voxel_size, chunk_size, voxels, mesh_options)
     }
 
     /// Rebuild concrete persisted authority at its accepted live revision.
@@ -450,7 +412,6 @@ impl VoxelCollisionScene {
             voxel_size,
             chunk_size,
             voxels,
-            None,
             source_revision,
             SurfaceMeshOptions::default(),
             None,
@@ -470,7 +431,6 @@ impl VoxelCollisionScene {
             voxel_size,
             chunk_size,
             voxels,
-            None,
             revisions.source,
             mesh_options,
             None,
@@ -492,21 +452,9 @@ impl VoxelCollisionScene {
             voxel_size,
             chunk_size,
             world,
-            None,
             revisions,
             mesh_options,
             incremental_mesh,
-        )
-    }
-
-    pub fn from_generated_room(config: GeneratedRoomConfig) -> Result<Self, CollisionSceneError> {
-        let (voxels, record) = generate_room(config).map_err(CollisionSceneError::Generation)?;
-        Self::build(
-            config.voxel_size,
-            config.chunk_size,
-            voxels,
-            Some((config, record)),
-            SurfaceMeshOptions::default(),
         )
     }
 
@@ -514,14 +462,12 @@ impl VoxelCollisionScene {
         voxel_size: f64,
         chunk_size: u32,
         voxels: impl IntoIterator<Item = MaterialVoxel>,
-        generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
         mesh_options: SurfaceMeshOptions,
     ) -> Result<Self, CollisionSceneError> {
         Self::build_at_revision(
             voxel_size,
             chunk_size,
             voxels,
-            generated_room,
             VoxelSourceRevision::INITIAL,
             mesh_options,
             None,
@@ -532,7 +478,6 @@ impl VoxelCollisionScene {
         voxel_size: f64,
         chunk_size: u32,
         voxels: impl IntoIterator<Item = MaterialVoxel>,
-        generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
         source_revision: VoxelSourceRevision,
         mesh_options: SurfaceMeshOptions,
         incremental_mesh: Option<(&[VoxelMeshChunk], &BTreeSet<ChunkCoord>)>,
@@ -596,7 +541,6 @@ impl VoxelCollisionScene {
             voxel_size,
             chunk_size,
             voxel_world,
-            generated_room,
             SceneBuildRevision::initial(source_revision),
             mesh_options,
             incremental_mesh,
@@ -607,7 +551,6 @@ impl VoxelCollisionScene {
         voxel_size: f64,
         chunk_size: u32,
         voxel_world: VoxelWorld,
-        generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
         revisions: SceneBuildRevision,
         mesh_options: SurfaceMeshOptions,
         incremental_mesh: Option<(&[VoxelMeshChunk], &BTreeSet<ChunkCoord>)>,
@@ -687,7 +630,6 @@ impl VoxelCollisionScene {
                 reused_chunks,
                 removed_chunks,
             },
-            generated_room,
             source_revision: revisions.source,
             projection_revisions: VoxelProjectionRevisions::coherent(revisions.source),
             authority_hash,
@@ -728,10 +670,6 @@ impl VoxelCollisionScene {
         &self.mesh_update
     }
 
-    pub fn generated_room(&self) -> Option<(GeneratedRoomConfig, GeneratedRoomRecord)> {
-        self.generated_room
-    }
-
     pub const fn source_revision(&self) -> VoxelSourceRevision {
         self.source_revision
     }
@@ -768,7 +706,6 @@ impl VoxelCollisionScene {
             self.voxel_size,
             self.chunk_size,
             voxel_world,
-            self.generated_room,
             SceneBuildRevision {
                 source: self.source_revision,
                 world_origin: target,
@@ -1199,119 +1136,6 @@ fn mesh_payload_hash(mesh: &svc_mesh::MeshPayload) -> u64 {
     }
     for value in mesh.bounds.min.into_iter().chain(mesh.bounds.max) {
         feed(&value.to_bits().to_le_bytes());
-    }
-    hash
-}
-
-fn generate_room(
-    config: GeneratedRoomConfig,
-) -> Result<(Vec<MaterialVoxel>, GeneratedRoomRecord), GeneratedRoomError> {
-    if config.width < 5 || config.height < 3 || config.length < 8 {
-        return Err(GeneratedRoomError::TooSmall);
-    }
-    let shell = [
-        config
-            .width
-            .checked_add(2)
-            .ok_or(GeneratedRoomError::ExceedsChunk)?,
-        config
-            .height
-            .checked_add(2)
-            .ok_or(GeneratedRoomError::ExceedsChunk)?,
-        config
-            .length
-            .checked_add(2)
-            .ok_or(GeneratedRoomError::ExceedsChunk)?,
-    ];
-    if !(1..=MAX_CHUNK_SIZE).contains(&config.chunk_size)
-        || shell.iter().any(|dimension| *dimension > config.chunk_size)
-    {
-        return Err(GeneratedRoomError::ExceedsChunk);
-    }
-    let mut rng = ScopedRng::new(RngSeed::new(config.seed), GENERATED_ROOM_SCOPE);
-    let pillar_x = 2 + rng
-        .next_bounded_u32(config.width - 2)
-        .expect("validated pillar span");
-    let pillar_z = 1 + config.length / 2;
-    let accent_x = if rng.next_bool() { 0 } else { shell[0] - 1 };
-    let accent_z = 1 + rng
-        .next_bounded_u32(config.length)
-        .expect("validated accent span");
-    let exit_x_start = 1 + (config.width - GENERATED_EXIT_WIDTH) / 2;
-    let exit_x_end = exit_x_start + GENERATED_EXIT_WIDTH;
-    let exit_y_end = 1 + GENERATED_EXIT_HEIGHT;
-    let exit_z = shell[2] - 1;
-    let mut voxels = Vec::new();
-    for z in 0..shell[2] {
-        for y in 0..shell[1] {
-            for x in 0..shell[0] {
-                let in_exit_aperture = z == exit_z
-                    && (exit_x_start..exit_x_end).contains(&x)
-                    && (1..exit_y_end).contains(&y);
-                if in_exit_aperture {
-                    continue;
-                }
-                let on_shell = x == 0
-                    || x + 1 == shell[0]
-                    || y == 0
-                    || y + 1 == shell[1]
-                    || z == 0
-                    || z + 1 == shell[2];
-                let material_slot = if on_shell {
-                    if x == accent_x && y == 1 && z == accent_z {
-                        3
-                    } else if y == 0 {
-                        2
-                    } else {
-                        1
-                    }
-                } else if x == pillar_x && z == pillar_z {
-                    3
-                } else {
-                    continue;
-                };
-                voxels.push(MaterialVoxel {
-                    address: [i64::from(x), i64::from(y), i64::from(z)],
-                    material_slot,
-                });
-            }
-        }
-    }
-    let output_hash = hash_generated_room(config, &voxels);
-    let record = GeneratedRoomRecord {
-        generator_version: GENERATED_ROOM_VERSION,
-        output_hash,
-        pillar_voxel: [i64::from(pillar_x), 1, i64::from(pillar_z)],
-        accent_voxel: [i64::from(accent_x), 1, i64::from(accent_z)],
-        exit_aperture_min: [i64::from(exit_x_start), 1, i64::from(exit_z)],
-        exit_aperture_max_exclusive: [
-            i64::from(exit_x_end),
-            i64::from(exit_y_end),
-            i64::from(exit_z + 1),
-        ],
-        solid_voxel_count: voxels.len(),
-    };
-    Ok((voxels, record))
-}
-
-fn hash_generated_room(config: GeneratedRoomConfig, voxels: &[MaterialVoxel]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for value in [
-        u64::from(GENERATED_ROOM_VERSION),
-        config.seed,
-        config.voxel_size.to_bits(),
-        u64::from(config.chunk_size),
-        u64::from(config.width),
-        u64::from(config.height),
-        u64::from(config.length),
-    ] {
-        feed_hash(&mut hash, &value.to_le_bytes());
-    }
-    for voxel in voxels {
-        for coordinate in voxel.address {
-            feed_hash(&mut hash, &coordinate.to_le_bytes());
-        }
-        feed_hash(&mut hash, &voxel.material_slot.to_le_bytes());
     }
     hash
 }

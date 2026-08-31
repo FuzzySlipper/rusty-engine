@@ -96,7 +96,28 @@ test('generic host reports a typed missing bootstrap without creating an adapter
   }
 });
 
-async function writeFixtureRoot(root: string, adapterId: string): Promise<void> {
+test('close serializes with a bootstrap adapter that is still starting', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rusty-studio-adapter-close-'));
+  await writeFixtureRoot(root, 'fixture.delayed', 50);
+  const host = await StudioAdapterHost.create({ adapterBinary: undefined, managedIdentity: null });
+  try {
+    const selection = host.selectProject(root, 'content/projects/delayed.project.json');
+    await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    const closing = host.close();
+    await assert.rejects(selection, /studio_adapter_host_closed/u);
+    await closing;
+    assert.equal(host.status(), null);
+    await assert.rejects(
+      host.exchange(JSON.stringify({ type: 'describe', protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION })),
+      /studio_adapter_host_closed/u,
+    );
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function writeFixtureRoot(root: string, adapterId: string, describeDelayMs = 0): Promise<void> {
   await mkdir(root, { recursive: true });
   const adapter = join(root, 'fixture-adapter.mjs');
   await writeFile(adapter, `#!/usr/bin/env node
@@ -104,7 +125,7 @@ import { createInterface } from 'node:readline';
 const lines = createInterface({ input: process.stdin });
 lines.on('line', (line) => {
   const request = JSON.parse(line);
-  process.stdout.write(JSON.stringify({
+  const respond = () => process.stdout.write(JSON.stringify({
     type: 'described',
     protocolVersion: ${String(STUDIO_ADAPTER_PROTOCOL_VERSION)},
     requestId: request.requestId ?? 'fixture',
@@ -118,6 +139,7 @@ lines.on('line', (line) => {
       entityInspectorContracts: [],
     },
   }) + '\\n');
+  ${describeDelayMs === 0 ? 'respond();' : `setTimeout(respond, ${String(describeDelayMs)});`}
 });
 `);
   await chmod(adapter, 0o755);

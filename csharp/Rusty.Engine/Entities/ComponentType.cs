@@ -22,7 +22,11 @@ public readonly record struct ComponentTypeKey : IComparable<ComponentTypeKey>
     internal bool IsEngine => Value is > 0 and <= EngineComponentKeys.LastEngineValue;
 }
 
-/// <summary>Copies a component value when an in-memory world snapshot is captured or restored.</summary>
+/// <summary>
+/// Creates a detached component value whenever <see cref="EntityWorld"/> stores, stages,
+/// snapshots, restores, or captures that component. For a value containing managed references,
+/// the codec must copy the reachable mutable state rather than return the original references.
+/// </summary>
 public delegate T ComponentSnapshotCodec<T>(in T value) where T : struct;
 
 /// <summary>Rejects one component value before it reaches live world state.</summary>
@@ -99,6 +103,7 @@ public sealed class ComponentType<T> : ComponentType where T : struct
         {
             throw new ArgumentOutOfRangeException(nameof(key), "Product descriptors must use ProductComponentKeys.Create.");
         }
+        RequireDetachedCopyCodec(snapshotCodec);
         return new(key, snapshotCodec, validator);
     }
 
@@ -111,10 +116,25 @@ public sealed class ComponentType<T> : ComponentType where T : struct
         {
             throw new ArgumentOutOfRangeException(nameof(key));
         }
+        RequireDetachedCopyCodec(snapshotCodec);
         return new(key, snapshotCodec, validator);
     }
 
     internal void Validate(in T value) => Validator?.Invoke(in value);
 
+    internal T CopyForDetachedUse(in T value)
+        => SnapshotCodec is ComponentSnapshotCodec<T> codec ? codec(in value) : value;
+
     internal override EntityWorld.ComponentTable CreateTable() => new EntityWorld.ComponentTable<T>(this);
+
+    private static void RequireDetachedCopyCodec(ComponentSnapshotCodec<T>? snapshotCodec)
+    {
+        if (System.Runtime.CompilerServices.RuntimeHelpers.IsReferenceOrContainsReferences<T>()
+            && snapshotCodec is null)
+        {
+            throw new ArgumentException(
+                $"Component type {typeof(T).FullName} contains managed references and requires a deep-copy snapshot codec.",
+                nameof(snapshotCodec));
+        }
+    }
 }

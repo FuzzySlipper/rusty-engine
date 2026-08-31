@@ -10,10 +10,5 @@
 /render/playwright-report/
 /render/test-results/
 /render/voxel-vignette-playtest/assets/**/*.glb
-/rules/node_modules/
-/rules/packages/*/node_modules/
-/rules/packages/*/dist/
-/rules/**/*.tsbuildinfo
-/fixtures/product-conformance/generated/
 *.log
 .DS_Store

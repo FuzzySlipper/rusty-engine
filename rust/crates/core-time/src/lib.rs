@@ -1,24 +1,13 @@
-//! Deterministic tick/time primitives for the ASHA workspace.
+//! Deterministic tick and interval primitives for Rusty Engine simulation.
 //!
-//! # Lane
+//! [`Tick`] is a monotonic, zero-based simulation counter; [`TickDelta`] is a
+//! non-negative difference between ticks; and [`TickInterval`] describes a
+//! recurring simulation cadence. Arithmetic saturates instead of wrapping so
+//! overflow cannot silently corrupt ordering.
 //!
-//! `rust-foundation` — `std`-only, zero external dependencies, no knowledge of
-//! state, protocol, render, services, or TypeScript.
-//!
-//! # Design
-//!
-//! [`Tick`] is a monotonic, zero-based simulation tick counter; [`TickDelta`] is
-//! a non-negative difference between ticks; [`TickInterval`] expresses the
-//! common "every `n` ticks" scheduling cadence. All arithmetic saturates rather
-//! than wrapping or panicking, so a stray overflow can never silently corrupt
-//! ordering.
-//!
-//! # Non-goals
-//!
-//! No wall-clock time, no real-time durations, no `Instant`/`SystemTime`, no
-//! scheduling policy or rule logic — those are forbidden in the deterministic
-//! simulation path, or belong to the `rust-rule` scheduler. This crate only
-//! counts ticks.
+//! This crate deliberately owns time values only. Wall-clock time, real-time
+//! measurement, scheduling policy, and gameplay rules belong to their owning
+//! runtime services.
 
 #![forbid(unsafe_code)]
 

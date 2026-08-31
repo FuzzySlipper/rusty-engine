@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <Description>Broad managed-helper proof harness; not a downstream product architecture template.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Rusty.Engine/Rusty.Engine.csproj" />
