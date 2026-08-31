@@ -1396,7 +1396,8 @@ impl CsharpProductRuntime {
             .iter()
             .map(NativeInputOwned::as_native)
             .collect();
-        self.services.begin_call(ui_binding(&self.lifecycle));
+        self.services
+            .begin_update_call(ui_binding(&self.lifecycle), facts);
         let result = match call_update(
             &self.api,
             self.handle,

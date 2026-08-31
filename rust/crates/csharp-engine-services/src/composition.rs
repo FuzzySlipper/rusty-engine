@@ -327,6 +327,19 @@ impl EngineServiceSet {
 
     pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
         self.appearance.begin_call();
+        self.begin_other_services(ui_binding);
+    }
+
+    pub fn begin_update_call(
+        &mut self,
+        ui_binding: RuntimeUiRuntimeBinding,
+        facts: NativeProductUpdateFacts,
+    ) {
+        self.appearance.begin_update_call(facts);
+        self.begin_other_services(ui_binding);
+    }
+
+    fn begin_other_services(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
         self.audio.begin_call();
         self.camera_view.begin_call();
         self.dynamics.begin_call();

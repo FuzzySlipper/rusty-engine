@@ -332,13 +332,13 @@ pub struct NativeSpritePlaybackControlRequest {
     pub control: NativeSpritePlaybackControl,
 }
 
-/// Advances through the exact Rust-admitted facts supplied to the current
-/// Product.Update callback. Replaying the same admitted update is a no-op.
+/// Advances through the exact Rust-admitted facts bound to the active
+/// Product.Update callback. The product cannot supply or replace those facts;
+/// replaying the operation in one admitted update is a no-op.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpritePlaybackAdvanceRequest {
     pub playback: NativeSpritePlaybackHandle,
-    pub facts: NativeProductUpdateFacts,
 }
 
 #[repr(C)]

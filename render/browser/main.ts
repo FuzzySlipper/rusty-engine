@@ -2,6 +2,7 @@
 
 import {
   animationProjectionHandle,
+  audioSignalHandle,
   billboardHandle,
   renderHandle,
   telemetryOverlayHandle,
@@ -1467,6 +1468,7 @@ function browserPresentationFrame(audioHash: string, spriteHash: string): Presen
         meta: { sequence: 1 },
         op: {
           op: 'emit',
+          signalHandle: audioSignalHandle(1),
           signalId: 'browser-proof-tone',
           descriptor: {
             clip: { asset: 'audio/browser-proof-tone', contentHash: audioHash },

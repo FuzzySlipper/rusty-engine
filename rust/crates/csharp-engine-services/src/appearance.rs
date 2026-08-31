@@ -789,11 +789,17 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
         .expect("initial appearance call");
     bridge.commit(Some(initial_call));
     bridge.begin_call();
+    assert_eq!(
+        bridge
+            .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
+            .expect_err("non-update callback cannot advance")
+            .code(),
+        "CSHARP_SPRITE_PLAYBACK_UPDATE"
+    );
+    bridge.discard_call();
+    bridge.begin_update_call(realtime_sprite_update(1, 0.25));
     let first = bridge
-        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
-            playback,
-            facts: realtime_sprite_update(1, 0.25),
-        })
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
         .expect("exact first boundary");
     let first_crossings =
         unsafe { std::slice::from_raw_parts(first.crossings, first.crossings_len) };
@@ -802,19 +808,19 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
     assert_eq!(first_crossings.len(), 1);
     assert_eq!(first_crossings[0].marker_id, 11);
     let duplicate = bridge
-        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
-            playback,
-            facts: realtime_sprite_update(1, 0.25),
-        })
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
         .expect("duplicate is idempotent");
     assert!(!duplicate.advanced);
     assert_eq!(duplicate.crossings_len, 0);
     assert_eq!(duplicate.readout.revision, first.readout.revision);
+    let first_call = bridge
+        .take_staged_call()
+        .expect("first update call")
+        .expect("first appearance update");
+    bridge.commit(Some(first_call));
+    bridge.begin_update_call(realtime_sprite_update(2, 0.25));
     let second = bridge
-        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
-            playback,
-            facts: realtime_sprite_update(2, 0.25),
-        })
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
         .expect("second boundary");
     assert_eq!(second.readout.frame_id, 9);
     assert_eq!(
@@ -838,7 +844,7 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
         })
     }));
     bridge.commit(Some(updated_call));
-    bridge.begin_call();
+    bridge.begin_update_call(realtime_sprite_update(3, 0.25));
     bridge
         .control_sprite_playback(NativeSpritePlaybackControlRequest {
             playback,
@@ -846,10 +852,7 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
         })
         .expect("pause");
     let paused = bridge
-        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
-            playback,
-            facts: realtime_sprite_update(3, 0.25),
-        })
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
         .expect("paused update");
     assert!(!paused.advanced);
     bridge
@@ -858,23 +861,63 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
             control: NativeSpritePlaybackControl::Resume,
         })
         .expect("resume");
+    let paused_call = bridge
+        .take_staged_call()
+        .expect("paused update call")
+        .expect("paused appearance update");
+    bridge.commit(Some(paused_call));
+    bridge.begin_update_call(realtime_sprite_update(4, 0.25));
     let completed = bridge
-        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
-            playback,
-            facts: realtime_sprite_update(4, 0.25),
-        })
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
         .expect("one shot completion");
     assert!(completed.readout.completed);
     assert_eq!(
         completed.readout.state,
         NativeSpritePlaybackState::Completed
     );
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Restart,
+        })
+        .expect("restart after completion");
+    let after_restart = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
+        .expect("restart preserves consumed update identity");
+    assert!(!after_restart.advanced);
+    assert_eq!(after_restart.crossings_len, 0);
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Stop,
+        })
+        .expect("stop after restart");
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Start,
+        })
+        .expect("start after stop");
+    let after_stop_start = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
+        .expect("stop and start preserve consumed update identity");
+    assert!(!after_stop_start.advanced);
+    assert_eq!(after_stop_start.crossings_len, 0);
     unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.expect("remove retained sprite");
     let removal_call = bridge
         .take_staged_call()
         .expect("removal call")
         .expect("removal appearance call");
     bridge.commit(Some(removal_call));
+    bridge.begin_update_call(realtime_sprite_update(3, 0.25));
+    assert_eq!(
+        bridge
+            .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
+            .expect_err("stale admitted update")
+            .code(),
+        "CSHARP_SPRITE_PLAYBACK_STALE_UPDATE"
+    );
+    bridge.discard_call();
     bridge.begin_call();
     assert_eq!(
         bridge
@@ -982,11 +1025,14 @@ fn sprite_playback_loop_sampling_restart_and_invalid_creation_are_atomic() {
             control: NativeSpritePlaybackControl::Restart,
         })
         .expect("restart starts from zero");
+    let setup_call = bridge
+        .take_staged_call()
+        .expect("loop setup call")
+        .expect("loop setup appearance call");
+    bridge.commit(Some(setup_call));
+    bridge.begin_update_call(realtime_sprite_update(1, 0.5));
     let looped = bridge
-        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
-            playback,
-            facts: realtime_sprite_update(1, 0.5),
-        })
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
         .expect("loop advance");
     assert_eq!(looped.readout.cycle, 2);
     bridge
@@ -1181,6 +1227,7 @@ struct SpritePlaybackAdvanceLeaseBacking {
 
 pub(crate) struct RuntimeAppearanceCall {
     pub(crate) state: RuntimeAppearanceState,
+    admitted_update: Option<NativeProductUpdateFacts>,
     /// Typed browser realization work in the order the C# product invoked the
     /// owning appearance APIs. This remains call-local: it is not a general
     /// output transport and only represents this service family's existing
@@ -1342,8 +1389,17 @@ impl RuntimeAppearanceBridge {
     }
 
     pub(crate) fn begin_call(&mut self) {
+        self.begin_call_with_update(None);
+    }
+
+    pub(crate) fn begin_update_call(&mut self, facts: NativeProductUpdateFacts) {
+        self.begin_call_with_update(Some(facts));
+    }
+
+    fn begin_call_with_update(&mut self, admitted_update: Option<NativeProductUpdateFacts>) {
         self.staged = Some(RuntimeAppearanceCall {
             state: self.state.clone(),
+            admitted_update,
             outputs: Vec::new(),
             frame: None,
             extra_frames: Vec::new(),
@@ -3660,18 +3716,23 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: NativeSpritePlaybackAdvanceRequest,
     ) -> Result<NativeSpritePlaybackAdvanceLease, CsharpEngineServicesError> {
+        let facts = self.staged_ref()?.admitted_update.ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_UPDATE",
+                "sprite playback can advance only during the active Product.Update callback",
+            )
+        })?;
         let mut playback = self.sprite_playback(request.playback)?;
-        let identity = validate_sprite_playback_update(request.facts, playback.last_update)?;
+        let identity = validate_sprite_playback_update(facts, playback.last_update)?;
         let duplicate = playback.last_update == Some(identity);
         let mut crossings = Vec::new();
         let mut advanced = false;
         if !duplicate {
             playback.last_update = Some(identity);
-            if playback.state == NativeSpritePlaybackState::Playing
-                && request.facts.admitted_step_count > 0
+            if playback.state == NativeSpritePlaybackState::Playing && facts.admitted_step_count > 0
             {
-                let mut remaining = request.facts.fixed_delta_seconds
-                    * f64::from(request.facts.admitted_step_count)
+                let mut remaining = facts.fixed_delta_seconds
+                    * f64::from(facts.admitted_step_count)
                     * playback.playback_rate;
                 if !remaining.is_finite() || remaining < 0.0 {
                     return Err(CsharpEngineServicesError::new(
@@ -6170,7 +6231,6 @@ fn reset_sprite_playback(playback: &mut RuntimeSpritePlayback, state: NativeSpri
     playback.frame_index = 0;
     playback.elapsed_in_frame_seconds = 0.0;
     playback.cycle = 0;
-    playback.last_update = None;
 }
 
 fn sprite_playback_readout(playback: &RuntimeSpritePlayback) -> NativeSpritePlaybackReadout {
