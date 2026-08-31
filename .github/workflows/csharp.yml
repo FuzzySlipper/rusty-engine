@@ -1,0 +1,65 @@
+name: csharp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'csharp/**'
+      - 'fixtures/csharp-*/**'
+      - 'rust/crates/csharp-engine-abi/**'
+      - 'rust/crates/csharp-engine-services/**'
+      - 'rust/crates/csharp-product-runtime/**'
+      - '.config/dotnet-tools.json'
+      - 'scripts/generate-csharp-native-bindings.sh'
+      - 'scripts/test-csharp-binding-generator-lease-fixture.sh'
+      - 'scripts/verify-csharp.sh'
+      - '.github/workflows/csharp.yml'
+  pull_request:
+    paths:
+      - 'csharp/**'
+      - 'fixtures/csharp-*/**'
+      - 'rust/crates/csharp-engine-abi/**'
+      - 'rust/crates/csharp-engine-services/**'
+      - 'rust/crates/csharp-product-runtime/**'
+      - '.config/dotnet-tools.json'
+      - 'scripts/generate-csharp-native-bindings.sh'
+      - 'scripts/test-csharp-binding-generator-lease-fixture.sh'
+      - 'scripts/verify-csharp.sh'
+      - '.github/workflows/csharp.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-ci
+          workspaces: . -> target
+
+      - name: Install binding generator dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang
+
+      - name: Verify generated C# SDK and NativeAOT fixture
+        run: ./scripts/verify-csharp.sh

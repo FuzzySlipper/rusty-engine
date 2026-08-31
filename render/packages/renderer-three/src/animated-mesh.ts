@@ -399,13 +399,8 @@ export class AnimatedMeshRegistry {
     this.#validatedResource(asset);
   }
 
-  /**
-   * Run the fallible initial-sample path on a detached instance. This is used
-   * while a retained frame is still in preflight, before a later animation
-   * rejection could invalidate already-live Three resources.
-   */
+  /** Run every fallible creation path on a detached instance during frame preflight. */
   validateInitialSample(instance: AnimatedMeshInstanceDescriptor): void {
-    if (instance.playback?.kind !== 'sample') return;
     const probeHandle = -1 as RenderHandle;
     const probe = {
       ...instance,
@@ -427,12 +422,11 @@ export class AnimatedMeshRegistry {
     }
   }
 
-  /** Preflight an initial sample for an asset defined earlier in this frame. */
+  /** Preflight creation for an asset defined earlier in this frame. */
   validateInitialSampleForDefinition(
     asset: AnimatedMeshAsset,
     instance: AnimatedMeshInstanceDescriptor,
   ): void {
-    if (instance.playback?.kind !== 'sample') return;
     const staged = new AnimatedMeshRegistry(this.#assetSource);
     try {
       staged.define(asset);

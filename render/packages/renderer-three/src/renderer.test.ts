@@ -4097,6 +4097,58 @@ void test('a rejected initial animated sample preserves live texture/material re
   renderer.dispose();
 });
 
+void test('a rejected non-sample animated creation preserves earlier frame resources', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const source = new TestTextureResourceSource(bytes);
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({
+    animatedMeshSource: testAnimatedMeshSource(asset),
+    textureResourceSource: source,
+  });
+  const beforeTexture = textureDescriptor(bytes, 1, 'resource');
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: beforeTexture },
+    { op: 'defineMaterial', material: texturedMaterial() },
+    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
+    {
+      op: 'createStaticMeshInstance', handle: renderHandle(4294), parent: null,
+      instance: crateInstance('mesh/textured-plank'),
+    },
+    { op: 'defineAnimatedMesh', asset },
+  ] });
+  const mesh = renderer.objectFor(renderHandle(4294)) as THREE.Mesh;
+  const oldMaterial = mesh.material;
+  const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
+  const beforeSnapshot = renderer.snapshot();
+  const beforeDescriptor = renderer.textureDescriptor(beforeTexture.id);
+  const beforeResources = renderer.resourceStatistics();
+
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: textureDescriptor(bytes, 2, 'resource') },
+    { op: 'defineMaterial', material: { ...texturedMaterial(), color: [0.4, 0.2, 0.8, 1] } },
+    {
+      op: 'createAnimatedMeshInstance', handle: renderHandle(4295), parent: null,
+      instance: {
+        asset: asset.asset,
+        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        materialOverrides: [{ slot: 0, material: texturedMaterial().id }],
+        playback: null,
+        visible: true,
+        metadata: { sourceEntity: 90, sourceSceneNode: null, tags: [], label: 'must-not-publish' },
+      },
+    },
+  ] }), /override for unbound embedded material slot 0/u);
+
+  assert.equal(mesh.material, oldMaterial);
+  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
+  assert.equal(renderer.animatedMeshPlayback(renderHandle(4295)), undefined);
+  assert.equal(renderer.snapshot(), beforeSnapshot);
+  assert.deepEqual(renderer.textureDescriptor(beforeTexture.id), beforeDescriptor);
+  assert.deepEqual(renderer.resourceStatistics(), beforeResources);
+  assert.deepEqual(source.released, source.acquired, 'prepared resource borrows are always released');
+  renderer.dispose();
+});
+
 void test('a rejected animated sample update preserves live texture/material and handle state', () => {
   const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const source = new TestTextureResourceSource(bytes);

@@ -62,6 +62,7 @@ public sealed class EntityWorld : IDisposable
         }
         ArgumentNullException.ThrowIfNull(componentType);
         RegisterUntyped(componentType);
+        Mutated();
     }
 
     public EntityId Create(EntityLifecycle lifecycle = EntityLifecycle.Active)

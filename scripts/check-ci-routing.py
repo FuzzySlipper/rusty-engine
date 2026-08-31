@@ -65,6 +65,7 @@ def main() -> None:
         name: read(root, f".github/workflows/{name}.yml")
         for name in (
             "verify",
+            "csharp",
             "render",
             "studio",
             "docs",
@@ -83,20 +84,29 @@ def main() -> None:
             "Cargo.lock",
             "rust/**",
             "!rust/crates/renderer-webview-host/artifacts/**",
+            "scripts/verify.sh",
+        },
+        {"csharp/**", "fixtures/csharp-*/**", "render/**", "studio/**", "migration/**"},
+    )
+    if "paths-ignore:" in workflows["verify"]:
+        fail("verify must use explicit owner paths instead of a repository-wide paths-ignore")
+
+    require_paths(
+        "csharp",
+        workflows["csharp"],
+        {
             "csharp/**",
             "fixtures/csharp-*/**",
             "rust/crates/csharp-engine-abi/**",
             "rust/crates/csharp-engine-services/**",
             "rust/crates/csharp-product-runtime/**",
+            ".config/dotnet-tools.json",
             "scripts/generate-csharp-native-bindings.sh",
             "scripts/test-csharp-binding-generator-lease-fixture.sh",
             "scripts/verify-csharp.sh",
-            "scripts/verify.sh",
         },
-        {"render/**", "studio/**", "migration/**"},
+        {"Cargo.toml", "Cargo.lock", "rust/**", "render/**", "studio/**"},
     )
-    if "paths-ignore:" in workflows["verify"]:
-        fail("verify must use explicit owner paths instead of a repository-wide paths-ignore")
 
     require_paths(
         "render",
@@ -113,13 +123,13 @@ def main() -> None:
 
     routing_cases = {
         "fixtures/render/depth-splat-comparison-v1.json": {"render"},
-        "fixtures/csharp-nativeaot-trial/Product.cs": {"verify"},
-        "csharp/Rusty.Engine/Mechanics/Inventory.cs": {"verify"},
-        "rust/crates/csharp-engine-abi/src/lib.rs": {"verify"},
-        "rust/crates/csharp-engine-services/src/lib.rs": {"verify"},
-        "rust/crates/csharp-product-runtime/src/lib.rs": {"verify"},
-        "scripts/generate-csharp-native-bindings.sh": {"verify"},
-        "scripts/test-csharp-binding-generator-lease-fixture.sh": {"verify"},
+        "fixtures/csharp-nativeaot-trial/Product.cs": {"csharp"},
+        "csharp/Rusty.Engine/Mechanics/Inventory.cs": {"csharp"},
+        "rust/crates/csharp-engine-abi/src/lib.rs": {"csharp", "verify"},
+        "rust/crates/csharp-engine-services/src/lib.rs": {"csharp", "verify"},
+        "rust/crates/csharp-product-runtime/src/lib.rs": {"csharp", "verify"},
+        "scripts/generate-csharp-native-bindings.sh": {"csharp"},
+        "scripts/test-csharp-binding-generator-lease-fixture.sh": {"csharp"},
         "render/browser/application-host.browser.spec.ts": {"render"},
         "render/packages/renderer-three/src/backend.ts": {
             "render",
@@ -170,7 +180,7 @@ def main() -> None:
         {"README.md", "AGENTS.md", "docs/**", ".github/workflows/**"},
         set(),
     )
-    for name in ("verify", "render"):
+    for name in ("verify", "csharp", "render"):
         workflow = workflows[name]
         if "uses: Swatinem/rust-cache@v2" not in workflow or "shared-key: engine-ci" not in workflow:
             fail(f"{name} does not participate in the bounded shared Rust cache")
@@ -182,9 +192,19 @@ def main() -> None:
         'dotnet build "$MANAGED_PROJECT" --no-restore',
         'dotnet publish "$NATIVE_AOT_PROJECT"',
         '--runtime linux-x64',
+        'cargo run -p csharp-product-runtime --bin csharp-product-runtime --locked --',
+        '--exercise',
     ):
         if required not in csharp_gate:
             fail(f"C# verification gate is missing {required}")
+
+    studio_package = json.loads(read(root, "studio/package.json"))
+    studio_scripts = studio_package.get("scripts", {})
+    studio_verify = studio_scripts.get("verify", "")
+    if "migration" in studio_verify:
+        fail("ordinary Studio verification still requires historical migration certification")
+    if "verify:migration" not in studio_scripts:
+        fail("Studio does not retain an explicit optional migration audit")
 
     aggregate = read(root, "scripts/verify-render.sh")
     if 'install --frozen-lockfile --ignore-scripts' not in aggregate:

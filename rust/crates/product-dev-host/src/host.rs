@@ -818,11 +818,13 @@ fn push_outputs(
                 }
                 (pending.binding, pending.outputs.clone())
             };
-            // Keep the baseline available until the complete expanded output
-            // batch has passed admission. Fragment encoding can reject after
-            // the marker arrives, and a retry must not turn that failure into
-            // a later incremental-without-baseline error.
-            append_output_events(&mut bus, pending_binding, pending_outputs)?;
+            // Admission is fail-atomic. Once a complete baseline is rejected,
+            // discard its staging buffer so the producer can replay the same
+            // full binding-to-completion sequence without a phantom baseline.
+            if let Err(error) = append_output_events(&mut bus, pending_binding, pending_outputs) {
+                bus.pending_baseline = None;
+                return Err(error);
+            }
             bus.pending_baseline = None;
             bus.active_binding = Some(binding);
             continue;
@@ -1050,51 +1052,49 @@ mod tests {
     }
 
     #[test]
-    fn rejected_fragmented_baseline_remains_pending_until_a_later_admission_succeeds() {
+    fn rejected_fragmented_baseline_accepts_a_real_full_producer_replay() {
         let runtime = binding();
         let fragmented_payload =
             "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1));
-        let bus = Mutex::new(OutputBus {
-            pending_baseline: Some(PendingBaseline {
-                binding: runtime,
-                outputs: vec![
-                    crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
-                    crate::model::ProductDevRuntimeOutput::test_frame_value(
-                        serde_json::json!({"payload": fragmented_payload}),
-                    ),
-                    crate::model::ProductDevRuntimeOutput::test_frame_value(
-                        serde_json::json!({"payload": "y".repeat(
-                            MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1),
-                        )}),
-                    ),
-                ],
-            }),
-            ..OutputBus::default()
-        });
+        let bus = Mutex::new(OutputBus::default());
         let error = push_outputs(
             &bus,
-            vec![crate::model::ProductDevRuntimeOutput::complete_baseline(
-                runtime,
+            vec![
+                crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
+                crate::model::ProductDevRuntimeOutput::test_frame_value(
+                    serde_json::json!({"payload": fragmented_payload}),
+                ),
+                crate::model::ProductDevRuntimeOutput::test_frame_value(
+                    serde_json::json!({"payload": "y".repeat(
+                        MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1),
+                    )}),
+                ),
+                crate::model::ProductDevRuntimeOutput::complete_baseline(runtime),
+            ],
+        )
+        .expect_err("oversized complete producer baseline is rejected");
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BATCH_BOUNDS");
+        assert!(bus
+            .lock()
+            .expect("test bus lock")
+            .pending_baseline
+            .is_none());
+        let incremental = push_outputs(
+            &bus,
+            vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"incremental": true}),
             )],
         )
-        .expect_err("oversized baseline remains rejected");
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BATCH_BOUNDS");
-
-        let mut locked = bus.lock().expect("test bus lock");
-        let pending = locked
-            .pending_baseline
-            .as_mut()
-            .expect("rejected baseline remains pending");
-        assert_eq!(pending.binding, runtime);
-        pending.outputs.truncate(1);
-        drop(locked);
+        .expect_err("incremental output cannot attach to a rejected baseline");
+        assert_eq!(incremental.code(), "DEV_HOST_OUTPUT_BASELINE");
         push_outputs(
             &bus,
-            vec![crate::model::ProductDevRuntimeOutput::complete_baseline(
-                runtime,
-            )],
+            vec![
+                crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
+                crate::model::ProductDevRuntimeOutput::complete_baseline(runtime),
+            ],
         )
-        .expect("admitted baseline publishes atomically");
+        .expect("a replayed full producer baseline publishes atomically");
         let locked = bus.lock().expect("test bus lock");
         assert!(locked.pending_baseline.is_none());
         assert_eq!(locked.active_binding, Some(runtime));

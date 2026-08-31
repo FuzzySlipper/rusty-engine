@@ -107,6 +107,8 @@ static void ExerciseEntityWorldCandidateAndCopyContracts()
 {
     const uint ReferenceValueLocalComponentId = 90;
     const uint ValueLocalComponentId = 91;
+    const uint BatchRegistrationLocalComponentId = 93;
+    const uint RestoreRegistrationLocalComponentId = 94;
     ComponentType<ReferenceComponent> referenceValues = ComponentType<ReferenceComponent>.Create(
         ProductComponentKeys.Create(ReferenceValueLocalComponentId),
         snapshotCodec: static (in ReferenceComponent value) => new ReferenceComponent([.. value.Values]));
@@ -136,9 +138,13 @@ static void ExerciseEntityWorldCandidateAndCopyContracts()
 
     EntityWorldBatchCandidate staged = world.PrepareBatch(new EntityBatch()
         .Mutate(candidate => candidate.Set(entity, referenceValues, new ReferenceComponent([2]))));
-    world.Set(entity, values, 1);
-    Throws(() => staged.Publish(), "stale batch candidate overwrote a later live mutation");
+    ComponentType<int> batchRegistration = ComponentType<int>.Create(
+        ProductComponentKeys.Create(BatchRegistrationLocalComponentId));
+    world.Register(batchRegistration);
+    Throws(() => staged.Publish(), "stale batch candidate overwrote a later component registration");
     Throws(() => staged.Publish(), "stale batch candidate was marked published after its first failed attempt");
+    world.Set(entity, batchRegistration, 93);
+    world.Set(entity, values, 1);
     Require(world.Get(entity, referenceValues).Values[0] == 1 && world.Get(entity, values) == 1,
         "stale batch candidate discarded live component state");
 
@@ -149,10 +155,15 @@ static void ExerciseEntityWorldCandidateAndCopyContracts()
     }
     restorePlan.AddComponentFamily(referenceValues, world.CaptureComponentFamily(referenceValues));
     restorePlan.AddComponentFamily(values, world.CaptureComponentFamily(values));
+    restorePlan.AddComponentFamily(batchRegistration, world.CaptureComponentFamily(batchRegistration));
     EntityWorldRestoreCandidate restore = world.PrepareRestore(restorePlan, world.Revision);
-    world.Set(entity, values, 2);
-    Throws(() => restore.Publish(), "stale restore candidate overwrote a later live mutation");
+    ComponentType<int> restoreRegistration = ComponentType<int>.Create(
+        ProductComponentKeys.Create(RestoreRegistrationLocalComponentId));
+    world.Register(restoreRegistration);
+    Throws(() => restore.Publish(), "stale restore candidate overwrote a later component registration");
     Throws(() => restore.Publish(), "stale restore candidate was marked published after its first failed attempt");
+    world.Set(entity, restoreRegistration, 94);
+    world.Set(entity, values, 2);
     Require(world.Get(entity, referenceValues).Values[0] == 1 && world.Get(entity, values) == 2,
         "stale restore candidate discarded live state");
 

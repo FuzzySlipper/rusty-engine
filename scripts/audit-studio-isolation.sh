@@ -9,10 +9,6 @@ required=(
   studio/pnpm-lock.yaml
   studio/pnpm-workspace.yaml
   studio/nx.json
-  studio/donor-source.json
-  studio/donor-inventory.tsv
-  studio/donor-surface-disposition.tsv
-  studio/owner-adoption.tsv
 )
 for path in "${required[@]}"; do
   if [[ ! -f "$path" ]]; then

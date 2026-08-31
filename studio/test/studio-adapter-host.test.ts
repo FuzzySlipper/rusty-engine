@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -117,11 +117,42 @@ test('close serializes with a bootstrap adapter that is still starting', async (
   }
 });
 
+test('close owns an already-selected adapter while openProject is awaiting its response', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rusty-studio-adapter-open-close-'));
+  await writeFixtureRoot(root, 'fixture.open-delayed', 50);
+  const host = await StudioAdapterHost.create({ adapterBinary: undefined, managedIdentity: null });
+  try {
+    await host.selectProject(root, 'content/projects/delayed.project.json');
+    const pid = Number(await readFile(join(root, 'adapter.pid'), 'utf8'));
+    assert.ok(processAlive(pid), 'selected adapter process is live before openProject');
+    const opening = host.openProject(root, 'content/projects/delayed.project.json');
+    await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    const closing = host.close();
+    await assert.rejects(opening, /studio_adapter_host_closed/u);
+    await closing;
+    assert.equal(processAlive(pid), false, 'close reaps the selected adapter after delayed openProject');
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function writeFixtureRoot(root: string, adapterId: string, describeDelayMs = 0): Promise<void> {
   await mkdir(root, { recursive: true });
   const adapter = join(root, 'fixture-adapter.mjs');
   await writeFile(adapter, `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+writeFileSync(${JSON.stringify(join(root, 'adapter.pid'))}, String(process.pid));
 const lines = createInterface({ input: process.stdin });
 lines.on('line', (line) => {
   const request = JSON.parse(line);

@@ -684,10 +684,16 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsBodyAtRequest,
     ) -> Result<NativeDynamicsBodyAtReceipt, CsharpEngineServicesError> {
+        let pending_bodies = self
+            .staged
+            .as_ref()
+            .map(|staged| staged.bodies.clone())
+            .unwrap_or_default();
         let world = self.active_world_mut(request.world.value)?;
         let body = world
             .bodies
             .iter()
+            .filter(|(handle, _)| !pending_bodies.contains(handle))
             .nth(request.index as usize)
             .map(|(handle, entity)| (*handle, *entity));
         let Some((handle, entity)) = body else {
@@ -833,12 +839,24 @@ impl RuntimeDynamicsBridge {
         &mut self,
         request: NativeDynamicsWorldReadRequest,
     ) -> Result<NativeDynamicsWorldReadout, CsharpEngineServicesError> {
+        let pending_bodies = self
+            .staged
+            .as_ref()
+            .map(|staged| staged.bodies.clone())
+            .unwrap_or_default();
         let world = self.active_world_mut(request.world.value)?;
         let readout = world.service.readout();
         Ok(NativeDynamicsWorldReadout {
             generation: readout.map_or(0, |value| value.generation),
             entity_revision: world.entities.revision(),
-            body_count: u32::try_from(world.bodies.len()).map_err(|_| {
+            body_count: u32::try_from(
+                world
+                    .bodies
+                    .keys()
+                    .filter(|handle| !pending_bodies.contains(handle))
+                    .count(),
+            )
+            .map_err(|_| {
                 CsharpEngineServicesError::new("CSHARP_DYNAMICS_WORLD", "body count exceeded u32")
             })?,
             contact_count: u32::try_from(world.last_contact_receipts.len()).map_err(|_| {
@@ -2092,6 +2110,19 @@ mod tests {
         bridge
             .destroy_world(second_world)
             .expect("stage world destroy");
+        let staged_first = bridge
+            .read_world(NativeDynamicsWorldReadRequest { world: first_world })
+            .expect("world remains readable while its child destroy is staged");
+        assert_eq!(staged_first.body_count, 0);
+        assert!(
+            !bridge
+                .read_body_at(NativeDynamicsBodyAtRequest {
+                    world: first_world,
+                    index: 0
+                })
+                .expect("staged child is absent from bounded enumeration")
+                .present
+        );
         assert!(bridge
             .read(NativeDynamicsReadRequest { body: first_body })
             .is_err());
@@ -2109,6 +2140,13 @@ mod tests {
         assert!(bridge
             .read(NativeDynamicsReadRequest { body: first_body })
             .is_ok());
+        assert_eq!(
+            bridge
+                .read_world(NativeDynamicsWorldReadRequest { world: first_world })
+                .expect("rollback restores the child to world enumeration")
+                .body_count,
+            1
+        );
         bridge.begin_call();
         bridge
             .destroy_body(first_body)

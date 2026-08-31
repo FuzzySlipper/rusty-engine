@@ -202,11 +202,15 @@ export class StudioAdapterHost {
       }
       return responseLine;
     } catch (error) {
-      if (this.#pending !== null) await this.#rollbackPending();
-      else if (this.#current === current) {
-        this.#current = null;
-        this.#activeProjectRoot = null;
-        this.#activeProjectFile = null;
+      // close() owns every published process after it freezes admission. Keep
+      // those slots reachable so its queued teardown cannot orphan an adapter.
+      if (!this.#closed) {
+        if (this.#pending !== null) await this.#rollbackPending();
+        else if (this.#current === current) {
+          this.#current = null;
+          this.#activeProjectRoot = null;
+          this.#activeProjectFile = null;
+        }
       }
       throw error;
     }
