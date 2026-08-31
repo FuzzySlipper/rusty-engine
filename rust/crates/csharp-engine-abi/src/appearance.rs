@@ -259,6 +259,147 @@ pub struct NativeSpriteReadout {
     pub size: NativeVec2,
 }
 
+/// Engine-owned playback identity for one atlas-backed appearance. The
+/// generated C# owner must be disposed before either dependent appearance or
+/// atlas is released.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpritePlaybackHandle {
+    pub value: u64,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeSpritePlaybackLoopMode {
+    OneShot = 0,
+    Loop = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeSpritePlaybackState {
+    Stopped = 0,
+    Playing = 1,
+    Paused = 2,
+    Completed = 3,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeSpritePlaybackControl {
+    Start = 0,
+    Pause = 1,
+    Resume = 2,
+    Stop = 3,
+    Restart = 4,
+}
+
+/// One sequence entry. Repeated frame IDs are intentional and allow a caller
+/// to express holds and non-linear layouts without changing atlas ownership.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackFrame {
+    pub frame_id: u32,
+    pub duration_seconds: f64,
+}
+
+/// A caller-defined marker crossed when playback enters `frame_index`.
+/// Marker IDs are unique within one playback definition.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackMarker {
+    pub marker_id: u64,
+    pub frame_index: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackCreateRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub atlas: NativeSpriteAtlasHandle,
+    pub frames: *const NativeSpritePlaybackFrame,
+    pub frames_len: usize,
+    pub markers: *const NativeSpritePlaybackMarker,
+    pub markers_len: usize,
+    pub loop_mode: NativeSpritePlaybackLoopMode,
+    pub playback_rate: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackControlRequest {
+    pub playback: NativeSpritePlaybackHandle,
+    pub control: NativeSpritePlaybackControl,
+}
+
+/// Advances through the exact Rust-admitted facts supplied to the current
+/// Product.Update callback. Replaying the same admitted update is a no-op.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackAdvanceRequest {
+    pub playback: NativeSpritePlaybackHandle,
+    pub facts: NativeProductUpdateFacts,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackSampleRequest {
+    pub playback: NativeSpritePlaybackHandle,
+    pub elapsed_seconds: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpritePlaybackSample {
+    pub frame_id: u32,
+    pub frame_index: u32,
+    pub elapsed_in_frame_seconds: f64,
+    pub cycle: u64,
+    pub completed: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackReadout {
+    pub frame_id: u32,
+    pub frame_index: u32,
+    pub state: NativeSpritePlaybackState,
+    pub elapsed_in_frame_seconds: f64,
+    pub cycle: u64,
+    pub revision: u64,
+    pub completed: bool,
+}
+
+/// One immutable marker crossing copied by generated C# before the matching
+/// advance lease is released.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpritePlaybackMarkerCrossing {
+    pub marker_id: u64,
+    pub frame_id: u32,
+    pub frame_index: u32,
+    pub cycle: u64,
+    pub crossing_sequence: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpritePlaybackAdvanceLeaseHandle {
+    pub value: u64,
+}
+
+/// Copied advance result. `advanced` is false for paused/stopped/completed or
+/// duplicate admitted updates. Marker storage remains valid until released.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackAdvanceLease {
+    pub handle: NativeSpritePlaybackAdvanceLeaseHandle,
+    pub crossings: *const NativeSpritePlaybackMarkerCrossing,
+    pub crossings_len: usize,
+    pub readout: NativeSpritePlaybackReadout,
+    pub advanced: bool,
+}
+
 /// Renderer-neutral PBR-like material values. Texture handle zero means an
 /// untextured material. The Engine resolves resource identity and validates
 /// the resulting retained material descriptor.

@@ -40,6 +40,9 @@ const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
 const MAX_ANIMATION_CUE_DEFINITIONS: usize = 128;
 const MAX_ANIMATION_CUE_TEXT_BYTES: usize = 96;
 const MAX_SPRITE_ATLAS_FRAMES: usize = 4_096;
+const MAX_SPRITE_PLAYBACK_FRAMES: usize = 4_096;
+const MAX_SPRITE_PLAYBACK_MARKERS: usize = 4_096;
+const MAX_SPRITE_PLAYBACK_TRANSITIONS_PER_ADVANCE: usize = 16_384;
 
 /// Copied, bounded product animation facts for the existing browser animation
 /// host. The Engine retains this snapshot; no C# string remains borrowed after
@@ -654,6 +657,349 @@ fn atlas_sprite_failures_and_legacy_replacement_leave_or_release_the_lease() {
         .expect("legacy replacement released atlas lease");
 }
 
+#[cfg(test)]
+fn realtime_sprite_update(step: u64, delta: f64) -> NativeProductUpdateFacts {
+    NativeProductUpdateFacts {
+        mode: NativeProductUpdateMode::Realtime,
+        lifecycle_state: NativeProductLifecycleState::Running,
+        generation: 1,
+        control_revision: 1,
+        observed_host_time_nanoseconds: step * 1_000_000,
+        simulation_step: step,
+        fixed_step_hz: 4,
+        admitted_step_count: 1,
+        dropped_step_count: 0,
+        fixed_delta_seconds: delta,
+    }
+}
+
+#[cfg(test)]
+fn sprite_appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
+    NativeAppearanceFact {
+        object_id: 71,
+        transform: NativeTransform {
+            translation: NativeVec3::default(),
+            rotation: NativeQuat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            scale: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+        },
+        appearance,
+        visible: true,
+        layer: NativeRenderLayer::Scene,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let atlas_frames = [
+        NativeSpriteAtlasFrame {
+            frame_id: 7,
+            uv_min: NativeVec2::default(),
+            uv_max: NativeVec2 { x: 0.5, y: 1.0 },
+            has_size: false,
+            size: NativeVec2::default(),
+        },
+        NativeSpriteAtlasFrame {
+            frame_id: 9,
+            uv_min: NativeVec2 { x: 0.5, y: 0.0 },
+            uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+            has_size: false,
+            size: NativeVec2::default(),
+        },
+    ];
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    let atlas = unsafe {
+        bridge
+            .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture,
+                frames: atlas_frames.as_ptr(),
+                frames_len: atlas_frames.len(),
+            })
+            .expect("atlas")
+    };
+    let appearance = bridge
+        .create_sprite_from_atlas(atlas_sprite_request(atlas, 7))
+        .expect("sprite");
+    let frames = [
+        NativeSpritePlaybackFrame {
+            frame_id: 7,
+            duration_seconds: 0.25,
+        },
+        NativeSpritePlaybackFrame {
+            frame_id: 7,
+            duration_seconds: 0.25,
+        },
+        NativeSpritePlaybackFrame {
+            frame_id: 9,
+            duration_seconds: 0.25,
+        },
+    ];
+    let markers = [
+        NativeSpritePlaybackMarker {
+            marker_id: 11,
+            frame_index: 1,
+        },
+        NativeSpritePlaybackMarker {
+            marker_id: 12,
+            frame_index: 2,
+        },
+    ];
+    let playback = unsafe {
+        bridge
+            .create_sprite_playback(&NativeSpritePlaybackCreateRequest {
+                appearance,
+                atlas,
+                frames: frames.as_ptr(),
+                frames_len: frames.len(),
+                markers: markers.as_ptr(),
+                markers_len: markers.len(),
+                loop_mode: NativeSpritePlaybackLoopMode::OneShot,
+                playback_rate: 1.0,
+            })
+            .expect("playback")
+    };
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Start,
+        })
+        .expect("start");
+    let appearance_fact = sprite_appearance_fact(appearance);
+    unsafe { bridge.stage_snapshot(&appearance_fact, 1) }.expect("initial retained snapshot");
+    let initial_call = bridge
+        .take_staged_call()
+        .expect("initial call")
+        .expect("initial appearance call");
+    bridge.commit(Some(initial_call));
+    bridge.begin_call();
+    let first = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
+            playback,
+            facts: realtime_sprite_update(1, 0.25),
+        })
+        .expect("exact first boundary");
+    let first_crossings =
+        unsafe { std::slice::from_raw_parts(first.crossings, first.crossings_len) };
+    assert_eq!(first.readout.frame_index, 1);
+    assert_eq!(first.readout.frame_id, 7);
+    assert_eq!(first_crossings.len(), 1);
+    assert_eq!(first_crossings[0].marker_id, 11);
+    let duplicate = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
+            playback,
+            facts: realtime_sprite_update(1, 0.25),
+        })
+        .expect("duplicate is idempotent");
+    assert!(!duplicate.advanced);
+    assert_eq!(duplicate.crossings_len, 0);
+    assert_eq!(duplicate.readout.revision, first.readout.revision);
+    let second = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
+            playback,
+            facts: realtime_sprite_update(2, 0.25),
+        })
+        .expect("second boundary");
+    assert_eq!(second.readout.frame_id, 9);
+    assert_eq!(
+        bridge
+            .read_sprite(appearance)
+            .expect("renderer fact")
+            .frame_id,
+        9
+    );
+    unsafe { bridge.stage_snapshot(&appearance_fact, 1) }.expect("updated retained snapshot");
+    let updated_call = bridge
+        .take_staged_call()
+        .expect("updated call")
+        .expect("updated appearance call");
+    assert!(updated_call.frame.as_ref().is_some_and(|frame| {
+        frame.ops.iter().any(|operation| {
+            matches!(
+                operation,
+                render_model::RenderDiff::UpdateSprite { frame: Some(9), .. }
+            )
+        })
+    }));
+    bridge.commit(Some(updated_call));
+    bridge.begin_call();
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Pause,
+        })
+        .expect("pause");
+    let paused = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
+            playback,
+            facts: realtime_sprite_update(3, 0.25),
+        })
+        .expect("paused update");
+    assert!(!paused.advanced);
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Resume,
+        })
+        .expect("resume");
+    let completed = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
+            playback,
+            facts: realtime_sprite_update(4, 0.25),
+        })
+        .expect("one shot completion");
+    assert!(completed.readout.completed);
+    assert_eq!(
+        completed.readout.state,
+        NativeSpritePlaybackState::Completed
+    );
+    unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.expect("remove retained sprite");
+    let removal_call = bridge
+        .take_staged_call()
+        .expect("removal call")
+        .expect("removal appearance call");
+    bridge.commit(Some(removal_call));
+    bridge.begin_call();
+    assert_eq!(
+        bridge
+            .destroy_appearance(appearance)
+            .expect_err("playback retains appearance")
+            .code(),
+        "CSHARP_SPRITE_PLAYBACK_APPEARANCE_IN_USE"
+    );
+    bridge
+        .destroy_sprite_playback(playback)
+        .expect("dispose playback");
+    bridge
+        .destroy_appearance(appearance)
+        .expect("dispose sprite");
+    bridge.destroy_sprite_atlas(atlas).expect("dispose atlas");
+}
+
+#[cfg(test)]
+#[test]
+fn sprite_playback_loop_sampling_restart_and_invalid_creation_are_atomic() {
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let atlas_frames = [NativeSpriteAtlasFrame {
+        frame_id: 4,
+        uv_min: NativeVec2::default(),
+        uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+        has_size: false,
+        size: NativeVec2::default(),
+    }];
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    let atlas = unsafe {
+        bridge
+            .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture,
+                frames: atlas_frames.as_ptr(),
+                frames_len: atlas_frames.len(),
+            })
+            .expect("atlas")
+    };
+    let appearance = bridge
+        .create_sprite_from_atlas(atlas_sprite_request(atlas, 4))
+        .expect("sprite");
+    let invalid = [NativeSpritePlaybackFrame {
+        frame_id: 99,
+        duration_seconds: 0.5,
+    }];
+    assert_eq!(
+        unsafe {
+            bridge.create_sprite_playback(&NativeSpritePlaybackCreateRequest {
+                appearance,
+                atlas,
+                frames: invalid.as_ptr(),
+                frames_len: invalid.len(),
+                markers: std::ptr::null(),
+                markers_len: 0,
+                loop_mode: NativeSpritePlaybackLoopMode::Loop,
+                playback_rate: 1.0,
+            })
+        }
+        .expect_err("missing frame")
+        .code(),
+        "CSHARP_SPRITE_PLAYBACK_FRAME"
+    );
+    assert!(bridge
+        .staged_ref()
+        .unwrap()
+        .state
+        .sprite_playbacks
+        .is_empty());
+    let frames = [NativeSpritePlaybackFrame {
+        frame_id: 4,
+        duration_seconds: 0.5,
+    }];
+    let playback = unsafe {
+        bridge
+            .create_sprite_playback(&NativeSpritePlaybackCreateRequest {
+                appearance,
+                atlas,
+                frames: frames.as_ptr(),
+                frames_len: frames.len(),
+                markers: std::ptr::null(),
+                markers_len: 0,
+                loop_mode: NativeSpritePlaybackLoopMode::Loop,
+                playback_rate: 2.0,
+            })
+            .expect("loop playback")
+    };
+    let sample = bridge
+        .sample_sprite_playback(NativeSpritePlaybackSampleRequest {
+            playback,
+            elapsed_seconds: 1.25,
+        })
+        .expect("sample");
+    assert_eq!(sample.cycle, 5);
+    assert_eq!(sample.frame_id, 4);
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Restart,
+        })
+        .expect("restart starts from zero");
+    let looped = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest {
+            playback,
+            facts: realtime_sprite_update(1, 0.5),
+        })
+        .expect("loop advance");
+    assert_eq!(looped.readout.cycle, 2);
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Stop,
+        })
+        .expect("stop");
+    let stopped = bridge.read_sprite_playback(playback).expect("readback");
+    assert_eq!(stopped.state, NativeSpritePlaybackState::Stopped);
+    assert_eq!(stopped.frame_index, 0);
+}
+
 fn renderer_path(path: String, extension: &str) -> Result<String, CsharpEngineServicesError> {
     if !path.starts_with("content/") || !path.ends_with(extension) {
         return Err(CsharpEngineServicesError::new(
@@ -774,6 +1120,12 @@ pub(crate) struct RuntimeAppearanceState {
     sprite_atlas_appearances: BTreeMap<u64, BTreeSet<u64>>,
     sprite_appearance_atlases: BTreeMap<u64, u64>,
     next_sprite_atlas: u64,
+    sprite_playbacks: BTreeMap<u64, RuntimeSpritePlayback>,
+    sprite_playbacks_by_atlas: BTreeMap<u64, BTreeSet<u64>>,
+    sprite_playbacks_by_appearance: BTreeMap<u64, BTreeSet<u64>>,
+    next_sprite_playback: u64,
+    sprite_playback_advance_leases: BTreeMap<u64, SpritePlaybackAdvanceLeaseBacking>,
+    next_sprite_playback_advance_lease: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
     animation_graphs: BTreeMap<u64, AnimationGraphBuilder>,
@@ -795,6 +1147,36 @@ struct RuntimeSpriteAtlas {
     asset: String,
     texture_asset: String,
     frames: BTreeMap<u32, SpriteFrameRect>,
+}
+
+#[derive(Clone)]
+struct RuntimeSpritePlayback {
+    appearance: u64,
+    atlas: u64,
+    frames: Vec<NativeSpritePlaybackFrame>,
+    markers: Vec<NativeSpritePlaybackMarker>,
+    loop_mode: NativeSpritePlaybackLoopMode,
+    playback_rate: f64,
+    state: NativeSpritePlaybackState,
+    frame_index: usize,
+    elapsed_in_frame_seconds: f64,
+    cycle: u64,
+    revision: u64,
+    next_crossing_sequence: u64,
+    last_update: Option<SpritePlaybackUpdateIdentity>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SpritePlaybackUpdateIdentity {
+    generation: u64,
+    control_revision: u64,
+    simulation_step: u64,
+    admitted_step_count: u32,
+}
+
+#[derive(Clone)]
+struct SpritePlaybackAdvanceLeaseBacking {
+    _crossings: Box<[NativeSpritePlaybackMarkerCrossing]>,
 }
 
 pub(crate) struct RuntimeAppearanceCall {
@@ -928,6 +1310,12 @@ impl RuntimeAppearanceBridge {
                 sprite_atlas_appearances: BTreeMap::new(),
                 sprite_appearance_atlases: BTreeMap::new(),
                 next_sprite_atlas: 1,
+                sprite_playbacks: BTreeMap::new(),
+                sprite_playbacks_by_atlas: BTreeMap::new(),
+                sprite_playbacks_by_appearance: BTreeMap::new(),
+                next_sprite_playback: 1,
+                sprite_playback_advance_leases: BTreeMap::new(),
+                next_sprite_playback_advance_lease: 1,
                 animated_appearances: BTreeMap::new(),
                 animation_instances: BTreeMap::new(),
                 animation_graphs: BTreeMap::new(),
@@ -1397,6 +1785,15 @@ impl RuntimeAppearanceBridge {
 
     fn staged_mut(&mut self) -> Result<&mut RuntimeAppearanceCall, CsharpEngineServicesError> {
         self.staged.as_mut().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_APPEARANCE_CALL",
+                "appearance service was called outside a product call",
+            )
+        })
+    }
+
+    fn staged_ref(&self) -> Result<&RuntimeAppearanceCall, CsharpEngineServicesError> {
+        self.staged.as_ref().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_APPEARANCE_CALL",
                 "appearance service was called outside a product call",
@@ -2212,6 +2609,17 @@ impl RuntimeAppearanceBridge {
                 "dispose animation instances using this appearance before disposing or replacing it",
             ));
         }
+        if staged
+            .state
+            .sprite_playbacks_by_appearance
+            .get(&appearance.value)
+            .is_some_and(|playbacks| !playbacks.is_empty())
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_APPEARANCE_IN_USE",
+                "dispose sprite playbacks using this appearance before disposing or replacing it",
+            ));
+        }
         let Some(identity) = staged.state.appearances.remove(&appearance.value) else {
             // Match the other generated retained owners: replacement-first
             // then owner disposal is safe and has no renderer side channel.
@@ -2219,6 +2627,10 @@ impl RuntimeAppearanceBridge {
         };
         staged.state.appearance_materials.remove(&appearance.value);
         staged.state.animated_appearances.remove(&appearance.value);
+        staged
+            .state
+            .sprite_playbacks_by_appearance
+            .remove(&appearance.value);
         if let Some(atlas) = staged
             .state
             .sprite_appearance_atlases
@@ -2797,8 +3209,20 @@ impl RuntimeAppearanceBridge {
                 "dispose or replace appearances using this sprite atlas before disposing it",
             ));
         }
+        if staged
+            .state
+            .sprite_playbacks_by_atlas
+            .get(&atlas.value)
+            .is_some_and(|playbacks| !playbacks.is_empty())
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_ATLAS_IN_USE",
+                "dispose sprite playbacks using this atlas before disposing it",
+            ));
+        }
         staged.state.sprite_atlases.remove(&atlas.value);
         staged.state.sprite_atlas_appearances.remove(&atlas.value);
+        staged.state.sprite_playbacks_by_atlas.remove(&atlas.value);
         let resources = staged.state.projector.resources_mut();
         resources
             .sprite_atlases
@@ -3010,6 +3434,394 @@ impl RuntimeAppearanceBridge {
                 })
                 .unwrap_or_default(),
         })
+    }
+
+    unsafe fn create_sprite_playback(
+        &mut self,
+        request: &NativeSpritePlaybackCreateRequest,
+    ) -> Result<NativeSpritePlaybackHandle, CsharpEngineServicesError> {
+        let frames = borrowed_slice(request.frames, request.frames_len, "sprite playback frames")?;
+        let markers = borrowed_slice(
+            request.markers,
+            request.markers_len,
+            "sprite playback markers",
+        )?;
+        if frames.is_empty() || frames.len() > MAX_SPRITE_PLAYBACK_FRAMES {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_FRAMES",
+                "sprite playback must contain between one and 4096 sequence entries",
+            ));
+        }
+        if markers.len() > MAX_SPRITE_PLAYBACK_MARKERS {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_MARKERS",
+                "sprite playback cannot contain more than 4096 markers",
+            ));
+        }
+        if !request.playback_rate.is_finite() || request.playback_rate <= 0.0 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_RATE",
+                "sprite playback rate must be finite and positive",
+            ));
+        }
+        let state = &self.staged_ref()?.state;
+        let atlas = state
+            .sprite_atlases
+            .get(&request.atlas.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_HANDLE",
+                    "sprite atlas is not live",
+                )
+            })?;
+        let appearance_atlas = state
+            .sprite_appearance_atlases
+            .get(&request.appearance.value)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_ATLAS_APPEARANCE",
+                    "appearance is not an atlas-backed sprite",
+                )
+            })?;
+        if appearance_atlas != request.atlas.value {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_ATLAS",
+                "sprite playback atlas does not own the supplied appearance",
+            ));
+        }
+        let mut total_duration_seconds = 0.0;
+        for frame in frames {
+            if !frame.duration_seconds.is_finite() || frame.duration_seconds <= 0.0 {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_DURATION",
+                    "sprite playback frame duration must be finite and positive",
+                ));
+            }
+            if !atlas.frames.contains_key(&frame.frame_id) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_FRAME",
+                    "sprite playback references a frame absent from the admitted atlas",
+                ));
+            }
+            total_duration_seconds += frame.duration_seconds;
+            if !total_duration_seconds.is_finite() {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_DURATION",
+                    "sprite playback total duration must be finite",
+                ));
+            }
+        }
+        let mut marker_ids = BTreeSet::new();
+        for marker in markers {
+            if marker.marker_id == 0 || !marker_ids.insert(marker.marker_id) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_MARKER",
+                    "sprite playback marker IDs must be nonzero and unique",
+                ));
+            }
+            if marker.frame_index as usize >= frames.len() {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_MARKER",
+                    "sprite playback marker frame index is outside the sequence",
+                ));
+            }
+        }
+        let handle = state.next_sprite_playback;
+        let first_frame = frames[0].frame_id;
+        self.set_sprite_frame(NativeSpriteFrameUpdateRequest {
+            appearance: request.appearance,
+            frame_id: first_frame,
+        })?;
+        let staged = self.staged_mut()?;
+        staged.state.next_sprite_playback = handle.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_HANDLE",
+                "sprite playback handle overflow",
+            )
+        })?;
+        staged.state.sprite_playbacks.insert(
+            handle,
+            RuntimeSpritePlayback {
+                appearance: request.appearance.value,
+                atlas: request.atlas.value,
+                frames: frames.to_vec(),
+                markers: markers.to_vec(),
+                loop_mode: request.loop_mode,
+                playback_rate: request.playback_rate,
+                state: NativeSpritePlaybackState::Stopped,
+                frame_index: 0,
+                elapsed_in_frame_seconds: 0.0,
+                cycle: 0,
+                revision: 0,
+                next_crossing_sequence: 1,
+                last_update: None,
+            },
+        );
+        staged
+            .state
+            .sprite_playbacks_by_atlas
+            .entry(request.atlas.value)
+            .or_default()
+            .insert(handle);
+        staged
+            .state
+            .sprite_playbacks_by_appearance
+            .entry(request.appearance.value)
+            .or_default()
+            .insert(handle);
+        Ok(NativeSpritePlaybackHandle { value: handle })
+    }
+
+    fn destroy_sprite_playback(
+        &mut self,
+        playback: NativeSpritePlaybackHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let Some(value) = staged.state.sprite_playbacks.remove(&playback.value) else {
+            return Ok(());
+        };
+        if let Some(values) = staged.state.sprite_playbacks_by_atlas.get_mut(&value.atlas) {
+            values.remove(&playback.value);
+        }
+        if let Some(values) = staged
+            .state
+            .sprite_playbacks_by_appearance
+            .get_mut(&value.appearance)
+        {
+            values.remove(&playback.value);
+        }
+        Ok(())
+    }
+
+    fn control_sprite_playback(
+        &mut self,
+        request: NativeSpritePlaybackControlRequest,
+    ) -> Result<NativeSpritePlaybackReadout, CsharpEngineServicesError> {
+        let mut playback = self.sprite_playback(request.playback)?;
+        match request.control {
+            NativeSpritePlaybackControl::Start
+                if playback.state == NativeSpritePlaybackState::Stopped =>
+            {
+                playback.state = NativeSpritePlaybackState::Playing;
+            }
+            NativeSpritePlaybackControl::Pause
+                if playback.state == NativeSpritePlaybackState::Playing =>
+            {
+                playback.state = NativeSpritePlaybackState::Paused;
+            }
+            NativeSpritePlaybackControl::Resume
+                if playback.state == NativeSpritePlaybackState::Paused =>
+            {
+                playback.state = NativeSpritePlaybackState::Playing;
+            }
+            NativeSpritePlaybackControl::Stop
+                if matches!(
+                    playback.state,
+                    NativeSpritePlaybackState::Playing
+                        | NativeSpritePlaybackState::Paused
+                        | NativeSpritePlaybackState::Completed
+                ) =>
+            {
+                reset_sprite_playback(&mut playback, NativeSpritePlaybackState::Stopped);
+            }
+            NativeSpritePlaybackControl::Restart => {
+                reset_sprite_playback(&mut playback, NativeSpritePlaybackState::Playing);
+            }
+            _ => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_TRANSITION",
+                    "sprite playback control is invalid for the current state",
+                ))
+            }
+        }
+        playback.revision = playback.revision.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_REVISION",
+                "sprite playback revision overflow",
+            )
+        })?;
+        let frame_id = playback.frames[playback.frame_index].frame_id;
+        self.set_sprite_frame(NativeSpriteFrameUpdateRequest {
+            appearance: NativeAppearanceHandle {
+                value: playback.appearance,
+            },
+            frame_id,
+        })?;
+        let readout = sprite_playback_readout(&playback);
+        self.staged_mut()?
+            .state
+            .sprite_playbacks
+            .insert(request.playback.value, playback);
+        Ok(readout)
+    }
+
+    fn advance_sprite_playback(
+        &mut self,
+        request: NativeSpritePlaybackAdvanceRequest,
+    ) -> Result<NativeSpritePlaybackAdvanceLease, CsharpEngineServicesError> {
+        let mut playback = self.sprite_playback(request.playback)?;
+        let identity = validate_sprite_playback_update(request.facts, playback.last_update)?;
+        let duplicate = playback.last_update == Some(identity);
+        let mut crossings = Vec::new();
+        let mut advanced = false;
+        if !duplicate {
+            playback.last_update = Some(identity);
+            if playback.state == NativeSpritePlaybackState::Playing
+                && request.facts.admitted_step_count > 0
+            {
+                let mut remaining = request.facts.fixed_delta_seconds
+                    * f64::from(request.facts.admitted_step_count)
+                    * playback.playback_rate;
+                if !remaining.is_finite() || remaining < 0.0 {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_SPRITE_PLAYBACK_TIME",
+                        "admitted sprite playback time is not finite and non-negative",
+                    ));
+                }
+                advanced = remaining > 0.0;
+                let mut transitions = 0usize;
+                while remaining > 0.0 && playback.state == NativeSpritePlaybackState::Playing {
+                    let duration = playback.frames[playback.frame_index].duration_seconds;
+                    let until_boundary = duration - playback.elapsed_in_frame_seconds;
+                    if remaining < until_boundary {
+                        playback.elapsed_in_frame_seconds += remaining;
+                        remaining = 0.0;
+                        continue;
+                    }
+                    remaining -= until_boundary;
+                    transitions += 1;
+                    if transitions > MAX_SPRITE_PLAYBACK_TRANSITIONS_PER_ADVANCE {
+                        return Err(CsharpEngineServicesError::new(
+                            "CSHARP_SPRITE_PLAYBACK_ADVANCE",
+                            "one admitted update crossed too many sprite playback frames",
+                        ));
+                    }
+                    if playback.frame_index + 1 == playback.frames.len() {
+                        match playback.loop_mode {
+                            NativeSpritePlaybackLoopMode::OneShot => {
+                                playback.elapsed_in_frame_seconds = duration;
+                                playback.state = NativeSpritePlaybackState::Completed;
+                                remaining = 0.0;
+                                continue;
+                            }
+                            NativeSpritePlaybackLoopMode::Loop => {
+                                playback.frame_index = 0;
+                                playback.cycle =
+                                    playback.cycle.checked_add(1).ok_or_else(|| {
+                                        CsharpEngineServicesError::new(
+                                            "CSHARP_SPRITE_PLAYBACK_CYCLE",
+                                            "sprite playback cycle overflow",
+                                        )
+                                    })?;
+                            }
+                        }
+                    } else {
+                        playback.frame_index += 1;
+                    }
+                    playback.elapsed_in_frame_seconds = 0.0;
+                    append_sprite_playback_markers(&mut playback, &mut crossings)?;
+                }
+                if advanced {
+                    playback.revision = playback.revision.checked_add(1).ok_or_else(|| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_SPRITE_PLAYBACK_REVISION",
+                            "sprite playback revision overflow",
+                        )
+                    })?;
+                }
+            }
+        }
+        let frame_id = playback.frames[playback.frame_index].frame_id;
+        if advanced {
+            self.set_sprite_frame(NativeSpriteFrameUpdateRequest {
+                appearance: NativeAppearanceHandle {
+                    value: playback.appearance,
+                },
+                frame_id,
+            })?;
+        }
+        let readout = sprite_playback_readout(&playback);
+        let boxed = crossings.into_boxed_slice();
+        let lease = self.staged_ref()?.state.next_sprite_playback_advance_lease;
+        let crossings_pointer = if boxed.is_empty() {
+            std::ptr::null()
+        } else {
+            boxed.as_ptr()
+        };
+        let result = NativeSpritePlaybackAdvanceLease {
+            handle: NativeSpritePlaybackAdvanceLeaseHandle { value: lease },
+            crossings: crossings_pointer,
+            crossings_len: boxed.len(),
+            readout,
+            advanced,
+        };
+        let staged = self.staged_mut()?;
+        staged.state.next_sprite_playback_advance_lease =
+            lease.checked_add(1).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_LEASE",
+                    "sprite playback advance lease handle overflow",
+                )
+            })?;
+        staged
+            .state
+            .sprite_playbacks
+            .insert(request.playback.value, playback);
+        staged.state.sprite_playback_advance_leases.insert(
+            lease,
+            SpritePlaybackAdvanceLeaseBacking { _crossings: boxed },
+        );
+        Ok(result)
+    }
+
+    fn destroy_sprite_playback_advance_lease(
+        &mut self,
+        lease: NativeSpritePlaybackAdvanceLeaseHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?
+            .state
+            .sprite_playback_advance_leases
+            .remove(&lease.value);
+        Ok(())
+    }
+
+    fn sample_sprite_playback(
+        &self,
+        request: NativeSpritePlaybackSampleRequest,
+    ) -> Result<NativeSpritePlaybackSample, CsharpEngineServicesError> {
+        if !request.elapsed_seconds.is_finite() || request.elapsed_seconds < 0.0 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_SAMPLE",
+                "sprite playback sample time must be finite and non-negative",
+            ));
+        }
+        let playback = self.sprite_playback(request.playback)?;
+        sample_sprite_playback_at(&playback, request.elapsed_seconds * playback.playback_rate)
+    }
+
+    fn read_sprite_playback(
+        &self,
+        playback: NativeSpritePlaybackHandle,
+    ) -> Result<NativeSpritePlaybackReadout, CsharpEngineServicesError> {
+        Ok(sprite_playback_readout(&self.sprite_playback(playback)?))
+    }
+
+    fn sprite_playback(
+        &self,
+        playback: NativeSpritePlaybackHandle,
+    ) -> Result<RuntimeSpritePlayback, CsharpEngineServicesError> {
+        self.staged_ref()?
+            .state
+            .sprite_playbacks
+            .get(&playback.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_HANDLE",
+                    "sprite playback is not live",
+                )
+            })
     }
 
     fn ensure_live_appearance(
@@ -5353,6 +6165,138 @@ fn native_light_readout(fact: &RuntimeLightFact) -> NativeLightReadout {
     }
 }
 
+fn reset_sprite_playback(playback: &mut RuntimeSpritePlayback, state: NativeSpritePlaybackState) {
+    playback.state = state;
+    playback.frame_index = 0;
+    playback.elapsed_in_frame_seconds = 0.0;
+    playback.cycle = 0;
+    playback.last_update = None;
+}
+
+fn sprite_playback_readout(playback: &RuntimeSpritePlayback) -> NativeSpritePlaybackReadout {
+    NativeSpritePlaybackReadout {
+        frame_id: playback.frames[playback.frame_index].frame_id,
+        frame_index: playback.frame_index as u32,
+        state: playback.state,
+        elapsed_in_frame_seconds: playback.elapsed_in_frame_seconds,
+        cycle: playback.cycle,
+        revision: playback.revision,
+        completed: playback.state == NativeSpritePlaybackState::Completed,
+    }
+}
+
+fn validate_sprite_playback_update(
+    facts: NativeProductUpdateFacts,
+    last: Option<SpritePlaybackUpdateIdentity>,
+) -> Result<SpritePlaybackUpdateIdentity, CsharpEngineServicesError> {
+    if facts.lifecycle_state != NativeProductLifecycleState::Running {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_SPRITE_PLAYBACK_UPDATE",
+            "sprite playback can advance only during a running product update",
+        ));
+    }
+    if facts.admitted_step_count > 0
+        && (facts.mode != NativeProductUpdateMode::Realtime
+            || !facts.fixed_delta_seconds.is_finite()
+            || facts.fixed_delta_seconds <= 0.0)
+    {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_SPRITE_PLAYBACK_UPDATE",
+            "sprite playback requires positive finite Rust-admitted realtime steps",
+        ));
+    }
+    let identity = SpritePlaybackUpdateIdentity {
+        generation: facts.generation,
+        control_revision: facts.control_revision,
+        simulation_step: facts.simulation_step,
+        admitted_step_count: facts.admitted_step_count,
+    };
+    if last.is_some_and(|previous| identity < previous) {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_SPRITE_PLAYBACK_STALE_UPDATE",
+            "sprite playback update facts precede the last admitted update",
+        ));
+    }
+    Ok(identity)
+}
+
+fn append_sprite_playback_markers(
+    playback: &mut RuntimeSpritePlayback,
+    crossings: &mut Vec<NativeSpritePlaybackMarkerCrossing>,
+) -> Result<(), CsharpEngineServicesError> {
+    for marker in playback
+        .markers
+        .iter()
+        .filter(|marker| marker.frame_index as usize == playback.frame_index)
+    {
+        let sequence = playback.next_crossing_sequence;
+        playback.next_crossing_sequence = sequence.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_MARKER",
+                "sprite playback marker sequence overflow",
+            )
+        })?;
+        crossings.push(NativeSpritePlaybackMarkerCrossing {
+            marker_id: marker.marker_id,
+            frame_id: playback.frames[playback.frame_index].frame_id,
+            frame_index: playback.frame_index as u32,
+            cycle: playback.cycle,
+            crossing_sequence: sequence,
+        });
+    }
+    Ok(())
+}
+
+fn sample_sprite_playback_at(
+    playback: &RuntimeSpritePlayback,
+    elapsed_seconds: f64,
+) -> Result<NativeSpritePlaybackSample, CsharpEngineServicesError> {
+    let total = playback
+        .frames
+        .iter()
+        .map(|frame| frame.duration_seconds)
+        .sum::<f64>();
+    let (mut remaining, cycle, completed) = match playback.loop_mode {
+        NativeSpritePlaybackLoopMode::OneShot if elapsed_seconds >= total => {
+            let frame_index = playback.frames.len() - 1;
+            return Ok(NativeSpritePlaybackSample {
+                frame_id: playback.frames[frame_index].frame_id,
+                frame_index: frame_index as u32,
+                elapsed_in_frame_seconds: playback.frames[frame_index].duration_seconds,
+                cycle: 0,
+                completed: true,
+            });
+        }
+        NativeSpritePlaybackLoopMode::OneShot => (elapsed_seconds, 0, false),
+        NativeSpritePlaybackLoopMode::Loop => {
+            let cycles = (elapsed_seconds / total).floor();
+            if cycles > u64::MAX as f64 {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_SAMPLE",
+                    "sprite playback sample cycle is out of range",
+                ));
+            }
+            (elapsed_seconds % total, cycles as u64, false)
+        }
+    };
+    for (frame_index, frame) in playback.frames.iter().enumerate() {
+        if remaining < frame.duration_seconds {
+            return Ok(NativeSpritePlaybackSample {
+                frame_id: frame.frame_id,
+                frame_index: frame_index as u32,
+                elapsed_in_frame_seconds: remaining,
+                cycle,
+                completed,
+            });
+        }
+        remaining -= frame.duration_seconds;
+    }
+    Err(CsharpEngineServicesError::new(
+        "CSHARP_SPRITE_PLAYBACK_SAMPLE",
+        "sprite playback sample could not resolve a sequence frame",
+    ))
+}
+
 pub(crate) fn create(
     catalog: RuntimeAppearanceCatalog,
     content_resources: BTreeMap<String, Arc<[u8]>>,
@@ -5540,6 +6484,127 @@ pub(crate) unsafe extern "C" fn read_sprite(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
     match bridge.read_sprite(appearance) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn create_sprite_playback(
+    context: *mut c_void,
+    request: *const NativeSpritePlaybackCreateRequest,
+    result: *mut NativeSpritePlaybackHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match unsafe { bridge.create_sprite_playback(&*request) } {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn destroy_sprite_playback(
+    context: *mut c_void,
+    playback: NativeSpritePlaybackHandle,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.destroy_sprite_playback(playback))
+}
+
+pub(crate) unsafe extern "C" fn control_sprite_playback(
+    context: *mut c_void,
+    request: NativeSpritePlaybackControlRequest,
+    result: *mut NativeSpritePlaybackReadout,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match bridge.control_sprite_playback(request) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn advance_sprite_playback(
+    context: *mut c_void,
+    request: *const NativeSpritePlaybackAdvanceRequest,
+    result: *mut NativeSpritePlaybackAdvanceLease,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match bridge.advance_sprite_playback(unsafe { *request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn destroy_sprite_playback_advance_lease(
+    context: *mut c_void,
+    lease: NativeSpritePlaybackAdvanceLeaseHandle,
+) -> i32 {
+    appearance_void(context, |bridge| {
+        bridge.destroy_sprite_playback_advance_lease(lease)
+    })
+}
+
+pub(crate) unsafe extern "C" fn sample_sprite_playback(
+    context: *mut c_void,
+    request: NativeSpritePlaybackSampleRequest,
+    result: *mut NativeSpritePlaybackSample,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match bridge.sample_sprite_playback(request) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn read_sprite_playback(
+    context: *mut c_void,
+    playback: NativeSpritePlaybackHandle,
+    result: *mut NativeSpritePlaybackReadout,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match bridge.read_sprite_playback(playback) {
         Ok(value) => {
             unsafe { *result = value };
             ABI_OK

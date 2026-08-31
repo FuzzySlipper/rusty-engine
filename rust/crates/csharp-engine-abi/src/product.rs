@@ -463,6 +463,35 @@ pub type NativeSetSpriteFrame =
     unsafe extern "C" fn(*mut c_void, NativeSpriteFrameUpdateRequest) -> i32;
 pub type NativeReadSprite =
     unsafe extern "C" fn(*mut c_void, NativeAppearanceHandle, *mut NativeSpriteReadout) -> i32;
+pub type NativeCreateSpritePlayback = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpritePlaybackCreateRequest,
+    *mut NativeSpritePlaybackHandle,
+) -> i32;
+pub type NativeDestroySpritePlayback =
+    unsafe extern "C" fn(*mut c_void, NativeSpritePlaybackHandle) -> i32;
+pub type NativeControlSpritePlayback = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpritePlaybackControlRequest,
+    *mut NativeSpritePlaybackReadout,
+) -> i32;
+pub type NativeAdvanceSpritePlayback = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpritePlaybackAdvanceRequest,
+    *mut NativeSpritePlaybackAdvanceLease,
+) -> i32;
+pub type NativeDestroySpritePlaybackAdvanceLease =
+    unsafe extern "C" fn(*mut c_void, NativeSpritePlaybackAdvanceLeaseHandle) -> i32;
+pub type NativeSampleSpritePlayback = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpritePlaybackSampleRequest,
+    *mut NativeSpritePlaybackSample,
+) -> i32;
+pub type NativeReadSpritePlayback = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpritePlaybackHandle,
+    *mut NativeSpritePlaybackReadout,
+) -> i32;
 pub type NativeDestroyAppearance = unsafe extern "C" fn(*mut c_void, NativeAppearanceHandle) -> i32;
 pub type NativePublishAppearanceSnapshot =
     unsafe extern "C" fn(*mut c_void, *const NativeAppearanceFact, usize) -> i32;
@@ -862,6 +891,13 @@ pub struct NativeAppearanceApi {
     pub replace_sprite_from_atlas: NativeReplaceSpriteFromAtlas,
     pub set_sprite_frame: NativeSetSpriteFrame,
     pub read_sprite: NativeReadSprite,
+    pub create_sprite_playback: NativeCreateSpritePlayback,
+    pub destroy_sprite_playback: NativeDestroySpritePlayback,
+    pub control_sprite_playback: NativeControlSpritePlayback,
+    pub advance_sprite_playback: NativeAdvanceSpritePlayback,
+    pub destroy_sprite_playback_advance_lease: NativeDestroySpritePlaybackAdvanceLease,
+    pub sample_sprite_playback: NativeSampleSpritePlayback,
+    pub read_sprite_playback: NativeReadSpritePlayback,
     pub destroy_appearance: NativeDestroyAppearance,
     pub publish_snapshot: NativePublishAppearanceSnapshot,
     pub create_light: NativeCreateLight,
