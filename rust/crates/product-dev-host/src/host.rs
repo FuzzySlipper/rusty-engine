@@ -796,6 +796,11 @@ fn push_outputs(
                     "a new binding arrived before the previous baseline completed",
                 ));
             }
+            // A runtime that begins a replacement baseline owns subsequent
+            // publication. Fence the previous binding immediately so a
+            // rejected replacement cannot label later incrementals with the
+            // stale runtime identity.
+            bus.active_binding = None;
             bus.pending_baseline = Some(PendingBaseline {
                 binding,
                 outputs: vec![output],
@@ -1053,14 +1058,32 @@ mod tests {
 
     #[test]
     fn rejected_fragmented_baseline_accepts_a_real_full_producer_replay() {
-        let runtime = binding();
+        let active_runtime = binding();
+        let replacement_runtime = crate::ProductDevRuntimeBinding {
+            generation: CanonicalU64::new(2),
+            ..active_runtime
+        };
         let fragmented_payload =
             "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1));
         let bus = Mutex::new(OutputBus::default());
+        push_outputs(
+            &bus,
+            vec![
+                crate::model::ProductDevRuntimeOutput::binding(
+                    active_runtime,
+                    CanonicalU64::new(0),
+                ),
+                crate::model::ProductDevRuntimeOutput::complete_baseline(active_runtime),
+            ],
+        )
+        .expect("initial runtime baseline publishes");
         let error = push_outputs(
             &bus,
             vec![
-                crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
+                crate::model::ProductDevRuntimeOutput::binding(
+                    replacement_runtime,
+                    CanonicalU64::new(0),
+                ),
                 crate::model::ProductDevRuntimeOutput::test_frame_value(
                     serde_json::json!({"payload": fragmented_payload}),
                 ),
@@ -1069,7 +1092,7 @@ mod tests {
                         MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS / 2 + 1),
                     )}),
                 ),
-                crate::model::ProductDevRuntimeOutput::complete_baseline(runtime),
+                crate::model::ProductDevRuntimeOutput::complete_baseline(replacement_runtime),
             ],
         )
         .expect_err("oversized complete producer baseline is rejected");
@@ -1079,6 +1102,7 @@ mod tests {
             .expect("test bus lock")
             .pending_baseline
             .is_none());
+        assert!(bus.lock().expect("test bus lock").active_binding.is_none());
         let incremental = push_outputs(
             &bus,
             vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
@@ -1087,18 +1111,26 @@ mod tests {
         )
         .expect_err("incremental output cannot attach to a rejected baseline");
         assert_eq!(incremental.code(), "DEV_HOST_OUTPUT_BASELINE");
+        assert_eq!(
+            bus.lock().expect("test bus lock").events.len(),
+            1,
+            "replacement incremental was not mislabeled as the previous runtime",
+        );
         push_outputs(
             &bus,
             vec![
-                crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
-                crate::model::ProductDevRuntimeOutput::complete_baseline(runtime),
+                crate::model::ProductDevRuntimeOutput::binding(
+                    replacement_runtime,
+                    CanonicalU64::new(0),
+                ),
+                crate::model::ProductDevRuntimeOutput::complete_baseline(replacement_runtime),
             ],
         )
         .expect("a replayed full producer baseline publishes atomically");
         let locked = bus.lock().expect("test bus lock");
         assert!(locked.pending_baseline.is_none());
-        assert_eq!(locked.active_binding, Some(runtime));
-        assert_eq!(locked.events.len(), 1);
+        assert_eq!(locked.active_binding, Some(replacement_runtime));
+        assert_eq!(locked.events.len(), 2);
     }
 }
 
