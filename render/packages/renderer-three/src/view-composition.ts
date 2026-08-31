@@ -9,6 +9,7 @@ import {
 
 import type { RendererVisibilityReadout, ThreeRenderer } from './three-renderer.js';
 import { applyRendererThreeCameraBasis, applyRendererThreeCameraPose } from './camera-pose.js';
+import { synchronizeCameraRelativeViewmodelCamera } from './viewmodel-camera.js';
 
 export type RendererViewCompositionDiagnosticCode =
   | 'invalid_view_composition'
@@ -351,7 +352,11 @@ export class RendererViewCompositionBackend {
     if (camera === undefined) return;
     const area = pixelViewport(view.viewport, primaryWidth, primaryHeight);
     updateCameraAspect(camera, area.width / area.height);
-    this.#syncViewmodelCamera(camera, area.width / area.height);
+    synchronizeCameraRelativeViewmodelCamera(
+      camera,
+      this.#viewmodelCamera,
+      area.width / area.height,
+    );
     setPhysicalViewport(this.#webgl, area);
     this.#webgl.clear(true, true, true);
     this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
@@ -366,20 +371,6 @@ export class RendererViewCompositionBackend {
       this.#projection.viewmodelScene,
     );
     this.#webgl.render(this.#projection.viewmodelScene, this.#viewmodelCamera);
-  }
-
-  #syncViewmodelCamera(camera: THREE.Camera, aspect: number): void {
-    this.#viewmodelCamera.position.copy(camera.position);
-    this.#viewmodelCamera.quaternion.copy(camera.quaternion);
-    this.#viewmodelCamera.up.copy(camera.up);
-    if (camera instanceof THREE.PerspectiveCamera) {
-      this.#viewmodelCamera.fov = camera.fov;
-      this.#viewmodelCamera.near = camera.near;
-      this.#viewmodelCamera.far = camera.far;
-    }
-    this.#viewmodelCamera.aspect = aspect;
-    this.#viewmodelCamera.updateProjectionMatrix();
-    this.#viewmodelCamera.updateMatrixWorld(true);
   }
 
   #validateTargetRevisions(composition: RendererViewComposition): void {

@@ -36,8 +36,11 @@ export interface Material {
 /**
  * Retained composition channel.
  *
- * `viewmodel` is camera-relative presentation composed after world depth. It
- * carries no camera, input, picking, or gameplay authority.
+ * `viewmodel` is camera-relative presentation composed after world depth.
+ * Transforms use canonical camera-local axes (+X right, +Y up, -Z forward)
+ * around a local origin; world-camera translation, pitch, and yaw are not
+ * inherited. The host owns the Viewmodel camera orientation and projection.
+ * This layer carries no camera, input, picking, or gameplay authority.
  */
 export type RenderLayer = 'scene' | 'debug' | 'ui' | 'viewmodel';
 

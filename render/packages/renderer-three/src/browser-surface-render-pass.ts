@@ -1,5 +1,7 @@
 import type * as THREE from 'three';
 
+import { synchronizeCameraRelativeViewmodelCamera } from './viewmodel-camera.js';
+
 export interface BrowserSurfaceRenderProjection {
   readonly scene: THREE.Scene;
   readonly viewmodelScene: THREE.Scene;
@@ -24,10 +26,14 @@ export interface BrowserSurfaceRenderDriver {
 export function renderBrowserSurfaceFrame(
   driver: BrowserSurfaceRenderDriver,
   worldCamera: THREE.Camera,
-  viewmodelCamera: THREE.Camera,
+  viewmodelCamera: THREE.PerspectiveCamera,
   projection: BrowserSurfaceRenderProjection,
   deltaSeconds: number,
 ): void {
+  const aspect = 'aspect' in worldCamera && typeof worldCamera.aspect === 'number'
+    ? worldCamera.aspect
+    : viewmodelCamera.aspect;
+  synchronizeCameraRelativeViewmodelCamera(worldCamera, viewmodelCamera, aspect);
   driver.clear(true, true, true);
   projection.advanceAnimation(deltaSeconds);
   projection.prepareSpritesForCamera(worldCamera, projection.scene);
