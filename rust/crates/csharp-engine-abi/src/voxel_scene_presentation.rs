@@ -4,7 +4,7 @@
 //! Engine to project a Spatial session.  It never supplies mesh payloads,
 //! renderer handles, or a parallel scene representation.
 
-use crate::{NativeMaterialHandle, NativeSpatialSessionHandle};
+use crate::{NativeMaterialHandle, NativeSpatialFace, NativeSpatialSessionHandle};
 use std::ffi::c_void;
 
 /// Opaque retained projection identity.  The generated C# facade owns its
@@ -25,6 +25,16 @@ pub struct NativeVoxelSceneMaterialBinding {
     pub material: NativeMaterialHandle,
 }
 
+/// Sparse face-specific override for one canonical source material slot.
+/// Omitted faces continue to resolve through the complete base bindings.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelSceneFaceMaterialBinding {
+    pub material_slot: u32,
+    pub face: NativeSpatialFace,
+    pub material: NativeMaterialHandle,
+}
+
 /// Creates one retained projection of the canonical voxel scene owned by a
 /// Spatial session.  There is no mesh, renderer resource, or transform input:
 /// the scene's own world-origin-aware mesh projection is authoritative.
@@ -36,6 +46,17 @@ pub struct NativeProjectVoxelSceneRequest {
     pub materials_len: usize,
 }
 
+/// Adds sparse canonical-face overrides to the unchanged base scene request.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeProjectVoxelSceneDirectionalRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub materials: *const NativeVoxelSceneMaterialBinding,
+    pub materials_len: usize,
+    pub face_materials: *const NativeVoxelSceneFaceMaterialBinding,
+    pub face_materials_len: usize,
+}
+
 /// Rebinds the complete material palette for an existing retained scene
 /// projection.  The Engine copies resolved descriptors before returning.
 #[repr(C)]
@@ -44,6 +65,49 @@ pub struct NativeUpdateVoxelScenePresentationRequest {
     pub presentation: NativeVoxelScenePresentationHandle,
     pub materials: *const NativeVoxelSceneMaterialBinding,
     pub materials_len: usize,
+}
+
+/// Complete base bindings plus sparse face overrides for an existing retained
+/// presentation. All inputs are copied before the callback returns.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUpdateVoxelScenePresentationDirectionalRequest {
+    pub presentation: NativeVoxelScenePresentationHandle,
+    pub materials: *const NativeVoxelSceneMaterialBinding,
+    pub materials_len: usize,
+    pub face_materials: *const NativeVoxelSceneFaceMaterialBinding,
+    pub face_materials_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelSceneMaterialMappingLeaseHandle {
+    pub value: u64,
+}
+
+/// Copied provenance for one effective source-slot/face renderer selection.
+/// `material_value` identifies the selected retained Material at admission
+/// time; it is diagnostic provenance, not a live disposable handle.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVoxelSceneMaterialMappingRow {
+    pub source_slot: u32,
+    pub face: NativeSpatialFace,
+    pub material_value: u64,
+    pub renderer_slot: u32,
+    pub overridden: bool,
+}
+
+/// Temporary backing for a copied effective mapping readout. The generated
+/// binding copies rows and consumes this lease before returning to C#.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVoxelSceneMaterialMappingLease {
+    pub handle: NativeVoxelSceneMaterialMappingLeaseHandle,
+    pub mappings: *const NativeVoxelSceneMaterialMappingRow,
+    pub mappings_len: usize,
+    pub source_revision: u64,
+    pub mesh_revision: u64,
 }
 
 /// Small observation of the last renderer projection for one retained scene.
@@ -72,6 +136,11 @@ pub type NativeProjectVoxelScene = unsafe extern "C" fn(
     *const NativeProjectVoxelSceneRequest,
     *mut NativeVoxelScenePresentationHandle,
 ) -> i32;
+pub type NativeProjectVoxelSceneDirectional = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeProjectVoxelSceneDirectionalRequest,
+    *mut NativeVoxelScenePresentationHandle,
+) -> i32;
 pub type NativeRefreshVoxelScenePresentation = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelScenePresentationHandle,
@@ -82,6 +151,18 @@ pub type NativeUpdateVoxelScenePresentation = unsafe extern "C" fn(
     *const NativeUpdateVoxelScenePresentationRequest,
     *mut NativeVoxelScenePresentationReadout,
 ) -> i32;
+pub type NativeUpdateVoxelScenePresentationDirectional = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeUpdateVoxelScenePresentationDirectionalRequest,
+    *mut NativeVoxelScenePresentationReadout,
+) -> i32;
+pub type NativeReadVoxelSceneMaterialMapping = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelScenePresentationHandle,
+    *mut NativeVoxelSceneMaterialMappingLease,
+) -> i32;
+pub type NativeDestroyVoxelSceneMaterialMappingLease =
+    unsafe extern "C" fn(*mut c_void, NativeVoxelSceneMaterialMappingLeaseHandle) -> i32;
 pub type NativeDestroyVoxelScenePresentation =
     unsafe extern "C" fn(*mut c_void, NativeVoxelScenePresentationHandle) -> i32;
 pub type NativeClearVoxelScenePresentations =
@@ -98,4 +179,8 @@ pub struct NativeVoxelScenePresentationApi {
     pub update_scene: NativeUpdateVoxelScenePresentation,
     pub destroy_scene: NativeDestroyVoxelScenePresentation,
     pub clear: NativeClearVoxelScenePresentations,
+    pub project_scene_directional: NativeProjectVoxelSceneDirectional,
+    pub update_scene_directional: NativeUpdateVoxelScenePresentationDirectional,
+    pub read_material_mapping: NativeReadVoxelSceneMaterialMapping,
+    pub destroy_material_mapping_lease: NativeDestroyVoxelSceneMaterialMappingLease,
 }

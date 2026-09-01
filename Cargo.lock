@@ -3142,6 +3142,7 @@ dependencies = [
  "core-assets",
  "core-ids",
  "core-math",
+ "core-space",
  "engine-spatial",
  "entity-state",
  "render-model",

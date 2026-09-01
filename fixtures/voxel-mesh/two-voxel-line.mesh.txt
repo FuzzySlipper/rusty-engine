@@ -1,6 +1,11 @@
 mesh v=24 i=36 quads=6 emitted=6 source=10 culled=2
 bounds min=[0.0, 0.0, 0.0] max=[2.0, 1.0, 1.0]
-group slot=1 start=0 count=36
+group slot=1 direction=PosX start=0 count=6
+group slot=1 direction=NegX start=6 count=6
+group slot=1 direction=PosY start=12 count=6
+group slot=1 direction=NegY start=18 count=6
+group slot=1 direction=PosZ start=24 count=6
+group slot=1 direction=NegZ start=30 count=6
 v0 pos=[2.0, 0.0, 0.0] nrm=[1.0, 0.0, 0.0]
 v1 pos=[2.0, 1.0, 0.0] nrm=[1.0, 0.0, 0.0]
 v2 pos=[2.0, 1.0, 1.0] nrm=[1.0, 0.0, 0.0]

@@ -656,6 +656,7 @@ fn dual_contouring(
         indices.extend(lane);
         groups.push(MeshGroup {
             material_slot: slot,
+            direction: None,
             start,
             count: indices.len() as u32 - start,
         });
@@ -834,6 +835,7 @@ fn finalize_lanes(
         indices.extend(lane.indices.into_iter().map(|index| index + vertex_base));
         groups.push(MeshGroup {
             material_slot: slot,
+            direction: None,
             start: group_start,
             count: indices.len() as u32 - group_start,
         });

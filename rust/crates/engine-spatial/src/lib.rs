@@ -172,6 +172,7 @@ pub struct MaterialVoxel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VoxelMeshGroup {
     pub material_slot: u16,
+    pub direction: Option<core_space::Direction6>,
     pub start: u32,
     pub count: u32,
 }
@@ -1094,6 +1095,7 @@ fn voxel_mesh_chunk(
             .into_iter()
             .map(|group| VoxelMeshGroup {
                 material_slot: group.material_slot,
+                direction: group.direction,
                 start: group.start,
                 count: group.count,
             })

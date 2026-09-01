@@ -81,6 +81,9 @@ pub struct SurfaceMeshOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeshGroup {
     pub material_slot: u16,
+    /// Canonical cube face for greedy output. Reconstructed surfaces have no
+    /// face identity and therefore retain `None`.
+    pub direction: Option<Direction6>,
     /// First index (into `indices`) of the run.
     pub start: u32,
     /// Number of indices in the run (a multiple of 3).
@@ -654,18 +657,20 @@ fn emit_quads(
     let mut bmin = [f32::INFINITY; 3];
     let mut bmax = [f32::NEG_INFINITY; 3];
 
-    let mut cur_slot: Option<u16> = None;
+    let mut cur_group: Option<(u16, Direction6)> = None;
     let mut group_start: u32 = 0;
     for quad in quads {
-        if cur_slot != Some(quad.slot) {
-            if let Some(slot) = cur_slot {
+        let group = (quad.slot, quad.dir);
+        if cur_group != Some(group) {
+            if let Some((slot, direction)) = cur_group {
                 groups.push(MeshGroup {
                     material_slot: slot,
+                    direction: Some(direction),
                     start: group_start,
                     count: indices.len() as u32 - group_start,
                 });
             }
-            cur_slot = Some(quad.slot);
+            cur_group = Some(group);
             group_start = indices.len() as u32;
         }
 
@@ -696,9 +701,10 @@ fn emit_quads(
         // Two CCW triangles of the quad: (0,1,2) (0,2,3).
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
-    if let Some(slot) = cur_slot {
+    if let Some((slot, direction)) = cur_group {
         groups.push(MeshGroup {
             material_slot: slot,
+            direction: Some(direction),
             start: group_start,
             count: indices.len() as u32 - group_start,
         });
@@ -757,11 +763,19 @@ impl MeshPayload {
             self.bounds.min, self.bounds.max
         );
         for g in &self.groups {
-            let _ = writeln!(
-                s,
-                "group slot={} start={} count={}",
-                g.material_slot, g.start, g.count
-            );
+            if let Some(direction) = g.direction {
+                let _ = writeln!(
+                    s,
+                    "group slot={} direction={direction:?} start={} count={}",
+                    g.material_slot, g.start, g.count
+                );
+            } else {
+                let _ = writeln!(
+                    s,
+                    "group slot={} start={} count={}",
+                    g.material_slot, g.start, g.count
+                );
+            }
         }
         for (i, p) in self.positions.as_chunks::<3>().0.iter().enumerate() {
             let n = &self.normals[i * 3..i * 3 + 3];
@@ -808,13 +822,17 @@ mod tests {
         assert_eq!(m.stats.vertices, 24);
         assert_eq!(m.stats.indices, 36);
         assert_eq!(m.stats.faces_culled, 0);
+        assert_eq!(m.groups.len(), 6);
+        assert!(m
+            .groups
+            .iter()
+            .all(|group| group.material_slot == 1 && group.count == 6));
         assert_eq!(
-            m.groups,
-            vec![MeshGroup {
-                material_slot: 1,
-                start: 0,
-                count: 36
-            }]
+            m.groups
+                .iter()
+                .filter_map(|group| group.direction)
+                .collect::<BTreeSet<_>>(),
+            Direction6::ALL.into_iter().collect()
         );
     }
 
@@ -878,12 +896,20 @@ mod tests {
     }
 
     #[test]
-    fn faces_are_grouped_by_material_slot() {
+    fn faces_are_grouped_by_material_slot_and_direction() {
         let c = chunk_with(&[(l(0, 0, 0), 3), (l(2, 2, 2), 1)]);
         let m = mesh_chunk_standalone(&spec(), ChunkCoord::ORIGIN, &c).unwrap();
-        assert_eq!(m.groups.len(), 2);
-        assert_eq!(m.groups[0].material_slot, 1); // ascending
-        assert_eq!(m.groups[1].material_slot, 3);
+        assert_eq!(m.groups.len(), 12);
+        assert_eq!(
+            m.groups
+                .iter()
+                .map(|group| (group.material_slot, group.direction))
+                .collect::<BTreeSet<_>>(),
+            Direction6::ALL
+                .into_iter()
+                .flat_map(|direction| [(1, Some(direction)), (3, Some(direction))])
+                .collect()
+        );
         assert_eq!(
             m.groups.iter().map(|g| g.count).sum::<u32>(),
             m.stats.indices
@@ -1055,7 +1081,7 @@ mod tests {
         ];
         assert_eq!(
             actual,
-            ["4f5f3ad142b288fb", "9921ac6f9a29b267", "f9323127d86a2e2a",]
+            ["4b47c7382d4377e3", "9921ac6f9a29b267", "f9323127d86a2e2a",]
         );
     }
 
@@ -1350,7 +1376,7 @@ mod tests {
         let mesh = mesh_cells_standalone(1.0, [0.0; 3], &mixed, 100).unwrap();
         assert_eq!(mesh.stats.source_faces, 10);
         assert_eq!(mesh.stats.quads, 10);
-        assert_eq!(mesh.groups.len(), 2);
+        assert_eq!(mesh.groups.len(), 10);
     }
 
     #[test]

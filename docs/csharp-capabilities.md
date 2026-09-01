@@ -32,7 +32,7 @@ the ignored `obj/Generated` output is produced by
 | `WorldOrigin` | Prepare, inspect, and commit world-origin rebases. |
 | `Voxel` | Read and mutate Engine-owned voxel state. |
 | `VoxelContent` | Admit and inspect reusable voxel content resources, including bounded MagicaVoxel objects and retained object presentations. |
-| `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources. |
+| `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection. |
 | `Content` | Read product content admitted by the host. |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
 | `Appearance` | Create and update renderer-owned materials, meshes, atlas sprites, synchronized sprite playback, lights, and appearance state. |

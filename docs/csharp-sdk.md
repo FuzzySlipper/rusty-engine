@@ -127,13 +127,17 @@ or presentation needs are an upstream Engine task and a valid stopping point.
 `VoxelScenePresentation` projects the canonical `Spatial` session voxel scene
 through the Engine renderer. Bind every currently used scene material slot to
 a live `Appearance` material, retain the disposable projection, and call
-`RefreshScene` after voxel edits, residency changes, or origin changes. The
-Engine keeps incremental renderer identity and owns all generated mesh/frame
-work; C# receives only a small readout. `Clear` or disposal stages the matching
-renderer destroys. Select `VoxelSurfaceMode` in `SpatialSessionConfig` when
-creating the session; it chooses only the Engine-derived mesh posture and is
-retained through subsequent voxel changes. Changing the mode of an existing
-session is not currently a C# API.
+`RefreshScene` after voxel edits, residency changes, or origin changes. For a
+`GreedyCubes` session, `ProjectSceneDirectional` and
+`UpdateSceneDirectional` additionally accept sparse `SpatialFace` overrides;
+omitted faces use the required base slot binding. `ReadMaterialMapping` returns
+copied effective source-slot/face selections, material provenance values, and
+renderer slots. The Engine keeps incremental renderer identity and owns all
+generated mesh/frame work; C# receives only copied facts. `Clear` or disposal
+stages the matching renderer destroys. Select `VoxelSurfaceMode` in
+`SpatialSessionConfig` when creating the session; it chooses only the
+Engine-derived mesh posture and is retained through subsequent voxel changes.
+Changing the mode of an existing session is not currently a C# API.
 
 `Spatial.EvaluateNavigationStep` evaluates one bounded planar-navigation step
 against the retained session projection and returns the same typed outcome,

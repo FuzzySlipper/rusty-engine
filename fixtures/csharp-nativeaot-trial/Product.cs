@@ -20,6 +20,7 @@ public sealed class Product : IEngineProduct
     private readonly Appearance _appearance;
     private readonly GhostPlatePresentation _ghostPlate;
     private readonly Material _material;
+    private readonly Material _voxelTopMaterial;
     private readonly Camera _camera;
     private readonly PersistenceStore _persistenceStore;
     private int _turns;
@@ -196,6 +197,8 @@ public sealed class Product : IEngineProduct
         _material = _engine.Appearance.ReplaceMaterial(new MaterialUpdateRequest(createdMaterial, new MaterialRequest(
             new Color(1, 1, 1, 1), new RenderResourceHandle(0), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false)));
         createdMaterial.Dispose();
+        _voxelTopMaterial = _engine.Appearance.CreateMaterial(new MaterialRequest(
+            new Color(0.2f, 0.9f, 0.2f, 1), new RenderResourceHandle(0), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false));
         ExerciseMagicaVoxelAdmission();
         CameraDescriptor initialCamera = new(
             new CameraPose(new Vector3(0, 1, 3), 0, 0),
@@ -237,10 +240,20 @@ public sealed class Product : IEngineProduct
         VoxelReadout exercisedReadout = _engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel));
         Require(exercisedReadout.Present && exercisedReadout.MaterialSlot == 3,
             "voxel material readout did not preserve the accepted edit");
-        _voxelPresentation = _engine.VoxelScenePresentation.ProjectScene(
-            new ProjectVoxelSceneRequest(
+        _voxelPresentation = _engine.VoxelScenePresentation.ProjectSceneDirectional(
+            new ProjectVoxelSceneDirectionalRequest(
                 _spatial,
-                new[] { new VoxelSceneMaterialBinding(3, _material) }));
+                new[] { new VoxelSceneMaterialBinding(3, _material) },
+                new[] { new VoxelSceneFaceMaterialBinding(3, SpatialFace.PosY, _voxelTopMaterial) }));
+        VoxelSceneMaterialMappingLeaseReceipt voxelMapping = _engine.VoxelScenePresentation.ReadMaterialMapping(_voxelPresentation);
+        bool topOverrideMapped = false;
+        foreach (VoxelSceneMaterialMappingRow row in voxelMapping.Mappings.Span)
+        {
+            topOverrideMapped |= row.Face == SpatialFace.PosY && row.Overridden
+                && row.MaterialValue == _voxelTopMaterial.Handle.Value;
+        }
+        Require(voxelMapping.Mappings.Length == 6 && topOverrideMapped,
+            "directional voxel material mapping did not retain the +Y override");
         SpatialProjectionReadout sharedVoxelProjection = _engine.Spatial.ReadProjection(
             new SpatialProjectionReadRequest(_spatial));
         Require(sharedVoxelProjection.SourceRevision == voxelEdit.AcceptedRevision
@@ -440,7 +453,7 @@ public sealed class Product : IEngineProduct
         _paused = false;
         PublishPresentation();
         PresentationReadout presentation = _engine.Appearance.ReadPresentation();
-        Require(presentation.RetainedObjectCount == 1 && presentation.AppearanceCount == 1 && presentation.MaterialCount == 1, "appearance readout did not report retained Engine presentation facts");
+        Require(presentation.RetainedObjectCount == 1 && presentation.AppearanceCount == 1 && presentation.MaterialCount == 2, "appearance readout did not report retained Engine presentation facts");
     }
 
     public void Attach() => PublishPresentation();
@@ -632,6 +645,7 @@ public sealed class Product : IEngineProduct
         _appearance.Dispose();
         _voxelPresentation.Dispose();
         _material.Dispose();
+        _voxelTopMaterial.Dispose();
         _voxelLease.Dispose();
         _spatial.Dispose();
         _persistenceStore.Dispose();

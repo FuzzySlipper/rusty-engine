@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use core_space::Direction6;
 use engine_spatial::{SurfaceMode, VoxelCollisionScene, VoxelMeshChunk};
 use render_model::{
     Geometry, Material, MaterialDescriptorError, MeshAttribute, MeshAttributeKind,
@@ -19,6 +20,15 @@ pub struct VoxelProjectionInstance<'a> {
     pub scene: &'a VoxelCollisionScene,
 }
 
+/// Internal renderer realization for a canonical voxel scene. Base mappings
+/// apply to every group, including directionless reconstructed groups; sparse
+/// directional entries refine only greedy cube face groups.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VoxelMaterialSlotMapping {
+    pub base: BTreeMap<u16, u16>,
+    pub directional: BTreeMap<(u16, Direction6), u16>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct ChunkSnapshot {
     content_hash: u64,
@@ -31,7 +41,7 @@ struct InstanceSnapshot {
     transform: Transform,
     source_revision: u64,
     rebase_revision: u64,
-    material_slots: BTreeMap<u16, u16>,
+    material_slots: VoxelMaterialSlotMapping,
     chunks: BTreeMap<[i64; 3], ChunkSnapshot>,
 }
 
@@ -91,6 +101,30 @@ impl VoxelRenderProjector {
         instances: &[VoxelProjectionInstance<'_>],
         materials: &BTreeMap<u16, RenderMaterialDescriptor>,
         material_slots: &BTreeMap<String, BTreeMap<u16, u16>>,
+    ) -> Result<VoxelProjectionResult, VoxelProjectionError> {
+        let mapped = material_slots
+            .iter()
+            .map(|(instance, base)| {
+                (
+                    instance.clone(),
+                    VoxelMaterialSlotMapping {
+                        base: base.clone(),
+                        directional: BTreeMap::new(),
+                    },
+                )
+            })
+            .collect();
+        self.project_mapped_directional(instances, materials, &mapped)
+    }
+
+    /// Directional material realization for canonical greedy cube groups.
+    /// The public base-slot method remains compatible by retaining a separate
+    /// base map and supplying no directional overrides.
+    pub fn project_mapped_directional(
+        &mut self,
+        instances: &[VoxelProjectionInstance<'_>],
+        materials: &BTreeMap<u16, RenderMaterialDescriptor>,
+        material_slots: &BTreeMap<String, VoxelMaterialSlotMapping>,
     ) -> Result<VoxelProjectionResult, VoxelProjectionError> {
         let current = validate_and_snapshot(instances, materials, material_slots)?;
         for (instance, next) in &current {
@@ -318,7 +352,7 @@ fn voxel_publication_stream<'a>(instances: impl Iterator<Item = &'a String>) -> 
 fn validate_and_snapshot(
     instances: &[VoxelProjectionInstance<'_>],
     materials: &BTreeMap<u16, RenderMaterialDescriptor>,
-    material_slots: &BTreeMap<String, BTreeMap<u16, u16>>,
+    material_slots: &BTreeMap<String, VoxelMaterialSlotMapping>,
 ) -> Result<BTreeMap<String, InstanceSnapshot>, VoxelProjectionError> {
     for (slot, material) in materials {
         material
@@ -359,11 +393,16 @@ fn validate_and_snapshot(
                 instance: instance.instance_id.clone(),
             });
         }
-        let empty_mapping = BTreeMap::new();
+        let empty_mapping = VoxelMaterialSlotMapping::default();
         let slots = material_slots
             .get(&instance.instance_id)
             .unwrap_or(&empty_mapping);
-        let map_slot = |slot| slots.get(&slot).copied().unwrap_or(slot);
+        let map_slot = |slot, direction: Option<Direction6>| {
+            direction
+                .and_then(|direction| slots.directional.get(&(slot, direction)).copied())
+                .or_else(|| slots.base.get(&slot).copied())
+                .unwrap_or(slot)
+        };
         let mut chunks = BTreeMap::new();
         let mut used_slots = BTreeSet::new();
         for chunk in instance.scene.mesh_chunks() {
@@ -379,7 +418,7 @@ fn validate_and_snapshot(
                 chunk
                     .groups
                     .iter()
-                    .map(|group| map_slot(group.material_slot)),
+                    .map(|group| map_slot(group.material_slot, group.direction)),
             );
             chunks.insert(
                 chunk.chunk,
@@ -400,12 +439,13 @@ fn validate_and_snapshot(
                 return None;
             }
             chunk.groups.iter().find_map(|group| {
+                let effective_slot = map_slot(group.material_slot, group.direction);
                 materials
-                    .get(&map_slot(group.material_slot))
+                    .get(&effective_slot)
                     .filter(|material| {
                         material.texture.is_some() || material.voxel_surface.is_some()
                     })
-                    .map(|_| (chunk, map_slot(group.material_slot)))
+                    .map(|_| (chunk, effective_slot))
             })
         }) {
             return Err(VoxelProjectionError::TexturedReconstructedSurface {
@@ -497,12 +537,12 @@ fn chunk_node(instance_id: &str, chunk: &VoxelMeshChunk) -> RenderNode {
 }
 
 pub fn voxel_mesh_payload(chunk: &VoxelMeshChunk) -> MeshPayloadDescriptor {
-    voxel_mesh_payload_with_material_slots(chunk, &BTreeMap::new())
+    voxel_mesh_payload_with_material_slots(chunk, &VoxelMaterialSlotMapping::default())
 }
 
 fn voxel_mesh_payload_with_material_slots(
     chunk: &VoxelMeshChunk,
-    material_slots: &BTreeMap<u16, u16>,
+    material_slots: &VoxelMaterialSlotMapping,
 ) -> MeshPayloadDescriptor {
     let mut attributes = vec![
         MeshAttribute {
@@ -534,9 +574,15 @@ fn voxel_mesh_payload_with_material_slots(
             .groups
             .iter()
             .map(|group| MeshGroupDescriptor {
-                material_slot: material_slots
-                    .get(&group.material_slot)
-                    .copied()
+                material_slot: group
+                    .direction
+                    .and_then(|direction| {
+                        material_slots
+                            .directional
+                            .get(&(group.material_slot, direction))
+                            .copied()
+                    })
+                    .or_else(|| material_slots.base.get(&group.material_slot).copied())
                     .unwrap_or(group.material_slot),
                 start: group.start,
                 count: group.count,
