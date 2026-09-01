@@ -35,7 +35,7 @@ the ignored `obj/Generated` output is produced by
 | `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources. |
 | `Content` | Read product content admitted by the host. |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
-| `Appearance` | Create and update renderer-owned materials, meshes, sprites, lights, and appearance state. |
+| `Appearance` | Create and update renderer-owned materials, meshes, atlas sprites, synchronized sprite playback, lights, and appearance state. |
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
 | `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |

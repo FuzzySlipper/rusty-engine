@@ -502,6 +502,11 @@ pub type NativeControlSpritePlayback = unsafe extern "C" fn(
     NativeSpritePlaybackControlRequest,
     *mut NativeSpritePlaybackReadout,
 ) -> i32;
+pub type NativeSelectSpritePlaybackFrame = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpritePlaybackFrameSelectionRequest,
+    *mut NativeSpritePlaybackReadout,
+) -> i32;
 pub type NativeAdvanceSpritePlayback = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpritePlaybackAdvanceRequest,
@@ -926,6 +931,7 @@ pub struct NativeAppearanceApi {
     pub create_sprite_playback: NativeCreateSpritePlayback,
     pub destroy_sprite_playback: NativeDestroySpritePlayback,
     pub control_sprite_playback: NativeControlSpritePlayback,
+    pub select_sprite_playback_frame: NativeSelectSpritePlaybackFrame,
     pub advance_sprite_playback: NativeAdvanceSpritePlayback,
     pub destroy_sprite_playback_advance_lease: NativeDestroySpritePlaybackAdvanceLease,
     pub sample_sprite_playback: NativeSampleSpritePlayback,

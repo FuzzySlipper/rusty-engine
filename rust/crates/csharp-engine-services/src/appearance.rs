@@ -1069,6 +1069,192 @@ fn sprite_playback_loop_sampling_restart_and_invalid_creation_are_atomic() {
     assert_eq!(stopped.frame_index, 0);
 }
 
+#[cfg(test)]
+#[test]
+fn sprite_playback_frame_selection_updates_cursor_and_renderer_atomically() {
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let atlas_frames = [
+        NativeSpriteAtlasFrame {
+            frame_id: 7,
+            uv_min: NativeVec2::default(),
+            uv_max: NativeVec2 { x: 0.5, y: 1.0 },
+            has_size: false,
+            size: NativeVec2::default(),
+        },
+        NativeSpriteAtlasFrame {
+            frame_id: 9,
+            uv_min: NativeVec2 { x: 0.5, y: 0.0 },
+            uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+            has_size: false,
+            size: NativeVec2::default(),
+        },
+    ];
+    let frames = [
+        NativeSpritePlaybackFrame {
+            frame_id: 7,
+            duration_seconds: 0.25,
+        },
+        NativeSpritePlaybackFrame {
+            frame_id: 9,
+            duration_seconds: 0.25,
+        },
+    ];
+    let markers = [NativeSpritePlaybackMarker {
+        marker_id: 11,
+        frame_index: 0,
+    }];
+
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    let atlas = unsafe {
+        bridge
+            .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture,
+                frames: atlas_frames.as_ptr(),
+                frames_len: atlas_frames.len(),
+            })
+            .expect("atlas")
+    };
+    let appearance = bridge
+        .create_sprite_from_atlas(atlas_sprite_request(atlas, 7))
+        .expect("sprite");
+    let playback = unsafe {
+        bridge
+            .create_sprite_playback(&NativeSpritePlaybackCreateRequest {
+                appearance,
+                atlas,
+                frames: frames.as_ptr(),
+                frames_len: frames.len(),
+                markers: markers.as_ptr(),
+                markers_len: markers.len(),
+                loop_mode: NativeSpritePlaybackLoopMode::Loop,
+                playback_rate: 1.0,
+            })
+            .expect("loop playback")
+    };
+    bridge
+        .control_sprite_playback(NativeSpritePlaybackControlRequest {
+            playback,
+            control: NativeSpritePlaybackControl::Start,
+        })
+        .expect("start");
+    let setup = bridge.take_staged_call().expect("setup call");
+    bridge.commit(setup);
+
+    bridge.begin_update_call(realtime_sprite_update(1, 0.5));
+    let looped = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
+        .expect("loop once");
+    assert_eq!(looped.readout.cycle, 1);
+    assert_eq!(looped.readout.frame_index, 0);
+    assert_eq!(looped.crossings_len, 1);
+    let mut selected = std::mem::MaybeUninit::<NativeSpritePlaybackReadout>::uninit();
+    assert_eq!(
+        unsafe {
+            select_sprite_playback_frame(
+                (&mut bridge as *mut RuntimeAppearanceBridge).cast(),
+                NativeSpritePlaybackFrameSelectionRequest {
+                    playback,
+                    frame_index: 1,
+                },
+                selected.as_mut_ptr(),
+            )
+        },
+        ABI_OK,
+        "generated ABI callback selects the sequence entry"
+    );
+    let selected = unsafe { selected.assume_init() };
+    assert_eq!(selected.state, NativeSpritePlaybackState::Playing);
+    assert_eq!(selected.frame_index, 1);
+    assert_eq!(selected.frame_id, 9);
+    assert_eq!(selected.elapsed_in_frame_seconds, 0.0);
+    assert_eq!(
+        selected.cycle, 1,
+        "selection preserves the current loop cycle"
+    );
+    assert_eq!(selected.revision, looped.readout.revision + 1);
+    assert_eq!(
+        bridge
+            .read_sprite(appearance)
+            .expect("selected sprite")
+            .frame_id,
+        9
+    );
+    let duplicate = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
+        .expect("same admitted update stays consumed");
+    assert!(!duplicate.advanced);
+    assert_eq!(duplicate.crossings_len, 0);
+    assert_eq!(duplicate.readout.frame_index, 1);
+    let selected_call = bridge.take_staged_call().expect("selected call");
+    bridge.commit(selected_call);
+
+    bridge.begin_update_call(realtime_sprite_update(2, 0.25));
+    let continued = bridge
+        .advance_sprite_playback(NativeSpritePlaybackAdvanceRequest { playback })
+        .expect("advance from selected cursor");
+    assert!(continued.advanced);
+    assert_eq!(continued.readout.frame_index, 0);
+    assert_eq!(continued.readout.cycle, 2);
+    let continued_crossings =
+        unsafe { std::slice::from_raw_parts(continued.crossings, continued.crossings_len) };
+    assert_eq!(continued_crossings.len(), 1);
+    assert_eq!(continued_crossings[0].marker_id, 11);
+
+    let before_invalid = bridge
+        .read_sprite_playback(playback)
+        .expect("before invalid");
+    let before_invalid_sprite = bridge
+        .read_sprite(appearance)
+        .expect("before invalid sprite");
+    assert_eq!(
+        bridge
+            .select_sprite_playback_frame(NativeSpritePlaybackFrameSelectionRequest {
+                playback,
+                frame_index: 2,
+            })
+            .expect_err("selection never wraps")
+            .code(),
+        "CSHARP_SPRITE_PLAYBACK_FRAME_INDEX"
+    );
+    assert_eq!(
+        bridge
+            .read_sprite_playback(playback)
+            .expect("after invalid")
+            .frame_index,
+        before_invalid.frame_index
+    );
+    assert_eq!(
+        bridge
+            .read_sprite(appearance)
+            .expect("after invalid sprite")
+            .frame_id,
+        before_invalid_sprite.frame_id
+    );
+    assert_eq!(
+        sprite_playback_state_after_selection(NativeSpritePlaybackState::Stopped),
+        NativeSpritePlaybackState::Stopped
+    );
+    assert_eq!(
+        sprite_playback_state_after_selection(NativeSpritePlaybackState::Playing),
+        NativeSpritePlaybackState::Playing
+    );
+    assert_eq!(
+        sprite_playback_state_after_selection(NativeSpritePlaybackState::Paused),
+        NativeSpritePlaybackState::Paused
+    );
+    assert_eq!(
+        sprite_playback_state_after_selection(NativeSpritePlaybackState::Completed),
+        NativeSpritePlaybackState::Paused
+    );
+}
+
 fn renderer_path(path: String, extension: &str) -> Result<String, CsharpEngineServicesError> {
     if !path.starts_with("content/") || !path.ends_with(extension) {
         return Err(CsharpEngineServicesError::new(
@@ -4020,6 +4206,55 @@ impl RuntimeAppearanceBridge {
         Ok(readout)
     }
 
+    fn select_sprite_playback_frame(
+        &mut self,
+        request: NativeSpritePlaybackFrameSelectionRequest,
+    ) -> Result<NativeSpritePlaybackReadout, CsharpEngineServicesError> {
+        let mut playback = self.sprite_playback(request.playback)?;
+        let frame_index = usize::try_from(request.frame_index).map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_FRAME_INDEX",
+                "sprite playback frame index is outside the admitted sequence",
+            )
+        })?;
+        let frame_id = playback
+            .frames
+            .get(frame_index)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_PLAYBACK_FRAME_INDEX",
+                    "sprite playback frame index is outside the admitted sequence",
+                )
+            })?
+            .frame_id;
+        let revision = playback.revision.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_PLAYBACK_REVISION",
+                "sprite playback revision overflow",
+            )
+        })?;
+
+        // Validate and update the renderer-owned sprite before committing the
+        // copied playback cursor. Because both mutations live in the staged
+        // appearance call, callback failure still rolls the pair back.
+        self.set_sprite_frame(NativeSpriteFrameUpdateRequest {
+            appearance: NativeAppearanceHandle {
+                value: playback.appearance,
+            },
+            frame_id,
+        })?;
+        playback.frame_index = frame_index;
+        playback.elapsed_in_frame_seconds = 0.0;
+        playback.revision = revision;
+        playback.state = sprite_playback_state_after_selection(playback.state);
+        let readout = sprite_playback_readout(&playback);
+        self.staged_mut()?
+            .state
+            .sprite_playbacks
+            .insert(request.playback.value, playback);
+        Ok(readout)
+    }
+
     fn advance_sprite_playback(
         &mut self,
         request: NativeSpritePlaybackAdvanceRequest,
@@ -6627,6 +6862,15 @@ fn reset_sprite_playback(playback: &mut RuntimeSpritePlayback, state: NativeSpri
     playback.cycle = 0;
 }
 
+fn sprite_playback_state_after_selection(
+    state: NativeSpritePlaybackState,
+) -> NativeSpritePlaybackState {
+    match state {
+        NativeSpritePlaybackState::Completed => NativeSpritePlaybackState::Paused,
+        state => state,
+    }
+}
+
 fn sprite_playback_readout(playback: &RuntimeSpritePlayback) -> NativeSpritePlaybackReadout {
     NativeSpritePlaybackReadout {
         frame_id: playback.frames[playback.frame_index].frame_id,
@@ -6987,6 +7231,27 @@ pub(crate) unsafe extern "C" fn control_sprite_playback(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
     match bridge.control_sprite_playback(request) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn select_sprite_playback_frame(
+    context: *mut c_void,
+    request: NativeSpritePlaybackFrameSelectionRequest,
+    result: *mut NativeSpritePlaybackReadout,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    match bridge.select_sprite_playback_frame(request) {
         Ok(value) => {
             unsafe { *result = value };
             ABI_OK

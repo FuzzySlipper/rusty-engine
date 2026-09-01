@@ -332,6 +332,18 @@ pub struct NativeSpritePlaybackControlRequest {
     pub control: NativeSpritePlaybackControl,
 }
 
+/// Selects the start of one admitted sequence entry without traversing time.
+/// The index is never wrapped, and selection does not report marker crossings.
+/// Stopped, playing, and paused state are preserved; selecting from completed
+/// playback leaves it paused so an ordinary Resume can continue from the new
+/// cursor.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpritePlaybackFrameSelectionRequest {
+    pub playback: NativeSpritePlaybackHandle,
+    pub frame_index: u32,
+}
+
 /// Advances through the exact Rust-admitted facts bound to the active
 /// Product.Update callback. The product cannot supply or replace those facts;
 /// replaying the operation in one admitted update is a no-op.

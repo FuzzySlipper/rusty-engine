@@ -74,6 +74,18 @@ machines are ordinary managed helpers, not native context services. See the
 [current capability map](csharp-capabilities.md) and do not assume a Rust API
 is callable from C# simply because its crate is public.
 
+### Atlas sprite playback
+
+`Appearance.CreateSpritePlayback` retains one admitted sequence for an
+atlas-backed sprite. `SelectSpritePlaybackFrame` selects the start of an exact
+sequence entry and atomically updates both the playback readout and rendered
+sprite frame. It preserves stopped, playing, or paused state; a completed
+one-shot becomes paused so it can resume from the selected entry. Selection
+does not wrap an out-of-range index, change the current loop cycle, or report
+marker crossings because it does not traverse time. A later
+`AdvanceSpritePlayback` continues from the selected cursor through the ordinary
+Engine-admitted update facts.
+
 ### Ghost plates
 
 `IEngineContext.Presentation` provides the retained ghost-plate path. Create a
