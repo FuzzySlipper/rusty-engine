@@ -10,6 +10,7 @@ import type {
 } from './audio-host.js';
 import type { RendererAnimationRealizedFactsReadout } from './animation-host.js';
 import type { AudioProjectionDiagnostic } from './host-types.js';
+import type { RendererGhostPlateReadout } from './ghost-plate-host.js';
 
 export type RendererPresentationDomain = PresentationOp['domain'];
 
@@ -62,6 +63,7 @@ export interface RendererPresentationHosts {
   readonly billboard?: RendererAdvancingPresentationDomainHost;
   readonly particle?: RendererAdvancingPresentationDomainHost;
   readonly telemetryOverlay?: RendererPresentationDomainHost;
+  readonly ghostPlate?: RendererPresentationDomainHost & { readonly readout?: () => RendererGhostPlateReadout; readonly dispose?: () => void };
 }
 
 /** Typed receipt for the Engine-owned camera-to-audio listener handoff. */
@@ -210,6 +212,10 @@ export class RendererPresentationHostSet {
     return this.#hosts.animation?.realizedFacts?.() ?? null;
   }
 
+  readGhostPlate(): RendererGhostPlateReadout | null {
+    return this.#hosts.ghostPlate?.readout?.() ?? null;
+  }
+
   /** Acknowledge only the exact submitted animation feedback boundary. */
   acknowledgeAnimationRealizedFacts(throughFactId: number): boolean {
     const host = this.#hosts.animation;
@@ -232,6 +238,10 @@ export class RendererPresentationHostSet {
       return host !== undefined && (host.requiresAnimationFrame?.() ?? true);
     });
   }
+
+  dispose(): void {
+    this.#hosts.ghostPlate?.dispose?.();
+  }
 }
 
 function hasListenerSynchronization(
@@ -249,6 +259,7 @@ const PRESENTATION_DOMAIN_ORDER: readonly RendererPresentationDomain[] = [
   'billboard',
   'particle',
   'telemetryOverlay',
+  'ghostPlate',
 ];
 
 const ADVANCING_DOMAIN_ORDER: readonly (

@@ -61,7 +61,7 @@ export function decodePresentationFrameDiff(input: unknown): PresentationFrameDi
     const domain = enumeration(
       value['domain'],
       `${path}.domain`,
-      ['audio', 'billboard', 'particle', 'telemetryOverlay', 'animation'] as const,
+      ['audio', 'billboard', 'particle', 'telemetryOverlay', 'animation', 'ghostPlate'] as const,
     );
     presentationOperation(domain, value['op'], `${path}.op`);
   });
@@ -1032,7 +1032,90 @@ function presentationOperation(domain: string, input: unknown, path: string): vo
   if (domain === 'billboard') return billboardOperation(op, input, path);
   if (domain === 'particle') return particleOperation(op, input, path);
   if (domain === 'telemetryOverlay') return telemetryOperation(op, input, path);
+  if (domain === 'ghostPlate') return ghostPlateOperation(op, input, path);
   animationOperation(op, input, path);
+}
+
+function ghostPlateOperation(op: string, input: unknown, path: string): void {
+  if (op === 'create') {
+    const value = record(input, path, ['op', 'handle', 'descriptor']);
+    handle(value['handle'], `${path}.handle`);
+    ghostPlateDescriptor(value['descriptor'], `${path}.descriptor`);
+  } else if (op === 'update') {
+    const value = record(input, path, ['op', 'handle', 'patch']);
+    handle(value['handle'], `${path}.handle`);
+    const patch = recordOptional(value['patch'], `${path}.patch`, [], ['placement', 'config']);
+    if (patch['placement'] !== undefined) ghostPlatePlacement(patch['placement'], `${path}.patch.placement`);
+    if (patch['config'] !== undefined) ghostPlateConfig(patch['config'], `${path}.patch.config`);
+  } else if (op === 'recapture') {
+    const value = record(input, path, ['op', 'handle', 'capture']);
+    handle(value['handle'], `${path}.handle`);
+    nullable(value['capture'], `${path}.capture`, ghostPlateCapture);
+  } else if (op === 'destroy') {
+    const value = record(input, path, ['op', 'handle']);
+    handle(value['handle'], `${path}.handle`);
+  } else fail(`${path}.op`, 'is unsupported for ghost plate');
+}
+
+function ghostPlateDescriptor(input: unknown, path: string): void {
+  const value = record(input, path, ['source', 'placement', 'capture', 'config']);
+  handle(value['source'], `${path}.source`);
+  ghostPlatePlacement(value['placement'], `${path}.placement`);
+  ghostPlateCapture(value['capture'], `${path}.capture`);
+  ghostPlateConfig(value['config'], `${path}.config`);
+}
+
+function ghostPlatePlacement(input: unknown, path: string): void {
+  const value = record(input, path, ['transform', 'width', 'height']);
+  transform(value['transform'], `${path}.transform`);
+  range(value['width'], `${path}.width`, 0.05, 64);
+  range(value['height'], `${path}.height`, 0.05, 64);
+}
+
+function ghostPlateCapture(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'resolution', 'azimuthDegrees', 'elevationDegrees', 'near', 'far', 'fieldOfViewDegrees', 'lighting',
+  ]);
+  integer(value['resolution'], `${path}.resolution`, 8, 4096);
+  range(value['azimuthDegrees'], `${path}.azimuthDegrees`, -360, 360);
+  range(value['elevationDegrees'], `${path}.elevationDegrees`, -89, 89);
+  range(value['near'], `${path}.near`, 0.001, 100);
+  const far = finite(value['far'], `${path}.far`);
+  if (far <= Number(value['near']) + 0.001 || far > 10_000) fail(`${path}.far`, 'must exceed near by 0.001 and be <= 10000');
+  range(value['fieldOfViewDegrees'], `${path}.fieldOfViewDegrees`, 10, 120);
+  ghostPlateLighting(value['lighting'], `${path}.lighting`);
+}
+
+function ghostPlateLighting(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'mode', 'ambientColor', 'ambientIntensity', 'keyDirection', 'keyColor', 'keyIntensity', 'fillDirection', 'fillColor', 'fillIntensity',
+  ]);
+  enumeration(value['mode'], `${path}.mode`, ['scene', 'isolated'] as const);
+  color3(value['ambientColor'], `${path}.ambientColor`);
+  range(value['ambientIntensity'], `${path}.ambientIntensity`, 0, 8);
+  direction(value['keyDirection'], `${path}.keyDirection`);
+  color3(value['keyColor'], `${path}.keyColor`);
+  range(value['keyIntensity'], `${path}.keyIntensity`, 0, 8);
+  direction(value['fillDirection'], `${path}.fillDirection`);
+  color3(value['fillColor'], `${path}.fillColor`);
+  range(value['fillIntensity'], `${path}.fillIntensity`, 0, 8);
+}
+
+function ghostPlateConfig(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'depthRetention', 'anchorPolicy', 'anchorValue', 'plateMapping', 'shellMode', 'shellDepthEpsilon', 'sectorCount', 'sectorHysteresisDegrees',
+  ]);
+  range(value['depthRetention'], `${path}.depthRetention`, 0.02, 1);
+  enumeration(value['anchorPolicy'], `${path}.anchorPolicy`, ['bounds-center', 'bounds-normalized'] as const);
+  range(value['anchorValue'], `${path}.anchorValue`, 0, 1);
+  enumeration(value['plateMapping'], `${path}.plateMapping`, ['plate-locked', 'projective-surface'] as const);
+  enumeration(value['shellMode'], `${path}.shellMode`, ['whole-mesh', 'strict-source', 'repaired-source'] as const);
+  range(value['shellDepthEpsilon'], `${path}.shellDepthEpsilon`, 0, 2);
+  const sectorCount = integer(value['sectorCount'], `${path}.sectorCount`, 1, 16);
+  if (sectorCount !== 1 && sectorCount !== 4 && sectorCount !== 8 && sectorCount !== 16) {
+    fail(`${path}.sectorCount`, 'must be one of 1, 4, 8, or 16');
+  }
+  range(value['sectorHysteresisDegrees'], `${path}.sectorHysteresisDegrees`, 0, 22.5);
 }
 
 function audioOperation(op: string, input: unknown, path: string): void {

@@ -4,6 +4,7 @@ use crate::{
     AnimationProjectionDiagnostic, AnimationProjectionReadout, AnimationProjector,
     AudioProjectionDiagnostic, AudioProjectionReadout, AudioProjector,
     BillboardProjectionDiagnostic, BillboardProjectionReadout, BillboardProjector,
+    GhostPlateProjectionDiagnostic, GhostPlateProjectionReadout, GhostPlateProjector,
     ParticleProjectionDiagnostic, ParticleProjectionReadout, ParticleProjector,
     PresentationAssetLookup, PresentationFrameDiff, PresentationFrameError, PresentationOp,
     RenderTargetLookup, TelemetryOverlayDiagnostic, TelemetryOverlayProjector,
@@ -18,6 +19,7 @@ pub enum PresentationProjectionError {
     Particle(ParticleProjectionDiagnostic),
     Telemetry(TelemetryOverlayDiagnostic),
     Animation(AnimationProjectionDiagnostic),
+    GhostPlate(GhostPlateProjectionDiagnostic),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +30,7 @@ pub struct PresentationProjectionReadout {
     pub particles: ParticleProjectionReadout,
     pub telemetry: TelemetryOverlayReadout,
     pub animation: AnimationProjectionReadout,
+    pub ghost_plates: GhostPlateProjectionReadout,
 }
 
 /// All presentation families can be advanced as one transaction when a host
@@ -39,6 +42,7 @@ pub struct PresentationProjectorSet {
     particles: ParticleProjector,
     telemetry: TelemetryOverlayProjector,
     animation: AnimationProjector,
+    ghost_plates: GhostPlateProjector,
 }
 
 impl PresentationProjectorSet {
@@ -75,6 +79,10 @@ impl PresentationProjectorSet {
                     .animation
                     .project(assets, targets, meta, op)
                     .map_err(PresentationProjectionError::Animation)?,
+                PresentationOp::GhostPlate { meta, op } => staged
+                    .ghost_plates
+                    .project(targets, meta, op)
+                    .map_err(PresentationProjectionError::GhostPlate)?,
             };
             projected.push(output);
         }
@@ -91,6 +99,7 @@ impl PresentationProjectorSet {
             particles: self.particles.readout(),
             telemetry: self.telemetry.readout(),
             animation: self.animation.readout(),
+            ghost_plates: self.ghost_plates.readout(),
         }
     }
 

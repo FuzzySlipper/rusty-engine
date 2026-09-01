@@ -33,6 +33,7 @@ export type {
   RustyApplicationFrameDiagnostic,
   RustyApplicationFrameReceipt,
   RustyApplicationFogOptions,
+  RustyApplicationGhostPlateReadout,
   RustyApplicationHost,
   RustyApplicationHostOptions,
   RustyApplicationHostReadout,

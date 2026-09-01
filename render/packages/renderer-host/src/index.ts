@@ -3,6 +3,14 @@
 export * from './surface.js';
 export * from './animated-mesh-capture.js';
 export * from './presentation-host-set.js';
+export { RendererGhostPlateHost } from './ghost-plate-host.js';
+export type {
+  RendererGhostPlateFrameReceipt,
+  RendererGhostPlateOperationReceipt,
+  RendererGhostPlatePresentation,
+  RendererGhostPlatePresentationReadout,
+  RendererGhostPlateReadout,
+} from './ghost-plate-host.js';
 export * from './browser-dom-hosts.js';
 
 export {

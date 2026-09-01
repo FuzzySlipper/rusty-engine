@@ -49,6 +49,7 @@ import { automaticSubmissionCapacity } from './gpu-submission-capacity.js';
 import { resolveRendererPixelRatio } from './software-renderer-resolution.js';
 import { applyRendererThreeCameraPose } from './camera-pose.js';
 import { RendererThreeVoxelSpriteScene } from './voxel-sprite-scene.js';
+import { RendererThreeGhostPlatePresentation } from './ghost-plate-presentation.js';
 import {
   RendererViewCompositionBackend,
   RendererViewCompositionPolicyError,
@@ -259,6 +260,8 @@ export interface RendererBrowserSurface {
   readonly renderer: ThreeRenderer;
   /** Create a backend-owned experimental voxel-sprite scene attachment. */
   readonly createVoxelSpriteScene: () => RendererThreeVoxelSpriteScene;
+  /** Create one named retained ghost presentation without exposing renderer resources. */
+  readonly createGhostPlatePresentation: (id: string) => RendererThreeGhostPlatePresentation;
   readonly frame: RenderFrameDiff;
   readonly cameraPose: () => RendererBrowserSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
@@ -438,6 +441,7 @@ export function mountRendererBrowserSurface(
   let submissionSequence = 0;
   let disposed = false;
   const voxelSpriteScenes = new Set<RendererThreeVoxelSpriteScene>();
+  const ghostPlatePresentations = new Set<RendererThreeGhostPlatePresentation>();
   const viewComposition = new RendererViewCompositionBackend(webgl, renderer, viewmodelCamera);
   if (options.viewComposition !== undefined) {
     const receipt = viewComposition.configure(options.viewComposition);
@@ -505,6 +509,7 @@ export function mountRendererBrowserSurface(
     lastRenderTimeMs = timeMs;
     webgl.info.reset();
     for (const voxelSpriteScene of voxelSpriteScenes) voxelSpriteScene.prepare(camera);
+    for (const ghostPlatePresentation of ghostPlatePresentations) ghostPlatePresentation.prepare(camera);
     const cpuSubmissionStarted = globalThis.performance?.now() ?? timeMs;
     gpuSubmissionDuty.begin(submissionSourceTimeMs ?? undefined);
     try {
@@ -601,6 +606,8 @@ export function mountRendererBrowserSurface(
     stop();
     for (const voxelSpriteScene of voxelSpriteScenes) voxelSpriteScene.dispose();
     voxelSpriteScenes.clear();
+    for (const ghostPlatePresentation of ghostPlatePresentations) ghostPlatePresentation.dispose();
+    ghostPlatePresentations.clear();
     gpuSubmissionFence.dispose();
     gpuSubmissionDuty.dispose();
     viewComposition.dispose();
@@ -629,6 +636,17 @@ export function mountRendererBrowserSurface(
       });
       voxelSpriteScenes.add(scene);
       return scene;
+    },
+    createGhostPlatePresentation: (_id) => {
+      if (disposed) throw new Error('renderer browser surface is disposed');
+      const presentation = new RendererThreeGhostPlatePresentation({
+        webgl,
+        backend: renderer,
+        invalidate: () => viewComposition.invalidate(),
+        onDispose: () => ghostPlatePresentations.delete(presentation),
+      });
+      ghostPlatePresentations.add(presentation);
+      return presentation;
     },
     frame,
     automaticSubmissionPacing: () => {

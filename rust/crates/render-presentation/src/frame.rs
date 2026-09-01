@@ -12,8 +12,9 @@ use crate::{
     AudioProjectionOp, AudioSourceDescriptor, AudioSourcePatch, BillboardAnchor, BillboardContent,
     BillboardDescriptor, BillboardFontRef, BillboardLayoutPolicy, BillboardLayoutSizing,
     BillboardMeter, BillboardPatch, BillboardProjectionOp, BillboardStyle, BillboardTextureRef,
-    ParticleAnchor, ParticleCollisionVolume, ParticleEmitterDescriptor, ParticleEmitterPatch,
-    ParticleProjectionOp, TelemetryOverlayProjectionOp,
+    GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlatePlacement,
+    GhostPlateProjectionOp, ParticleAnchor, ParticleCollisionVolume, ParticleEmitterDescriptor,
+    ParticleEmitterPatch, ParticleProjectionOp, TelemetryOverlayProjectionOp,
 };
 
 pub const PRESENTATION_FRAME_SCHEMA_VERSION: u32 = 1;
@@ -53,6 +54,10 @@ pub enum PresentationOp {
         meta: PresentationOpMeta,
         op: AnimationProjectionOp,
     },
+    GhostPlate {
+        meta: PresentationOpMeta,
+        op: GhostPlateProjectionOp,
+    },
 }
 
 impl PresentationOp {
@@ -62,7 +67,8 @@ impl PresentationOp {
             | Self::Billboard { meta, .. }
             | Self::Particle { meta, .. }
             | Self::TelemetryOverlay { meta, .. }
-            | Self::Animation { meta, .. } => *meta,
+            | Self::Animation { meta, .. }
+            | Self::GhostPlate { meta, .. } => *meta,
         }
     }
 }
@@ -239,6 +245,31 @@ fn validate_json_safe_integers(
                 json_safe(handle.raw(), sequence, "animation.handle")
             }
         },
+        PresentationOp::GhostPlate { op, .. } => match op {
+            GhostPlateProjectionOp::Create { handle, descriptor } => {
+                json_safe(handle.raw(), sequence, "ghostPlate.handle")?;
+                validate_ghost_plate(descriptor, sequence)
+            }
+            GhostPlateProjectionOp::Update { handle, patch } => {
+                json_safe(handle.raw(), sequence, "ghostPlate.handle")?;
+                if let Some(placement) = &patch.placement {
+                    validate_ghost_plate_placement(placement, sequence)?;
+                }
+                if let Some(config) = &patch.config {
+                    validate_ghost_plate_config(config, sequence)?;
+                }
+                Ok(())
+            }
+            GhostPlateProjectionOp::Recapture { handle, capture } => {
+                json_safe(handle.raw(), sequence, "ghostPlate.handle")?;
+                capture.as_ref().map_or(Ok(()), |capture| {
+                    validate_ghost_plate_capture(capture, sequence)
+                })
+            }
+            GhostPlateProjectionOp::Destroy { handle } => {
+                json_safe(handle.raw(), sequence, "ghostPlate.handle")
+            }
+        },
     }
 }
 
@@ -247,6 +278,128 @@ fn validate_audio(
     sequence: u32,
 ) -> Result<(), PresentationFrameError> {
     validate_audio_emitter(&descriptor.emitter, sequence)
+}
+
+fn validate_ghost_plate(
+    descriptor: &GhostPlateDescriptor,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    json_safe(descriptor.source.raw(), sequence, "ghostPlate.source")?;
+    validate_ghost_plate_placement(&descriptor.placement, sequence)?;
+    validate_ghost_plate_capture(&descriptor.capture, sequence)?;
+    validate_ghost_plate_config(&descriptor.config, sequence)
+}
+
+fn validate_ghost_plate_placement(
+    placement: &GhostPlatePlacement,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    finite_vec(
+        &placement.transform.translation,
+        sequence,
+        "ghostPlate.placement.transform.translation",
+    )?;
+    finite_vec(
+        &placement.transform.rotation,
+        sequence,
+        "ghostPlate.placement.transform.rotation",
+    )?;
+    finite_vec(
+        &placement.transform.scale,
+        sequence,
+        "ghostPlate.placement.transform.scale",
+    )?;
+    positive_f32(placement.width, sequence, "ghostPlate.placement.width")?;
+    positive_f32(placement.height, sequence, "ghostPlate.placement.height")
+}
+
+fn validate_ghost_plate_capture(
+    capture: &GhostPlateCaptureSettings,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    if !(8..=4096).contains(&capture.resolution)
+        || !(capture.azimuth_degrees.is_finite()
+            && (-360.0..=360.0).contains(&capture.azimuth_degrees))
+        || !(capture.elevation_degrees.is_finite()
+            && (-89.0..=89.0).contains(&capture.elevation_degrees))
+        || !(capture.near.is_finite() && capture.near >= 0.001)
+        || !(capture.far.is_finite()
+            && capture.far > capture.near + 0.001
+            && capture.far <= 10_000.0)
+        || !(capture.field_of_view_degrees.is_finite()
+            && (10.0..=120.0).contains(&capture.field_of_view_degrees))
+    {
+        return invalid_ghost_plate(sequence, "ghostPlate.capture");
+    }
+    let lighting = &capture.lighting;
+    if !lighting
+        .ambient_color
+        .iter()
+        .chain(lighting.key_color.iter())
+        .chain(lighting.fill_color.iter())
+        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+        || ![
+            lighting.ambient_intensity,
+            lighting.key_intensity,
+            lighting.fill_intensity,
+        ]
+        .iter()
+        .all(|value| value.is_finite() && (0.0..=8.0).contains(value))
+        || ![lighting.key_direction, lighting.fill_direction]
+            .iter()
+            .all(|direction| {
+                direction.iter().all(|value| value.is_finite())
+                    && direction.iter().map(|value| value * value).sum::<f32>() > 1e-8
+            })
+    {
+        return invalid_ghost_plate(sequence, "ghostPlate.capture.lighting");
+    }
+    Ok(())
+}
+
+fn validate_ghost_plate_config(
+    config: &GhostPlateConfig,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    if !(config.depth_retention.is_finite() && (0.02..=1.0).contains(&config.depth_retention))
+        || !(config.anchor_value.is_finite() && (0.0..=1.0).contains(&config.anchor_value))
+        || !(config.shell_depth_epsilon.is_finite()
+            && (0.0..=2.0).contains(&config.shell_depth_epsilon))
+        || !(config.sector_hysteresis_degrees.is_finite()
+            && (0.0..=22.5).contains(&config.sector_hysteresis_degrees))
+        || ![1, 4, 8, 16].contains(&config.sector_count)
+    {
+        return invalid_ghost_plate(sequence, "ghostPlate.config");
+    }
+    Ok(())
+}
+
+fn finite_vec(
+    values: &[f32],
+    sequence: u32,
+    field: &'static str,
+) -> Result<(), PresentationFrameError> {
+    if values.iter().all(|value| value.is_finite()) {
+        Ok(())
+    } else {
+        Err(PresentationFrameError::NonFiniteNumber { sequence, field })
+    }
+}
+
+fn positive_f32(
+    value: f32,
+    sequence: u32,
+    field: &'static str,
+) -> Result<(), PresentationFrameError> {
+    if value.is_finite() && value > 0.0 {
+        Ok(())
+    } else {
+        invalid_ghost_plate(sequence, field)
+    }
+}
+
+fn invalid_ghost_plate(sequence: u32, field: &'static str) -> Result<(), PresentationFrameError> {
+    Err(PresentationFrameError::InvalidDescriptor { sequence, field })
 }
 
 fn validate_audio_patch(

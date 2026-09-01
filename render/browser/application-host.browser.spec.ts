@@ -1129,6 +1129,84 @@ test('retained ghost-plate compiles in real WebGL and changes coherently off the
   expect(result.ordinaryAfterGhost.error).toBe(0);
 });
 
+test('typed ghost-plate presentation operations reach Three and hard-snap sectors', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const result = await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    if (host === undefined) throw new Error('application host is unavailable');
+    const descriptor = {
+      source: 2,
+      placement: {
+        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        width: 1.8,
+        height: 1.8,
+      },
+      capture: {
+        resolution: 64,
+        azimuthDegrees: 0,
+        elevationDegrees: 0,
+        near: 0.1,
+        far: 20,
+        fieldOfViewDegrees: 55,
+        lighting: {
+          mode: 'isolated', ambientColor: [1, 1, 1], ambientIntensity: 1.1,
+          keyDirection: [0.55, 0.8, 1], keyColor: [1, 0.95, 0.85], keyIntensity: 2.4,
+          fillDirection: [-0.7, 0.25, 0.65], fillColor: [0.55, 0.7, 1], fillIntensity: 1,
+        },
+      },
+      config: {
+        depthRetention: 0.15, anchorPolicy: 'bounds-center', anchorValue: 0.5,
+        plateMapping: 'plate-locked', shellMode: 'whole-mesh', shellDepthEpsilon: 0.12,
+        sectorCount: 8, sectorHysteresisDegrees: 3,
+      },
+    } as const;
+    const sourceFrame = host.renderer.applyFrame({
+      schemaVersion: 1,
+      ops: [{
+        op: 'create', handle: 2, parent: null,
+        node: {
+          geometry: { kind: 'cube' }, material: { color: [0.9, 0.5, 0.2, 1], wireframe: false },
+          transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+          visible: true, layer: 'scene', metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'typed-ghost-source' },
+        },
+      }],
+    });
+    if (!sourceFrame.applied) throw new Error(`ghost source frame failed: ${JSON.stringify(sourceFrame.diagnostics)}`);
+    const created = await host.renderer.applyPresentation({
+      schemaVersion: 1,
+      ops: [{ domain: 'ghostPlate', meta: { sequence: 0 }, op: { op: 'create', handle: 41, descriptor } }],
+    });
+    if (created.applied !== 1) throw new Error(`ghost create failed: ${JSON.stringify(created.diagnostics)}`);
+    host.renderer.setCameraPose({ position: [0, 0, 6], pitchDegrees: 0, yawDegrees: 0 });
+    host.renderer.renderOnce();
+    const first = host.renderer.ghostPlateReadout?.()?.plates[0];
+    host.renderer.setCameraPose({ position: [6, 0, 0], pitchDegrees: 0, yawDegrees: -90 });
+    host.renderer.renderOnce();
+    const second = host.renderer.ghostPlateReadout?.()?.plates[0];
+    const updated = await host.renderer.applyPresentation({
+      schemaVersion: 1,
+      ops: [{ domain: 'ghostPlate', meta: { sequence: 0 }, op: {
+        op: 'update', handle: 41, patch: { config: { ...descriptor.config, plateMapping: 'projective-surface', shellMode: 'repaired-source', sectorCount: 16 } },
+      } }],
+    });
+    const afterUpdate = host.renderer.ghostPlateReadout?.()?.plates[0];
+    const destroyed = await host.renderer.applyPresentation({
+      schemaVersion: 1,
+      ops: [{ domain: 'ghostPlate', meta: { sequence: 0 }, op: { op: 'destroy', handle: 41 } }],
+    });
+    return { created, updated, destroyed, first, second, afterUpdate, remaining: host.renderer.ghostPlateReadout?.()?.activePlates };
+  });
+  expect(result.created.applied).toBe(1);
+  expect(result.first?.sourceMatch).toBe(true);
+  expect(result.first?.captureCpuSubmissionMilliseconds).not.toBeNull();
+  expect(result.first?.currentSector).not.toBe(result.second?.currentSector);
+  expect(result.updated.applied).toBe(1);
+  expect(result.afterUpdate?.config.sectorCount).toBe(16);
+  expect(result.afterUpdate?.config.plateMapping).toBe('projective-surface');
+  expect(result.destroyed.applied).toBe(1);
+  expect(result.remaining).toBe(0);
+});
+
 test('late trusted UI failure cleans the renderer transactionally and leaves bounded failure UI', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const message = await page.evaluate(() => window.__rustyApplicationFailureProbe?.());

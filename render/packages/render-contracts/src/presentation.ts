@@ -1,6 +1,7 @@
 import {
   assertJsonSafeUnsignedInteger,
   type RenderHandle,
+  type Transform,
   type Vec3,
   type Vec4,
 } from './render.js';
@@ -12,6 +13,7 @@ export type BillboardHandle = number & { readonly __brand: 'BillboardHandle' };
 export type ParticleEmitterHandle = number & { readonly __brand: 'ParticleEmitterHandle' };
 export type TelemetryOverlayHandle = number & { readonly __brand: 'TelemetryOverlayHandle' };
 export type AnimationProjectionHandle = number & { readonly __brand: 'AnimationProjectionHandle' };
+export type GhostPlateHandle = number & { readonly __brand: 'GhostPlateHandle' };
 
 export const audioHandle = (raw: number): AudioHandle =>
   assertJsonSafeUnsignedInteger(raw, 'audio handle') as AudioHandle;
@@ -25,6 +27,8 @@ export const telemetryOverlayHandle = (raw: number): TelemetryOverlayHandle =>
   assertJsonSafeUnsignedInteger(raw, 'telemetry overlay handle') as TelemetryOverlayHandle;
 export const animationProjectionHandle = (raw: number): AnimationProjectionHandle =>
   assertJsonSafeUnsignedInteger(raw, 'animation projection handle') as AnimationProjectionHandle;
+export const ghostPlateHandle = (raw: number): GhostPlateHandle =>
+  assertJsonSafeUnsignedInteger(raw, 'ghost plate handle') as GhostPlateHandle;
 
 export interface PresentationOpMeta {
   readonly sequence: number;
@@ -388,12 +392,63 @@ export type AnimationProjectionOp =
   | { readonly op: 'update'; readonly handle: AnimationProjectionHandle; readonly controller: AnimationControllerProjectionState }
   | { readonly op: 'destroy'; readonly handle: AnimationProjectionHandle };
 
+export type GhostPlateCaptureLighting =
+  | { readonly mode: 'scene'; readonly ambientColor: Vec3; readonly ambientIntensity: number; readonly keyDirection: Vec3; readonly keyColor: Vec3; readonly keyIntensity: number; readonly fillDirection: Vec3; readonly fillColor: Vec3; readonly fillIntensity: number }
+  | { readonly mode: 'isolated'; readonly ambientColor: Vec3; readonly ambientIntensity: number; readonly keyDirection: Vec3; readonly keyColor: Vec3; readonly keyIntensity: number; readonly fillDirection: Vec3; readonly fillColor: Vec3; readonly fillIntensity: number };
+
+export interface GhostPlateCaptureSettings {
+  readonly resolution: number;
+  readonly azimuthDegrees: number;
+  readonly elevationDegrees: number;
+  readonly near: number;
+  readonly far: number;
+  readonly fieldOfViewDegrees: number;
+  readonly lighting: GhostPlateCaptureLighting;
+}
+
+export interface GhostPlatePlacement {
+  readonly transform: Transform;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface GhostPlateConfig {
+  readonly depthRetention: number;
+  readonly anchorPolicy: 'bounds-center' | 'bounds-normalized';
+  readonly anchorValue: number;
+  readonly plateMapping: 'plate-locked' | 'projective-surface';
+  readonly shellMode: 'whole-mesh' | 'strict-source' | 'repaired-source';
+  readonly shellDepthEpsilon: number;
+  readonly sectorCount: 1 | 4 | 8 | 16;
+  readonly sectorHysteresisDegrees: number;
+}
+
+export interface GhostPlateDescriptor {
+  /** Stable Engine-owned retained appearance/object identity, not a backend handle. */
+  readonly source: RenderHandle;
+  readonly placement: GhostPlatePlacement;
+  readonly capture: GhostPlateCaptureSettings;
+  readonly config: GhostPlateConfig;
+}
+
+export interface GhostPlatePatch {
+  readonly placement?: GhostPlatePlacement;
+  readonly config?: GhostPlateConfig;
+}
+
+export type GhostPlateProjectionOp =
+  | { readonly op: 'create'; readonly handle: GhostPlateHandle; readonly descriptor: GhostPlateDescriptor }
+  | { readonly op: 'update'; readonly handle: GhostPlateHandle; readonly patch: GhostPlatePatch }
+  | { readonly op: 'recapture'; readonly handle: GhostPlateHandle; readonly capture: GhostPlateCaptureSettings | null }
+  | { readonly op: 'destroy'; readonly handle: GhostPlateHandle };
+
 export type PresentationOp =
   | { readonly domain: 'audio'; readonly meta: PresentationOpMeta; readonly op: AudioProjectionOp }
   | { readonly domain: 'billboard'; readonly meta: PresentationOpMeta; readonly op: BillboardProjectionOp }
   | { readonly domain: 'particle'; readonly meta: PresentationOpMeta; readonly op: ParticleProjectionOp }
   | { readonly domain: 'telemetryOverlay'; readonly meta: PresentationOpMeta; readonly op: TelemetryOverlayProjectionOp }
-  | { readonly domain: 'animation'; readonly meta: PresentationOpMeta; readonly op: AnimationProjectionOp };
+  | { readonly domain: 'animation'; readonly meta: PresentationOpMeta; readonly op: AnimationProjectionOp }
+  | { readonly domain: 'ghostPlate'; readonly meta: PresentationOpMeta; readonly op: GhostPlateProjectionOp };
 
 export interface PresentationFrameDiff {
   readonly schemaVersion: 1;

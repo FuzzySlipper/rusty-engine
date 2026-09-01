@@ -55,6 +55,7 @@ import {
   RendererPresentationHostSet,
   type RendererPresentationFrameReceipt,
 } from './presentation-host-set.js';
+import type { RendererGhostPlatePresentation, RendererGhostPlateReadout } from './ghost-plate-host.js';
 import type { RendererAudioRealizedFactsReadout } from './audio-host.js';
 import { resolveRendererAudioListenerPose } from './renderer-listener-pose.js';
 import {
@@ -472,6 +473,7 @@ export interface RendererSurface {
   readonly createParticleSink: () => RendererParticleSceneSink;
   /** Create a backend-owned experimental voxel-sprite attachment without exposing Three. */
   readonly createVoxelSpriteExperiment: () => RendererVoxelSpriteExperiment;
+  readonly createGhostPlatePresentation: (id: string) => RendererGhostPlatePresentation;
   readonly animatedMeshPlayback: (handle: RenderHandle) => RendererAnimatedMeshPlaybackReadout;
   readonly sampleAnimatedMesh: (
     handle: RenderHandle,
@@ -486,6 +488,7 @@ export interface RendererSurface {
   readonly audioRealizedFacts: () => RendererAudioRealizedFactsReadout | null;
   /** Read renderer-observed animation facts without exposing backend handles. */
   readonly animationRealizedFacts: () => import('./animation-host.js').RendererAnimationRealizedFactsReadout | null;
+  readonly ghostPlateReadout: () => RendererGhostPlateReadout | null;
   readonly automaticSubmissionPacing: () => RendererSurfaceAutomaticSubmissionPacingSample;
   readonly cameraPose: () => RendererSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
@@ -944,6 +947,10 @@ function mountPreparedRendererSurface(
       voxelSpriteExperiments.add(experiment);
       return experiment;
     },
+    createGhostPlatePresentation: (id) => {
+      if (disposed) throw new Error('renderer surface is disposed');
+      return backendSurface.createGhostPlatePresentation(id);
+    },
     animatedMeshPlayback: (handle) => animationProjection.playback(handle),
     sampleAnimatedMesh: (handle, clipId, normalizedTime) =>
       backendSurface.sampleAnimatedMesh(handle, clipId, normalizedTime),
@@ -958,6 +965,7 @@ function mountPreparedRendererSurface(
     },
     audioRealizedFacts: () => presentationHosts?.readAudioRealizedFacts() ?? null,
     animationRealizedFacts: () => presentationHosts?.readAnimationRealizedFacts() ?? null,
+    ghostPlateReadout: () => presentationHosts?.readGhostPlate() ?? null,
     automaticSubmissionPacing: () => Object.freeze({
       ...backendSurface.automaticSubmissionPacing(),
       hostAdmission: automaticSubmissionAdmission.sample(),
@@ -1027,6 +1035,8 @@ function mountPreparedRendererSurface(
     dispose: () => {
       if (disposed) return;
       stop();
+      presentationHosts?.dispose();
+      presentationHosts = null;
       controls.dispose();
       for (const sink of [...particleSinks]) sink.dispose();
       particleSinks.clear();
