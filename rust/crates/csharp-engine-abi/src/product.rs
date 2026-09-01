@@ -1191,6 +1191,15 @@ pub struct NativeProductTimelineCompletion {
 
 pub type NativeProductCreate =
     unsafe extern "C" fn(*const NativeProductCreateArgs, *mut *mut c_void) -> i32;
+/// Product creation callback with a copied diagnostic result for failures.
+/// The legacy `create` callback remains in the table for products generated
+/// before product-call diagnostics were added; new generated products fill
+/// both slots and the runtime prefers this one.
+pub type NativeProductCreateWithError = unsafe extern "C" fn(
+    *const NativeProductCreateArgs,
+    *mut *mut c_void,
+    *mut NativeProductCallError,
+) -> i32;
 pub type NativeProductAction = unsafe extern "C" fn(*mut c_void) -> i32;
 pub type NativeProductUpdate = unsafe extern "C" fn(
     *mut c_void,
@@ -1230,6 +1239,19 @@ pub struct NativeProductDebugResult {
     pub message: NativeUtf8Slice,
 }
 
+/// One copied diagnostic describing a failed generated product callback.
+/// Every UTF-8 slice is product-owned until `NativeProductReleaseCallError`
+/// consumes this result. Rust copies the fields before release; it never keeps
+/// the product allocation or an exception object across the ABI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeProductCallError {
+    pub service: NativeUtf8Slice,
+    pub operation: NativeUtf8Slice,
+    pub status: i32,
+    pub message: NativeUtf8Slice,
+}
+
 /// Executes one borrowed UTF-8 command through the generated product catalog.
 pub type NativeProductExecuteDebug =
     unsafe extern "C" fn(*mut c_void, *const NativeUtf8Slice, *mut NativeProductDebugResult) -> i32;
@@ -1246,6 +1268,16 @@ pub type NativeProductDescribeDebug =
 /// may have initialized the result, including an ABI failure.
 pub type NativeProductReleaseDebugResult =
     unsafe extern "C" fn(*mut c_void, NativeProductDebugResult);
+
+/// Reads the last failure recorded by a generated product callback. The
+/// callback returns a product-owned UTF-8 result that Rust copies immediately
+/// and releases with the matching callback. It has no Engine service access.
+pub type NativeProductReadCallError =
+    unsafe extern "C" fn(*mut c_void, *mut NativeProductCallError) -> i32;
+
+/// Releases one product-owned callback diagnostic result, including failures
+/// where its callback returned a non-success status after initializing it.
+pub type NativeProductReleaseCallError = unsafe extern "C" fn(*mut c_void, NativeProductCallError);
 
 /// Product functions supplied to Rust by the one NativeAOT bootstrap export.
 /// Nullable fields let Rust receive and inspect an initially empty table safely.
@@ -1291,6 +1323,21 @@ pub struct NativeProductApi {
     /// browser without changing lifecycle state or resetting product state.
     /// Appended so products built against earlier tables keep their offsets.
     pub attach: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+    /// Optional richer creation callback appended after all established
+    /// fields so older products retain their table prefix.
+    pub create_with_error: Option<
+        unsafe extern "C" fn(
+            *const NativeProductCreateArgs,
+            *mut *mut c_void,
+            *mut NativeProductCallError,
+        ) -> i32,
+    >,
+    /// Optional product callback failure readout and matching release pair.
+    /// New generated products record ordinary callback exceptions here while
+    /// preserving the existing action/update callback ABI.
+    pub read_call_error:
+        Option<unsafe extern "C" fn(*mut c_void, *mut NativeProductCallError) -> i32>,
+    pub release_call_error: Option<unsafe extern "C" fn(*mut c_void, NativeProductCallError)>,
 }
 
 pub type NativeProductBind = unsafe extern "C" fn(*mut NativeProductApi) -> i32;

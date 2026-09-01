@@ -47,6 +47,11 @@ public sealed class Product : IEngineProduct
     public Product(ProductCreateContext context)
     {
         _engine = context.Engine;
+        if (Environment.GetEnvironmentVariable("RUSTY_ENGINE_DIAGNOSTIC_FIXTURE") == "1")
+        {
+            _ = _engine.Animation.OpenAnimatedMesh(new AnimatedMeshResourceRequest("missing-diagnostic.glb"));
+            throw new InvalidOperationException("diagnostic fixture expected the named Engine call to reject the missing GLB");
+        }
         Require(context.Input.Context.Value.Span.SequenceEqual("gameplay.default"u8), "input context did not reach Product.Game");
         bool payloadIntentFound = false;
         foreach (ProductInputDescriptor descriptor in context.Input.DirectIntents.Span)

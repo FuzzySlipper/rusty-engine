@@ -325,6 +325,7 @@ include = [
     "NativeInputConfiguration",
     "NativeInputEvent",
     "NativeProductUpdateArgs",
+    "NativeProductCallError",
     "NativeLookState",
     "NativeLookConfig",
     "NativeLookRequest",
@@ -639,7 +640,10 @@ include = [
     "NativeContentStoreApi",
     "NativeEngineApi",
     "NativeProductCreateArgs",
+    "NativeProductCreateWithError",
     "NativeProductDebugResult",
+    "NativeProductReadCallError",
+    "NativeProductReleaseCallError",
     "NativeProductApi",
     "NativeProductBind",
 ]

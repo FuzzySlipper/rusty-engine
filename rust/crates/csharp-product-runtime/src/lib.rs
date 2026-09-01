@@ -75,6 +75,7 @@ const MAX_CONTENT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_CONTENT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DEBUG_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_DEBUG_RESULT_BYTES: usize = 64 * 1024;
+const MAX_PRODUCT_ERROR_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub struct CsharpProductRuntimeError {
@@ -190,6 +191,7 @@ struct CoreclrProductHost {
 struct LoadedProductApi {
     host: LoadedProductHost,
     create: NativeProductCreate,
+    create_with_error: Option<NativeProductCreateWithError>,
     start: NativeProductAction,
     update: NativeProductUpdate,
     complete_timeline: NativeProductCompleteTimeline,
@@ -203,6 +205,7 @@ struct LoadedProductApi {
     debug_describe: Option<(NativeProductDescribeDebug, NativeProductReleaseDebugResult)>,
     observe_runtime: Option<NativeProductObserveRuntime>,
     attach: Option<NativeProductAction>,
+    call_error: Option<(NativeProductReadCallError, NativeProductReleaseCallError)>,
 }
 
 impl LoadedProductApi {
@@ -339,8 +342,21 @@ impl LoadedProductApi {
         product: NativeProductApi,
         host: LoadedProductHost,
     ) -> Result<Self, CsharpProductRuntimeError> {
+        let call_error = optional_callback_pair(
+            product.read_call_error,
+            product.release_call_error,
+            "read_call_error",
+            "release_call_error",
+        )?;
+        if product.create_with_error.is_some() && call_error.is_none() {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_CALLBACK_PAIR",
+                "product supplied create_with_error without read_call_error and release_call_error",
+            ));
+        }
         Ok(Self {
             create: required_function(product.create, "create")?,
+            create_with_error: product.create_with_error,
             start: required_function(product.start, "start")?,
             update: required_function(product.update, "update")?,
             complete_timeline: required_function(product.complete_timeline, "complete_timeline")?,
@@ -366,6 +382,7 @@ impl LoadedProductApi {
             )?,
             observe_runtime: product.observe_runtime,
             attach: product.attach,
+            call_error,
             host,
         })
     }
@@ -616,6 +633,7 @@ impl CsharpProductRuntime {
         match call_create(&api, &args, &mut handle) {
             Ok(()) => {}
             Err(error) => {
+                let error = prefer_engine_call_error(&mut services, error);
                 services.discard_call();
                 if !handle.is_null() {
                     complete_product_call(&api, handle, false, false);
@@ -1488,6 +1506,7 @@ impl CsharpProductRuntime {
         ) {
             Ok(result) => result,
             Err(error) => {
+                let error = prefer_engine_call_error(&mut self.services, error);
                 self.discard_staged_call();
                 return Err(error);
             }
@@ -1593,9 +1612,10 @@ impl CsharpProductRuntime {
         F: FnOnce(&mut RuntimeLifecycle) -> Result<T, runtime_lifecycle::RuntimeLifecycleError>,
     {
         self.services.begin_call(ui_binding(&self.lifecycle));
-        match call_action(action, self.handle, operation) {
+        match call_action(&self.api, action, self.handle, operation) {
             Ok(()) => {}
             Err(error) => {
+                let error = prefer_engine_call_error(&mut self.services, error);
                 self.discard_staged_call();
                 return Err(error);
             }
@@ -1651,7 +1671,13 @@ impl CsharpProductRuntime {
             self.services.discard_call();
             return Err(error.into());
         }
-        if let Err(error) = call_action(attach, self.handle, ProductDevOperationKind::Connect) {
+        if let Err(error) = call_action(
+            &self.api,
+            attach,
+            self.handle,
+            ProductDevOperationKind::Connect,
+        ) {
+            let error = prefer_engine_call_error(&mut self.services, error);
             self.discard_staged_call();
             return Err(error);
         }
@@ -2954,18 +2980,68 @@ fn call_create(
     handle: &mut *mut c_void,
 ) -> Result<(), CsharpProductRuntimeError> {
     // SAFETY: fixed ABI pointers are valid for the duration of this call.
+    if let Some(create_with_error) = api.create_with_error {
+        let mut native_error = NativeProductCallError::default();
+        let status = unsafe { create_with_error(args, handle, &mut native_error) };
+        let diagnostic_result = if status == ABI_OK {
+            if !native_product_call_error_is_empty(native_error) {
+                Ok(Some(CsharpProductRuntimeError::new(
+                    "CSHARP_PRODUCT_CALL",
+                    "C# product create succeeded with a non-empty callback diagnostic",
+                )))
+            } else {
+                Ok(None)
+            }
+        } else {
+            copy_product_call_error(native_error)
+        };
+        // SAFETY: the generated product owns every buffer in the result and
+        // the matching release callback is required for every invocation,
+        // including a failed create with no product handle.
+        unsafe {
+            (api.call_error
+                .expect("create diagnostics require call-error callbacks")
+                .1)(ptr::null_mut(), native_error)
+        };
+        let diagnostic = diagnostic_result?;
+        if let Some(diagnostic) = diagnostic {
+            return Err(diagnostic);
+        }
+        return checked_status(status, "create");
+    }
     let status = unsafe { (api.create)(args, handle) };
     checked_status(status, "create")
 }
 
+/// A generated C# callback can return before Rust's staged Engine services are
+/// taken. Prefer the concrete service failure captured by those bridges, then
+/// fall back to the product callback diagnostic when the callback failed for a
+/// reason unrelated to an Engine service call. Taking the staged value here
+/// is only an inspection/rollback step; callers still discard the transaction.
+fn prefer_engine_call_error(
+    services: &mut EngineServiceSet,
+    fallback: CsharpProductRuntimeError,
+) -> CsharpProductRuntimeError {
+    match services.take_call() {
+        Err(error) => error.into(),
+        Ok(_) => fallback,
+    }
+}
+
 fn call_action(
+    api: &LoadedProductApi,
     action: NativeProductAction,
     handle: *mut c_void,
     operation: ProductDevOperationKind,
 ) -> Result<(), CsharpProductRuntimeError> {
     // SAFETY: `handle` is retained by the runtime.
     let status = unsafe { action(handle) };
-    checked_status(status, operation_name(operation))
+    if status == ABI_OK {
+        return Ok(());
+    }
+    let fallback = checked_status(status, operation_name(operation))
+        .expect_err("non-success action status has a fallback error");
+    Err(read_product_call_error(api, handle).unwrap_or(fallback))
 }
 
 fn call_update(
@@ -2977,8 +3053,103 @@ fn call_update(
     // SAFETY: event label pointers borrow local strings that remain alive for
     // the call; the C# product is required to copy anything it retains.
     let status = unsafe { (api.update)(handle, &args, &mut result) };
-    checked_status(status, "update")?;
+    if status != ABI_OK {
+        let fallback = checked_status(status, "update")
+            .expect_err("non-success update status has a fallback error");
+        return Err(read_product_call_error(api, handle).unwrap_or(fallback));
+    }
     Ok(result)
+}
+
+fn read_product_call_error(
+    api: &LoadedProductApi,
+    handle: *mut c_void,
+) -> Option<CsharpProductRuntimeError> {
+    let Some((read, release)) = api.call_error else {
+        return None;
+    };
+    let mut native_error = NativeProductCallError::default();
+    // SAFETY: the product handle remains live for this immediate read and the
+    // generated callback writes only the supplied result storage.
+    let status = unsafe { read(handle, &mut native_error) };
+    let copied = if status == ABI_OK {
+        copy_product_call_error(native_error)
+    } else {
+        Err(CsharpProductRuntimeError::new(
+            "CSHARP_PRODUCT_CALL",
+            format!("product callback error readout returned status {status}"),
+        ))
+    };
+    // SAFETY: the product owns each result buffer and its matching release is
+    // required even when the readout or its UTF-8 conversion failed.
+    unsafe { release(handle, native_error) };
+    copied.ok().flatten()
+}
+
+fn native_product_call_error_is_empty(error: NativeProductCallError) -> bool {
+    error.status == 0
+        && error.service.len == 0
+        && error.operation.len == 0
+        && error.message.len == 0
+}
+
+fn copy_product_call_error(
+    native: NativeProductCallError,
+) -> Result<Option<CsharpProductRuntimeError>, CsharpProductRuntimeError> {
+    if native_product_call_error_is_empty(native) {
+        return Ok(None);
+    }
+    let service = copy_product_error_text(native.service, "service")?;
+    let operation = copy_product_error_text(native.operation, "operation")?;
+    let message = copy_product_error_text(native.message, "message")?;
+    let context = match (service.is_empty(), operation.is_empty()) {
+        (false, false) => format!("{service}.{operation} returned status {}", native.status),
+        (false, true) => format!("{service} returned status {}", native.status),
+        (true, false) => format!("{operation} returned status {}", native.status),
+        (true, true) => format!("product callback returned status {}", native.status),
+    };
+    let detail = if message.is_empty() {
+        context
+    } else {
+        format!("{context}: {message}")
+    };
+    Ok(Some(CsharpProductRuntimeError::new(
+        "CSHARP_PRODUCT_CALL",
+        detail,
+    )))
+}
+
+fn copy_product_error_text(
+    value: NativeUtf8Slice,
+    field: &str,
+) -> Result<String, CsharpProductRuntimeError> {
+    if value.len > MAX_PRODUCT_ERROR_BYTES {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_PRODUCT_DIAGNOSTIC_BOUNDS",
+            format!("product callback {field} exceeds the host diagnostic bound"),
+        ));
+    }
+    if value.len != 0 && value.bytes.is_null() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_PRODUCT_DIAGNOSTIC_POINTER",
+            format!("product callback {field} has length without bytes"),
+        ));
+    }
+    // SAFETY: the product release callback keeps the returned bytes alive until
+    // after this bounded copy.
+    let bytes = if value.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(value.bytes, value.len) }
+    };
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|error| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_PRODUCT_DIAGNOSTIC_UTF8",
+                format!("product callback {field} is not UTF-8: {error}"),
+            )
+        })
 }
 
 fn call_debug(
@@ -4238,6 +4409,7 @@ mod tests {
     static DROP_FIXTURE_GATE: Mutex<()> = Mutex::new(());
     static DROP_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(ABI_OK);
     static DROP_EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    static PRODUCT_ERROR_RELEASES: AtomicUsize = AtomicUsize::new(0);
 
     fn record_drop_event(event: &'static str) {
         DROP_EVENTS.lock().expect("drop fixture events").push(event);
@@ -4299,10 +4471,65 @@ mod tests {
         record_drop_event("destroy");
     }
 
+    unsafe extern "C" fn product_error_fixture_create(
+        _args: *const NativeProductCreateArgs,
+        handle: *mut *mut c_void,
+        result: *mut NativeProductCallError,
+    ) -> i32 {
+        let service = b"Animation";
+        let operation = b"OpenAnimatedMesh";
+        let message = b"CSHARP_ANIMATION_RESOURCE_UNKNOWN: missing-diagnostic.glb";
+        // SAFETY: the fixture writes the caller-owned output pointers and
+        // exposes static bytes until the matching release callback.
+        unsafe {
+            *handle = std::ptr::NonNull::<u8>::dangling().as_ptr().cast();
+            *result = NativeProductCallError {
+                service: NativeUtf8Slice {
+                    bytes: service.as_ptr(),
+                    len: service.len(),
+                },
+                operation: NativeUtf8Slice {
+                    bytes: operation.as_ptr(),
+                    len: operation.len(),
+                },
+                status: 0,
+                message: NativeUtf8Slice {
+                    bytes: message.as_ptr(),
+                    len: message.len(),
+                },
+            };
+        }
+        99
+    }
+
+    unsafe extern "C" fn product_error_fixture_read(
+        _handle: *mut c_void,
+        result: *mut NativeProductCallError,
+    ) -> i32 {
+        // SAFETY: the fixture receives the call helper's writable result.
+        unsafe { *result = NativeProductCallError::default() };
+        ABI_OK
+    }
+
+    unsafe extern "C" fn product_error_fixture_release(
+        _handle: *mut c_void,
+        _result: NativeProductCallError,
+    ) {
+        PRODUCT_ERROR_RELEASES.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn product_error_fixture_api() -> LoadedProductApi {
+        let mut api = drop_fixture_api();
+        api.create_with_error = Some(product_error_fixture_create);
+        api.call_error = Some((product_error_fixture_read, product_error_fixture_release));
+        api
+    }
+
     fn drop_fixture_api() -> LoadedProductApi {
         LoadedProductApi {
             host: LoadedProductHost::NativeAot(None),
             create: drop_fixture_create,
+            create_with_error: None,
             start: drop_fixture_action,
             update: drop_fixture_update,
             complete_timeline: drop_fixture_timeline,
@@ -4316,6 +4543,7 @@ mod tests {
             debug_describe: None,
             observe_runtime: None,
             attach: None,
+            call_error: None,
         }
     }
 
@@ -4508,6 +4736,41 @@ mod tests {
         .expect_err("ABI failure remains a runtime error");
         assert_eq!(error.code(), "CSHARP_PRODUCT_CALL");
         assert_eq!(DEBUG_RELEASES.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn failed_create_copies_named_engine_diagnostic_and_rolls_back_before_destroy() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .expect("product error fixture gate");
+        PRODUCT_ERROR_RELEASES.store(0, Ordering::SeqCst);
+        DROP_EVENTS.lock().expect("drop fixture events").clear();
+
+        let root = content_fixture_root("product-create-diagnostic");
+        fs::create_dir_all(&root).expect("product error fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("product error fixture content");
+        let error = match CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(RuntimeLifecycleConfig::Demand, Vec::new()),
+            || Ok(product_error_fixture_api()),
+        ) {
+            Ok(_) => panic!("named Engine create failure must reject the product"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), "CSHARP_PRODUCT_CALL");
+        assert!(error
+            .detail()
+            .contains("Animation.OpenAnimatedMesh returned status 0"));
+        assert!(error
+            .detail()
+            .contains("CSHARP_ANIMATION_RESOURCE_UNKNOWN: missing-diagnostic.glb"));
+        assert_eq!(PRODUCT_ERROR_RELEASES.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            DROP_EVENTS.lock().expect("drop fixture events").as_slice(),
+            ["discard", "destroy"]
+        );
+        fs::remove_dir_all(root).expect("remove product error fixture content");
     }
 
     #[test]

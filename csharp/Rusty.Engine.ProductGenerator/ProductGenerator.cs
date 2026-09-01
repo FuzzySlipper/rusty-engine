@@ -162,6 +162,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
             internal sealed class ProductLifetime
             {
                 private IEngineProduct? _product;
+                private Exception? _lastCallError;
                 private readonly IDebugCommandCatalog _debugCatalog;
                 private readonly LeaseReleaseCoordinator _leaseReleases;
                 private readonly object _debuggingGate = new();
@@ -170,6 +171,14 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 internal IEngineProduct Product => _product ?? throw new ObjectDisposedException(nameof(ProductLifetime));
                 internal IDebugCommandCatalog DebugCatalog => _product is null ? throw new ObjectDisposedException(nameof(ProductLifetime)) : _debugCatalog;
                 internal ProductDebugExecutionContext Debugging { get; }
+                internal void RecordCallError(Exception error) => _lastCallError = error;
+                internal void ClearCallError() => _lastCallError = null;
+                internal Exception? TakeCallError()
+                {
+                    Exception? error = _lastCallError;
+                    _lastCallError = null;
+                    return error;
+                }
                 internal void StageDebugging(Action<ProductDebugExecutionContext> apply)
                 {
                     lock (_debuggingGate)
@@ -197,6 +206,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 }
                 internal void Dispose()
                 {
+                    _lastCallError = null;
                     _leaseReleases.Complete(false, true);
                     System.Threading.Interlocked.Exchange(ref _product, null)?.Dispose();
                 }
@@ -234,15 +244,30 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     api->release_debug_result = &ReleaseDebugResult;
                     api->observe_runtime = &ObserveRuntime;
                     api->attach = &Attach;
+                    api->create_with_error = &CreateWithError;
+                    api->read_call_error = &ReadCallError;
+                    api->release_call_error = &ReleaseCallError;
                     return 1;
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int Create(NativeProductCreateArgs* args, void** handle)
                 {
+                    return CreateCore(args, handle, null);
+                }
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static int CreateWithError(NativeProductCreateArgs* args, void** handle, NativeProductCallError* error)
+                {
+                    return CreateCore(args, handle, error);
+                }
+
+                private static int CreateCore(NativeProductCreateArgs* args, void** handle, NativeProductCallError* error)
+                {
                     ProductLifetime? lifetime = null;
                     try
                     {
+                        if (error is not null) *error = default;
                         if (args is null || handle is null || (args->content_len != 0 && args->content is null) || (args->input.context_len != 0 && args->input.context is null) || (args->input.direct_intents_len != 0 && args->input.direct_intents is null) || (args->input.physical_mappings_len != 0 && args->input.physical_mappings is null)) return 2;
                         ProductContent content = new(CopyContent(args->content, args->content_len));
                         ProductInputConfiguration input = CopyInputConfiguration(args->input);
@@ -253,8 +278,10 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(lifetime));
                         return 1;
                     }
-                    catch
+                    catch (Exception exception)
                     {
+                        try { if (error is not null) SetProductCallError(error, exception); }
+                        catch { }
                         try { lifetime?.Dispose(); }
                         catch { }
                         return 99;
@@ -286,7 +313,11 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         lifetime.StageDebugging(debugging => debugging.RecordUpdated(facts));
                         return 1;
                     }
-                    catch { return 99; }
+                    catch (Exception exception)
+                    {
+                        RecordCallError(handle, exception);
+                        return 99;
+                    }
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -452,6 +483,98 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static int ReadCallError(void* handle, NativeProductCallError* result)
+                {
+                    try
+                    {
+                        if (result is null) return 2;
+                        *result = default;
+                        Exception? error = Get(handle).TakeCallError();
+                        return error is null ? 1 : SetProductCallError(result, error);
+                    }
+                    catch { return 99; }
+                }
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static void ReleaseCallError(void* _, NativeProductCallError result)
+                {
+                    try
+                    {
+                        NativeMemory.Free(result.service.bytes);
+                        NativeMemory.Free(result.operation.bytes);
+                        NativeMemory.Free(result.message.bytes);
+                    }
+                    catch { }
+                }
+
+                private static int SetProductCallError(NativeProductCallError* result, Exception exception)
+                {
+                    if (result is null) return 2;
+                    *result = default;
+                    string service = "CSharpProduct";
+                    string operation = "Callback";
+                    int status = 99;
+                    string message = exception.Message;
+                    if (exception is EngineCallException engineError)
+                    {
+                        service = engineError.Service;
+                        operation = engineError.Operation;
+                        status = engineError.Status;
+                        message = DescribeEngineError(engineError);
+                    }
+                    byte* serviceBytes = null;
+                    byte* operationBytes = null;
+                    byte* messageBytes = null;
+                    try
+                    {
+                        serviceBytes = AllocateProductErrorText(service);
+                        operationBytes = AllocateProductErrorText(operation);
+                        messageBytes = AllocateProductErrorText(message);
+                        *result = new NativeProductCallError
+                        {
+                            service = new NativeUtf8Slice { bytes = serviceBytes, len = Utf8Length(service) },
+                            operation = new NativeUtf8Slice { bytes = operationBytes, len = Utf8Length(operation) },
+                            status = status,
+                            message = new NativeUtf8Slice { bytes = messageBytes, len = Utf8Length(message) },
+                        };
+                        return 1;
+                    }
+                    catch
+                    {
+                        NativeMemory.Free(serviceBytes);
+                        NativeMemory.Free(operationBytes);
+                        NativeMemory.Free(messageBytes);
+                        *result = default;
+                        return 99;
+                    }
+                }
+
+                private static string DescribeEngineError(EngineCallException error)
+                {
+                    if (error.Diagnostics.IsEmpty) return error.Message;
+                    StringBuilder message = new(error.Message);
+                    foreach (EngineDiagnostic diagnostic in error.Diagnostics.Span)
+                    {
+                        message.Append(": ").Append(diagnostic.Code).Append(": ").Append(diagnostic.Message);
+                        if (!string.IsNullOrEmpty(diagnostic.Source)) message.Append(" [").Append(diagnostic.Source).Append(']');
+                    }
+                    return message.ToString();
+                }
+
+                private static byte* AllocateProductErrorText(string value)
+                {
+                    byte[] bytes = StrictUtf8.GetBytes(value);
+                    if (bytes.Length > MaxProductErrorBytes) throw new InvalidOperationException("product callback diagnostic exceeded the supported copy bound");
+                    if (bytes.Length == 0) return null;
+                    byte* allocated = (byte*)NativeMemory.Alloc((nuint)bytes.Length);
+                    if (allocated is null) throw new OutOfMemoryException();
+                    bytes.CopyTo(new Span<byte>(allocated, bytes.Length));
+                    return allocated;
+                }
+
+                private static nuint Utf8Length(string value) => (nuint)StrictUtf8.GetByteCount(value);
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static void Destroy(void* handle)
                 {
                     if (handle is null) return;
@@ -470,8 +593,27 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
                 private static int Invoke(void* handle, Action<ProductLifetime> action)
                 {
-                    try { action(Get(handle)); return 1; }
-                    catch { return 99; }
+                    try
+                    {
+                        ProductLifetime lifetime = Get(handle);
+                        action(lifetime);
+                        lifetime.ClearCallError();
+                        return 1;
+                    }
+                    catch (Exception exception)
+                    {
+                        RecordCallError(handle, exception);
+                        return 99;
+                    }
+                }
+
+                private static void RecordCallError(void* handle, Exception exception)
+                {
+                    try
+                    {
+                        if (handle is not null) Get(handle).RecordCallError(exception);
+                    }
+                    catch { }
                 }
 
                 private static ProductLifetime Get(void* handle)
@@ -482,6 +624,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
                 private const int MaxDebugCommandBytes = 64 * 1024;
                 private const int MaxDebugResultBytes = 64 * 1024;
+                private const int MaxProductErrorBytes = 64 * 1024;
                 private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
                 private static ProductContentFile[] CopyContent(NativeContentFile* source, nuint count)
