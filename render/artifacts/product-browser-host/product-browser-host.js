@@ -28023,34 +28023,37 @@ function cD(e, t) {
 //#endregion
 //#region packages/product-browser-host/src/realtime-cadence.ts
 function lD(e) {
-	let t = !1, n = null, r = !1, i = Promise.resolve(), a = (a) => {
-		if (!(r || !e.isReady())) {
+	let t = !1, n = null, r = !1, i = !1, a = Promise.resolve(), o = (o, c = !1) => {
+		if (!(i || !e.isReady())) {
 			if (t) {
-				n = a;
+				n = o, r ||= c;
 				return;
 			}
-			t = !0, i = e.enqueueOperation(async () => {
+			t = !0, a = e.enqueueOperation(async () => {
 				let t = e.sampleInput();
-				t.length > 0 && await e.sendInput(t), e.lifecycleMode === "realtime" && e.realtimeAdvanceOwner === "browser" && await e.advanceRealtime(uD(a));
-			}).then(() => o(), (t) => {
-				e.onFailure(t), o();
+				t.length > 0 && await e.sendInput(t), e.lifecycleMode === "realtime" && e.realtimeAdvanceOwner === "browser" ? await e.advanceRealtime(uD(o)) : e.lifecycleMode === "demand" && c && await e.admitDemandStep();
+			}).then(() => s(), (t) => {
+				e.onFailure(t), s();
 			});
 		}
-	}, o = () => {
+	}, s = () => {
 		t = !1;
-		let i = n;
-		n = null, i !== null && !r && e.isReady() && a(i);
+		let a = n, s = r;
+		n = null, r = !1, a !== null && !i && e.isReady() && o(a, s);
 	};
 	return Object.freeze({
-		enqueue: a,
+		enqueue: o,
+		pulseInput: (t) => {
+			o(t, e.lifecycleMode === "demand");
+		},
 		pulseRustHost: () => {
-			e.realtimeAdvanceOwner === "rust-host" && a(0);
+			e.realtimeAdvanceOwner === "rust-host" && o(0);
 		},
 		settle: async () => {
-			for (; t || n !== null;) await i;
+			for (; t || n !== null;) await a;
 		},
 		dispose: () => {
-			r = !0, n = null;
+			i = !0, n = null, r = !1;
 		}
 	});
 }
@@ -28365,18 +28368,22 @@ async function xD(e) {
 		advanceRealtime: async (r) => {
 			re(await bD(A, () => n.advanceRealtime(r))), e.lifecycleMode === "realtime" && t === "browser" && (p += 1, C());
 		},
+		admitDemandStep: async () => {
+			if (n.admitDemandStep === void 0) throw new Q("transport_failed", "this native product did not provide a demand-step transport lane");
+			re(await bD(A, () => n.admitDemandStep()));
+		},
 		onFailure: (e) => {
 			k(e, "transport_failed");
 		}
 	});
 	let ae;
 	if (e.runtimeInput !== void 0) {
-		let { binding: n, ...r } = e.runtimeInput;
+		let { binding: t, ...n } = e.runtimeInput;
 		ae = {
-			...r,
-			...t === "rust-host" ? { onAvailable: () => D?.pulseRustHost() } : {},
-			...n === void 0 ? {} : { binding: {
-				runtime: n,
+			...n,
+			onAvailable: () => D?.pulseInput(globalThis.performance?.now() ?? Date.now()),
+			...t === void 0 ? {} : { binding: {
+				runtime: t,
 				context: e.inputContext ?? "gameplay.default"
 			} }
 		};

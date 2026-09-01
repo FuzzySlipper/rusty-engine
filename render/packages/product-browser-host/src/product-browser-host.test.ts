@@ -231,6 +231,7 @@ test('realtime owner controls advancement without dropping typed cadence input',
       advanceRealtime: async (observedTimeNs) => {
         observedTimes.push(observedTimeNs);
       },
+      admitDemandStep: async () => undefined,
       onFailure: (cause) => {
         failures.push(cause);
       },
@@ -269,6 +270,7 @@ test('Rust-host output pulse drains typed input without browser advancement', as
     sampleInput: () => [input],
     sendInput: async (batch) => { batches.push(batch); },
     advanceRealtime: async (time) => { advances.push(time); },
+    admitDemandStep: async () => undefined,
     onFailure: (cause) => { assert.fail(String(cause)); },
   });
   cadence.pulseRustHost();
@@ -276,6 +278,44 @@ test('Rust-host output pulse drains typed input without browser advancement', as
   cadence.dispose();
   assert.deepEqual(batches, [[input]]);
   assert.deepEqual(advances, []);
+});
+
+test('input availability wakes static realtime and demand admission without a second loop', async () => {
+  const input: RustyApplicationRuntimeInputEnvelope = {
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    sequence: '1',
+    context: 'gameplay.default',
+    intent: 'fixture.regenerate',
+    value: { kind: 'digital', active: true },
+  };
+  const run = async (
+    lifecycleMode: 'realtime' | 'demand' | 'external',
+    realtimeAdvanceOwner: 'browser' | 'rust-host' = 'browser',
+  ) => {
+    const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+    const advances: string[] = [];
+    let demandSteps = 0;
+    const cadence = createProductBrowserCadence({
+      lifecycleMode,
+      realtimeAdvanceOwner,
+      isReady: () => true,
+      enqueueOperation: (operation) => operation(),
+      sampleInput: () => [input],
+      sendInput: async (batch) => { batches.push(batch); },
+      advanceRealtime: async (time) => { advances.push(time); },
+      admitDemandStep: async () => { demandSteps += 1; },
+      onFailure: (cause) => { assert.fail(String(cause)); },
+    });
+    cadence.pulseInput(25);
+    await cadence.settle();
+    cadence.dispose();
+    return { batches, advances, demandSteps };
+  };
+
+  assert.deepEqual(await run('realtime'), { batches: [[input]], advances: ['25000000'], demandSteps: 0 });
+  assert.deepEqual(await run('realtime', 'rust-host'), { batches: [[input]], advances: [], demandSteps: 0 });
+  assert.deepEqual(await run('demand'), { batches: [[input]], advances: [], demandSteps: 1 });
+  assert.deepEqual(await run('external'), { batches: [[input]], advances: [], demandSteps: 0 });
 });
 
 test('transport rejects an adapter with an arbitrary or missing operation surface', () => {

@@ -23,6 +23,12 @@ const READOUT = {
   fault: null,
 };
 
+interface RuntimeStreamState {
+  response: ServerResponse | null;
+  inputPending: boolean;
+  nextEventId: number;
+}
+
 test('relocatable generated bundle starts over plain HTTP without bare package imports', async ({ page }) => {
   const engineHostModule = await readFile(
     fileURLToPath(new URL('../artifacts/product-browser-host/product-browser-host.js', import.meta.url)),
@@ -105,6 +111,40 @@ test('generated bundle admits valid resources without Web Crypto subtle', async 
   }
 });
 
+test('demand Product UI intent wakes input and one Engine-owned demand admission', async ({ page }) => {
+  const engineHostModule = await readFile(
+    fileURLToPath(new URL('../artifacts/product-browser-host/product-browser-host.js', import.meta.url)),
+    'utf8',
+  );
+  const generatedAssets = productBrowserBundleAssets({
+    engineHostModule,
+    uiModule: './ui/main.js',
+    runtimeAdapterModule: './runtime-adapter.js',
+    lifecycleMode: 'demand',
+    uiProjection: {
+      expectedStream: 'product.local',
+      expectedContract: 'product.local.current',
+    },
+  });
+  const requests: string[] = [];
+  const server = await createBundleServer(generatedAssets, rendererPreloadResources(), requests);
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('demand Product Bundle server did not expose a TCP address');
+  }
+  try {
+    await page.goto(`http://127.0.0.1:${String(address.port)}/index.html`);
+    await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+    await expect(page.locator('#bundle-value')).toHaveText('status: ready');
+    await page.locator('#bundle-regenerate').click();
+    await expect(page.locator('#bundle-value')).toHaveText('status: regenerated');
+    expect(requests).toContain('POST /__rusty/product/runtime/input');
+    expect(requests).toContain('POST /__rusty/product/runtime/admit-demand-step');
+  } finally {
+    await closeBundleServer(server);
+  }
+});
+
 test('generated bundle preserves renderer hash mismatch without Web Crypto subtle', async ({ page }) => {
   await removeWebCryptoSubtle(page);
   const engineHostModule = await readFile(
@@ -172,7 +212,7 @@ async function createBundleServer(
   rendererResources: readonly RendererPreloadResource[],
   requests: string[],
 ): Promise<Server> {
-  const runtimeStream: { response: ServerResponse | null } = { response: null };
+  const runtimeStream: RuntimeStreamState = { response: null, inputPending: false, nextEventId: 0 };
   const assetMap = new Map<string, { readonly body: string | Uint8Array; readonly contentType: string }>();
   for (const asset of generatedAssets) {
     assetMap.set(`/${asset.name}`, { body: asset.content, contentType: contentTypeFor(asset.name) });
@@ -197,10 +237,19 @@ async function createBundleServer(
       '  const state = document.createElement("output");',
       '  state.id = "bundle-state";',
       '  state.textContent = "projection: waiting";',
+      '  const value = document.createElement("output");',
+      '  value.id = "bundle-value";',
+      '  value.textContent = "status: waiting";',
+      '  const regenerate = document.createElement("button");',
+      '  regenerate.id = "bundle-regenerate";',
+      '  regenerate.textContent = "Regenerate";',
+      '  regenerate.addEventListener("click", () => context.intents?.claim("fixture.regenerate", { kind: "digital", active: true }));',
       '  context.projection?.subscribe((value) => {',
       '    state.textContent = `projection: ${value?.contract ?? "empty"}`;',
+      '    const status = value?.value?.status;',
+      '    document.querySelector("#bundle-value").textContent = `status: ${typeof status === "string" ? status : "empty"}`;',
       '  });',
-      '  root.append(state);',
+      '  root.append(state, value, regenerate);',
       '}',
       '',
     ].join('\n'),
@@ -226,7 +275,7 @@ async function handleRequest(
   response: ServerResponse,
   assets: ReadonlyMap<string, { readonly body: string | Uint8Array; readonly contentType: string }>,
   requests: string[],
-  runtimeStream: { response: ServerResponse | null },
+  runtimeStream: RuntimeStreamState,
 ): Promise<void> {
   const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
   requests.push(`${request.method ?? 'GET'} ${pathname}`);
@@ -254,6 +303,7 @@ async function handleRequest(
         nextInputSequence: '1',
         readout: READOUT,
       })}\n\n`);
+      runtimeStream.nextEventId = 1;
     }
     return;
   }
@@ -275,18 +325,39 @@ async function handleRequest(
         runtimeStream.response?.write(initialRuntimeOutputs()
           .map((value) => `data: ${JSON.stringify(value)}\n\n`).join(''));
       }
+      if (operation === 'input' && inputCount > 0) {
+        runtimeStream.inputPending = true;
+      }
+      let outputThrough: number | null = null;
+      if (runtimeStream.inputPending
+        && (operation === 'advance-realtime' || operation === 'admit-demand-step')) {
+        runtimeStream.inputPending = false;
+        runtimeStream.nextEventId += 1;
+        outputThrough = runtimeStream.nextEventId;
+        runtimeStream.response?.write(`id: ${String(outputThrough)}\ndata: ${JSON.stringify({
+          kind: 'ui-projection',
+          envelope: {
+            artifact: 'rusty.product.ui-projection',
+            runtime: RUNTIME,
+            sequence: '1',
+            stream: 'product.local',
+            contract: 'product.local.current',
+            value: { status: 'regenerated' },
+          },
+        })}\n\n`);
+      }
       const result = operation === 'input'
         ? { accepted: true, count: inputCount, binding: RUNTIME, readout: READOUT }
         : operation === 'audio-feedback' || operation === 'animation-feedback'
           ? { accepted: true, runtime: RUNTIME }
           : {
             accepted: true,
-            operation: operation === 'lifecycle/start' ? 'start' : 'advance-realtime',
+            operation: operation === 'lifecycle/start' ? 'start' : operation,
             binding: RUNTIME,
             nextInputSequence: '1',
             readout: READOUT,
           };
-      sendJson(response, result);
+      sendJson(response, result, outputThrough);
     });
     return;
   }
@@ -483,9 +554,12 @@ function packedMeshResourceBytes(): Uint8Array {
   return bytes;
 }
 
-function sendJson(response: ServerResponse, value: unknown): void {
+function sendJson(response: ServerResponse, value: unknown, outputThrough: number | null = null): void {
   const body = JSON.stringify(value);
-  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+  response.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    ...(outputThrough === null ? {} : { 'x-rusty-output-through': String(outputThrough) }),
+  });
   response.end(body);
 }
 

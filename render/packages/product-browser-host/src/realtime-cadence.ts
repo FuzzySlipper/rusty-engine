@@ -20,11 +20,18 @@ export interface ProductBrowserCadenceDependencies {
     batch: readonly RustyApplicationRuntimeInputEnvelope[],
   ) => Promise<void>;
   readonly advanceRealtime: (observedTimeNs: string) => Promise<void>;
+  readonly admitDemandStep: () => Promise<void>;
   readonly onFailure: (cause: unknown) => void;
 }
 
 export interface ProductBrowserCadence {
   readonly enqueue: (timeMs: number) => void;
+  /**
+   * Wakes the same serialized admission lane when input arrives between renderer frames.
+   * Browser-owned realtime advances once, demand admits one step, and externally owned
+   * modes only deliver the input because their scheduling authority remains external.
+   */
+  readonly pulseInput: (timeMs: number) => void;
   /** Drains input from one Rust-host runtime output without browser advancement. */
   readonly pulseRustHost: () => void;
   /** Waits for the current cadence operation and any coalesced follow-up. */
@@ -43,16 +50,18 @@ export function createProductBrowserCadence(
 ): ProductBrowserCadence {
   let cadenceInFlight = false;
   let pendingCadenceTimeMs: number | null = null;
+  let pendingDemandAdmission = false;
   let disposed = false;
   let lastOperation: Promise<void> = Promise.resolve();
 
-  const enqueue = (timeMs: number): void => {
+  const enqueue = (timeMs: number, demandAdmission = false): void => {
     if (disposed || !dependencies.isReady()) return;
     if (cadenceInFlight) {
       // Keep only the newest observed host time while the Rust operation is
       // outstanding. Input remains in application-host's bounded ingress
       // queue; one slow local request must not create one promise per RAF.
       pendingCadenceTimeMs = timeMs;
+      pendingDemandAdmission ||= demandAdmission;
       return;
     }
     cadenceInFlight = true;
@@ -62,6 +71,8 @@ export function createProductBrowserCadence(
       if (dependencies.lifecycleMode === 'realtime'
         && dependencies.realtimeAdvanceOwner === 'browser') {
         await dependencies.advanceRealtime(toNanoseconds(timeMs));
+      } else if (dependencies.lifecycleMode === 'demand' && demandAdmission) {
+        await dependencies.admitDemandStep();
       }
     });
     lastOperation = operation.then(
@@ -76,12 +87,19 @@ export function createProductBrowserCadence(
   const finish = (): void => {
     cadenceInFlight = false;
     const nextTimeMs = pendingCadenceTimeMs;
+    const demandAdmission = pendingDemandAdmission;
     pendingCadenceTimeMs = null;
-    if (nextTimeMs !== null && !disposed && dependencies.isReady()) enqueue(nextTimeMs);
+    pendingDemandAdmission = false;
+    if (nextTimeMs !== null && !disposed && dependencies.isReady()) {
+      enqueue(nextTimeMs, demandAdmission);
+    }
   };
 
   return Object.freeze({
     enqueue,
+    pulseInput: (timeMs: number): void => {
+      enqueue(timeMs, dependencies.lifecycleMode === 'demand');
+    },
     pulseRustHost: (): void => {
       if (dependencies.realtimeAdvanceOwner === 'rust-host') enqueue(0);
     },
@@ -93,6 +111,7 @@ export function createProductBrowserCadence(
     dispose: (): void => {
       disposed = true;
       pendingCadenceTimeMs = null;
+      pendingDemandAdmission = false;
     },
   });
 }

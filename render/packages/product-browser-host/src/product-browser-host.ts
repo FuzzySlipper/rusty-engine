@@ -1062,6 +1062,18 @@ export async function mountProductBrowserHost(
         publishHealth();
       }
     },
+    admitDemandStep: async () => {
+      if (transport.admitDemandStep === undefined) {
+        throw new ProductBrowserHostError(
+          'transport_failed',
+          'this native product did not provide a demand-step transport lane',
+        );
+      }
+      applyOperationResult(await flushProductBrowserRendererFeedbackBeforeUpdate(
+        flushRendererFeedback,
+        () => transport.admitDemandStep!(),
+      ));
+    },
     onFailure: (cause) => {
       failAndClose(cause, 'transport_failed');
     },
@@ -1072,9 +1084,7 @@ export async function mountProductBrowserHost(
     const { binding, ...runtimeInputOptions } = options.runtimeInput;
     runtimeInput = {
       ...runtimeInputOptions,
-      ...(realtimeAdvanceOwner === 'rust-host'
-        ? { onAvailable: () => cadence?.pulseRustHost() }
-        : {}),
+      onAvailable: () => cadence?.pulseInput(globalThis.performance?.now() ?? Date.now()),
       ...(binding === undefined
         ? {}
         : {
