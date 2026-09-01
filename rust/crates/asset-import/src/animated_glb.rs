@@ -103,8 +103,13 @@ pub fn import_animated_glb_asset(
     context: &ImportContext,
 ) -> AnimatedGlbImportOutcome {
     let mut diagnostics = Vec::new();
+    // Animated mesh IDs are content identities, not filename-derived labels.
+    // Hashing before source-name inspection means a source can retain its
+    // authored spelling (including spaces or uppercase characters) without
+    // weakening the canonical AssetId grammar.
+    let source_hash_hex = sha256_hex(source);
     let Some((asset_id, name, runtime_resource_path)) =
-        source_identity(source_uri, &mut diagnostics)
+        source_identity(source_uri, &source_hash_hex, &mut diagnostics)
     else {
         return failed(diagnostics);
     };
@@ -128,7 +133,6 @@ pub fn import_animated_glb_asset(
             return failed(diagnostics);
         }
     };
-    let source_hash_hex = sha256_hex(source);
     let source_hash = format!("sha256:{source_hash_hex}");
     let animated_request = MeshSourceImportRequest {
         source_asset_id: asset_id.as_str().to_owned(),
@@ -226,7 +230,7 @@ pub fn import_animated_glb_asset(
         // and measure a zero-clip GLB; publication remains the same GLB mesh
         // descriptor/resource lifecycle below.
         let static_request = MeshSourceImportRequest {
-            source_asset_id: format!("mesh/{name}"),
+            source_asset_id: format!("mesh/{source_hash_hex}"),
             ..animated_request
         };
         let imported = match import_mesh_source(&static_request) {
@@ -889,6 +893,7 @@ fn invalid_texture_transform(path: &str, message: &str) -> ImportDiagnostic {
 
 fn source_identity(
     source_uri: &SourceUri,
+    source_hash_hex: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
 ) -> Option<(AssetId, String, String)> {
     let value = source_uri.value();
@@ -910,11 +915,15 @@ fn source_identity(
             ImportCode::UnsupportedFeature,
             value,
             "animated import accepts binary .glb source files only",
-            "select a binary GLB file with a lowercase kebab-case filename",
+            "select a named binary GLB source",
         ));
         return None;
     };
-    let asset_text = format!("mesh-animation/{name}");
+    // AssetId intentionally remains strict while source filenames are
+    // ordinary provenance/display metadata. The source hash is deterministic
+    // for the exact copied bytes, survives a project move or filename rename,
+    // and prevents collisions that a lossy filename normalization would hide.
+    let asset_text = format!("mesh-animation/{source_hash_hex}");
     match AssetId::parse(&asset_text) {
         Ok(asset_id) if asset_id.kind() == AssetKind::AnimatedMesh => {
             Some((asset_id, name.to_owned(), format!("{name}.glb")))
@@ -924,8 +933,8 @@ fn source_identity(
             diagnostics.push(ImportDiagnostic::error(
                 ImportCode::MalformedSource,
                 value,
-                format!("source filename does not form an animated mesh identity: {error}"),
-                "rename the file with lowercase kebab-case path segments",
+                format!("Engine-derived animated mesh identity is invalid: {error}"),
+                "repair the Engine-derived source identity",
             ));
             None
         }

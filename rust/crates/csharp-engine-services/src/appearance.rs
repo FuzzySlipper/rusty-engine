@@ -1157,9 +1157,9 @@ fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesErro
         || value
             .split('/')
             .any(|part| part.is_empty() || matches!(part, "." | ".."))
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'))
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'.' | b'-' | b'_' | b'/')
+        })
     {
         return Err(CsharpEngineServicesError::new(
             "CSHARP_RENDER_RESOURCE_PATH",
@@ -8109,6 +8109,7 @@ fn retain_texture_descriptor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
 
     fn external_image_glb(source: &[u8], uri: &str) -> Vec<u8> {
         assert_eq!(&source[..4], b"glTF");
@@ -8946,6 +8947,51 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn animated_filename_spelling_is_admitted_through_csharp_service() {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        let expected_asset = format!("mesh-animation/{:x}", sha2::Sha256::digest(CHARACTER_GLB));
+        for relative_path in [
+            "actors/UAL1_Standard.glb",
+            "actors/UAL1 Standard.glb",
+            "actors/ual1-standard.glb",
+        ] {
+            let mut content_resources = BTreeMap::new();
+            content_resources.insert(relative_path.to_owned(), Arc::from(CHARACTER_GLB));
+            let mut bridge = RuntimeAppearanceBridge::new(
+                RuntimeAppearanceCatalog::default(),
+                content_resources,
+            );
+            let request_path = format!("content/{relative_path}");
+
+            bridge.begin_call();
+            bridge
+                .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                    path: NativeUtf8Slice {
+                        bytes: request_path.as_ptr(),
+                        len: request_path.len(),
+                    },
+                })
+                .expect("filename spelling is not an identity requirement");
+
+            let resource = bridge
+                .staged
+                .as_ref()
+                .expect("staged animated resource")
+                .state
+                .render_resources
+                .first()
+                .expect("one admitted animated resource");
+            assert_eq!(resource.path(), request_path);
+            assert_eq!(
+                resource.animated_mesh().expect("animated descriptor").asset,
+                expected_asset
+            );
+        }
     }
 
     #[test]

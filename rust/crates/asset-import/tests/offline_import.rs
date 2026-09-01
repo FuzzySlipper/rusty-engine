@@ -68,6 +68,10 @@ fn uri() -> SourceUri {
     SourceUri::RelativePath("assets/fixture-triangle.mesh.json".to_owned())
 }
 
+fn animated_asset_stem(source: &[u8]) -> String {
+    format!("{:x}", sha2::Sha256::digest(source))
+}
+
 #[test]
 fn valid_source_produces_deterministic_native_assets_and_manifest() {
     let context = ImportContext::with_textures(["steel-plate".to_owned()]);
@@ -221,6 +225,7 @@ fn golden_static_ramp_imports_into_the_shared_trimesh_query_service() {
 #[test]
 fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenance() {
     let uri = SourceUri::RelativePath("content/actors/character-medium.glb".to_owned());
+    let asset_stem = animated_asset_stem(ANIMATED_GLB);
     let first = plan_animated_glb_import(
         &uri,
         ANIMATED_GLB,
@@ -247,11 +252,12 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
 
     let resource = artifact(&first, "character-medium.glb");
     assert_eq!(resource.bytes, ANIMATED_GLB);
-    let descriptor: AnimatedMeshAsset =
-        serde_json::from_slice(&artifact(&first, "character-medium.animated-mesh.json").bytes)
-            .unwrap();
+    let descriptor: AnimatedMeshAsset = serde_json::from_slice(
+        &artifact(&first, &format!("{asset_stem}.animated-mesh.json")).bytes,
+    )
+    .unwrap();
     descriptor.validate().unwrap();
-    assert_eq!(descriptor.asset, "mesh-animation/character-medium");
+    assert_eq!(descriptor.asset, format!("mesh-animation/{asset_stem}"));
     assert_eq!(
         descriptor.content_hash.as_deref(),
         Some("sha256:c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674")
@@ -275,7 +281,8 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
     assert!(descriptor.material_slots.is_empty());
 
     let catalog = decode_catalog(
-        std::str::from_utf8(&artifact(&first, "character-medium.catalog.json").bytes).unwrap(),
+        std::str::from_utf8(&artifact(&first, &format!("{asset_stem}.catalog.json")).bytes)
+            .unwrap(),
     )
     .unwrap();
     assert!(validate_catalog(&catalog).is_ok());
@@ -315,6 +322,49 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
     assert!(rig.structural_root_ids.len() > 1);
     assert!(rig.designated_motion_root_ids.is_empty());
     assert!(!rig.authored_pose_translation_joint_ids.is_empty());
+}
+
+#[test]
+fn animated_glb_filename_spelling_is_provenance_only_for_identity() {
+    let expected_asset = format!("mesh-animation/{}", animated_asset_stem(ANIMATED_GLB));
+    for source_path in [
+        "content/actors/UAL1_Standard.glb",
+        "content/actors/UAL1 Standard.glb",
+        "content/actors/ual1-standard.glb",
+    ] {
+        let imported = import_animated_glb_asset(
+            &SourceUri::RelativePath(source_path.to_owned()),
+            ANIMATED_GLB,
+            &ImportContext::default(),
+        );
+        assert!(
+            !imported.has_errors(),
+            "{source_path}: {:?}",
+            imported.diagnostics
+        );
+        let assets = imported.assets.expect("filename spelling is not identity");
+        assert_eq!(assets.animated_mesh.asset, expected_asset);
+        assert_eq!(assets.runtime_resource_bytes, ANIMATED_GLB);
+        assert_eq!(
+            assets.catalog.entries[0].id.as_str(),
+            expected_asset.as_str()
+        );
+    }
+}
+
+#[test]
+fn animated_glb_invalid_content_still_rejects_after_filename_admission() {
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("content/actors/Not A Real GLB.glb".to_owned()),
+        b"not a GLB",
+        &ImportContext::default(),
+    );
+    assert!(imported.assets.is_none());
+    assert!(imported.has_errors());
+    assert!(imported
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ImportCode::InvalidContainer));
 }
 
 #[test]
@@ -520,6 +570,7 @@ fn exact_loading_bay_closure_admits_visual_metadata_and_embedded_clips() {
 fn zero_clip_unlit_glb_uses_the_existing_mesh_resource_lifecycle() {
     let uri = SourceUri::RelativePath("content/environment/static-unlit-triangle.glb".to_owned());
     let source = static_unlit_glb();
+    let asset_stem = animated_asset_stem(&source);
     let first = plan_animated_glb_import(
         &uri,
         &source,
@@ -543,11 +594,12 @@ fn zero_clip_unlit_glb_uses_the_existing_mesh_resource_lifecycle() {
 
     let resource = artifact(&first, "static-unlit-triangle.glb");
     assert_eq!(resource.bytes, source);
-    let descriptor: AnimatedMeshAsset =
-        serde_json::from_slice(&artifact(&first, "static-unlit-triangle.animated-mesh.json").bytes)
-            .unwrap();
+    let descriptor: AnimatedMeshAsset = serde_json::from_slice(
+        &artifact(&first, &format!("{asset_stem}.animated-mesh.json")).bytes,
+    )
+    .unwrap();
     descriptor.validate().unwrap();
-    assert_eq!(descriptor.asset, "mesh-animation/static-unlit-triangle");
+    assert_eq!(descriptor.asset, format!("mesh-animation/{asset_stem}"));
     assert!(descriptor.clips.is_empty());
     assert_eq!(descriptor.default_clip, None);
     assert_eq!(
@@ -612,9 +664,11 @@ fn gltf_closure_converges_with_glb_for_static_and_animated_sources() {
     assert!(artifact(&first, "actor-external.glb")
         .bytes
         .starts_with(b"glTF"));
-    let descriptor: AnimatedMeshAsset =
-        serde_json::from_slice(&artifact(&first, "actor-external.animated-mesh.json").bytes)
-            .unwrap();
+    let asset_stem = animated_asset_stem(&artifact(&first, "actor-external.glb").bytes);
+    let descriptor: AnimatedMeshAsset = serde_json::from_slice(
+        &artifact(&first, &format!("{asset_stem}.animated-mesh.json")).bytes,
+    )
+    .unwrap();
     assert_eq!(descriptor.clips.len(), 3);
     assert_eq!(first.manifest.as_ref().unwrap().source_uri, uri.value());
 }
@@ -1256,6 +1310,7 @@ fn cli_publishes_animated_glb_without_utf8_or_original_path_dependency() {
     let root = temp_directory("animated-cli");
     let source = root.join("actor-medium.glb");
     let output = root.join("imported");
+    let asset_stem = animated_asset_stem(ANIMATED_GLB);
     fs::write(&source, ANIMATED_GLB).unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_rusty-asset-import"))
         .arg("write")
@@ -1272,15 +1327,18 @@ fn cli_publishes_animated_glb_without_utf8_or_original_path_dependency() {
         fs::read(output.join("actor-medium.glb")).unwrap(),
         ANIMATED_GLB
     );
-    assert!(output.join("actor-medium.animated-mesh.json").is_file());
-    assert!(output.join("actor-medium.catalog.json").is_file());
-    assert!(output.join("actor-medium.import.json").is_file());
+    assert!(output
+        .join(format!("{asset_stem}.animated-mesh.json"))
+        .is_file());
+    assert!(output.join(format!("{asset_stem}.catalog.json")).is_file());
+    assert!(output.join(format!("{asset_stem}.import.json")).is_file());
     fs::remove_file(source).unwrap();
-    let descriptor: AnimatedMeshAsset =
-        serde_json::from_slice(&fs::read(output.join("actor-medium.animated-mesh.json")).unwrap())
-            .unwrap();
+    let descriptor: AnimatedMeshAsset = serde_json::from_slice(
+        &fs::read(output.join(format!("{asset_stem}.animated-mesh.json"))).unwrap(),
+    )
+    .unwrap();
     descriptor.validate().unwrap();
-    assert_eq!(descriptor.asset, "mesh-animation/actor-medium");
+    assert_eq!(descriptor.asset, format!("mesh-animation/{asset_stem}"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1337,8 +1395,10 @@ fn cli_loads_gltf_closure_and_missing_resource_failure_preserves_publication() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(output.join("actor-external.glb").is_file());
-    let manifest_before = fs::read(output.join("actor-external.import.json")).unwrap();
     let runtime_before = fs::read(output.join("actor-external.glb")).unwrap();
+    let asset_stem = animated_asset_stem(&runtime_before);
+    let manifest_path = format!("{asset_stem}.import.json");
+    let manifest_before = fs::read(output.join(&manifest_path)).unwrap();
 
     fs::remove_file(root.join("textures/actor.png")).unwrap();
     let rejected = Command::new(binary)
@@ -1350,7 +1410,7 @@ fn cli_loads_gltf_closure_and_missing_resource_failure_preserves_publication() {
     assert!(!rejected.status.success());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("referenced resource"));
     assert_eq!(
-        fs::read(output.join("actor-external.import.json")).unwrap(),
+        fs::read(output.join(&manifest_path)).unwrap(),
         manifest_before
     );
     assert_eq!(
