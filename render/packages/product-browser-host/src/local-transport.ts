@@ -63,6 +63,7 @@ const ROUTES = Object.freeze({
   audioFeedback: 'audio-feedback',
   animationFeedback: 'animation-feedback',
   outputs: 'outputs',
+  freshOutputs: 'outputs/fresh',
 });
 
 const MAXIMUM_RUNTIME_RESPONSE_BYTES = 512 * 1024;
@@ -176,11 +177,11 @@ export interface ProductBrowserLocalEventSource {
   onmessage: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null;
   onerror: ((event: unknown) => void) | null;
   readonly addEventListener?: (
-    type: 'rusty-output-lag' | 'rusty-output-fragment',
+    type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline',
     listener: (event: { readonly data: string; readonly lastEventId: string }) => void,
   ) => void;
   readonly removeEventListener?: (
-    type: 'rusty-output-lag' | 'rusty-output-fragment',
+    type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline',
     listener: (event: { readonly data: string; readonly lastEventId: string }) => void,
   ) => void;
   readonly close: () => void;
@@ -263,10 +264,14 @@ export function createProductBrowserLocalHttpAdapter(
   let stream: ProductBrowserLocalEventSource | null = null;
   let streamLagListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
   let streamFragmentListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
+  let streamBaselineListener: ((event: { readonly data: string; readonly lastEventId: string }) => void) | null = null;
   let pendingFragment: PendingOutputFragment | null = null;
   let currentOutputBinding: RustyApplicationRuntimeIdentity | null = null;
   let outputSubscriptionReady: Promise<void> | null = null;
   let resolveOutputSubscriptionReady: (() => void) | null = null;
+  let connectionReady: Promise<ProductBrowserRuntimeOperationResult> | null = null;
+  let resolveConnectionReady: ((result: ProductBrowserRuntimeOperationResult) => void) | null = null;
+  let rejectConnectionReady: ((error: ProductBrowserLocalTransportError) => void) | null = null;
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
   let observedOutputSequence = 0n;
   const outputSequenceWaiters = new Set<{
@@ -369,6 +374,10 @@ export function createProductBrowserLocalHttpAdapter(
         stream.removeEventListener?.('rusty-output-fragment', streamFragmentListener);
         streamFragmentListener = null;
       }
+      if (streamBaselineListener !== null) {
+        stream.removeEventListener?.('rusty-output-baseline', streamBaselineListener);
+        streamBaselineListener = null;
+      }
       stream.close();
       stream = null;
     }
@@ -377,6 +386,10 @@ export function createProductBrowserLocalHttpAdapter(
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
     outputSubscriptionReady = null;
+    rejectConnectionReady?.(error);
+    connectionReady = null;
+    resolveConnectionReady = null;
+    rejectConnectionReady = null;
     reportTransportError(error);
     for (const listener of [...terminalFailureListeners]) {
       try {
@@ -565,7 +578,15 @@ export function createProductBrowserLocalHttpAdapter(
         outputSubscriptionReady = new Promise<void>((resolve) => {
           resolveOutputSubscriptionReady = resolve;
         });
-        stream = new eventSourceConstructor(`${basePath}${ROUTES.outputs}`);
+        connectionReady = new Promise<ProductBrowserRuntimeOperationResult>((resolve, reject) => {
+          resolveConnectionReady = resolve;
+          rejectConnectionReady = reject;
+        });
+        // Output-only consumers still need terminal stream failures without being
+        // forced to await connect(). Keep the shared promise observable for
+        // connect callers while preventing an unhandled rejection otherwise.
+        void connectionReady.catch(() => undefined);
+        stream = new eventSourceConstructor(`${basePath}${ROUTES.freshOutputs}`);
         stream.onopen = () => {
           resolveOutputSubscriptionReady?.();
           resolveOutputSubscriptionReady = null;
@@ -653,6 +674,41 @@ export function createProductBrowserLocalHttpAdapter(
           }
         };
         stream.addEventListener?.('rusty-output-fragment', streamFragmentListener);
+        streamBaselineListener = (event) => {
+          try {
+            if (pendingFragment !== null) {
+              throw new TypeError('connection baseline ended during an output fragment transfer');
+            }
+            const result = decodeConnectionResult(parseBoundedJson(
+              event.data,
+              MAXIMUM_RUNTIME_RESPONSE_BYTES,
+            ));
+            observeOutputSequence(event.lastEventId);
+            if (!result.accepted) {
+              throw new ProductBrowserLocalTransportError(
+                'request_failed',
+                result.diagnostic ?? 'Product Browser local runtime rejected the browser connection',
+                { route: ROUTES.freshOutputs },
+              );
+            }
+            resolveConnectionReady?.(result);
+            resolveConnectionReady = null;
+            rejectConnectionReady = null;
+          } catch (cause) {
+            const error = cause instanceof ProductBrowserLocalTransportError
+              ? cause
+              : new ProductBrowserLocalTransportError(
+                'output_decode_failed',
+                `Product Browser local runtime emitted an invalid connection baseline: ${cause instanceof Error ? cause.message : String(cause)}`,
+                { cause, route: ROUTES.freshOutputs },
+              );
+            rejectConnectionReady?.(error);
+            resolveConnectionReady = null;
+            rejectConnectionReady = null;
+            reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
+          }
+        };
+        stream.addEventListener?.('rusty-output-baseline', streamBaselineListener);
         stream.onmessage = (event) => {
           if (terminalFailure !== null) return;
           try {
@@ -697,11 +753,15 @@ export function createProductBrowserLocalHttpAdapter(
         stream = null;
         streamLagListener = null;
         streamFragmentListener = null;
+        streamBaselineListener = null;
         pendingFragment = null;
         wakeOutputSequenceWaiters();
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
         outputSubscriptionReady = null;
+        connectionReady = null;
+        resolveConnectionReady = null;
+        rejectConnectionReady = null;
         throw new ProductBrowserLocalTransportError(
           'stream_failed',
           `Product Browser local runtime output stream could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -723,6 +783,10 @@ export function createProductBrowserLocalHttpAdapter(
           stream?.removeEventListener?.('rusty-output-fragment', streamFragmentListener);
           streamFragmentListener = null;
         }
+        if (streamBaselineListener !== null) {
+          stream?.removeEventListener?.('rusty-output-baseline', streamBaselineListener);
+          streamBaselineListener = null;
+        }
         stream?.close();
         stream = null;
         pendingFragment = null;
@@ -730,6 +794,9 @@ export function createProductBrowserLocalHttpAdapter(
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
         outputSubscriptionReady = null;
+        connectionReady = null;
+        resolveConnectionReady = null;
+        rejectConnectionReady = null;
       }
     };
   };
@@ -745,6 +812,20 @@ export function createProductBrowserLocalHttpAdapter(
     }
     await outputSubscriptionReady;
     ensureOpen();
+  };
+
+  const connect = async (): Promise<ProductBrowserRuntimeOperationResult> => {
+    ensureOpen();
+    if (stream === null || connectionReady === null) {
+      throw new ProductBrowserLocalTransportError(
+        'stream_failed',
+        'Product Browser local runtime connection has not started',
+        { route: ROUTES.freshOutputs },
+      );
+    }
+    const result = await connectionReady;
+    ensureOpen();
+    return result;
   };
 
   const subscribeTerminalFailures = (
@@ -789,6 +870,10 @@ export function createProductBrowserLocalHttpAdapter(
       stream?.removeEventListener?.('rusty-output-fragment', streamFragmentListener);
       streamFragmentListener = null;
     }
+    if (streamBaselineListener !== null) {
+      stream?.removeEventListener?.('rusty-output-baseline', streamBaselineListener);
+      streamBaselineListener = null;
+    }
     stream?.close();
     stream = null;
     pendingFragment = null;
@@ -796,11 +881,15 @@ export function createProductBrowserLocalHttpAdapter(
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
     outputSubscriptionReady = null;
+    connectionReady = null;
+    resolveConnectionReady = null;
+    rejectConnectionReady = null;
     listeners.clear();
     terminalFailureListeners.clear();
   };
 
   return Object.freeze({
+    connect,
     lifecycle,
     input,
     reportAudioFeedback,
@@ -1528,6 +1617,14 @@ function decodeOperationResult(
     ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   };
+}
+
+function decodeConnectionResult(value: unknown): ProductBrowserRuntimeOperationResult {
+  const record = requireRecord(value, 'connection result');
+  if (record.operation !== 'start' && record.operation !== 'connect') {
+    throw new TypeError('connection operation must be start or connect');
+  }
+  return decodeOperationResult(value, record.operation);
 }
 
 function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {

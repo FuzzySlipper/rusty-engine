@@ -21,8 +21,8 @@ test('generated-style browser composition reaches a local Rust-shaped HTTP/SSE t
     const request = route.request();
     const url = new URL(request.url());
     requests.push(`${request.method()} ${url.pathname}`);
-    if (url.pathname.endsWith('/outputs')) {
-      const body = [
+    if (url.pathname.endsWith('/outputs/fresh')) {
+      const outputs = [
         { kind: 'binding', runtime: RUNTIME, nextInputSequence: '0' },
         { kind: 'runtime-readout', readout: READOUT },
         {
@@ -36,7 +36,17 @@ test('generated-style browser composition reaches a local Rust-shaped HTTP/SSE t
             value: { status: 'ready' },
           },
         },
-      ].map((value) => `data: ${JSON.stringify(value)}\n\n`).join('');
+      ];
+      const body = outputs
+        .map((value, index) => `id: ${String(index + 1)}\ndata: ${JSON.stringify(value)}\n\n`)
+        .join('')
+        + `id: ${String(outputs.length + 1)}\nevent: rusty-output-baseline\ndata: ${JSON.stringify({
+          accepted: true,
+          operation: 'start',
+          binding: RUNTIME,
+          nextInputSequence: '0',
+          readout: READOUT,
+        })}\n\n`;
       await route.fulfill({
         status: 200,
         headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
@@ -66,11 +76,25 @@ test('generated-style browser composition reaches a local Rust-shaped HTTP/SSE t
       });
       return;
     }
+    if (operation === 'audio-feedback' || operation === 'animation-feedback') {
+      await route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accepted: true, runtime: RUNTIME }),
+      });
+      return;
+    }
     if (operation === 'advance-realtime') {
       await route.fulfill({
         status: 200,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ accepted: true, operation: 'advance-realtime', binding: RUNTIME, readout: READOUT }),
+        body: JSON.stringify({
+          accepted: true,
+          operation: 'advance-realtime',
+          binding: RUNTIME,
+          nextInputSequence: '0',
+          readout: READOUT,
+        }),
       });
       return;
     }
@@ -81,7 +105,15 @@ test('generated-style browser composition reaches a local Rust-shaped HTTP/SSE t
   await expect(page.locator('#product-state')).toHaveText('state: ready');
   await expect(page.locator('#product-projection')).toHaveText('projection: product.local.current');
   await expect.poll(() => page.locator('canvas[data-rusty-application-renderer="engine-owned"]').count()).toBe(1);
-  expect(requests).toContain('GET /__rusty/product/runtime/outputs');
-  expect(requests).toContain('POST /__rusty/product/runtime/lifecycle/start');
-  expect(requests.some((request) => request.startsWith('POST /__rusty/product/runtime/advance-realtime'))).toBeTruthy();
+  expect(requests).toContain('GET /__rusty/product/runtime/outputs/fresh');
+  expect(requests).not.toContain('POST /__rusty/product/runtime/lifecycle/start');
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-runtime-mode', 'realtime');
+  await expect.poll(
+    () => ({
+      advanced: requests.some((request) => request.startsWith('POST /__rusty/product/runtime/advance-realtime')),
+      requests,
+    }),
+    { message: 'browser-owned realtime cadence should advance after attach' },
+  ).toMatchObject({ advanced: true });
 });

@@ -1282,6 +1282,10 @@ pub struct NativeProductApi {
     /// the authoritative lifecycle transition has committed.
     pub observe_runtime:
         Option<unsafe extern "C" fn(*mut c_void, *const NativeProductRuntimeFacts)>,
+    /// Republishes the current product presentation for a newly attached
+    /// browser without changing lifecycle state or resetting product state.
+    /// Appended so products built against earlier tables keep their offsets.
+    pub attach: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
 }
 
 pub type NativeProductBind = unsafe extern "C" fn(*mut NativeProductApi) -> i32;

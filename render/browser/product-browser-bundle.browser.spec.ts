@@ -52,10 +52,8 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
     await expect.poll(() => pageErrors).toEqual([]);
     await expect(page.locator('#bundle-state')).toHaveText('projection: product.local.current');
     await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
-    await expect.poll(() => requests.some((request) => request === 'GET /__rusty/product/runtime/outputs')).toBe(true);
-    await expect.poll(() => requests.some((request) => request === 'POST /__rusty/product/runtime/lifecycle/start')).toBe(true);
-    expect(requests.indexOf('GET /__rusty/product/runtime/outputs'))
-      .toBeLessThan(requests.indexOf('POST /__rusty/product/runtime/lifecycle/start'));
+    await expect.poll(() => requests.some((request) => request === 'GET /__rusty/product/runtime/outputs/fresh')).toBe(true);
+    expect(requests).not.toContain('POST /__rusty/product/runtime/lifecycle/start');
     await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
     await expect.poll(() => readStartupRendererProof(page)).not.toBeNull();
     const pixels = await readStartupRendererProof(page);
@@ -232,7 +230,9 @@ async function handleRequest(
 ): Promise<void> {
   const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
   requests.push(`${request.method ?? 'GET'} ${pathname}`);
-  if (pathname === '/__rusty/product/runtime/outputs' && request.method === 'GET') {
+  if ((pathname === '/__rusty/product/runtime/outputs'
+      || pathname === '/__rusty/product/runtime/outputs/fresh')
+    && request.method === 'GET') {
     response.writeHead(200, {
       'cache-control': 'no-cache',
       connection: 'keep-alive',
@@ -243,6 +243,21 @@ async function handleRequest(
     response.once('close', () => {
       if (runtimeStream.response === response) runtimeStream.response = null;
     });
+    if (pathname.endsWith('/fresh')) {
+      let eventId = 0;
+      for (const value of initialRuntimeOutputs()) {
+        eventId += 1;
+        response.write(`id: ${String(eventId)}\ndata: ${JSON.stringify(value)}\n\n`);
+      }
+      eventId += 1;
+      response.write(`id: ${String(eventId)}\nevent: rusty-output-baseline\ndata: ${JSON.stringify({
+        accepted: true,
+        operation: 'start',
+        binding: RUNTIME,
+        nextInputSequence: '1',
+        readout: READOUT,
+      })}\n\n`);
+    }
     return;
   }
   if (pathname.startsWith('/__rusty/product/runtime/') && request.method === 'POST') {

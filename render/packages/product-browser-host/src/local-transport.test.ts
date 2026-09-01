@@ -42,11 +42,11 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
     this.closed = true;
   }
 
-  addEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
+  addEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
     this.namedListeners.set(type, listener);
   }
 
-  removeEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
+  removeEventListener(type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: { readonly data: string; readonly lastEventId: string }) => void): void {
     if (this.namedListeners.get(type) === listener) this.namedListeners.delete(type);
   }
 
@@ -67,6 +67,10 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
 
   emitFragment(value: unknown, lastEventId = String(this.nextEventId++)): void {
     this.namedListeners.get('rusty-output-fragment')?.({ data: JSON.stringify(value), lastEventId });
+  }
+
+  emitBaseline(value: unknown, lastEventId = String(this.nextEventId++)): void {
+    this.namedListeners.get('rusty-output-baseline')?.({ data: JSON.stringify(value), lastEventId });
   }
 }
 
@@ -148,7 +152,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   const throwingUnsubscribe = adapter.subscribeOutputs(() => { throw new Error('listener probe'); });
   const isolatedOutputs: unknown[] = [];
   const isolatedUnsubscribe = adapter.subscribeOutputs((output) => isolatedOutputs.push(output));
-  assert.equal(FakeEventSource.instances[0]?.url, `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}outputs`);
+  assert.equal(FakeEventSource.instances[0]?.url, `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}outputs/fresh`);
   let outputSubscriptionReady = false;
   const readiness = adapter.waitUntilOutputSubscriptionReady?.().then(() => {
     outputSubscriptionReady = true;
@@ -168,6 +172,9 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   assert.equal(outputs.length, 3);
   assert.equal(isolatedOutputs.length, 3);
   assert.equal(transportErrors.length, 4);
+  const connection = adapter.connect?.();
+  FakeEventSource.instances[0]!.emitBaseline(result('connect'));
+  assert.equal((await connection)?.operation, 'connect');
   const lifecycle = await adapter.lifecycle({ kind: 'start' });
   assert.deepEqual(lifecycle.binding, RUNTIME);
   assert.equal(lifecycle.nextInputSequence, '1');

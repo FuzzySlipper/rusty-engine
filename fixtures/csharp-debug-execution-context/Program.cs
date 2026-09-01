@@ -155,6 +155,8 @@ public sealed class FixtureProduct : IEngineProduct
 
     public void Start() => ThrowIfRequested("start");
 
+    public void Attach() => ThrowIfRequested("attach");
+
     public ProductUpdateResult Update(ProductUpdate update)
     {
         ThrowIfRequested("update");

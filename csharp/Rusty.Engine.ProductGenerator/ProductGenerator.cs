@@ -233,6 +233,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     api->describe_debug = &DescribeDebug;
                     api->release_debug_result = &ReleaseDebugResult;
                     api->observe_runtime = &ObserveRuntime;
+                    api->attach = &Attach;
                     return 1;
                 }
 
@@ -262,6 +263,9 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int Start(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Start(); lifetime.StageDebugging(static debugging => debugging.RecordStarted()); });
+
+                [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+                private static int Attach(void* handle) => Invoke(handle, static lifetime => lifetime.Product.Attach());
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
                 private static int Update(void* handle, NativeProductUpdateArgs* args, NativeProductUpdateResult* result)

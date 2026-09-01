@@ -1392,6 +1392,15 @@ impl RuntimeAppearanceBridge {
         self.begin_call_with_update(None);
     }
 
+    pub(crate) fn begin_attach_call(&mut self) {
+        self.begin_call_with_update(None);
+        self.staged_mut()
+            .expect("attach begins an appearance stage")
+            .state
+            .projector
+            .reset_renderer_projection();
+    }
+
     pub(crate) fn begin_update_call(&mut self, facts: NativeProductUpdateFacts) {
         self.begin_call_with_update(Some(facts));
     }

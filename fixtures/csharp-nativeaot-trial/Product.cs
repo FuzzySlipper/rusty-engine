@@ -391,6 +391,8 @@ public sealed class Product : IEngineProduct
         Require(presentation.RetainedObjectCount == 1 && presentation.AppearanceCount == 1 && presentation.MaterialCount == 1, "appearance readout did not report retained Engine presentation facts");
     }
 
+    public void Attach() => PublishPresentation();
+
     public ProductUpdateResult Update(ProductUpdate update)
     {
         if (!_started || _paused || _shutdown)

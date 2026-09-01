@@ -144,6 +144,7 @@ impl ProductDevLifecycleOperation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevOperationKind {
+    Connect,
     Start,
     Pause,
     Resume,
@@ -1457,6 +1458,16 @@ impl<T> ProductDevRuntimeReceipt<T> {
 /// input, schedule, timeline, mutation, and projection authority. They return
 /// exact output receipts, so this trait has no subscription/callback method.
 pub trait ProductDevRuntime: Send + 'static {
+    /// Establishes one browser connection to the current runtime generation.
+    /// A concrete runtime may start from `Created` or publish a fresh baseline
+    /// for an already-active generation, but must not reset active product
+    /// state merely because another browser attached.
+    fn connect(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.lifecycle(ProductDevLifecycleOperation::Start)
+    }
+
     fn lifecycle(
         &mut self,
         operation: ProductDevLifecycleOperation,

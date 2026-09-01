@@ -81,6 +81,14 @@ impl RuntimeAppearanceProjector {
         }
     }
 
+    /// Starts a detached renderer projection while preserving the current
+    /// logical appearance and light facts. The next complete product snapshot
+    /// therefore emits a full create baseline for a fresh browser without
+    /// disturbing the retained projector used by active browsers.
+    pub fn reset_renderer_projection(&mut self) {
+        self.projector = SceneAppearanceProjector::new();
+    }
+
     /// Adds or replaces one product-authored appearance without resetting retained objects.
     pub fn insert_appearance(
         &mut self,

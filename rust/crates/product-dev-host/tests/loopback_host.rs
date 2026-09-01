@@ -1,6 +1,10 @@
 use std::{
     io::{Read, Write},
     net::{Shutdown, TcpStream},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     thread,
     time::Duration,
 };
@@ -17,6 +21,12 @@ use product_dev_host::{
 
 #[derive(Default)]
 struct FixtureRuntime;
+
+struct ReconnectRuntime {
+    started: bool,
+    starts: Arc<AtomicUsize>,
+    attaches: Arc<AtomicUsize>,
+}
 
 impl FixtureRuntime {
     fn binding() -> ProductDevRuntimeBinding {
@@ -52,6 +62,134 @@ impl FixtureRuntime {
             ],
         )
         .unwrap()
+    }
+}
+
+impl ReconnectRuntime {
+    fn operation(
+        &self,
+        operation: ProductDevOperationKind,
+        baseline: bool,
+    ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
+        let mut outputs = vec![ProductDevRuntimeOutput::runtime_readout(
+            FixtureRuntime::readout(),
+        )];
+        if baseline {
+            outputs.insert(
+                0,
+                ProductDevRuntimeOutput::binding(FixtureRuntime::binding(), CanonicalU64::new(0)),
+            );
+            outputs.push(ProductDevRuntimeOutput::complete_baseline(
+                FixtureRuntime::binding(),
+            ));
+        }
+        ProductDevRuntimeReceipt::new(
+            ProductDevOperationResult::accepted(
+                operation,
+                FixtureRuntime::binding(),
+                CanonicalU64::new(0),
+                FixtureRuntime::readout(),
+            )
+            .unwrap(),
+            outputs,
+        )
+        .unwrap()
+    }
+}
+
+impl ProductDevRuntime for ReconnectRuntime {
+    fn connect(
+        &mut self,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        let operation = if self.started {
+            self.attaches.fetch_add(1, Ordering::SeqCst);
+            ProductDevOperationKind::Connect
+        } else {
+            self.started = true;
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            ProductDevOperationKind::Start
+        };
+        Ok(self.operation(operation, true))
+    }
+
+    fn lifecycle(
+        &mut self,
+        operation: ProductDevLifecycleOperation,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(self.operation(operation.operation_kind(), true))
+    }
+
+    fn input(
+        &mut self,
+        batch: ProductDevInputBatch,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevInputResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(ProductDevRuntimeReceipt::new(
+            ProductDevInputResult::accepted(
+                batch.events().len(),
+                FixtureRuntime::binding(),
+                FixtureRuntime::readout(),
+            )
+            .unwrap(),
+            Vec::new(),
+        )
+        .unwrap())
+    }
+
+    fn advance_realtime(
+        &mut self,
+        _observed_time_ns: CanonicalU64,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(self.operation(ProductDevOperationKind::AdvanceRealtime, false))
+    }
+
+    fn admit_demand_step(
+        &mut self,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(self.operation(ProductDevOperationKind::AdmitDemandStep, false))
+    }
+
+    fn admit_external_step(
+        &mut self,
+        _step: CanonicalU64,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(self.operation(ProductDevOperationKind::AdmitExternalStep, false))
+    }
+
+    fn complete_timeline(
+        &mut self,
+        completion: ProductDevTimelineCompletion,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(ProductDevRuntimeReceipt::new(
+            ProductDevTimelineCompletionResult::accepted(
+                CanonicalU64::new(completion.envelope().ticket().value()),
+                FixtureRuntime::binding(),
+                FixtureRuntime::readout(),
+            )
+            .unwrap(),
+            Vec::new(),
+        )
+        .unwrap())
     }
 }
 
@@ -222,6 +360,51 @@ fn start_debug() -> product_dev_host::RunningProductDevHost {
     .unwrap()
 }
 
+fn start_reconnect(
+    starts: Arc<AtomicUsize>,
+    attaches: Arc<AtomicUsize>,
+) -> product_dev_host::RunningProductDevHost {
+    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    ProductDevHost::start(
+        ReconnectRuntime {
+            started: false,
+            starts,
+            attaches,
+        },
+        ProductDevHostConfig::new(0, bundle),
+    )
+    .unwrap()
+}
+
+fn open_sse(address: std::net::SocketAddr, path: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).unwrap();
+    stream
+}
+
+fn read_until(stream: &mut TcpStream, marker: &str) -> String {
+    let mut bytes = Vec::new();
+    while !String::from_utf8_lossy(&bytes).contains(marker) {
+        let mut buffer = [0_u8; 1024];
+        let count = stream.read(&mut buffer).unwrap();
+        assert_ne!(count, 0, "SSE stream closed before {marker}");
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+    String::from_utf8(bytes).unwrap()
+}
+
 fn request(origin: &str, raw: &str) -> String {
     request_bytes(origin, raw.as_bytes())
 }
@@ -361,6 +544,60 @@ fn sse_receives_runtime_receipt_outputs_without_blocking_post() {
 }
 
 #[test]
+fn fresh_sse_connects_once_then_attaches_after_retained_outputs_are_evicted() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let attaches = Arc::new(AtomicUsize::new(0));
+    let host = start_reconnect(Arc::clone(&starts), Arc::clone(&attaches));
+    let origin = host.origin();
+
+    let mut first = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let first_baseline = read_until(&mut first, "\"operation\":\"start\"");
+    assert!(first_baseline.contains("\"operation\":\"start\""));
+    drop(first);
+
+    for index in 0..=product_dev_host::MAX_OUTPUT_QUEUE_ITEMS {
+        let body = format!("{{\"observedTimeNs\":\"{}\"}}", index + 1);
+        let response = request(
+            &origin,
+            &format!("POST /__rusty/product/runtime/advance-realtime HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    }
+
+    let mut second = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let second_baseline = read_until(&mut second, "\"operation\":\"connect\"");
+    assert!(second_baseline.contains("\"operation\":\"connect\""));
+    assert!(!second_baseline.contains("event: rusty-output-lag"));
+
+    let mut simultaneous = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let simultaneous_baseline = read_until(&mut simultaneous, "\"operation\":\"connect\"");
+    assert!(simultaneous_baseline.contains("\"operation\":\"connect\""));
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    assert_eq!(attaches.load(Ordering::SeqCst), 2);
+    drop(second);
+    drop(simultaneous);
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn idle_sse_disconnects_release_subscriber_slots() {
+    let host = start();
+    for _ in 0..(product_dev_host::MAX_SSE_SUBSCRIBERS + 4) {
+        let mut stream = open_sse(host.address(), "/__rusty/product/runtime/outputs");
+        let response = read_until(&mut stream, "\r\n\r\n");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        drop(stream);
+        thread::sleep(Duration::from_millis(60));
+    }
+    let mut final_stream = open_sse(host.address(), "/__rusty/product/runtime/outputs");
+    let response = read_until(&mut final_stream, "\r\n\r\n");
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(!response.contains("DEV_HOST_SSE_BOUNDS"));
+    drop(final_stream);
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn loopback_port_zero_relocates_and_shutdown_releases_the_listener() {
     let first = start();
     let second = start();
@@ -407,7 +644,7 @@ fn slow_body_and_lagging_sse_cursor_fail_closed_while_runtime_continues() {
     for _ in 0..=product_dev_host::MAX_OUTPUT_QUEUE_ITEMS {
         assert!(request(&origin, start).starts_with("HTTP/1.1 200 OK\r\n"));
     }
-    let reset = request(&origin, "GET /__rusty/product/runtime/outputs HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nLast-Event-ID: 0\r\nConnection: close\r\n\r\n");
+    let reset = request(&origin, "GET /__rusty/product/runtime/outputs/fresh HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nLast-Event-ID: 0\r\nConnection: close\r\n\r\n");
     assert!(reset.contains("event: rusty-output-lag\n"));
     assert!(reset.contains("\"DEV_HOST_OUTPUT_LAG\""));
     host.shutdown().unwrap();

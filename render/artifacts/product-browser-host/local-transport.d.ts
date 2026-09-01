@@ -16,11 +16,11 @@ export interface ProductBrowserLocalEventSource {
         readonly lastEventId: string;
     }) => void) | null;
     onerror: ((event: unknown) => void) | null;
-    readonly addEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: {
+    readonly addEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: {
         readonly data: string;
         readonly lastEventId: string;
     }) => void) => void;
-    readonly removeEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment', listener: (event: {
+    readonly removeEventListener?: (type: 'rusty-output-lag' | 'rusty-output-fragment' | 'rusty-output-baseline', listener: (event: {
         readonly data: string;
         readonly lastEventId: string;
     }) => void) => void;

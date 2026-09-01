@@ -48,6 +48,7 @@ export type ProductBrowserLifecycleOperation =
 
 export type ProductBrowserRuntimeOperationKind =
   | ProductBrowserLifecycleOperation['kind']
+  | 'connect'
   | 'advance-realtime'
   | 'admit-demand-step'
   | 'admit-external-step';
@@ -222,6 +223,11 @@ export type ProductBrowserRuntimeTerminalFailureListener = (
  * arbitrary message method.
  */
 export interface ProductBrowserRuntimeAdapter {
+  /**
+   * Resolves the Engine-owned fresh connection baseline. Local generated
+   * hosts use this instead of issuing `start` on every browser mount.
+   */
+  readonly connect?: () => Promise<ProductBrowserRuntimeOperationResult>;
   readonly lifecycle: (
     operation: ProductBrowserLifecycleOperation,
   ) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -257,6 +263,7 @@ export interface ProductBrowserRuntimeAdapter {
 
 /** The transport kept by the generated bridge and consumed by the host. */
 export interface ProductBrowserRuntimeTransport {
+  readonly connect?: NonNullable<ProductBrowserRuntimeAdapter['connect']>;
   readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
   readonly input: ProductBrowserRuntimeAdapter['input'];
   readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
@@ -278,6 +285,9 @@ export function createProductBrowserRuntimeTransport(
     throw new TypeError('Product Browser Host runtime adapter must be an object');
   }
   requireFunction(adapter.lifecycle, 'lifecycle');
+  if (adapter.connect !== undefined) {
+    requireFunction(adapter.connect, 'connect');
+  }
   requireFunction(adapter.input, 'input');
   requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
   requireFunction(adapter.reportAnimationFeedback, 'reportAnimationFeedback');
@@ -300,6 +310,7 @@ export function createProductBrowserRuntimeTransport(
   }
   requireFunction(adapter.dispose, 'dispose');
   return Object.freeze({
+    ...(adapter.connect === undefined ? {} : { connect: adapter.connect }),
     lifecycle: adapter.lifecycle,
     input: adapter.input,
     reportAudioFeedback: adapter.reportAudioFeedback,
@@ -1086,7 +1097,8 @@ export async function mountProductBrowserHost(
     if (requiresInitialRendererFrame) {
       await transport.waitUntilOutputSubscriptionReady?.();
       if (failure !== null) throw failure;
-      const result = await queue.enqueue(() => transport.lifecycle({ kind: 'start' }));
+      const result = await queue.enqueue(() => transport.connect?.()
+        ?? transport.lifecycle({ kind: 'start' }));
       applyOperationResult(result, 'startup_failed');
       if (failure !== null) throw failure;
       const initialFrameGate = initialRendererFrameGate;
@@ -1153,7 +1165,8 @@ export async function mountProductBrowserHost(
     if (options.autoStart !== false && !runtimeStartedBeforeMount) {
       await transport.waitUntilOutputSubscriptionReady?.();
       if (failure !== null) throw failure;
-      const result = await queue.enqueue(() => transport.lifecycle({ kind: 'start' }));
+      const result = await queue.enqueue(() => transport.connect?.()
+        ?? transport.lifecycle({ kind: 'start' }));
       applyOperationResult(result, 'startup_failed');
       if (failure !== null) throw failure;
     }

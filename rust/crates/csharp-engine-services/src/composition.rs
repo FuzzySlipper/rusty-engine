@@ -330,6 +330,23 @@ impl EngineServiceSet {
         self.begin_other_services(ui_binding);
     }
 
+    /// Begins a detached browser-attachment projection. Renderer-facing
+    /// projectors rebase for a fresh consumer, while commit is deliberately
+    /// left to the caller so active runtime service state is not replaced.
+    pub fn begin_attach_call(
+        &mut self,
+        ui_binding: RuntimeUiRuntimeBinding,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.appearance.begin_attach_call();
+        self.audio.begin_call();
+        self.camera_view.begin_attach_call()?;
+        self.dynamics.begin_call();
+        self.ui.begin_call(ui_binding);
+        self.voxel_content.begin_call();
+        self.voxel_scene_presentation.begin_call();
+        Ok(())
+    }
+
     pub fn begin_update_call(
         &mut self,
         ui_binding: RuntimeUiRuntimeBinding,

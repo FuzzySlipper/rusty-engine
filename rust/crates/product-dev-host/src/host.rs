@@ -7,7 +7,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use runtime_input::decode_runtime_input_wire_events_json;
@@ -22,12 +22,12 @@ use crate::{
     ProductDevTimelineCompletion, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
     MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
     MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
-    PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const SSE_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Configuration for the fixed development host.
 #[derive(Debug, Clone)]
@@ -243,9 +243,14 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
         );
         return;
     }
-    if request.method == "GET" && request.path == format!("{PRODUCT_DEV_RUNTIME_BASE_PATH}outputs")
+    if request.method == "GET"
+        && matches!(
+            request.path.as_str(),
+            "/__rusty/product/runtime/outputs" | "/__rusty/product/runtime/outputs/fresh"
+        )
     {
-        handle_sse(stream, state, request);
+        let fresh = request.path.ends_with("/fresh");
+        handle_sse(stream, state, request, fresh);
         return;
     }
     let response = dispatch_request(&state, request);
@@ -631,12 +636,12 @@ where
             }
         }
     };
-    drop(runtime);
     let (result, outputs) = receipt.into_parts();
     let output_through = match push_outputs(&state.outputs, outputs) {
         Ok(output_through) => output_through,
         Err(error) => return HttpResponse::error(503, error.code(), error.detail()),
     };
+    drop(runtime);
     match serde_json::to_vec(&result) {
         Ok(bytes) if bytes.len() <= MAX_REQUEST_BODY_BYTES => {
             HttpResponse::bytes(200, "application/json", bytes).with_output_through(output_through)
@@ -658,6 +663,7 @@ fn handle_sse<R: ProductDevRuntime>(
     mut stream: TcpStream,
     state: Arc<HostState<R>>,
     request: HttpRequest,
+    fresh: bool,
 ) {
     if request
         .headers
@@ -683,6 +689,9 @@ fn handle_sse<R: ProductDevRuntime>(
         return;
     }
     let _subscriber = CounterGuard::new(&state.subscribers);
+    let fresh_connection = fresh && !request.headers.contains_key("last-event-id");
+    let mut private_events = Vec::new();
+    let mut connection_result = None;
     let mut cursor = match request.headers.get("last-event-id") {
         Some(value) => match parse_last_event_id(value) {
             Some(value) => value,
@@ -698,11 +707,112 @@ fn handle_sse<R: ProductDevRuntime>(
                 return;
             }
         },
+        None if fresh_connection => {
+            let mut runtime = match state.runtime.lock() {
+                Ok(runtime) => runtime,
+                Err(_) => {
+                    let _ = write_response(
+                        &mut stream,
+                        HttpResponse::error(
+                            500,
+                            "DEV_HOST_RUNTIME_POISONED",
+                            "runtime serialization lock is poisoned",
+                        ),
+                    );
+                    return;
+                }
+            };
+            let receipt = match runtime.connect() {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    let _ = write_response(
+                        &mut stream,
+                        HttpResponse::error(500, error.code(), error.diagnostic()),
+                    );
+                    return;
+                }
+            };
+            let (result, outputs) = receipt.into_parts();
+            let isolated = Mutex::new(OutputBus::default());
+            if let Err(error) = push_outputs(&isolated, outputs) {
+                let _ = write_response(
+                    &mut stream,
+                    HttpResponse::error(503, error.code(), error.detail()),
+                );
+                return;
+            }
+            let isolated = match isolated.into_inner() {
+                Ok(bus) => bus,
+                Err(_) => return,
+            };
+            let Some(connection_binding) = isolated.active_binding else {
+                let _ = write_response(
+                    &mut stream,
+                    HttpResponse::error(
+                        503,
+                        "DEV_HOST_OUTPUT_BASELINE",
+                        "runtime connection did not publish a complete binding baseline",
+                    ),
+                );
+                return;
+            };
+            let result_json = match serde_json::to_string(&result) {
+                Ok(result) => result,
+                Err(_) => {
+                    let _ = write_response(
+                        &mut stream,
+                        HttpResponse::error(
+                            500,
+                            "DEV_HOST_RESPONSE_ENCODE",
+                            "runtime connection result could not be encoded",
+                        ),
+                    );
+                    return;
+                }
+            };
+            let mut outputs = match state.outputs.lock() {
+                Ok(outputs) => outputs,
+                Err(_) => return,
+            };
+            outputs.active_binding = Some(connection_binding);
+            for mut event in isolated.events {
+                outputs.next_id = match outputs.next_id.checked_add(1) {
+                    Some(id) => id,
+                    None => return,
+                };
+                event.id = outputs.next_id;
+                private_events.push(event);
+            }
+            outputs.next_id = match outputs.next_id.checked_add(1) {
+                Some(id) => id,
+                None => return,
+            };
+            connection_result = Some((outputs.next_id, result_json));
+            let cursor = outputs.next_id;
+            drop(outputs);
+            drop(runtime);
+            cursor
+        }
         None => 0,
     };
     if write_sse_headers(&mut stream).is_err() {
         return;
     }
+    if stream.set_read_timeout(Some(SSE_POLL_INTERVAL)).is_err() {
+        return;
+    }
+    for event in private_events {
+        if write_sse_event(&mut stream, &event).is_err() {
+            return;
+        }
+    }
+    if let Some((id, result)) = connection_result {
+        let payload = format!("id: {id}\nevent: rusty-output-baseline\ndata: {result}\n\n");
+        if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
+            return;
+        }
+    }
+    let mut last_write = Instant::now();
     loop {
         if state.shutdown.load(Ordering::Acquire) {
             break;
@@ -721,19 +831,50 @@ fn handle_sse<R: ProductDevRuntime>(
             break;
         }
         for event in snapshot.events {
-            let payload = match event.event {
-                Some(name) => format!(
-                    "id: {}\nevent: {}\ndata: {}\n\n",
-                    event.id, name, event.json
-                ),
-                None => format!("id: {}\ndata: {}\n\n", event.id, event.json),
-            };
-            if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
+            if write_sse_event(&mut stream, &event).is_err() {
                 return;
             }
             cursor = event.id;
+            last_write = Instant::now();
         }
-        thread::sleep(SSE_POLL_INTERVAL);
+        if peer_disconnected(&stream) {
+            return;
+        }
+        if last_write.elapsed() >= SSE_HEARTBEAT_INTERVAL {
+            if stream.write_all(b": rusty-keep-alive\n\n").is_err() || stream.flush().is_err() {
+                return;
+            }
+            last_write = Instant::now();
+        }
+    }
+}
+
+fn write_sse_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()> {
+    let payload = match event.event {
+        Some(name) => format!(
+            "id: {}\nevent: {}\ndata: {}\n\n",
+            event.id, name, event.json
+        ),
+        None => format!("id: {}\ndata: {}\n\n", event.id, event.json),
+    };
+    stream.write_all(payload.as_bytes())?;
+    stream.flush()
+}
+
+fn peer_disconnected(stream: &TcpStream) -> bool {
+    let mut byte = [0_u8; 1];
+    match stream.peek(&mut byte) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            false
+        }
+        Err(_) => true,
     }
 }
 

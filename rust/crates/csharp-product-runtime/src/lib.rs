@@ -200,6 +200,7 @@ struct LoadedProductApi {
     debug: Option<(NativeProductExecuteDebug, NativeProductReleaseDebugResult)>,
     debug_describe: Option<(NativeProductDescribeDebug, NativeProductReleaseDebugResult)>,
     observe_runtime: Option<NativeProductObserveRuntime>,
+    attach: Option<NativeProductAction>,
 }
 
 impl LoadedProductApi {
@@ -362,6 +363,7 @@ impl LoadedProductApi {
                 product.release_debug_result,
             )?,
             observe_runtime: product.observe_runtime,
+            attach: product.attach,
             host,
         })
     }
@@ -1564,6 +1566,39 @@ impl CsharpProductRuntime {
         Ok(outputs)
     }
 
+    fn attach_outputs(
+        &mut self,
+        attach: NativeProductAction,
+    ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
+        if let Err(error) = self.services.begin_attach_call(ui_binding(&self.lifecycle)) {
+            self.services.discard_call();
+            return Err(error.into());
+        }
+        if let Err(error) = call_action(attach, self.handle, ProductDevOperationKind::Connect) {
+            self.discard_staged_call();
+            return Err(error);
+        }
+        let staged = match self.services.take_call() {
+            Ok(staged) => staged,
+            Err(error) => {
+                self.discard_staged_call();
+                return Err(error.into());
+            }
+        };
+        let outputs = match service_outputs(self.services.outputs(&staged)) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                self.discard_staged_call();
+                return Err(error);
+            }
+        };
+        // Attachment is a detached publication for one fresh browser. Keep
+        // the active runtime's retained projectors and service state intact.
+        self.services.discard_call();
+        complete_product_call(&self.api, self.handle, false, false);
+        Ok(outputs)
+    }
+
     fn receipt(
         &self,
         operation: ProductDevOperationKind,
@@ -1694,6 +1729,35 @@ impl CsharpProductRuntime {
 }
 
 impl ProductDevRuntime for CsharpProductRuntime {
+    fn connect(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        if self.lifecycle.state() == RuntimeState::Created {
+            return self.lifecycle_with_binding(ProductDevLifecycleOperation::Start, None);
+        }
+        if self.lifecycle.state() == RuntimeState::Shutdown {
+            return Err(ProductDevRuntimeError::new(
+                "CSHARP_CONNECT_STATE",
+                "a shutdown runtime cannot accept a browser connection",
+            )
+            .expect("fixed connect-state diagnostic"));
+        }
+        let attach = self.api.attach.ok_or_else(|| {
+            ProductDevRuntimeError::new(
+                "CSHARP_ATTACH_UNSUPPORTED",
+                "this product predates generated browser attachment support",
+            )
+            .expect("fixed attach-unsupported diagnostic")
+        })?;
+        let outputs = self
+            .attach_outputs(attach)
+            .map_err(|error| self.runtime_error(error))?;
+        self.receipt(
+            ProductDevOperationKind::Connect,
+            self.tag_complete_baseline(outputs),
+        )
+    }
+
     fn lifecycle(
         &mut self,
         operation: ProductDevLifecycleOperation,
@@ -2927,6 +2991,7 @@ fn checked_status(status: i32, operation: &str) -> Result<(), CsharpProductRunti
 
 fn operation_name(operation: ProductDevOperationKind) -> &'static str {
     match operation {
+        ProductDevOperationKind::Connect => "attach",
         ProductDevOperationKind::Start => "start",
         ProductDevOperationKind::Pause => "pause",
         ProductDevOperationKind::Resume => "resume",
@@ -4022,6 +4087,7 @@ mod tests {
             debug: None,
             debug_describe: None,
             observe_runtime: None,
+            attach: None,
         }
     }
 

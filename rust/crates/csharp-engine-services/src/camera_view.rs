@@ -56,6 +56,16 @@ impl RuntimeCameraViewBridge {
         self.callback_error = None;
     }
 
+    pub(crate) fn begin_attach_call(&mut self) -> Result<(), CsharpEngineServicesError> {
+        self.begin_call();
+        let staged = self
+            .staged
+            .as_mut()
+            .expect("attach begins a camera/view stage");
+        staged.sky_texture = Some(staged.state.sky_texture);
+        stage_composition(staged)
+    }
+
     pub(crate) fn discard_call(&mut self) {
         self.staged = None;
         self.callback_error = None;

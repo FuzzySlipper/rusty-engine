@@ -50,6 +50,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource
     }
 
     public void Start() { }
+    public void Attach() { }
     public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
     public void Pause() { }
     public void Resume() { }

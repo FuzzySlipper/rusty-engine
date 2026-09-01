@@ -30,7 +30,7 @@ export type ProductBrowserLifecycleOperation = {
 } | {
     readonly kind: 'report-fault';
 };
-export type ProductBrowserRuntimeOperationKind = ProductBrowserLifecycleOperation['kind'] | 'advance-realtime' | 'admit-demand-step' | 'admit-external-step';
+export type ProductBrowserRuntimeOperationKind = ProductBrowserLifecycleOperation['kind'] | 'connect' | 'advance-realtime' | 'admit-demand-step' | 'admit-external-step';
 export interface ProductBrowserRuntimeOperationResult {
     readonly accepted: boolean;
     readonly operation: ProductBrowserRuntimeOperationKind;
@@ -222,6 +222,11 @@ export type ProductBrowserRuntimeTerminalFailureListener = (failure: ProductBrow
  * arbitrary message method.
  */
 export interface ProductBrowserRuntimeAdapter {
+    /**
+     * Resolves the Engine-owned fresh connection baseline. Local generated
+     * hosts use this instead of issuing `start` on every browser mount.
+     */
+    readonly connect?: () => Promise<ProductBrowserRuntimeOperationResult>;
     readonly lifecycle: (operation: ProductBrowserLifecycleOperation) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly input: (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => Promise<ProductBrowserRuntimeInputResult>;
     readonly reportAudioFeedback: (feedback: ProductBrowserAudioFeedback) => Promise<ProductBrowserAudioFeedbackResult>;
@@ -238,6 +243,7 @@ export interface ProductBrowserRuntimeAdapter {
 }
 /** The transport kept by the generated bridge and consumed by the host. */
 export interface ProductBrowserRuntimeTransport {
+    readonly connect?: NonNullable<ProductBrowserRuntimeAdapter['connect']>;
     readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
     readonly input: ProductBrowserRuntimeAdapter['input'];
     readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
