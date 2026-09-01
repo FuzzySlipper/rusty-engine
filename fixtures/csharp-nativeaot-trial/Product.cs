@@ -14,6 +14,7 @@ public sealed class Product : IEngineProduct
     private readonly Rng _rng;
     private readonly Rng _forkedRng;
     private readonly SpatialSession _spatial;
+    private readonly VoxelScenePresentation _voxelPresentation;
     private readonly VoxelChunkLease _voxelLease;
     private readonly UiStream _uiStream;
     private readonly Appearance _appearance;
@@ -222,6 +223,10 @@ public sealed class Product : IEngineProduct
         VoxelReadout exercisedReadout = _engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel));
         Require(exercisedReadout.Present && exercisedReadout.MaterialSlot == 3,
             "voxel material readout did not preserve the accepted edit");
+        _voxelPresentation = _engine.VoxelScenePresentation.ProjectScene(
+            new ProjectVoxelSceneRequest(
+                _spatial,
+                new[] { new VoxelSceneMaterialBinding(3, _material) }));
         SpatialProjectionReadout sharedVoxelProjection = _engine.Spatial.ReadProjection(
             new SpatialProjectionReadRequest(_spatial));
         Require(sharedVoxelProjection.SourceRevision == voxelEdit.AcceptedRevision
@@ -555,6 +560,7 @@ public sealed class Product : IEngineProduct
         _rng.Dispose();
         _camera.Dispose();
         _appearance.Dispose();
+        _voxelPresentation.Dispose();
         _material.Dispose();
         _voxelLease.Dispose();
         _spatial.Dispose();
@@ -1091,6 +1097,9 @@ public sealed class Product : IEngineProduct
     private void PublishPresentation()
     {
         PublishAppearanceSnapshot();
+        VoxelScenePresentationReadout voxel = _engine.VoxelScenePresentation.RefreshScene(_voxelPresentation);
+        Require(voxel.Present && voxel.ChunkCount == 1 && voxel.MaterialCount == 1,
+            "retained voxel scene presentation did not refresh");
         _engine.Ui.PublishProjection(new UiProjection(_uiStream, ++_uiSequence, UiValue()));
     }
 

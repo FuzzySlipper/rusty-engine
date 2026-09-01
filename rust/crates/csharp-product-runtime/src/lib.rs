@@ -708,6 +708,7 @@ impl CsharpProductRuntime {
     /// pending input and lifecycle counters remain unchanged.
     pub fn exercise_updates(&mut self) -> Result<(), CsharpProductRuntimeError> {
         self.start_for_exercise()?;
+        self.exercise_fresh_attachments()?;
         let started_binding = input_binding(&self.lifecycle);
         self.exercise_ui_projection_binding(started_binding)?;
         self.input(ProductDevInputBatch::new(vec![key_press(
@@ -798,6 +799,24 @@ impl CsharpProductRuntime {
         self.exercise_selected_mode()?;
         self.exercise_timeline_completion()?;
         self.exercise_pause_resume()?;
+        Ok(())
+    }
+
+    fn exercise_fresh_attachments(&mut self) -> Result<(), CsharpProductRuntimeError> {
+        let before = self.readout();
+        let (_, first_outputs) = self.connect().map_err(exercise_runtime_error)?.into_parts();
+        assert_ui_projection_binding(&first_outputs, input_binding(&self.lifecycle))?;
+        let first_voxel = complete_voxel_baseline(&first_outputs)?;
+
+        let (_, second_outputs) = self.connect().map_err(exercise_runtime_error)?.into_parts();
+        assert_ui_projection_binding(&second_outputs, input_binding(&self.lifecycle))?;
+        let second_voxel = complete_voxel_baseline(&second_outputs)?;
+        if second_voxel != first_voxel || self.readout() != before {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_ATTACH",
+                "repeated browser attachment changed active runtime state or voxel baseline identity",
+            ));
+        }
         Ok(())
     }
 
@@ -3986,6 +4005,54 @@ fn assert_ui_projection_binding(
             "admitted product update did not publish a UI projection",
         ))
     }
+}
+
+fn complete_voxel_baseline(
+    outputs: &[ProductDevRuntimeOutput],
+) -> Result<serde_json::Value, CsharpProductRuntimeError> {
+    for output in outputs {
+        let encoded = serde_json::to_value(output).map_err(|error| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_EXERCISE_ATTACH",
+                format!("could not inspect fresh attachment output: {error}"),
+            )
+        })?;
+        if encoded.get("kind").and_then(serde_json::Value::as_str) != Some("frame") {
+            continue;
+        }
+        let Some(frame) = encoded.get("frame") else {
+            continue;
+        };
+        let is_voxel = frame
+            .get("publication")
+            .and_then(|publication| publication.get("stream"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|stream| stream.starts_with("voxel:"));
+        if !is_voxel {
+            continue;
+        }
+        let operations = frame
+            .get("ops")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_EXERCISE_ATTACH",
+                    "fresh voxel attachment frame did not expose typed operations",
+                )
+            })?;
+        let has = |expected: &str| {
+            operations.iter().any(|operation| {
+                operation.get("op").and_then(serde_json::Value::as_str) == Some(expected)
+            })
+        };
+        if has("defineMaterial") && has("create") && has("replaceMeshPayload") {
+            return Ok(frame.clone());
+        }
+    }
+    Err(CsharpProductRuntimeError::new(
+        "CSHARP_EXERCISE_ATTACH",
+        "fresh browser attachment did not publish a complete retained voxel baseline",
+    ))
 }
 
 fn host_error(error: product_dev_host::ProductDevHostError) -> CsharpProductRuntimeError {

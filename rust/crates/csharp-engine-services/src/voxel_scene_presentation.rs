@@ -80,6 +80,21 @@ impl RuntimeVoxelScenePresentationBridge {
         });
     }
 
+    pub(crate) fn begin_attach_call(&mut self) {
+        self.begin_call();
+        let staged = self
+            .staged
+            .as_mut()
+            .expect("attach begins a voxel scene presentation stage");
+        for presentation in staged.state.presentations.values_mut() {
+            // A fresh renderer has no publication revision, handles, materials,
+            // or mesh payloads. Reset only the detached clone so RefreshScene
+            // emits a complete baseline without changing the active runtime's
+            // retained projector history.
+            presentation.projector = VoxelRenderProjector::new();
+        }
+    }
+
     pub(crate) fn discard_call(&mut self) {
         self.staged = None;
     }
@@ -669,6 +684,97 @@ mod tests {
                 .iter()
                 .any(|operation| matches!(operation, RenderDiff::Destroy { .. }))
         }));
+    }
+
+    #[test]
+    fn fresh_attachment_rebases_voxel_projection_without_mutating_active_history() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = session_with_voxel(&mut spatial);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let material = material(&mut appearance);
+        let api = super::api(&mut bridge, &mut appearance);
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        let mut presentation = NativeVoxelScenePresentationHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.project_scene)(
+                    api.context,
+                    &NativeProjectVoxelSceneRequest {
+                        session,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                    &mut presentation,
+                )
+            },
+            ABI_OK
+        );
+        let initial_voxel = bridge.take_staged_call().expect("initial voxel projection");
+        bridge.commit_call(initial_voxel);
+        let initial_appearance = appearance
+            .take_staged_call()
+            .expect("initial material projection");
+        appearance.commit(initial_appearance);
+
+        let attach_frame = |bridge: &mut RuntimeVoxelScenePresentationBridge,
+                            appearance: &mut RuntimeAppearanceBridge| {
+            appearance.begin_attach_call();
+            bridge.begin_attach_call();
+            let api = super::api(bridge, appearance);
+            let mut readout = NativeVoxelScenePresentationReadout::default();
+            assert_eq!(
+                unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+                ABI_OK
+            );
+            assert!(readout.present);
+            let staged = bridge.take_staged_call().expect("detached voxel baseline");
+            assert_eq!(staged.frames.len(), 1);
+            let frame = staged.frames.into_iter().next().expect("one voxel frame");
+            assert!(frame
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, RenderDiff::DefineMaterial { .. })));
+            assert!(frame
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, RenderDiff::Create { .. })));
+            assert!(frame
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, RenderDiff::ReplaceMeshPayload { .. })));
+            bridge.discard_call();
+            appearance.discard_call();
+            frame
+        };
+
+        let first_attach = attach_frame(&mut bridge, &mut appearance);
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        let mut readout = NativeVoxelScenePresentationReadout::default();
+        assert_eq!(
+            unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+            ABI_OK
+        );
+        let active = bridge
+            .take_staged_call()
+            .expect("active incremental refresh");
+        assert_eq!(active.frames.len(), 1);
+        assert!(active.frames[0].ops.is_empty());
+        bridge.discard_call();
+        appearance.discard_call();
+
+        let second_attach = attach_frame(&mut bridge, &mut appearance);
+        assert_eq!(second_attach, first_attach);
     }
 
     #[test]
