@@ -1332,22 +1332,9 @@ impl CsharpProductRuntime {
         )?;
         self.input(ProductDevInputBatch::new(vec![admitted]))
             .map_err(exercise_runtime_error)?;
-        let native = self.pending_inputs.last().ok_or_else(|| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_DIRECT_INTENT",
-                "admitted direct intent did not reach the ProductInputEvent conversion queue",
-            )
-        })?;
-        if native.label != descriptor.id().as_bytes()
-            || native.kind != direct_intent_native_kind(descriptor.value_kind())
-            || native.payload_contract != contract.as_bytes()
-            || native.payload_data != br#"{"exercise":true}"#
-        {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_DIRECT_INTENT",
-                "direct intent was not converted to the configured safe ProductInputEvent shape",
-            ));
-        }
+        // Direct claims deliberately remain in RuntimeInputLane until the
+        // next admitted input snapshot. The generated fixture checks their
+        // copied ProductInputEvent shape in that callback.
         let digital = self
             .direct_intents
             .iter()
@@ -1371,21 +1358,6 @@ impl CsharpProductRuntime {
         )?;
         self.input(ProductDevInputBatch::new(vec![admitted]))
             .map_err(exercise_runtime_error)?;
-        let native = self.pending_inputs.last().ok_or_else(|| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_DIRECT_INTENT",
-                "admitted digital intent did not reach the ProductInputEvent conversion queue",
-            )
-        })?;
-        if native.kind != NativeInputEventKind::DirectDigital
-            || native.intent != digital.id().as_bytes()
-            || native.x != 1.0
-        {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_DIRECT_INTENT",
-                "digital intent was not converted to the configured safe ProductInputEvent shape",
-            ));
-        }
         Ok(())
     }
 
@@ -1395,10 +1367,10 @@ impl CsharpProductRuntime {
         // queuing this exact exercise payload. Keep the retry in the focused
         // exercise harness rather than making ordinary product calls retry
         // callback failures implicitly.
-        let ghost_rollback_probe = self.pending_inputs.iter().any(|event| {
-            event.kind == NativeInputEventKind::DirectProductPayload
-                && event.payload_contract.as_slice() == b"runtime.exercise.payload"
-                && event.payload_data.as_slice() == br#"{"exercise":true}"#
+        let ghost_rollback_probe = self.direct_intents.iter().any(|descriptor| {
+            descriptor.id() == "runtime.exercise"
+                && descriptor.value_kind() == IntentValueKind::ProductPayload
+                && descriptor.payload_contract() == Some("runtime.exercise.payload")
         });
         let readout_mode = self.readout().mode();
         let expected_readout_mode = match selected_mode {
@@ -1630,12 +1602,6 @@ impl CsharpProductRuntime {
         let context = self.input_lane.context().clone();
         let mapped = envelopes
             .iter()
-            .filter(|envelope| {
-                matches!(
-                    envelope.provenance(),
-                    runtime_input::IntentProvenance::Physical { .. }
-                )
-            })
             .map(|envelope| native_intent_event(envelope, &context))
             .collect::<Vec<_>>();
         self.pending_inputs.extend(mapped);
@@ -2075,9 +2041,18 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 self.input_lane
                     .ingest(event.clone())
                     .map_err(input_runtime_error)?;
-                Ok(native_event(event))
+                // Direct product claims become semantic envelopes at the
+                // admitted input snapshot. Queueing them here as raw events
+                // would bypass that ordering and deliver each claim twice.
+                Ok(match event {
+                    RuntimeInputEvent::Physical(_) => Some(native_event(event)),
+                    RuntimeInputEvent::DirectIntent(_) => None,
+                })
             })
-            .collect::<Result<Vec<_>, ProductDevRuntimeError>>()?;
+            .collect::<Result<Vec<_>, ProductDevRuntimeError>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
         self.pending_inputs.extend(native);
         let result =
             ProductDevInputResult::accepted(batch.events().len(), self.binding(), self.readout())
@@ -2858,14 +2833,6 @@ fn payload_intent(
     )
     .map(RuntimeInputEvent::DirectIntent)
     .map_err(input_error)
-}
-
-fn direct_intent_native_kind(value_kind: IntentValueKind) -> NativeInputEventKind {
-    match value_kind {
-        IntentValueKind::Digital => NativeInputEventKind::DirectDigital,
-        IntentValueKind::Axis => NativeInputEventKind::DirectAxis,
-        IntentValueKind::ProductPayload => NativeInputEventKind::DirectProductPayload,
-    }
 }
 
 fn native_input_value_kind(value_kind: IntentValueKind) -> NativeInputValueKind {
@@ -4045,27 +4012,38 @@ fn native_intent_event(
     envelope: &RuntimeIntentEnvelope,
     context: &InputContext,
 ) -> NativeInputOwned {
-    let mapping_id = match envelope.provenance() {
-        runtime_input::IntentProvenance::Physical { mapping_id } => mapping_id,
-        runtime_input::IntentProvenance::DirectUi => "",
+    let (mapping_id, provenance) = match envelope.provenance() {
+        runtime_input::IntentProvenance::Physical { mapping_id } => {
+            (mapping_id.as_str(), NativeInputProvenance::Physical)
+        }
+        runtime_input::IntentProvenance::DirectUi => ("", NativeInputProvenance::DirectUi),
     };
     let (kind, value_kind, x, payload_contract, payload_data) = match envelope.value() {
         RuntimeIntentValue::Digital { active } => (
-            NativeInputEventKind::MappedDigital,
+            match provenance {
+                NativeInputProvenance::DirectUi => NativeInputEventKind::DirectDigital,
+                _ => NativeInputEventKind::MappedDigital,
+            },
             NativeInputValueKind::Digital,
             if active { 1.0 } else { 0.0 },
             Vec::new(),
             Vec::new(),
         ),
         RuntimeIntentValue::Axis { value } => (
-            NativeInputEventKind::MappedAxis,
+            match provenance {
+                NativeInputProvenance::DirectUi => NativeInputEventKind::DirectAxis,
+                _ => NativeInputEventKind::MappedAxis,
+            },
             NativeInputValueKind::Axis,
             value.value(),
             Vec::new(),
             Vec::new(),
         ),
         RuntimeIntentValue::ProductPayload { payload } => (
-            NativeInputEventKind::MappedProductPayload,
+            match provenance {
+                NativeInputProvenance::DirectUi => NativeInputEventKind::DirectProductPayload,
+                _ => NativeInputEventKind::MappedProductPayload,
+            },
             NativeInputValueKind::ProductPayload,
             0.0,
             payload.contract().as_bytes().to_vec(),
@@ -4083,11 +4061,15 @@ fn native_intent_event(
     native.value_kind = value_kind;
     native.phase = native_input_phase(envelope.phase());
     native.edge = native_input_edge(envelope.phase());
-    native.provenance = NativeInputProvenance::Physical;
+    native.provenance = provenance;
     native.x = x;
     native.mapping_id = mapping_id.as_bytes().to_vec();
     native.intent = envelope.intent().as_bytes().to_vec();
-    native.label = native.mapping_id.clone();
+    native.label = if provenance == NativeInputProvenance::DirectUi {
+        native.intent.clone()
+    } else {
+        native.mapping_id.clone()
+    };
     native.payload_contract = payload_contract;
     native.payload_data = payload_data;
     native
@@ -4501,6 +4483,69 @@ mod tests {
     static DROP_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(ABI_OK);
     static DROP_EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
     static PRODUCT_ERROR_RELEASES: AtomicUsize = AtomicUsize::new(0);
+    static DIRECT_INPUT_FIXTURE_GATE: Mutex<()> = Mutex::new(());
+    static DIRECT_INPUT_CALLBACK_EVENTS: Mutex<Vec<Vec<DirectInputCallbackEvent>>> =
+        Mutex::new(Vec::new());
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct DirectInputCallbackEvent {
+        kind: NativeInputEventKind,
+        provenance: NativeInputProvenance,
+        phase: NativeInputPhase,
+        sequence: u64,
+        intent: Vec<u8>,
+        payload_contract: Vec<u8>,
+        payload_data: Vec<u8>,
+    }
+
+    unsafe fn copy_callback_bytes(bytes: *const u8, len: usize) -> Vec<u8> {
+        if len == 0 {
+            return Vec::new();
+        }
+        // SAFETY: the generated callback borrows every input slice for this
+        // call, and this fixture copies the requested non-empty range before
+        // returning.
+        unsafe { std::slice::from_raw_parts(bytes, len).to_vec() }
+    }
+
+    unsafe extern "C" fn direct_input_fixture_update(
+        _handle: *mut c_void,
+        args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        // SAFETY: the runtime supplies valid callback arguments for this
+        // immediate generated-boundary fixture invocation.
+        let args = unsafe { args.as_ref().expect("direct-input update arguments") };
+        // SAFETY: `events` is borrowed for this callback and has the declared
+        // count; the fixture copies fields and pointed-to bytes before return.
+        let events = unsafe { std::slice::from_raw_parts(args.events, args.event_count) };
+        let captured = events
+            .iter()
+            .map(|event| DirectInputCallbackEvent {
+                kind: event.kind,
+                provenance: event.provenance,
+                phase: event.phase,
+                sequence: event.sequence.value,
+                // SAFETY: these byte slices remain valid for this callback.
+                intent: unsafe { copy_callback_bytes(event.intent, event.intent_len) },
+                // SAFETY: these byte slices remain valid for this callback.
+                payload_contract: unsafe {
+                    copy_callback_bytes(event.payload_contract, event.payload_contract_len)
+                },
+                // SAFETY: these byte slices remain valid for this callback.
+                payload_data: unsafe {
+                    copy_callback_bytes(event.payload_data, event.payload_data_len)
+                },
+            })
+            .collect();
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("direct-input callback events")
+            .push(captured);
+        // SAFETY: the fixture owns the callback result pointer.
+        unsafe { *result = NativeProductUpdateResult::None };
+        ABI_OK
+    }
 
     fn record_drop_event(event: &'static str) {
         DROP_EVENTS.lock().expect("drop fixture events").push(event);
@@ -4638,6 +4683,12 @@ mod tests {
         }
     }
 
+    fn direct_input_fixture_api() -> LoadedProductApi {
+        let mut api = drop_fixture_api();
+        api.update = direct_input_fixture_update;
+        api
+    }
+
     fn drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
         let root = content_fixture_root(label);
         fs::create_dir_all(&root).expect("drop fixture content root");
@@ -4648,6 +4699,24 @@ mod tests {
             || Ok(drop_fixture_api()),
         )
         .expect("drop fixture runtime");
+        (runtime, root)
+    }
+
+    fn direct_input_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+        let root = content_fixture_root(label);
+        fs::create_dir_all(&root).expect("direct-input fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("direct-input fixture content");
+        let descriptor = DirectInputIntentDescriptor::product_payload(
+            "fixture.product.payload",
+            "fixture.product.payload.v1",
+        )
+        .expect("direct-input descriptor");
+        let runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(RuntimeLifecycleConfig::Demand, vec![descriptor]),
+            || Ok(direct_input_fixture_api()),
+        )
+        .expect("direct-input fixture runtime");
         (runtime, root)
     }
 
@@ -4895,6 +4964,88 @@ mod tests {
         );
         DROP_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
         fs::remove_dir_all(root).expect("remove drop fixture content");
+    }
+
+    #[test]
+    fn direct_product_payload_is_snapshot_delivered_once_after_preceding_clear() {
+        let _guard = DIRECT_INPUT_FIXTURE_GATE
+            .lock()
+            .expect("direct-input fixture gate");
+        let _drop_guard = DROP_FIXTURE_GATE
+            .lock()
+            .expect("shared callback fixture gate");
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("direct-input callback events")
+            .clear();
+        let (mut runtime, root) = direct_input_fixture_runtime("direct-payload-snapshot");
+
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start direct-input fixture");
+        runtime
+            .admit_demand_step()
+            .expect("drain start clear before the regression sequence");
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("direct-input callback events")
+            .clear();
+
+        let binding = input_binding(&runtime.lifecycle);
+        let payload = payload_intent(
+            binding,
+            2,
+            "fixture.product.payload",
+            "fixture.product.payload.v1",
+        )
+        .expect("fixture payload intent");
+        runtime
+            .input(ProductDevInputBatch::new(vec![
+                input_clear(binding, 1),
+                payload,
+            ]))
+            .expect("admit ordered clear and direct payload");
+        assert!(
+            DIRECT_INPUT_CALLBACK_EVENTS
+                .lock()
+                .expect("direct-input callback events")
+                .is_empty(),
+            "input admission must not call the product before an admitted snapshot"
+        );
+
+        runtime
+            .admit_demand_step()
+            .expect("deliver ordered clear and direct payload");
+        assert_eq!(
+            DIRECT_INPUT_CALLBACK_EVENTS
+                .lock()
+                .expect("direct-input callback events")
+                .as_slice(),
+            &[vec![
+                DirectInputCallbackEvent {
+                    kind: NativeInputEventKind::Clear,
+                    provenance: NativeInputProvenance::Physical,
+                    phase: NativeInputPhase::None,
+                    sequence: 1,
+                    intent: Vec::new(),
+                    payload_contract: Vec::new(),
+                    payload_data: Vec::new(),
+                },
+                DirectInputCallbackEvent {
+                    kind: NativeInputEventKind::DirectProductPayload,
+                    provenance: NativeInputProvenance::DirectUi,
+                    phase: NativeInputPhase::DirectUi,
+                    sequence: 2,
+                    intent: b"fixture.product.payload".to_vec(),
+                    payload_contract: b"fixture.product.payload.v1".to_vec(),
+                    payload_data: br#"{"exercise":true}"#.to_vec(),
+                },
+            ]],
+            "the admitted generated callback receives the clear then one direct semantic payload"
+        );
+
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove direct-input fixture content");
     }
 
     #[test]
