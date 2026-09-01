@@ -417,6 +417,11 @@ pub type NativeReadAudioRealizationFactAt = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeCreateMaterial =
     unsafe extern "C" fn(*mut c_void, NativeMaterialRequest, *mut NativeMaterialHandle) -> i32;
+pub type NativeCreateAuthoredMaterial = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAuthoredMaterialAppearanceRequest,
+    *mut NativeMaterialHandle,
+) -> i32;
 pub type NativeUpdateMaterial =
     unsafe extern "C" fn(*mut c_void, NativeMaterialUpdateRequest) -> i32;
 pub type NativeReplaceMaterial = unsafe extern "C" fn(
@@ -944,6 +949,7 @@ pub struct NativeAppearanceApi {
     pub destroy_light: NativeDestroyLight,
     pub read_light: NativeReadLight,
     pub read_presentation: NativeReadPresentation,
+    pub create_authored_material: NativeCreateAuthoredMaterial,
 }
 
 /// Named renderer-neutral facts. Handles identify product-owned billboard and

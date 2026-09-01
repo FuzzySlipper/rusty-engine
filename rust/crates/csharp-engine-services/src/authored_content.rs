@@ -24,6 +24,8 @@ use content_store::{
 use core_assets::{AssetHash, AssetId, AssetKind, AssetReference, AssetVersionReq};
 use core_ids::{EntityId, PrefabId, PrefabPartId, SceneId, SceneNodeId};
 use csharp_engine_abi::*;
+use render_model::RenderMaterialDescriptor;
+use render_projection::project_catalog_material;
 
 use crate::{
     composition::{borrowed_slice, borrowed_utf8, ABI_OK},
@@ -347,6 +349,37 @@ impl RuntimeAuthoredContentBridge {
         content_store: &mut crate::content_store::RuntimeContentStoreBridge,
     ) {
         self.content_store = Some(content_store);
+    }
+
+    pub(crate) fn project_renderer_material(
+        &self,
+        catalog: NativeAuthoredCatalogHandle,
+        material_id: &str,
+    ) -> Result<RenderMaterialDescriptor, crate::CsharpEngineServicesError> {
+        let material_id = AssetId::parse(material_id).map_err(|error| {
+            crate::CsharpEngineServicesError::new(
+                "CSHARP_AUTHORED_MATERIAL_ID",
+                format!("authored material identity is invalid: {error:?}"),
+            )
+        })?;
+        if material_id.kind() != AssetKind::Material {
+            return Err(crate::CsharpEngineServicesError::new(
+                "CSHARP_AUTHORED_MATERIAL_ID",
+                "authored material projection requires a material asset id",
+            ));
+        }
+        let catalog = self.catalogs.get(&catalog.value).ok_or_else(|| {
+            crate::CsharpEngineServicesError::new(
+                "CSHARP_AUTHORED_CATALOG_HANDLE",
+                "authored material projection catalog handle is not live",
+            )
+        })?;
+        project_catalog_material(catalog.catalog(), &material_id).map_err(|error| {
+            crate::CsharpEngineServicesError::new(
+                "CSHARP_AUTHORED_MATERIAL_PROJECTION",
+                format!("authored material could not be projected: {error:?}"),
+            )
+        })
     }
     fn publish_semantic_owner(
         &mut self,
@@ -4057,11 +4090,225 @@ unsafe extern "C" fn destroy_operation_diagnostic_lease(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     fn slice(value: &'static [u8]) -> NativeUtf8Slice {
         NativeUtf8Slice {
             bytes: value.as_ptr(),
             len: value.len(),
+        }
+    }
+
+    fn pinned(id: &str, version: u32, hash: &str) -> core_assets::AssetReference {
+        core_assets::AssetReference::new(
+            AssetId::parse(id).unwrap(),
+            core_assets::AssetVersionReq::Exact(version),
+            Some(AssetHash::parse(hash).unwrap()),
+        )
+    }
+
+    #[test]
+    fn authored_repeat_and_atlas_materials_project_through_appearance() {
+        let texture_hash = format!("{:x}", Sha256::digest(crate::appearance::tests::RGBA_PNG));
+        let atlas_hash = "ab".repeat(32);
+        let repeat_texture = pinned("texture/repeat", 2, &texture_hash);
+        let atlas_texture = pinned("texture/atlas", 3, &texture_hash);
+        let atlas = pinned("sprite-sheet/atlas", 4, &atlas_hash);
+        let repeat_texture_entry = CatalogEntry::new(repeat_texture.id().clone(), 2)
+            .with_hash(AssetHash::parse(&texture_hash).unwrap())
+            .with_texture(TextureDefinition {
+                width: 4,
+                height: 4,
+                filter: TextureFilter::Nearest,
+                wrap: TextureWrap::Repeat,
+            });
+        let atlas_texture_entry = CatalogEntry::new(atlas_texture.id().clone(), 3)
+            .with_hash(AssetHash::parse(&texture_hash).unwrap())
+            .with_texture(TextureDefinition {
+                width: 4,
+                height: 4,
+                filter: TextureFilter::Linear,
+                wrap: TextureWrap::Clamp,
+            });
+        let atlas_entry = CatalogEntry::new(atlas.id().clone(), 4)
+            .with_hash(AssetHash::parse(&atlas_hash).unwrap())
+            .with_dependencies(vec![atlas_texture.clone()])
+            .with_voxel_atlas(VoxelAtlasDefinition {
+                schema_version: 1,
+                texture: atlas_texture.clone(),
+                regions: vec![AtlasRegionDefinition {
+                    id: "tile".to_owned(),
+                    content_min: [1, 1],
+                    content_extent: [1, 1],
+                    padding: AtlasPadding::ONE,
+                    inset: AtlasInset::HalfTexel,
+                }],
+            });
+        let mut repeat_style = MaterialStyle::flat(asset_catalog::Rgba::WHITE);
+        repeat_style.texture = Some(repeat_texture.clone());
+        repeat_style.voxel_surface = Some(VoxelSurfaceBinding {
+            schema_version: 1,
+            mapping: VoxelSurfaceMapping::Repeat {
+                texture: repeat_texture.clone(),
+                tile_scale_cells: [2.0, 3.0],
+                tile_origin_cells: [-1.0, 4.0],
+            },
+            alpha_mode: VoxelAlphaMode::Mask { cutoff: 0.4 },
+        });
+        let repeat_material = CatalogEntry::new(AssetId::parse("material/repeat").unwrap(), 1)
+            .with_hash(AssetHash::parse(&"cd".repeat(32)).unwrap())
+            .with_dependencies(vec![repeat_texture])
+            .with_material(MaterialDefinition {
+                authority: MaterialAuthority {
+                    solid: true,
+                    collidable: true,
+                    occludes: true,
+                    structural_class: StructuralClass::Structural,
+                },
+                style: repeat_style,
+            });
+        let mut atlas_style = MaterialStyle::flat(asset_catalog::Rgba::WHITE);
+        atlas_style.texture = Some(atlas_texture);
+        atlas_style.uv_strategy = UvStrategy::Atlas;
+        atlas_style.voxel_surface = Some(VoxelSurfaceBinding {
+            schema_version: 1,
+            mapping: VoxelSurfaceMapping::Atlas {
+                atlas: atlas.clone(),
+                region: "tile".to_owned(),
+                tile_scale_cells: [5.0, 6.0],
+                tile_origin_cells: [7.0, 8.0],
+            },
+            alpha_mode: VoxelAlphaMode::Blend,
+        });
+        let atlas_material = CatalogEntry::new(AssetId::parse("material/atlas").unwrap(), 1)
+            .with_hash(AssetHash::parse(&"ef".repeat(32)).unwrap())
+            .with_dependencies(vec![atlas])
+            .with_material(MaterialDefinition {
+                authority: MaterialAuthority {
+                    solid: true,
+                    collidable: true,
+                    occludes: true,
+                    structural_class: StructuralClass::Structural,
+                },
+                style: atlas_style,
+            });
+        let admitted = AdmittedAssetCatalog::admit(AssetCatalog::from_entries(vec![
+            repeat_material,
+            atlas_material,
+            atlas_entry,
+            repeat_texture_entry,
+            atlas_texture_entry,
+        ]))
+        .expect("authored material catalog");
+        let mut authored = RuntimeAuthoredContentBridge::new();
+        authored.catalogs.insert(1, admitted);
+        authored.next_catalog = 2;
+
+        let mut content = BTreeMap::new();
+        content.insert(
+            "pattern.png".to_owned(),
+            std::sync::Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+        );
+        let mut appearance = crate::appearance::RuntimeAppearanceBridge::new(
+            render_projection::RuntimeAppearanceCatalog::default(),
+            content,
+        );
+        appearance.bind_authored_content(&authored);
+        appearance.begin_call();
+        let context = (&mut appearance as *mut crate::appearance::RuntimeAppearanceBridge).cast();
+        let mut texture = NativeRenderResourceInfo::default();
+        assert_eq!(
+            unsafe {
+                crate::appearance::open_render_resource(
+                    context,
+                    &crate::appearance::tests::resource_request("pattern.png"),
+                    &mut texture,
+                )
+            },
+            ABI_OK
+        );
+        for material_id in [b"material/repeat".as_slice(), b"material/atlas".as_slice()] {
+            let request = NativeAuthoredMaterialAppearanceRequest {
+                catalog: NativeAuthoredCatalogHandle { value: 1 },
+                material_id: NativeUtf8Slice {
+                    bytes: material_id.as_ptr(),
+                    len: material_id.len(),
+                },
+                texture: texture.handle,
+            };
+            let mut material = NativeMaterialHandle::default();
+            assert_eq!(
+                unsafe {
+                    crate::appearance::create_authored_material(context, &request, &mut material)
+                },
+                ABI_OK
+            );
+        }
+        assert_eq!(
+            unsafe { crate::appearance::publish_appearance_snapshot(context, std::ptr::null(), 0) },
+            ABI_OK
+        );
+        let call = appearance
+            .take_staged_call()
+            .expect("valid appearance call")
+            .expect("staged appearance call");
+        let frame = call
+            .outputs
+            .iter()
+            .find_map(|output| match output {
+                crate::appearance::RuntimeAppearanceCallOutput::Frame(frame) => Some(frame),
+                _ => None,
+            })
+            .expect("appearance frame");
+        let textures = frame
+            .ops
+            .iter()
+            .filter_map(|operation| match operation {
+                render_model::RenderDiff::DefineTexture { texture } => Some(texture),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let materials = frame
+            .ops
+            .iter()
+            .filter_map(|operation| match operation {
+                render_model::RenderDiff::DefineMaterial { material } => Some(material),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!((textures.len(), materials.len()), (2, 2));
+        assert!(textures.iter().any(|texture| texture.filter
+            == render_model::TextureFilter::Nearest
+            && texture.wrap == render_model::TextureWrap::Repeat
+            && texture.content_hash.as_deref() == Some(format!("sha256:{texture_hash}").as_str())));
+        assert!(textures.iter().any(|texture| texture.filter
+            == render_model::TextureFilter::Linear
+            && texture.wrap == render_model::TextureWrap::Clamp));
+        assert!(materials.iter().any(|material| matches!(
+            material
+                .voxel_surface
+                .as_ref()
+                .map(|surface| &surface.mapping),
+            Some(render_model::VoxelSurfaceMappingDescriptor::Repeat {
+                tile_scale_cells: [2.0, 3.0],
+                tile_origin_cells: [-1.0, 4.0],
+                ..
+            })
+        )));
+        assert!(materials.iter().any(|material| matches!(
+            material.voxel_surface.as_ref().map(|surface| &surface.mapping),
+            Some(render_model::VoxelSurfaceMappingDescriptor::Atlas {
+                region,
+                tile_scale_cells: [5.0, 6.0],
+                tile_origin_cells: [7.0, 8.0],
+                ..
+            }) if region.id == "tile"
+        )));
+        for material in materials {
+            let texture_id = material.texture.as_ref().expect("material texture");
+            let surface = material.voxel_surface.as_ref().expect("voxel surface");
+            assert_eq!(surface.texture(), texture_id);
+            assert!(textures.iter().any(|texture| &texture.id == texture_id));
         }
     }
 

@@ -879,6 +879,7 @@ sealed class AppearanceServiceFake : IAppearanceService
 
     public RenderResourceInfo OpenResource(RenderResourceRequest arg0) => throw new NotSupportedException();
     public Material CreateMaterial(MaterialRequest arg0) => throw new NotSupportedException();
+    public Material CreateAuthoredMaterial(AuthoredMaterialAppearanceRequest arg0) => throw new NotSupportedException();
     public void UpdateMaterial(MaterialUpdateRequest arg0) => throw new NotSupportedException();
     public Material ReplaceMaterial(MaterialUpdateRequest arg0) => throw new NotSupportedException();
     public Appearance CreatePrimitive(PrimitiveAppearanceRequest arg0) => throw new NotSupportedException();

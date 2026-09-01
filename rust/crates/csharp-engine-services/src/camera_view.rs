@@ -331,20 +331,24 @@ pub(crate) fn sky_frame(
     let Some(change) = change else {
         return Ok(None);
     };
-    let background = change
-        .map(|handle| {
-            appearance
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_SKY_TEXTURE",
-                        "sky background needs an appearance call that selected its texture",
-                    )
-                })?
-                .texture_identity(handle)
-                .map(|texture| SkyBackgroundDescriptor { texture })
-        })
-        .transpose()?;
-    RenderFrameDiff::try_from_ops(vec![RenderDiff::SetSkyBackground { background }])
+    let mut operations = Vec::with_capacity(if change.is_some() { 2 } else { 1 });
+    let background = if let Some(handle) = change {
+        let texture = appearance
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SKY_TEXTURE",
+                    "sky background needs an appearance call that selected its texture",
+                )
+            })?
+            .texture_descriptor(handle)?;
+        let identity = texture.id.clone();
+        operations.push(RenderDiff::DefineTexture { texture });
+        Some(SkyBackgroundDescriptor { texture: identity })
+    } else {
+        None
+    };
+    operations.push(RenderDiff::SetSkyBackground { background });
+    RenderFrameDiff::try_from_ops(operations)
         .map(Some)
         .map_err(|error| {
             CsharpEngineServicesError::new(

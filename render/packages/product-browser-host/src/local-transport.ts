@@ -1,3 +1,4 @@
+import { snapshotRustyApplicationProductPayloadJson } from '@rusty-engine/application-host';
 import type {
   RustyApplicationFrame,
   RustyApplicationAnimationCueDefinition,
@@ -1501,6 +1502,13 @@ function snapshotIntentValue(value: unknown): RustyApplicationRuntimeIntentValue
     case 'axis':
       requireKnownFields(record, ['kind', 'value'], 'axis intent value');
       return Object.freeze({ kind: 'axis', value: requireFiniteNumber(record['value'], 'axis intent value', -1, 1) });
+    case 'product-payload':
+      requireKnownFields(record, ['kind', 'contract', 'data'], 'product payload intent value');
+      return Object.freeze({
+        kind: 'product-payload',
+        contract: requireProductIdentity(record['contract'], 'product payload contract'),
+        data: snapshotRustyApplicationProductPayloadJson(record['data']),
+      });
     default:
       throw new TypeError('runtime intent value kind is not admitted');
   }

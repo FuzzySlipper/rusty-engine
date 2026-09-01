@@ -323,7 +323,11 @@ test('input availability wakes static realtime and demand admission without a se
     sequence: '1',
     context: 'gameplay.default',
     intent: 'fixture.regenerate',
-    value: { kind: 'digital', active: true },
+    value: {
+      kind: 'product-payload',
+      contract: 'fixture.regenerate.v1',
+      data: { seed: 7, preset: 'spread' },
+    },
   };
   const run = async (
     lifecycleMode: 'realtime' | 'demand' | 'external',

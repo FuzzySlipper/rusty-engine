@@ -1516,10 +1516,10 @@ struct AnimationController {
 }
 
 impl RuntimeAppearanceCall {
-    pub(crate) fn texture_identity(
+    pub(crate) fn texture_descriptor(
         &self,
         handle: u64,
-    ) -> Result<String, CsharpEngineServicesError> {
+    ) -> Result<TextureDescriptor, CsharpEngineServicesError> {
         let index = usize::try_from(handle.saturating_sub(1)).map_err(|_| {
             CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_HANDLE",
@@ -1538,7 +1538,12 @@ impl RuntimeAppearanceCall {
                 "sky background requires a selected texture resource",
             ));
         }
-        Ok(resource.asset_identity().to_owned())
+        resource.texture().cloned().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SKY_TEXTURE",
+                "sky background texture descriptor is not retained",
+            )
+        })
     }
 }
 
@@ -1556,6 +1561,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     ghost_plate_realization: BTreeMap<u64, GhostPlateRealizationFact>,
     animation_realization_facts: VecDeque<AnimationRealizationFact>,
     animation_realization_evicted: u64,
+    authored_content: Option<*const crate::authored_content::RuntimeAuthoredContentBridge>,
 }
 
 impl RuntimeAppearanceBridge {
@@ -1615,7 +1621,15 @@ impl RuntimeAppearanceBridge {
             ghost_plate_realization: BTreeMap::new(),
             animation_realization_facts: VecDeque::new(),
             animation_realization_evicted: 0,
+            authored_content: None,
         }
+    }
+
+    pub(crate) fn bind_authored_content(
+        &mut self,
+        authored_content: &crate::authored_content::RuntimeAuthoredContentBridge,
+    ) {
+        self.authored_content = Some(authored_content);
     }
 
     pub(crate) fn begin_call(&mut self) {
@@ -2219,10 +2233,8 @@ impl RuntimeAppearanceBridge {
                 "voxel-object material handle is not live",
             )
         })?;
-        let material = staged
-            .state
-            .projector
-            .resources_mut()
+        let resources = staged.state.projector.resources_mut();
+        let material = resources
             .materials
             .iter()
             .find(|candidate| candidate.id == *id)
@@ -2237,13 +2249,11 @@ impl RuntimeAppearanceBridge {
             .texture
             .as_ref()
             .and_then(|identity| {
-                staged
-                    .state
-                    .render_resources
+                resources
+                    .textures
                     .iter()
-                    .find(|resource| resource.asset_identity() == identity)
+                    .find(|texture| texture.id == *identity)
             })
-            .and_then(CsharpRenderResource::texture)
             .cloned();
         if material.texture.is_some() && texture.is_none() {
             return Err(CsharpEngineServicesError::new(
@@ -3057,6 +3067,111 @@ impl RuntimeAppearanceBridge {
         }
         resources.materials.push(descriptor);
         staged.state.materials.insert(handle, id);
+        Ok(NativeMaterialHandle { value: handle })
+    }
+
+    fn create_authored_material(
+        &mut self,
+        request: NativeAuthoredMaterialAppearanceRequest,
+        material_id: &str,
+    ) -> Result<NativeMaterialHandle, CsharpEngineServicesError> {
+        let authored = unsafe {
+            self.authored_content
+                .and_then(|authored_content| authored_content.as_ref())
+        }
+        .ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUTHORED_MATERIAL_COMPOSITION",
+                "authored content is not composed with Appearance",
+            )
+        })?;
+        let mut material = authored.project_renderer_material(request.catalog, material_id)?;
+        let staged = self.staged_mut()?;
+        let handle = staged.state.next_material;
+        staged.state.next_material = handle.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new("CSHARP_MATERIAL_HANDLE", "material handle overflow")
+        })?;
+        material.id = format!("material/csharp-authored-{handle}");
+
+        let texture = match material.texture.as_deref() {
+            None => {
+                if request.texture.value != 0 {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_AUTHORED_MATERIAL_TEXTURE",
+                        "untextured authored material cannot select a texture resource",
+                    ));
+                }
+                None
+            }
+            Some(_) => {
+                let index =
+                    usize::try_from(request.texture.value.checked_sub(1).ok_or_else(|| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_AUTHORED_MATERIAL_TEXTURE",
+                            "textured authored material requires a selected texture resource",
+                        )
+                    })?)
+                    .map_err(|_| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_AUTHORED_MATERIAL_TEXTURE",
+                            "authored material texture handle is invalid",
+                        )
+                    })?;
+                let resource = staged.state.render_resources.get(index).ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_AUTHORED_MATERIAL_TEXTURE",
+                        "authored material texture handle is not live",
+                    )
+                })?;
+                if resource.kind() != CsharpRenderResourceKind::Texture {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_AUTHORED_MATERIAL_TEXTURE",
+                        "authored material texture must be an admitted texture resource",
+                    ));
+                }
+                if let Some(expected_hash) = authored_voxel_texture_hash(&material) {
+                    if resource.content_hash() != expected_hash {
+                        return Err(CsharpEngineServicesError::new(
+                            "CSHARP_AUTHORED_MATERIAL_TEXTURE_HASH",
+                            "selected texture bytes do not match the resolved authored texture hash",
+                        ));
+                    }
+                }
+                let mut texture = resource.texture().cloned().ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_AUTHORED_MATERIAL_TEXTURE",
+                        "selected texture descriptor is not retained",
+                    )
+                })?;
+                texture.id = format!("texture/csharp-authored-{handle}");
+                if let Some(surface) = material.voxel_surface.as_mut() {
+                    texture.filter = surface.filter;
+                    texture.wrap = surface.wrap;
+                    texture.version = authored_voxel_texture_version(surface);
+                    retarget_voxel_surface(surface, &texture.id);
+                }
+                texture.validate().map_err(|error| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_AUTHORED_MATERIAL_TEXTURE",
+                        format!("projected authored texture is invalid: {error:?}"),
+                    )
+                })?;
+                material.texture = Some(texture.id.clone());
+                Some(texture)
+            }
+        };
+        material.validate().map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUTHORED_MATERIAL",
+                format!("projected authored material is invalid: {error:?}"),
+            )
+        })?;
+        let resources = staged.state.projector.resources_mut();
+        if let Some(texture) = texture {
+            retain_texture_descriptor(&mut resources.textures, texture)?;
+        }
+        resources.materials.push(material.clone());
+        staged.state.materials.insert(handle, material.id);
         Ok(NativeMaterialHandle { value: handle })
     }
 
@@ -7401,6 +7516,33 @@ pub(crate) unsafe extern "C" fn create_material(
     material_result(context, result, |bridge| bridge.create_material(request))
 }
 
+pub(crate) unsafe extern "C" fn create_authored_material(
+    context: *mut c_void,
+    request: *const NativeAuthoredMaterialAppearanceRequest,
+    result: *mut NativeMaterialHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    let material_id = match unsafe {
+        borrowed_utf8(
+            request.material_id.bytes,
+            request.material_id.len,
+            "authored material id",
+        )
+    } {
+        Ok(material_id) => material_id,
+        Err(error) => {
+            unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() }.callback_error = Some(error);
+            return 0;
+        }
+    };
+    material_result(context, result, |bridge| {
+        bridge.create_authored_material(request, material_id)
+    })
+}
+
 pub(crate) unsafe extern "C" fn update_material(
     context: *mut c_void,
     request: NativeMaterialUpdateRequest,
@@ -8333,6 +8475,42 @@ fn material_descriptor(
     Ok(descriptor)
 }
 
+fn authored_voxel_texture_hash(material: &RenderMaterialDescriptor) -> Option<&str> {
+    material
+        .voxel_surface
+        .as_ref()
+        .map(|surface| match &surface.mapping {
+            VoxelSurfaceMappingDescriptor::Repeat {
+                texture_content_hash,
+                ..
+            }
+            | VoxelSurfaceMappingDescriptor::Atlas {
+                texture_content_hash,
+                ..
+            } => texture_content_hash.as_str(),
+        })
+}
+
+fn authored_voxel_texture_version(surface: &VoxelSurfaceDescriptor) -> u32 {
+    match &surface.mapping {
+        VoxelSurfaceMappingDescriptor::Repeat {
+            texture_version, ..
+        }
+        | VoxelSurfaceMappingDescriptor::Atlas {
+            texture_version, ..
+        } => *texture_version,
+    }
+}
+
+fn retarget_voxel_surface(surface: &mut VoxelSurfaceDescriptor, texture_id: &str) {
+    match &mut surface.mapping {
+        VoxelSurfaceMappingDescriptor::Repeat { texture, .. }
+        | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => {
+            *texture = texture_id.to_owned();
+        }
+    }
+}
+
 fn texture_descriptor_for_material(
     material: &RenderMaterialDescriptor,
     resources: &[CsharpRenderResource],
@@ -8372,7 +8550,7 @@ fn retain_texture_descriptor(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use sha2::Digest;
 
@@ -8413,14 +8591,14 @@ mod tests {
         }
     }
 
-    pub(super) const RGBA_PNG: &[u8] = &[
+    pub(crate) const RGBA_PNG: &[u8] = &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6,
         0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68,
         255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
         130,
     ];
 
-    pub(super) fn resource_request(path: &'static str) -> NativeRenderResourceRequest {
+    pub(crate) fn resource_request(path: &'static str) -> NativeRenderResourceRequest {
         NativeRenderResourceRequest {
             path: NativeUtf8Slice {
                 bytes: path.as_ptr(),

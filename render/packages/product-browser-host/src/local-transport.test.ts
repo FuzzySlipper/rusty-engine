@@ -563,3 +563,65 @@ test('local transport hardens the JSON border before requests', async () => {
   );
   wrongContentType.dispose();
 });
+
+test('local transport carries immutable bounded product payload intents', async () => {
+  const requestBodies: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as unknown);
+      return response({ accepted: true, count: 1, binding: RUNTIME, readout: READOUT });
+    },
+    eventSource: FakeEventSource,
+  });
+  const envelope = (data: unknown): readonly RustyApplicationRuntimeInputEnvelope[] => [{
+    runtime: RUNTIME,
+    sequence: '1',
+    context: 'gameplay',
+    intent: 'regenerate',
+    value: { kind: 'product-payload', contract: 'example.regenerate.v1', data },
+  } as never];
+
+  const source = { nested: { seed: 7 }, values: [true, null, 'stable'] };
+  const request = adapter.input(envelope(source));
+  source.nested.seed = 99;
+  source.values[2] = 'mutated';
+  await request;
+  assert.deepEqual(requestBodies, [{ batch: [{
+    runtime: RUNTIME,
+    sequence: '1',
+    context: 'gameplay',
+    intent: 'regenerate',
+    value: {
+      kind: 'product-payload',
+      contract: 'example.regenerate.v1',
+      data: { nested: { seed: 7 }, values: [true, null, 'stable'] },
+    },
+  }] }]);
+
+  const accessor = {} as Record<string, unknown>;
+  Object.defineProperty(accessor, 'value', { enumerable: true, get: () => 1 });
+  const inherited = Object.create({ inherited: true }) as Record<string, unknown>;
+  inherited['value'] = 1;
+  let deep: unknown = null;
+  for (let index = 0; index < 33; index += 1) deep = [deep];
+  const nodeOverflow = Object.fromEntries(Array.from(
+    { length: 1_024 },
+    (_unused, index) => [`entry${String(index)}`, [index, index, index]],
+  ));
+  const byteOverflow = Array.from({ length: 1_024 }, () => 'x'.repeat(64));
+
+  for (const rejected of [
+    accessor,
+    inherited,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    9_007_199_254_740_992,
+    deep,
+    nodeOverflow,
+    byteOverflow,
+  ]) {
+    assert.throws(() => adapter.input(envelope(rejected)), (error: unknown) =>
+      error instanceof TypeError || error instanceof RangeError);
+  }
+  adapter.dispose();
+});

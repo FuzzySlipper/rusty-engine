@@ -58,6 +58,7 @@ fn engine_api(
     persistence_bridge: &mut RuntimePersistenceBridge,
     ui_bridge: &mut RuntimeUiBridge,
 ) -> NativeEngineApi {
+    appearance_bridge.bind_authored_content(authored_content_bridge);
     NativeEngineApi {
         look: crate::look::api(),
         dynamics: crate::dynamics::api(dynamics_bridge),
@@ -117,6 +118,7 @@ fn engine_api(
             destroy_light,
             read_light,
             read_presentation,
+            create_authored_material: crate::appearance::create_authored_material,
         },
         presentation: NativePresentationApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
@@ -599,6 +601,105 @@ mod tests {
             cells: cells.as_ptr(),
             cells_len: cells.len(),
         }
+    }
+
+    #[test]
+    fn sky_background_publishes_its_texture_before_selection_and_rebuilds_on_attach() {
+        let mut content = BTreeMap::new();
+        content.insert(
+            "sky.png".to_owned(),
+            Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+        );
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            content,
+            None,
+            None,
+        )
+        .expect("service set");
+
+        services.begin_call(binding());
+        let api = services.api();
+        let mut texture = NativeRenderResourceInfo::default();
+        assert_eq!(
+            unsafe {
+                (api.appearance.open_resource)(
+                    api.appearance.context,
+                    &crate::appearance::tests::resource_request("sky.png"),
+                    &mut texture,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_sky_background)(api.camera_view.context, texture.handle)
+            },
+            ABI_OK
+        );
+        let staged = services.take_call().expect("sky call");
+        let output = services.outputs(&staged);
+        assert!(matches!(
+            output.frames[0].ops.as_slice(),
+            [
+                render_model::RenderDiff::DefineTexture { texture: defined },
+                render_model::RenderDiff::SetSkyBackground { background: Some(background) },
+            ] if defined.id == background.texture
+                && defined.payload.is_some()
+                && defined.content_hash.is_some()
+        ));
+        services.commit_call(staged);
+
+        services
+            .begin_attach_call(binding())
+            .expect("fresh attachment stage");
+        let attachment = services.take_call().expect("fresh attachment");
+        let attachment_output = services.outputs(&attachment);
+        assert!(matches!(
+            attachment_output.frames[0].ops.as_slice(),
+            [
+                render_model::RenderDiff::DefineTexture { texture: defined },
+                render_model::RenderDiff::SetSkyBackground { background: Some(background) },
+            ] if defined.id == background.texture
+        ));
+        services.discard_call();
+
+        services.begin_call(binding());
+        let api = services.api();
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_sky_background)(
+                    api.camera_view.context,
+                    NativeRenderResourceHandle { value: u64::MAX },
+                )
+            },
+            ABI_OK,
+            "camera staging cannot inspect Appearance-owned handles"
+        );
+        let error = match services.take_call() {
+            Ok(_) => panic!("unknown texture must fail atomically"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "CSHARP_RENDER_RESOURCE_HANDLE");
+        services.discard_call();
+
+        services.begin_call(binding());
+        let api = services.api();
+        assert_eq!(
+            unsafe {
+                (api.camera_view.clear_sky_background)(
+                    api.camera_view.context,
+                    &NativeClearSkyBackgroundRequest::default(),
+                )
+            },
+            ABI_OK
+        );
+        let cleared = services.take_call().expect("clear sky");
+        let cleared_output = services.outputs(&cleared);
+        assert!(matches!(
+            cleared_output.frames[0].ops.as_slice(),
+            [render_model::RenderDiff::SetSkyBackground { background: None }]
+        ));
     }
 
     #[test]

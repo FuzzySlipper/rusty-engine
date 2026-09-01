@@ -427,6 +427,17 @@ pub struct NativeMaterialRequest {
     pub double_sided: bool,
 }
 
+/// Projects one admitted authored material through Engine-owned catalog and
+/// renderer mechanisms. The selected texture remains an Appearance resource;
+/// Rust verifies it against the resolved authored texture hash.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAuthoredMaterialAppearanceRequest {
+    pub catalog: NativeAuthoredCatalogHandle,
+    pub material_id: NativeUtf8Slice,
+    pub texture: NativeRenderResourceHandle,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMaterialUpdateRequest {

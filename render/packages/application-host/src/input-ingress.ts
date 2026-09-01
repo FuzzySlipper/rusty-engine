@@ -729,7 +729,7 @@ function validateIntentValue(
     return Object.freeze({
       kind: 'product-payload',
       contract: validateProductIdentity(value.contract, 'product payload contract'),
-      data: normalizeProductPayloadJson(value.data),
+      data: snapshotRustyApplicationProductPayloadJson(value.data),
     });
   }
   throw new TypeError('direct UI intent claim has an unknown value kind');
@@ -745,7 +745,9 @@ interface ProductPayloadJsonBudget {
  * the browser ingress boundary because `claim` is a public trusted-UI API;
  * Rust validates the same shape and budget again before adapter delivery.
  */
-function normalizeProductPayloadJson(value: unknown): RustyApplicationProductPayloadJson {
+export function snapshotRustyApplicationProductPayloadJson(
+  value: unknown,
+): RustyApplicationProductPayloadJson {
   const normalized = normalizeProductPayloadJsonValue(value, '$.data', 1, {
     nodes: 0,
     active: new WeakSet<object>(),
