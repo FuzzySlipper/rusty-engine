@@ -14,6 +14,7 @@ use std::{
     path::{Component, Path, PathBuf},
     ptr,
     sync::Arc,
+    time::Instant,
 };
 
 use csharp_engine_services::{
@@ -399,7 +400,9 @@ fn optional_callback_pair<T, U>(
         (None, None) => Ok(None),
         _ => Err(CsharpProductRuntimeError::new(
             "CSHARP_CALLBACK_PAIR",
-            format!("product supplied only one of optional callbacks `{first_name}` and `{second_name}`"),
+            format!(
+                "product supplied only one of optional callbacks `{first_name}` and `{second_name}`"
+            ),
         )),
     }
 }
@@ -820,6 +823,57 @@ impl CsharpProductRuntime {
         self.exercise_timeline_completion()?;
         self.exercise_pause_resume()?;
         Ok(())
+    }
+
+    /// Measures the ordinary demand-update path through lifecycle admission,
+    /// the generated C# callback, Engine service staging/commit, and output
+    /// conversion. This is an explicit diagnostic probe, never runtime policy.
+    pub fn performance_probe_demand(
+        &mut self,
+        iterations: u32,
+    ) -> Result<Vec<u128>, CsharpProductRuntimeError> {
+        if iterations == 0 || iterations > 256 {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_PERFORMANCE_ITERATIONS",
+                "performance probe iterations must be in 1..=256",
+            ));
+        }
+        if self.lifecycle.mode() != RuntimeMode::Demand {
+            return Err(CsharpProductRuntimeError::new(
+                "CSHARP_PERFORMANCE_MODE",
+                "performance probe requires demand lifecycle mode",
+            ));
+        }
+        if self.lifecycle.state() == RuntimeState::Created {
+            ProductDevRuntime::lifecycle(self, ProductDevLifecycleOperation::Start).map_err(
+                |error| {
+                    CsharpProductRuntimeError::new(
+                        "CSHARP_PERFORMANCE_RUNTIME",
+                        format!("{}: {}", error.code(), error.diagnostic()),
+                    )
+                },
+            )?;
+        }
+        for _ in 0..iterations.min(8) {
+            ProductDevRuntime::admit_demand_step(self).map_err(|error| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_PERFORMANCE_RUNTIME",
+                    format!("{}: {}", error.code(), error.diagnostic()),
+                )
+            })?;
+        }
+        let mut durations = Vec::with_capacity(iterations as usize);
+        for _ in 0..iterations {
+            let started = Instant::now();
+            ProductDevRuntime::admit_demand_step(self).map_err(|error| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_PERFORMANCE_RUNTIME",
+                    format!("{}: {}", error.code(), error.diagnostic()),
+                )
+            })?;
+            durations.push(started.elapsed().as_nanos());
+        }
+        Ok(durations)
     }
 
     fn exercise_fresh_attachments(&mut self) -> Result<(), CsharpProductRuntimeError> {

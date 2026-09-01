@@ -132,7 +132,7 @@ pub struct CsharpRenderResource {
     identity: String,
     content_hash: String,
     path: String,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     texture: Option<TextureDescriptor>,
     animated_mesh: Option<AnimatedMeshAsset>,
 }
@@ -186,7 +186,7 @@ impl CsharpRenderResource {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_RENDER_RESOURCE_TEXTURE",
                     "renderer texture payload did not retain its content resource identity",
-                ))
+                ));
             }
         };
         admit_bundle_resource(&path, &bytes)?;
@@ -195,7 +195,7 @@ impl CsharpRenderResource {
             identity: resource_identity,
             content_hash,
             path,
-            bytes,
+            bytes: Arc::from(bytes),
             texture: Some(descriptor),
             animated_mesh: None,
         })
@@ -222,7 +222,7 @@ impl CsharpRenderResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: Arc::from(bytes),
             texture: None,
             animated_mesh: None,
         })
@@ -251,7 +251,7 @@ impl CsharpRenderResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: Arc::from(bytes),
             texture: None,
             animated_mesh: None,
         })
@@ -284,7 +284,7 @@ impl CsharpRenderResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: Arc::from(bytes),
             texture: None,
             animated_mesh: None,
         })
@@ -346,7 +346,7 @@ impl CsharpRenderResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: Arc::from(bytes),
             texture: None,
             animated_mesh: Some(imported.animated_mesh),
         })
@@ -408,7 +408,7 @@ impl CsharpRenderResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: Arc::from(bytes),
             texture: None,
             animated_mesh: Some(imported.animated_mesh),
         })
@@ -2841,7 +2841,7 @@ impl RuntimeAppearanceBridge {
                     format!(
                         "renderer resource `{requested_path}` must be an RGBA PNG, packed .rmesh, or WOFF2 file"
                     ),
-                ))
+                ));
             }
         }?;
         let handle =
@@ -2903,19 +2903,19 @@ impl RuntimeAppearanceBridge {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_RENDER_RESOURCE_KIND",
                         "audio resources are exposed by the Audio service, not Appearance",
-                    ))
+                    ));
                 }
                 CsharpRenderResourceKind::AnimatedMesh => {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_RENDER_RESOURCE_KIND",
                         "animated GLB resources are exposed by the Animation service, not Appearance",
-                    ))
+                    ));
                 }
                 CsharpRenderResourceKind::AnimationClipPack => {
                     return Err(CsharpEngineServicesError::new(
                         "CSHARP_RENDER_RESOURCE_KIND",
                         "animation clip-pack GLB resources are exposed by the Animation service, not Appearance",
-                    ))
+                    ));
                 }
             },
             byte_length: u32::try_from(resource.bytes().len()).map_err(|_| {
@@ -3379,7 +3379,7 @@ impl RuntimeAppearanceBridge {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_STATIC_MESH_APPEARANCE",
                     "material bindings require a live static mesh appearance",
-                ))
+                ));
             }
         }
         staged
@@ -3490,7 +3490,7 @@ impl RuntimeAppearanceBridge {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_ANIMATED_MESH_APPEARANCE",
                     "material bindings require a live animated mesh appearance",
-                ))
+                ));
             }
         }
         staged
@@ -3595,7 +3595,7 @@ impl RuntimeAppearanceBridge {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_STATIC_MESH_ENCODING",
                     "unknown packed mesh encoding",
-                ))
+                ));
             }
         };
         let byte_length = u32::try_from(resource.bytes().len()).map_err(|_| {
@@ -4024,7 +4024,7 @@ impl RuntimeAppearanceBridge {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_SPRITE_ATLAS_APPEARANCE",
                     "appearance is not a sprite",
-                ))
+                ));
             }
         }
         Ok(())
@@ -4068,7 +4068,7 @@ impl RuntimeAppearanceBridge {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_SPRITE_ATLAS_APPEARANCE",
                     "appearance is not a sprite",
-                ))
+                ));
             }
         };
         let frame = atlas.frames.get(&frame_id).ok_or_else(|| {
@@ -4297,7 +4297,7 @@ impl RuntimeAppearanceBridge {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_SPRITE_PLAYBACK_TRANSITION",
                     "sprite playback control is invalid for the current state",
-                ))
+                ));
             }
         }
         playback.revision = playback.revision.checked_add(1).ok_or_else(|| {
@@ -8620,6 +8620,86 @@ pub(super) mod tests {
         }
     }
 
+    #[test]
+    fn product_call_snapshot_shares_immutable_resource_bodies() {
+        let bytes: Arc<[u8]> = Arc::from(vec![0x5a; 8 * 1024 * 1024]);
+        let pointer = bytes.as_ptr();
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.state.render_resources.push(CsharpRenderResource {
+            kind: CsharpRenderResourceKind::Mesh,
+            identity: "mesh-resource/performance-probe".to_owned(),
+            content_hash: format!("sha256:{}", "ab".repeat(32)),
+            path: "content/performance-probe.rmesh".to_owned(),
+            bytes,
+            texture: None,
+            animated_mesh: None,
+        });
+
+        bridge.begin_call();
+        let staged = bridge.staged_ref().expect("product call stage");
+        assert_eq!(staged.state.render_resources[0].bytes.as_ptr(), pointer);
+        assert_eq!(
+            staged.state.render_resources[0].bytes.len(),
+            8 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    #[ignore = "run by scripts/run-performance-regression.sh"]
+    fn performance_probe_appearance_call_stage() {
+        const ITERATIONS: usize = 10_000;
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.state.render_resources.push(CsharpRenderResource {
+            kind: CsharpRenderResourceKind::Mesh,
+            identity: "mesh-resource/performance-probe".to_owned(),
+            content_hash: format!("sha256:{}", "ab".repeat(32)),
+            path: "content/performance-probe.rmesh".to_owned(),
+            bytes: Arc::from(vec![0x5a; 8 * 1024 * 1024]),
+            texture: None,
+            animated_mesh: None,
+        });
+        for _ in 0..100 {
+            bridge.begin_call();
+            bridge.discard_call();
+        }
+        let allocated_pointer = bridge.state.render_resources[0].bytes.as_ptr();
+        let mut durations = Vec::with_capacity(ITERATIONS);
+        for _ in 0..ITERATIONS {
+            let started = std::time::Instant::now();
+            bridge.begin_call();
+            assert_eq!(
+                bridge.staged_ref().unwrap().state.render_resources[0]
+                    .bytes
+                    .as_ptr(),
+                allocated_pointer,
+            );
+            bridge.discard_call();
+            durations.push(started.elapsed().as_nanos());
+        }
+        durations.sort_unstable();
+        let median = durations[(durations.len() - 1) / 2] as f64 / 1_000_000.0;
+        let p95 =
+            durations[((durations.len() - 1) as f64 * 0.95).round() as usize] as f64 / 1_000_000.0;
+        let mean = durations.iter().sum::<u128>() as f64 / durations.len() as f64 / 1_000_000.0;
+        println!(
+            "RUSTY_PERF {}",
+            serde_json::json!({
+                "schemaVersion": 1,
+                "lane": "rust-appearance-call-stage",
+                "iterations": ITERATIONS,
+                "unit": "milliseconds",
+                "resourceBytes": 8 * 1024 * 1024,
+                "minimum": durations[0] as f64 / 1_000_000.0,
+                "median": median,
+                "p95": p95,
+                "maximum": durations[durations.len() - 1] as f64 / 1_000_000.0,
+                "mean": mean,
+            })
+        );
+    }
+
     fn appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
         NativeAppearanceFact {
             object_id: 7,
@@ -9477,7 +9557,7 @@ pub(super) mod tests {
         assert!(glb_relative_resource_uris(&packed.bytes)
             .unwrap()
             .is_empty());
-        assert_ne!(packed.bytes, external);
+        assert_ne!(packed.bytes.as_ref(), external.as_slice());
         let appearance = bridge
             .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
             .expect("animated appearance");

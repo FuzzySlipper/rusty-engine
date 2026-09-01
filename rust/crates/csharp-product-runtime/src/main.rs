@@ -1,8 +1,9 @@
 use std::{
     env, fs,
     io::{Read, Write},
-    net::{Ipv4Addr, TcpStream},
+    net::{Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use csharp_product_runtime::{
@@ -56,6 +57,15 @@ fn main() -> Result<(), String> {
             .exercise_updates()
             .map_err(|error| error.to_string())?;
     }
+    let crossover_durations = args
+        .performance_probe
+        .map(|iterations| {
+            runtime
+                .performance_probe_demand(iterations)
+                .map(|durations| (iterations, durations))
+                .map_err(|error| error.to_string())
+        })
+        .transpose()?;
     let host = ProductDevHost::start(
         runtime,
         ProductDevHostConfig::new(args.port, bundle)
@@ -85,6 +95,24 @@ fn main() -> Result<(), String> {
             host.origin()
         );
         host.shutdown().map_err(|error| error.to_string())?;
+    } else if let Some((iterations, durations)) = crossover_durations {
+        println!(
+            "RUSTY_PERF {}",
+            performance_summary("csharp-rust-crossover", iterations, &durations)
+        );
+        let output_stream = open_fresh_output_stream(host.address())?;
+        let mut host_durations = Vec::with_capacity(iterations as usize);
+        for _ in 0..iterations {
+            let started = Instant::now();
+            post_empty_json(host.address(), "/__rusty/product/runtime/admit-demand-step")?;
+            host_durations.push(started.elapsed().as_nanos());
+        }
+        println!(
+            "RUSTY_PERF {}",
+            performance_summary("product-dev-host-http", iterations, &host_durations)
+        );
+        drop(output_stream);
+        host.shutdown().map_err(|error| error.to_string())?;
     } else {
         println!(
             "C# {} product host listening at {}",
@@ -106,6 +134,85 @@ fn wait_for_process_termination() -> ! {
     }
 }
 
+fn open_fresh_output_stream(address: SocketAddr) -> Result<TcpStream, String> {
+    let mut stream = TcpStream::connect(address).map_err(|error| error.to_string())?;
+    let request = format!(
+        "GET /__rusty/product/runtime/outputs/fresh HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .map_err(|error| error.to_string())?;
+    let mut headers = Vec::with_capacity(512);
+    let mut byte = [0_u8; 1];
+    while !headers.ends_with(b"\r\n\r\n") {
+        stream
+            .read_exact(&mut byte)
+            .map_err(|error| format!("performance probe output stream failed: {error}"))?;
+        headers.push(byte[0]);
+        if headers.len() > 16 * 1024 {
+            return Err("performance probe output stream headers exceeded 16 KiB".to_owned());
+        }
+    }
+    if !headers.starts_with(b"HTTP/1.1 200") {
+        return Err(format!(
+            "performance probe output stream failed: {}",
+            String::from_utf8_lossy(&headers)
+                .lines()
+                .next()
+                .unwrap_or("empty response")
+        ));
+    }
+    stream
+        .set_read_timeout(None)
+        .map_err(|error| error.to_string())?;
+    Ok(stream)
+}
+
+fn post_empty_json(address: SocketAddr, path: &str) -> Result<(), String> {
+    let mut stream = TcpStream::connect(address).map_err(|error| error.to_string())?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| error.to_string())?;
+    if !response.starts_with("HTTP/1.1 200") {
+        return Err(format!(
+            "performance probe request {path} failed: {}",
+            response.lines().next().unwrap_or("empty response")
+        ));
+    }
+    Ok(())
+}
+
+fn performance_summary(lane: &str, iterations: u32, durations: &[u128]) -> serde_json::Value {
+    let mut sorted = durations.to_vec();
+    sorted.sort_unstable();
+    let value_at = |fraction: f64| -> f64 {
+        let index = ((sorted.len().saturating_sub(1)) as f64 * fraction).round() as usize;
+        sorted[index] as f64 / 1_000_000.0
+    };
+    let mean = sorted.iter().copied().sum::<u128>() as f64 / sorted.len() as f64 / 1_000_000.0;
+    serde_json::json!({
+        "schemaVersion": 1,
+        "lane": lane,
+        "iterations": iterations,
+        "unit": "milliseconds",
+        "minimum": value_at(0.0),
+        "median": value_at(0.5),
+        "p95": value_at(0.95),
+        "maximum": value_at(1.0),
+        "mean": mean,
+    })
+}
+
 #[derive(Debug)]
 struct Arguments {
     loader: ProductLoader,
@@ -122,6 +229,7 @@ struct Arguments {
     content_store_root: Option<PathBuf>,
     live_debug: bool,
     exercise: bool,
+    performance_probe: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -247,31 +355,56 @@ impl Arguments {
         let mut content_store_root = None;
         let mut live_debug = false;
         let mut exercise = false;
+        let mut performance_probe = None;
         let mut values = values.into_iter();
         while let Some(arg) = values.next() {
             match arg.as_str() {
-                "--loader" => loader = Some(ProductLoader::parse(&values.next().ok_or("--loader requires a value")?)?),
+                "--loader" => {
+                    loader = Some(ProductLoader::parse(
+                        &values.next().ok_or("--loader requires a value")?,
+                    )?)
+                }
                 "--library" => library = values.next().map(PathBuf::from),
                 "--runtimeconfig" => runtime_config_path = values.next().map(PathBuf::from),
                 "--bundle-dir" => bundle_dir = values.next().map(PathBuf::from),
                 "--content-dir" => content_dir = values.next().map(PathBuf::from),
-                "--port" => port = values.next().ok_or("--port requires a value")?.parse().map_err(|_| "--port must be a u16")?,
-                "--bind-host" => bind_host = values.next().ok_or("--bind-host requires an IPv4 address")?.parse().map_err(|_| "--bind-host must be an IPv4 address")?,
-                "--mode" => mode = Some(RuntimeMode::parse(&values.next().ok_or("--mode requires a value")?)?),
+                "--port" => {
+                    port = values
+                        .next()
+                        .ok_or("--port requires a value")?
+                        .parse()
+                        .map_err(|_| "--port must be a u16")?
+                }
+                "--bind-host" => {
+                    bind_host = values
+                        .next()
+                        .ok_or("--bind-host requires an IPv4 address")?
+                        .parse()
+                        .map_err(|_| "--bind-host must be an IPv4 address")?
+                }
+                "--mode" => {
+                    mode = Some(RuntimeMode::parse(
+                        &values.next().ok_or("--mode requires a value")?,
+                    )?)
+                }
                 "--persistence-root" => {
                     persistence_root = Some(PathBuf::from(
-                        values
-                            .next()
-                            .ok_or("--persistence-root requires a value")?,
+                        values.next().ok_or("--persistence-root requires a value")?,
                     ))
                 }
                 "--content-store-root" => {
-                    content_store_root = Some(PathBuf::from(values.next().ok_or("--content-store-root requires a value")?))
+                    content_store_root = Some(PathBuf::from(
+                        values
+                            .next()
+                            .ok_or("--content-store-root requires a value")?,
+                    ))
                 }
                 "--live-debug" => live_debug = true,
-                "--direct-intent" => direct_intents.push(parse_direct_intent(
-                    &values.next().ok_or("--direct-intent requires id=digital, id=axis, or id=payload:contract")?,
-                )?),
+                "--direct-intent" => {
+                    direct_intents.push(parse_direct_intent(&values.next().ok_or(
+                        "--direct-intent requires id=digital, id=axis, or id=payload:contract",
+                    )?)?)
+                }
                 "--physical-mapping" => {
                     if physical_mappings.len() == MAX_PHYSICAL_MAPPINGS {
                         return Err(format!(
@@ -279,13 +412,28 @@ impl Arguments {
                         ));
                     }
                     physical_mappings.push(parse_physical_mapping(
-                        &values.next().ok_or("--physical-mapping requires a declaration")?,
+                        &values
+                            .next()
+                            .ok_or("--physical-mapping requires a declaration")?,
                     )?);
                 }
                 "--exercise" => exercise = true,
-                "--help" => return Err(format!(
-                    "usage: csharp-product-runtime [--loader <nativeaot|coreclr>] --library <product.so|product.dll> [--runtimeconfig <product.runtimeconfig.json>] --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--live-debug] [--exercise]\n\n`--live-debug` explicitly admits the trusted product live-debug HTTP routes; they are absent by default. The default loader is `nativeaot`, preserving the existing shared-library workflow and its generated `rusty_product_bind` symbol. Select `coreclr` explicitly for development-only managed loading; it requires --runtimeconfig and resolves the same generated NativeProductApi bind entry point through nethost/hostfxr.\n\n{PHYSICAL_MAPPING_USAGE}"
-                )),
+                "--performance-probe" => {
+                    let iterations = values
+                        .next()
+                        .ok_or("--performance-probe requires an iteration count")?
+                        .parse::<u32>()
+                        .map_err(|_| "--performance-probe must be an integer in 1..=256")?;
+                    if iterations == 0 || iterations > 256 {
+                        return Err("--performance-probe must be in 1..=256".to_owned());
+                    }
+                    performance_probe = Some(iterations);
+                }
+                "--help" => {
+                    return Err(format!(
+                        "usage: csharp-product-runtime [--loader <nativeaot|coreclr>] --library <product.so|product.dll> [--runtimeconfig <product.runtimeconfig.json>] --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--live-debug] [--exercise] [--performance-probe <1..=256>]\n\n`--live-debug` explicitly admits the trusted product live-debug HTTP routes; they are absent by default. `--performance-probe` runs bounded demand-update crossover and local HTTP timing, prints RUSTY_PERF JSON, and exits. The default loader is `nativeaot`, preserving the existing shared-library workflow and its generated `rusty_product_bind` symbol. Select `coreclr` explicitly for development-only managed loading; it requires --runtimeconfig and resolves the same generated NativeProductApi bind entry point through nethost/hostfxr.\n\n{PHYSICAL_MAPPING_USAGE}"
+                    ));
+                }
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
         }
@@ -304,7 +452,14 @@ impl Arguments {
             content_store_root,
             live_debug,
             exercise,
+            performance_probe,
         };
+        if arguments.exercise && arguments.performance_probe.is_some() {
+            return Err("--exercise and --performance-probe are mutually exclusive".to_owned());
+        }
+        if arguments.performance_probe.is_some() && !matches!(arguments.mode, RuntimeMode::Demand) {
+            return Err("--performance-probe requires --mode demand".to_owned());
+        }
         match (arguments.loader, &arguments.runtime_config_path) {
             (ProductLoader::CoreClr, None) => {
                 return Err(
@@ -513,7 +668,7 @@ fn parse_keyboard_control(value: &str) -> Result<KeyboardControl, String> {
         _ => {
             return Err(format!(
                 "--physical-mapping keyboard control `{value}` is unsupported"
-            ))
+            ));
         }
     };
     Ok(control)
@@ -559,7 +714,7 @@ fn parse_controller_button(value: &str) -> Result<ControllerButton, String> {
         _ => {
             return Err(format!(
                 "--physical-mapping controller button `{value}` is unsupported"
-            ))
+            ));
         }
     }
 }

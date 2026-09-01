@@ -25,7 +25,6 @@ use crate::{
 };
 
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
-const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const SSE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -76,9 +75,6 @@ impl ProductDevHost {
     ) -> Result<RunningProductDevHost, ProductDevHostError> {
         let listener = TcpListener::bind(SocketAddr::from((config.bind_host, config.port)))
             .map_err(|error| ProductDevHostError::io("DEV_HOST_BIND", error))?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|error| ProductDevHostError::io("DEV_HOST_LISTENER_MODE", error))?;
         let address = listener
             .local_addr()
             .map_err(|error| ProductDevHostError::io("DEV_HOST_ADDRESS", error))?;
@@ -212,9 +208,6 @@ fn accept_loop<R: ProductDevRuntime>(
                         state.connections.fetch_sub(1, Ordering::AcqRel);
                     }
                 }
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(ACCEPT_POLL_INTERVAL)
             }
             Err(_) => break,
         }
@@ -363,7 +356,7 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
                 500,
                 "DEV_HOST_RUNTIME_POISONED",
                 "runtime serialization lock is poisoned",
-            )
+            );
         }
     };
     let receipt = match runtime.describe_debug() {
@@ -394,7 +387,7 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
     let receipt = match runtime.execute_debug(command) {
         Ok(receipt) => receipt,
         Err(error) => {
-            return debug_text_error(500, &format!("{}: {}", error.code(), error.diagnostic()))
+            return debug_text_error(500, &format!("{}: {}", error.code(), error.diagnostic()));
         }
     };
     drop(runtime);
@@ -402,7 +395,7 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
     let output_through = match push_outputs(&state.outputs, outputs) {
         Ok(output_through) => output_through,
         Err(error) => {
-            return debug_text_error(503, &format!("{}: {}", error.code(), error.detail()))
+            return debug_text_error(503, &format!("{}: {}", error.code(), error.detail()));
         }
     };
     HttpResponse::text(
@@ -466,7 +459,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
                 400,
                 "DEV_HOST_INPUT_DECODE",
                 "input batch could not be encoded",
-            )
+            );
         }
     };
     let events = match decode_runtime_input_wire_events_json(&batch_json) {
@@ -476,7 +469,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
                 400,
                 "DEV_HOST_INPUT_DECODE",
                 "input batch is not a strict runtime-input wire batch",
-            )
+            );
         }
     };
     call_runtime(
@@ -651,7 +644,7 @@ where
                 500,
                 "DEV_HOST_RUNTIME_POISONED",
                 "runtime serialization lock is poisoned",
-            )
+            );
         }
     };
     let receipt = match call(&mut runtime) {
@@ -660,7 +653,7 @@ where
             return match error_result(error) {
                 Ok(result) => json_response(200, &result),
                 Err(host_error) => HttpResponse::error(500, host_error.code(), host_error.detail()),
-            }
+            };
         }
     };
     let (result, outputs) = receipt.into_parts();
@@ -1328,7 +1321,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
                     400,
                     "DEV_HOST_REQUEST_EOF",
                     "request ended before headers",
-                ))
+                ));
             }
             Ok(count) => {
                 bytes.extend_from_slice(&buffer[..count]);
@@ -1368,7 +1361,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
                     400,
                     "DEV_HOST_REQUEST_READ",
                     "could not read request",
-                ))
+                ));
             }
         }
     }
@@ -1452,7 +1445,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
                     400,
                     "DEV_HOST_BODY_EOF",
                     "request ended before body",
-                ))
+                ));
             }
             Ok(count) => body.extend_from_slice(&buffer[..count]),
             Err(error)
@@ -1472,7 +1465,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
                     400,
                     "DEV_HOST_BODY_READ",
                     "could not read request body",
-                ))
+                ));
             }
         }
     }
