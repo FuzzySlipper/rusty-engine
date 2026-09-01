@@ -31,6 +31,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
       ? {}
       : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
   }),
+  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, runtime: feedback.runtime }),
   advanceRealtime: async () => ({ accepted: true, operation: 'advance-realtime' }),
   subscribeOutputs: () => () => undefined,
   dispose: () => { root.dataset['transportDisposed'] = 'true'; },

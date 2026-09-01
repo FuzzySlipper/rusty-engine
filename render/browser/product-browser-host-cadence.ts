@@ -75,6 +75,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
       ? {}
       : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
   }),
+  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, runtime: feedback.runtime }),
   advanceRealtime: async (observedTimeNs) => {
     window.__rustyProductCadenceAdvanceCalls = (window.__rustyProductCadenceAdvanceCalls ?? 0) + 1;
     const active = (window.__rustyProductCadenceActiveRequests ?? 0) + 1;

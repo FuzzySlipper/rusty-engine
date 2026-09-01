@@ -408,6 +408,50 @@ export interface RustyApplicationVoxelSpriteReceipt {
     readonly diagnostics: readonly RustyApplicationVoxelSpriteDiagnostic[];
     readonly readout: RustyApplicationVoxelSpriteReadout;
 }
+/** Focused renderer-owned retained ghost facts; no backend object crosses this port. */
+export interface RustyApplicationGhostPlateReadout {
+    readonly activePlates: number;
+    readonly plates: readonly {
+        readonly handle: number;
+        readonly source: number;
+        readonly sourceMatch: boolean;
+        readonly currentSector: number;
+        readonly localAzimuthDegrees: number | null;
+        readonly capture: {
+            readonly resolution: number;
+            readonly azimuthDegrees: number;
+            readonly elevationDegrees: number;
+            readonly near: number;
+            readonly far: number;
+            readonly fieldOfViewDegrees: number;
+            readonly lighting: {
+                readonly mode: 'scene' | 'isolated';
+            };
+        };
+        readonly config: {
+            readonly depthRetention: number;
+            readonly anchorPolicy: 'bounds-center' | 'bounds-normalized';
+            readonly anchorValue: number;
+            readonly plateMapping: 'plate-locked' | 'projective-surface';
+            readonly shellMode: 'whole-mesh' | 'strict-source' | 'repaired-source';
+            readonly shellDepthEpsilon: number;
+            readonly sectorCount: 1 | 4 | 8 | 16;
+            readonly sectorHysteresisDegrees: number;
+        };
+        readonly fallbackActive: boolean;
+        readonly fallbackReason: string | null;
+        /** Closed GhostPlateLimitationMask bits; no renderer limitation strings cross this port. */
+        readonly limitationMask: number;
+        readonly preparationCpuMilliseconds: number | null;
+        readonly captureCpuSubmissionMilliseconds: number | null;
+        readonly retainedResourceCounts: {
+            readonly sectors: number;
+            readonly meshes: number;
+            readonly materials: number;
+            readonly borrowedTextures: number;
+        };
+    }[];
+}
 /** Experimental renderer attachment. It becomes stale when application content is replaced. */
 export interface RustyApplicationVoxelSpriteExperimentPort {
     readonly create: (definition: RustyApplicationVoxelSpriteDefinition) => RustyApplicationVoxelSpriteReceipt;
@@ -541,6 +585,7 @@ export interface RustyApplicationRendererPort {
     /** Read Engine-realized audio facts without exposing the browser audio owner. */
     readonly audioRealizedFacts: () => RustyApplicationAudioRealizedFactsReadout | null;
     readonly animationRealizedFacts: () => RustyApplicationAnimationRealizedFactsReadout | null;
+    readonly ghostPlateReadout: () => RustyApplicationGhostPlateReadout | null;
     /** Acknowledge only the submitted Engine-realized audio fact range. */
     readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
     readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;

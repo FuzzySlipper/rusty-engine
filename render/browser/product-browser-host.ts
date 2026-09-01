@@ -106,6 +106,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
       ? {}
       : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
   }),
+  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, runtime: feedback.runtime }),
   advanceRealtime: async (observedTimeNs) => {
     realtimeTicks.push(observedTimeNs);
     emit({ kind: 'runtime-readout', readout: runtimeReadout('running') });
