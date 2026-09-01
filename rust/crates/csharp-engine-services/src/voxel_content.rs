@@ -732,6 +732,19 @@ impl RuntimeVoxelContentBridge {
         });
     }
 
+    /// Starts a detached renderer attachment without changing retained product
+    /// owners. The fresh projector lives only in the staged clone, so a
+    /// product update republishes its existing presentation as a complete
+    /// baseline while a failed attachment leaves the active projector intact.
+    pub(crate) fn begin_attach_call(&mut self) {
+        self.begin_call();
+        let staged = self
+            .staged_presentation
+            .as_mut()
+            .expect("attach begins a voxel content presentation stage");
+        staged.state.projector = VoxelObjectRenderProjector::new();
+    }
+
     pub(crate) fn discard_call(&mut self) {
         self.staged_presentation = None;
     }
@@ -2414,7 +2427,7 @@ mod tests {
     };
 
     #[test]
-    fn projects_retained_voxel_objects_through_staged_renderer_frames_and_releases_them() {
+    fn retained_voxel_object_presentation_rebases_for_fresh_attachment_and_releases_exactly() {
         let mut bridge = RuntimeVoxelContentBridge::new();
         let mut appearance =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
@@ -2519,6 +2532,147 @@ mod tests {
         bridge.commit_call(staged);
         let staged_appearance = appearance.take_staged_call().expect("staged material");
         appearance.commit(staged_appearance);
+
+        let retained_object = Arc::clone(
+            &bridge
+                .presentation
+                .presentations
+                .get(&presentation.value)
+                .expect("committed presentation")
+                .object,
+        );
+
+        // An attach stage starts with a fresh renderer projector but keeps the
+        // same retained product presentation. A rejected operation must not
+        // replace the active projector or its owner.
+        appearance.begin_attach_call();
+        bridge.begin_attach_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        assert_eq!(
+            unsafe {
+                (api.update_object_presentation)(
+                    api.context,
+                    &NativeUpdateVoxelObjectPresentationRequest {
+                        presentation,
+                        runtime_frame: 99,
+                        transform: NativeTransform {
+                            translation: NativeVec3::default(),
+                            rotation: NativeQuat {
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                w: 1.0,
+                            },
+                            scale: NativeVec3 {
+                                x: 1.0,
+                                y: 1.0,
+                                z: 1.0,
+                            },
+                        },
+                        visible: true,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                )
+            },
+            0,
+            "invalid attach update leaves the staged presentation unchanged"
+        );
+        let rejected_attach = bridge.take_staged_call().expect("staged rejected attach");
+        assert!(rejected_attach.frames.is_empty());
+        assert!(Arc::ptr_eq(
+            &retained_object,
+            &rejected_attach
+                .state
+                .presentations
+                .get(&presentation.value)
+                .expect("staged retained presentation")
+                .object,
+        ));
+        appearance.discard_call();
+        assert!(Arc::ptr_eq(
+            &retained_object,
+            &bridge
+                .presentation
+                .presentations
+                .get(&presentation.value)
+                .expect("active retained presentation")
+                .object,
+        ));
+
+        appearance.begin_attach_call();
+        bridge.begin_attach_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        assert_eq!(
+            unsafe {
+                (api.update_object_presentation)(
+                    api.context,
+                    &NativeUpdateVoxelObjectPresentationRequest {
+                        presentation,
+                        runtime_frame: 0,
+                        transform: NativeTransform {
+                            translation: NativeVec3::default(),
+                            rotation: NativeQuat {
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                w: 1.0,
+                            },
+                            scale: NativeVec3 {
+                                x: 1.0,
+                                y: 1.0,
+                                z: 1.0,
+                            },
+                        },
+                        visible: true,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                )
+            },
+            ABI_OK
+        );
+        let rebase = bridge.take_staged_call().expect("staged attach baseline");
+        assert_eq!(rebase.frames.len(), 1, "one attach update emits one frame");
+        let baseline = &rebase.frames[0];
+        assert_eq!(
+            baseline
+                .ops
+                .iter()
+                .filter(|operation| matches!(operation, RenderDiff::DefineMaterial { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            baseline
+                .ops
+                .iter()
+                .filter(|operation| matches!(operation, RenderDiff::DefineVoxelObject { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            baseline
+                .ops
+                .iter()
+                .filter(|operation| matches!(
+                    operation,
+                    RenderDiff::CreateVoxelObjectInstance { .. }
+                ))
+                .count(),
+            1
+        );
+        assert!(Arc::ptr_eq(
+            &retained_object,
+            &rebase
+                .state
+                .presentations
+                .get(&presentation.value)
+                .expect("rebased retained presentation")
+                .object,
+        ));
+        assert_eq!(rebase.state.next_presentation, 2);
+        appearance.discard_call();
 
         appearance.begin_call();
         bridge.begin_call();

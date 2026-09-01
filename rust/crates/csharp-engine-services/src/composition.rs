@@ -342,7 +342,7 @@ impl EngineServiceSet {
         self.camera_view.begin_attach_call()?;
         self.dynamics.begin_call();
         self.ui.begin_call(ui_binding);
-        self.voxel_content.begin_call();
+        self.voxel_content.begin_attach_call();
         self.voxel_scene_presentation.begin_attach_call();
         Ok(())
     }
