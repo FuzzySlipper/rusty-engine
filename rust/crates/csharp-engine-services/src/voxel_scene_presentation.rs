@@ -29,12 +29,13 @@ struct RetainedVoxelScenePresentation {
     session: NativeSpatialSessionHandle,
     materials: BTreeMap<u16, RenderMaterialDescriptor>,
     textures: BTreeMap<String, TextureDescriptor>,
-    projector: VoxelRenderProjector,
+    renderer_slots: BTreeMap<u16, u16>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct VoxelScenePresentationState {
     presentations: BTreeMap<u64, RetainedVoxelScenePresentation>,
+    projector: VoxelRenderProjector,
     next_presentation: u64,
 }
 
@@ -59,6 +60,7 @@ impl RuntimeVoxelScenePresentationBridge {
             spatial,
             state: VoxelScenePresentationState {
                 presentations: BTreeMap::new(),
+                projector: VoxelRenderProjector::new(),
                 next_presentation: 1,
             },
             staged: None,
@@ -86,13 +88,11 @@ impl RuntimeVoxelScenePresentationBridge {
             .staged
             .as_mut()
             .expect("attach begins a voxel scene presentation stage");
-        for presentation in staged.state.presentations.values_mut() {
-            // A fresh renderer has no publication revision, handles, materials,
-            // or mesh payloads. Reset only the detached clone so RefreshScene
-            // emits a complete baseline without changing the active runtime's
-            // retained projector history.
-            presentation.projector = VoxelRenderProjector::new();
-        }
+        // A fresh renderer has no publication revision, handles, materials,
+        // or mesh payloads. Reset only the detached clone so RefreshScene
+        // emits a complete baseline without changing the active runtime's
+        // retained projector history.
+        staged.state.projector = VoxelRenderProjector::new();
     }
 
     pub(crate) fn discard_call(&mut self) {
@@ -154,13 +154,21 @@ impl RuntimeVoxelScenePresentationBridge {
                 "voxel scene presentation handle space overflowed",
             )
         })?;
+        let renderer_slots = allocate_renderer_slots(
+            materials.keys().copied(),
+            staged
+                .state
+                .presentations
+                .values()
+                .flat_map(|presentation| presentation.renderer_slots.values().copied()),
+        )?;
         staged.state.presentations.insert(
             value,
             RetainedVoxelScenePresentation {
                 session: request.session,
                 materials,
                 textures,
-                projector: VoxelRenderProjector::new(),
+                renderer_slots,
             },
         );
         self.refresh(NativeVoxelScenePresentationHandle { value })?;
@@ -176,14 +184,15 @@ impl RuntimeVoxelScenePresentationBridge {
         let presentation = staged
             .state
             .presentations
-            .get_mut(&handle.value)
+            .get(&handle.value)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
                     "voxel scene presentation handle is not retained",
                 )
             })?;
-        let (frame, readout) = project_presentation(handle, presentation, &spatial)?;
+        let readout = presentation_readout(presentation, &spatial)?;
+        let frame = project_all_presentations(&mut staged.state, &spatial)?;
         staged.frames.push(frame);
         Ok(readout)
     }
@@ -207,6 +216,30 @@ impl RuntimeVoxelScenePresentationBridge {
         let (materials, textures) =
             self.materials_for_scene(&scene, request.materials, request.materials_len)?;
         let staged = self.staged_mut()?;
+        let retained_slots = staged
+            .state
+            .presentations
+            .get(&request.presentation.value)
+            .expect("presentation existence was checked before material resolution")
+            .renderer_slots
+            .iter()
+            .filter(|(source_slot, _)| materials.contains_key(source_slot))
+            .map(|(source_slot, renderer_slot)| (*source_slot, *renderer_slot))
+            .collect::<BTreeMap<_, _>>();
+        let missing_slots = materials
+            .keys()
+            .copied()
+            .filter(|slot| !retained_slots.contains_key(slot))
+            .collect::<Vec<_>>();
+        let occupied = staged
+            .state
+            .presentations
+            .iter()
+            .filter(|(handle, _)| **handle != request.presentation.value)
+            .flat_map(|(_, presentation)| presentation.renderer_slots.values().copied())
+            .chain(retained_slots.values().copied())
+            .collect::<Vec<_>>();
+        let new_slots = allocate_renderer_slots(missing_slots, occupied)?;
         let presentation = staged
             .state
             .presentations
@@ -214,6 +247,8 @@ impl RuntimeVoxelScenePresentationBridge {
             .expect("presentation existence was checked before material resolution");
         presentation.materials = materials;
         presentation.textures = textures;
+        presentation.renderer_slots = retained_slots;
+        presentation.renderer_slots.extend(new_slots);
         self.refresh(request.presentation)
     }
 
@@ -223,7 +258,7 @@ impl RuntimeVoxelScenePresentationBridge {
     ) -> Result<(), CsharpEngineServicesError> {
         let spatial = self.spatial.clone();
         let staged = self.staged_mut()?;
-        let mut presentation = staged
+        staged
             .state
             .presentations
             .remove(&handle.value)
@@ -233,7 +268,7 @@ impl RuntimeVoxelScenePresentationBridge {
                     "voxel scene presentation handle is not retained",
                 )
             })?;
-        let frame = clear_presentation(&mut presentation, &spatial)?;
+        let frame = project_all_presentations(&mut staged.state, &spatial)?;
         staged.frames.push(frame);
         Ok(())
     }
@@ -249,12 +284,10 @@ impl RuntimeVoxelScenePresentationBridge {
                 "voxel scene presentation count exceeded the C# receipt range",
             )
         })?;
-        for presentation in staged.state.presentations.values_mut() {
-            staged
-                .frames
-                .push(clear_presentation(presentation, &spatial)?);
-        }
         staged.state.presentations.clear();
+        staged
+            .frames
+            .push(project_all_presentations(&mut staged.state, &spatial)?);
         Ok(NativeVoxelScenePresentationClearReceipt {
             cleared_count,
             retained_count: 0,
@@ -305,8 +338,7 @@ impl RuntimeVoxelScenePresentationBridge {
         let resolved = slots
             .into_iter()
             .map(|(slot, material)| {
-                let (mut descriptor, texture) = appearance.voxel_material_projection(material)?;
-                descriptor.id = voxel_material_id(slot);
+                let (descriptor, texture) = appearance.voxel_material_projection(material)?;
                 Ok((slot, descriptor, texture))
             })
             .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
@@ -322,25 +354,43 @@ impl RuntimeVoxelScenePresentationBridge {
     }
 }
 
-fn project_presentation(
-    handle: NativeVoxelScenePresentationHandle,
-    presentation: &mut RetainedVoxelScenePresentation,
+fn project_all_presentations(
+    state: &mut VoxelScenePresentationState,
     spatial: &SpatialCollisionSource,
-) -> Result<(RenderFrameDiff, NativeVoxelScenePresentationReadout), CsharpEngineServicesError> {
-    let scene = spatial.scene(presentation.session)?;
-    let instance_id = format!("csharp-voxel-scene-presentation-{}", handle.value);
-    let asset_id = format!("spatial-session-{}", presentation.session.value);
-    let result = presentation
+) -> Result<RenderFrameDiff, CsharpEngineServicesError> {
+    let scenes = state
+        .presentations
+        .iter()
+        .map(|(handle, presentation)| {
+            spatial
+                .scene(presentation.session)
+                .map(|scene| (*handle, presentation.session, scene))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let instances = scenes
+        .iter()
+        .map(|(handle, session, scene)| VoxelProjectionInstance {
+            instance_id: presentation_instance_id(*handle),
+            asset_id: format!("spatial-session-{}", session.value),
+            transform: Transform::IDENTITY,
+            scene,
+        })
+        .collect::<Vec<_>>();
+    let material_slots = state
+        .presentations
+        .iter()
+        .map(|(handle, presentation)| {
+            (
+                presentation_instance_id(*handle),
+                presentation.renderer_slots.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let materials = renderer_materials(&state.presentations)?;
+    let textures = presentation_textures(&state.presentations);
+    let result = state
         .projector
-        .project(
-            &[VoxelProjectionInstance {
-                instance_id,
-                asset_id,
-                transform: Transform::IDENTITY,
-                scene: &scene,
-            }],
-            &presentation.materials,
-        )
+        .project_mapped(&instances, &materials, &material_slots)
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_PRESENTATION", format!("{error:?}"))
         })?;
@@ -357,8 +407,7 @@ fn project_presentation(
         let mut operations = used_textures
             .into_iter()
             .map(|identity| {
-                presentation
-                    .textures
+                textures
                     .get(&identity)
                     .cloned()
                     .map(|texture| RenderDiff::DefineTexture { texture })
@@ -386,39 +435,100 @@ fn project_presentation(
             CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_PRESENTATION", format!("{error:?}"))
         })?;
     }
-    Ok((
-        frame,
-        NativeVoxelScenePresentationReadout {
-            present: true,
-            source_revision: scene.source_revision().raw(),
-            mesh_revision: scene.projection_revisions().mesh().raw(),
-            chunk_count: u64::try_from(result.readout.chunk_count).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_SCENE_PRESENTATION",
-                    "voxel scene chunk count exceeded the C# receipt range",
-                )
-            })?,
-            material_count: u32::try_from(presentation.materials.len()).map_err(|_| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_VOXEL_SCENE_PRESENTATION",
-                    "voxel scene material count exceeded the C# receipt range",
-                )
-            })?,
-        },
-    ))
+    Ok(frame)
 }
 
-fn clear_presentation(
-    presentation: &mut RetainedVoxelScenePresentation,
-    _spatial: &SpatialCollisionSource,
-) -> Result<RenderFrameDiff, CsharpEngineServicesError> {
-    presentation
-        .projector
-        .project(&[], &BTreeMap::new())
-        .map(|result| result.frame)
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_VOXEL_SCENE_PRESENTATION", format!("{error:?}"))
+fn presentation_readout(
+    presentation: &RetainedVoxelScenePresentation,
+    spatial: &SpatialCollisionSource,
+) -> Result<NativeVoxelScenePresentationReadout, CsharpEngineServicesError> {
+    let scene = spatial.scene(presentation.session)?;
+    Ok(NativeVoxelScenePresentationReadout {
+        present: true,
+        source_revision: scene.source_revision().raw(),
+        mesh_revision: scene.projection_revisions().mesh().raw(),
+        chunk_count: u64::try_from(scene.mesh_chunks().len()).map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_SCENE_PRESENTATION",
+                "voxel scene chunk count exceeded the C# receipt range",
+            )
+        })?,
+        material_count: u32::try_from(presentation.materials.len()).map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_SCENE_PRESENTATION",
+                "voxel scene material count exceeded the C# receipt range",
+            )
+        })?,
+    })
+}
+
+fn presentation_instance_id(handle: u64) -> String {
+    format!("csharp-voxel-scene-presentation-{handle}")
+}
+
+fn renderer_materials(
+    presentations: &BTreeMap<u64, RetainedVoxelScenePresentation>,
+) -> Result<BTreeMap<u16, RenderMaterialDescriptor>, CsharpEngineServicesError> {
+    presentations
+        .values()
+        .flat_map(|presentation| {
+            presentation
+                .materials
+                .iter()
+                .map(|(source_slot, descriptor)| {
+                    (
+                        presentation.renderer_slots.get(source_slot).copied(),
+                        descriptor,
+                    )
+                })
         })
+        .map(|(renderer_slot, descriptor)| {
+            let slot = renderer_slot.ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIAL_SLOTS",
+                    "voxel scene material had no retained renderer slot",
+                )
+            })?;
+            let mut descriptor = descriptor.clone();
+            descriptor.id = voxel_material_id(slot);
+            Ok((slot, descriptor))
+        })
+        .collect()
+}
+
+fn presentation_textures(
+    presentations: &BTreeMap<u64, RetainedVoxelScenePresentation>,
+) -> BTreeMap<String, TextureDescriptor> {
+    presentations
+        .values()
+        .flat_map(|presentation| presentation.textures.iter())
+        .map(|(identity, texture)| (identity.clone(), texture.clone()))
+        .collect()
+}
+
+fn allocate_renderer_slots(
+    source_slots: impl IntoIterator<Item = u16>,
+    occupied_slots: impl IntoIterator<Item = u16>,
+) -> Result<BTreeMap<u16, u16>, CsharpEngineServicesError> {
+    let mut occupied = occupied_slots.into_iter().collect::<BTreeSet<_>>();
+    let mut mappings = BTreeMap::new();
+    for source_slot in source_slots {
+        if mappings.contains_key(&source_slot) {
+            continue;
+        }
+        let renderer_slot = (!occupied.contains(&source_slot))
+            .then_some(source_slot)
+            .or_else(|| (0..=u16::MAX).find(|candidate| !occupied.contains(candidate)))
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_SCENE_PRESENTATION_MATERIAL_SLOTS",
+                    "voxel scene renderer material slot space is exhausted",
+                )
+            })?;
+        occupied.insert(renderer_slot);
+        mappings.insert(source_slot, renderer_slot);
+    }
+    Ok(mappings)
 }
 
 pub(crate) fn api(
@@ -570,18 +680,28 @@ mod tests {
     }
 
     fn material(appearance: &mut RuntimeAppearanceBridge) -> NativeMaterialHandle {
+        material_with_color(
+            appearance,
+            NativeColor {
+                r: 0.25,
+                g: 0.5,
+                b: 0.75,
+                a: 1.0,
+            },
+        )
+    }
+
+    fn material_with_color(
+        appearance: &mut RuntimeAppearanceBridge,
+        color: NativeColor,
+    ) -> NativeMaterialHandle {
         let mut handle = NativeMaterialHandle::default();
         assert_eq!(
             unsafe {
                 crate::appearance::create_material(
                     (appearance as *mut RuntimeAppearanceBridge).cast(),
                     NativeMaterialRequest {
-                        color: NativeColor {
-                            r: 0.25,
-                            g: 0.5,
-                            b: 0.75,
-                            a: 1.0,
-                        },
+                        color,
                         texture: NativeRenderResourceHandle::default(),
                         roughness: 1.0,
                         texture_tint: NativeColor {
@@ -687,9 +807,174 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_presentations_keep_renderer_handles_and_material_slots_distinct() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let first_session = session_with_voxel(&mut spatial);
+        let second_session = session_with_voxel(&mut spatial);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let first_material = material_with_color(
+            &mut appearance,
+            NativeColor {
+                r: 0.9,
+                g: 0.1,
+                b: 0.1,
+                a: 1.0,
+            },
+        );
+        let second_material = material_with_color(
+            &mut appearance,
+            NativeColor {
+                r: 0.1,
+                g: 0.9,
+                b: 0.1,
+                a: 1.0,
+            },
+        );
+        let api = super::api(&mut bridge, &mut appearance);
+        let first_bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material: first_material,
+        }];
+        let second_bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material: second_material,
+        }];
+        let mut first = NativeVoxelScenePresentationHandle::default();
+        let mut second = NativeVoxelScenePresentationHandle::default();
+        for (session, bindings, output) in [
+            (first_session, &first_bindings[..], &mut first),
+            (second_session, &second_bindings[..], &mut second),
+        ] {
+            assert_eq!(
+                unsafe {
+                    (api.project_scene)(
+                        api.context,
+                        &NativeProjectVoxelSceneRequest {
+                            session,
+                            materials: bindings.as_ptr(),
+                            materials_len: bindings.len(),
+                        },
+                        output,
+                    )
+                },
+                ABI_OK
+            );
+        }
+        let staged = bridge.take_staged_call().expect("overlapping projections");
+        let create_handles = staged
+            .frames
+            .iter()
+            .flat_map(|frame| frame.ops.iter())
+            .filter_map(|operation| match operation {
+                RenderDiff::Create { handle, .. } => Some(*handle),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            create_handles.len(),
+            4,
+            "two roots and two chunks are distinct"
+        );
+        let material_ids = staged
+            .frames
+            .iter()
+            .flat_map(|frame| frame.ops.iter())
+            .filter_map(|operation| match operation {
+                RenderDiff::DefineMaterial { material } => Some(material.id.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            material_ids.len(),
+            2,
+            "same source slot is remapped per presentation"
+        );
+        let payload_slots = staged
+            .frames
+            .iter()
+            .flat_map(|frame| frame.ops.iter())
+            .filter_map(|operation| match operation {
+                RenderDiff::ReplaceMeshPayload { payload, .. } => {
+                    payload.groups.first().map(|group| group.material_slot)
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(payload_slots, BTreeSet::from([0, 1]));
+        bridge.commit_call(staged);
+        let staged_appearance = appearance.take_staged_call().expect("staged materials");
+        appearance.commit(staged_appearance);
+
+        let first_root = bridge
+            .state
+            .projector
+            .root_handle(&presentation_instance_id(first.value))
+            .expect("first root");
+        let second_root = bridge
+            .state
+            .projector
+            .root_handle(&presentation_instance_id(second.value))
+            .expect("second root");
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        assert_eq!(unsafe { (api.destroy_scene)(api.context, first) }, ABI_OK);
+        let staged = bridge.take_staged_call().expect("first cleanup");
+        let destroyed = staged.frames[0]
+            .ops
+            .iter()
+            .filter_map(|operation| match operation {
+                RenderDiff::Destroy { handle } => Some(*handle),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(destroyed.contains(&first_root));
+        assert!(!destroyed.contains(&second_root));
+        bridge.commit_call(staged);
+        let staged_appearance = appearance.take_staged_call().expect("appearance cleanup");
+        appearance.commit(staged_appearance);
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        let mut readout = NativeVoxelScenePresentationReadout::default();
+        assert_eq!(
+            unsafe { (api.refresh_scene)(api.context, second, &mut readout) },
+            ABI_OK
+        );
+        let staged = bridge.take_staged_call().expect("survivor refresh");
+        assert!(staged.frames[0].ops.is_empty());
+        bridge.commit_call(staged);
+        let staged_appearance = appearance.take_staged_call().expect("appearance refresh");
+        appearance.commit(staged_appearance);
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        assert_eq!(unsafe { (api.destroy_scene)(api.context, second) }, ABI_OK);
+        let staged = bridge.take_staged_call().expect("second cleanup");
+        assert!(staged.frames[0]
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, RenderDiff::Destroy { handle } if *handle == second_root)));
+    }
+
+    #[test]
+    fn renderer_slot_exhaustion_is_an_explicit_admission_error() {
+        assert!(allocate_renderer_slots([1], 0..=u16::MAX).is_err());
+    }
+
+    #[test]
     fn fresh_attachment_rebases_voxel_projection_without_mutating_active_history() {
         let mut spatial = RuntimeSpatialBridge::new();
         let session = session_with_voxel(&mut spatial);
+        let second_session = session_with_voxel(&mut spatial);
         let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         let mut appearance =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
@@ -697,12 +982,22 @@ mod tests {
         appearance.begin_call();
         bridge.begin_call();
         let material = material(&mut appearance);
+        let second_material = material_with_color(
+            &mut appearance,
+            NativeColor {
+                r: 0.8,
+                g: 0.2,
+                b: 0.1,
+                a: 1.0,
+            },
+        );
         let api = super::api(&mut bridge, &mut appearance);
         let bindings = [NativeVoxelSceneMaterialBinding {
             material_slot: 1,
             material,
         }];
         let mut presentation = NativeVoxelScenePresentationHandle::default();
+        let mut second_presentation = NativeVoxelScenePresentationHandle::default();
         assert_eq!(
             unsafe {
                 (api.project_scene)(
@@ -713,6 +1008,24 @@ mod tests {
                         materials_len: bindings.len(),
                     },
                     &mut presentation,
+                )
+            },
+            ABI_OK
+        );
+        let second_bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material: second_material,
+        }];
+        assert_eq!(
+            unsafe {
+                (api.project_scene)(
+                    api.context,
+                    &NativeProjectVoxelSceneRequest {
+                        session: second_session,
+                        materials: second_bindings.as_ptr(),
+                        materials_len: second_bindings.len(),
+                    },
+                    &mut second_presentation,
                 )
             },
             ABI_OK
@@ -750,6 +1063,24 @@ mod tests {
                 .ops
                 .iter()
                 .any(|operation| matches!(operation, RenderDiff::ReplaceMeshPayload { .. })));
+            assert_eq!(
+                frame
+                    .ops
+                    .iter()
+                    .filter(|operation| matches!(operation, RenderDiff::Create { .. }))
+                    .count(),
+                4,
+                "the detached baseline contains both retained presentations"
+            );
+            assert_eq!(
+                frame
+                    .ops
+                    .iter()
+                    .filter(|operation| matches!(operation, RenderDiff::DefineMaterial { .. }))
+                    .count(),
+                2,
+                "the detached baseline preserves the disjoint material slots"
+            );
             bridge.discard_call();
             appearance.discard_call();
             frame
@@ -784,9 +1115,9 @@ mod tests {
         // normal appearance/material path.
         const TEXTURE: &[u8] = &[
             137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1,
-            8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99,
-            248, 207, 0, 68, 255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0,
-            0, 73, 69, 78, 68, 174, 66, 96, 130,
+            8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            0, 68, 255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73, 69, 78, 68,
+            174, 66, 96, 130,
         ];
         let mut spatial = RuntimeSpatialBridge::new();
         let session = session_with_voxel(&mut spatial);

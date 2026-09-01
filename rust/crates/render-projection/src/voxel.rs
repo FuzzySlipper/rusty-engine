@@ -31,6 +31,7 @@ struct InstanceSnapshot {
     transform: Transform,
     source_revision: u64,
     rebase_revision: u64,
+    material_slots: BTreeMap<u16, u16>,
     chunks: BTreeMap<[i64; 3], ChunkSnapshot>,
 }
 
@@ -78,7 +79,20 @@ impl VoxelRenderProjector {
         instances: &[VoxelProjectionInstance<'_>],
         materials: &BTreeMap<u16, RenderMaterialDescriptor>,
     ) -> Result<VoxelProjectionResult, VoxelProjectionError> {
-        let current = validate_and_snapshot(instances, materials)?;
+        self.project_mapped(instances, materials, &BTreeMap::new())
+    }
+
+    /// Projects voxel instances whose source material slots are translated to
+    /// retained renderer slots before mesh payloads are published. The map is
+    /// internal renderer realization: callers still own source scene slots,
+    /// while `materials` is keyed by the effective renderer slot.
+    pub fn project_mapped(
+        &mut self,
+        instances: &[VoxelProjectionInstance<'_>],
+        materials: &BTreeMap<u16, RenderMaterialDescriptor>,
+        material_slots: &BTreeMap<String, BTreeMap<u16, u16>>,
+    ) -> Result<VoxelProjectionResult, VoxelProjectionError> {
+        let current = validate_and_snapshot(instances, materials, material_slots)?;
         for (instance, next) in &current {
             let Some(previous) = self.last_instances.get(instance) else {
                 continue;
@@ -206,10 +220,15 @@ impl VoxelRenderProjector {
                     });
                     handle
                 };
-                if previous_chunk.is_none_or(|value| value.content_hash != chunk.content_hash) {
+                if previous_chunk.is_none_or(|value| value.content_hash != chunk.content_hash)
+                    || previous.is_some_and(|value| value.material_slots != snapshot.material_slots)
+                {
                     operations.push(RenderDiff::ReplaceMeshPayload {
                         handle,
-                        payload: voxel_mesh_payload(chunk),
+                        payload: voxel_mesh_payload_with_material_slots(
+                            chunk,
+                            &snapshot.material_slots,
+                        ),
                     });
                 } else if previous_chunk.is_some_and(|value| value.translation != chunk.translation)
                 {
@@ -299,6 +318,7 @@ fn voxel_publication_stream<'a>(instances: impl Iterator<Item = &'a String>) -> 
 fn validate_and_snapshot(
     instances: &[VoxelProjectionInstance<'_>],
     materials: &BTreeMap<u16, RenderMaterialDescriptor>,
+    material_slots: &BTreeMap<String, BTreeMap<u16, u16>>,
 ) -> Result<BTreeMap<String, InstanceSnapshot>, VoxelProjectionError> {
     for (slot, material) in materials {
         material
@@ -339,10 +359,15 @@ fn validate_and_snapshot(
                 instance: instance.instance_id.clone(),
             });
         }
+        let empty_mapping = BTreeMap::new();
+        let slots = material_slots
+            .get(&instance.instance_id)
+            .unwrap_or(&empty_mapping);
+        let map_slot = |slot| slots.get(&slot).copied().unwrap_or(slot);
         let mut chunks = BTreeMap::new();
         let mut used_slots = BTreeSet::new();
         for chunk in instance.scene.mesh_chunks() {
-            let payload = voxel_mesh_payload(chunk);
+            let payload = voxel_mesh_payload_with_material_slots(chunk, slots);
             payload
                 .validate()
                 .map_err(|source| VoxelProjectionError::InvalidMesh {
@@ -350,7 +375,12 @@ fn validate_and_snapshot(
                     chunk: chunk.chunk,
                     source,
                 })?;
-            used_slots.extend(chunk.groups.iter().map(|group| group.material_slot));
+            used_slots.extend(
+                chunk
+                    .groups
+                    .iter()
+                    .map(|group| map_slot(group.material_slot)),
+            );
             chunks.insert(
                 chunk.chunk,
                 ChunkSnapshot {
@@ -371,11 +401,11 @@ fn validate_and_snapshot(
             }
             chunk.groups.iter().find_map(|group| {
                 materials
-                    .get(&group.material_slot)
+                    .get(&map_slot(group.material_slot))
                     .filter(|material| {
                         material.texture.is_some() || material.voxel_surface.is_some()
                     })
-                    .map(|_| (chunk, group.material_slot))
+                    .map(|_| (chunk, map_slot(group.material_slot)))
             })
         }) {
             return Err(VoxelProjectionError::TexturedReconstructedSurface {
@@ -392,6 +422,7 @@ fn validate_and_snapshot(
                 transform: instance.transform,
                 source_revision: instance.scene.source_revision().raw(),
                 rebase_revision: instance.scene.rebase_revision(),
+                material_slots: slots.clone(),
                 chunks,
             },
         );
@@ -466,6 +497,13 @@ fn chunk_node(instance_id: &str, chunk: &VoxelMeshChunk) -> RenderNode {
 }
 
 pub fn voxel_mesh_payload(chunk: &VoxelMeshChunk) -> MeshPayloadDescriptor {
+    voxel_mesh_payload_with_material_slots(chunk, &BTreeMap::new())
+}
+
+fn voxel_mesh_payload_with_material_slots(
+    chunk: &VoxelMeshChunk,
+    material_slots: &BTreeMap<u16, u16>,
+) -> MeshPayloadDescriptor {
     let mut attributes = vec![
         MeshAttribute {
             name: MeshAttributeName::Position,
@@ -496,7 +534,10 @@ pub fn voxel_mesh_payload(chunk: &VoxelMeshChunk) -> MeshPayloadDescriptor {
             .groups
             .iter()
             .map(|group| MeshGroupDescriptor {
-                material_slot: group.material_slot,
+                material_slot: material_slots
+                    .get(&group.material_slot)
+                    .copied()
+                    .unwrap_or(group.material_slot),
                 start: group.start,
                 count: group.count,
             })
@@ -668,6 +709,51 @@ mod tests {
         let second = projector.project(&instances, &materials).unwrap();
         assert!(second.frame.is_empty());
         assert_eq!(projector.chunk_handle("room", [0, 0, 0]), Some(handle));
+    }
+
+    #[test]
+    fn mapped_slots_rewrite_mesh_groups_and_refresh_payloads_when_the_mapping_changes() {
+        let scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            16,
+            [MaterialVoxel {
+                address: [0, 0, 0],
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        let instances = [VoxelProjectionInstance {
+            instance_id: "room".to_string(),
+            asset_id: "voxel-object/room".to_string(),
+            transform: Transform::IDENTITY,
+            scene: &scene,
+        }];
+        let mut projector = VoxelRenderProjector::new();
+        let first = projector
+            .project_mapped(
+                &instances,
+                &BTreeMap::from([(4, material(4))]),
+                &BTreeMap::from([("room".to_string(), BTreeMap::from([(1, 4)]))]),
+            )
+            .unwrap();
+        assert!(first.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::ReplaceMeshPayload { payload, .. }
+                if payload.groups.iter().all(|group| group.material_slot == 4)
+        )));
+
+        let remapped = projector
+            .project_mapped(
+                &instances,
+                &BTreeMap::from([(5, material(5))]),
+                &BTreeMap::from([("room".to_string(), BTreeMap::from([(1, 5)]))]),
+            )
+            .unwrap();
+        assert!(remapped.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::ReplaceMeshPayload { payload, .. }
+                if payload.groups.iter().all(|group| group.material_slot == 5)
+        )));
     }
 
     #[test]
