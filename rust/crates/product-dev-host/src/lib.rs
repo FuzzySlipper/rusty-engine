@@ -37,6 +37,7 @@ pub use model::{
     ProductDevDebugCommandParameterDescriptor, ProductDevDebugResult,
     ProductDevGhostPlateFallbackReason, ProductDevGhostPlateFeedback,
     ProductDevGhostPlateFeedbackFact, ProductDevGhostPlateFeedbackResult, ProductDevInputBatch,
+    ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
     ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeFault,
     ProductDevRuntimeMode, ProductDevRuntimeOutput, ProductDevRuntimeReadout,

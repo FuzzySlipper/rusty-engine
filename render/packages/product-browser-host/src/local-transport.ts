@@ -26,6 +26,8 @@ import type {
   ProductBrowserGhostPlateFeedback,
   ProductBrowserGhostPlateFeedbackFact,
   ProductBrowserGhostPlateFeedbackResult,
+  ProductBrowserRendererDiagnosticsFeedback,
+  ProductBrowserRendererDiagnosticsFeedbackResult,
   ProductBrowserRuntimeAdapter,
   ProductBrowserRuntimeInputResult,
   ProductBrowserRuntimeOperationKind,
@@ -67,6 +69,7 @@ const ROUTES = Object.freeze({
   audioFeedback: 'audio-feedback',
   animationFeedback: 'animation-feedback',
   ghostPlateFeedback: 'ghost-plate-feedback',
+  rendererDiagnostics: 'renderer-diagnostics',
   outputs: 'outputs',
   freshOutputs: 'outputs/fresh',
 });
@@ -529,6 +532,17 @@ export function createProductBrowserLocalHttpAdapter(
     );
   };
 
+  const reportRendererDiagnostics = (
+    feedback: ProductBrowserRendererDiagnosticsFeedback,
+  ): Promise<ProductBrowserRendererDiagnosticsFeedbackResult> => {
+    const snapshot = snapshotRendererDiagnosticsFeedback(feedback);
+    return post(
+      ROUTES.rendererDiagnostics,
+      snapshot,
+      (value) => decodeRendererDiagnosticsResult(value, snapshot.runtime),
+    );
+  };
+
   const advanceRealtime = (observedTimeNs: string): Promise<ProductBrowserRuntimeOperationResult> =>
     post(
       ROUTES.advanceRealtime,
@@ -976,6 +990,7 @@ export function createProductBrowserLocalHttpAdapter(
     reportAudioFeedback,
     reportAnimationFeedback,
     reportGhostPlateFeedback,
+    reportRendererDiagnostics,
     advanceRealtime,
     admitDemandStep,
     admitExternalStep,
@@ -1359,6 +1374,18 @@ function snapshotGhostPlateFeedback(value: ProductBrowserGhostPlateFeedback): Pr
     replaceOwner: record.replaceOwner,
     facts: Object.freeze(facts.map(snapshotGhostPlateFeedbackFact)),
   });
+}
+
+function snapshotRendererDiagnosticsFeedback(
+  value: ProductBrowserRendererDiagnosticsFeedback,
+): ProductBrowserRendererDiagnosticsFeedback {
+  const record = requireRecord(value, 'renderer diagnostics feedback');
+  requireKnownFields(record, ['runtime', 'snapshot'], 'renderer diagnostics feedback');
+  const snapshot = snapshotRustyApplicationProductPayloadJson(record['snapshot']);
+  return Object.freeze({
+    runtime: decodeRuntimeIdentity(record.runtime),
+    snapshot,
+  }) as unknown as ProductBrowserRendererDiagnosticsFeedback;
 }
 
 function snapshotGhostPlateFeedbackFact(value: unknown): ProductBrowserGhostPlateFeedbackFact {
@@ -1852,6 +1879,28 @@ function decodeGhostPlateFeedbackResult(
     runtime,
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   });
+}
+
+function decodeRendererDiagnosticsResult(
+  value: unknown,
+  expectedRuntime: RustyApplicationRuntimeIdentity,
+): ProductBrowserRendererDiagnosticsFeedbackResult {
+  const record = requireRecord(value, 'renderer diagnostics result');
+  requireKnownFields(record, ['accepted', 'runtime', 'diagnostic'], 'renderer diagnostics result');
+  if (record.accepted !== true && record.accepted !== false) {
+    throw new TypeError('renderer diagnostics accepted must be boolean');
+  }
+  const runtime = decodeRuntimeIdentity(record.runtime);
+  if (!sameRuntimeIdentity(runtime, expectedRuntime)) {
+    throw new TypeError('renderer diagnostics result runtime does not match request runtime');
+  }
+  const diagnostic = record.diagnostic === undefined
+    ? undefined
+    : requireDiagnostic(record.diagnostic);
+  if (record.accepted && diagnostic !== undefined) {
+    throw new TypeError('accepted renderer diagnostics cannot include diagnostic');
+  }
+  return Object.freeze({ accepted: record.accepted, runtime, ...(diagnostic === undefined ? {} : { diagnostic }) });
 }
 
 function decodeAnimationFeedbackResult(

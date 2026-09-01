@@ -344,6 +344,9 @@ fn dispatch_request<R: ProductDevRuntime>(
         "/__rusty/product/runtime/ghost-plate-feedback" => {
             invoke_ghost_plate_feedback(state, &request.body)
         }
+        "/__rusty/product/runtime/renderer-diagnostics" => {
+            invoke_renderer_diagnostics(state, &request.body)
+        }
         _ => HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
     }
 }
@@ -623,6 +626,27 @@ fn invoke_ghost_plate_feedback<R: ProductDevRuntime>(
         |runtime| runtime.report_ghost_plate_feedback(request),
         |error| {
             crate::ProductDevGhostPlateFeedbackResult::rejected(
+                binding,
+                format!("{}: {}", error.code(), error.diagnostic()),
+            )
+        },
+    )
+}
+
+fn invoke_renderer_diagnostics<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    body: &[u8],
+) -> HttpResponse {
+    let request: crate::ProductDevRendererDiagnosticsFeedback = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let binding = request.runtime;
+    call_runtime(
+        state,
+        |runtime| runtime.report_renderer_diagnostics(request),
+        |error| {
+            crate::ProductDevRendererDiagnosticsFeedbackResult::rejected(
                 binding,
                 format!("{}: {}", error.code(), error.diagnostic()),
             )

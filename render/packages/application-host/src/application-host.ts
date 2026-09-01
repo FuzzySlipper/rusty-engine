@@ -9,6 +9,7 @@ import {
   createRendererDefaultSurfaceFrame,
   mountRendererSurface,
   type RendererSurface,
+  type RendererSurfaceDiagnosticsReadout,
   type RendererSurfaceOptions,
   type RendererSurfaceResourceOptions,
 } from '@rusty-engine/renderer-host';
@@ -354,6 +355,7 @@ export interface RustyApplicationRendererPort {
   readonly audioRealizedFacts: () => RustyApplicationAudioRealizedFactsReadout | null;
   readonly animationRealizedFacts: () => RustyApplicationAnimationRealizedFactsReadout | null;
   readonly ghostPlateReadout: () => RustyApplicationGhostPlateReadout | null;
+  readonly diagnosticsReadout: () => RendererSurfaceDiagnosticsReadout;
   /** Acknowledge only the submitted Engine-realized audio fact range. */
   readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
   readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;
@@ -1016,6 +1018,7 @@ async function mountRustyApplicationWithEnvironment(
     audioRealizedFacts: () => requireActive().audioRealizedFacts(),
     animationRealizedFacts: () => requireActive().animationRealizedFacts(),
     ghostPlateReadout: () => requireActive().ghostPlateReadout() as RustyApplicationGhostPlateReadout | null,
+    diagnosticsReadout: () => requireActive().diagnosticsReadout(),
     acknowledgeAudioRealizedFacts: (throughFactId: number) =>
       requireActive().acknowledgeAudioRealizedFacts(throughFactId),
     acknowledgeAnimationRealizedFacts: (throughFactId: number) =>

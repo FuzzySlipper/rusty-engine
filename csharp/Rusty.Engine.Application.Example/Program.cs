@@ -179,6 +179,7 @@ static void Require(bool condition, string message)
 
 sealed class ExampleEngineContext : IEngineContext
 {
+    public IDiagnosticsService Diagnostics => throw new NotSupportedException();
     public ILookService Look => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();

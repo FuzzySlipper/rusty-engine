@@ -163,6 +163,17 @@ export interface ProductBrowserGhostPlateFeedbackResult {
   readonly diagnostic?: string;
 }
 
+export interface ProductBrowserRendererDiagnosticsFeedback {
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly snapshot: ReturnType<RustyApplicationHost['renderer']['diagnosticsReadout']>;
+}
+
+export interface ProductBrowserRendererDiagnosticsFeedbackResult {
+  readonly accepted: boolean;
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly diagnostic?: string;
+}
+
 export interface ProductBrowserTimelineCompletion {
   /** Canonical decimal u64 ticket issued by runtime-timeline. */
   readonly ticket: string;
@@ -273,6 +284,9 @@ export interface ProductBrowserRuntimeAdapter {
   readonly reportGhostPlateFeedback: (
     feedback: ProductBrowserGhostPlateFeedback,
   ) => Promise<ProductBrowserGhostPlateFeedbackResult>;
+  readonly reportRendererDiagnostics?: (
+    feedback: ProductBrowserRendererDiagnosticsFeedback,
+  ) => Promise<ProductBrowserRendererDiagnosticsFeedbackResult>;
   readonly advanceRealtime: (
     observedTimeNs: string,
   ) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -302,6 +316,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
   readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
   readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
+  readonly reportRendererDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportRendererDiagnostics']>;
   readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
   readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
   readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -326,6 +341,9 @@ export function createProductBrowserRuntimeTransport(
   requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
   requireFunction(adapter.reportAnimationFeedback, 'reportAnimationFeedback');
   requireFunction(adapter.reportGhostPlateFeedback, 'reportGhostPlateFeedback');
+  if (adapter.reportRendererDiagnostics !== undefined) {
+    requireFunction(adapter.reportRendererDiagnostics, 'reportRendererDiagnostics');
+  }
   requireFunction(adapter.advanceRealtime, 'advanceRealtime');
   if (adapter.admitDemandStep !== undefined) {
     requireFunction(adapter.admitDemandStep, 'admitDemandStep');
@@ -351,6 +369,9 @@ export function createProductBrowserRuntimeTransport(
     reportAudioFeedback: adapter.reportAudioFeedback,
     reportAnimationFeedback: adapter.reportAnimationFeedback,
     reportGhostPlateFeedback: adapter.reportGhostPlateFeedback,
+    ...(adapter.reportRendererDiagnostics === undefined
+      ? {}
+      : { reportRendererDiagnostics: adapter.reportRendererDiagnostics }),
     advanceRealtime: adapter.advanceRealtime,
     ...(adapter.admitDemandStep === undefined ? {} : { admitDemandStep: adapter.admitDemandStep }),
     ...(adapter.admitExternalStep === undefined ? {} : { admitExternalStep: adapter.admitExternalStep }),
@@ -586,6 +607,11 @@ interface ProductBrowserGhostPlateFeedbackReporter {
   readonly flush: () => Promise<void>;
 }
 
+interface ProductBrowserRendererDiagnosticsReporter {
+  readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
+  readonly flush: () => Promise<void>;
+}
+
 /** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
 export function createProductBrowserAudioFeedbackReporter(options: {
   readonly renderer: Pick<RustyApplicationHost['renderer'],
@@ -759,6 +785,37 @@ export function createProductBrowserGhostPlateFeedbackReporter(options: {
   return Object.freeze({ bindRuntime, flush });
 }
 
+/** @internal Publishes one latest immutable renderer snapshot without scheduling renderer work. */
+export function createProductBrowserRendererDiagnosticsReporter(options: {
+  readonly renderer: Pick<RustyApplicationHost['renderer'], 'diagnosticsReadout'>;
+  readonly report: NonNullable<ProductBrowserRuntimeTransport['reportRendererDiagnostics']>;
+  readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+}): ProductBrowserRendererDiagnosticsReporter {
+  let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
+  let lastRenderSequence: number | null = null;
+  const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
+    if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) {
+      lastRenderSequence = null;
+    }
+    currentBinding = runtime;
+  };
+  const flush = async (): Promise<void> => {
+    const binding = currentBinding;
+    if (binding === null) return;
+    const snapshot = options.renderer.diagnosticsReadout();
+    if (snapshot.submission.renderSequence === lastRenderSequence) return;
+    const result = await options.report(Object.freeze({ runtime: binding, snapshot }));
+    if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
+      throw new ProductBrowserHostError('transport_failed', 'renderer diagnostics result did not match the current Product runtime binding');
+    }
+    if (!result.accepted || result.diagnostic !== undefined) {
+      throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'renderer diagnostics were rejected by the runtime');
+    }
+    lastRenderSequence = snapshot.submission.renderSequence;
+  };
+  return Object.freeze({ bindRuntime, flush });
+}
+
 /** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
 export async function flushProductBrowserAudioFeedbackBeforeUpdate<T>(
   flush: () => Promise<void>,
@@ -805,6 +862,7 @@ export async function mountProductBrowserHost(
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
+  let rendererDiagnosticsReporter: ProductBrowserRendererDiagnosticsReporter | null = null;
   // Renderer calls can be asynchronous (notably presentation realization),
   // while the retained runtime output port is synchronous. Keep their typed
   // realization order private to this host so a later frame cannot overtake a
@@ -938,6 +996,7 @@ export async function mountProductBrowserHost(
     await audioFeedbackReporter?.flush();
     await animationFeedbackReporter?.flush();
     await ghostPlateFeedbackReporter?.flush();
+    await rendererDiagnosticsReporter?.flush();
   };
 
   const scheduleRendererFeedbackFlush = (): void => {
@@ -991,6 +1050,7 @@ export async function mountProductBrowserHost(
           audioFeedbackReporter?.bindRuntime(output.runtime);
           animationFeedbackReporter?.bindRuntime(output.runtime);
           ghostPlateFeedbackReporter?.bindRuntime(output.runtime);
+          rendererDiagnosticsReporter?.bindRuntime(output.runtime);
           host.input?.bindRuntime({
             runtime: output.runtime,
             context: options.inputContext ?? 'gameplay.default',
@@ -1268,6 +1328,15 @@ export async function mountProductBrowserHost(
         ? {}
         : { initialRuntime: options.runtimeInput.binding }),
     });
+    if (transport.reportRendererDiagnostics !== undefined) {
+      rendererDiagnosticsReporter = createProductBrowserRendererDiagnosticsReporter({
+        renderer: application.renderer,
+        report: transport.reportRendererDiagnostics,
+        ...(options.runtimeInput?.binding === undefined
+          ? {}
+          : { initialRuntime: options.runtimeInput.binding }),
+      });
+    }
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
     for (const output of bufferedOutputs) applyOutput(output);
     await rendererOutputTail;

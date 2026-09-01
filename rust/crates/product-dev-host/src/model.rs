@@ -686,6 +686,71 @@ impl ProductDevGhostPlateFeedbackResult {
     }
 }
 
+/// Latest bounded browser-owned renderer observation. Its payload is a closed
+/// versioned snapshot produced by renderer-host, not a command or telemetry bus.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevRendererDiagnosticsFeedback {
+    pub runtime: ProductDevRuntimeBinding,
+    pub snapshot: Value,
+}
+
+impl ProductDevRendererDiagnosticsFeedback {
+    pub const MAX_SNAPSHOT_BYTES: usize = 256 * 1024;
+
+    pub fn validate(&self) -> Result<(), ProductDevHostError> {
+        let valid_version = self
+            .snapshot
+            .as_object()
+            .and_then(|object| object.get("schemaVersion"))
+            .and_then(Value::as_u64)
+            == Some(1);
+        let encoded = serde_json::to_vec(&self.snapshot).map_err(|_| {
+            ProductDevHostError::new(
+                "DEV_HOST_RENDERER_DIAGNOSTICS_ENCODE",
+                "renderer diagnostics snapshot could not be encoded",
+            )
+        })?;
+        if !valid_version || encoded.len() > Self::MAX_SNAPSHOT_BYTES {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RENDERER_DIAGNOSTICS_BOUNDS",
+                "renderer diagnostics must be a version 1 object within 256 KiB",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevRendererDiagnosticsFeedbackResult {
+    pub accepted: bool,
+    pub runtime: ProductDevRuntimeBinding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
+impl ProductDevRendererDiagnosticsFeedbackResult {
+    pub fn accepted(runtime: ProductDevRuntimeBinding) -> Self {
+        Self {
+            accepted: true,
+            runtime,
+            diagnostic: None,
+        }
+    }
+
+    pub fn rejected(
+        runtime: ProductDevRuntimeBinding,
+        diagnostic: impl Into<String>,
+    ) -> Result<Self, ProductDevHostError> {
+        Ok(Self {
+            accepted: false,
+            runtime,
+            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+        })
+    }
+}
+
 /// Minimal local readout passed through from the generated runtime owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -849,6 +914,22 @@ impl ProductDevDebugCatalog {
             available: false,
             commands: Vec::new(),
         }
+    }
+
+    pub fn with_renderer_diagnostics(mut self) -> Self {
+        self.available = true;
+        if !self
+            .commands
+            .iter()
+            .any(|command| command.name == "engine.renderer")
+        {
+            self.commands.push(ProductDevDebugCommandDescriptor {
+                name: "engine.renderer".to_owned(),
+                description: "Show the latest browser renderer timing, pacing, canvas, and resource realization snapshot".to_owned(),
+                parameters: Vec::new(),
+            });
+        }
+        self
     }
 
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
@@ -1704,6 +1785,20 @@ pub trait ProductDevRuntime: Send + 'static {
             "ghost plate feedback is not supported by this runtime",
         )
         .expect("fixed ghost-plate feedback diagnostic"))
+    }
+
+    fn report_renderer_diagnostics(
+        &mut self,
+        _feedback: ProductDevRendererDiagnosticsFeedback,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevRendererDiagnosticsFeedbackResult>,
+        ProductDevRuntimeError,
+    > {
+        Err(ProductDevRuntimeError::new(
+            "DEV_HOST_RENDERER_DIAGNOSTICS_UNSUPPORTED",
+            "renderer diagnostics are not supported by this runtime",
+        )
+        .expect("fixed renderer-diagnostics diagnostic"))
     }
 }
 

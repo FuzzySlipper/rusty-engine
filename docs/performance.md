@@ -42,5 +42,14 @@ Use the first lane that regressed to localize investigation:
    completion, or resolution/pacing policy.
 
 The probe is deliberately bounded and synthetic. A live product diagnostic is
-still needed to identify which lane a particular slow scene is exercising; the
-probe prevents already-fixed costs from silently returning.
+available when the product host opts into its existing live-debug routes. Run
+`engine.renderer` in the ordinary debug CLI or Angular panel to print the
+latest browser snapshot. The same snapshot is available to trusted product
+code as UTF-8 JSON bytes through
+`IEngineContext.Diagnostics.ReadRenderer()`; the generated binding copies and
+releases the Engine byte lease before returning. It includes renderer/vendor
+identity when available, CSS and backing resolution, accepted submission
+cadence and CPU submission time, asynchronous pacing/fence observations,
+draw/triangle/live-resource counts, realized texture encoded/decoded sizes,
+sprite/material fallback counts, and voxel-specialized material count. Reading
+it never submits a frame or synchronizes the GPU.

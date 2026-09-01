@@ -43,6 +43,7 @@ use crate::appearance::{
 };
 
 fn engine_api(
+    diagnostics_bridge: &mut crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance_bridge: &mut RuntimeAppearanceBridge,
     content_bridge: &mut RuntimeContentBridge,
     authored_content_bridge: &mut RuntimeAuthoredContentBridge,
@@ -60,6 +61,7 @@ fn engine_api(
 ) -> NativeEngineApi {
     appearance_bridge.bind_authored_content(authored_content_bridge);
     NativeEngineApi {
+        diagnostics: crate::diagnostics::api(diagnostics_bridge),
         look: crate::look::api(),
         dynamics: crate::dynamics::api(dynamics_bridge),
         motion: crate::motion::api(),
@@ -229,6 +231,7 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 /// The runtime drives call boundaries; this owner stages and commits only
 /// Engine-facing effects created through the generated function tables.
 pub struct EngineServiceSet {
+    diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance: RuntimeAppearanceBridge,
     content: Box<RuntimeContentBridge>,
     authored_content: RuntimeAuthoredContentBridge,
@@ -298,6 +301,7 @@ impl EngineServiceSet {
         let voxel_scene_presentation =
             RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         Ok(Self {
+            diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::default(),
             appearance: crate::appearance::create(catalog.0, content_resources.clone()),
             content,
             authored_content,
@@ -317,6 +321,7 @@ impl EngineServiceSet {
 
     pub fn api(&mut self) -> NativeEngineApi {
         engine_api(
+            &mut self.diagnostics,
             &mut self.appearance,
             &mut self.content,
             &mut self.authored_content,
@@ -332,6 +337,22 @@ impl EngineServiceSet {
             &mut self.persistence,
             &mut self.ui,
         )
+    }
+
+    pub fn ingest_renderer_diagnostics(
+        &mut self,
+        snapshot: &serde_json::Value,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.diagnostics.ingest_renderer(snapshot).map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
+                "renderer diagnostics snapshot could not be encoded",
+            )
+        })
+    }
+
+    pub fn renderer_diagnostics_json(&self) -> Option<&str> {
+        self.diagnostics.renderer_json()
     }
 
     pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {

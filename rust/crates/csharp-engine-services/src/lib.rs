@@ -7,6 +7,7 @@ mod camera_view;
 mod composition;
 mod content;
 mod content_store;
+mod diagnostics;
 mod dynamics;
 mod kinematic;
 mod look;

@@ -6,6 +6,7 @@ import {
   bindProductBrowserInitialRendererFrame,
   createProductBrowserAudioFeedbackReporter,
   createProductBrowserGhostPlateFeedbackReporter,
+  createProductBrowserRendererDiagnosticsReporter,
   createProductBrowserRuntimeTransport,
   flushProductBrowserAudioFeedbackBeforeUpdate,
   productBrowserInitialRendererFrameRequired,
@@ -231,6 +232,27 @@ test('ghost plate feedback replaces an active snapshot with an empty snapshot af
   assert.equal(reports[1]?.facts.length, 0);
   assert.equal(reports[0]?.replaceOwner, true);
   assert.equal(reports[1]?.replaceOwner, false);
+});
+
+test('renderer diagnostics publishes only a newly accepted renderer submission', async () => {
+  const reports: unknown[] = [];
+  let renderSequence = 4;
+  const renderer = {
+    diagnosticsReadout: () => ({ schemaVersion: 1, submission: { renderSequence } }),
+  } as unknown as Parameters<typeof createProductBrowserRendererDiagnosticsReporter>[0]['renderer'];
+  const reporter = createProductBrowserRendererDiagnosticsReporter({
+    renderer,
+    report: async (feedback) => {
+      reports.push(feedback.snapshot);
+      return { accepted: true, runtime: feedback.runtime };
+    },
+    initialRuntime: AUDIO_RUNTIME,
+  });
+  await reporter.flush();
+  await reporter.flush();
+  renderSequence = 5;
+  await reporter.flush();
+  assert.equal(reports.length, 2);
 });
 
 test('audio feedback flush precedes every browser-host C# update admission lane', async () => {

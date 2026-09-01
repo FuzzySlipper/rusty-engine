@@ -36,7 +36,8 @@ use product_dev_host::{
     ProductDevGhostPlateFallbackReason, ProductDevGhostPlateFeedback,
     ProductDevGhostPlateFeedbackFact, ProductDevGhostPlateFeedbackResult, ProductDevInputBatch,
     ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRendererResource, ProductDevRuntime,
+    ProductDevOperationResult, ProductDevRendererDiagnosticsFeedback,
+    ProductDevRendererDiagnosticsFeedbackResult, ProductDevRendererResource, ProductDevRuntime,
     ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
@@ -2088,6 +2089,25 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         command: &str,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
+        if command.trim() == "engine.renderer" {
+            let message = self.services.renderer_diagnostics_json().map_or_else(
+                || {
+                    "renderer diagnostics unavailable: no browser snapshot has been admitted"
+                        .to_owned()
+                },
+                |snapshot| {
+                    serde_json::to_string_pretty(snapshot).unwrap_or_else(|_| {
+                        "renderer diagnostics unavailable: snapshot encoding failed".to_owned()
+                    })
+                },
+            );
+            let result = ProductDevDebugResult::new(
+                self.services.renderer_diagnostics_json().is_some(),
+                message,
+            )
+            .map_err(host_runtime_error)?;
+            return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+        }
         if command.len() > MAX_DEBUG_COMMAND_BYTES {
             return Err(ProductDevRuntimeError::new(
                 "CSHARP_DEBUG_INPUT_BOUNDS",
@@ -2142,7 +2162,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
     > {
         let Some((describe, release)) = self.api.debug_describe else {
             return ProductDevRuntimeReceipt::new(
-                product_dev_host::ProductDevDebugCatalog::unavailable(),
+                product_dev_host::ProductDevDebugCatalog::unavailable().with_renderer_diagnostics(),
                 Vec::new(),
             )
             .map_err(host_runtime_error);
@@ -2157,7 +2177,8 @@ impl ProductDevRuntime for CsharpProductRuntime {
                         error.detail().to_owned(),
                     ))
                 })?;
-        ProductDevRuntimeReceipt::new(catalog, Vec::new()).map_err(host_runtime_error)
+        ProductDevRuntimeReceipt::new(catalog.with_renderer_diagnostics(), Vec::new())
+            .map_err(host_runtime_error)
     }
 
     fn advance_realtime(
@@ -2389,6 +2410,22 @@ impl ProductDevRuntime for CsharpProductRuntime {
             Vec::new(),
         )
         .map_err(host_runtime_error)
+    }
+
+    fn report_renderer_diagnostics(
+        &mut self,
+        feedback: ProductDevRendererDiagnosticsFeedback,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevRendererDiagnosticsFeedbackResult>,
+        ProductDevRuntimeError,
+    > {
+        self.require_current_control_binding(Some(feedback.runtime))?;
+        feedback.validate().map_err(host_runtime_error)?;
+        self.services
+            .ingest_renderer_diagnostics(&feedback.snapshot)
+            .map_err(|error| self.runtime_error(error.into()))?;
+        let result = ProductDevRendererDiagnosticsFeedbackResult::accepted(self.binding());
+        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
 }
 

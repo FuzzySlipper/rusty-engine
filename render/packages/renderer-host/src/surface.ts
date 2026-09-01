@@ -190,6 +190,34 @@ export interface RendererSurfaceAutomaticSubmissionPacingSample {
   readonly hostAdmission: RendererSurfaceAutomaticSubmissionAdmissionSample;
 }
 
+export interface RendererSurfaceDiagnosticsReadout {
+  readonly schemaVersion: 1;
+  readonly renderer: string | null;
+  readonly vendor: string | null;
+  readonly canvas: {
+    readonly cssWidth: number;
+    readonly cssHeight: number;
+    readonly backingWidth: number;
+    readonly backingHeight: number;
+    readonly effectivePixelRatio: number;
+  };
+  readonly submission: RendererSurfaceSubmissionSample;
+  readonly pacing: RendererSurfaceAutomaticSubmissionPacingSample;
+  readonly resources: {
+    readonly definedTextureCount: number;
+    readonly realizedTextures: readonly {
+      readonly id: string;
+      readonly resource: string | null;
+      readonly encodedBytes: number;
+      readonly decodedBytes: number;
+    }[];
+    readonly spriteAtlasCount: number;
+    readonly spriteFallbackCount: number;
+    readonly materialFallbackCount: number;
+    readonly voxelSpecializedMaterialCount: number;
+  };
+}
+
 export interface RendererSurfaceOptions {
   readonly autoStart?: boolean;
   /** Optional observer on the one Engine-owned animation cadence. */
@@ -448,6 +476,8 @@ export interface RendererSurface {
   readonly animationRealizedFacts: () => import('./animation-host.js').RendererAnimationRealizedFactsReadout | null;
   readonly ghostPlateReadout: () => RendererGhostPlateReadout | null;
   readonly automaticSubmissionPacing: () => RendererSurfaceAutomaticSubmissionPacingSample;
+  /** Latest observational renderer facts; does not submit or synchronize work. */
+  readonly diagnosticsReadout: () => RendererSurfaceDiagnosticsReadout;
   readonly cameraPose: () => RendererSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
   readonly inputReadout: () => RendererSurfaceInputReadout;
@@ -896,6 +926,54 @@ function mountPreparedRendererSurface(
       ...backendSurface.automaticSubmissionPacing(),
       hostAdmission: automaticSubmissionAdmission.sample(),
     }),
+    diagnosticsReadout: () => {
+      const projectionSnapshot = projection.snapshot();
+      const submission = latestSubmission;
+      if (submission === null) {
+        throw new Error('renderer surface has no completed submission');
+      }
+      const cssWidth = canvas.clientWidth;
+      const cssHeight = canvas.clientHeight;
+      const gl = canvas.getContext('webgl2');
+      const extension = gl?.getExtension('WEBGL_debug_renderer_info') ?? null;
+      const pacing = Object.freeze({
+        ...backendSurface.automaticSubmissionPacing(),
+        hostAdmission: automaticSubmissionAdmission.sample(),
+      });
+      return Object.freeze({
+        schemaVersion: 1 as const,
+        renderer: gl === null || extension === null
+          ? null
+          : String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)),
+        vendor: gl === null || extension === null
+          ? null
+          : String(gl.getParameter(extension.UNMASKED_VENDOR_WEBGL)),
+        canvas: Object.freeze({
+          cssWidth,
+          cssHeight,
+          backingWidth: canvas.width,
+          backingHeight: canvas.height,
+          effectivePixelRatio: cssWidth > 0 ? canvas.width / cssWidth : 0,
+        }),
+        submission,
+        pacing,
+        resources: Object.freeze({
+          definedTextureCount: projectionSnapshot.textures.length,
+          realizedTextures: Object.freeze(backendSurface.renderer.textureResourceReadout()
+            .map((texture) => Object.freeze({
+              id: texture.id,
+              resource: texture.resource,
+              encodedBytes: texture.encodedBytes,
+              decodedBytes: texture.decodedBytes,
+            }))),
+          spriteAtlasCount: projectionSnapshot.spriteAtlases.length,
+          spriteFallbackCount: backendSurface.renderer.spriteFallbackCount,
+          materialFallbackCount: backendSurface.renderer.fallbackMaterialCount,
+          voxelSpecializedMaterialCount:
+            backendSurface.renderer.voxelSurfaceMaterialReadout().length,
+        }),
+      });
+    },
     cameraPose: controls.cameraPose,
     cameraProjection: backendSurface.cameraProjection,
     inputReadout: controls.inputReadout,

@@ -25,6 +25,7 @@ export interface RendererPerformanceProbeResult {
     readonly cssHeight: number;
     readonly backingWidth: number;
     readonly backingHeight: number;
+    readonly effectivePixelRatio: number;
   };
   readonly submission: RendererSurfaceSubmissionSample;
   readonly pacing: RendererSurfaceAutomaticSubmissionPacingSample;
@@ -57,14 +58,7 @@ window.__rustyRendererPerformance = Promise.resolve().then(() => {
     throw new Error('renderer submission clock was unavailable during the performance probe');
   }
   durations.sort((left, right) => left - right);
-  const gl = canvas.getContext('webgl2');
-  const extension = gl?.getExtension('WEBGL_debug_renderer_info') ?? null;
-  const renderer = gl === null || extension === null
-    ? null
-    : String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL));
-  const vendor = gl === null || extension === null
-    ? null
-    : String(gl.getParameter(extension.UNMASKED_VENDOR_WEBGL));
+  const diagnostics = surface.diagnosticsReadout();
   const result = Object.freeze({
     schemaVersion: 1 as const,
     lane: 'browser-renderer-submission' as const,
@@ -75,16 +69,11 @@ window.__rustyRendererPerformance = Promise.resolve().then(() => {
     p95: percentile(durations, 0.95),
     maximum: durations.at(-1)!,
     mean: durations.reduce((sum, duration) => sum + duration, 0) / durations.length,
-    renderer,
-    vendor,
-    canvas: Object.freeze({
-      cssWidth: canvas.clientWidth,
-      cssHeight: canvas.clientHeight,
-      backingWidth: canvas.width,
-      backingHeight: canvas.height,
-    }),
-    submission: surface.submission(),
-    pacing: surface.automaticSubmissionPacing(),
+    renderer: diagnostics.renderer,
+    vendor: diagnostics.vendor,
+    canvas: diagnostics.canvas,
+    submission: diagnostics.submission,
+    pacing: diagnostics.pacing,
   });
   surface.dispose();
   return result;
