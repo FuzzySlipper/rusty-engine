@@ -20622,7 +20622,7 @@ var Jv = 4096, Yv = class e {
 		this.#e = e;
 	}
 	capture(e) {
-		if (this.#c) return this.#g("capture_disposed", "voxel sprite capture is disposed");
+		if (this.#c) return this.#g("capture_disposed", "ghost plate capture is disposed");
 		let t;
 		try {
 			t = ty(e);
@@ -20695,7 +20695,7 @@ var Jv = 4096, Yv = class e {
 	}
 };
 function ey(e) {
-	if (ny(e.width, "width"), ny(e.height, "height"), !Number.isFinite(e.depth.near) || !Number.isFinite(e.depth.far) || e.depth.near < 0 || e.depth.far <= e.depth.near) throw RangeError("voxel sprite frame depth range must be finite and increasing");
+	if (ny(e.width, "width"), ny(e.height, "height"), !Number.isFinite(e.depth.near) || !Number.isFinite(e.depth.far) || e.depth.near < 0 || e.depth.far <= e.depth.near) throw RangeError("ghost plate frame depth range must be finite and increasing");
 	for (let [t, n] of Object.entries(e.textures)) if (!(n instanceof Ki)) throw TypeError(`${t} must be a Three texture`);
 	return ry(e.capture.basis), iy(e.capture.bounds), Object.freeze({
 		...e,
@@ -20738,10 +20738,10 @@ function ry(e) {
 	]) ay(t);
 }
 function iy(e) {
-	if (ay(e.minimum), ay(e.maximum), e.maximum.some((t, n) => t < e.minimum[n])) throw RangeError("voxel sprite frame bounds must be increasing");
+	if (ay(e.minimum), ay(e.maximum), e.maximum.some((t, n) => t < e.minimum[n])) throw RangeError("ghost plate frame bounds must be increasing");
 }
 function ay(e) {
-	if (e.length !== 3 || e.some((e) => !Number.isFinite(e))) throw TypeError("voxel sprite frame vectors must contain three finite values");
+	if (e.length !== 3 || e.some((e) => !Number.isFinite(e))) throw TypeError("ghost plate frame vectors must contain three finite values");
 }
 function oy(e) {
 	return Object.freeze({
@@ -20758,12 +20758,12 @@ function sy(e) {
 	});
 }
 function cy(e, t) {
-	let n = ly("voxel-sprite-color", e, t, !0), r = new Hc(e, t, wn);
-	return r.name = "voxel-sprite-hardware-depth", r.format = Fn, r.minFilter = pn, r.magFilter = pn, n.depthTexture = r, n.texture.colorSpace = Lr, {
+	let n = ly("ghost-plate-color", e, t, !0), r = new Hc(e, t, wn);
+	return r.name = "ghost-plate-hardware-depth", r.format = Fn, r.minFilter = pn, r.magFilter = pn, n.depthTexture = r, n.texture.colorSpace = Lr, {
 		color: n,
-		depth: ly("voxel-sprite-linear-depth", e, t, !1),
-		normal: ly("voxel-sprite-view-normal", e, t, !0),
-		coverage: ly("voxel-sprite-coverage", e, t, !1),
+		depth: ly("ghost-plate-linear-depth", e, t, !1),
+		normal: ly("ghost-plate-view-normal", e, t, !0),
+		coverage: ly("ghost-plate-coverage", e, t, !1),
 		hardwareDepth: r
 	};
 }
@@ -20781,15 +20781,15 @@ function ly(e, t, n, r) {
 }
 function uy() {
 	return new nl({
-		name: "voxel-sprite-linear-depth-resolve",
+		name: "ghost-plate-linear-depth-resolve",
 		uniforms: {
 			sourceDepth: { value: null },
 			cameraNear: { value: .1 },
 			cameraFar: { value: 100 },
 			isPerspective: { value: !0 }
 		},
-		vertexShader: "\n      varying vec2 voxelSpriteUv;\n      void main() {\n        voxelSpriteUv = uv;\n        gl_Position = vec4(position.xy, 0.0, 1.0);\n      }\n    ",
-		fragmentShader: "\n      #include <packing>\n      uniform sampler2D sourceDepth;\n      uniform float cameraNear;\n      uniform float cameraFar;\n      uniform bool isPerspective;\n      varying vec2 voxelSpriteUv;\n      void main() {\n        float depth = texture2D(sourceDepth, voxelSpriteUv).x;\n        float viewZ = isPerspective\n          ? perspectiveDepthToViewZ(depth, cameraNear, cameraFar)\n          : orthographicDepthToViewZ(depth, cameraNear, cameraFar);\n        float linearDepth = clamp((-viewZ - cameraNear) / (cameraFar - cameraNear), 0.0, 1.0);\n        gl_FragColor = vec4(linearDepth, linearDepth, linearDepth, depth < 1.0 ? 1.0 : 0.0);\n      }\n    ",
+		vertexShader: "\n      varying vec2 ghostPlateUv;\n      void main() {\n        ghostPlateUv = uv;\n        gl_Position = vec4(position.xy, 0.0, 1.0);\n      }\n    ",
+		fragmentShader: "\n      #include <packing>\n      uniform sampler2D sourceDepth;\n      uniform float cameraNear;\n      uniform float cameraFar;\n      uniform bool isPerspective;\n      varying vec2 ghostPlateUv;\n      void main() {\n        float depth = texture2D(sourceDepth, ghostPlateUv).x;\n        float viewZ = isPerspective\n          ? perspectiveDepthToViewZ(depth, cameraNear, cameraFar)\n          : orthographicDepthToViewZ(depth, cameraNear, cameraFar);\n        float linearDepth = clamp((-viewZ - cameraNear) / (cameraFar - cameraNear), 0.0, 1.0);\n        gl_FragColor = vec4(linearDepth, linearDepth, linearDepth, depth < 1.0 ? 1.0 : 0.0);\n      }\n    ",
 		depthTest: !1,
 		depthWrite: !1,
 		blending: 0
@@ -20797,14 +20797,14 @@ function uy() {
 }
 function dy() {
 	return new nl({
-		name: "voxel-sprite-coverage-resolve",
+		name: "ghost-plate-coverage-resolve",
 		uniforms: {
 			sourceColor: { value: null },
 			sourceDepth: { value: null },
 			alphaCutoff: { value: .001 }
 		},
-		vertexShader: "\n      varying vec2 voxelSpriteUv;\n      void main() {\n        voxelSpriteUv = uv;\n        gl_Position = vec4(position.xy, 0.0, 1.0);\n      }\n    ",
-		fragmentShader: "\n      uniform sampler2D sourceColor;\n      uniform sampler2D sourceDepth;\n      uniform float alphaCutoff;\n      varying vec2 voxelSpriteUv;\n      void main() {\n        float alpha = texture2D(sourceColor, voxelSpriteUv).a;\n        // Render-target alpha is not a reliable opaque-geometry occupancy\n        // signal for every admitted GLB material. Depth remains at one for a\n        // cleared pixel, while alpha retains cutout coverage where it exists.\n        float alphaCovered = step(alphaCutoff, alpha);\n        float depthCovered = step(texture2D(sourceDepth, voxelSpriteUv).x, 0.999999);\n        float covered = max(alphaCovered, depthCovered);\n        gl_FragColor = vec4(covered, covered, covered, covered);\n      }\n    ",
+		vertexShader: "\n      varying vec2 ghostPlateUv;\n      void main() {\n        ghostPlateUv = uv;\n        gl_Position = vec4(position.xy, 0.0, 1.0);\n      }\n    ",
+		fragmentShader: "\n      uniform sampler2D sourceColor;\n      uniform sampler2D sourceDepth;\n      uniform float alphaCutoff;\n      varying vec2 ghostPlateUv;\n      void main() {\n        float alpha = texture2D(sourceColor, ghostPlateUv).a;\n        // Render-target alpha is not a reliable opaque-geometry occupancy\n        // signal for every admitted GLB material. Depth remains at one for a\n        // cleared pixel, while alpha retains cutout coverage where it exists.\n        float alphaCovered = step(alphaCutoff, alpha);\n        float depthCovered = step(texture2D(sourceDepth, ghostPlateUv).x, 0.999999);\n        float covered = max(alphaCovered, depthCovered);\n        gl_FragColor = vec4(covered, covered, covered, covered);\n      }\n    ",
 		depthTest: !1,
 		depthWrite: !1,
 		blending: 0

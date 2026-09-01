@@ -210,7 +210,7 @@ export class GhostPlateRuntimeCapture {
   }
 
   capture(request: GhostPlateCaptureRequest): GhostPlateCaptureReceipt {
-    if (this.#disposed) return this.#rejected('capture_disposed', 'voxel sprite capture is disposed');
+    if (this.#disposed) return this.#rejected('capture_disposed', 'ghost plate capture is disposed');
 
     let validated: Required<Omit<GhostPlateCaptureRequest, 'bounds'>> & {
       readonly bounds: THREE.Box3;
@@ -362,7 +362,7 @@ function validatedDescriptor(input: GhostPlateFrameDescriptor): GhostPlateFrameD
     || !Number.isFinite(input.depth.far)
     || input.depth.near < 0
     || input.depth.far <= input.depth.near) {
-    throw new RangeError('voxel sprite frame depth range must be finite and increasing');
+    throw new RangeError('ghost plate frame depth range must be finite and increasing');
   }
   for (const [name, texture] of Object.entries(input.textures)) {
     if (!(texture instanceof THREE.Texture)) throw new TypeError(`${name} must be a Three texture`);
@@ -437,13 +437,13 @@ function validateBounds(bounds: GhostPlateFrameBounds): void {
   validateTuple(bounds.minimum);
   validateTuple(bounds.maximum);
   if (bounds.maximum.some((value, index) => value < bounds.minimum[index]!)) {
-    throw new RangeError('voxel sprite frame bounds must be increasing');
+    throw new RangeError('ghost plate frame bounds must be increasing');
   }
 }
 
 function validateTuple(tuple: readonly number[]): void {
   if (tuple.length !== 3 || tuple.some((value) => !Number.isFinite(value))) {
-    throw new TypeError('voxel sprite frame vectors must contain three finite values');
+    throw new TypeError('ghost plate frame vectors must contain three finite values');
   }
 }
 
@@ -464,9 +464,9 @@ function freezeBounds(bounds: GhostPlateFrameBounds): GhostPlateFrameBounds {
 }
 
 function createCaptureTargets(width: number, height: number): CaptureTargets {
-  const color = renderTarget('voxel-sprite-color', width, height, true);
+  const color = renderTarget('ghost-plate-color', width, height, true);
   const hardwareDepth = new THREE.DepthTexture(width, height, THREE.UnsignedIntType);
-  hardwareDepth.name = 'voxel-sprite-hardware-depth';
+  hardwareDepth.name = 'ghost-plate-hardware-depth';
   hardwareDepth.format = THREE.DepthFormat;
   hardwareDepth.minFilter = THREE.NearestFilter;
   hardwareDepth.magFilter = THREE.NearestFilter;
@@ -474,9 +474,9 @@ function createCaptureTargets(width: number, height: number): CaptureTargets {
   color.texture.colorSpace = THREE.SRGBColorSpace;
   return {
     color,
-    depth: renderTarget('voxel-sprite-linear-depth', width, height, false),
-    normal: renderTarget('voxel-sprite-view-normal', width, height, true),
-    coverage: renderTarget('voxel-sprite-coverage', width, height, false),
+    depth: renderTarget('ghost-plate-linear-depth', width, height, false),
+    normal: renderTarget('ghost-plate-view-normal', width, height, true),
+    coverage: renderTarget('ghost-plate-coverage', width, height, false),
     hardwareDepth,
   };
 }
@@ -506,7 +506,7 @@ function renderTarget(
 
 function depthResolveMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    name: 'voxel-sprite-linear-depth-resolve',
+    name: 'ghost-plate-linear-depth-resolve',
     uniforms: {
       sourceDepth: { value: null },
       cameraNear: { value: 0.1 },
@@ -514,9 +514,9 @@ function depthResolveMaterial(): THREE.ShaderMaterial {
       isPerspective: { value: true },
     },
     vertexShader: `
-      varying vec2 voxelSpriteUv;
+      varying vec2 ghostPlateUv;
       void main() {
-        voxelSpriteUv = uv;
+        ghostPlateUv = uv;
         gl_Position = vec4(position.xy, 0.0, 1.0);
       }
     `,
@@ -526,9 +526,9 @@ function depthResolveMaterial(): THREE.ShaderMaterial {
       uniform float cameraNear;
       uniform float cameraFar;
       uniform bool isPerspective;
-      varying vec2 voxelSpriteUv;
+      varying vec2 ghostPlateUv;
       void main() {
-        float depth = texture2D(sourceDepth, voxelSpriteUv).x;
+        float depth = texture2D(sourceDepth, ghostPlateUv).x;
         float viewZ = isPerspective
           ? perspectiveDepthToViewZ(depth, cameraNear, cameraFar)
           : orthographicDepthToViewZ(depth, cameraNear, cameraFar);
@@ -544,16 +544,16 @@ function depthResolveMaterial(): THREE.ShaderMaterial {
 
 function coverageResolveMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    name: 'voxel-sprite-coverage-resolve',
+    name: 'ghost-plate-coverage-resolve',
     uniforms: {
       sourceColor: { value: null },
       sourceDepth: { value: null },
       alphaCutoff: { value: 0.001 },
     },
     vertexShader: `
-      varying vec2 voxelSpriteUv;
+      varying vec2 ghostPlateUv;
       void main() {
-        voxelSpriteUv = uv;
+        ghostPlateUv = uv;
         gl_Position = vec4(position.xy, 0.0, 1.0);
       }
     `,
@@ -561,14 +561,14 @@ function coverageResolveMaterial(): THREE.ShaderMaterial {
       uniform sampler2D sourceColor;
       uniform sampler2D sourceDepth;
       uniform float alphaCutoff;
-      varying vec2 voxelSpriteUv;
+      varying vec2 ghostPlateUv;
       void main() {
-        float alpha = texture2D(sourceColor, voxelSpriteUv).a;
+        float alpha = texture2D(sourceColor, ghostPlateUv).a;
         // Render-target alpha is not a reliable opaque-geometry occupancy
         // signal for every admitted GLB material. Depth remains at one for a
         // cleared pixel, while alpha retains cutout coverage where it exists.
         float alphaCovered = step(alphaCutoff, alpha);
-        float depthCovered = step(texture2D(sourceDepth, voxelSpriteUv).x, 0.999999);
+        float depthCovered = step(texture2D(sourceDepth, ghostPlateUv).x, 0.999999);
         float covered = max(alphaCovered, depthCovered);
         gl_FragColor = vec4(covered, covered, covered, covered);
       }
