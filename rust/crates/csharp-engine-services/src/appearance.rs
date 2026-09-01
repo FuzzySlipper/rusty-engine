@@ -1262,6 +1262,11 @@ struct SpritePlaybackAdvanceLeaseBacking {
 pub(crate) struct RuntimeAppearanceCall {
     pub(crate) state: RuntimeAppearanceState,
     admitted_update: Option<NativeProductUpdateFacts>,
+    /// An attachment stage needs to rebuild the renderer-owned ghost projection
+    /// after the complete ordinary appearance snapshot has assigned fresh
+    /// source handles. This flag is consumed by that first snapshot only; the
+    /// logical product-owned ghost records remain part of the staged state.
+    rebase_ghost_plates: bool,
     /// Typed browser realization work in the order the C# product invoked the
     /// owning appearance APIs. This remains call-local: it is not a general
     /// output transport and only represents this service family's existing
@@ -1433,11 +1438,12 @@ impl RuntimeAppearanceBridge {
 
     pub(crate) fn begin_attach_call(&mut self) {
         self.begin_call_with_update(None);
-        self.staged_mut()
-            .expect("attach begins an appearance stage")
-            .state
-            .projector
-            .reset_renderer_projection();
+        let staged = self
+            .staged_mut()
+            .expect("attach begins an appearance stage");
+        staged.rebase_ghost_plates = true;
+        staged.state.projector.reset_renderer_projection();
+        staged.state.ghost_plate_projector.reset();
     }
 
     pub(crate) fn begin_update_call(&mut self, facts: NativeProductUpdateFacts) {
@@ -1448,6 +1454,7 @@ impl RuntimeAppearanceBridge {
         self.staged = Some(RuntimeAppearanceCall {
             state: self.state.clone(),
             admitted_update,
+            rebase_ghost_plates: false,
             outputs: Vec::new(),
             frame: None,
             extra_frames: Vec::new(),
@@ -5983,7 +5990,85 @@ impl RuntimeAppearanceBridge {
         )?;
         staged.state.retained_appearances = retained_appearances;
         append_projection_frame(staged, projection.frame)?;
+        if self.staged_ref()?.rebase_ghost_plates {
+            self.rebase_ghost_plates()?;
+            self.staged_mut()?.rebase_ghost_plates = false;
+        }
         self.flush_all_animations()?;
+        Ok(())
+    }
+
+    /// Rebuilds only the renderer-facing ghost projection for a detached
+    /// attachment. Product-owned presentation records and their stable
+    /// handles remain in staged state, while each source lookup is resolved
+    /// against the fresh ordinary appearance projection.
+    ///
+    /// The local projector clone and local output frame make the replay atomic
+    /// even if one retained ghost is no longer valid. The enclosing staged
+    /// call is discarded by the normal callback error path, so active runtime
+    /// state is untouched as well.
+    fn rebase_ghost_plates(&mut self) -> Result<(), CsharpEngineServicesError> {
+        let ghosts: Vec<(u64, RuntimeGhostPlatePresentation)> = self
+            .staged_ref()?
+            .state
+            .ghost_plates
+            .iter()
+            .map(|(handle, presentation)| (*handle, presentation.clone()))
+            .collect();
+        let mut projector = self.staged_ref()?.state.ghost_plate_projector.clone();
+        let mut projected = Vec::with_capacity(ghosts.len());
+
+        for (index, (handle, presentation)) in ghosts.iter().enumerate() {
+            let sequence = u32::try_from(index).map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_GHOST_PLATE",
+                    "too many retained ghost plates in one attachment",
+                )
+            })?;
+            let source = self
+                .staged_ref()?
+                .state
+                .projector
+                .object_handle(presentation.source_object_id)
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_GHOST_PLATE_SOURCE",
+                        "ghost plate source object must be present in the current Appearance snapshot",
+                    )
+                })?;
+            let op = GhostPlateProjectionOp::Create {
+                handle: GhostPlateHandle::new(*handle),
+                descriptor: ghost_plate_descriptor(presentation, source),
+            };
+            let targets = BTreeSet::from([source]);
+            let operation = projector
+                .project(&targets, PresentationOpMeta::new(sequence), op)
+                .map_err(|diagnostic| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_GHOST_PLATE",
+                        format!(
+                            "ghost plate {handle} could not be rebased: {}",
+                            diagnostic.message
+                        ),
+                    )
+                })?;
+            projected.push(operation);
+        }
+
+        if projected.is_empty() {
+            self.staged_mut()?.state.ghost_plate_projector = projector;
+            return Ok(());
+        }
+
+        let frame = PresentationFrameDiff::try_from_ops(projected).map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_GHOST_PLATE",
+                format!("rebased ghost plate presentation frame is invalid: {error:?}"),
+            )
+        })?;
+        let staged = self.staged_mut()?;
+        staged.state.ghost_plate_projector = projector;
+        push_presentation_frame(staged, frame);
         Ok(())
     }
 }
@@ -8318,6 +8403,109 @@ mod tests {
             .expect("destroy before source removal");
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }
             .expect("source removal is ordered after ghost disposal");
+    }
+
+    #[test]
+    fn attach_rebases_retained_ghost_projection_without_committing() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let appearance = bridge.create_primitive(primitive_request()).unwrap();
+        let source = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&source, 1) }.expect("source snapshot");
+        let plate = bridge
+            .presentation_create_ghost_plate(ghost_plate_request(source.object_id))
+            .expect("ghost plate");
+        let initial = bridge
+            .take_staged_call()
+            .expect("initial call")
+            .expect("initial appearance call");
+        bridge.commit(Some(initial));
+
+        let live_source = bridge.state.projector.object_handle(source.object_id);
+        let live_ghost = bridge
+            .state
+            .ghost_plate_projector
+            .descriptor(GhostPlateHandle::new(plate.value))
+            .cloned();
+        let live_projection = bridge.state.ghost_plate_projector.readout();
+
+        bridge.begin_attach_call();
+        unsafe { bridge.stage_snapshot(&source, 1) }.expect("fresh attachment snapshot");
+        let attached = bridge
+            .take_staged_call()
+            .expect("attachment call")
+            .expect("attachment appearance call");
+        assert!(attached.frame.as_ref().is_some_and(|frame| {
+            frame
+                .ops
+                .iter()
+                .any(|op| matches!(op, render_model::RenderDiff::Create { .. }))
+        }));
+
+        let fresh_source = attached.state.projector.object_handle(source.object_id);
+        let ghost_creates: Vec<_> = attached
+            .presentation
+            .iter()
+            .flat_map(|frame| frame.ops.iter())
+            .filter_map(|op| match op {
+                render_presentation::PresentationOp::GhostPlate {
+                    op:
+                        GhostPlateProjectionOp::Create {
+                            handle, descriptor, ..
+                        },
+                    ..
+                } => Some((*handle, descriptor.source)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ghost_creates.len(), 1);
+        assert_eq!(ghost_creates[0].0, GhostPlateHandle::new(plate.value));
+        assert_eq!(
+            ghost_creates[0].1,
+            fresh_source.expect("fresh source handle")
+        );
+        assert_eq!(
+            attached.state.ghost_plate_projector.readout().active_plates,
+            1
+        );
+
+        // Attachment output is deliberately detached. Dropping the staged
+        // call must leave the active projector and stable product identity
+        // exactly as they were before the fresh publication.
+        bridge.discard_call();
+        assert_eq!(
+            bridge.state.projector.object_handle(source.object_id),
+            live_source
+        );
+        assert_eq!(
+            bridge
+                .state
+                .ghost_plate_projector
+                .descriptor(GhostPlateHandle::new(plate.value)),
+            live_ghost.as_ref()
+        );
+        assert_eq!(
+            bridge.state.ghost_plate_projector.readout(),
+            live_projection
+        );
+
+        bridge.begin_call();
+        let mut moved = source;
+        moved.transform.translation.x = 2.0;
+        unsafe { bridge.stage_snapshot(&moved, 1) }.expect("incremental snapshot");
+        let next = bridge
+            .take_staged_call()
+            .expect("next call")
+            .expect("next appearance call");
+        assert!(next.presentation.is_empty());
+        assert!(next.frame.as_ref().is_some_and(|frame| {
+            frame
+                .ops
+                .iter()
+                .any(|op| matches!(op, render_model::RenderDiff::Update { .. }))
+        }));
+        bridge.commit(Some(next));
     }
 
     #[test]
