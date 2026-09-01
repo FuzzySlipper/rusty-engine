@@ -71,6 +71,7 @@ const MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES = 256 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES = 96 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_FRAGMENTS = 256;
+const MAXIMUM_CONNECTION_BASELINE_OUTPUTS = 256;
 const DEFAULT_MAXIMUM_RESPONSE_BYTES = MAXIMUM_RUNTIME_RESPONSE_BYTES;
 const DEFAULT_MAXIMUM_OUTPUT_BYTES = MAXIMUM_RUNTIME_OUTPUT_BYTES;
 const MAXIMUM_CONFIGURED_BYTES = 16 * 1024 * 1024;
@@ -272,6 +273,8 @@ export function createProductBrowserLocalHttpAdapter(
   let connectionReady: Promise<ProductBrowserRuntimeOperationResult> | null = null;
   let resolveConnectionReady: ((result: ProductBrowserRuntimeOperationResult) => void) | null = null;
   let rejectConnectionReady: ((error: ProductBrowserLocalTransportError) => void) | null = null;
+  let connectionBaselineComplete = false;
+  let pendingConnectionOutputs: ProductBrowserRuntimeOutput[] = [];
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
   let observedOutputSequence = 0n;
   const outputSequenceWaiters = new Set<{
@@ -382,6 +385,7 @@ export function createProductBrowserLocalHttpAdapter(
       stream = null;
     }
     pendingFragment = null;
+    pendingConnectionOutputs = [];
     wakeOutputSequenceWaiters();
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
@@ -551,6 +555,22 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
+  const stageOrPublishOutput = (output: ProductBrowserRuntimeOutput): void => {
+    if (connectionBaselineComplete) {
+      publishOutput(output);
+      return;
+    }
+    if (pendingConnectionOutputs.length >= MAXIMUM_CONNECTION_BASELINE_OUTPUTS) {
+      throw new ProductBrowserLocalTransportError(
+        'output_decode_failed',
+        `Product Browser local runtime connection baseline exceeds ${String(MAXIMUM_CONNECTION_BASELINE_OUTPUTS)} outputs`,
+        { route: ROUTES.freshOutputs },
+      );
+    }
+    if (output.kind === 'binding') currentOutputBinding = output.runtime;
+    pendingConnectionOutputs.push(output);
+  };
+
   const failFragmentStream = (cause: unknown): void => {
     const error = cause instanceof ProductBrowserLocalTransportError
       ? cause
@@ -586,6 +606,8 @@ export function createProductBrowserLocalHttpAdapter(
         // forced to await connect(). Keep the shared promise observable for
         // connect callers while preventing an unhandled rejection otherwise.
         void connectionReady.catch(() => undefined);
+        connectionBaselineComplete = false;
+        pendingConnectionOutputs = [];
         stream = new eventSourceConstructor(`${basePath}${ROUTES.freshOutputs}`);
         stream.onopen = () => {
           resolveOutputSubscriptionReady?.();
@@ -667,8 +689,8 @@ export function createProductBrowserLocalHttpAdapter(
               pendingFragment = null;
               completedOutput = decodeRuntimeOutput(parseBoundedJson(encoded, maximumOutputBytes));
             }
-            observeOutputSequence(event.lastEventId);
-            if (completedOutput !== null) publishOutput(completedOutput);
+            if (connectionBaselineComplete) observeOutputSequence(event.lastEventId);
+            if (completedOutput !== null) stageOrPublishOutput(completedOutput);
           } catch (cause) {
             failFragmentStream(cause);
           }
@@ -691,6 +713,10 @@ export function createProductBrowserLocalHttpAdapter(
                 { route: ROUTES.freshOutputs },
               );
             }
+            connectionBaselineComplete = true;
+            const baselineOutputs = pendingConnectionOutputs;
+            pendingConnectionOutputs = [];
+            for (const output of baselineOutputs) publishOutput(output);
             resolveConnectionReady?.(result);
             resolveConnectionReady = null;
             rejectConnectionReady = null;
@@ -723,8 +749,8 @@ export function createProductBrowserLocalHttpAdapter(
               event.data,
               Math.min(maximumOutputBytes, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
             ));
-            observeOutputSequence(event.lastEventId);
-            publishOutput(output);
+            if (connectionBaselineComplete) observeOutputSequence(event.lastEventId);
+            stageOrPublishOutput(output);
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
               ? cause
@@ -738,6 +764,11 @@ export function createProductBrowserLocalHttpAdapter(
         };
         stream.onerror = (event) => {
           if (terminalFailure !== null) return;
+          if (!connectionBaselineComplete) {
+            pendingFragment = null;
+            pendingConnectionOutputs = [];
+            currentOutputBinding = null;
+          }
           const error = new ProductBrowserLocalTransportError(
             'stream_failed',
             `Product Browser local runtime output stream failed${event instanceof Error ? `: ${event.message}` : ''}`,
@@ -755,6 +786,7 @@ export function createProductBrowserLocalHttpAdapter(
         streamFragmentListener = null;
         streamBaselineListener = null;
         pendingFragment = null;
+        pendingConnectionOutputs = [];
         wakeOutputSequenceWaiters();
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
@@ -790,6 +822,7 @@ export function createProductBrowserLocalHttpAdapter(
         stream?.close();
         stream = null;
         pendingFragment = null;
+        pendingConnectionOutputs = [];
         wakeOutputSequenceWaiters();
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
@@ -877,6 +910,7 @@ export function createProductBrowserLocalHttpAdapter(
     stream?.close();
     stream = null;
     pendingFragment = null;
+    pendingConnectionOutputs = [];
     wakeOutputSequenceWaiters();
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;

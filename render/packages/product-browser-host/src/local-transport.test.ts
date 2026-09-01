@@ -91,6 +91,12 @@ function result(operation: string): Record<string, unknown> {
   };
 }
 
+function completeConnectionBaseline(stream: FakeEventSource): void {
+  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
+  stream.emitBaseline(result('connect'), '1');
+  stream.nextEventId = 2;
+}
+
 test('same-origin local transport uses fixed typed operation routes and SSE outputs', async () => {
   FakeEventSource.instances.length = 0;
   const routes: string[] = [];
@@ -162,19 +168,22 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   FakeEventSource.instances[0]!.open();
   await readiness;
   assert.equal(outputSubscriptionReady, true);
-  FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
-  FakeEventSource.instances[0]!.emit({ kind: 'runtime-readout', readout: READOUT });
-  assert.equal(outputs.length, 2);
-  assert.equal(isolatedOutputs.length, 2);
+  FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
+  FakeEventSource.instances[0]!.emit({ kind: 'runtime-readout', readout: READOUT }, '');
+  assert.equal(outputs.length, 0);
+  assert.equal(isolatedOutputs.length, 0);
   FakeEventSource.instances[0]!.onerror?.(new Error('transient stream failure'));
   assert.equal(FakeEventSource.instances[0]!.closed, false);
-  FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
-  assert.equal(outputs.length, 3);
-  assert.equal(isolatedOutputs.length, 3);
-  assert.equal(transportErrors.length, 4);
+  FakeEventSource.instances[0]!.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
+  FakeEventSource.instances[0]!.emit({ kind: 'runtime-readout', readout: READOUT }, '');
+  assert.equal(outputs.length, 0);
+  assert.equal(isolatedOutputs.length, 0);
   const connection = adapter.connect?.();
-  FakeEventSource.instances[0]!.emitBaseline(result('connect'));
+  FakeEventSource.instances[0]!.emitBaseline(result('connect'), '1');
   assert.equal((await connection)?.operation, 'connect');
+  assert.equal(outputs.length, 2);
+  assert.equal(isolatedOutputs.length, 2);
+  assert.equal(transportErrors.length, 3);
   const lifecycle = await adapter.lifecycle({ kind: 'start' });
   assert.deepEqual(lifecycle.binding, RUNTIME);
   assert.equal(lifecycle.nextInputSequence, '1');
@@ -267,12 +276,11 @@ test('operation response waits for its exact retained-output cursor', async () =
   });
   const outputs: unknown[] = [];
   adapter.subscribeOutputs((output) => outputs.push(output));
+  const stream = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(stream);
   const operation = adapter.lifecycle({ kind: 'start' });
   let settled = false;
   void operation.then(() => { settled = true; });
-  await Promise.resolve();
-  const stream = FakeEventSource.instances[0]!;
-  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '1');
   await Promise.resolve();
   assert.equal(settled, false);
   stream.emit({ kind: 'runtime-readout', readout: READOUT }, '2');
@@ -294,7 +302,7 @@ test('duplicate and decreasing output event ids fail before subscriber publicati
     adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
     adapter.subscribeOutputs((output) => outputs.push(output));
     const stream = FakeEventSource.instances[0]!;
-    stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '1');
+    completeConnectionBaseline(stream);
     stream.emit({ kind: 'runtime-readout', readout: READOUT }, staleId);
     assert.equal(outputs.length, 1);
     assert.equal(failures.length, 1);
@@ -312,7 +320,7 @@ test('large retained output fragments publish once after complete ordered reasse
   const outputs: unknown[] = [];
   adapter.subscribeOutputs((output) => outputs.push(output));
   const stream = FakeEventSource.instances[0]!;
-  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+  completeConnectionBaseline(stream);
   const encoded = JSON.stringify({ kind: 'frame', frame: { payload: 'x'.repeat(300_000) } });
   const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
   chunks.forEach((data, fragmentIndex) => stream.emitFragment({
@@ -341,7 +349,7 @@ test('duplicate final fragment event id fails before assembled output publicatio
   adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
   adapter.subscribeOutputs((output) => outputs.push(output));
   const stream = FakeEventSource.instances[0]!;
-  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '1');
+  completeConnectionBaseline(stream);
   const encoded = JSON.stringify({ kind: 'frame', frame: { payload: 'x'.repeat(300_000) } });
   const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
   chunks.forEach((data, fragmentIndex) => stream.emitFragment({
@@ -385,7 +393,7 @@ test('output fragments fail closed on missing, duplicate, stale, oversized, and 
     adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
     adapter.subscribeOutputs((output) => outputs.push(output));
     const stream = FakeEventSource.instances[0]!;
-    stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+    completeConnectionBaseline(stream);
     exercise(stream);
     assert.equal(outputs.length, 1);
     assert.equal(failures.length, 1);

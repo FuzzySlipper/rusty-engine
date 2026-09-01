@@ -405,6 +405,17 @@ fn read_until(stream: &mut TcpStream, marker: &str) -> String {
     String::from_utf8(bytes).unwrap()
 }
 
+fn read_through_marker(stream: &mut TcpStream, marker: &str) -> String {
+    let mut bytes = Vec::new();
+    while !String::from_utf8_lossy(&bytes).ends_with(marker) {
+        let mut byte = [0_u8; 1];
+        let count = stream.read(&mut byte).unwrap();
+        assert_ne!(count, 0, "SSE stream closed before {marker}");
+        bytes.push(byte[0]);
+    }
+    String::from_utf8(bytes).unwrap()
+}
+
 fn request(origin: &str, raw: &str) -> String {
     request_bytes(origin, raw.as_bytes())
 }
@@ -576,6 +587,29 @@ fn fresh_sse_connects_once_then_attaches_after_retained_outputs_are_evicted() {
     assert_eq!(attaches.load(Ordering::SeqCst), 2);
     drop(second);
     drop(simultaneous);
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn partial_fresh_baseline_reconnects_without_a_cursor_or_second_start() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let attaches = Arc::new(AtomicUsize::new(0));
+    let host = start_reconnect(Arc::clone(&starts), Arc::clone(&attaches));
+
+    let mut interrupted = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let headers = read_through_marker(&mut interrupted, "\r\n\r\n");
+    assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+    let first_private_event = read_through_marker(&mut interrupted, "\n\n");
+    assert!(first_private_event.contains("data: {\"kind\":\"binding\""));
+    assert!(!first_private_event.contains("id: "));
+    drop(interrupted);
+
+    let mut retry = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let completed = read_until(&mut retry, "\"operation\":\"connect\"");
+    assert!(completed.contains("event: rusty-output-baseline"));
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    assert_eq!(attaches.load(Ordering::SeqCst), 1);
+    drop(retry);
     host.shutdown().unwrap();
 }
 

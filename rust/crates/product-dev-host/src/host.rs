@@ -775,14 +775,7 @@ fn handle_sse<R: ProductDevRuntime>(
                 Err(_) => return,
             };
             outputs.active_binding = Some(connection_binding);
-            for mut event in isolated.events {
-                outputs.next_id = match outputs.next_id.checked_add(1) {
-                    Some(id) => id,
-                    None => return,
-                };
-                event.id = outputs.next_id;
-                private_events.push(event);
-            }
+            private_events = isolated.events.into_iter().collect();
             outputs.next_id = match outputs.next_id.checked_add(1) {
                 Some(id) => id,
                 None => return,
@@ -802,7 +795,7 @@ fn handle_sse<R: ProductDevRuntime>(
         return;
     }
     for event in private_events {
-        if write_sse_event(&mut stream, &event).is_err() {
+        if write_sse_private_event(&mut stream, &event).is_err() {
             return;
         }
     }
@@ -847,6 +840,15 @@ fn handle_sse<R: ProductDevRuntime>(
             last_write = Instant::now();
         }
     }
+}
+
+fn write_sse_private_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()> {
+    let payload = match event.event {
+        Some(name) => format!("event: {}\ndata: {}\n\n", name, event.json),
+        None => format!("data: {}\n\n", event.json),
+    };
+    stream.write_all(payload.as_bytes())?;
+    stream.flush()
 }
 
 fn write_sse_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()> {

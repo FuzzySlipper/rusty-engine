@@ -244,13 +244,10 @@ async function handleRequest(
       if (runtimeStream.response === response) runtimeStream.response = null;
     });
     if (pathname.endsWith('/fresh')) {
-      let eventId = 0;
       for (const value of initialRuntimeOutputs()) {
-        eventId += 1;
-        response.write(`id: ${String(eventId)}\ndata: ${JSON.stringify(value)}\n\n`);
+        response.write(`data: ${JSON.stringify(value)}\n\n`);
       }
-      eventId += 1;
-      response.write(`id: ${String(eventId)}\nevent: rusty-output-baseline\ndata: ${JSON.stringify({
+      response.write(`id: 1\nevent: rusty-output-baseline\ndata: ${JSON.stringify({
         accepted: true,
         operation: 'start',
         binding: RUNTIME,

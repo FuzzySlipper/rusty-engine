@@ -38,9 +38,9 @@ test('generated-style browser composition reaches a local Rust-shaped HTTP/SSE t
         },
       ];
       const body = outputs
-        .map((value, index) => `id: ${String(index + 1)}\ndata: ${JSON.stringify(value)}\n\n`)
+        .map((value) => `data: ${JSON.stringify(value)}\n\n`)
         .join('')
-        + `id: ${String(outputs.length + 1)}\nevent: rusty-output-baseline\ndata: ${JSON.stringify({
+        + `id: 1\nevent: rusty-output-baseline\ndata: ${JSON.stringify({
           accepted: true,
           operation: 'start',
           binding: RUNTIME,
