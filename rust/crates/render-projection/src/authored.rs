@@ -1204,6 +1204,7 @@ mod tests {
                     parent: None,
                     transform: Transform::IDENTITY,
                     visible: true,
+                    layer: render_model::RenderLayer::Scene,
                     metadata: RenderMetadata::default(),
                     availability: ProjectionAvailability::Both,
                     appearance: Appearance::Primitive {
@@ -1216,6 +1217,7 @@ mod tests {
                     parent: Some(1),
                     transform: Transform::IDENTITY,
                     visible: true,
+                    layer: render_model::RenderLayer::Scene,
                     metadata: RenderMetadata::default(),
                     availability: ProjectionAvailability::Both,
                     appearance: Appearance::StaticMesh {
@@ -1277,6 +1279,7 @@ mod tests {
                     parent: None,
                     transform: Transform::IDENTITY,
                     visible: true,
+                    layer: render_model::RenderLayer::Scene,
                     metadata: RenderMetadata::default(),
                     availability: ProjectionAvailability::Both,
                     appearance: Appearance::StaticMesh {
@@ -1289,6 +1292,7 @@ mod tests {
                     parent: Some(1),
                     transform: Transform::IDENTITY,
                     visible: true,
+                    layer: render_model::RenderLayer::Scene,
                     metadata: RenderMetadata::default(),
                     availability: ProjectionAvailability::Both,
                     appearance: Appearance::Primitive {
@@ -1301,6 +1305,7 @@ mod tests {
                     parent: None,
                     transform: Transform::IDENTITY,
                     visible: true,
+                    layer: render_model::RenderLayer::Scene,
                     metadata: RenderMetadata::default(),
                     availability: ProjectionAvailability::Both,
                     appearance: Appearance::StaticMesh {
@@ -1370,6 +1375,7 @@ mod tests {
                 parent: None,
                 transform: Transform::IDENTITY,
                 visible: true,
+                layer: render_model::RenderLayer::Scene,
                 metadata: RenderMetadata::default(),
                 availability: ProjectionAvailability::Both,
                 appearance: Appearance::AnimatedMesh {
@@ -1409,6 +1415,7 @@ mod tests {
                 parent: None,
                 transform: Transform::IDENTITY,
                 visible: true,
+                layer: render_model::RenderLayer::Scene,
                 metadata: RenderMetadata::default(),
                 availability: ProjectionAvailability::AuthoredOnly,
                 appearance: Appearance::Primitive {
