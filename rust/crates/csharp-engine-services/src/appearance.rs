@@ -8436,6 +8436,41 @@ mod tests {
             .take_staged_call()
             .expect("attachment call")
             .expect("attachment appearance call");
+        let ordinary_output_index = attached
+            .outputs
+            .iter()
+            .position(|output| {
+                matches!(
+                    output,
+                    RuntimeAppearanceCallOutput::Frame(frame)
+                        if frame
+                            .ops
+                            .iter()
+                            .any(|op| matches!(op, render_model::RenderDiff::Create { .. }))
+                )
+            })
+            .expect("attachment output includes the ordinary source baseline");
+        let ghost_output_index = attached
+            .outputs
+            .iter()
+            .position(|output| {
+                matches!(
+                    output,
+                    RuntimeAppearanceCallOutput::Presentation(frame)
+                        if frame.ops.iter().any(|op| matches!(
+                            op,
+                            render_presentation::PresentationOp::GhostPlate {
+                                op: GhostPlateProjectionOp::Create { .. },
+                                ..
+                            }
+                        ))
+                )
+            })
+            .expect("attachment output includes the retained ghost baseline");
+        assert!(
+            ordinary_output_index < ghost_output_index,
+            "ordinary appearance baseline must precede retained ghost baseline"
+        );
         assert!(attached.frame.as_ref().is_some_and(|frame| {
             frame
                 .ops
