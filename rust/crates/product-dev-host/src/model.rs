@@ -574,6 +574,118 @@ impl ProductDevAnimationFeedbackResult {
     }
 }
 
+/// Closed fallback classifications reported by the retained ghost-plate host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProductDevGhostPlateFallbackReason {
+    None,
+    PreparedSourceUnsupported,
+    RealizationFailed,
+}
+
+/// One latest-state observation keyed by the opaque Engine ghost owner. This
+/// is deliberately a bounded snapshot, not a renderer event stream.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevGhostPlateFeedbackFact {
+    pub presentation: CanonicalU64,
+    pub source_matches: bool,
+    pub current_sector: u32,
+    pub local_angular_offset_degrees: Option<f64>,
+    pub fallback_active: bool,
+    pub fallback_reason: ProductDevGhostPlateFallbackReason,
+    /// Closed GhostPlateLimitationMask bits copied from the renderer host.
+    pub limitation_mask: u32,
+    pub preparation_cpu_milliseconds: Option<f64>,
+    pub capture_cpu_submission_milliseconds: Option<f64>,
+    pub retained_sector_count: u32,
+    pub retained_mesh_count: u32,
+    pub retained_material_count: u32,
+    pub retained_borrowed_texture_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevGhostPlateFeedback {
+    pub runtime: ProductDevRuntimeBinding,
+    pub replace_owner: bool,
+    pub facts: Vec<ProductDevGhostPlateFeedbackFact>,
+}
+
+impl ProductDevGhostPlateFeedback {
+    pub const MAX_FACTS: usize = 128;
+
+    pub fn validate(&self) -> Result<(), ProductDevHostError> {
+        if self.facts.len() > Self::MAX_FACTS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_GHOST_PLATE_FEEDBACK_BOUNDS",
+                "ghost plate feedback exceeds the 128 presentation bound",
+            ));
+        }
+        let mut owners = std::collections::BTreeSet::new();
+        for fact in &self.facts {
+            let fallback_active = !matches!(
+                fact.fallback_reason,
+                ProductDevGhostPlateFallbackReason::None
+            );
+            let invalid_angle = fact
+                .local_angular_offset_degrees
+                .is_some_and(|value| !value.is_finite() || !(-360.0..=360.0).contains(&value));
+            let invalid_timing = [
+                fact.preparation_cpu_milliseconds,
+                fact.capture_cpu_submission_milliseconds,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite() || value < 0.0);
+            let unsupported_limitation_mask = !matches!(fact.limitation_mask, 125 | 127);
+            if fact.presentation.get() == 0
+                || !owners.insert(fact.presentation.get())
+                || fact.fallback_active != fallback_active
+                || invalid_angle
+                || invalid_timing
+                || unsupported_limitation_mask
+            {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_GHOST_PLATE_FEEDBACK_FACT",
+                    "ghost plate feedback must contain unique owners, coherent fallback state, and finite observations",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevGhostPlateFeedbackResult {
+    pub accepted: bool,
+    pub runtime: ProductDevRuntimeBinding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
+impl ProductDevGhostPlateFeedbackResult {
+    pub fn accepted(runtime: ProductDevRuntimeBinding) -> Self {
+        Self {
+            accepted: true,
+            runtime,
+            diagnostic: None,
+        }
+    }
+
+    pub fn rejected(
+        runtime: ProductDevRuntimeBinding,
+        diagnostic: impl Into<String>,
+    ) -> Result<Self, ProductDevHostError> {
+        Ok(Self {
+            accepted: false,
+            runtime,
+            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+        })
+    }
+}
+
 /// Minimal local readout passed through from the generated runtime owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1578,5 +1690,76 @@ pub trait ProductDevRuntime: Send + 'static {
             "animation feedback is not supported by this runtime",
         )
         .expect("fixed animation-feedback diagnostic"))
+    }
+
+    /// Ingests the latest retained ghost-plate renderer snapshot. It is
+    /// exposed only by a later normal generated C# service read.
+    fn report_ghost_plate_feedback(
+        &mut self,
+        _feedback: ProductDevGhostPlateFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevGhostPlateFeedbackResult>, ProductDevRuntimeError>
+    {
+        Err(ProductDevRuntimeError::new(
+            "DEV_HOST_GHOST_PLATE_FEEDBACK_UNSUPPORTED",
+            "ghost plate feedback is not supported by this runtime",
+        )
+        .expect("fixed ghost-plate feedback diagnostic"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feedback(fact: ProductDevGhostPlateFeedbackFact) -> ProductDevGhostPlateFeedback {
+        ProductDevGhostPlateFeedback {
+            runtime: ProductDevRuntimeBinding {
+                instance_id: CanonicalU64::new(1),
+                generation: CanonicalU64::new(1),
+                control_revision: CanonicalU64::new(1),
+            },
+            replace_owner: true,
+            facts: vec![fact],
+        }
+    }
+
+    fn fact() -> ProductDevGhostPlateFeedbackFact {
+        ProductDevGhostPlateFeedbackFact {
+            presentation: CanonicalU64::new(9),
+            source_matches: true,
+            current_sector: 2,
+            local_angular_offset_degrees: None,
+            fallback_active: false,
+            fallback_reason: ProductDevGhostPlateFallbackReason::None,
+            limitation_mask: 127,
+            preparation_cpu_milliseconds: Some(1.0),
+            capture_cpu_submission_milliseconds: Some(2.0),
+            retained_sector_count: 4,
+            retained_mesh_count: 1,
+            retained_material_count: 1,
+            retained_borrowed_texture_count: 0,
+        }
+    }
+
+    #[test]
+    fn ghost_plate_feedback_rejects_invalid_timings_without_an_angle() {
+        let mut invalid_preparation = fact();
+        invalid_preparation.preparation_cpu_milliseconds = Some(-0.1);
+        assert!(feedback(invalid_preparation).validate().is_err());
+
+        let mut invalid_capture = fact();
+        invalid_capture.capture_cpu_submission_milliseconds = Some(f64::NAN);
+        assert!(feedback(invalid_capture).validate().is_err());
+    }
+
+    #[test]
+    fn ghost_plate_feedback_requires_fallback_flag_and_reason_to_agree() {
+        let mut inactive_reason = fact();
+        inactive_reason.fallback_reason = ProductDevGhostPlateFallbackReason::RealizationFailed;
+        assert!(feedback(inactive_reason).validate().is_err());
+
+        let mut active_none = fact();
+        active_none.fallback_active = true;
+        assert!(feedback(active_none).validate().is_err());
     }
 }

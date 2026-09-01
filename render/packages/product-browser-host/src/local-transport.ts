@@ -22,6 +22,9 @@ import type {
   ProductBrowserAnimationFeedback,
   ProductBrowserAnimationFeedbackFact,
   ProductBrowserAnimationFeedbackResult,
+  ProductBrowserGhostPlateFeedback,
+  ProductBrowserGhostPlateFeedbackFact,
+  ProductBrowserGhostPlateFeedbackResult,
   ProductBrowserRuntimeAdapter,
   ProductBrowserRuntimeInputResult,
   ProductBrowserRuntimeOperationKind,
@@ -62,6 +65,7 @@ const ROUTES = Object.freeze({
   completeTimeline: 'timeline-completion',
   audioFeedback: 'audio-feedback',
   animationFeedback: 'animation-feedback',
+  ghostPlateFeedback: 'ghost-plate-feedback',
   outputs: 'outputs',
   freshOutputs: 'outputs/fresh',
 });
@@ -513,6 +517,17 @@ export function createProductBrowserLocalHttpAdapter(
     );
   };
 
+  const reportGhostPlateFeedback = (
+    feedback: ProductBrowserGhostPlateFeedback,
+  ): Promise<ProductBrowserGhostPlateFeedbackResult> => {
+    const snapshot = snapshotGhostPlateFeedback(feedback);
+    return post(
+      ROUTES.ghostPlateFeedback,
+      snapshot,
+      (value) => decodeGhostPlateFeedbackResult(value, snapshot.runtime),
+    );
+  };
+
   const advanceRealtime = (observedTimeNs: string): Promise<ProductBrowserRuntimeOperationResult> =>
     post(
       ROUTES.advanceRealtime,
@@ -959,6 +974,7 @@ export function createProductBrowserLocalHttpAdapter(
     input,
     reportAudioFeedback,
     reportAnimationFeedback,
+    reportGhostPlateFeedback,
     advanceRealtime,
     admitDemandStep,
     admitExternalStep,
@@ -1328,6 +1344,54 @@ function snapshotAnimationFeedback(value: ProductBrowserAnimationFeedback): Prod
     runtime: decodeRuntimeIdentity(record.runtime), replaceOwner: record.replaceOwner,
     evictedFactCount: requireU64Text(record.evictedFactCount, 'animation feedback evictedFactCount'),
     facts: Object.freeze(facts.map((fact) => snapshotAnimationFeedbackFact(fact))),
+  });
+}
+
+function snapshotGhostPlateFeedback(value: ProductBrowserGhostPlateFeedback): ProductBrowserGhostPlateFeedback {
+  const record = requireRecord(value, 'ghost plate feedback');
+  requireKnownFields(record, ['runtime', 'replaceOwner', 'facts'], 'ghost plate feedback');
+  if (typeof record.replaceOwner !== 'boolean') throw new TypeError('ghost plate feedback replaceOwner must be boolean');
+  const facts = requirePlainArray(record.facts, 'ghost plate feedback facts');
+  if (facts.length > 128) throw new ProductBrowserLocalTransportError('invalid_options', 'ghost plate feedback exceeds 128 facts');
+  return Object.freeze({
+    runtime: decodeRuntimeIdentity(record.runtime),
+    replaceOwner: record.replaceOwner,
+    facts: Object.freeze(facts.map(snapshotGhostPlateFeedbackFact)),
+  });
+}
+
+function snapshotGhostPlateFeedbackFact(value: unknown): ProductBrowserGhostPlateFeedbackFact {
+  const record = requireRecord(value, 'ghost plate feedback fact');
+  requireKnownFields(record, [
+    'presentation', 'sourceMatches', 'currentSector', 'localAngularOffsetDegrees',
+    'fallbackActive', 'fallbackReason', 'limitationMask', 'preparationCpuMilliseconds',
+    'captureCpuSubmissionMilliseconds', 'retainedSectorCount', 'retainedMeshCount',
+    'retainedMaterialCount', 'retainedBorrowedTextureCount',
+  ], 'ghost plate feedback fact');
+  const optionalFinite = (candidate: unknown, field: string, minimum: number): number | null =>
+    candidate === null ? null : requireFiniteNumber(candidate, field, minimum, Number.MAX_VALUE);
+  const fallbackReason = requireCatalogValue<'none' | 'preparedSourceUnsupported' | 'realizationFailed'>(
+    record['fallbackReason'],
+    'ghost plate fallback reason',
+    new Set(['none', 'preparedSourceUnsupported', 'realizationFailed']),
+  );
+  if (typeof record['sourceMatches'] !== 'boolean' || typeof record['fallbackActive'] !== 'boolean') {
+    throw new TypeError('ghost plate boolean observations are invalid');
+  }
+  return Object.freeze({
+    presentation: requireU64Text(record['presentation'], 'ghost plate presentation'),
+    sourceMatches: record['sourceMatches'],
+    currentSector: requireU32(record['currentSector'], 'ghost plate current sector'),
+    localAngularOffsetDegrees: optionalFinite(record['localAngularOffsetDegrees'], 'ghost plate local angular offset', -360),
+    fallbackActive: record['fallbackActive'],
+    fallbackReason,
+    limitationMask: requireU32(record['limitationMask'], 'ghost plate limitation mask'),
+    preparationCpuMilliseconds: optionalFinite(record['preparationCpuMilliseconds'], 'ghost plate preparation cpu milliseconds', 0),
+    captureCpuSubmissionMilliseconds: optionalFinite(record['captureCpuSubmissionMilliseconds'], 'ghost plate capture cpu milliseconds', 0),
+    retainedSectorCount: requireU32(record['retainedSectorCount'], 'ghost plate retained sectors'),
+    retainedMeshCount: requireU32(record['retainedMeshCount'], 'ghost plate retained meshes'),
+    retainedMaterialCount: requireU32(record['retainedMaterialCount'], 'ghost plate retained materials'),
+    retainedBorrowedTextureCount: requireU32(record['retainedBorrowedTextureCount'], 'ghost plate retained borrowed textures'),
   });
 }
 
@@ -1760,6 +1824,26 @@ function decodeAudioFeedbackResult(
     throw new TypeError('audio feedback acknowledgement boundary does not match submitted facts');
   }
   return Object.freeze({ accepted: true, runtime, acceptedThroughFactId });
+}
+
+function decodeGhostPlateFeedbackResult(
+  value: unknown,
+  expectedRuntime: RustyApplicationRuntimeIdentity,
+): ProductBrowserGhostPlateFeedbackResult {
+  const record = requireRecord(value, 'ghost plate feedback result');
+  requireKnownFields(record, ['accepted', 'runtime', 'diagnostic'], 'ghost plate feedback result');
+  if (record.accepted !== true && record.accepted !== false) throw new TypeError('ghost plate feedback accepted must be boolean');
+  const runtime = decodeRuntimeIdentity(record.runtime);
+  if (!sameRuntimeIdentity(runtime, expectedRuntime)) throw new TypeError('ghost plate feedback result runtime does not match request runtime');
+  if (record.accepted) {
+    if (record.diagnostic !== undefined) throw new TypeError('accepted ghost plate feedback cannot include diagnostic');
+    return Object.freeze({ accepted: true, runtime });
+  }
+  return Object.freeze({
+    accepted: false,
+    runtime,
+    ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
+  });
 }
 
 function decodeAnimationFeedbackResult(

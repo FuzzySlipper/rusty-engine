@@ -32,9 +32,11 @@ use product_dev_host::{
     ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult,
     ProductDevAudioCompletionSource, ProductDevAudioFeedback, ProductDevAudioFeedbackFact,
     ProductDevAudioFeedbackResult, ProductDevControlOperation, ProductDevDebugResult,
-    ProductDevInputBatch, ProductDevInputResult, ProductDevLifecycleOperation,
-    ProductDevOperationKind, ProductDevOperationResult, ProductDevRendererResource,
-    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
+    ProductDevGhostPlateFallbackReason, ProductDevGhostPlateFeedback,
+    ProductDevGhostPlateFeedbackFact, ProductDevGhostPlateFeedbackResult, ProductDevInputBatch,
+    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
+    ProductDevOperationResult, ProductDevRendererResource, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
@@ -1726,6 +1728,7 @@ impl CsharpProductRuntime {
             .map_err(input_error)?;
         self.services.reset_audio_realization_owner();
         self.services.reset_animation_realization_owner();
+        self.services.reset_ghost_plate_realization_owner();
         self.pending_inputs.clear();
         self.pending_inputs.push(clear_input_owned(binding, reason));
         Ok(())
@@ -2230,6 +2233,108 @@ impl ProductDevRuntime for CsharpProductRuntime {
             ProductDevAnimationFeedbackResult::accepted(self.binding(), accepted_through_fact_id);
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
+
+    fn report_ghost_plate_feedback(
+        &mut self,
+        feedback: ProductDevGhostPlateFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevGhostPlateFeedbackResult>, ProductDevRuntimeError>
+    {
+        self.require_current_control_binding(Some(feedback.runtime))?;
+        feedback.validate().map_err(host_runtime_error)?;
+        let facts = feedback
+            .facts
+            .into_iter()
+            .map(ghost_plate_realization_fact)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.services
+            .ingest_ghost_plate_realization_feedback(feedback.replace_owner, facts);
+        ProductDevRuntimeReceipt::new(
+            ProductDevGhostPlateFeedbackResult::accepted(self.binding()),
+            Vec::new(),
+        )
+        .map_err(host_runtime_error)
+    }
+}
+
+fn ghost_plate_realization_fact(
+    fact: ProductDevGhostPlateFeedbackFact,
+) -> Result<csharp_engine_services::GhostPlateRealizationFact, ProductDevRuntimeError> {
+    let scalar =
+        |value: Option<f64>, field: &'static str| -> Result<Option<f64>, ProductDevRuntimeError> {
+            if value.is_some_and(|value| !value.is_finite() || value < 0.0) {
+                Err(ProductDevRuntimeError::new(
+                    "CSHARP_GHOST_PLATE_FEEDBACK",
+                    format!("ghost plate {field} is invalid"),
+                )
+                .expect("bounded ghost-plate feedback diagnostic"))
+            } else {
+                Ok(value)
+            }
+        };
+    let angle = fact
+        .local_angular_offset_degrees
+        .map(|value| {
+            if !value.is_finite() || !(-360.0..=360.0).contains(&value) {
+                return Err(ProductDevRuntimeError::new(
+                    "CSHARP_GHOST_PLATE_FEEDBACK",
+                    "ghost plate local angular offset is invalid",
+                )
+                .expect("bounded ghost-plate feedback diagnostic"));
+            }
+            Ok(value)
+        })
+        .transpose()?
+        .map(|value| {
+            if value > f64::from(f32::MAX) {
+                Err(ProductDevRuntimeError::new(
+                    "CSHARP_GHOST_PLATE_FEEDBACK",
+                    "ghost plate local angular offset exceeded f32 range",
+                )
+                .expect("bounded ghost-plate feedback diagnostic"))
+            } else {
+                Ok(value as f32)
+            }
+        })
+        .transpose()?;
+    Ok(csharp_engine_services::GhostPlateRealizationFact {
+        handle: fact.presentation.get(),
+        source_matches: fact.source_matches,
+        current_sector: fact.current_sector,
+        local_angular_offset_degrees: angle,
+        fallback_active: fact.fallback_active,
+        fallback_reason: match fact.fallback_reason {
+            ProductDevGhostPlateFallbackReason::None => NativeGhostPlateFallbackReason::None,
+            ProductDevGhostPlateFallbackReason::PreparedSourceUnsupported => {
+                NativeGhostPlateFallbackReason::PreparedSourceUnsupported
+            }
+            ProductDevGhostPlateFallbackReason::RealizationFailed => {
+                NativeGhostPlateFallbackReason::RealizationFailed
+            }
+        },
+        limitation_mask: match fact.limitation_mask {
+            127 => NativeGhostPlateLimitationMask::SingleCaptureViewProfile,
+            125 => NativeGhostPlateLimitationMask::DirectionalCaptureBankProfile,
+            _ => {
+                return Err(ProductDevRuntimeError::new(
+                    "CSHARP_GHOST_PLATE_FEEDBACK",
+                    "ghost plate limitation mask is not a supported retained profile",
+                )
+                .expect("bounded ghost-plate feedback diagnostic"));
+            }
+        },
+        preparation_cpu_milliseconds: scalar(
+            fact.preparation_cpu_milliseconds,
+            "preparation cpu milliseconds",
+        )?,
+        capture_cpu_submission_milliseconds: scalar(
+            fact.capture_cpu_submission_milliseconds,
+            "capture cpu submission milliseconds",
+        )?,
+        retained_sector_count: fact.retained_sector_count,
+        retained_mesh_count: fact.retained_mesh_count,
+        retained_material_count: fact.retained_material_count,
+        retained_borrowed_texture_count: fact.retained_borrowed_texture_count,
+    })
 }
 
 fn animation_realization_fact(

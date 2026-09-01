@@ -15,11 +15,15 @@ use render_presentation::{
     BillboardFontRef, BillboardHandle, BillboardIndicator, BillboardLayer, BillboardLayoutPolicy,
     BillboardLayoutSizing, BillboardMeter, BillboardMeterFillDirection, BillboardOverlapBehavior,
     BillboardPatch, BillboardProjectionDiagnosticCode, BillboardProjectionOp, BillboardProjector,
-    BillboardSafeArea, BillboardStatusCue, BillboardStyle, BillboardTextureRef, ParticleAnchor,
-    ParticleCollisionDescriptor, ParticleCollisionLimitBehavior, ParticleCollisionVolume,
-    ParticleEmitterDescriptor, ParticleEmitterHandle, ParticleEmitterPatch,
-    ParticleProjectionDiagnosticCode, ParticleProjectionOp, ParticleProjector, ParticleSpriteRef,
-    ParticleVisual, PresentationFrameDiff, PresentationOpMeta,
+    BillboardSafeArea, BillboardStatusCue, BillboardStyle, BillboardTextureRef,
+    GhostPlateAnchorPolicy, GhostPlateCaptureLighting, GhostPlateCaptureLightingMode,
+    GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlateHandle,
+    GhostPlateMapping, GhostPlatePatch, GhostPlatePlacement, GhostPlateProjectionOp,
+    GhostPlateProjector, GhostPlateShellMode, ParticleAnchor, ParticleCollisionDescriptor,
+    ParticleCollisionLimitBehavior, ParticleCollisionVolume, ParticleEmitterDescriptor,
+    ParticleEmitterHandle, ParticleEmitterPatch, ParticleProjectionDiagnosticCode,
+    ParticleProjectionOp, ParticleProjector, ParticleSpriteRef, ParticleVisual,
+    PresentationFrameDiff, PresentationOpMeta,
 };
 use render_projection::{
     Appearance, RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
@@ -43,6 +47,25 @@ const MAX_SPRITE_ATLAS_FRAMES: usize = 4_096;
 const MAX_SPRITE_PLAYBACK_FRAMES: usize = 4_096;
 const MAX_SPRITE_PLAYBACK_MARKERS: usize = 4_096;
 const MAX_SPRITE_PLAYBACK_TRANSITIONS_PER_ADVANCE: usize = 16_384;
+
+/// Latest bounded browser realization snapshot for one opaque ghost owner.
+/// It is observation only: product callbacks continue to own all ghost policy.
+#[derive(Clone, Copy, Debug)]
+pub struct GhostPlateRealizationFact {
+    pub handle: u64,
+    pub source_matches: bool,
+    pub current_sector: u32,
+    pub local_angular_offset_degrees: Option<f32>,
+    pub fallback_active: bool,
+    pub fallback_reason: NativeGhostPlateFallbackReason,
+    pub limitation_mask: NativeGhostPlateLimitationMask,
+    pub preparation_cpu_milliseconds: Option<f64>,
+    pub capture_cpu_submission_milliseconds: Option<f64>,
+    pub retained_sector_count: u32,
+    pub retained_mesh_count: u32,
+    pub retained_material_count: u32,
+    pub retained_borrowed_texture_count: u32,
+}
 
 /// Copied, bounded product animation facts for the existing browser animation
 /// host. The Engine retains this snapshot; no C# string remains borrowed after
@@ -1186,6 +1209,17 @@ pub(crate) struct RuntimeAppearanceState {
     particle_projector: ParticleProjector,
     billboards: BTreeMap<u64, BillboardHandle>,
     emitters: BTreeMap<u64, ParticleEmitterHandle>,
+    ghost_plate_projector: GhostPlateProjector,
+    ghost_plates: BTreeMap<u64, RuntimeGhostPlatePresentation>,
+    next_ghost_plate: u64,
+}
+
+#[derive(Clone)]
+struct RuntimeGhostPlatePresentation {
+    source_object_id: u64,
+    placement: GhostPlatePlacement,
+    capture: GhostPlateCaptureSettings,
+    config: GhostPlateConfig,
 }
 
 #[derive(Clone)]
@@ -1328,6 +1362,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     staged: Option<RuntimeAppearanceCall>,
     callback_error: Option<CsharpEngineServicesError>,
     presentation_diagnostics: Vec<StoredPresentationDiagnostic>,
+    ghost_plate_realization: BTreeMap<u64, GhostPlateRealizationFact>,
     animation_realization_facts: VecDeque<AnimationRealizationFact>,
     animation_realization_evicted: u64,
 }
@@ -1377,12 +1412,16 @@ impl RuntimeAppearanceBridge {
                 particle_projector: ParticleProjector::default(),
                 billboards: BTreeMap::new(),
                 emitters: BTreeMap::new(),
+                ghost_plate_projector: GhostPlateProjector::default(),
+                ghost_plates: BTreeMap::new(),
+                next_ghost_plate: 1,
             },
             content_resources,
             selection_sealed: false,
             staged: None,
             callback_error: None,
             presentation_diagnostics: Vec::new(),
+            ghost_plate_realization: BTreeMap::new(),
             animation_realization_facts: VecDeque::new(),
             animation_realization_evicted: 0,
         }
@@ -1753,6 +1792,188 @@ impl RuntimeAppearanceBridge {
             .nth(request.index as usize)
             .map(|diagnostic| diagnostic.receipt)
             .unwrap_or_default()
+    }
+
+    /// Replaces the renderer-owned latest ghost snapshot for the active
+    /// runtime binding. This is deliberately not a command or event queue.
+    pub(crate) fn ingest_ghost_plate_realization(
+        &mut self,
+        replace_owner: bool,
+        facts: impl IntoIterator<Item = GhostPlateRealizationFact>,
+    ) {
+        // Every admitted report is a complete latest snapshot. `replace_owner`
+        // remains the explicit binding-reset marker at the host boundary, but
+        // an ordinary empty renderer snapshot must also clear disposed plates.
+        let _ = replace_owner;
+        self.ghost_plate_realization.clear();
+        for fact in facts {
+            self.ghost_plate_realization.insert(fact.handle, fact);
+        }
+    }
+
+    pub(crate) fn presentation_create_ghost_plate(
+        &mut self,
+        request: NativeCreateGhostPlatePresentationRequest,
+    ) -> Result<NativeGhostPlatePresentationHandle, CsharpEngineServicesError> {
+        let presentation = RuntimeGhostPlatePresentation {
+            source_object_id: request.source_object_id,
+            placement: native_ghost_plate_placement(request.placement),
+            capture: native_ghost_plate_capture(request.capture),
+            config: native_ghost_plate_config(request.config),
+        };
+        let handle = {
+            let staged = self.staged_mut()?;
+            let value = staged.state.next_ghost_plate;
+            staged.state.next_ghost_plate = value.checked_add(1).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_GHOST_PLATE_HANDLE",
+                    "ghost plate handle space overflowed",
+                )
+            })?;
+            value
+        };
+        self.stage_ghost_plate(
+            handle,
+            presentation.source_object_id,
+            GhostPlateProjectionOp::Create {
+                handle: GhostPlateHandle::new(handle),
+                descriptor: ghost_plate_descriptor(
+                    &presentation,
+                    self.ghost_plate_source(&presentation)?,
+                ),
+            },
+        )?;
+        self.staged_mut()?
+            .state
+            .ghost_plates
+            .insert(handle, presentation);
+        Ok(NativeGhostPlatePresentationHandle { value: handle })
+    }
+
+    pub(crate) fn presentation_update_ghost_plate(
+        &mut self,
+        request: NativeUpdateGhostPlatePresentationRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let handle = request.presentation.value;
+        let mut next = self.ghost_plate(handle)?;
+        next.placement = native_ghost_plate_placement(request.placement);
+        next.config = native_ghost_plate_config(request.config);
+        // The browser host performs this patch as an atomic retained
+        // replacement, including sector-count capture-bank changes.
+        self.stage_ghost_plate(
+            handle,
+            next.source_object_id,
+            GhostPlateProjectionOp::Update {
+                handle: GhostPlateHandle::new(handle),
+                patch: GhostPlatePatch {
+                    placement: Some(next.placement.clone()),
+                    config: Some(next.config.clone()),
+                },
+            },
+        )?;
+        self.staged_mut()?.state.ghost_plates.insert(handle, next);
+        Ok(())
+    }
+
+    pub(crate) fn presentation_recapture_ghost_plate(
+        &mut self,
+        request: NativeRecaptureGhostPlatePresentationRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let handle = request.presentation.value;
+        let mut next = self.ghost_plate(handle)?;
+        next.capture = native_ghost_plate_capture(request.capture);
+        self.stage_ghost_plate(
+            handle,
+            next.source_object_id,
+            GhostPlateProjectionOp::Recapture {
+                handle: GhostPlateHandle::new(handle),
+                capture: Some(next.capture.clone()),
+            },
+        )?;
+        self.staged_mut()?.state.ghost_plates.insert(handle, next);
+        Ok(())
+    }
+
+    pub(crate) fn presentation_read_ghost_plate(
+        &self,
+        presentation: NativeGhostPlatePresentationHandle,
+    ) -> Result<NativeGhostPlatePresentationReadout, CsharpEngineServicesError> {
+        let staged = self.staged_ref()?;
+        let ghost = staged
+            .state
+            .ghost_plates
+            .get(&presentation.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_GHOST_PLATE_HANDLE",
+                    "ghost plate presentation is not live",
+                )
+            })?;
+        let source_present = staged
+            .state
+            .projector
+            .object_handle(ghost.source_object_id)
+            .is_some();
+        let observed = self.ghost_plate_realization.get(&presentation.value);
+        Ok(NativeGhostPlatePresentationReadout {
+            source_object_id: ghost.source_object_id,
+            source_present,
+            has_renderer_observation: observed.is_some(),
+            source_matches: observed.is_some_and(|fact| fact.source_matches),
+            current_sector: observed.map_or(0, |fact| fact.current_sector),
+            has_local_angular_offset: observed
+                .and_then(|fact| fact.local_angular_offset_degrees)
+                .is_some(),
+            local_angular_offset_degrees: observed
+                .and_then(|fact| fact.local_angular_offset_degrees)
+                .unwrap_or_default(),
+            fallback_active: observed.is_some_and(|fact| fact.fallback_active),
+            fallback_reason: observed.map_or(NativeGhostPlateFallbackReason::None, |fact| {
+                fact.fallback_reason
+            }),
+            limitation_mask: observed.map_or(NativeGhostPlateLimitationMask::None, |fact| {
+                fact.limitation_mask
+            }),
+            has_preparation_cpu_milliseconds: observed
+                .and_then(|fact| fact.preparation_cpu_milliseconds)
+                .is_some(),
+            preparation_cpu_milliseconds: observed
+                .and_then(|fact| fact.preparation_cpu_milliseconds)
+                .unwrap_or_default(),
+            has_capture_cpu_submission_milliseconds: observed
+                .and_then(|fact| fact.capture_cpu_submission_milliseconds)
+                .is_some(),
+            capture_cpu_submission_milliseconds: observed
+                .and_then(|fact| fact.capture_cpu_submission_milliseconds)
+                .unwrap_or_default(),
+            retained_sector_count: observed.map_or(u32::from(ghost.config.sector_count), |fact| {
+                fact.retained_sector_count
+            }),
+            retained_mesh_count: observed.map_or(0, |fact| fact.retained_mesh_count),
+            retained_material_count: observed.map_or(0, |fact| fact.retained_material_count),
+            retained_borrowed_texture_count: observed
+                .map_or(0, |fact| fact.retained_borrowed_texture_count),
+            capture: native_ghost_plate_capture_readout(&ghost.capture),
+            config: native_ghost_plate_config_readout(&ghost.config),
+        })
+    }
+
+    pub(crate) fn presentation_destroy_ghost_plate(
+        &mut self,
+        presentation: NativeGhostPlatePresentationHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let handle = presentation.value;
+        self.ghost_plate(handle)?;
+        self.stage_ghost_plate(
+            handle,
+            self.ghost_plate(handle)?.source_object_id,
+            GhostPlateProjectionOp::Destroy {
+                handle: GhostPlateHandle::new(handle),
+            },
+        )?;
+        self.staged_mut()?.state.ghost_plates.remove(&handle);
+        self.ghost_plate_realization.remove(&handle);
+        Ok(())
     }
 
     pub(crate) fn record_callback_error(&mut self, error: CsharpEngineServicesError) {
@@ -2288,6 +2509,77 @@ impl RuntimeAppearanceBridge {
                     diagnostic.message,
                 ))
             }
+        }
+    }
+
+    fn ghost_plate(
+        &self,
+        handle: u64,
+    ) -> Result<RuntimeGhostPlatePresentation, CsharpEngineServicesError> {
+        self.staged_ref()?
+            .state
+            .ghost_plates
+            .get(&handle)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_GHOST_PLATE_HANDLE",
+                    "ghost plate presentation is not live",
+                )
+            })
+    }
+
+    fn ghost_plate_source(
+        &self,
+        presentation: &RuntimeGhostPlatePresentation,
+    ) -> Result<RenderHandle, CsharpEngineServicesError> {
+        self.staged_ref()?
+            .state
+            .projector
+            .object_handle(presentation.source_object_id)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_GHOST_PLATE_SOURCE",
+                    "ghost plate source object must be present in the current Appearance snapshot",
+                )
+            })
+    }
+
+    fn stage_ghost_plate(
+        &mut self,
+        handle: u64,
+        source_object_id: u64,
+        op: GhostPlateProjectionOp,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let result = {
+            let staged = self.staged_mut()?;
+            let source = staged
+                .state
+                .projector
+                .object_handle(source_object_id)
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_GHOST_PLATE_SOURCE",
+                        "ghost plate source object must be present in the current Appearance snapshot",
+                    )
+                })?;
+            let targets = BTreeSet::from([source]);
+            staged
+                .state
+                .ghost_plate_projector
+                .project(&targets, PresentationOpMeta::new(0), op)
+        };
+        match result {
+            Ok(projected) => {
+                let mut frame = PresentationFrameDiff::new();
+                frame.ops.push(projected);
+                push_presentation_frame(self.staged_mut()?, frame);
+                Ok(())
+            }
+            Err(diagnostic) => Err(CsharpEngineServicesError::new(
+                "CSHARP_GHOST_PLATE",
+                format!("ghost plate {handle} was rejected: {}", diagnostic.message),
+            )),
         }
     }
 
@@ -5670,6 +5962,14 @@ impl RuntimeAppearanceBridge {
                 ));
             }
         }
+        for ghost in staged.state.ghost_plates.values() {
+            if !retained_appearances.contains_key(&ghost.source_object_id) {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_GHOST_PLATE_SNAPSHOT_ORDER",
+                    "dispose ghost plate presentations before publishing a snapshot that removes their source object",
+                ));
+            }
+        }
         let projection = staged.state.projector.project(&owned).map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_VISUAL_SNAPSHOT", format!("{error:?}"))
         })?;
@@ -7428,6 +7728,161 @@ fn native_color(value: NativeColor) -> [f32; 4] {
     [value.r, value.g, value.b, value.a]
 }
 
+fn native_ghost_plate_placement(value: NativeGhostPlatePlacement) -> GhostPlatePlacement {
+    GhostPlatePlacement {
+        transform: Transform {
+            translation: native_vec3_array(value.transform.translation),
+            rotation: [
+                value.transform.rotation.x,
+                value.transform.rotation.y,
+                value.transform.rotation.z,
+                value.transform.rotation.w,
+            ],
+            scale: native_vec3_array(value.transform.scale),
+        },
+        width: value.width,
+        height: value.height,
+    }
+}
+
+fn native_ghost_plate_capture(value: NativeGhostPlateCaptureSettings) -> GhostPlateCaptureSettings {
+    GhostPlateCaptureSettings {
+        resolution: value.resolution,
+        azimuth_degrees: value.azimuth_degrees,
+        elevation_degrees: value.elevation_degrees,
+        near: value.near,
+        far: value.far,
+        field_of_view_degrees: value.field_of_view_degrees,
+        lighting: GhostPlateCaptureLighting {
+            mode: match value.lighting.mode {
+                NativeGhostPlateCaptureLightingMode::Scene => GhostPlateCaptureLightingMode::Scene,
+                NativeGhostPlateCaptureLightingMode::Isolated => {
+                    GhostPlateCaptureLightingMode::Isolated
+                }
+            },
+            ambient_color: native_vec3_array(value.lighting.ambient_color),
+            ambient_intensity: value.lighting.ambient_intensity,
+            key_direction: native_vec3_array(value.lighting.key_direction),
+            key_color: native_vec3_array(value.lighting.key_color),
+            key_intensity: value.lighting.key_intensity,
+            fill_direction: native_vec3_array(value.lighting.fill_direction),
+            fill_color: native_vec3_array(value.lighting.fill_color),
+            fill_intensity: value.lighting.fill_intensity,
+        },
+    }
+}
+
+fn native_ghost_plate_config(value: NativeGhostPlateConfig) -> GhostPlateConfig {
+    GhostPlateConfig {
+        depth_retention: value.depth_retention,
+        anchor_policy: match value.anchor_policy {
+            NativeGhostPlateAnchorPolicy::BoundsCenter => GhostPlateAnchorPolicy::BoundsCenter,
+            NativeGhostPlateAnchorPolicy::BoundsNormalized => {
+                GhostPlateAnchorPolicy::BoundsNormalized
+            }
+        },
+        anchor_value: value.anchor_value,
+        plate_mapping: match value.plate_mapping {
+            NativeGhostPlateMapping::PlateLocked => GhostPlateMapping::PlateLocked,
+            NativeGhostPlateMapping::ProjectiveSurface => GhostPlateMapping::ProjectiveSurface,
+        },
+        shell_mode: match value.shell_mode {
+            NativeGhostPlateShellMode::WholeMesh => GhostPlateShellMode::WholeMesh,
+            NativeGhostPlateShellMode::StrictSource => GhostPlateShellMode::StrictSource,
+            NativeGhostPlateShellMode::RepairedSource => GhostPlateShellMode::RepairedSource,
+        },
+        shell_depth_epsilon: value.shell_depth_epsilon,
+        sector_count: value.sector_count,
+        sector_hysteresis_degrees: value.sector_hysteresis_degrees,
+    }
+}
+
+fn ghost_plate_descriptor(
+    presentation: &RuntimeGhostPlatePresentation,
+    source: RenderHandle,
+) -> GhostPlateDescriptor {
+    GhostPlateDescriptor {
+        source,
+        placement: presentation.placement.clone(),
+        capture: presentation.capture.clone(),
+        config: presentation.config.clone(),
+    }
+}
+
+fn native_ghost_plate_capture_readout(
+    value: &GhostPlateCaptureSettings,
+) -> NativeGhostPlateCaptureSettings {
+    NativeGhostPlateCaptureSettings {
+        resolution: value.resolution,
+        azimuth_degrees: value.azimuth_degrees,
+        elevation_degrees: value.elevation_degrees,
+        near: value.near,
+        far: value.far,
+        field_of_view_degrees: value.field_of_view_degrees,
+        lighting: NativeGhostPlateCaptureLighting {
+            mode: match value.lighting.mode {
+                GhostPlateCaptureLightingMode::Scene => NativeGhostPlateCaptureLightingMode::Scene,
+                GhostPlateCaptureLightingMode::Isolated => {
+                    NativeGhostPlateCaptureLightingMode::Isolated
+                }
+            },
+            ambient_color: NativeVec3 {
+                x: value.lighting.ambient_color[0],
+                y: value.lighting.ambient_color[1],
+                z: value.lighting.ambient_color[2],
+            },
+            ambient_intensity: value.lighting.ambient_intensity,
+            key_direction: NativeVec3 {
+                x: value.lighting.key_direction[0],
+                y: value.lighting.key_direction[1],
+                z: value.lighting.key_direction[2],
+            },
+            key_color: NativeVec3 {
+                x: value.lighting.key_color[0],
+                y: value.lighting.key_color[1],
+                z: value.lighting.key_color[2],
+            },
+            key_intensity: value.lighting.key_intensity,
+            fill_direction: NativeVec3 {
+                x: value.lighting.fill_direction[0],
+                y: value.lighting.fill_direction[1],
+                z: value.lighting.fill_direction[2],
+            },
+            fill_color: NativeVec3 {
+                x: value.lighting.fill_color[0],
+                y: value.lighting.fill_color[1],
+                z: value.lighting.fill_color[2],
+            },
+            fill_intensity: value.lighting.fill_intensity,
+        },
+    }
+}
+
+fn native_ghost_plate_config_readout(value: &GhostPlateConfig) -> NativeGhostPlateConfig {
+    NativeGhostPlateConfig {
+        depth_retention: value.depth_retention,
+        anchor_policy: match value.anchor_policy {
+            GhostPlateAnchorPolicy::BoundsCenter => NativeGhostPlateAnchorPolicy::BoundsCenter,
+            GhostPlateAnchorPolicy::BoundsNormalized => {
+                NativeGhostPlateAnchorPolicy::BoundsNormalized
+            }
+        },
+        anchor_value: value.anchor_value,
+        plate_mapping: match value.plate_mapping {
+            GhostPlateMapping::PlateLocked => NativeGhostPlateMapping::PlateLocked,
+            GhostPlateMapping::ProjectiveSurface => NativeGhostPlateMapping::ProjectiveSurface,
+        },
+        shell_mode: match value.shell_mode {
+            GhostPlateShellMode::WholeMesh => NativeGhostPlateShellMode::WholeMesh,
+            GhostPlateShellMode::StrictSource => NativeGhostPlateShellMode::StrictSource,
+            GhostPlateShellMode::RepairedSource => NativeGhostPlateShellMode::RepairedSource,
+        },
+        shell_depth_epsilon: value.shell_depth_epsilon,
+        sector_count: value.sector_count,
+        sector_hysteresis_degrees: value.sector_hysteresis_degrees,
+    }
+}
+
 fn sprite_instance_descriptor(
     asset: String,
     frame: u32,
@@ -7708,6 +8163,188 @@ mod tests {
             })
             .unwrap();
         assert_ne!(replacement.value, appearance.value);
+    }
+
+    fn ghost_plate_request(source_object_id: u64) -> NativeCreateGhostPlatePresentationRequest {
+        NativeCreateGhostPlatePresentationRequest {
+            source_object_id,
+            placement: NativeGhostPlatePlacement {
+                transform: NativeTransform {
+                    translation: NativeVec3 {
+                        x: 0.0,
+                        y: 1.0,
+                        z: 0.0,
+                    },
+                    rotation: NativeQuat {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        w: 1.0,
+                    },
+                    scale: NativeVec3 {
+                        x: 1.0,
+                        y: 1.0,
+                        z: 1.0,
+                    },
+                },
+                width: 1.0,
+                height: 1.0,
+            },
+            capture: NativeGhostPlateCaptureSettings {
+                resolution: 64,
+                azimuth_degrees: 0.0,
+                elevation_degrees: 10.0,
+                near: 0.1,
+                far: 20.0,
+                field_of_view_degrees: 55.0,
+                lighting: NativeGhostPlateCaptureLighting {
+                    mode: NativeGhostPlateCaptureLightingMode::Isolated,
+                    ambient_color: NativeVec3 {
+                        x: 0.25,
+                        y: 0.25,
+                        z: 0.25,
+                    },
+                    ambient_intensity: 0.5,
+                    key_direction: NativeVec3 {
+                        x: 0.5,
+                        y: 1.0,
+                        z: 0.25,
+                    },
+                    key_color: NativeVec3 {
+                        x: 1.0,
+                        y: 1.0,
+                        z: 1.0,
+                    },
+                    key_intensity: 1.0,
+                    fill_direction: NativeVec3 {
+                        x: -0.5,
+                        y: 0.25,
+                        z: -1.0,
+                    },
+                    fill_color: NativeVec3 {
+                        x: 0.5,
+                        y: 0.5,
+                        z: 0.5,
+                    },
+                    fill_intensity: 0.25,
+                },
+            },
+            config: NativeGhostPlateConfig {
+                depth_retention: 0.5,
+                anchor_policy: NativeGhostPlateAnchorPolicy::BoundsCenter,
+                anchor_value: 0.5,
+                plate_mapping: NativeGhostPlateMapping::PlateLocked,
+                shell_mode: NativeGhostPlateShellMode::WholeMesh,
+                shell_depth_epsilon: 0.01,
+                sector_count: 4,
+                sector_hysteresis_degrees: 5.0,
+            },
+        }
+    }
+
+    #[test]
+    fn ghost_plate_is_product_id_owned_and_preserves_live_state_on_failed_update() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let appearance = bridge.create_primitive(primitive_request()).unwrap();
+        let source = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&source, 1) }.expect("source snapshot");
+
+        let request = ghost_plate_request(source.object_id);
+        let plate = bridge
+            .presentation_create_ghost_plate(request)
+            .expect("create ghost plate from product object id");
+        let initial = bridge
+            .presentation_read_ghost_plate(plate)
+            .expect("initial readout");
+        assert_eq!(initial.source_object_id, source.object_id);
+        assert!(initial.source_present);
+        assert!(!initial.has_renderer_observation);
+        assert_eq!(initial.config.sector_count, 4);
+
+        let mut update = request.config;
+        update.sector_count = 8;
+        bridge
+            .presentation_update_ghost_plate(NativeUpdateGhostPlatePresentationRequest {
+                presentation: plate,
+                placement: request.placement,
+                config: update,
+            })
+            .expect("hard-snap ghost update");
+        bridge
+            .presentation_recapture_ghost_plate(NativeRecaptureGhostPlatePresentationRequest {
+                presentation: plate,
+                capture: NativeGhostPlateCaptureSettings {
+                    azimuth_degrees: 45.0,
+                    ..request.capture
+                },
+            })
+            .expect("recapture ghost plate");
+        assert_eq!(
+            bridge
+                .presentation_read_ghost_plate(plate)
+                .unwrap()
+                .config
+                .sector_count,
+            8
+        );
+
+        update.sector_count = 0;
+        assert!(bridge
+            .presentation_update_ghost_plate(NativeUpdateGhostPlatePresentationRequest {
+                presentation: plate,
+                placement: request.placement,
+                config: update,
+            })
+            .is_err());
+        assert_eq!(
+            bridge
+                .presentation_read_ghost_plate(plate)
+                .unwrap()
+                .config
+                .sector_count,
+            8,
+            "a rejected replacement leaves the live presentation intact"
+        );
+
+        let call = bridge.take_staged_call().unwrap();
+        bridge.commit(call);
+        bridge.begin_call();
+        let error = unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap_err();
+        assert_eq!(error.code(), "CSHARP_GHOST_PLATE_SNAPSHOT_ORDER");
+        bridge
+            .presentation_destroy_ghost_plate(plate)
+            .expect("destroy before source removal");
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }
+            .expect("source removal is ordered after ghost disposal");
+    }
+
+    #[test]
+    fn ghost_plate_realization_snapshot_replaces_active_observations_with_empty() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.ingest_ghost_plate_realization(
+            false,
+            [GhostPlateRealizationFact {
+                handle: 9,
+                source_matches: true,
+                current_sector: 2,
+                local_angular_offset_degrees: Some(12.0),
+                fallback_active: false,
+                fallback_reason: NativeGhostPlateFallbackReason::None,
+                limitation_mask: NativeGhostPlateLimitationMask::SingleCaptureViewProfile,
+                preparation_cpu_milliseconds: Some(1.0),
+                capture_cpu_submission_milliseconds: Some(2.0),
+                retained_sector_count: 4,
+                retained_mesh_count: 1,
+                retained_material_count: 1,
+                retained_borrowed_texture_count: 0,
+            }],
+        );
+        assert!(bridge.ghost_plate_realization.contains_key(&9));
+        bridge.ingest_ghost_plate_realization(false, []);
+        assert!(bridge.ghost_plate_realization.is_empty());
     }
 
     #[test]

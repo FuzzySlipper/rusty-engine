@@ -133,6 +133,36 @@ export interface ProductBrowserAnimationFeedbackResult {
   readonly diagnostic?: string;
 }
 
+/** Latest retained ghost-plate realization snapshot. Owner identities are opaque Engine values. */
+export interface ProductBrowserGhostPlateFeedbackFact {
+  readonly presentation: string;
+  readonly sourceMatches: boolean;
+  readonly currentSector: number;
+  readonly localAngularOffsetDegrees: number | null;
+  readonly fallbackActive: boolean;
+  readonly fallbackReason: 'none' | 'preparedSourceUnsupported' | 'realizationFailed';
+  /** Closed GhostPlateLimitationMask bits copied from the renderer host. */
+  readonly limitationMask: number;
+  readonly preparationCpuMilliseconds: number | null;
+  readonly captureCpuSubmissionMilliseconds: number | null;
+  readonly retainedSectorCount: number;
+  readonly retainedMeshCount: number;
+  readonly retainedMaterialCount: number;
+  readonly retainedBorrowedTextureCount: number;
+}
+
+export interface ProductBrowserGhostPlateFeedback {
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly replaceOwner: boolean;
+  readonly facts: readonly ProductBrowserGhostPlateFeedbackFact[];
+}
+
+export interface ProductBrowserGhostPlateFeedbackResult {
+  readonly accepted: boolean;
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly diagnostic?: string;
+}
+
 export interface ProductBrowserTimelineCompletion {
   /** Canonical decimal u64 ticket issued by runtime-timeline. */
   readonly ticket: string;
@@ -240,6 +270,9 @@ export interface ProductBrowserRuntimeAdapter {
   readonly reportAnimationFeedback: (
     feedback: ProductBrowserAnimationFeedback,
   ) => Promise<ProductBrowserAnimationFeedbackResult>;
+  readonly reportGhostPlateFeedback: (
+    feedback: ProductBrowserGhostPlateFeedback,
+  ) => Promise<ProductBrowserGhostPlateFeedbackResult>;
   readonly advanceRealtime: (
     observedTimeNs: string,
   ) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -268,6 +301,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly input: ProductBrowserRuntimeAdapter['input'];
   readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
   readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
+  readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
   readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
   readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
   readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -291,6 +325,7 @@ export function createProductBrowserRuntimeTransport(
   requireFunction(adapter.input, 'input');
   requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
   requireFunction(adapter.reportAnimationFeedback, 'reportAnimationFeedback');
+  requireFunction(adapter.reportGhostPlateFeedback, 'reportGhostPlateFeedback');
   requireFunction(adapter.advanceRealtime, 'advanceRealtime');
   if (adapter.admitDemandStep !== undefined) {
     requireFunction(adapter.admitDemandStep, 'admitDemandStep');
@@ -315,6 +350,7 @@ export function createProductBrowserRuntimeTransport(
     input: adapter.input,
     reportAudioFeedback: adapter.reportAudioFeedback,
     reportAnimationFeedback: adapter.reportAnimationFeedback,
+    reportGhostPlateFeedback: adapter.reportGhostPlateFeedback,
     advanceRealtime: adapter.advanceRealtime,
     ...(adapter.admitDemandStep === undefined ? {} : { admitDemandStep: adapter.admitDemandStep }),
     ...(adapter.admitExternalStep === undefined ? {} : { admitExternalStep: adapter.admitExternalStep }),
@@ -545,6 +581,11 @@ interface ProductBrowserAnimationFeedbackReporter {
   readonly flush: () => Promise<void>;
 }
 
+interface ProductBrowserGhostPlateFeedbackReporter {
+  readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
+  readonly flush: () => Promise<void>;
+}
+
 /** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
 export function createProductBrowserAudioFeedbackReporter(options: {
   readonly renderer: Pick<RustyApplicationHost['renderer'],
@@ -669,6 +710,55 @@ export function createProductBrowserAnimationFeedbackReporter(options: {
   return Object.freeze({ bindRuntime, flush });
 }
 
+/** @internal Latest-state ghost realization reporter; it has no renderer command path. */
+export function createProductBrowserGhostPlateFeedbackReporter(options: {
+  readonly renderer: Pick<RustyApplicationHost['renderer'], 'ghostPlateReadout'>;
+  readonly report: ProductBrowserRuntimeTransport['reportGhostPlateFeedback'];
+  readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+}): ProductBrowserGhostPlateFeedbackReporter {
+  let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
+  let replaceOwnerPending = currentBinding !== null;
+  const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
+    if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) replaceOwnerPending = true;
+    currentBinding = runtime;
+  };
+  const flush = async (): Promise<void> => {
+    const binding = currentBinding;
+    if (binding === null) return;
+    const plates = options.renderer.ghostPlateReadout()?.plates ?? [];
+    const facts: ProductBrowserGhostPlateFeedbackFact[] = plates.map((plate) => Object.freeze({
+      presentation: canonicalSafeU64(Number(plate.handle), 'ghost plate presentation'),
+      sourceMatches: plate.sourceMatch,
+      currentSector: plate.currentSector,
+      localAngularOffsetDegrees: plate.localAzimuthDegrees,
+      fallbackActive: plate.fallbackActive,
+      fallbackReason: plate.fallbackReason === 'prepared-source-unsupported'
+        ? 'preparedSourceUnsupported'
+        : plate.fallbackReason === null ? 'none' : 'realizationFailed',
+      limitationMask: plate.limitationMask,
+      preparationCpuMilliseconds: plate.preparationCpuMilliseconds,
+      captureCpuSubmissionMilliseconds: plate.captureCpuSubmissionMilliseconds,
+      retainedSectorCount: plate.retainedResourceCounts.sectors,
+      retainedMeshCount: plate.retainedResourceCounts.meshes,
+      retainedMaterialCount: plate.retainedResourceCounts.materials,
+      retainedBorrowedTextureCount: plate.retainedResourceCounts.borrowedTextures,
+    }));
+    const result = await options.report(Object.freeze({
+      runtime: binding,
+      replaceOwner: replaceOwnerPending,
+      facts: Object.freeze(facts),
+    }));
+    if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
+      throw new ProductBrowserHostError('transport_failed', 'ghost plate feedback result did not match the current Product runtime binding');
+    }
+    if (!result.accepted || result.diagnostic !== undefined) {
+      throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'ghost plate feedback was rejected by the runtime');
+    }
+    replaceOwnerPending = false;
+  };
+  return Object.freeze({ bindRuntime, flush });
+}
+
 /** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
 export async function flushProductBrowserAudioFeedbackBeforeUpdate<T>(
   flush: () => Promise<void>,
@@ -714,6 +804,7 @@ export async function mountProductBrowserHost(
   let runtimeProgress = 0;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
+  let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
   // Renderer calls can be asynchronous (notably presentation realization),
   // while the retained runtime output port is synchronous. Keep their typed
   // realization order private to this host so a later frame cannot overtake a
@@ -846,6 +937,7 @@ export async function mountProductBrowserHost(
   const flushRendererFeedback = async (): Promise<void> => {
     await audioFeedbackReporter?.flush();
     await animationFeedbackReporter?.flush();
+    await ghostPlateFeedbackReporter?.flush();
   };
 
   const scheduleRendererFeedbackFlush = (): void => {
@@ -898,6 +990,7 @@ export async function mountProductBrowserHost(
         case 'binding':
           audioFeedbackReporter?.bindRuntime(output.runtime);
           animationFeedbackReporter?.bindRuntime(output.runtime);
+          ghostPlateFeedbackReporter?.bindRuntime(output.runtime);
           host.input?.bindRuntime({
             runtime: output.runtime,
             context: options.inputContext ?? 'gameplay.default',
@@ -1164,6 +1257,13 @@ export async function mountProductBrowserHost(
     animationFeedbackReporter = createProductBrowserAnimationFeedbackReporter({
       renderer: application.renderer,
       report: transport.reportAnimationFeedback,
+      ...(options.runtimeInput?.binding === undefined
+        ? {}
+        : { initialRuntime: options.runtimeInput.binding }),
+    });
+    ghostPlateFeedbackReporter = createProductBrowserGhostPlateFeedbackReporter({
+      renderer: application.renderer,
+      report: transport.reportGhostPlateFeedback,
       ...(options.runtimeInput?.binding === undefined
         ? {}
         : { initialRuntime: options.runtimeInput.binding }),

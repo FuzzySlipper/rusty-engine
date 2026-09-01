@@ -5,6 +5,7 @@ import {
   PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE,
   bindProductBrowserInitialRendererFrame,
   createProductBrowserAudioFeedbackReporter,
+  createProductBrowserGhostPlateFeedbackReporter,
   createProductBrowserRuntimeTransport,
   flushProductBrowserAudioFeedbackBeforeUpdate,
   productBrowserInitialRendererFrameRequired,
@@ -44,6 +45,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
       ? {}
       : { acceptedThroughFactId: feedback.facts[feedback.facts.length - 1]!.factId }),
   }),
+  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, runtime: feedback.runtime }),
   advanceRealtime: async () => ({ accepted: true, operation: 'advance-realtime' as const }),
   subscribeOutputs: () => () => undefined,
   dispose: () => undefined,
@@ -194,6 +196,41 @@ test('audio feedback claims the initial owner, retries without loss, and acknowl
   await reporter.flush();
   assert.deepEqual((reports[3]!['facts'] as Array<Record<string, unknown>>).map((fact) => fact['factId']), ['2']);
   assert.deepEqual(acknowledgements, [1, 2]);
+});
+
+test('ghost plate feedback replaces an active snapshot with an empty snapshot after disposal', async () => {
+  const reports: Array<{ readonly facts: readonly unknown[]; readonly replaceOwner: boolean }> = [];
+  let plates: readonly unknown[] = [
+    {
+      handle: 9,
+      sourceMatch: true,
+      currentSector: 2,
+      localAzimuthDegrees: 12,
+      fallbackActive: false,
+      fallbackReason: null,
+      limitationMask: 125,
+      preparationCpuMilliseconds: 1,
+      captureCpuSubmissionMilliseconds: 2,
+      retainedResourceCounts: { sectors: 4, meshes: 1, materials: 1, borrowedTextures: 0 },
+    },
+  ];
+  const renderer = { ghostPlateReadout: () => ({ activePlates: plates.length, plates }) } as unknown as Parameters<typeof createProductBrowserGhostPlateFeedbackReporter>[0]['renderer'];
+  const reporter = createProductBrowserGhostPlateFeedbackReporter({
+    renderer,
+    report: async (feedback) => {
+      reports.push(feedback);
+      return { accepted: true, runtime: feedback.runtime };
+    },
+    initialRuntime: AUDIO_RUNTIME,
+  });
+  await reporter.flush();
+  plates = [];
+  await reporter.flush();
+  assert.equal(reports.length, 2);
+  assert.equal(reports[0]?.facts.length, 1);
+  assert.equal(reports[1]?.facts.length, 0);
+  assert.equal(reports[0]?.replaceOwner, true);
+  assert.equal(reports[1]?.replaceOwner, false);
 });
 
 test('audio feedback flush precedes every browser-host C# update admission lane', async () => {

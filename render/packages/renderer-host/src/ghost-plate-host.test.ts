@@ -74,6 +74,7 @@ class FakePresentation implements RendererGhostPlatePresentation {
       config: this.descriptor?.config ?? descriptor.config,
       fallbackActive: false,
       fallbackReason: null,
+      limitationMask: 125,
       preparationCpuMilliseconds: 4,
       captureCpuSubmissionMilliseconds: null,
       retainedResourceCounts: { sectors: 16, meshes: 32, materials: 32, borrowedTextures: 48 },

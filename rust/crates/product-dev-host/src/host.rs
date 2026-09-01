@@ -348,6 +348,9 @@ fn dispatch_request<R: ProductDevRuntime>(
         "/__rusty/product/runtime/animation-feedback" => {
             invoke_animation_feedback(state, &request.body)
         }
+        "/__rusty/product/runtime/ghost-plate-feedback" => {
+            invoke_ghost_plate_feedback(state, &request.body)
+        }
         _ => HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
     }
 }
@@ -603,6 +606,30 @@ fn invoke_animation_feedback<R: ProductDevRuntime>(
         |runtime| runtime.report_animation_feedback(request),
         |error| {
             crate::ProductDevAnimationFeedbackResult::rejected(
+                binding,
+                format!("{}: {}", error.code(), error.diagnostic()),
+            )
+        },
+    )
+}
+
+fn invoke_ghost_plate_feedback<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    body: &[u8],
+) -> HttpResponse {
+    let request: crate::ProductDevGhostPlateFeedback = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(error) = request.validate() {
+        return HttpResponse::error(400, error.code(), error.detail());
+    }
+    let binding = request.runtime;
+    call_runtime(
+        state,
+        |runtime| runtime.report_ghost_plate_feedback(request),
+        |error| {
+            crate::ProductDevGhostPlateFeedbackResult::rejected(
                 binding,
                 format!("{}: {}", error.code(), error.diagnostic()),
             )

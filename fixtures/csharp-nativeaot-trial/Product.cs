@@ -18,6 +18,7 @@ public sealed class Product : IEngineProduct
     private readonly VoxelChunkLease _voxelLease;
     private readonly UiStream _uiStream;
     private readonly Appearance _appearance;
+    private readonly GhostPlatePresentation _ghostPlate;
     private readonly Material _material;
     private readonly Camera _camera;
     private readonly PersistenceStore _persistenceStore;
@@ -386,6 +387,39 @@ public sealed class Product : IEngineProduct
         ExerciseLook();
         ExerciseDynamics();
         PublishPresentation();
+        GhostPlateCaptureLighting ghostLighting = new(
+            GhostPlateCaptureLightingMode.Isolated,
+            new Vector3(0.25f, 0.25f, 0.25f), 0.5f,
+            new Vector3(0.5f, 1.0f, 0.25f), Vector3.One, 1.0f,
+            new Vector3(-0.5f, 0.25f, -1.0f), new Vector3(0.5f), 0.25f);
+        GhostPlateCaptureSettings ghostCapture = new(
+            64, 0, 10, 0.1f, 20, 55, ghostLighting);
+        GhostPlateConfig ghostConfig = new(
+            0.5f, GhostPlateAnchorPolicy.BoundsCenter, 0.5f,
+            GhostPlateMapping.PlateLocked, GhostPlateShellMode.WholeMesh,
+            0.01f, 4, 5);
+        GhostPlatePlacement ghostPlacement = new(
+            new Transform(new Vector3(0, 1, 0), Quaternion.Identity, Vector3.One), 1, 1);
+        _ghostPlate = _engine.Presentation.CreateGhostPlate(new CreateGhostPlatePresentationRequest(
+            41, ghostPlacement, ghostCapture, ghostConfig));
+        GhostPlatePresentationReadout ghostInitial = _engine.Presentation.ReadGhostPlate(_ghostPlate);
+        Require(ghostInitial.SourceObjectId == 41 && ghostInitial.SourcePresent
+            && ghostInitial.Config.SectorCount == 4,
+            "generated ghost plate create/read did not retain the product source");
+        GhostPlateConfig ghostUpdatedConfig = ghostConfig with
+        {
+            PlateMapping = GhostPlateMapping.ProjectiveSurface,
+            SectorCount = 8,
+        };
+        _engine.Presentation.UpdateGhostPlate(new UpdateGhostPlatePresentationRequest(
+            _ghostPlate,
+            ghostPlacement with { Width = 1.25f },
+            ghostUpdatedConfig));
+        _engine.Presentation.RecaptureGhostPlate(new RecaptureGhostPlatePresentationRequest(
+            _ghostPlate,
+            ghostCapture with { AzimuthDegrees = 45 }));
+        Require(_engine.Presentation.ReadGhostPlate(_ghostPlate).Config.SectorCount == 8,
+            "generated ghost plate update/recapture did not retain the replacement facts");
     }
 
     public void Start()
@@ -505,6 +539,12 @@ public sealed class Product : IEngineProduct
         }
         _turns++;
         _lastRandom = _engine.Random.NextBoundedU32(new ScopedRngBoundedRequest(_rng, 100)).Value;
+        if (_turns == 2)
+        {
+            // Destroy before the following complete Appearance snapshot removes
+            // source object 41; the Engine owns the ordering invariant.
+            _ghostPlate.Dispose();
+        }
         PublishPresentation();
         return reportFaultThisTurn ? ProductUpdateResult.ReportFault : ProductUpdateResult.None;
     }
@@ -528,7 +568,9 @@ public sealed class Product : IEngineProduct
             Require(_mappingReleaseVerified, "physical mapping release was not observed to end Held delivery");
             Require(_directDigitalObserved, "direct digital UI claim never reached Product.Game");
         }
-        // Release the retained Engine projection before owner disposal.
+        // Release the retained Engine projection before its source leaves the
+        // following complete snapshot.
+        _ghostPlate.Dispose();
         _engine.Appearance.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
         _shutdown = true;
     }
@@ -560,6 +602,7 @@ public sealed class Product : IEngineProduct
         _forkedRng.Dispose();
         _rng.Dispose();
         _camera.Dispose();
+        _ghostPlate.Dispose();
         _appearance.Dispose();
         _voxelPresentation.Dispose();
         _material.Dispose();

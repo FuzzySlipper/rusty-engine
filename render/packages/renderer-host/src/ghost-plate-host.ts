@@ -22,6 +22,7 @@ export interface RendererGhostPlatePresentationReadout {
   readonly config: GhostPlateConfig;
   readonly fallbackActive: boolean;
   readonly fallbackReason: string | null;
+  readonly limitationMask: number;
   readonly preparationCpuMilliseconds: number | null;
   readonly captureCpuSubmissionMilliseconds: number | null;
   readonly retainedResourceCounts: {
@@ -55,6 +56,7 @@ export interface RendererGhostPlateReadout {
     readonly config: GhostPlateConfig;
     readonly fallbackActive: boolean;
     readonly fallbackReason: string | null;
+    readonly limitationMask: number;
     readonly preparationCpuMilliseconds: number | null;
     readonly captureCpuSubmissionMilliseconds: number | null;
     readonly retainedResourceCounts: {

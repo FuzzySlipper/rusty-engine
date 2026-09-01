@@ -9,6 +9,7 @@ export interface RendererThreeGhostPlateReceipt { readonly applied: boolean; rea
 export interface RendererThreeGhostPlateReadout {
   readonly source: number; readonly sourceMatch: boolean; readonly currentSector: number; readonly localAzimuthDegrees: number | null;
   readonly capture: GhostPlateCaptureSettings; readonly config: GhostPlateConfig; readonly fallbackActive: boolean; readonly fallbackReason: string | null;
+  readonly limitationMask: number;
   readonly preparationCpuMilliseconds: number | null; readonly captureCpuSubmissionMilliseconds: number | null;
   readonly retainedResourceCounts: { readonly sectors: number; readonly meshes: number; readonly materials: number; readonly borrowedTextures: number; };
   readonly disposed: boolean;
@@ -51,6 +52,7 @@ export class RendererThreeGhostPlatePresentation {
       currentSector: ghost?.selectedSector ?? 0, localAzimuthDegrees: ghost?.localAzimuthDegrees ?? null,
       capture: active?.descriptor.capture ?? emptyCapture(), config: active?.descriptor.config ?? emptyConfig(),
       fallbackActive: ghost?.fallbackActive ?? false, fallbackReason: ghost?.fallbackReason ?? null,
+      limitationMask: ghostPlateLimitationMask(ghost?.limitations ?? []),
       preparationCpuMilliseconds: ghost?.preparationCpuMilliseconds ?? null, captureCpuSubmissionMilliseconds: active?.captureCpuSubmissionMilliseconds ?? null,
       retainedResourceCounts: Object.freeze({ sectors: ghost?.residentSectorCount ?? 0, meshes: ghost?.meshCount ?? 0, materials: ghost?.materialResourceCount ?? 0, borrowedTextures: ghost?.borrowedTextureCount ?? 0 }),
       disposed: this.#disposed,
@@ -102,6 +104,23 @@ export class RendererThreeGhostPlatePresentation {
     }
   }
   #disposeActive(active: ActiveGhostPlate): void { active.presentation.object.removeFromParent(); active.presentation.dispose(); for (const capture of active.captures) capture.dispose(); }
+}
+
+function ghostPlateLimitationMask(limitations: readonly string[]): number {
+  let mask = 0;
+  for (const limitation of limitations) {
+    switch (limitation) {
+      case 'retained-source-only': mask |= 1; break;
+      case 'single-capture-view': mask |= 2; break;
+      case 'frozen-appearance-pose': mask |= 4; break;
+      case 'whole-hierarchy-relief': mask |= 8; break;
+      case 'rgba8-shell-depth': mask |= 16; break;
+      case 'fragment-ratios-unavailable-without-readback': mask |= 32; break;
+      case 'gpu-time-not-measured': mask |= 64; break;
+      default: break;
+    }
+  }
+  return mask;
 }
 
 function applied(): RendererThreeGhostPlateReceipt { return Object.freeze({ applied: true, diagnostics: Object.freeze([]) }); }

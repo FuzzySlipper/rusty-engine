@@ -957,6 +957,11 @@ pub struct NativePresentationApi {
     pub destroy_emitter: NativeDestroyPresentationEmitter,
     pub read: NativeReadPresentationFacts,
     pub read_diagnostic_at: NativeReadPresentationDiagnosticAt,
+    pub create_ghost_plate: NativeCreateGhostPlatePresentation,
+    pub update_ghost_plate: NativeUpdateGhostPlatePresentation,
+    pub recapture_ghost_plate: NativeRecaptureGhostPlatePresentation,
+    pub read_ghost_plate: NativeReadGhostPlatePresentation,
+    pub destroy_ghost_plate: NativeDestroyGhostPlatePresentation,
 }
 
 #[repr(C)]

@@ -25,7 +25,7 @@ mod world_origin;
 
 pub use appearance::{
     AnimationCueDefinition, AnimationRealizationFact, CsharpRenderResource,
-    CsharpRenderResourceKind,
+    CsharpRenderResourceKind, GhostPlateRealizationFact,
 };
 pub use audio::AudioRealizationFact;
 pub use composition::{

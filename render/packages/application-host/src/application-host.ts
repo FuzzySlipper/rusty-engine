@@ -513,6 +513,8 @@ export interface RustyApplicationGhostPlateReadout {
     };
     readonly fallbackActive: boolean;
     readonly fallbackReason: string | null;
+    /** Closed GhostPlateLimitationMask bits; no renderer limitation strings cross this port. */
+    readonly limitationMask: number;
     readonly preparationCpuMilliseconds: number | null;
     readonly captureCpuSubmissionMilliseconds: number | null;
     readonly retainedResourceCounts: {

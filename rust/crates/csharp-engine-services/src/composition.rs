@@ -129,6 +129,11 @@ fn engine_api(
             destroy_emitter: crate::presentation::destroy_emitter,
             read: crate::presentation::read,
             read_diagnostic_at: crate::presentation::read_diagnostic_at,
+            create_ghost_plate: crate::presentation::create_ghost_plate,
+            update_ghost_plate: crate::presentation::update_ghost_plate,
+            recapture_ghost_plate: crate::presentation::recapture_ghost_plate,
+            read_ghost_plate: crate::presentation::read_ghost_plate,
+            destroy_ghost_plate: crate::presentation::destroy_ghost_plate,
         },
         animation: crate::appearance::animation_api(appearance_bridge),
         audio: crate::audio::api(audio_bridge),
@@ -390,6 +395,17 @@ impl EngineServiceSet {
         );
     }
 
+    /// Replaces the bound browser host's latest ghost-plate realization
+    /// snapshot. Generated C# reads it during the next ordinary product call.
+    pub fn ingest_ghost_plate_realization_feedback(
+        &mut self,
+        replace_owner: bool,
+        facts: impl IntoIterator<Item = crate::appearance::GhostPlateRealizationFact>,
+    ) {
+        self.appearance
+            .ingest_ghost_plate_realization(replace_owner, facts);
+    }
+
     /// Clears realization observations when the exact runtime binding changes.
     pub fn reset_audio_realization_owner(&mut self) {
         self.audio.reset_realized_feedback();
@@ -398,6 +414,10 @@ impl EngineServiceSet {
     pub fn reset_animation_realization_owner(&mut self) {
         self.appearance
             .ingest_animation_realization_feedback(true, 0, []);
+    }
+
+    pub fn reset_ghost_plate_realization_owner(&mut self) {
+        self.appearance.ingest_ghost_plate_realization(true, []);
     }
 
     pub fn discard_call(&mut self) {

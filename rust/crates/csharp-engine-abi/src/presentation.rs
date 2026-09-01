@@ -367,6 +367,201 @@ pub struct NativePresentationDiagnosticAtReceipt {
     pub logical_id: u64,
 }
 
+/// Opaque retained ghost-plate owner. The generated C# facade owns the
+/// matching destroy call; products never receive a renderer target handle.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeGhostPlatePresentationHandle {
+    pub value: u64,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeGhostPlateCaptureLightingMode {
+    Scene = 1,
+    Isolated = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeGhostPlateCaptureLighting {
+    pub mode: NativeGhostPlateCaptureLightingMode,
+    pub ambient_color: NativeVec3,
+    pub ambient_intensity: f32,
+    pub key_direction: NativeVec3,
+    pub key_color: NativeVec3,
+    pub key_intensity: f32,
+    pub fill_direction: NativeVec3,
+    pub fill_color: NativeVec3,
+    pub fill_intensity: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeGhostPlateCaptureSettings {
+    pub resolution: u16,
+    pub azimuth_degrees: f32,
+    pub elevation_degrees: f32,
+    pub near: f32,
+    pub far: f32,
+    pub field_of_view_degrees: f32,
+    pub lighting: NativeGhostPlateCaptureLighting,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeGhostPlateAnchorPolicy {
+    BoundsCenter = 1,
+    BoundsNormalized = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeGhostPlateMapping {
+    PlateLocked = 1,
+    ProjectiveSurface = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeGhostPlateShellMode {
+    WholeMesh = 1,
+    StrictSource = 2,
+    RepairedSource = 3,
+}
+
+/// Product-owned placement facts for one retained ghost plate.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeGhostPlatePlacement {
+    pub transform: crate::NativeTransform,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Direction selection is always a hard snap. Transition mode and duration
+/// deliberately do not cross the product ABI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeGhostPlateConfig {
+    pub depth_retention: f32,
+    pub anchor_policy: NativeGhostPlateAnchorPolicy,
+    pub anchor_value: f32,
+    pub plate_mapping: NativeGhostPlateMapping,
+    pub shell_mode: NativeGhostPlateShellMode,
+    pub shell_depth_epsilon: f32,
+    pub sector_count: u8,
+    pub sector_hysteresis_degrees: f32,
+}
+
+/// Creates a retained ghost plate from the current complete Appearance
+/// snapshot entry named by stable product object ID. The Engine resolves that
+/// ID to its renderer target internally.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCreateGhostPlatePresentationRequest {
+    pub source_object_id: u64,
+    pub placement: NativeGhostPlatePlacement,
+    pub capture: NativeGhostPlateCaptureSettings,
+    pub config: NativeGhostPlateConfig,
+}
+
+/// A complete placement/configuration replacement. The host realizes it as an
+/// atomic replacement, so capture-bank identity changes preserve the prior
+/// live presentation when preparation fails.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeUpdateGhostPlatePresentationRequest {
+    pub presentation: NativeGhostPlatePresentationHandle,
+    pub placement: NativeGhostPlatePlacement,
+    pub config: NativeGhostPlateConfig,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeRecaptureGhostPlatePresentationRequest {
+    pub presentation: NativeGhostPlatePresentationHandle,
+    pub capture: NativeGhostPlateCaptureSettings,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeGhostPlateFallbackReason {
+    #[default]
+    None = 0,
+    PreparedSourceUnsupported = 1,
+    RealizationFailed = 2,
+}
+
+/// Compact closed summary of the retained ghost realization limits. The two
+/// profiles are the only backend states currently emitted: a single capture
+/// or a hard-snapped directional capture bank. Individual bit values remain
+/// named so product code can inspect the closed mask without renderer strings.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeGhostPlateLimitationMask {
+    #[default]
+    None = 0,
+    RetainedSourceOnly = 1,
+    SingleCaptureView = 2,
+    FrozenAppearancePose = 4,
+    WholeHierarchyRelief = 8,
+    Rgba8ShellDepth = 16,
+    FragmentRatiosUnavailableWithoutReadback = 32,
+    GpuTimeNotMeasured = 64,
+    SingleCaptureViewProfile = 127,
+    DirectionalCaptureBankProfile = 125,
+}
+
+/// Copied latest renderer observation plus Engine-owned source/retention
+/// facts. Renderer observation is explicitly marked absent until the bound
+/// host reports its first snapshot; no backend object crosses into C#.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeGhostPlatePresentationReadout {
+    pub source_object_id: u64,
+    pub source_present: bool,
+    pub has_renderer_observation: bool,
+    pub source_matches: bool,
+    pub current_sector: u32,
+    pub has_local_angular_offset: bool,
+    pub local_angular_offset_degrees: f32,
+    pub fallback_active: bool,
+    pub fallback_reason: NativeGhostPlateFallbackReason,
+    pub limitation_mask: NativeGhostPlateLimitationMask,
+    pub has_preparation_cpu_milliseconds: bool,
+    pub preparation_cpu_milliseconds: f64,
+    pub has_capture_cpu_submission_milliseconds: bool,
+    pub capture_cpu_submission_milliseconds: f64,
+    pub retained_sector_count: u32,
+    pub retained_mesh_count: u32,
+    pub retained_material_count: u32,
+    pub retained_borrowed_texture_count: u32,
+    pub capture: NativeGhostPlateCaptureSettings,
+    pub config: NativeGhostPlateConfig,
+}
+
+pub type NativeCreateGhostPlatePresentation = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeCreateGhostPlatePresentationRequest,
+    *mut NativeGhostPlatePresentationHandle,
+) -> i32;
+pub type NativeUpdateGhostPlatePresentation = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeUpdateGhostPlatePresentationRequest,
+) -> i32;
+pub type NativeRecaptureGhostPlatePresentation = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeRecaptureGhostPlatePresentationRequest,
+) -> i32;
+pub type NativeReadGhostPlatePresentation = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    NativeGhostPlatePresentationHandle,
+    *mut NativeGhostPlatePresentationReadout,
+) -> i32;
+pub type NativeDestroyGhostPlatePresentation =
+    unsafe extern "C" fn(*mut std::ffi::c_void, NativeGhostPlatePresentationHandle) -> i32;
+
 impl Default for NativePresentationDiagnosticAtReceipt {
     fn default() -> Self {
         Self {

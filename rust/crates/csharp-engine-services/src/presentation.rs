@@ -223,3 +223,103 @@ pub(crate) unsafe extern "C" fn read_diagnostic_at(
     unsafe { *result = bridge.presentation_diagnostic(request) };
     ABI_OK
 }
+
+pub(crate) unsafe extern "C" fn create_ghost_plate(
+    context: *mut c_void,
+    request: *const NativeCreateGhostPlatePresentationRequest,
+    result: *mut NativeGhostPlatePresentationHandle,
+) -> i32 {
+    if request.is_null() || result.is_null() {
+        return 0;
+    }
+    let Some(bridge) = (unsafe { bridge(context) }) else {
+        return 0;
+    };
+    match bridge.presentation_create_ghost_plate(unsafe { *request }) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.record_callback_error(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn update_ghost_plate(
+    context: *mut c_void,
+    request: *const NativeUpdateGhostPlatePresentationRequest,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    let Some(bridge) = (unsafe { bridge(context) }) else {
+        return 0;
+    };
+    match bridge.presentation_update_ghost_plate(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.record_callback_error(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn recapture_ghost_plate(
+    context: *mut c_void,
+    request: *const NativeRecaptureGhostPlatePresentationRequest,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    let Some(bridge) = (unsafe { bridge(context) }) else {
+        return 0;
+    };
+    match bridge.presentation_recapture_ghost_plate(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.record_callback_error(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn read_ghost_plate(
+    context: *mut c_void,
+    presentation: NativeGhostPlatePresentationHandle,
+    result: *mut NativeGhostPlatePresentationReadout,
+) -> i32 {
+    if result.is_null() {
+        return 0;
+    }
+    let Some(bridge) = (unsafe { bridge(context) }) else {
+        return 0;
+    };
+    match bridge.presentation_read_ghost_plate(presentation) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.record_callback_error(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn destroy_ghost_plate(
+    context: *mut c_void,
+    presentation: NativeGhostPlatePresentationHandle,
+) -> i32 {
+    let Some(bridge) = (unsafe { bridge(context) }) else {
+        return 0;
+    };
+    match bridge.presentation_destroy_ghost_plate(presentation) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.record_callback_error(error);
+            0
+        }
+    }
+}
