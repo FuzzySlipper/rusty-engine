@@ -40,7 +40,7 @@ test('generated-style browser composition reaches a local Rust-shaped HTTP/SSE t
       const body = outputs
         .map((value) => `data: ${JSON.stringify(value)}\n\n`)
         .join('')
-        + `id: 1\nevent: rusty-output-baseline\ndata: ${JSON.stringify({
+        + `event: rusty-output-baseline\ndata: ${JSON.stringify({
           accepted: true,
           operation: 'start',
           binding: RUNTIME,

@@ -28964,45 +28964,45 @@ var tO = "/__rusty/product/runtime/", nO = "rusty.product.local-runtime-transpor
 	}
 };
 function FO(e = {}) {
-	let t = RO(e.basePath ?? "/__rusty/product/runtime/"), n = e.fetch ?? IO(), r = e.eventSource ?? LO(), i = zO(e.maximumResponseBytes ?? uO, "maximumResponseBytes", iO), a = zO(e.maximumOutputBytes ?? dO, "maximumOutputBytes", oO), o = !1, s = null, c = null, l = null, u = null, d = null, f = null, p = null, m = null, h = null, g = null, _ = null, v = !1, y = [], b = null, x = 0n, S = /* @__PURE__ */ new Set(), C = /* @__PURE__ */ new Set(), w = /* @__PURE__ */ new Set(), T = new AbortController(), E = () => {
+	let t = RO(e.basePath ?? "/__rusty/product/runtime/"), n = e.fetch ?? IO(), r = e.eventSource ?? LO(), i = zO(e.maximumResponseBytes ?? uO, "maximumResponseBytes", iO), a = zO(e.maximumOutputBytes ?? dO, "maximumOutputBytes", oO), o = !1, s = null, c = null, l = null, u = null, d = null, f = null, p = null, m = null, h = null, g = null, _ = null, v = !1, y = !1, b = [], x = null, S = 0n, C = /* @__PURE__ */ new Set(), w = /* @__PURE__ */ new Set(), T = /* @__PURE__ */ new Set(), E = new AbortController(), D = () => {
 		if (o) throw new $("disposed", "Product Browser local runtime transport is disposed");
-		if (b !== null) throw new $("stream_failed", b.diagnostic, { route: rO.outputs });
-	}, D = (t) => {
+		if (x !== null) throw new $("stream_failed", x.diagnostic, { route: rO.outputs });
+	}, O = (t) => {
 		try {
 			e.onTransportError?.(t);
 		} catch {}
-	}, O = () => {
-		for (let e of [...S]) S.delete(e), e.resolve();
 	}, k = () => {
-		for (let e of [...S]) e.through > x || (S.delete(e), e.resolve());
-	}, A = (e) => {
+		for (let e of [...C]) C.delete(e), e.resolve();
+	}, A = () => {
+		for (let e of [...C]) e.through > S || (C.delete(e), e.resolve());
+	}, ee = (e) => {
 		let t = BO(e, "output event id", "output_decode_failed");
-		if (t <= x) throw new $("output_decode_failed", "Product Browser local runtime output event ids must be strictly increasing", { route: rO.outputs });
-		x = t, k();
-	}, ee = async (e) => {
-		if (!(e <= x)) {
-			if (E(), s === null) throw new $("stream_failed", "Product Browser local runtime response named output that cannot be observed without an active subscription", { route: rO.outputs });
+		if (t <= S) throw new $("output_decode_failed", "Product Browser local runtime output event ids must be strictly increasing", { route: rO.outputs });
+		S = t, A();
+	}, te = async (e) => {
+		if (!(e <= S)) {
+			if (D(), s === null) throw new $("stream_failed", "Product Browser local runtime response named output that cannot be observed without an active subscription", { route: rO.outputs });
 			if (await new Promise((t) => {
-				S.add({
+				C.add({
 					through: e,
 					resolve: t
 				});
-			}), E(), e > x) throw new $("stream_failed", "Product Browser local runtime output subscription closed before the response boundary was observed", { route: rO.outputs });
+			}), D(), e > S) throw new $("stream_failed", "Product Browser local runtime output subscription closed before the response boundary was observed", { route: rO.outputs });
 		}
-	}, te = (e, t) => {
-		if (b === null) {
-			b = Object.freeze({ ...e }), s !== null && (c !== null && (s.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s.removeEventListener?.("rusty-output-fragment", l), l = null), u !== null && (s.removeEventListener?.("rusty-output-baseline", u), u = null), s.close(), s = null), d = null, y = [], O(), m?.(), m = null, p = null, _?.(t), h = null, g = null, _ = null, D(t);
-			for (let e of [...w]) try {
-				e(b);
+	}, j = (e, t) => {
+		if (x === null) {
+			x = Object.freeze({ ...e }), s !== null && (c !== null && (s.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s.removeEventListener?.("rusty-output-fragment", l), l = null), u !== null && (s.removeEventListener?.("rusty-output-baseline", u), u = null), s.close(), s = null), d = null, b = [], k(), m?.(), m = null, p = null, _?.(t), h = null, g = null, _ = null, O(t);
+			for (let e of [...T]) try {
+				e(x);
 			} catch (e) {
-				D(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+				O(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
 					cause: e,
 					route: rO.outputs
 				}));
 			}
 		}
-	}, j = async (e, r, a) => {
-		E();
+	}, ne = async (e, r, a) => {
+		D();
 		let o = `${t}${e}`, s = ZO(r, i, e), c;
 		try {
 			c = await n(o, {
@@ -29013,7 +29013,7 @@ function FO(e = {}) {
 					"content-type": "application/json"
 				},
 				body: s,
-				signal: T.signal
+				signal: E.signal
 			});
 		} catch (t) {
 			throw new $("request_failed", `Product Browser local runtime request failed for ${e}: ${t instanceof Error ? t.message : String(t)}`, {
@@ -29035,7 +29035,7 @@ function FO(e = {}) {
 		}
 		let d;
 		try {
-			E(), d = a(u);
+			D(), d = a(u);
 		} catch (t) {
 			throw t instanceof $ ? t : new $("response_decode_failed", `Product Browser local runtime returned an invalid response for ${e}: ${t instanceof Error ? t.message : String(t)}`, {
 				cause: t,
@@ -29045,103 +29045,103 @@ function FO(e = {}) {
 		let f = c.headers.get("x-rusty-output-through");
 		if (f !== null) {
 			let t = BO(f, "X-Rusty-Output-Through response header", "response_decode_failed", e);
-			await ee(t);
+			await te(t);
 		}
 		return d;
-	}, ne = (e) => j(rO.lifecycle[e.kind], {}, (t) => pk(t, e.kind)), re = (e) => j(rO.input, { batch: QO(e) }, hk), ie = (e) => {
+	}, re = (e) => ne(rO.lifecycle[e.kind], {}, (t) => pk(t, e.kind)), ie = (e) => ne(rO.input, { batch: QO(e) }, hk), ae = (e) => {
 		let t = ek(e);
-		return j(rO.audioFeedback, t, (e) => gk(e, t.runtime, t.facts));
-	}, ae = (e) => {
+		return ne(rO.audioFeedback, t, (e) => gk(e, t.runtime, t.facts));
+	}, oe = (e) => {
 		let t = nk(e);
-		return j(rO.animationFeedback, t, (e) => _k(e, t.runtime, t.facts));
-	}, oe = (e) => j(rO.advanceRealtime, { observedTimeNs: VO(e, "observedTimeNs") }, (e) => pk(e, "advance-realtime")), se = () => j(rO.admitDemandStep, {}, (e) => pk(e, "admit-demand-step")), ce = (e) => j(rO.admitExternalStep, { step: VO(e, "step") }, (e) => pk(e, "admit-external-step")), le = (e) => {
+		return ne(rO.animationFeedback, t, (e) => _k(e, t.runtime, t.facts));
+	}, se = (e) => ne(rO.advanceRealtime, { observedTimeNs: VO(e, "observedTimeNs") }, (e) => pk(e, "advance-realtime")), ce = () => ne(rO.admitDemandStep, {}, (e) => pk(e, "admit-demand-step")), le = (e) => ne(rO.admitExternalStep, { step: VO(e, "step") }, (e) => pk(e, "admit-external-step")), ue = (e) => {
 		let t = ok(e);
-		return j(rO.completeTimeline, t, (e) => vk(e, t.ticket));
-	}, ue = (e) => {
+		return ne(rO.completeTimeline, t, (e) => vk(e, t.ticket));
+	}, de = (e) => {
 		e.kind === "binding" && (f = e.runtime);
-		for (let t of [...C]) try {
+		for (let t of [...w]) try {
 			t(e);
 		} catch (e) {
-			D(new $("stream_failed", `Product Browser local runtime output listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+			O(new $("stream_failed", `Product Browser local runtime output listener failed: ${e instanceof Error ? e.message : String(e)}`, {
 				cause: e,
 				route: rO.outputs
 			}));
 		}
-	}, de = (e) => {
-		if (v) {
-			ue(e);
+	}, fe = (e) => {
+		if (v && !y) {
+			de(e);
 			return;
 		}
-		if (y.length >= lO) throw new $("output_decode_failed", `Product Browser local runtime connection baseline exceeds ${String(lO)} outputs`, { route: rO.freshOutputs });
-		e.kind === "binding" && (f = e.runtime), y.push(e);
-	}, fe = (e) => {
+		if (b.length >= lO) throw new $("output_decode_failed", `Product Browser local runtime connection baseline exceeds ${String(lO)} outputs`, { route: rO.freshOutputs });
+		e.kind === "binding" && (f = e.runtime), b.push(e);
+	}, pe = (e) => {
 		let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted invalid output fragments: ${e instanceof Error ? e.message : String(e)}`, {
 			cause: e,
 			route: rO.outputs
 		});
-		te({
+		j({
 			kind: "runtime-failure",
 			diagnostic: t.message
 		}, t);
 	};
 	return Object.freeze({
 		connect: async () => {
-			if (E(), s === null || h === null) throw new $("stream_failed", "Product Browser local runtime connection has not started", { route: rO.freshOutputs });
+			if (D(), s === null || h === null) throw new $("stream_failed", "Product Browser local runtime connection has not started", { route: rO.freshOutputs });
 			let e = await h;
-			return E(), e;
+			return D(), e;
 		},
-		lifecycle: ne,
-		input: re,
-		reportAudioFeedback: ie,
-		reportAnimationFeedback: ae,
-		advanceRealtime: oe,
-		admitDemandStep: se,
-		admitExternalStep: ce,
-		completeTimeline: le,
+		lifecycle: re,
+		input: ie,
+		reportAudioFeedback: ae,
+		reportAnimationFeedback: oe,
+		advanceRealtime: se,
+		admitDemandStep: ce,
+		admitExternalStep: le,
+		completeTimeline: ue,
 		subscribeTerminalFailures: (e) => {
 			if (typeof e != "function") throw new $("invalid_options", "Product Browser local runtime terminal-failure listener must be a function");
-			if (b !== null) {
+			if (x !== null) {
 				try {
-					e(b);
+					e(x);
 				} catch (e) {
-					D(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
+					O(new $("stream_failed", `Product Browser local runtime terminal-failure listener failed: ${e instanceof Error ? e.message : String(e)}`, {
 						cause: e,
 						route: rO.outputs
 					}));
 				}
 				return () => void 0;
 			}
-			w.add(e);
+			T.add(e);
 			let t = !0;
 			return () => {
-				t && (t = !1, w.delete(e));
+				t && (t = !1, T.delete(e));
 			};
 		},
 		subscribeOutputs: (e) => {
-			if (E(), typeof e != "function") throw new $("invalid_options", "Product Browser local runtime output listener must be a function");
-			if (C.add(e), s === null) try {
+			if (D(), typeof e != "function") throw new $("invalid_options", "Product Browser local runtime output listener must be a function");
+			if (w.add(e), s === null) try {
 				p = new Promise((e) => {
 					m = e;
 				}), h = new Promise((e, t) => {
 					g = e, _ = t;
-				}), h.catch(() => void 0), v = !1, y = [], s = new r(`${t}${rO.freshOutputs}`), s.onopen = () => {
+				}), h.catch(() => void 0), v = !1, b = [], s = new r(`${t}${rO.freshOutputs}`), s.onopen = () => {
 					m?.(), m = null;
 				}, c = (e) => {
 					try {
 						let t = fk(e.data, a);
-						te(t, new $("stream_failed", t.diagnostic, { route: rO.outputs }));
+						j(t, new $("stream_failed", t.diagnostic, { route: rO.outputs }));
 					} catch (e) {
 						let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted an invalid output-lag event: ${e instanceof Error ? e.message : String(e)}`, {
 							cause: e,
 							route: rO.outputs
 						});
-						te({
+						j({
 							kind: "output-lag",
 							diagnostic: t.message
 						}, t);
 					}
 				}, s.addEventListener?.("rusty-output-lag", c), l = (e) => {
-					if (b === null) try {
+					if (x === null) try {
 						let t = dk(uk(e.data, aO), a);
 						if (f === null || !Tk(t.runtime, f)) throw TypeError("output fragment runtime binding is stale or unavailable");
 						if (d === null) {
@@ -29166,65 +29166,71 @@ function FO(e = {}) {
 							let e = n.data.join("");
 							d = null, r = yk(uk(e, a));
 						}
-						v && A(e.lastEventId), r !== null && de(r);
+						v && !y && ee(e.lastEventId), r !== null && fe(r);
 					} catch (e) {
-						fe(e);
+						pe(e);
 					}
 				}, s.addEventListener?.("rusty-output-fragment", l), u = (e) => {
 					try {
 						if (d !== null) throw TypeError("connection baseline ended during an output fragment transfer");
+						if (e.lastEventId !== "") throw TypeError("connection baseline completion must not carry a reconnect cursor");
 						let t = mk(uk(e.data, iO));
-						if (A(e.lastEventId), !t.accepted) throw new $("request_failed", t.diagnostic ?? "Product Browser local runtime rejected the browser connection", { route: rO.freshOutputs });
-						v = !0;
-						let n = y;
-						y = [];
-						for (let e of n) ue(e);
+						if (!t.accepted) throw new $("request_failed", t.diagnostic ?? "Product Browser local runtime rejected the browser connection", { route: rO.freshOutputs });
+						if (v) {
+							if (!y) throw TypeError("connection baseline completion was duplicated without a reconnect");
+							b = [], y = !1;
+							return;
+						}
+						v = !0, y = !1;
+						let n = b;
+						b = [];
+						for (let e of n) de(e);
 						g?.(t), g = null, _ = null;
 					} catch (e) {
 						let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted an invalid connection baseline: ${e instanceof Error ? e.message : String(e)}`, {
 							cause: e,
 							route: rO.freshOutputs
 						});
-						_?.(t), g = null, _ = null, te({
+						_?.(t), g = null, _ = null, j({
 							kind: "runtime-failure",
 							diagnostic: t.message
 						}, t);
 					}
 				}, s.addEventListener?.("rusty-output-baseline", u), s.onmessage = (e) => {
-					if (b === null) try {
+					if (x === null) try {
 						if (d !== null) throw new $("output_decode_failed", "Product Browser local runtime interrupted an output fragment transfer", { route: rO.outputs });
 						let t = yk(uk(e.data, Math.min(a, aO)));
-						v && A(e.lastEventId), de(t);
+						v && !y && ee(e.lastEventId), fe(t);
 					} catch (e) {
 						let t = e instanceof $ ? e : new $("output_decode_failed", `Product Browser local runtime emitted an invalid output: ${e instanceof Error ? e.message : String(e)}`, {
 							cause: e,
 							route: rO.outputs
 						});
-						fe(t);
+						pe(t);
 					}
 				}, s.onerror = (e) => {
-					if (b !== null) return;
-					v || (d = null, y = [], f = null);
+					if (x !== null) return;
+					v ? S === 0n && (d = null, b = [], y = !0) : (d = null, b = [], f = null);
 					let t = new $("stream_failed", `Product Browser local runtime output stream failed${e instanceof Error ? `: ${e.message}` : ""}`, { route: rO.outputs });
-					D(t);
+					O(t);
 				};
 			} catch (t) {
-				throw C.delete(e), s?.close(), s = null, c = null, l = null, u = null, d = null, y = [], O(), m?.(), m = null, p = null, h = null, g = null, _ = null, new $("stream_failed", `Product Browser local runtime output stream could not start: ${t instanceof Error ? t.message : String(t)}`, {
+				throw w.delete(e), s?.close(), s = null, c = null, l = null, u = null, d = null, b = [], y = !1, k(), m?.(), m = null, p = null, h = null, g = null, _ = null, new $("stream_failed", `Product Browser local runtime output stream could not start: ${t instanceof Error ? t.message : String(t)}`, {
 					cause: t,
 					route: rO.outputs
 				});
 			}
 			let n = !0;
 			return () => {
-				n && (n = !1, C.delete(e), C.size === 0 && (c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s?.removeEventListener?.("rusty-output-fragment", l), l = null), u !== null && (s?.removeEventListener?.("rusty-output-baseline", u), u = null), s?.close(), s = null, d = null, y = [], O(), m?.(), m = null, p = null, h = null, g = null, _ = null));
+				n && (n = !1, w.delete(e), w.size === 0 && (c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s?.removeEventListener?.("rusty-output-fragment", l), l = null), u !== null && (s?.removeEventListener?.("rusty-output-baseline", u), u = null), s?.close(), s = null, d = null, b = [], y = !1, k(), m?.(), m = null, p = null, h = null, g = null, _ = null));
 			};
 		},
 		waitUntilOutputSubscriptionReady: async () => {
-			if (E(), s === null || p === null) throw new $("stream_failed", "Product Browser local runtime output subscription has not started", { route: rO.outputs });
-			await p, E();
+			if (D(), s === null || p === null) throw new $("stream_failed", "Product Browser local runtime output subscription has not started", { route: rO.outputs });
+			await p, D();
 		},
 		dispose: () => {
-			o || (o = !0, T.abort(), c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s?.removeEventListener?.("rusty-output-fragment", l), l = null), u !== null && (s?.removeEventListener?.("rusty-output-baseline", u), u = null), s?.close(), s = null, d = null, y = [], O(), m?.(), m = null, p = null, h = null, g = null, _ = null, C.clear(), w.clear());
+			o || (o = !0, E.abort(), c !== null && (s?.removeEventListener?.("rusty-output-lag", c), c = null), l !== null && (s?.removeEventListener?.("rusty-output-fragment", l), l = null), u !== null && (s?.removeEventListener?.("rusty-output-baseline", u), u = null), s?.close(), s = null, d = null, b = [], y = !1, k(), m?.(), m = null, p = null, h = null, g = null, _ = null, w.clear(), T.clear());
 		}
 	});
 }

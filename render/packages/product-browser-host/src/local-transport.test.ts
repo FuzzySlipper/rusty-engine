@@ -93,8 +93,8 @@ function result(operation: string): Record<string, unknown> {
 
 function completeConnectionBaseline(stream: FakeEventSource): void {
   stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
-  stream.emitBaseline(result('connect'), '1');
-  stream.nextEventId = 2;
+  stream.emitBaseline(result('connect'), '');
+  stream.nextEventId = 1;
 }
 
 test('same-origin local transport uses fixed typed operation routes and SSE outputs', async () => {
@@ -179,7 +179,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   assert.equal(outputs.length, 0);
   assert.equal(isolatedOutputs.length, 0);
   const connection = adapter.connect?.();
-  FakeEventSource.instances[0]!.emitBaseline(result('connect'), '1');
+  FakeEventSource.instances[0]!.emitBaseline(result('connect'), '');
   assert.equal((await connection)?.operation, 'connect');
   assert.equal(outputs.length, 2);
   assert.equal(isolatedOutputs.length, 2);
@@ -268,6 +268,36 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   );
 });
 
+test('completed unnumbered baseline discards a cursorless replacement attach after reconnect', async () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response(result('advance-realtime')),
+    eventSource: FakeEventSource,
+  });
+  const outputs: unknown[] = [];
+  const unsubscribe = adapter.subscribeOutputs((output) => outputs.push(output));
+  const stream = FakeEventSource.instances[0]!;
+  stream.open();
+  const connection = adapter.connect?.();
+  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
+  stream.emit({ kind: 'runtime-readout', readout: READOUT }, '');
+  stream.emitBaseline(result('connect'), '');
+  await connection;
+  assert.equal(outputs.length, 2);
+
+  stream.onerror?.(new Error('cursorless reconnect'));
+  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
+  stream.emit({ kind: 'runtime-readout', readout: READOUT }, '');
+  assert.equal(outputs.length, 2);
+  stream.emitBaseline(result('connect'), '');
+  assert.equal(outputs.length, 2);
+
+  stream.emit({ kind: 'runtime-readout', readout: READOUT }, '1');
+  assert.equal(outputs.length, 3);
+  unsubscribe();
+  adapter.dispose();
+});
+
 test('operation response waits for its exact retained-output cursor', async () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -303,8 +333,9 @@ test('duplicate and decreasing output event ids fail before subscriber publicati
     adapter.subscribeOutputs((output) => outputs.push(output));
     const stream = FakeEventSource.instances[0]!;
     completeConnectionBaseline(stream);
+    stream.emit({ kind: 'runtime-readout', readout: READOUT }, '1');
     stream.emit({ kind: 'runtime-readout', readout: READOUT }, staleId);
-    assert.equal(outputs.length, 1);
+    assert.equal(outputs.length, 2);
     assert.equal(failures.length, 1);
     assert.equal(stream.closed, true);
     adapter.dispose();

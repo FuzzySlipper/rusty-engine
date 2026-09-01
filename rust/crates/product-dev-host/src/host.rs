@@ -776,11 +776,7 @@ fn handle_sse<R: ProductDevRuntime>(
             };
             outputs.active_binding = Some(connection_binding);
             private_events = isolated.events.into_iter().collect();
-            outputs.next_id = match outputs.next_id.checked_add(1) {
-                Some(id) => id,
-                None => return,
-            };
-            connection_result = Some((outputs.next_id, result_json));
+            connection_result = Some(result_json);
             let cursor = outputs.next_id;
             drop(outputs);
             drop(runtime);
@@ -799,8 +795,11 @@ fn handle_sse<R: ProductDevRuntime>(
             return;
         }
     }
-    if let Some((id, result)) = connection_result {
-        let payload = format!("id: {id}\nevent: rusty-output-baseline\ndata: {result}\n\n");
+    if let Some(result) = connection_result {
+        // Subscriber-private baselines deliberately carry no SSE cursor. An
+        // id parsed before this record's terminating blank line could survive
+        // a disconnect even though JavaScript never received the completion.
+        let payload = format!("event: rusty-output-baseline\ndata: {result}\n\n");
         if stream.write_all(payload.as_bytes()).is_err() || stream.flush().is_err() {
             return;
         }

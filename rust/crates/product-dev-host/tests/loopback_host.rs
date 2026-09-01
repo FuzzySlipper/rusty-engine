@@ -614,6 +614,31 @@ fn partial_fresh_baseline_reconnects_without_a_cursor_or_second_start() {
 }
 
 #[test]
+fn interrupted_baseline_completion_has_no_cursor_and_reattaches_without_reset() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let attaches = Arc::new(AtomicUsize::new(0));
+    let host = start_reconnect(Arc::clone(&starts), Arc::clone(&attaches));
+
+    let mut interrupted = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let through_event = read_through_marker(&mut interrupted, "event: rusty-output-baseline\n");
+    assert!(through_event.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(!through_event.contains("id: "));
+    let incomplete_completion = read_through_marker(&mut interrupted, "\n");
+    assert!(incomplete_completion.contains("\"operation\":\"start\""));
+    assert!(!incomplete_completion.ends_with("\n\n"));
+    drop(interrupted);
+
+    let mut retry = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let completed = read_until(&mut retry, "\"operation\":\"connect\"");
+    assert!(completed.contains("event: rusty-output-baseline"));
+    assert!(!completed.contains("id: "));
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    assert_eq!(attaches.load(Ordering::SeqCst), 1);
+    drop(retry);
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn idle_sse_disconnects_release_subscriber_slots() {
     let host = start();
     for _ in 0..(product_dev_host::MAX_SSE_SUBSCRIBERS + 4) {

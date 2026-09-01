@@ -296,14 +296,14 @@ async function handleRequest(
       for (const value of initialRuntimeOutputs()) {
         response.write(`data: ${JSON.stringify(value)}\n\n`);
       }
-      response.write(`id: 1\nevent: rusty-output-baseline\ndata: ${JSON.stringify({
+      response.write(`event: rusty-output-baseline\ndata: ${JSON.stringify({
         accepted: true,
         operation: 'start',
         binding: RUNTIME,
         nextInputSequence: '1',
         readout: READOUT,
       })}\n\n`);
-      runtimeStream.nextEventId = 1;
+      runtimeStream.nextEventId = 0;
     }
     return;
   }

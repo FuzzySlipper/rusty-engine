@@ -274,6 +274,7 @@ export function createProductBrowserLocalHttpAdapter(
   let resolveConnectionReady: ((result: ProductBrowserRuntimeOperationResult) => void) | null = null;
   let rejectConnectionReady: ((error: ProductBrowserLocalTransportError) => void) | null = null;
   let connectionBaselineComplete = false;
+  let reattachingFreshBaseline = false;
   let pendingConnectionOutputs: ProductBrowserRuntimeOutput[] = [];
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
   let observedOutputSequence = 0n;
@@ -556,7 +557,7 @@ export function createProductBrowserLocalHttpAdapter(
   };
 
   const stageOrPublishOutput = (output: ProductBrowserRuntimeOutput): void => {
-    if (connectionBaselineComplete) {
+    if (connectionBaselineComplete && !reattachingFreshBaseline) {
       publishOutput(output);
       return;
     }
@@ -689,7 +690,9 @@ export function createProductBrowserLocalHttpAdapter(
               pendingFragment = null;
               completedOutput = decodeRuntimeOutput(parseBoundedJson(encoded, maximumOutputBytes));
             }
-            if (connectionBaselineComplete) observeOutputSequence(event.lastEventId);
+            if (connectionBaselineComplete && !reattachingFreshBaseline) {
+              observeOutputSequence(event.lastEventId);
+            }
             if (completedOutput !== null) stageOrPublishOutput(completedOutput);
           } catch (cause) {
             failFragmentStream(cause);
@@ -701,11 +704,13 @@ export function createProductBrowserLocalHttpAdapter(
             if (pendingFragment !== null) {
               throw new TypeError('connection baseline ended during an output fragment transfer');
             }
+            if (event.lastEventId !== '') {
+              throw new TypeError('connection baseline completion must not carry a reconnect cursor');
+            }
             const result = decodeConnectionResult(parseBoundedJson(
               event.data,
               MAXIMUM_RUNTIME_RESPONSE_BYTES,
             ));
-            observeOutputSequence(event.lastEventId);
             if (!result.accepted) {
               throw new ProductBrowserLocalTransportError(
                 'request_failed',
@@ -713,7 +718,21 @@ export function createProductBrowserLocalHttpAdapter(
                 { route: ROUTES.freshOutputs },
               );
             }
+            if (connectionBaselineComplete) {
+              if (!reattachingFreshBaseline) {
+                throw new TypeError('connection baseline completion was duplicated without a reconnect');
+              }
+              // No retained output id existed when the completed fresh stream
+              // failed, so EventSource correctly retried without a cursor and
+              // the host attached again. The renderer already owns the first
+              // atomic baseline; discard this replacement rather than replaying
+              // duplicate Create operations into it.
+              pendingConnectionOutputs = [];
+              reattachingFreshBaseline = false;
+              return;
+            }
             connectionBaselineComplete = true;
+            reattachingFreshBaseline = false;
             const baselineOutputs = pendingConnectionOutputs;
             pendingConnectionOutputs = [];
             for (const output of baselineOutputs) publishOutput(output);
@@ -749,7 +768,9 @@ export function createProductBrowserLocalHttpAdapter(
               event.data,
               Math.min(maximumOutputBytes, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
             ));
-            if (connectionBaselineComplete) observeOutputSequence(event.lastEventId);
+            if (connectionBaselineComplete && !reattachingFreshBaseline) {
+              observeOutputSequence(event.lastEventId);
+            }
             stageOrPublishOutput(output);
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
@@ -768,6 +789,13 @@ export function createProductBrowserLocalHttpAdapter(
             pendingFragment = null;
             pendingConnectionOutputs = [];
             currentOutputBinding = null;
+          } else if (observedOutputSequence === 0n) {
+            // Until one retained event supplies a cursor, retrying /fresh is
+            // another detached attach. Stage and discard that replacement
+            // baseline once its unnumbered completion arrives.
+            pendingFragment = null;
+            pendingConnectionOutputs = [];
+            reattachingFreshBaseline = true;
           }
           const error = new ProductBrowserLocalTransportError(
             'stream_failed',
@@ -787,6 +815,7 @@ export function createProductBrowserLocalHttpAdapter(
         streamBaselineListener = null;
         pendingFragment = null;
         pendingConnectionOutputs = [];
+        reattachingFreshBaseline = false;
         wakeOutputSequenceWaiters();
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
@@ -823,6 +852,7 @@ export function createProductBrowserLocalHttpAdapter(
         stream = null;
         pendingFragment = null;
         pendingConnectionOutputs = [];
+        reattachingFreshBaseline = false;
         wakeOutputSequenceWaiters();
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
@@ -911,6 +941,7 @@ export function createProductBrowserLocalHttpAdapter(
     stream = null;
     pendingFragment = null;
     pendingConnectionOutputs = [];
+    reattachingFreshBaseline = false;
     wakeOutputSequenceWaiters();
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
