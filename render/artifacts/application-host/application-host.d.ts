@@ -1,3 +1,4 @@
+import { type RendererSurfaceDiagnosticsReadout } from '@rusty-engine/renderer-host';
 import { type RustyApplicationContent } from './application-content.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
 import { type RustyApplicationInputPort, type RustyApplicationRuntimeInputOptions, type RustyApplicationRuntimeIntentValue } from './input-ingress.js';
@@ -257,6 +258,7 @@ export interface RustyApplicationRendererPort {
     readonly audioRealizedFacts: () => RustyApplicationAudioRealizedFactsReadout | null;
     readonly animationRealizedFacts: () => RustyApplicationAnimationRealizedFactsReadout | null;
     readonly ghostPlateReadout: () => RustyApplicationGhostPlateReadout | null;
+    readonly diagnosticsReadout: () => RendererSurfaceDiagnosticsReadout;
     /** Acknowledge only the submitted Engine-realized audio fact range. */
     readonly acknowledgeAudioRealizedFacts: (throughFactId: number) => boolean;
     readonly acknowledgeAnimationRealizedFacts: (throughFactId: number) => boolean;

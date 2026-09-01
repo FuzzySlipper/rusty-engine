@@ -173,4 +173,10 @@ export declare function normalizeRustyApplicationKeyboardControl(code: string): 
  * always begins a newly bound epoch at zero.
  */
 export declare function createRustyApplicationInputQueue(maximumQueue: number, initialSequence?: bigint): RustyApplicationInputQueue;
+/**
+ * Clones only bounded plain JSON into an immutable data value. This lives at
+ * the browser ingress boundary because `claim` is a public trusted-UI API;
+ * Rust validates the same shape and budget again before adapter delivery.
+ */
+export declare function snapshotRustyApplicationProductPayloadJson(value: unknown): RustyApplicationProductPayloadJson;
 export {};

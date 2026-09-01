@@ -162,6 +162,15 @@ export interface ProductBrowserGhostPlateFeedbackResult {
     readonly runtime: RustyApplicationRuntimeIdentity;
     readonly diagnostic?: string;
 }
+export interface ProductBrowserRendererDiagnosticsFeedback {
+    readonly runtime: RustyApplicationRuntimeIdentity;
+    readonly snapshot: ReturnType<RustyApplicationHost['renderer']['diagnosticsReadout']>;
+}
+export interface ProductBrowserRendererDiagnosticsFeedbackResult {
+    readonly accepted: boolean;
+    readonly runtime: RustyApplicationRuntimeIdentity;
+    readonly diagnostic?: string;
+}
 export interface ProductBrowserTimelineCompletion {
     /** Canonical decimal u64 ticket issued by runtime-timeline. */
     readonly ticket: string;
@@ -259,6 +268,7 @@ export interface ProductBrowserRuntimeAdapter {
     readonly reportAudioFeedback: (feedback: ProductBrowserAudioFeedback) => Promise<ProductBrowserAudioFeedbackResult>;
     readonly reportAnimationFeedback: (feedback: ProductBrowserAnimationFeedback) => Promise<ProductBrowserAnimationFeedbackResult>;
     readonly reportGhostPlateFeedback: (feedback: ProductBrowserGhostPlateFeedback) => Promise<ProductBrowserGhostPlateFeedbackResult>;
+    readonly reportRendererDiagnostics?: (feedback: ProductBrowserRendererDiagnosticsFeedback) => Promise<ProductBrowserRendererDiagnosticsFeedbackResult>;
     readonly advanceRealtime: (observedTimeNs: string) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly admitDemandStep?: () => Promise<ProductBrowserRuntimeOperationResult>;
     readonly admitExternalStep?: (step: string) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -277,6 +287,7 @@ export interface ProductBrowserRuntimeTransport {
     readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
     readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
     readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
+    readonly reportRendererDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportRendererDiagnostics']>;
     readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
     readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
     readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -372,6 +383,10 @@ interface ProductBrowserGhostPlateFeedbackReporter {
     readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
     readonly flush: () => Promise<void>;
 }
+interface ProductBrowserRendererDiagnosticsReporter {
+    readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
+    readonly flush: () => Promise<void>;
+}
 /** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
 export declare function createProductBrowserAudioFeedbackReporter(options: {
     readonly renderer: Pick<RustyApplicationHost['renderer'], 'audioRealizedFacts' | 'acknowledgeAudioRealizedFacts' | 'resetAudioRealizationOwner'>;
@@ -390,6 +405,12 @@ export declare function createProductBrowserGhostPlateFeedbackReporter(options: 
     readonly report: ProductBrowserRuntimeTransport['reportGhostPlateFeedback'];
     readonly initialRuntime?: RustyApplicationRuntimeIdentity;
 }): ProductBrowserGhostPlateFeedbackReporter;
+/** @internal Publishes one latest immutable renderer snapshot without scheduling renderer work. */
+export declare function createProductBrowserRendererDiagnosticsReporter(options: {
+    readonly renderer: Pick<RustyApplicationHost['renderer'], 'diagnosticsReadout'>;
+    readonly report: NonNullable<ProductBrowserRuntimeTransport['reportRendererDiagnostics']>;
+    readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+}): ProductBrowserRendererDiagnosticsReporter;
 /** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
 export declare function flushProductBrowserAudioFeedbackBeforeUpdate<T>(flush: () => Promise<void>, update: () => Promise<T>): Promise<T>;
 /** @internal Flushes both fixed renderer feedback families before C# update work. */

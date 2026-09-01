@@ -26,6 +26,7 @@ const READOUT = {
 interface RuntimeStreamState {
   response: ServerResponse | null;
   inputPending: boolean;
+  inputBodies: unknown[];
   nextEventId: number;
 }
 
@@ -127,7 +128,13 @@ test('demand Product UI intent wakes input and one Engine-owned demand admission
     },
   });
   const requests: string[] = [];
-  const server = await createBundleServer(generatedAssets, rendererPreloadResources(), requests);
+  const inputBodies: unknown[] = [];
+  const server = await createBundleServer(
+    generatedAssets,
+    rendererPreloadResources(),
+    requests,
+    inputBodies,
+  );
   const address = server.address();
   if (address === null || typeof address === 'string') {
     throw new Error('demand Product Bundle server did not expose a TCP address');
@@ -138,6 +145,23 @@ test('demand Product UI intent wakes input and one Engine-owned demand admission
     await expect(page.locator('#bundle-value')).toHaveText('status: ready');
     await page.locator('#bundle-regenerate').click();
     await expect(page.locator('#bundle-value')).toHaveText('status: regenerated');
+    await expect.poll(() => inputBodies.flatMap((body) => {
+      if (body === null || typeof body !== 'object') return [];
+      const batch = (body as { readonly batch?: unknown }).batch;
+      return Array.isArray(batch) ? batch : [];
+    }).find((entry) => entry !== null
+      && typeof entry === 'object'
+      && (entry as { readonly intent?: unknown }).intent === 'rusty-procgen.workbench')).toMatchObject({
+      runtime: RUNTIME,
+      sequence: expect.any(String),
+      context: 'gameplay.default',
+      intent: 'rusty-procgen.workbench',
+      value: {
+        kind: 'product-payload',
+        contract: 'rusty-procgen.workbench.command.v1',
+        data: { action: 'regenerate' },
+      },
+    });
     expect(requests).toContain('POST /__rusty/product/runtime/input');
     expect(requests).toContain('POST /__rusty/product/runtime/admit-demand-step');
   } finally {
@@ -211,8 +235,14 @@ async function createBundleServer(
   generatedAssets: readonly ProductBrowserBundleAsset[],
   rendererResources: readonly RendererPreloadResource[],
   requests: string[],
+  inputBodies: unknown[] = [],
 ): Promise<Server> {
-  const runtimeStream: RuntimeStreamState = { response: null, inputPending: false, nextEventId: 0 };
+  const runtimeStream: RuntimeStreamState = {
+    response: null,
+    inputPending: false,
+    inputBodies,
+    nextEventId: 0,
+  };
   const assetMap = new Map<string, { readonly body: string | Uint8Array; readonly contentType: string }>();
   for (const asset of generatedAssets) {
     assetMap.set(`/${asset.name}`, { body: asset.content, contentType: contentTypeFor(asset.name) });
@@ -243,7 +273,7 @@ async function createBundleServer(
       '  const regenerate = document.createElement("button");',
       '  regenerate.id = "bundle-regenerate";',
       '  regenerate.textContent = "Regenerate";',
-      '  regenerate.addEventListener("click", () => context.intents?.claim("fixture.regenerate", { kind: "digital", active: true }));',
+      '  regenerate.addEventListener("click", () => context.intents?.claim("rusty-procgen.workbench", { kind: "product-payload", contract: "rusty-procgen.workbench.command.v1", data: { action: "regenerate" } }));',
       '  context.projection?.subscribe((value) => {',
       '    state.textContent = `projection: ${value?.contract ?? "empty"}`;',
       '    const status = value?.value?.status;',
@@ -309,6 +339,7 @@ async function handleRequest(
   }
   if (pathname.startsWith('/__rusty/product/runtime/') && request.method === 'POST') {
     let body = '';
+    const operation = pathname.slice('/__rusty/product/runtime/'.length);
     request.setEncoding('utf8');
     request.on('data', (chunk: string) => { body += chunk; });
     request.on('end', () => {
@@ -316,11 +347,11 @@ async function handleRequest(
       try {
         const decoded = JSON.parse(body) as { readonly batch?: readonly unknown[] };
         inputCount = Array.isArray(decoded.batch) ? decoded.batch.length : 0;
+        if (operation === 'input') runtimeStream.inputBodies.push(decoded);
       } catch {
         // The generated adapter performs the strict request encoding; this
         // server only records a deterministic Rust-shaped response.
       }
-      const operation = pathname.slice('/__rusty/product/runtime/'.length);
       if (operation === 'lifecycle/start') {
         runtimeStream.response?.write(initialRuntimeOutputs()
           .map((value) => `data: ${JSON.stringify(value)}\n\n`).join(''));
@@ -348,7 +379,10 @@ async function handleRequest(
       }
       const result = operation === 'input'
         ? { accepted: true, count: inputCount, binding: RUNTIME, readout: READOUT }
-        : operation === 'audio-feedback' || operation === 'animation-feedback'
+        : operation === 'audio-feedback'
+          || operation === 'animation-feedback'
+          || operation === 'ghost-plate-feedback'
+          || operation === 'renderer-diagnostics'
           ? { accepted: true, runtime: RUNTIME }
           : {
             accepted: true,

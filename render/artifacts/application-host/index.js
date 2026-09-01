@@ -23600,6 +23600,41 @@ function $x(e, t, n = {}) {
 			...s.automaticSubmissionPacing(),
 			hostAdmission: h.sample()
 		}),
+		diagnosticsReadout: () => {
+			let t = a.snapshot(), n = p;
+			if (n === null) throw Error("renderer surface has no completed submission");
+			let r = e.clientWidth, i = e.clientHeight, o = e.getContext("webgl2"), c = o?.getExtension("WEBGL_debug_renderer_info") ?? null, l = Object.freeze({
+				...s.automaticSubmissionPacing(),
+				hostAdmission: h.sample()
+			});
+			return Object.freeze({
+				schemaVersion: 1,
+				renderer: o === null || c === null ? null : String(o.getParameter(c.UNMASKED_RENDERER_WEBGL)),
+				vendor: o === null || c === null ? null : String(o.getParameter(c.UNMASKED_VENDOR_WEBGL)),
+				canvas: Object.freeze({
+					cssWidth: r,
+					cssHeight: i,
+					backingWidth: e.width,
+					backingHeight: e.height,
+					effectivePixelRatio: r > 0 ? e.width / r : 0
+				}),
+				submission: n,
+				pacing: l,
+				resources: Object.freeze({
+					definedTextureCount: t.textures.length,
+					realizedTextures: Object.freeze(s.renderer.textureResourceReadout().map((e) => Object.freeze({
+						id: e.id,
+						resource: e.resource,
+						encodedBytes: e.encodedBytes,
+						decodedBytes: e.decodedBytes
+					}))),
+					spriteAtlasCount: t.spriteAtlases.length,
+					spriteFallbackCount: s.renderer.spriteFallbackCount,
+					materialFallbackCount: s.renderer.fallbackMaterialCount,
+					voxelSpecializedMaterialCount: s.renderer.voxelSurfaceMaterialReadout().length
+				})
+			});
+		},
 		cameraPose: o.cameraPose,
 		cameraProjection: s.cameraProjection,
 		inputReadout: o.inputReadout,
@@ -26865,6 +26900,7 @@ async function rE(e, t) {
 		audioRealizedFacts: () => k().audioRealizedFacts(),
 		animationRealizedFacts: () => k().animationRealizedFacts(),
 		ghostPlateReadout: () => k().ghostPlateReadout(),
+		diagnosticsReadout: () => k().diagnosticsReadout(),
 		acknowledgeAudioRealizedFacts: (e) => k().acknowledgeAudioRealizedFacts(e),
 		acknowledgeAnimationRealizedFacts: (e) => k().acknowledgeAnimationRealizedFacts(e),
 		resetAnimationRealizationOwner: () => k().resetAnimationRealizationOwner(),
@@ -27152,4 +27188,4 @@ function wE(e, t) {
 	return ex(e, t);
 }
 //#endregion
-export { yw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, bw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, xw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, ZT as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, Lw as RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM, Vw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM, Gw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM, Hw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM, Uw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM, Kw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM, Ww as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_STRING_BYTES_MAXIMUM, Iw as RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM, zw as RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM, Bw as RUSTY_APPLICATION_INPUT_U64_MAXIMUM, Rw as RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM, OT as RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT, kT as RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM, FT as RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH, AT as RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES, NT as RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH, MT as RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES, IT as RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS, PT as RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES, LT as RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS, jT as RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES, Sw as RustyApplicationContentError, $T as RustyApplicationHostError, $ as RustyApplicationUiProjectionError, zT as createRustyApplicationUiProjection, nE as mountRustyApplication, wE as rendererResourceContentHash };
+export { yw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, bw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, xw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, ZT as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, Lw as RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM, Vw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM, Gw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM, Hw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM, Uw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM, Kw as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM, Ww as RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_STRING_BYTES_MAXIMUM, Iw as RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM, zw as RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM, Bw as RUSTY_APPLICATION_INPUT_U64_MAXIMUM, Rw as RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM, OT as RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT, kT as RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM, FT as RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH, AT as RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES, NT as RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH, MT as RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES, IT as RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS, PT as RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES, LT as RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS, jT as RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES, Sw as RustyApplicationContentError, $T as RustyApplicationHostError, $ as RustyApplicationUiProjectionError, zT as createRustyApplicationUiProjection, nE as mountRustyApplication, wE as rendererResourceContentHash, oT as snapshotRustyApplicationProductPayloadJson };
