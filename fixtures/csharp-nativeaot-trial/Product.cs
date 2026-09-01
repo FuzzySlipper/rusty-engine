@@ -183,6 +183,7 @@ public sealed class Product : IEngineProduct
         _material = _engine.Appearance.ReplaceMaterial(new MaterialUpdateRequest(createdMaterial, new MaterialRequest(
             new Color(1, 1, 1, 1), new RenderResourceHandle(0), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false)));
         createdMaterial.Dispose();
+        ExerciseMagicaVoxelAdmission();
         CameraDescriptor initialCamera = new(
             new CameraPose(new Vector3(0, 1, 3), 0, 0),
             CameraBasisMode.Explicit,
@@ -1084,6 +1085,117 @@ public sealed class Product : IEngineProduct
             return;
         }
         throw new InvalidOperationException("expected an Engine call failure");
+    }
+
+    private static void ExpectEngineFailureStatus(Action action, int expectedStatus)
+    {
+        try
+        {
+            action();
+        }
+        catch (EngineCallException error) when (error.Status == expectedStatus)
+        {
+            return;
+        }
+        throw new InvalidOperationException($"expected Engine call status {expectedStatus}");
+    }
+
+    private void ExerciseMagicaVoxelAdmission()
+    {
+        byte[] source = CreateMagicaVoxelFixture();
+        using VoxelObject voxelObject = _engine.VoxelContent.AdmitMagicaVoxelObject(
+            new AdmitMagicaVoxelObjectRequest(
+                source,
+                "voxel-object/nativeaot-magica-fixture",
+                "generated/nativeaot-magica-fixture.vox",
+                0.25,
+                MagicaVoxelPivotPolicy.BaseCenter,
+                0,
+                0,
+                0,
+                MagicaVoxelOrientation.XRightYUpNegativeZForward,
+                64 * 1024,
+                64,
+                8,
+                3,
+                2));
+        MagicaVoxelPaletteLeaseReceipt palette = _engine.VoxelContent.ReadMagicaVoxelPalette(voxelObject);
+        Require(
+            palette.Palette.Length == 2
+            && palette.Palette.Span[0] == new MagicaVoxelPaletteRow(1, 1, 12, 34, 56, 255)
+            && palette.Palette.Span[1] == new MagicaVoxelPaletteRow(2, 2, 90, 80, 70, 255)
+            && palette.SourceByteCount == (ulong)source.Length
+            && palette.SourceHash != default,
+            "generated MagicaVoxel palette facts did not preserve source RGBA");
+        Require(
+            _engine.VoxelContent.ReadObject(voxelObject).FrameCount == 1,
+            "generated MagicaVoxel admission did not return an ordinary voxel object");
+        using VoxelObjectPresentation presentation = _engine.VoxelContent.ProjectObject(
+            new ProjectVoxelObjectRequest(
+                voxelObject,
+                0,
+                new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One),
+                true,
+                new[]
+                {
+                    new VoxelObjectMaterialBinding(1, _material),
+                    new VoxelObjectMaterialBinding(2, _material),
+                }));
+        ExpectEngineFailureStatus(() => _engine.VoxelContent.AdmitMagicaVoxelObject(
+            new AdmitMagicaVoxelObjectRequest(
+                source[..^1],
+                "voxel-object/nativeaot-magica-truncated",
+                "generated/nativeaot-magica-truncated.vox",
+                0.25,
+                MagicaVoxelPivotPolicy.BaseCenter,
+                0,
+                0,
+                0,
+                MagicaVoxelOrientation.XRightYUpNegativeZForward,
+                64 * 1024,
+                64,
+                8,
+                3,
+                2)), (int)MagicaVoxelAdmissionStatus.MalformedSource);
+    }
+
+    private static byte[] CreateMagicaVoxelFixture()
+    {
+        List<byte> children = [];
+        AppendChunk(children, "SIZE"u8, [2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0]);
+        List<byte> voxels = [];
+        AppendU32(voxels, 2);
+        voxels.AddRange([0, 0, 0, 1, 1, 0, 0, 2]);
+        AppendChunk(children, "XYZI"u8, voxels);
+        byte[] rgba = new byte[256 * 4];
+        new byte[] { 12, 34, 56, 255 }.CopyTo(rgba.AsSpan(0, 4));
+        new byte[] { 90, 80, 70, 255 }.CopyTo(rgba.AsSpan(4, 4));
+        AppendChunk(children, "RGBA"u8, rgba);
+        List<byte> file = [];
+        file.AddRange("VOX "u8.ToArray());
+        AppendU32(file, 150);
+        file.AddRange("MAIN"u8.ToArray());
+        AppendU32(file, 0);
+        AppendU32(file, (uint)children.Count);
+        file.AddRange(children);
+        return file.ToArray();
+    }
+
+    private static void AppendChunk(List<byte> destination, ReadOnlySpan<byte> kind, IEnumerable<byte> content)
+    {
+        byte[] body = content.ToArray();
+        destination.AddRange(kind.ToArray());
+        AppendU32(destination, (uint)body.Length);
+        AppendU32(destination, 0);
+        destination.AddRange(body);
+    }
+
+    private static void AppendU32(List<byte> destination, uint value)
+    {
+        destination.Add((byte)value);
+        destination.Add((byte)(value >> 8));
+        destination.Add((byte)(value >> 16));
+        destination.Add((byte)(value >> 24));
     }
 
     private static void Require(bool condition, string message)

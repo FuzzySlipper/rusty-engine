@@ -31,6 +31,9 @@ use voxel_object_runtime::{
 use crate::{
     appearance::RuntimeAppearanceBridge,
     composition::{borrowed_slice, borrowed_utf8, ABI_OK},
+    magica_vox::{
+        admit_magica_vox, MagicaVoxelAdmissionOptions, MagicaVoxelError, MagicaVoxelPaletteRow,
+    },
     spatial::{RuntimeSpatialBridge, VoxelAssetSpatialPublishFacts},
     CsharpEngineServicesError,
 };
@@ -48,6 +51,19 @@ struct RetainedVoxelObject {
     object: Arc<AdmittedVoxelObject>,
     selected: ObjectFrameSelection,
     selection_revision: u64,
+    magica_palette: Option<RetainedMagicaVoxelPalette>,
+}
+
+#[derive(Debug, Clone)]
+struct RetainedMagicaVoxelPalette {
+    rows: Vec<MagicaVoxelPaletteRow>,
+    source_hash: String,
+    source_byte_count: u64,
+}
+
+#[derive(Debug)]
+struct RetainedMagicaVoxelPaletteLease {
+    _rows: Vec<NativeMagicaVoxelPaletteRow>,
 }
 
 /// The player owns an Arc to the admitted object. Destroying the object's
@@ -132,6 +148,7 @@ pub(crate) struct RuntimeVoxelContentBridge {
     annotation_region_leases: BTreeMap<u64, RetainedVoxelAnnotationRegionLease>,
     annotation_edit_leases: BTreeMap<u64, RetainedVoxelAnnotationEditLease>,
     asset_spatial_publish_leases: BTreeMap<u64, RetainedVoxelAssetSpatialPublishLease>,
+    magica_palette_leases: BTreeMap<u64, RetainedMagicaVoxelPaletteLease>,
     next_asset: u64,
     next_object: u64,
     next_player: u64,
@@ -139,6 +156,7 @@ pub(crate) struct RuntimeVoxelContentBridge {
     next_annotation_region_lease: u64,
     next_annotation_edit_lease: u64,
     next_asset_spatial_publish_lease: u64,
+    next_magica_palette_lease: u64,
     presentation: VoxelObjectPresentationState,
     staged_presentation: Option<RuntimeVoxelContentCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
@@ -155,6 +173,7 @@ impl RuntimeVoxelContentBridge {
             annotation_region_leases: BTreeMap::new(),
             annotation_edit_leases: BTreeMap::new(),
             asset_spatial_publish_leases: BTreeMap::new(),
+            magica_palette_leases: BTreeMap::new(),
             next_asset: 1,
             next_object: 1,
             next_player: 1,
@@ -162,6 +181,7 @@ impl RuntimeVoxelContentBridge {
             next_annotation_region_lease: 1,
             next_annotation_edit_lease: 1,
             next_asset_spatial_publish_lease: 1,
+            next_magica_palette_lease: 1,
             presentation: VoxelObjectPresentationState {
                 projector: VoxelObjectRenderProjector::new(),
                 presentations: BTreeMap::new(),
@@ -185,6 +205,14 @@ impl RuntimeVoxelContentBridge {
     }
 
     fn insert_object(&mut self, object: AdmittedVoxelObject) -> Option<NativeVoxelObjectHandle> {
+        self.insert_object_with_magica_palette(object, None)
+    }
+
+    fn insert_object_with_magica_palette(
+        &mut self,
+        object: AdmittedVoxelObject,
+        magica_palette: Option<RetainedMagicaVoxelPalette>,
+    ) -> Option<NativeVoxelObjectHandle> {
         let value = self.next_object;
         self.next_object = value.checked_add(1)?;
         self.objects.insert(
@@ -198,9 +226,59 @@ impl RuntimeVoxelContentBridge {
                     is_default: true,
                 },
                 selection_revision: 0,
+                magica_palette,
             },
         );
         Some(NativeVoxelObjectHandle { value })
+    }
+
+    fn read_magica_palette(
+        &mut self,
+        object_handle: NativeVoxelObjectHandle,
+    ) -> Result<
+        (
+            NativeMagicaVoxelPaletteLease,
+            RetainedMagicaVoxelPaletteLease,
+        ),
+        CsharpEngineServicesError,
+    > {
+        let palette = self
+            .object(object_handle)?
+            .magica_palette
+            .clone()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_VOXEL_CONTENT_MAGICA",
+                    "voxel object was not admitted from a MagicaVoxel source",
+                )
+            })?;
+        let value = self.next_magica_palette_lease;
+        self.next_magica_palette_lease = value.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_CONTENT_MAGICA",
+                "MagicaVoxel palette lease handle space overflowed",
+            )
+        })?;
+        let rows = palette
+            .rows
+            .iter()
+            .map(|row| NativeMagicaVoxelPaletteRow {
+                material_slot: u32::from(row.material_slot),
+                source_color_index: u32::from(row.source_color_index),
+                red: row.rgba[0],
+                green: row.rgba[1],
+                blue: row.rgba[2],
+                alpha: row.rgba[3],
+            })
+            .collect::<Vec<_>>();
+        let lease = NativeMagicaVoxelPaletteLease {
+            handle: NativeMagicaVoxelPaletteLeaseHandle { value },
+            palette: rows.as_ptr(),
+            palette_len: rows.len(),
+            source_hash: hash(&palette.source_hash)?,
+            source_byte_count: palette.source_byte_count,
+        };
+        Ok((lease, RetainedMagicaVoxelPaletteLease { _rows: rows }))
     }
 
     fn insert_player(
@@ -997,6 +1075,9 @@ fn api_impl(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentApi {
         publish_asset_to_spatial,
         destroy_asset_spatial_publish_lease,
         admit_object,
+        admit_magica_voxel_object,
+        read_magica_voxel_palette,
+        destroy_magica_voxel_palette_lease,
         destroy_object,
         read_object,
         select_default_object_frame,
@@ -1186,6 +1267,146 @@ unsafe extern "C" fn admit_object(
         }
         None => 0,
     }
+}
+
+unsafe extern "C" fn admit_magica_voxel_object(
+    context: *mut c_void,
+    request: *const NativeAdmitMagicaVoxelObjectRequest,
+    output: *mut NativeVoxelObjectHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32;
+    }
+    let request = unsafe { &*request };
+    let bytes = match unsafe { borrowed_bytes(request.bytes) } {
+        Ok(value) => value,
+        Err(_) => return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32,
+    };
+    let asset_id = match unsafe {
+        borrowed_utf8(
+            request.asset_id.bytes,
+            request.asset_id.len,
+            "magicaVoxel.assetId",
+        )
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32,
+    };
+    let source_path = match unsafe {
+        borrowed_utf8(
+            request.source_path.bytes,
+            request.source_path.len,
+            "magicaVoxel.sourcePath",
+        )
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32,
+    };
+    let admission = match admit_magica_vox(
+        bytes,
+        asset_id,
+        source_path,
+        MagicaVoxelAdmissionOptions {
+            cell_size: request.cell_size,
+            pivot_policy: request.pivot_policy,
+            explicit_pivot: [request.pivot_x, request.pivot_y, request.pivot_z],
+            orientation: request.orientation,
+            max_source_bytes: request.max_source_bytes,
+            max_dimension: request.max_dimension,
+            max_voxel_count: request.max_voxel_count,
+            max_chunk_count: request.max_chunk_count,
+            max_material_slots: request.max_material_slots,
+        },
+    ) {
+        Ok(value) => value,
+        Err(error) => return magica_status(error),
+    };
+    let palette = RetainedMagicaVoxelPalette {
+        rows: admission.palette,
+        source_hash: admission.source_hash,
+        source_byte_count: admission.source_byte_count,
+    };
+    let object =
+        match voxel_object_runtime::admit_voxel_object(&admission.object, Default::default()) {
+            Ok(value) => value,
+            Err(_) => return NativeMagicaVoxelAdmissionStatus::CanonicalObject as i32,
+        };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.insert_object_with_magica_palette(object, Some(palette)) {
+        Some(handle) => {
+            unsafe { *output = handle };
+            ABI_OK
+        }
+        None => NativeMagicaVoxelAdmissionStatus::HandleExhausted as i32,
+    }
+}
+
+unsafe extern "C" fn read_magica_voxel_palette(
+    context: *mut c_void,
+    object: NativeVoxelObjectHandle,
+    output: *mut NativeMagicaVoxelPaletteLease,
+) -> i32 {
+    if context.is_null() || output.is_null() {
+        return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.read_magica_palette(object) {
+        Ok((lease, retained)) => {
+            let replaced = bridge
+                .magica_palette_leases
+                .insert(lease.handle.value, retained);
+            debug_assert!(replaced.is_none());
+            unsafe { *output = lease };
+            ABI_OK
+        }
+        Err(error) if error.code() == "CSHARP_VOXEL_CONTENT_MAGICA" => {
+            NativeMagicaVoxelAdmissionStatus::NotMagicaVoxelObject as i32
+        }
+        Err(_) => NativeMagicaVoxelAdmissionStatus::PaletteLeaseExhausted as i32,
+    }
+}
+
+unsafe extern "C" fn destroy_magica_voxel_palette_lease(
+    context: *mut c_void,
+    handle: NativeMagicaVoxelPaletteLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    if bridge.magica_palette_leases.remove(&handle.value).is_some() {
+        ABI_OK
+    } else {
+        NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32
+    }
+}
+
+fn magica_status(error: MagicaVoxelError) -> i32 {
+    (match error {
+        MagicaVoxelError::InvalidOptions(_) => NativeMagicaVoxelAdmissionStatus::InvalidRequest,
+        MagicaVoxelError::SourceLimit => NativeMagicaVoxelAdmissionStatus::SourceLimit,
+        MagicaVoxelError::InvalidHeader => NativeMagicaVoxelAdmissionStatus::InvalidHeader,
+        MagicaVoxelError::UnsupportedVersion(_) => {
+            NativeMagicaVoxelAdmissionStatus::UnsupportedVersion
+        }
+        MagicaVoxelError::UnsupportedChunk(_) | MagicaVoxelError::UnsupportedScene => {
+            NativeMagicaVoxelAdmissionStatus::UnsupportedFeature
+        }
+        MagicaVoxelError::DuplicateCell => NativeMagicaVoxelAdmissionStatus::DuplicateCell,
+        MagicaVoxelError::DimensionLimit | MagicaVoxelError::VoxelLimit => {
+            NativeMagicaVoxelAdmissionStatus::VoxelLimit
+        }
+        MagicaVoxelError::Canonical(_) => NativeMagicaVoxelAdmissionStatus::CanonicalObject,
+        MagicaVoxelError::Truncated
+        | MagicaVoxelError::InvalidChunk
+        | MagicaVoxelError::DuplicateChunk(_)
+        | MagicaVoxelError::MissingChunk(_)
+        | MagicaVoxelError::InvalidSize
+        | MagicaVoxelError::InvalidVoxelPayload
+        | MagicaVoxelError::InvalidPalettePayload
+        | MagicaVoxelError::InvalidColorIndex
+        | MagicaVoxelError::InvalidScene => NativeMagicaVoxelAdmissionStatus::MalformedSource,
+    }) as i32
 }
 
 unsafe extern "C" fn admit_annotation(
@@ -1903,6 +2124,17 @@ unsafe fn borrowed_json<'a>(value: NativeByteSlice) -> Result<&'a str, ()> {
         unsafe { std::slice::from_raw_parts(value.bytes, value.len) }
     };
     std::str::from_utf8(bytes).map_err(|_| ())
+}
+
+unsafe fn borrowed_bytes<'a>(value: NativeByteSlice) -> Result<&'a [u8], ()> {
+    if value.len > 0 && value.bytes.is_null() {
+        return Err(());
+    }
+    if value.len == 0 {
+        Ok(&[])
+    } else {
+        Ok(unsafe { std::slice::from_raw_parts(value.bytes, value.len) })
+    }
 }
 
 /// Copies a bounded, synchronous tag input before an edit can reach the

@@ -10,6 +10,7 @@ mod content_store;
 mod dynamics;
 mod kinematic;
 mod look;
+mod magica_vox;
 mod motion;
 mod perception;
 mod persistence;

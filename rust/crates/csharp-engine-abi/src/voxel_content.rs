@@ -115,6 +115,46 @@ pub enum NativeVoxelObjectPlaybackStatus {
     Paused = 3,
 }
 
+/// The only source-axis conversion currently admitted from ordinary
+/// MagicaVoxel v150 model chunks. MagicaVoxel's +Z-up coordinates become the
+/// Engine's +Y-up right-handed object-local coordinates.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMagicaVoxelOrientation {
+    #[default]
+    XRightYUpNegativeZForward = 1,
+}
+
+/// Product-selected local pivot policy for a MagicaVoxel source. Explicit
+/// pivots are already expressed in the converted Engine-local coordinates.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMagicaVoxelPivotPolicy {
+    #[default]
+    Explicit = 1,
+    BoundsCenter = 2,
+    BaseCenter = 3,
+}
+
+/// Stable rejection statuses for the bounded MagicaVoxel source-admission
+/// operation. `1` remains the shared ABI success status.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeMagicaVoxelAdmissionStatus {
+    InvalidRequest = 2,
+    SourceLimit = 3,
+    InvalidHeader = 4,
+    UnsupportedVersion = 5,
+    MalformedSource = 6,
+    UnsupportedFeature = 7,
+    DuplicateCell = 8,
+    VoxelLimit = 9,
+    CanonicalObject = 10,
+    HandleExhausted = 11,
+    NotMagicaVoxelObject = 12,
+    PaletteLeaseExhausted = 13,
+}
+
 /// A fixed SHA-256 fact. The words are big-endian groups from the canonical
 /// hexadecimal digest; no borrowed identity text escapes the direct call.
 #[repr(C)]
@@ -138,6 +178,59 @@ pub struct NativeAdmitVoxelAssetRequest {
 pub struct NativeAdmitVoxelObjectRequest {
     /// A complete bounded voxel-object artifact borrowed for this call only.
     pub bytes: NativeByteSlice,
+}
+
+/// One bounded trusted-product request for a single ordinary MagicaVoxel v150
+/// model. Bytes and UTF-8 identities are borrowed only for this call; the
+/// Engine copies the admitted source facts before retaining the object.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAdmitMagicaVoxelObjectRequest {
+    pub bytes: NativeByteSlice,
+    pub asset_id: NativeUtf8Slice,
+    pub source_path: NativeUtf8Slice,
+    pub cell_size: f64,
+    pub pivot_policy: NativeMagicaVoxelPivotPolicy,
+    pub pivot_x: f64,
+    pub pivot_y: f64,
+    pub pivot_z: f64,
+    pub orientation: NativeMagicaVoxelOrientation,
+    pub max_source_bytes: u64,
+    pub max_dimension: u32,
+    pub max_voxel_count: u64,
+    pub max_chunk_count: u32,
+    pub max_material_slots: u32,
+}
+
+/// One copied source palette fact. `source_color_index` is MagicaVoxel's
+/// 1-based color index; only occupied indices appear in an admission read.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMagicaVoxelPaletteRow {
+    pub material_slot: u32,
+    pub source_color_index: u32,
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+    pub alpha: u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMagicaVoxelPaletteLeaseHandle {
+    pub value: u64,
+}
+
+/// A copied, disposable palette readout associated with one admitted object.
+/// The pointer is valid only until its matching destroy callback.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMagicaVoxelPaletteLease {
+    pub handle: NativeMagicaVoxelPaletteLeaseHandle,
+    pub palette: *const NativeMagicaVoxelPaletteRow,
+    pub palette_len: usize,
+    pub source_hash: NativeVoxelContentHash,
+    pub source_byte_count: u64,
 }
 
 /// A complete bounded annotation artifact. Its target is an already admitted
@@ -502,6 +595,18 @@ pub type NativeAdmitVoxelObject = unsafe extern "C" fn(
     *const NativeAdmitVoxelObjectRequest,
     *mut NativeVoxelObjectHandle,
 ) -> i32;
+pub type NativeAdmitMagicaVoxelObject = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAdmitMagicaVoxelObjectRequest,
+    *mut NativeVoxelObjectHandle,
+) -> i32;
+pub type NativeReadMagicaVoxelPalette = unsafe extern "C" fn(
+    *mut c_void,
+    NativeVoxelObjectHandle,
+    *mut NativeMagicaVoxelPaletteLease,
+) -> i32;
+pub type NativeDestroyMagicaVoxelPaletteLease =
+    unsafe extern "C" fn(*mut c_void, NativeMagicaVoxelPaletteLeaseHandle) -> i32;
 pub type NativeAdmitVoxelAnnotation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAdmitVoxelAnnotationRequest,
@@ -614,6 +719,9 @@ pub struct NativeVoxelContentApi {
     pub publish_asset_to_spatial: NativePublishVoxelAssetToSpatial,
     pub destroy_asset_spatial_publish_lease: NativeDestroyVoxelAssetSpatialPublishLease,
     pub admit_object: NativeAdmitVoxelObject,
+    pub admit_magica_voxel_object: NativeAdmitMagicaVoxelObject,
+    pub read_magica_voxel_palette: NativeReadMagicaVoxelPalette,
+    pub destroy_magica_voxel_palette_lease: NativeDestroyMagicaVoxelPaletteLease,
     pub destroy_object: NativeDestroyVoxelObject,
     pub read_object: NativeReadVoxelObject,
     pub select_default_object_frame: NativeSelectDefaultVoxelObjectFrame,
