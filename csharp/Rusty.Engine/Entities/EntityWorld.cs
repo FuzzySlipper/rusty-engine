@@ -521,6 +521,8 @@ public sealed class EntityWorld : IDisposable
         return new EntityWorldDebugSnapshot(_state.Revision, _state.NextEntityValue, entities.ToArray(), componentFamilies);
     }
 
+    internal void ValidateDebugRegistration() => ThrowIfDisposed();
+
     public void Dispose()
     {
         if (_staging)

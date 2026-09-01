@@ -30,16 +30,40 @@ public sealed class EntityWorldDebugModule : IDebugCommandModule
     private readonly SortedDictionary<string, EntityWorld> _worlds = new(StringComparer.Ordinal);
     private readonly SortedDictionary<ComponentTypeKey, Projection> _projections = [];
 
+    /// <summary>Registers one live world under a stable product-selected name.</summary>
     public void RegisterWorld(string name, EntityWorld world)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Length > MaximumWorldNameLength || name.Any(char.IsWhiteSpace))
-        {
-            throw new ArgumentException($"A world name must be a non-empty, whitespace-free token of at most {MaximumWorldNameLength} characters.", nameof(name));
-        }
-        ArgumentNullException.ThrowIfNull(world);
+        ValidateWorldName(name);
+        ValidateWorld(world);
         if (!_worlds.TryAdd(name, world))
         {
             throw new InvalidOperationException($"A debug world named '{name}' is already registered.");
+        }
+    }
+
+    /// <summary>
+    /// Replaces an existing registration after a product atomically installs a
+    /// new authoritative world generation. The module does not dispose either
+    /// world; their lifetimes remain product-owned.
+    /// </summary>
+    public void ReplaceWorld(string name, EntityWorld world)
+    {
+        ValidateWorldName(name);
+        ValidateWorld(world);
+        if (!_worlds.ContainsKey(name))
+        {
+            throw new InvalidOperationException($"A debug world named '{name}' is not registered.");
+        }
+        _worlds[name] = world;
+    }
+
+    /// <summary>Removes an existing world registration without disposing the product-owned world.</summary>
+    public void UnregisterWorld(string name)
+    {
+        ValidateWorldName(name);
+        if (!_worlds.Remove(name))
+        {
+            throw new InvalidOperationException($"A debug world named '{name}' is not registered.");
         }
     }
 
@@ -194,6 +218,20 @@ public sealed class EntityWorldDebugModule : IDebugCommandModule
             return Invalid($"Page limit must be between 1 and {MaximumPageSize}.");
         }
         return WithWorld(world, (name, snapshot) => query(name, snapshot, limit));
+    }
+
+    private static void ValidateWorldName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Length > MaximumWorldNameLength || name.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException($"A world name must be a non-empty, whitespace-free token of at most {MaximumWorldNameLength} characters.", nameof(name));
+        }
+    }
+
+    private static void ValidateWorld(EntityWorld world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        world.ValidateDebugRegistration();
     }
 
     private static bool Matches(EntityWorldDebugSelector selector, EntityLifecycle lifecycle)

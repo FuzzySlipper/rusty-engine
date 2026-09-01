@@ -137,6 +137,41 @@ internal static class Program
             && oversized.Length == EntityWorldDebugModule.MaximumResultLength, "oversized projection output was not bounded");
         standalone.Dispose();
         Require(direct.Summary("standalone").Status == DebugCommandStatus.Failed, "disposed world did not report a bounded failure");
+
+        var generations = new EntityWorldDebugModule();
+        var original = new EntityWorld([Product.HealthForFixture]);
+        EntityId originalEntity = original.Create();
+        original.Set(originalEntity, Product.HealthForFixture, new Health(11));
+        generations.RegisterWorld("current", original);
+        generations.RegisterProjection(Product.HealthForFixture, static (in Health value) => $"current={value.Current}");
+
+        var disposedReplacement = new EntityWorld([Product.HealthForFixture]);
+        disposedReplacement.Dispose();
+        RequireThrows(() => generations.ReplaceWorld("current", disposedReplacement), "disposed replacement world was accepted");
+        Require(generations.GetComponent("current", originalEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var preserved }
+            && preserved.Contains("value=current=11", StringComparison.Ordinal), "failed replacement corrupted the existing registration");
+
+        var replacement = new EntityWorld([Product.HealthForFixture]);
+        EntityId replacementEntity = replacement.Create();
+        EntityId replacementOnlyEntity = replacement.Create();
+        replacement.Set(replacementEntity, Product.HealthForFixture, new Health(22));
+        RequireThrows(() => generations.ReplaceWorld("missing", replacement), "unknown replacement name was accepted");
+        generations.ReplaceWorld("current", replacement);
+        Require(generations.GetComponent("current", replacementEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var replaced }
+            && replaced.Contains("value=current=22", StringComparison.Ordinal)
+            && !replaced.Contains("value=current=11", StringComparison.Ordinal), "replacement reads did not use only the current generation");
+        Require(generations.GetEntity("current", replacementOnlyEntity.Value).Succeeded,
+            "replacement-only entity was not discoverable through the stable world name");
+        Require(generations.Summary("current") is { Succeeded: true, Message: var replacementSummary }
+            && replacementSummary.Contains("entities=2", StringComparison.Ordinal), "replacement summary retained the prior generation");
+        original.Dispose();
+        Require(generations.Summary("current").Succeeded, "retired world disposal affected the replacement registration");
+
+        RequireThrows(() => generations.UnregisterWorld("missing"), "unknown unregister name was accepted");
+        Require(generations.Summary("current").Succeeded, "failed unregister corrupted the existing registration");
+        generations.UnregisterWorld("current");
+        Require(generations.ListWorlds() == DebugCommandResult.Success("worlds=0"), "unregister did not remove the world deterministically");
+        Require(generations.Summary("current").Status == DebugCommandStatus.InvalidArguments, "unregistered world remained queryable");
         return 0;
     }
 
