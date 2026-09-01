@@ -699,7 +699,7 @@ internal static class Emit
     // today. Other generated owners retain the established immediate local
     // disposal path so a later product-call rollback never revives a native
     // handle that was already destroyed.
-    private static bool UsesCommitAwareRelease(Service service) => service.Name is "Appearance" or "CameraView" or "Ui" or "Dynamics";
+    private static bool UsesCommitAwareRelease(Service service) => service.Name is "Appearance" or "CameraView" or "Ui" or "Dynamics" or "Presentation";
 
     private static string EmitBorrowedRequestMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature, string requestName, string result, string[] leading)
     {

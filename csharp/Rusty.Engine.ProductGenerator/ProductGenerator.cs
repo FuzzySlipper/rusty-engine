@@ -128,7 +128,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
                     ContentStore = new ContentStoreServiceImplementation(native.content_store);
                     Appearance = new AppearanceServiceImplementation(native.appearance, leaseReleases);
-                    Presentation = new PresentationServiceImplementation(native.presentation);
+                    Presentation = new PresentationServiceImplementation(native.presentation, leaseReleases);
                     Animation = new AnimationServiceImplementation(native.animation);
                     CameraView = new CameraViewServiceImplementation(native.camera_view, leaseReleases);
                     Random = new RngServiceImplementation(native.rng);
