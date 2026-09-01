@@ -3,10 +3,10 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import {
-  VoxelSpriteFrame,
-  VoxelSpriteRuntimeCapture,
-  type VoxelSpriteFrameTextures,
-} from './voxel-sprite-capture.js';
+  GhostPlateFrame,
+  GhostPlateRuntimeCapture,
+  type GhostPlateFrameTextures,
+} from './ghost-plate-capture.js';
 
 void test('borrowed prepared frames validate metadata without acquiring caller textures', () => {
   const textures = testTextures();
@@ -14,7 +14,7 @@ void test('borrowed prepared frames validate metadata without acquiring caller t
   for (const texture of Object.values(textures)) {
     texture.addEventListener('dispose', () => { disposalCount += 1; });
   }
-  const frame = VoxelSpriteFrame.borrowed({
+  const frame = GhostPlateFrame.borrowed({
     width: 16,
     height: 16,
     textures,
@@ -47,7 +47,7 @@ void test('borrowed prepared frames validate metadata without acquiring caller t
 });
 
 void test('borrowed prepared frames reject non-finite depth metadata', () => {
-  assert.throws(() => VoxelSpriteFrame.borrowed({
+  assert.throws(() => GhostPlateFrame.borrowed({
     width: 16,
     height: 16,
     textures: testTextures(),
@@ -68,7 +68,7 @@ void test('borrowed prepared frames reject non-finite depth metadata', () => {
 
 void test('capture rejects invalid requests without rendering or replacing the current frame', () => {
   const renderer = new FakeRenderer();
-  const capture = new VoxelSpriteRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
+  const capture = new GhostPlateRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
   const scene = captureScene();
   const camera = captureCamera();
 
@@ -83,7 +83,7 @@ void test('capture rejects invalid requests without rendering or replacing the c
 
 void test('capture accepts the 4096 experiment ceiling without allocating CPU pixel arrays', () => {
   const renderer = new FakeRenderer();
-  const capture = new VoxelSpriteRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
+  const capture = new GhostPlateRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
   const scene = captureScene();
   const camera = captureCamera();
 
@@ -94,7 +94,7 @@ void test('capture accepts the 4096 experiment ceiling without allocating CPU pi
   assert.equal(renderer.renderCalls, 4);
   capture.dispose();
 
-  const rejected = new VoxelSpriteRuntimeCapture(
+  const rejected = new GhostPlateRuntimeCapture(
     new FakeRenderer() as unknown as THREE.WebGLRenderer,
   ).capture({ scene, camera, width: 4097, height: 4096 });
   assert.equal(rejected.applied, false);
@@ -121,7 +121,7 @@ void test('successful recapture is atomic, restores caller state, and disposes r
   scene.fog = fog;
   scene.overrideMaterial = override;
   const camera = captureCamera();
-  const capture = new VoxelSpriteRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
+  const capture = new GhostPlateRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
 
   const first = capture.capture({ scene, camera, width: 32, height: 24 });
   assert.equal(first.applied, true);
@@ -167,7 +167,7 @@ void test('failed recapture retains the last successful frame and restores state
   const renderer = new FakeRenderer();
   const scene = captureScene();
   const camera = captureCamera();
-  const capture = new VoxelSpriteRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
+  const capture = new GhostPlateRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
   const first = capture.capture({ scene, camera, width: 16, height: 16 });
   assert.equal(first.applied, true);
   const stable = first.frame!;
@@ -207,7 +207,7 @@ function captureCamera(): THREE.PerspectiveCamera {
   return camera;
 }
 
-function testTextures(): VoxelSpriteFrameTextures {
+function testTextures(): GhostPlateFrameTextures {
   return {
     color: dataTexture(),
     depth: dataTexture(),

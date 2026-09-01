@@ -74,6 +74,44 @@ machines are ordinary managed helpers, not native context services. See the
 [current capability map](csharp-capabilities.md) and do not assume a Rust API
 is callable from C# simply because its crate is public.
 
+### Ghost plates
+
+`IEngineContext.Presentation` provides the retained ghost-plate path. Create a
+plate from the stable object ID of a retained Engine `Appearance`, then let the
+product choose its placement, capture/framing/lighting settings, plate
+mapping, depth/shell settings, and directional profile. The profile supports
+1, 4, 8, or 16 captures with hysteresis; sector changes are Engine-owned hard
+snaps. `UpdateGhostPlate` changes placement/configuration and
+`RecaptureGhostPlate` replaces capture settings. Dispose the returned
+`GhostPlatePresentation` before its source Appearance is released.
+
+The Engine retains the cloned capture bank, textures, renderer realization,
+and disposal. `ReadGhostPlate` returns copied facts rather than renderer
+objects: source presence and match, whether a host observation exists,
+fallback/limitation facts, current sector and offset, the effective
+capture/configuration, and retained resource counts/timing when the host
+provides them. The capture freezes the source Appearance pose, so this is a
+bounded presentation mechanism rather than live animation or a second
+renderer.
+
+### Microvoxel objects
+
+`IEngineContext.VoxelContent.AdmitMagicaVoxelObject` is the direct small-object
+path. It admits bounded MagicaVoxel v150 model bytes with product-selected
+identity, source path, cell size, pivot, orientation, and limits. Read the
+copied palette/object facts, bind every admitted palette slot to an ordinary
+`Appearance` material (roughness 1 is a suitable matte starting point), and
+call `ProjectObject` to obtain a retained `VoxelObjectPresentation`. Use the
+generated update operation for frame, transform, and visibility changes, then
+dispose the presentation and object handles normally.
+
+The default object mesh is a greedy voxel surface with axis-aligned face
+normals. This route uses ordinary Engine materials and retained mesh resources;
+it does not require voxel-specific shaders, a browser renderer, or TypeScript
+game code. It remains bounded by source, dimension, voxel, frame, mesh, and
+material limits, and it is not a general scene import path. Unsupported source
+or presentation needs are an upstream Engine task and a valid stopping point.
+
 `VoxelScenePresentation` projects the canonical `Spatial` session voxel scene
 through the Engine renderer. Bind every currently used scene material slot to
 a live `Appearance` material, retain the disposable projection, and call

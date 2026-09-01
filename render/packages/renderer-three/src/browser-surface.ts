@@ -48,7 +48,6 @@ import { classifyGpuSubmissionRendererName } from './gpu-submission-class.js';
 import { automaticSubmissionCapacity } from './gpu-submission-capacity.js';
 import { resolveRendererPixelRatio } from './software-renderer-resolution.js';
 import { applyRendererThreeCameraPose } from './camera-pose.js';
-import { RendererThreeVoxelSpriteScene } from './voxel-sprite-scene.js';
 import { RendererThreeGhostPlatePresentation } from './ghost-plate-presentation.js';
 import {
   RendererViewCompositionBackend,
@@ -258,8 +257,6 @@ export interface RendererBrowserSurface {
   readonly kind: 'rusty_renderer_browser_surface.v1';
   readonly canvas: HTMLCanvasElement;
   readonly renderer: ThreeRenderer;
-  /** Create a backend-owned experimental voxel-sprite scene attachment. */
-  readonly createVoxelSpriteScene: () => RendererThreeVoxelSpriteScene;
   /** Create one named retained ghost presentation without exposing renderer resources. */
   readonly createGhostPlatePresentation: (id: string) => RendererThreeGhostPlatePresentation;
   readonly frame: RenderFrameDiff;
@@ -440,7 +437,6 @@ export function mountRendererBrowserSurface(
   let logicalViewport = { width: 0, height: 0 };
   let submissionSequence = 0;
   let disposed = false;
-  const voxelSpriteScenes = new Set<RendererThreeVoxelSpriteScene>();
   const ghostPlatePresentations = new Set<RendererThreeGhostPlatePresentation>();
   const viewComposition = new RendererViewCompositionBackend(webgl, renderer, viewmodelCamera);
   if (options.viewComposition !== undefined) {
@@ -508,9 +504,7 @@ export function mountRendererBrowserSurface(
         : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
     lastRenderTimeMs = timeMs;
     webgl.info.reset();
-    for (const voxelSpriteScene of voxelSpriteScenes) voxelSpriteScene.prepare(camera);
     for (const ghostPlatePresentation of ghostPlatePresentations) ghostPlatePresentation.prepare(camera);
-    const cpuSubmissionStarted = globalThis.performance?.now() ?? timeMs;
     gpuSubmissionDuty.begin(submissionSourceTimeMs ?? undefined);
     try {
       renderBrowserSurfaceFrame(
@@ -528,10 +522,6 @@ export function mountRendererBrowserSurface(
     }
     gpuSubmissionDuty.submitted();
     gpuSubmissionFence.submitted();
-    const cpuSubmissionEnded = globalThis.performance?.now() ?? timeMs;
-    for (const voxelSpriteScene of voxelSpriteScenes) {
-      voxelSpriteScene.recordCpuSubmission(Math.max(0, cpuSubmissionEnded - cpuSubmissionStarted));
-    }
     return Object.freeze({
       schemaVersion: 1,
       drawCallCount: webgl.info.render.calls,
@@ -604,8 +594,6 @@ export function mountRendererBrowserSurface(
   const dispose = (): void => {
     if (disposed) return;
     stop();
-    for (const voxelSpriteScene of voxelSpriteScenes) voxelSpriteScene.dispose();
-    voxelSpriteScenes.clear();
     for (const ghostPlatePresentation of ghostPlatePresentations) ghostPlatePresentation.dispose();
     ghostPlatePresentations.clear();
     gpuSubmissionFence.dispose();
@@ -626,17 +614,6 @@ export function mountRendererBrowserSurface(
     kind: 'rusty_renderer_browser_surface.v1',
     canvas,
     renderer,
-    createVoxelSpriteScene: () => {
-      if (disposed) throw new Error('renderer browser surface is disposed');
-      const scene = new RendererThreeVoxelSpriteScene({
-        webgl,
-        backend: renderer,
-        invalidate: () => viewComposition.invalidate(),
-        onDispose: () => voxelSpriteScenes.delete(scene),
-      });
-      voxelSpriteScenes.add(scene);
-      return scene;
-    },
     createGhostPlatePresentation: (_id) => {
       if (disposed) throw new Error('renderer browser surface is disposed');
       const presentation = new RendererThreeGhostPlatePresentation({

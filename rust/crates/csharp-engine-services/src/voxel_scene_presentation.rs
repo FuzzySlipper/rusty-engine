@@ -779,9 +779,15 @@ mod tests {
 
     #[test]
     fn open_texture_material_projects_through_voxel_scene_presentation() {
-        const TEXTURE: &[u8] = include_bytes!(
-            "../../../../fixtures/render/depth-splat/texture-5f34c8db37048eeb5df2b0eaf29f0098f489025c09f1f3ff0d4308eb6e43c34b.png"
-        );
+        // Keep this test independent from any product-specific rendering
+        // fixture. The bridge only needs a valid PNG resource to exercise the
+        // normal appearance/material path.
+        const TEXTURE: &[u8] = &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99,
+            248, 207, 0, 68, 255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0,
+            0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
         let mut spatial = RuntimeSpatialBridge::new();
         let session = session_with_voxel(&mut spatial);
         let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());

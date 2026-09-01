@@ -7,130 +7,9 @@ import {
   GhostPlateDirectionalPresentation,
   GhostPlatePresentation,
   evaluateGhostPlateShell,
-  evaluateGhostPlateTransition,
-  ghostPlateEdgeEchoBand,
   selectGhostPlateSector,
   warpGhostCameraPoint,
-} from './voxel-sprite-ghost-plate.js';
-
-void test('transition partition admits exactly one depiction at every bounded threshold', () => {
-  for (let progressStep = 0; progressStep <= 100; progressStep += 1) {
-    const progress = progressStep / 100;
-    for (let thresholdStep = 0; thresholdStep < 256; thresholdStep += 1) {
-      const threshold = (thresholdStep + 0.5) / 256;
-      const admitted = evaluateGhostPlateTransition(threshold, progress);
-      assert.notEqual(admitted.previous, admitted.current);
-    }
-  }
-  assert.deepEqual(evaluateGhostPlateTransition(0.25, 0), { previous: true, current: false });
-  assert.deepEqual(evaluateGhostPlateTransition(0.25, 1), { previous: false, current: true });
-});
-
-void test('edge cue draws one depiction and rapid reversal settles coherently', () => {
-  const borrowedTextures: THREE.Texture[] = [];
-  const sourceMaterials: THREE.Material[] = [];
-  const config = {
-    depthRetention: 0.12,
-    anchorPolicy: 'bounds-center',
-    anchorValue: 0.5,
-    plateMapping: 'plate-locked',
-    shellMode: 'whole-mesh',
-    shellDepthEpsilon: 0.12,
-    sectorCount: 4,
-    sectorHysteresisDegrees: 3,
-    transitionMode: 'edge-echo',
-    transitionDurationMilliseconds: 180,
-  } as const;
-  const plates = Array.from({ length: 4 }, () => {
-    const geometry = new THREE.BoxGeometry(1, 2, 1);
-    const sourceMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    sourceMaterials.push(sourceMaterial);
-    const appearance = new THREE.Group();
-    appearance.add(new THREE.Mesh(geometry, sourceMaterial));
-    appearance.updateMatrixWorld(true);
-    const colorTexture = new THREE.Texture();
-    const coverageTexture = new THREE.Texture();
-    const depthTexture = new THREE.Texture();
-    borrowedTextures.push(colorTexture, coverageTexture, depthTexture);
-    const captureCamera = new THREE.PerspectiveCamera(35, 1, 0.1, 20);
-    captureCamera.position.set(0, 0, 5);
-    captureCamera.updateMatrixWorld(true);
-    return new GhostPlatePresentation({
-      appearanceRoot: appearance,
-      ownedGeometries: [geometry],
-      colorTexture,
-      coverageTexture,
-      depthTexture,
-      textureWidth: 64,
-      textureHeight: 64,
-      captureNear: 0.1,
-      captureFar: 20,
-      projectionKind: 'perspective',
-      ghostCameraWorld: captureCamera.matrixWorld.clone(),
-      ghostProjection: captureCamera.projectionMatrix.clone(),
-      bounds: new THREE.Box3().setFromObject(appearance, true),
-      transform: { position: [0, 0, 0], width: 1, height: 2 },
-      config,
-    });
-  });
-  const directional = new GhostPlateDirectionalPresentation({
-    plates,
-    config,
-    baseAzimuthDegrees: 0,
-    preparationCpuMilliseconds: 1,
-  });
-  const viewer = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
-  const setAzimuth = (degrees: number): void => {
-    const radians = THREE.MathUtils.degToRad(degrees);
-    viewer.position.set(Math.sin(radians) * 5, 0, Math.cos(radians) * 5);
-    viewer.updateMatrixWorld(true);
-  };
-
-  setAzimuth(0);
-  directional.prepare(viewer, 0);
-  setAzimuth(60);
-  directional.prepare(viewer, 10);
-  assert.equal(directional.readout().selectedSector, 1);
-  assert.equal(directional.readout().pendingSector, 1);
-  assert.equal(directional.readout().previousSector, null);
-  assert.equal(directional.readout().previousResourceResident, false);
-  assert.equal(directional.readout().expectedDrawCalls, 1);
-  assert.equal(directional.advancing(), true);
-  assert.equal(plates.filter((plate) => plate.object.visible).length, 1);
-
-  setAzimuth(0);
-  directional.prepare(viewer, 20);
-  assert.equal(directional.readout().selectedSector, 0);
-  assert.equal(directional.readout().previousSector, null);
-  assert.equal(directional.readout().transitionProgress, 1);
-  assert.equal(directional.advancing(), false);
-  assert.equal(plates.filter((plate) => plate.object.visible).length, 1);
-
-  directional.dispose();
-  for (const material of sourceMaterials) material.dispose();
-  for (const texture of borrowedTextures) texture.dispose();
-});
-
-void test('single-plate edge cue is a narrow mirrored band that travels fully off the plate', () => {
-  const positiveStart = ghostPlateEdgeEchoBand(0, 1);
-  const negativeStart = ghostPlateEdgeEchoBand(0, -1);
-  assert.deepEqual(positiveStart, { center: 0.86, halfWidth: 0.11 });
-  assert.deepEqual(negativeStart, { center: 0.14, halfWidth: 0.11 });
-  assert.ok(Math.abs(positiveStart.center + negativeStart.center - 1) < 1e-12);
-  assert.ok(positiveStart.halfWidth * 2 < 0.25, 'echo affects less than one quarter of the plate');
-
-  const positiveMiddle = ghostPlateEdgeEchoBand(0.5, 1);
-  const negativeMiddle = ghostPlateEdgeEchoBand(0.5, -1);
-  assert.ok(positiveMiddle.center < 1, 'positive echo remains on-plate halfway through');
-  assert.ok(negativeMiddle.center > 0, 'negative echo remains on-plate halfway through');
-  assert.ok(Math.abs(positiveMiddle.center + negativeMiddle.center - 1) < 1e-12);
-
-  const positiveEnd = ghostPlateEdgeEchoBand(1, 1);
-  const negativeEnd = ghostPlateEdgeEchoBand(1, -1);
-  assert.ok(positiveEnd.center - positiveEnd.halfWidth > 1);
-  assert.ok(negativeEnd.center + negativeEnd.halfWidth < 0);
-  assert.throws(() => ghostPlateEdgeEchoBand(0.5, 0 as -1), /direction/);
-});
+} from './ghost-plate.js';
 
 void test('sector selection holds through the boundary hysteresis then chooses the nearest sector', () => {
   assert.equal(selectGhostPlateSector(24, 0, 8, 0, 3), 0);
@@ -251,8 +130,6 @@ void test('presentation owns ghost materials but borrows geometry and capture te
       shellDepthEpsilon: 0.12,
       sectorCount: 1,
       sectorHysteresisDegrees: 3,
-      transitionMode: 'hard-cut',
-      transitionDurationMilliseconds: 180,
     },
   });
   assert.notEqual(mesh.material, sourceMaterial);
@@ -265,11 +142,9 @@ void test('presentation owns ghost materials but borrows geometry and capture te
     plateMapping: 'projective-surface',
     shellMode: 'repaired-source',
     shellDepthEpsilon: 0.2,
-    transitionMode: 'edge-echo',
   });
   assert.equal(presentation.readout().depthRetention, 1);
   assert.equal(presentation.readout().shellMode, 'repaired-source');
-  assert.equal(presentation.readout().transitionMode, 'hard-cut');
   assert.equal(presentation.readout().borrowedTextureCount, 3);
   assert.equal(presentation.readout().rejectedFragmentRatio.status, 'unavailable');
   presentation.dispose();

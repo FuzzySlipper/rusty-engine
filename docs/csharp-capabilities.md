@@ -31,12 +31,12 @@ the ignored `obj/Generated` output is produced by
 | `Perception` | Query reusable visibility facts; the product retains AI and awareness policy. |
 | `WorldOrigin` | Prepare, inspect, and commit world-origin rebases. |
 | `Voxel` | Read and mutate Engine-owned voxel state. |
-| `VoxelContent` | Admit and inspect reusable voxel content resources. |
+| `VoxelContent` | Admit and inspect reusable voxel content resources, including bounded MagicaVoxel objects and retained object presentations. |
 | `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources. |
 | `Content` | Read product content admitted by the host. |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
 | `Appearance` | Create and update renderer-owned materials, meshes, sprites, lights, and appearance state. |
-| `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer. |
+| `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
 | `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |
 | `CameraView` | Select and update the active Engine camera view. |
@@ -48,6 +48,45 @@ the ignored `obj/Generated` output is produced by
 The generated contracts are authoritative when this table and source ever
 disagree. Add a missing coherent family at the ABI and generator edge; do not
 handwrite a parallel C# declaration or generic dispatch protocol.
+
+### Ghost-plate presentation
+
+The generated `Presentation` service exposes `CreateGhostPlate`,
+`UpdateGhostPlate`, `RecaptureGhostPlate`, `ReadGhostPlate`, and disposal for a
+retained ghost plate. C# selects the live `Appearance` object by its stable
+Engine object ID and owns placement, tuning, and recapture policy. Capture
+settings cover resolution, framing, near/far range, field of view, and scene
+or isolated lighting. Plate mapping, depth retention, source-shell mode and
+epsilon, plus directional sector counts of 1, 4, 8, or 16 and hysteresis, are
+explicit configuration.
+
+The Engine owns the copied capture, renderer resources, directional bank, and
+cleanup. Direction changes are hard snaps selected by the Engine; there is no
+downstream transition renderer. `GhostPlatePresentationReadout` is copied
+back to C# and reports source presence, renderer observation/source match,
+fallback and limitation facts, selected sector/offset, capture/configuration,
+and retained resource counts and timing where available. A plate is a frozen
+capture of a currently retained Appearance hierarchy: it is not a live
+animated source, a general mesh renderer, or an arbitrary browser surface.
+
+### Direct microvoxel object path
+
+For a small standalone voxel object, use
+`VoxelContent.AdmitMagicaVoxelObject`, inspect its copied palette/object facts,
+then `ProjectObject` with one ordinary `Appearance` material binding per
+admitted palette slot. `VoxelObjectPresentation` retains the Engine-owned
+object projection; update its frame/transform/visibility through the generated
+service and dispose it when finished. The current MagicaVoxel path admits
+bounded v150 model data and its default greedy surface emits axis-aligned face
+normals. A roughness-1 ordinary material is sufficient for a matte microvoxel
+presentation; no voxel-specific shader or downstream renderer is involved.
+
+This is an object path, not a general scene importer. Source format, size,
+voxel, frame, mesh, and material limits still apply, and every palette slot
+must be bound. If a product needs a presentation or resource mechanism that
+the generated services cannot express, file the narrow Engine request and
+stop at that boundary rather than inventing C#, TypeScript, or browser
+rendering to fill it.
 
 Volumetric navigation is keyed by voxel coordinates and the resident voxel
 source, not by planar `NavProjection` membership. Its overlay admits bounded

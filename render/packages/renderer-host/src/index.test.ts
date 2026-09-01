@@ -543,9 +543,9 @@ void test('renderer-host declarations expose no concrete backend or donor runtim
   assert.match(surfaceDeclarationText, /RendererSurfacePickRequest/);
   assert.match(surfaceDeclarationText, /RendererSurfaceMovementResolver/);
   assert.match(surfaceDeclarationText, /readonly applyPresentation:/);
-  assert.match(surfaceDeclarationText, /RendererThreeVoxelSpriteConfigPatch/);
-  assert.doesNotMatch(surfaceDeclarationText, /Partial<VoxelSpriteEnhancementConfig>/);
-  assert.match(surfaceDeclarationText, /RendererVoxelSpriteDefinition/);
+  assert.match(surfaceDeclarationText, /RendererGhostPlatePresentation/);
+  assert.match(surfaceDeclarationText, /readonly createGhostPlatePresentation:/);
+  assert.doesNotMatch(surfaceDeclarationText, /VoxelSprite|createVoxelSprite/);
   assert.match(surfaceDeclarationText, /readonly automaticSubmissionPacing:/);
   assert.match(surfaceDeclarationText, /readonly renderOnce:.*RendererSurfaceSubmissionSample/);
   assert.match(surfaceDeclarationText, /readonly setCameraPose:/);

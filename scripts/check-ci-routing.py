@@ -122,7 +122,6 @@ def main() -> None:
     )
 
     routing_cases = {
-        "fixtures/render/depth-splat-comparison-v1.json": {"render"},
         "fixtures/csharp-nativeaot-trial/Product.cs": {"csharp"},
         "csharp/Rusty.Engine/Mechanics/Inventory.cs": {"csharp"},
         "rust/crates/csharp-engine-abi/src/lib.rs": {"csharp", "verify"},

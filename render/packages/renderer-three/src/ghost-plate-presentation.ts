@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlatePatch, RenderHandle } from '@rusty-engine/render-contracts';
-import { VoxelSpriteRuntimeCapture } from './voxel-sprite-capture.js';
-import { GhostPlateDirectionalPresentation, GhostPlatePresentation, type GhostPlateConfig as ThreeGhostPlateConfig } from './voxel-sprite-ghost-plate.js';
+import { GhostPlateRuntimeCapture } from './ghost-plate-capture.js';
+import { GhostPlateDirectionalPresentation, GhostPlatePresentation, type GhostPlateConfig as ThreeGhostPlateConfig } from './ghost-plate.js';
 
 export interface RendererThreeGhostPlateBackend { readonly scene: THREE.Scene; objectFor(handle: RenderHandle): THREE.Object3D | undefined; }
 export interface RendererThreeGhostPlateReceipt { readonly applied: boolean; readonly diagnostics: readonly { readonly code: string; readonly message: string }[]; }
@@ -14,7 +14,7 @@ export interface RendererThreeGhostPlateReadout {
   readonly retainedResourceCounts: { readonly sectors: number; readonly meshes: number; readonly materials: number; readonly borrowedTextures: number; };
   readonly disposed: boolean;
 }
-interface ActiveGhostPlate { readonly descriptor: GhostPlateDescriptor; readonly presentation: GhostPlateDirectionalPresentation; readonly captures: readonly VoxelSpriteRuntimeCapture[]; readonly captureCpuSubmissionMilliseconds: number | null; }
+interface ActiveGhostPlate { readonly descriptor: GhostPlateDescriptor; readonly presentation: GhostPlateDirectionalPresentation; readonly captures: readonly GhostPlateRuntimeCapture[]; readonly captureCpuSubmissionMilliseconds: number | null; }
 
 /** Dedicated retained realization: frozen source capture, directional bank, and ghost shell only. */
 export class RendererThreeGhostPlatePresentation {
@@ -76,7 +76,7 @@ export class RendererThreeGhostPlatePresentation {
     if (retained === undefined) throw new Error(`retained handle ${String(descriptor.source)} is unavailable`);
     retained.updateWorldMatrix(true, true);
     let appearanceRoot = SkeletonUtils.clone(retained); let frozenGeometries: readonly THREE.BufferGeometry[] = [];
-    const captures: VoxelSpriteRuntimeCapture[] = []; const plates: GhostPlatePresentation[] = []; let directional: GhostPlateDirectionalPresentation | null = null;
+    const captures: GhostPlateRuntimeCapture[] = []; const plates: GhostPlatePresentation[] = []; let directional: GhostPlateDirectionalPresentation | null = null;
     try {
       removeClonedLights(appearanceRoot); appearanceRoot.matrix.copy(retained.matrixWorld); appearanceRoot.matrixAutoUpdate = false; appearanceRoot.visible = true;
       appearanceRoot.traverse((object) => { if (object instanceof THREE.Mesh) object.layers.enable(0); }); appearanceRoot.updateWorldMatrix(true, true);
@@ -88,7 +88,7 @@ export class RendererThreeGhostPlatePresentation {
         const sectorAppearance = cloneFrozenAppearance(appearanceRoot); const scene = new THREE.Scene(); scene.add(sectorAppearance.root);
         const settings = Object.freeze({ ...descriptor.capture, azimuthDegrees: normalizedAzimuth(descriptor.capture.azimuthDegrees + sector * 360 / config.sectorCount) });
         const camera = captureCamera(settings, center, size); const releaseLighting = settings.lighting.mode === 'scene' ? cloneSceneLights(this.#backend.scene, scene) : addStudioRig(scene, camera, center, size, settings.lighting);
-        const capture = new VoxelSpriteRuntimeCapture(this.#webgl); captures.push(capture);
+        const capture = new GhostPlateRuntimeCapture(this.#webgl); captures.push(capture);
         const receipt = capture.capture({ scene, camera, width: settings.resolution, height: settings.resolution, bounds }); releaseLighting(); scene.remove(sectorAppearance.root);
         if (!receipt.applied || receipt.frame === null) { for (const geometry of sectorAppearance.ownedGeometries) geometry.dispose(); throw new Error(receipt.diagnostics[0]?.message ?? 'runtime capture failed'); }
         if (receipt.readout.cpuSubmissionMilliseconds === null) captureTimesPresent = false; else totalCaptureMilliseconds += receipt.readout.cpuSubmissionMilliseconds;
@@ -125,7 +125,7 @@ function ghostPlateLimitationMask(limitations: readonly string[]): number {
 
 function applied(): RendererThreeGhostPlateReceipt { return Object.freeze({ applied: true, diagnostics: Object.freeze([]) }); }
 function rejected(code: string, message: string): RendererThreeGhostPlateReceipt { return Object.freeze({ applied: false, diagnostics: Object.freeze([{ code, message }]) }); }
-function threeConfig(config: GhostPlateConfig): ThreeGhostPlateConfig { return Object.freeze({ ...config, transitionMode: 'hard-cut', transitionDurationMilliseconds: 0 }); }
+function threeConfig(config: GhostPlateConfig): ThreeGhostPlateConfig { return Object.freeze({ ...config }); }
 function applyTransform(object: THREE.Object3D, transform: GhostPlateDescriptor['placement']['transform']): void { object.position.set(...transform.translation); object.quaternion.set(...transform.rotation).normalize(); object.scale.set(...transform.scale); object.updateWorldMatrix(true, true); }
 function normalizedAzimuth(value: number): number { const normalized = ((value + 180) % 360 + 360) % 360 - 180; return normalized === -180 ? 180 : normalized; }
 function nowMilliseconds(): number { return globalThis.performance?.now() ?? Date.now(); }

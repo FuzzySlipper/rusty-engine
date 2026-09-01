@@ -3,7 +3,6 @@ import {
   type RustyApplicationContent,
   type RustyApplicationHost,
   type RustyApplicationPresentationAspectBounds,
-  type RustyApplicationVoxelSpriteExperimentPort,
 } from '@rusty-engine/application-host';
 import characterUrl from '../../fixtures/render/assets/kenney-retro-character/character-medium.glb?url';
 
@@ -29,7 +28,6 @@ declare global {
     __rustyApplicationIndicatorReceipt?: unknown;
     __rustyApplicationResourceContent?: (corrupt?: boolean) => RustyApplicationContent;
     __rustyApplicationUiDisposed?: boolean;
-    __rustyApplicationVoxelSpriteExperiment?: RustyApplicationVoxelSpriteExperimentPort;
     __rustyApplicationUiContextShape?: {
       readonly keys: readonly string[];
       readonly projectionKeys: readonly string[] | null;

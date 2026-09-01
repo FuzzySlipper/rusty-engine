@@ -36,7 +36,7 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | NativeAOT product bootstrap | Generated C# | [`Rusty.Engine.ProductGenerator`](../csharp/Rusty.Engine.ProductGenerator) produces the internal `rusty_product_bind` path and service implementations. |
 | Product lifecycle and host | Rust | [`csharp-product-runtime`](../rust/crates/csharp-product-runtime) loads the product and drives its lifecycle. |
 | Product logic | Downstream C# | The product implements the generated `IEngineProduct` contract and owns its own state and code organization. |
-| UI and host/backend implementation | TypeScript/host | DOM UI and explicit Engine host/backend work only; not gameplay ownership or game rendering. |
+| UI and host/backend implementation | TypeScript/host | DOM UI and explicit Engine host/backend work only; not downstream gameplay ownership or game-rendering substitution. |
 
 The generated ABI surface is deliberately a capability surface, not a claim of
 full source-level Rust API coverage. Its current shape is defined by the Rust
@@ -59,6 +59,17 @@ planning, rather than copying a volatile service table into this document.
    state. DOM UI observes Engine-supported UI/projection paths and emits
    semantic input; it does not become a second game implementation.
 
+Ghost plates and standalone microvoxel objects illustrate this boundary. C#
+selects a retained `Appearance` source, placement, capture/configuration, and
+ordinary material bindings. The Engine performs the retained capture or voxel
+mesh projection, owns renderer resources and cleanup, and returns copied
+observation/readout facts. Ghost direction uses an Engine-selected hard snap
+among 1/4/8/16 captured sectors with optional hysteresis; a plate is a frozen
+source pose. The MagicaVoxel object path uses bounded v150 model admission,
+ordinary matte-capable materials, and the generated greedy surface's
+axis-aligned face normals. Neither path asks a downstream product to supply a
+voxel shader, browser renderer, or TypeScript game implementation.
+
 The working reference is
 [`fixtures/csharp-nativeaot-trial`](../fixtures/csharp-nativeaot-trial). It is
 an ABI/lifecycle exercise, not a product architecture template.
@@ -67,8 +78,8 @@ an ABI/lifecycle exercise, not a product architecture template.
 
 - Handwritten P/Invoke declarations, `UnmanagedCallersOnly` exports, raw
   function-table use, pointer ownership, and browser/native host adaptation.
-- A custom renderer, retained frame format, browser canvas owner, or TypeScript
-  game renderer.
+- A custom renderer, retained frame format, browser canvas owner, TypeScript
+  game renderer, or downstream TypeScript gameplay path.
 - JSON invocation protocols, generic command buses, reflection/discovery
   frameworks, or policy/security layers at the trusted product boundary.
 

@@ -1,35 +1,35 @@
 import * as THREE from 'three';
 
-export const VOXEL_SPRITE_CAPTURE_MIN_RESOLUTION = 8;
-export const VOXEL_SPRITE_CAPTURE_MAX_RESOLUTION = 4096;
+export const GHOST_PLATE_CAPTURE_MIN_RESOLUTION = 8;
+export const GHOST_PLATE_CAPTURE_MAX_RESOLUTION = 4096;
 
-export type VoxelSpriteFrameProvenance = 'prepared' | 'runtime-capture';
+export type GhostPlateFrameProvenance = 'prepared' | 'runtime-capture';
 
-export interface VoxelSpriteFrameTextures {
+export interface GhostPlateFrameTextures {
   readonly color: THREE.Texture;
   readonly depth: THREE.Texture;
   readonly normal: THREE.Texture;
   readonly coverage: THREE.Texture;
 }
 
-export interface VoxelSpriteCaptureBasis {
+export interface GhostPlateCaptureBasis {
   readonly position: readonly [number, number, number];
   readonly right: readonly [number, number, number];
   readonly up: readonly [number, number, number];
   readonly forward: readonly [number, number, number];
 }
 
-export interface VoxelSpriteFrameBounds {
+export interface GhostPlateFrameBounds {
   readonly minimum: readonly [number, number, number];
   readonly maximum: readonly [number, number, number];
 }
 
-export interface VoxelSpriteFrameDescriptor {
+export interface GhostPlateFrameDescriptor {
   readonly schemaVersion: 1;
   readonly width: number;
   readonly height: number;
-  readonly textures: VoxelSpriteFrameTextures;
-  readonly provenance: VoxelSpriteFrameProvenance;
+  readonly textures: GhostPlateFrameTextures;
+  readonly provenance: GhostPlateFrameProvenance;
   readonly depth: {
     /** Linear view distance normalized from near to far and stored in RGBA8 red. */
     readonly encoding: 'linear-view-depth-unorm8';
@@ -39,62 +39,62 @@ export interface VoxelSpriteFrameDescriptor {
   readonly normalSpace: 'view';
   readonly capture: {
     readonly projection: 'perspective' | 'orthographic';
-    readonly basis: VoxelSpriteCaptureBasis;
-    readonly bounds: VoxelSpriteFrameBounds;
+    readonly basis: GhostPlateCaptureBasis;
+    readonly bounds: GhostPlateFrameBounds;
   };
 }
 
-export interface VoxelSpriteFrameReadout {
+export interface GhostPlateFrameReadout {
   readonly schemaVersion: 1;
   readonly width: number;
   readonly height: number;
-  readonly provenance: VoxelSpriteFrameProvenance;
+  readonly provenance: GhostPlateFrameProvenance;
   readonly estimatedTextureBytes: number;
   readonly disposed: boolean;
 }
 
-export interface PreparedVoxelSpriteFrameInput
-  extends Omit<VoxelSpriteFrameDescriptor, 'schemaVersion' | 'provenance'> {
+export interface PreparedGhostPlateFrameInput
+  extends Omit<GhostPlateFrameDescriptor, 'schemaVersion' | 'provenance'> {
   /** Borrowed textures remain caller-owned and are never disposed by the frame. */
-  readonly textures: VoxelSpriteFrameTextures;
+  readonly textures: GhostPlateFrameTextures;
 }
 
 /**
  * Backend-local texture bundle shared by prepared and runtime-captured producers.
  * It deliberately carries Three resources and is not a renderer-neutral contract.
  */
-export class VoxelSpriteFrame {
-  readonly descriptor: VoxelSpriteFrameDescriptor;
+export class GhostPlateFrame {
+  readonly descriptor: GhostPlateFrameDescriptor;
   readonly #disposeOwnedResources: (() => void) | null;
   #disposed = false;
 
   private constructor(
-    descriptor: VoxelSpriteFrameDescriptor,
+    descriptor: GhostPlateFrameDescriptor,
     disposeOwnedResources: (() => void) | null,
   ) {
     this.descriptor = descriptor;
     this.#disposeOwnedResources = disposeOwnedResources;
   }
 
-  static borrowed(input: PreparedVoxelSpriteFrameInput): VoxelSpriteFrame {
-    return new VoxelSpriteFrame(
+  static borrowed(input: PreparedGhostPlateFrameInput): GhostPlateFrame {
+    return new GhostPlateFrame(
       validatedDescriptor({ ...input, schemaVersion: 1, provenance: 'prepared' }),
       null,
     );
   }
 
   static owned(
-    descriptor: VoxelSpriteFrameDescriptor,
+    descriptor: GhostPlateFrameDescriptor,
     disposeOwnedResources: () => void,
-  ): VoxelSpriteFrame {
-    return new VoxelSpriteFrame(validatedDescriptor(descriptor), disposeOwnedResources);
+  ): GhostPlateFrame {
+    return new GhostPlateFrame(validatedDescriptor(descriptor), disposeOwnedResources);
   }
 
   get disposed(): boolean {
     return this.#disposed;
   }
 
-  readout(): VoxelSpriteFrameReadout {
+  readout(): GhostPlateFrameReadout {
     return Object.freeze({
       schemaVersion: 1,
       width: this.descriptor.width,
@@ -112,34 +112,34 @@ export class VoxelSpriteFrame {
   }
 }
 
-export type VoxelSpriteCaptureCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+export type GhostPlateCaptureCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
-export interface VoxelSpriteCaptureRequest {
+export interface GhostPlateCaptureRequest {
   readonly scene: THREE.Scene;
-  readonly camera: VoxelSpriteCaptureCamera;
+  readonly camera: GhostPlateCaptureCamera;
   readonly width: number;
   readonly height: number;
   readonly bounds?: THREE.Box3;
   readonly coverageAlphaCutoff?: number;
 }
 
-export type VoxelSpriteCaptureDiagnosticCode =
+export type GhostPlateCaptureDiagnosticCode =
   | 'capture_disposed'
   | 'invalid_capture_request'
   | 'capture_failed';
 
-export interface VoxelSpriteCaptureDiagnostic {
-  readonly code: VoxelSpriteCaptureDiagnosticCode;
+export interface GhostPlateCaptureDiagnostic {
+  readonly code: GhostPlateCaptureDiagnosticCode;
   readonly message: string;
 }
 
-export interface VoxelSpriteCaptureReadout {
+export interface GhostPlateCaptureReadout {
   readonly schemaVersion: 1;
   readonly revision: number;
   readonly captureCount: number;
   readonly rejectedCaptureCount: number;
   readonly cpuSubmissionMilliseconds: number | null;
-  readonly currentFrame: VoxelSpriteFrameReadout | null;
+  readonly currentFrame: GhostPlateFrameReadout | null;
   readonly disposed: boolean;
   readonly limitations: readonly [
     'rendered-color-not-albedo',
@@ -150,12 +150,12 @@ export interface VoxelSpriteCaptureReadout {
   ];
 }
 
-export interface VoxelSpriteCaptureReceipt {
+export interface GhostPlateCaptureReceipt {
   readonly applied: boolean;
   readonly revision: number;
-  readonly frame: VoxelSpriteFrame | null;
-  readonly diagnostics: readonly VoxelSpriteCaptureDiagnostic[];
-  readonly readout: VoxelSpriteCaptureReadout;
+  readonly frame: GhostPlateFrame | null;
+  readonly diagnostics: readonly GhostPlateCaptureDiagnostic[];
+  readonly readout: GhostPlateCaptureReadout;
 }
 
 interface CaptureTargets {
@@ -188,7 +188,7 @@ const LIMITATIONS = Object.freeze([
 ] as const);
 
 /** Explicit, atomic, deliberately triggered runtime capture owner. */
-export class VoxelSpriteRuntimeCapture {
+export class GhostPlateRuntimeCapture {
   readonly #renderer: THREE.WebGLRenderer;
   readonly #normalMaterial = new THREE.MeshNormalMaterial({
     side: THREE.DoubleSide,
@@ -199,7 +199,7 @@ export class VoxelSpriteRuntimeCapture {
   readonly #depthResolveScene = fullscreenScene(this.#depthResolveMaterial);
   readonly #coverageResolveScene = fullscreenScene(this.#coverageResolveMaterial);
   #captureCount = 0;
-  #currentFrame: VoxelSpriteFrame | null = null;
+  #currentFrame: GhostPlateFrame | null = null;
   #disposed = false;
   #lastCpuSubmissionMilliseconds: number | null = null;
   #rejectedCaptureCount = 0;
@@ -209,10 +209,10 @@ export class VoxelSpriteRuntimeCapture {
     this.#renderer = renderer;
   }
 
-  capture(request: VoxelSpriteCaptureRequest): VoxelSpriteCaptureReceipt {
+  capture(request: GhostPlateCaptureRequest): GhostPlateCaptureReceipt {
     if (this.#disposed) return this.#rejected('capture_disposed', 'voxel sprite capture is disposed');
 
-    let validated: Required<Omit<VoxelSpriteCaptureRequest, 'bounds'>> & {
+    let validated: Required<Omit<GhostPlateCaptureRequest, 'bounds'>> & {
       readonly bounds: THREE.Box3;
     };
     try {
@@ -227,7 +227,7 @@ export class VoxelSpriteRuntimeCapture {
     const originalBackground = validated.scene.background;
     const originalFog = validated.scene.fog;
     const started = nowMilliseconds();
-    let nextFrame: VoxelSpriteFrame | null = null;
+    let nextFrame: GhostPlateFrame | null = null;
 
     try {
       this.#prepareRenderer(validated.width, validated.height);
@@ -244,7 +244,7 @@ export class VoxelSpriteRuntimeCapture {
       this.#resolveCoverage(targets, validated.coverageAlphaCutoff);
 
       const descriptor = capturedDescriptor(validated, targets);
-      nextFrame = VoxelSpriteFrame.owned(descriptor, () => disposePersistentTargets(targets));
+      nextFrame = GhostPlateFrame.owned(descriptor, () => disposePersistentTargets(targets));
     } catch (cause) {
       disposeCaptureTargets(targets);
       this.#lastCpuSubmissionMilliseconds = nowMilliseconds() - started;
@@ -273,11 +273,11 @@ export class VoxelSpriteRuntimeCapture {
     });
   }
 
-  currentFrame(): VoxelSpriteFrame | null {
+  currentFrame(): GhostPlateFrame | null {
     return this.#currentFrame;
   }
 
-  readout(): VoxelSpriteCaptureReadout {
+  readout(): GhostPlateCaptureReadout {
     return Object.freeze({
       schemaVersion: 1,
       revision: this.#revision,
@@ -313,14 +313,14 @@ export class VoxelSpriteRuntimeCapture {
   #renderScene(
     target: THREE.WebGLRenderTarget,
     scene: THREE.Scene,
-    camera: VoxelSpriteCaptureCamera,
+    camera: GhostPlateCaptureCamera,
   ): void {
     this.#renderer.setRenderTarget(target);
     this.#renderer.clear(true, true, true);
     this.#renderer.render(scene, camera);
   }
 
-  #resolveDepth(targets: CaptureTargets, camera: VoxelSpriteCaptureCamera): void {
+  #resolveDepth(targets: CaptureTargets, camera: GhostPlateCaptureCamera): void {
     this.#depthResolveMaterial.uniforms['sourceDepth']!.value = targets.hardwareDepth;
     this.#depthResolveMaterial.uniforms['cameraNear']!.value = camera.near;
     this.#depthResolveMaterial.uniforms['cameraFar']!.value = camera.far;
@@ -340,9 +340,9 @@ export class VoxelSpriteRuntimeCapture {
   }
 
   #rejected(
-    code: VoxelSpriteCaptureDiagnosticCode,
+    code: GhostPlateCaptureDiagnosticCode,
     message: string,
-  ): VoxelSpriteCaptureReceipt {
+  ): GhostPlateCaptureReceipt {
     this.#rejectedCaptureCount += 1;
     const diagnostic = Object.freeze({ code, message });
     return Object.freeze({
@@ -355,7 +355,7 @@ export class VoxelSpriteRuntimeCapture {
   }
 }
 
-function validatedDescriptor(input: VoxelSpriteFrameDescriptor): VoxelSpriteFrameDescriptor {
+function validatedDescriptor(input: GhostPlateFrameDescriptor): GhostPlateFrameDescriptor {
   validateResolution(input.width, 'width');
   validateResolution(input.height, 'height');
   if (!Number.isFinite(input.depth.near)
@@ -382,8 +382,8 @@ function validatedDescriptor(input: VoxelSpriteFrameDescriptor): VoxelSpriteFram
 }
 
 function validateCaptureRequest(
-  request: VoxelSpriteCaptureRequest,
-): Required<Omit<VoxelSpriteCaptureRequest, 'bounds'>> & { readonly bounds: THREE.Box3 } {
+  request: GhostPlateCaptureRequest,
+): Required<Omit<GhostPlateCaptureRequest, 'bounds'>> & { readonly bounds: THREE.Box3 } {
   if (!(request.scene instanceof THREE.Scene)) throw new TypeError('capture scene must be a Three scene');
   if (!(request.camera instanceof THREE.PerspectiveCamera)
     && !(request.camera instanceof THREE.OrthographicCamera)) {
@@ -420,20 +420,20 @@ function validateCaptureRequest(
 
 function validateResolution(value: number, name: string): void {
   if (!Number.isInteger(value)
-    || value < VOXEL_SPRITE_CAPTURE_MIN_RESOLUTION
-    || value > VOXEL_SPRITE_CAPTURE_MAX_RESOLUTION) {
+    || value < GHOST_PLATE_CAPTURE_MIN_RESOLUTION
+    || value > GHOST_PLATE_CAPTURE_MAX_RESOLUTION) {
     throw new RangeError(
-      `${name} must be an integer from ${String(VOXEL_SPRITE_CAPTURE_MIN_RESOLUTION)}`
-      + ` to ${String(VOXEL_SPRITE_CAPTURE_MAX_RESOLUTION)}`,
+      `${name} must be an integer from ${String(GHOST_PLATE_CAPTURE_MIN_RESOLUTION)}`
+      + ` to ${String(GHOST_PLATE_CAPTURE_MAX_RESOLUTION)}`,
     );
   }
 }
 
-function validateBasis(basis: VoxelSpriteCaptureBasis): void {
+function validateBasis(basis: GhostPlateCaptureBasis): void {
   for (const value of [basis.position, basis.right, basis.up, basis.forward]) validateTuple(value);
 }
 
-function validateBounds(bounds: VoxelSpriteFrameBounds): void {
+function validateBounds(bounds: GhostPlateFrameBounds): void {
   validateTuple(bounds.minimum);
   validateTuple(bounds.maximum);
   if (bounds.maximum.some((value, index) => value < bounds.minimum[index]!)) {
@@ -447,7 +447,7 @@ function validateTuple(tuple: readonly number[]): void {
   }
 }
 
-function freezeBasis(basis: VoxelSpriteCaptureBasis): VoxelSpriteCaptureBasis {
+function freezeBasis(basis: GhostPlateCaptureBasis): GhostPlateCaptureBasis {
   return Object.freeze({
     position: Object.freeze([...basis.position]) as unknown as readonly [number, number, number],
     right: Object.freeze([...basis.right]) as unknown as readonly [number, number, number],
@@ -456,7 +456,7 @@ function freezeBasis(basis: VoxelSpriteCaptureBasis): VoxelSpriteCaptureBasis {
   });
 }
 
-function freezeBounds(bounds: VoxelSpriteFrameBounds): VoxelSpriteFrameBounds {
+function freezeBounds(bounds: GhostPlateFrameBounds): GhostPlateFrameBounds {
   return Object.freeze({
     minimum: Object.freeze([...bounds.minimum]) as unknown as readonly [number, number, number],
     maximum: Object.freeze([...bounds.maximum]) as unknown as readonly [number, number, number],
@@ -588,9 +588,9 @@ function fullscreenScene(material: THREE.Material): THREE.Scene {
 }
 
 function capturedDescriptor(
-  request: Required<Omit<VoxelSpriteCaptureRequest, 'bounds'>> & { readonly bounds: THREE.Box3 },
+  request: Required<Omit<GhostPlateCaptureRequest, 'bounds'>> & { readonly bounds: THREE.Box3 },
   targets: CaptureTargets,
-): VoxelSpriteFrameDescriptor {
+): GhostPlateFrameDescriptor {
   const quaternion = request.camera.getWorldQuaternion(new THREE.Quaternion());
   const position = request.camera.getWorldPosition(new THREE.Vector3());
   const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion).normalize();

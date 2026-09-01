@@ -4,11 +4,6 @@ export type GhostPlateAnchorPolicy = 'bounds-center' | 'bounds-normalized';
 export type GhostPlateMapping = 'plate-locked' | 'projective-surface';
 export type GhostPlateShellMode = 'whole-mesh' | 'strict-source' | 'repaired-source';
 export type GhostPlateSectorCount = 1 | 4 | 8 | 16;
-export type GhostPlateTransitionMode =
-  | 'hard-cut'
-  | 'ordered-dither'
-  | 'noise-dissolve'
-  | 'edge-echo';
 
 export interface GhostPlateConfig {
   readonly depthRetention: number;
@@ -20,8 +15,6 @@ export interface GhostPlateConfig {
   readonly shellDepthEpsilon: number;
   readonly sectorCount: GhostPlateSectorCount;
   readonly sectorHysteresisDegrees: number;
-  readonly transitionMode: GhostPlateTransitionMode;
-  readonly transitionDurationMilliseconds: number;
 }
 
 export interface GhostPlateCaptureSnapshot {
@@ -50,7 +43,7 @@ export interface GhostPlateReadout {
   readonly schemaVersion: 1;
   readonly enabled: boolean;
   readonly fallbackActive: boolean;
-  readonly fallbackReason: null | 'prepared-source-unsupported' | 'transition-failed';
+  readonly fallbackReason: null | 'prepared-source-unsupported' | 'sector-selection-failed';
   readonly matchedPose: boolean;
   readonly projection: 'perspective' | 'orthographic';
   readonly captureBasis: {
@@ -84,9 +77,6 @@ export interface GhostPlateReadout {
   readonly previousSector: number | null;
   readonly localAzimuthDegrees: number | null;
   readonly sectorHysteresisDegrees: number;
-  readonly transitionMode: GhostPlateTransitionMode;
-  readonly transitionProgress: number;
-  readonly transitionDurationMilliseconds: number;
   readonly residentSectorCount: number;
   readonly currentResourceResident: boolean;
   readonly previousResourceResident: boolean;
@@ -108,43 +98,6 @@ export interface GhostPlateWarpResult {
 export interface GhostPlateShellSample {
   readonly depth: number;
   readonly coverage: number;
-}
-
-/** CPU reference for the complementary binary transition partition used by both dissolve modes. */
-export function evaluateGhostPlateTransition(
-  threshold: number,
-  progress: number,
-): { readonly previous: boolean; readonly current: boolean } {
-  bounded(threshold, 0, 1, 'ghost transition threshold');
-  bounded(progress, 0, 1, 'ghost transition progress');
-  return Object.freeze({
-    previous: threshold >= progress,
-    current: threshold < progress,
-  });
-}
-
-export interface GhostPlateEdgeEchoBand {
-  readonly center: number;
-  readonly halfWidth: number;
-}
-
-/** CPU reference for the narrow trailing-side band retained by edge-echo transitions. */
-export function ghostPlateEdgeEchoBand(
-  progress: number,
-  direction: -1 | 1,
-): GhostPlateEdgeEchoBand {
-  bounded(progress, 0, 1, 'ghost transition progress');
-  if (direction !== -1 && direction !== 1) {
-    throw new RangeError('ghost transition direction must be -1 or 1');
-  }
-  const travel = progress * progress;
-  const center = direction > 0
-    ? THREE.MathUtils.lerp(0.86, 1.12, travel)
-    : THREE.MathUtils.lerp(0.14, -0.12, travel);
-  return Object.freeze({
-    center,
-    halfWidth: THREE.MathUtils.lerp(0.11, 0.03, progress),
-  });
 }
 
 /** CPU reference for the bounded source-shell admission used by deterministic tests. */
@@ -245,10 +198,6 @@ interface GhostUniforms {
   readonly shellMode: THREE.IUniform<number>;
   readonly shellDepthEpsilon: THREE.IUniform<number>;
   readonly shellDepthQuantizationHalfStep: THREE.IUniform<number>;
-  readonly transitionRole: THREE.IUniform<number>;
-  readonly transitionProgress: THREE.IUniform<number>;
-  readonly transitionPattern: THREE.IUniform<number>;
-  readonly transitionDirection: THREE.IUniform<number>;
 }
 
 /** Owns one frozen cloned appearance hierarchy and its ghost-only materials. */
@@ -331,16 +280,12 @@ export class GhostPlatePresentation {
       shellMode: { value: shellModeUniform(this.#config.shellMode) },
       shellDepthEpsilon: { value: this.#config.shellDepthEpsilon },
       shellDepthQuantizationHalfStep: { value: this.#shellDepthQuantizationStep * 0.5 },
-      transitionRole: { value: 0 },
-      transitionProgress: { value: 1 },
-      transitionPattern: { value: transitionPatternUniform(this.#config.transitionMode) },
-      transitionDirection: { value: 1 },
     };
 
     validateAppearanceHierarchy(this.#appearanceRoot);
     this.#replaceMaterials(snapshot.colorTexture);
     if (this.#meshCount === 0) throw new RangeError('ghost appearance hierarchy has no mesh');
-    this.object.name = 'voxel-sprite-ghost-plate';
+    this.object.name = 'ghost-plate';
     this.object.position.set(...snapshot.transform.position);
     this.object.add(this.#appearanceRoot);
     this.prepare(new THREE.PerspectiveCamera());
@@ -356,36 +301,12 @@ export class GhostPlatePresentation {
     this.#uniforms.plateMapping.value = this.#config.plateMapping === 'plate-locked' ? 0 : 1;
     this.#uniforms.shellMode.value = shellModeUniform(this.#config.shellMode);
     this.#uniforms.shellDepthEpsilon.value = this.#config.shellDepthEpsilon;
-    this.#uniforms.transitionPattern.value = transitionPatternUniform(this.#config.transitionMode);
     return this.readout();
   }
 
-  setDepictionState(
-    visible: boolean,
-    role: 'stable' | 'previous' | 'current' = 'stable',
-    progress = 1,
-    direction: -1 | 1 = 1,
-  ): void {
+  setVisible(visible: boolean): void {
     this.#assertLive();
-    bounded(progress, 0, 1, 'ghost transition progress');
-    if (direction !== -1 && direction !== 1) {
-      throw new RangeError('ghost transition direction must be -1 or 1');
-    }
     this.object.visible = visible;
-    this.#uniforms.transitionRole.value = role === 'previous' ? -1 : role === 'current' ? 1 : 0;
-    this.#uniforms.transitionProgress.value = progress;
-    this.#uniforms.transitionDirection.value = direction;
-    for (const material of this.#materials) {
-      const depthWrite = role === 'stable'
-        || (this.#config.transitionMode === 'edge-echo' && role === 'current');
-      if (material.depthWrite !== depthWrite) {
-        material.depthWrite = depthWrite;
-        material.needsUpdate = true;
-      }
-    }
-    this.object.renderOrder = this.#config.transitionMode === 'edge-echo'
-      ? 0
-      : role === 'current' ? 1 : 0;
   }
 
   prepare(realCamera: THREE.Camera): void {
@@ -435,9 +356,6 @@ export class GhostPlatePresentation {
       previousSector: null,
       localAzimuthDegrees: null,
       sectorHysteresisDegrees: 0,
-      transitionMode: 'hard-cut',
-      transitionProgress: 1,
-      transitionDurationMilliseconds: 0,
       residentSectorCount: this.#disposed ? 0 : 1,
       currentResourceResident: !this.#disposed,
       previousResourceResident: false,
@@ -480,7 +398,7 @@ export class GhostPlatePresentation {
 
   #material(colorTexture: THREE.Texture, source: THREE.Material): THREE.MeshBasicMaterial {
     const material = new THREE.MeshBasicMaterial({
-      name: 'voxel-sprite-ghost-plate-material',
+      name: 'ghost-plate-material',
       color: 0xffffff,
       map: colorTexture,
       side: THREE.DoubleSide,
@@ -494,7 +412,7 @@ export class GhostPlatePresentation {
     material.clipIntersection = source.clipIntersection;
     material.clipShadows = source.clipShadows;
     material.onBeforeCompile = (shader) => patchShader(shader, this.#uniforms);
-    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v6-visible-edge-cue';
+    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v7-hard-snap';
     this.#materials.push(material);
     return material;
   }
@@ -515,7 +433,7 @@ export class GhostPlatePresentation {
   }
 }
 
-/** Owns one exact-pose plate bank and exposes at most the selected pair while changing sectors. */
+/** Owns one exact-pose plate bank and exposes exactly one hard-selected sector. */
 export class GhostPlateDirectionalPresentation {
   readonly object = new THREE.Group();
   readonly #plates: readonly GhostPlatePresentation[];
@@ -523,11 +441,6 @@ export class GhostPlateDirectionalPresentation {
   readonly #preparationCpuMilliseconds: number | null;
   #config: GhostPlateConfig;
   #selectedSector = 0;
-  #previousSector: number | null = null;
-  #transitionStartedMilliseconds: number | null = null;
-  #transitionProgress = 1;
-  #transitionDirection: -1 | 1 = 1;
-  #transitionActive = false;
   #localAzimuthDegrees: number | null = null;
   #fallbackReason: GhostPlateReadout['fallbackReason'] = null;
   #invalidationReason: string | null = null;
@@ -549,10 +462,10 @@ export class GhostPlateDirectionalPresentation {
     this.#plates = Object.freeze([...options.plates]);
     this.#baseAzimuthDegrees = normalizeDegrees(options.baseAzimuthDegrees);
     this.#preparationCpuMilliseconds = options.preparationCpuMilliseconds;
-    this.object.name = 'voxel-sprite-directional-ghost-plate';
+    this.object.name = 'ghost-plate-directional';
     for (const [index, plate] of this.#plates.entries()) {
       this.object.add(plate.object);
-      plate.setDepictionState(index === 0);
+      plate.setVisible(index === 0);
     }
   }
 
@@ -564,9 +477,6 @@ export class GhostPlateDirectionalPresentation {
     }
     this.#config = next;
     for (const plate of this.#plates) plate.configure(next);
-    if (next.transitionMode === 'hard-cut' && this.#transitionActive) {
-      this.#settle(this.#selectedSector);
-    }
     return this.readout();
   }
 
@@ -582,18 +492,16 @@ export class GhostPlateDirectionalPresentation {
         this.#selectedSector,
         this.#config.sectorHysteresisDegrees,
       );
-      if (nextSector !== this.#selectedSector) this.#beginTransition(nextSector, now);
-      this.#advanceTransition(now);
+      if (nextSector !== this.#selectedSector) this.#selectSector(nextSector);
     } catch (cause) {
-      this.#fallbackReason = 'transition-failed';
+      this.#fallbackReason = 'sector-selection-failed';
       this.#invalidationReason = cause instanceof Error ? cause.message : String(cause);
-      this.#settle(this.#selectedSector);
+      this.#selectSector(this.#selectedSector);
     }
   }
 
   readout(): GhostPlateReadout {
     const current = this.#plates[this.#selectedSector]!.readout();
-    const previous = this.#previousSector === null ? null : this.#plates[this.#previousSector]!.readout();
     return Object.freeze({
       ...current,
       fallbackActive: this.#fallbackReason !== null,
@@ -606,19 +514,16 @@ export class GhostPlateDirectionalPresentation {
           )),
       sectorCount: this.#config.sectorCount,
       selectedSector: this.#selectedSector,
-      pendingSector: this.#transitionActive ? this.#selectedSector : null,
-      previousSector: this.#previousSector,
+      pendingSector: null,
+      previousSector: null,
       localAzimuthDegrees: this.#localAzimuthDegrees,
       sectorHysteresisDegrees: this.#config.sectorHysteresisDegrees,
-      transitionMode: this.#config.transitionMode,
-      transitionProgress: this.#transitionProgress,
-      transitionDurationMilliseconds: this.#config.transitionDurationMilliseconds,
       residentSectorCount: this.#disposed ? 0 : this.#plates.length,
       currentResourceResident: !this.#disposed,
-      previousResourceResident: previous !== null && !this.#disposed,
+      previousResourceResident: false,
       preparationCpuMilliseconds: this.#preparationCpuMilliseconds,
       invalidationReason: this.#invalidationReason,
-      expectedDrawCalls: current.expectedDrawCalls + (previous?.expectedDrawCalls ?? 0),
+      expectedDrawCalls: current.expectedDrawCalls,
       meshCount: this.#plates.reduce((total, plate) => total + plate.readout().meshCount, 0),
       materialResourceCount: this.#plates.reduce(
         (total, plate) => total + plate.readout().materialResourceCount,
@@ -633,10 +538,6 @@ export class GhostPlateDirectionalPresentation {
     });
   }
 
-  advancing(): boolean {
-    return !this.#disposed && this.#transitionActive;
-  }
-
   dispose(): void {
     if (this.#disposed) return;
     for (const plate of this.#plates) {
@@ -644,78 +545,13 @@ export class GhostPlateDirectionalPresentation {
       plate.dispose();
     }
     this.#disposed = true;
-    this.#previousSector = null;
-    this.#transitionActive = false;
   }
 
-  #beginTransition(nextSector: number, now: number): void {
-    const interrupted = this.#transitionActive;
-    if (this.#config.transitionMode === 'hard-cut'
-      || this.#config.transitionDurationMilliseconds === 0
-      || interrupted) {
-      this.#selectedSector = nextSector;
-      this.#settle(nextSector);
-      return;
-    }
-    const oldSector = this.#selectedSector;
-    this.#settle(oldSector);
-    this.#selectedSector = nextSector;
-    this.#previousSector = this.#config.transitionMode === 'edge-echo' ? null : oldSector;
-    this.#transitionStartedMilliseconds = now;
-    this.#transitionProgress = 0;
-    this.#transitionActive = true;
-    const currentCenter = this.#baseAzimuthDegrees
-      + oldSector * 360 / this.#config.sectorCount;
-    this.#transitionDirection = signedAngularDifference(
-      this.#localAzimuthDegrees ?? currentCenter,
-      currentCenter,
-    ) >= 0 ? 1 : -1;
-    this.#plates[oldSector]!.setDepictionState(
-      this.#config.transitionMode !== 'edge-echo',
-      'previous',
-      0,
-      this.#transitionDirection,
-    );
-    this.#plates[nextSector]!.setDepictionState(true, 'current', 0, this.#transitionDirection);
-  }
-
-  #advanceTransition(now: number): void {
-    if (!this.#transitionActive || this.#transitionStartedMilliseconds === null) return;
-    const duration = this.#config.transitionDurationMilliseconds;
-    const progress = duration === 0 ? 1 : THREE.MathUtils.clamp(
-      (now - this.#transitionStartedMilliseconds) / duration,
-      0,
-      1,
-    );
-    this.#transitionProgress = progress;
-    if (progress >= 1) {
-      this.#settle(this.#selectedSector);
-      return;
-    }
-    if (this.#previousSector !== null) {
-      this.#plates[this.#previousSector]!.setDepictionState(
-        true,
-        'previous',
-        progress,
-        this.#transitionDirection,
-      );
-    }
-    this.#plates[this.#selectedSector]!.setDepictionState(
-      true,
-      'current',
-      progress,
-      this.#transitionDirection,
-    );
-  }
-
-  #settle(sector: number): void {
+  #selectSector(sector: number): void {
+    this.#selectedSector = sector;
     for (const [index, plate] of this.#plates.entries()) {
-      plate.setDepictionState(index === sector, 'stable', 1);
+      plate.setVisible(index === sector);
     }
-    this.#previousSector = null;
-    this.#transitionStartedMilliseconds = null;
-    this.#transitionProgress = 1;
-    this.#transitionActive = false;
   }
 
   #assertLive(): void {
@@ -830,10 +666,6 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
     uniform float shellMode;
     uniform float shellDepthEpsilon;
     uniform float shellDepthQuantizationHalfStep;
-    uniform float transitionRole;
-    uniform float transitionProgress;
-    uniform float transitionPattern;
-    uniform float transitionDirection;
     varying vec3 ghostProjectiveUv;
     varying vec3 ghostPlateLockedUv;
     varying float ghostOriginalDepth;
@@ -847,57 +679,6 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
         <= shellDepthEpsilon + shellDepthQuantizationHalfStep;
     }
 
-    float ghostOrderedThreshold(vec2 uv) {
-      vec2 texel = floor(uv / textureTexelSize);
-      vec2 cell = mod(texel, 4.0);
-      float x = cell.x;
-      float y = cell.y;
-      float rank = mod(x, 2.0) * 2.0 + mod(y, 2.0);
-      rank += mod(floor(x / 2.0), 2.0) * 8.0;
-      rank += mod(floor(y / 2.0), 2.0) * 4.0;
-      return (rank + 0.5) / 16.0;
-    }
-
-    float ghostNoiseHash(vec2 cell) {
-      return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453123);
-    }
-
-    float ghostValueNoise(vec2 point) {
-      vec2 cell = floor(point);
-      vec2 local = fract(point);
-      local = local * local * (3.0 - 2.0 * local);
-      float bottom = mix(ghostNoiseHash(cell), ghostNoiseHash(cell + vec2(1.0, 0.0)), local.x);
-      float top = mix(
-        ghostNoiseHash(cell + vec2(0.0, 1.0)),
-        ghostNoiseHash(cell + vec2(1.0, 1.0)),
-        local.x
-      );
-      return mix(bottom, top, local.y);
-    }
-
-    float ghostDissolveThreshold(vec2 uv) {
-      vec2 texel = floor(uv / textureTexelSize);
-      float broad = ghostValueNoise(texel / 13.0);
-      float detail = ghostValueNoise(texel / 4.0 + vec2(19.0, 7.0));
-      float grain = ghostNoiseHash(texel + vec2(43.0, 71.0));
-      return min(broad * 0.55 + detail * 0.30 + grain * 0.15, 0.999999);
-    }
-
-    float ghostEdgeEchoStrength(vec2 uv) {
-      vec2 texel = floor(uv / textureTexelSize);
-      float travel = transitionProgress * transitionProgress;
-      float center = transitionDirection > 0.0
-        ? mix(0.86, 1.12, travel)
-        : mix(0.14, -0.12, travel);
-      float halfWidth = mix(0.11, 0.03, transitionProgress);
-      float seamNoise = (
-        ghostValueNoise(vec2(texel.y / 9.0, 31.0)) - 0.5
-      ) * 0.04;
-      float distanceToSeam = abs(uv.x - center - seamNoise);
-      float shoulder = 1.0 - smoothstep(halfWidth * 0.35, halfWidth, distanceToSeam);
-      float core = 1.0 - smoothstep(0.0, halfWidth * 0.28, distanceToSeam);
-      return min(shoulder * 0.70 + core * 0.45, 1.0);
-    }
   `;
   shader.fragmentShader = shader.fragmentShader
     .replace('void main() {', `${fragmentDeclarations}\nvoid main() {`)
@@ -909,18 +690,6 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       float ghostCoverage = texture2D(coverageTexture, ghostUv).r;
       vec4 ghostPlateColor = texture2D(map, ghostUv);
       if (ghostCoverage < 0.5 || ghostPlateColor.a < 0.01) discard;
-      float ghostEdgeStrength = 0.0;
-      if (transitionPattern > 1.5) {
-        if (transitionRole < -0.5) discard;
-        if (transitionRole > 0.5) ghostEdgeStrength = ghostEdgeEchoStrength(ghostUv);
-      } else {
-        float ghostTransitionThreshold = transitionPattern < 0.5
-          ? ghostOrderedThreshold(ghostUv)
-          : ghostDissolveThreshold(ghostUv);
-        bool ghostPreviousOwns = ghostTransitionThreshold >= transitionProgress;
-        if (transitionRole < -0.5 && !ghostPreviousOwns) discard;
-        if (transitionRole > 0.5 && ghostPreviousOwns) discard;
-      }
       if (shellMode > 0.5) {
         bool ghostShellAccepted = ghostShellSampleAgrees(ghostUv);
         if (!ghostShellAccepted && shellMode > 1.5) {
@@ -931,13 +700,6 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
         }
         if (!ghostShellAccepted) discard;
       }
-      float ghostEdgeLuminance = dot(ghostPlateColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-      vec3 ghostEdgeSoftColor = mix(ghostPlateColor.rgb, vec3(ghostEdgeLuminance), 0.20);
-      vec3 ghostEdgeColor = min(
-        ghostEdgeSoftColor * 1.20 + vec3(0.035, 0.025, 0.012),
-        vec3(1.0)
-      );
-      ghostPlateColor.rgb = mix(ghostPlateColor.rgb, ghostEdgeColor, ghostEdgeStrength * 0.85);
       diffuseColor *= vec4(ghostPlateColor.rgb, 1.0);
     `);
 }
@@ -1014,20 +776,13 @@ function validatedConfig(config: GhostPlateConfig): GhostPlateConfig {
     throw new RangeError('ghost sector count must be 1, 4, 8, or 16');
   }
   bounded(config.sectorHysteresisDegrees, 0, 22.5, 'ghost sector hysteresis');
-  if (config.transitionMode !== 'hard-cut'
-    && config.transitionMode !== 'ordered-dither'
-    && config.transitionMode !== 'noise-dissolve'
-    && config.transitionMode !== 'edge-echo') {
-    throw new TypeError(`unsupported ghost transition mode ${String(config.transitionMode)}`);
-  }
-  bounded(config.transitionDurationMilliseconds, 0, 5_000, 'ghost transition duration');
   return Object.freeze({ ...config });
 }
 
 function rejectUnknownKeys(config: Partial<GhostPlateConfig>): void {
   const keys = new Set([
     'depthRetention', 'anchorPolicy', 'anchorValue', 'plateMapping', 'shellMode', 'shellDepthEpsilon',
-    'sectorCount', 'sectorHysteresisDegrees', 'transitionMode', 'transitionDurationMilliseconds',
+    'sectorCount', 'sectorHysteresisDegrees',
   ]);
   for (const key of Object.keys(config)) {
     if (!keys.has(key)) throw new TypeError(`unknown ghost plate config field ${key}`);
@@ -1036,10 +791,6 @@ function rejectUnknownKeys(config: Partial<GhostPlateConfig>): void {
 
 function shellModeUniform(mode: GhostPlateShellMode): number {
   return mode === 'whole-mesh' ? 0 : mode === 'strict-source' ? 1 : 2;
-}
-
-function transitionPatternUniform(mode: GhostPlateTransitionMode): number {
-  return mode === 'edge-echo' ? 2 : mode === 'noise-dissolve' ? 1 : 0;
 }
 
 function finiteMatrix(matrix: THREE.Matrix4, name: string): void {

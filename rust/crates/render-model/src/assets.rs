@@ -1470,7 +1470,7 @@ mod tests {
     fn generic_material_alpha_and_sidedness_are_explicit_and_bounded() {
         let material = RenderMaterialDescriptor {
             schema_version: 3,
-            id: "material/depth-splat".to_string(),
+            id: "material/generic-alpha-test".to_string(),
             color: [1.0; 4],
             texture: None,
             roughness: 1.0,

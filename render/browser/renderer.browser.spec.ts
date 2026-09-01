@@ -66,26 +66,6 @@ test('shared host realizes retained, presentation, and inspection families in a 
     normalizedTimes: [0, 0.5, 1],
     independentInstances: true,
   });
-  expect(proof.heldAnimationFrameBank.externalBeginApplied).toBe(true);
-  expect(proof.heldAnimationFrameBank.externalPrepareApplied).toBe(true);
-  expect(proof.heldAnimationFrameBank.externalOrigin).toBe('pack');
-  expect(proof.heldAnimationFrameBank.embeddedBeginApplied).toBe(true);
-  expect(proof.heldAnimationFrameBank.embeddedPrepareApplied).toBe(true);
-  expect(proof.heldAnimationFrameBank.selectApplied).toBe(true);
-  expect(proof.heldAnimationFrameBank.embeddedOrigin).toBe('embedded');
-  expect(proof.heldAnimationFrameBank.capturedFrameCount).toBe(3);
-  expect(proof.heldAnimationFrameBank.captureCountAfterSelection)
-    .toBe(proof.heldAnimationFrameBank.captureCountBeforeSelection);
-  expect(proof.heldAnimationFrameBank.switchCount).toBe(2);
-  expect(proof.heldAnimationFrameBank.cacheHitCount).toBe(1);
-  expect(proof.heldAnimationFrameBank.canonicalPlaybackPreserved).toBe(true);
-  expect(proof.heldAnimationFrameBank.heldPresentationDrawCalls.every(
-    (drawCalls) => drawCalls !== null && drawCalls > 0,
-  )).toBe(true);
-  expect(
-    new Set(proof.heldAnimationFrameBank.embeddedPoseChecksums).size,
-    `held-bank checksums ${JSON.stringify(proof.heldAnimationFrameBank.embeddedPoseChecksums)} draws ${JSON.stringify(proof.heldAnimationFrameBank.heldPresentationDrawCalls)}`,
-  ).toBeGreaterThan(1);
   expect(['webgl', 'webgl2']).toContain(proof.context);
   expect(proof.snapshot).toContain('shape group');
   expect(proof.snapshot).toContain('shape cube');

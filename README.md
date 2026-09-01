@@ -70,9 +70,9 @@ deletes a selected root on shutdown.
 - The generated API is the green path. A missing capability is an upstream
   request and a valid stopping point—not permission to recreate an Engine
   mechanism downstream.
-- TypeScript is limited to DOM UI, accessibility, and explicit Engine
-  host/backend work. It does not own gameplay state or render non-UI game
-  elements.
+- TypeScript is limited to Engine-side DOM UI, accessibility, and explicit
+  host/backend work. It is not a downstream gameplay lane and does not render
+  non-UI game elements.
 
 For details and the product coding lane, use the linked guides rather than
 duplicating architecture here.
