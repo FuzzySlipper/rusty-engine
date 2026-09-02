@@ -32,17 +32,19 @@ fn dev(options: DevOptions) -> Result<(), String> {
     let runtime = RuntimePack::resolve(&options)?;
     runtime.verify()?;
 
+    let persistence_root = development_persistence_root(&options.project)?;
     let staged = stage_product(&options)?;
     verify_staged_product(&staged)?;
     let mut watches = query_watch_paths(&options.project)?;
     let mut snapshot = FileSnapshot::capture(&watches)?;
-    let mut child = SupervisedHost::start(&runtime.host, &staged)?;
+    let mut child = SupervisedHost::start(&runtime.host, &staged, &persistence_root)?;
 
     diagnostic(
         "started",
         serde_json::json!({
             "project": options.project,
             "productDirectory": staged,
+            "persistenceRoot": persistence_root,
             "runtimePack": runtime.root,
             "loader": "coreclr",
             "watchPaths": watches,
@@ -72,11 +74,12 @@ fn dev(options: DevOptions) -> Result<(), String> {
         let refreshed_watches = query_watch_paths(&options.project)?;
         snapshot = FileSnapshot::capture(&refreshed_watches)?;
         watches = refreshed_watches;
-        child = SupervisedHost::start(&runtime.host, &staged)?;
+        child = SupervisedHost::start(&runtime.host, &staged, &persistence_root)?;
         diagnostic(
             "restarted",
             serde_json::json!({
                 "productDirectory": staged,
+                "persistenceRoot": persistence_root,
                 "loader": "coreclr",
                 "watchPaths": watches,
                 "pid": child.child.id(),
@@ -427,23 +430,36 @@ fn verify_staged_product(staged: &Path) -> Result<(), String> {
     }
 }
 
+fn development_persistence_root(project: &Path) -> Result<PathBuf, String> {
+    let project = absolute(project)?;
+    let project_directory = project.parent().ok_or_else(|| {
+        format!(
+            "RUSTY_DEV_PROJECT: ordinary product project `{}` has no containing directory",
+            project.display()
+        )
+    })?;
+    // Keep developer state beside the Product repository when one is
+    // discoverable. This matches the ordinary `.runtime` lane used by
+    // downstream products and avoids writing state beneath a source project
+    // directory that may not ignore generated files. A loose project still
+    // gets a stable root beside its project file.
+    let product_root = project_directory
+        .ancestors()
+        .find(|candidate| candidate.join(".git").exists())
+        .unwrap_or(project_directory);
+    Ok(product_root.join(".runtime").join("persistence"))
+}
+
 struct SupervisedHost {
     child: Child,
     stdin: Option<ChildStdin>,
 }
 
 impl SupervisedHost {
-    fn start(host: &Path, product: &Path) -> Result<Self, String> {
+    fn start(host: &Path, product: &Path, persistence_root: &Path) -> Result<Self, String> {
+        let arguments = supervised_host_arguments(product, persistence_root)?;
         let mut child = Command::new(host)
-            .args([
-                "--product",
-                product
-                    .to_str()
-                    .ok_or("RUSTY_DEV_STAGE: staged product path must be UTF-8")?,
-                "--loader",
-                "coreclr",
-                "--supervised",
-            ])
+            .args(&arguments)
             .stdin(Stdio::piped())
             .spawn()
             .map_err(|error| {
@@ -497,6 +513,27 @@ impl SupervisedHost {
             thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+fn supervised_host_arguments(
+    product: &Path,
+    persistence_root: &Path,
+) -> Result<Vec<String>, String> {
+    Ok(vec![
+        "--product".to_owned(),
+        product
+            .to_str()
+            .ok_or("RUSTY_DEV_STAGE: staged product path must be UTF-8")?
+            .to_owned(),
+        "--loader".to_owned(),
+        "coreclr".to_owned(),
+        "--supervised".to_owned(),
+        "--persistence-root".to_owned(),
+        persistence_root
+            .to_str()
+            .ok_or("RUSTY_DEV_PERSISTENCE: persistence root path must be UTF-8")?
+            .to_owned(),
+    ])
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -639,5 +676,55 @@ mod tests {
         assert!(
             properties.contains(&"-p:RustyEngineSourceDevelopmentPath=/engine-source".to_owned())
         );
+    }
+
+    #[test]
+    fn development_persistence_root_is_project_local_and_absolute() {
+        let root = development_persistence_root(Path::new("src/Product.csproj"))
+            .expect("development persistence root");
+        let current_directory = env::current_dir().expect("current directory");
+        let repository_root = current_directory
+            .ancestors()
+            .find(|candidate| candidate.join(".git").exists())
+            .expect("test runs from the Engine repository");
+
+        assert_eq!(root, repository_root.join(".runtime").join("persistence"));
+        assert!(root.is_absolute());
+    }
+
+    #[test]
+    fn development_persistence_root_does_not_follow_staged_product_output() {
+        let root = development_persistence_root(Path::new("/workspace/Product/Product.csproj"))
+            .expect("development persistence root");
+        let staged_product = Path::new("/workspace/Product/obj/RustyEngineProduct");
+
+        assert_eq!(
+            root,
+            PathBuf::from("/workspace/Product/.runtime/persistence")
+        );
+        assert_ne!(root, staged_product.join(".runtime/persistence"));
+    }
+
+    #[test]
+    fn supervised_host_arguments_include_stable_persistence_root() {
+        let arguments = supervised_host_arguments(
+            Path::new("/workspace/Product/obj/RustyEngineProduct"),
+            Path::new("/workspace/Product/.runtime/persistence"),
+        )
+        .expect("supervised host arguments");
+
+        let expected = [
+            "--product",
+            "/workspace/Product/obj/RustyEngineProduct",
+            "--loader",
+            "coreclr",
+            "--supervised",
+            "--persistence-root",
+            "/workspace/Product/.runtime/persistence",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        assert_eq!(arguments, expected);
     }
 }
