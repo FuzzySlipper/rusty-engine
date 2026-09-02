@@ -96,3 +96,57 @@ test('browser artifact mounts independently and routes through an injected trans
   assert.equal(new Set(result.ids).size, result.ids.length, 'mounted panels must not reuse DOM IDs');
   assert.match(result.transcript ?? '', /ran inspect/);
 });
+
+test('browser artifact can remount after disposal into the same caller-owned host', async (context) => {
+  const bundle = await readFile(new URL('index.js', artifactRoot), 'utf8');
+  const server = createServer(async (request, response) => {
+    if (request.url === '/fixture.html') {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<main><div id="host"></div></main>');
+      return;
+    }
+    if (request.url === '/index.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript' });
+      response.end(bundle);
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+
+  const browser = await chromium.launch({ headless: true });
+  context.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.goto(`http://127.0.0.1:${address.port}/fixture.html`);
+
+  const result = await page.evaluate(async () => {
+    const { mountLiveDebugPanel } = await import('/index.js');
+    const transport = {
+      async catalog() {
+        return { available: true, commands: [] };
+      },
+      async execute() {
+        return { succeeded: true, message: 'ok' };
+      },
+    };
+    const host = document.querySelector('#host');
+    const first = await mountLiveDebugPanel(host, { enabled: true, transport });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const firstConnected = host.querySelector('.rusty-live-debug-panel')?.textContent?.includes('Connected');
+    first.dispose();
+    const cleared = host.childElementCount === 0;
+    const second = await mountLiveDebugPanel(host, { enabled: true, transport });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const secondConnected = host.querySelector('.rusty-live-debug-panel')?.textContent?.includes('Connected');
+    second.dispose();
+    return { firstConnected, cleared, secondConnected, finalChildCount: host.childElementCount };
+  });
+
+  assert.equal(result.firstConnected, true);
+  assert.equal(result.cleared, true, 'disposing a panel must remove its owned host node');
+  assert.equal(result.secondConnected, true, 'a caller-owned host must support a later remount');
+  assert.equal(result.finalChildCount, 0);
+});

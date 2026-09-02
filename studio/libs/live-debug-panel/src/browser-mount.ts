@@ -36,9 +36,14 @@ export async function mountLiveDebugPanel(
   const application = await createApplication({
     providers: [provideZonelessChangeDetection()],
   });
+  // Angular associates component host context with the element passed to
+  // createComponent. Keep that context on a mount-owned node so the
+  // caller-owned host can be reused after disposal.
+  const mountHost = host.ownerDocument.createElement('div');
+  host.appendChild(mountHost);
   const component = createComponent(LiveDebugPanelComponent, {
     environmentInjector: application.injector,
-    hostElement: host,
+    hostElement: mountHost,
   });
 
   application.attachView(component.hostView);
@@ -55,6 +60,7 @@ export async function mountLiveDebugPanel(
       application.detachView(component.hostView);
       component.destroy();
       application.destroy();
+      mountHost.remove();
     },
   };
 }
