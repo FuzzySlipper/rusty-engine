@@ -78,6 +78,10 @@ const MAXIMUM_RUNTIME_RESPONSE_BYTES = 512 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES = 256 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES = 96 * 1024;
+// Mirrors ProductDevRendererDiagnosticsFeedback::MAX_SNAPSHOT_BYTES. Renderer
+// observations are not direct UI product payloads and have their own closed,
+// versioned transport budget.
+const MAXIMUM_RENDERER_DIAGNOSTICS_SNAPSHOT_BYTES = 256 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_FRAGMENTS = 256;
 const MAXIMUM_CONNECTION_BASELINE_OUTPUTS = 256;
 const DEFAULT_MAXIMUM_RESPONSE_BYTES = MAXIMUM_RUNTIME_RESPONSE_BYTES;
@@ -1381,7 +1385,17 @@ function snapshotRendererDiagnosticsFeedback(
 ): ProductBrowserRendererDiagnosticsFeedback {
   const record = requireRecord(value, 'renderer diagnostics feedback');
   requireKnownFields(record, ['runtime', 'snapshot'], 'renderer diagnostics feedback');
-  const snapshot = snapshotRustyApplicationProductPayloadJson(record['snapshot']);
+  const snapshot = snapshotJsonValue(record['snapshot']);
+  const snapshotRecord = requireRecord(snapshot, 'renderer diagnostics snapshot');
+  if (snapshotRecord['schemaVersion'] !== 1) {
+    throw new TypeError('renderer diagnostics snapshot schemaVersion must equal 1');
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
+  if (bytes > MAXIMUM_RENDERER_DIAGNOSTICS_SNAPSHOT_BYTES) {
+    throw new TypeError(
+      `renderer diagnostics snapshot exceeds ${String(MAXIMUM_RENDERER_DIAGNOSTICS_SNAPSHOT_BYTES)} bytes`,
+    );
+  }
   return Object.freeze({
     runtime: decodeRuntimeIdentity(record.runtime),
     snapshot,

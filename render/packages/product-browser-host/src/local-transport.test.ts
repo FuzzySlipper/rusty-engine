@@ -625,3 +625,46 @@ test('local transport carries immutable bounded product payload intents', async 
   }
   adapter.dispose();
 });
+
+test('renderer diagnostics use their own 256 KiB snapshot budget', async () => {
+  const requestBodies: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as unknown);
+      return response({ accepted: true, runtime: RUNTIME });
+    },
+    eventSource: FakeEventSource,
+  });
+
+  const withinRendererBudget = {
+    schemaVersion: 1,
+    resources: Array.from({ length: 1_024 }, (_unused, index) => ({
+      id: index,
+      diagnostic: 'x'.repeat(64),
+    })),
+  };
+  assert.ok(JSON.stringify(withinRendererBudget).length > 65_536);
+  await adapter.reportRendererDiagnostics?.({
+    runtime: RUNTIME,
+    snapshot: withinRendererBudget,
+  } as never);
+  assert.deepEqual(requestBodies, [{ runtime: RUNTIME, snapshot: withinRendererBudget }]);
+
+  const overRendererBudget = {
+    schemaVersion: 1,
+    resources: Array.from({ length: 1_024 }, (_unused, index) => ({
+      id: index,
+      diagnostic: 'x'.repeat(256),
+    })),
+  };
+  assert.ok(JSON.stringify(overRendererBudget).length > 256 * 1024);
+  assert.throws(
+    () => adapter.reportRendererDiagnostics?.({
+      runtime: RUNTIME,
+      snapshot: overRendererBudget,
+    } as never),
+    /renderer diagnostics snapshot exceeds 262144 bytes/u,
+  );
+  assert.equal(requestBodies.length, 1);
+  adapter.dispose();
+});
