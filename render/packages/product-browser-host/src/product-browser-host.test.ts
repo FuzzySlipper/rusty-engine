@@ -6,6 +6,7 @@ import {
   bindProductBrowserInitialRendererFrame,
   createProductBrowserAudioFeedbackReporter,
   createProductBrowserGhostPlateFeedbackReporter,
+  createProductBrowserRendererDiagnosticsCadenceSampler,
   createProductBrowserRendererDiagnosticsReporter,
   isDroppedClockRegression,
   productBrowserAtomicReceiptMayContinue,
@@ -338,6 +339,97 @@ test('renderer diagnostics retries one recoverable rejection without loss or flo
   await reporter.flush();
   assert.deepEqual(reports, [4, 4, 5]);
   assert.deepEqual(observations, [4, 5]);
+});
+
+test('renderer diagnostics cadence sampling stays quiet until a changed sequence is due', async () => {
+  const reports: number[] = [];
+  let renderSequence = 2;
+  const renderer = {
+    diagnosticsReadout: () => ({ schemaVersion: 1, submission: { renderSequence } }),
+  } as unknown as Parameters<typeof createProductBrowserRendererDiagnosticsReporter>[0]['renderer'];
+  const reporter = createProductBrowserRendererDiagnosticsReporter({
+    renderer,
+    report: async (feedback) => {
+      reports.push(feedback.snapshot.submission.renderSequence);
+      return { accepted: true, ...ACCEPTED_FAULT, runtime: feedback.runtime };
+    },
+    initialRuntime: AUDIO_RUNTIME,
+  });
+  const failures: unknown[] = [];
+  const sampler = createProductBrowserRendererDiagnosticsCadenceSampler({
+    enqueueOperation: (operation) => operation(),
+    flush: reporter.flush,
+    onFailure: (cause) => failures.push(cause),
+  });
+
+  sampler.sample(0);
+  await sampler.settle();
+  assert.deepEqual(reports, [2]);
+
+  sampler.sample(750);
+  await sampler.settle();
+  assert.deepEqual(reports, [2]);
+
+  renderSequence = 3;
+  sampler.sample(1_499);
+  await sampler.settle();
+  assert.deepEqual(reports, [2]);
+  sampler.sample(1_500);
+  await sampler.settle();
+  sampler.dispose();
+
+  assert.deepEqual(reports, [2, 3]);
+  assert.deepEqual(failures, []);
+});
+
+test('many renderer cadence callbacks coalesce to one latest follow-up sample', async () => {
+  let flushes = 0;
+  const deferred: { release: (() => void) | null } = { release: null };
+  const firstFlush = new Promise<void>((resolve) => {
+    deferred.release = resolve;
+  });
+  const sampler = createProductBrowserRendererDiagnosticsCadenceSampler({
+    enqueueOperation: (operation) => operation(),
+    flush: async () => {
+      flushes += 1;
+      if (flushes === 1) await firstFlush;
+    },
+    onFailure: (cause) => assert.fail(String(cause)),
+  });
+
+  sampler.sample(0);
+  for (let timeMs = 1; timeMs <= 3_000; timeMs += 1) sampler.sample(timeMs);
+  assert.equal(flushes, 1);
+  deferred.release?.();
+  await sampler.settle();
+  sampler.dispose();
+
+  assert.equal(flushes, 2);
+});
+
+test('renderer diagnostics cadence disposal cancels queued work before admission', async () => {
+  let flushes = 0;
+  const deferred: { admit: (() => void) | null } = { admit: null };
+  const admission = new Promise<void>((resolve) => {
+    deferred.admit = resolve;
+  });
+  const sampler = createProductBrowserRendererDiagnosticsCadenceSampler({
+    enqueueOperation: async (operation) => {
+      await admission;
+      return operation();
+    },
+    flush: async () => {
+      flushes += 1;
+    },
+    onFailure: (cause) => assert.fail(String(cause)),
+  });
+
+  sampler.sample(0);
+  sampler.dispose();
+  deferred.admit?.();
+  await sampler.settle();
+
+  assert.equal(flushes, 0);
 });
 
 test('audio feedback flush precedes every browser-host C# update admission lane', async () => {

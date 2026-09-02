@@ -485,6 +485,7 @@ export interface ProductBrowserHostOptions {
 }
 
 const PRODUCT_BROWSER_INITIAL_RENDERER_FRAME_TIMEOUT_MS = 10_000;
+const PRODUCT_BROWSER_RENDERER_DIAGNOSTICS_INTERVAL_MS = 750;
 
 /** @internal Reports whether admitted animation bytes still need their first semantic frame. */
 export function productBrowserInitialRendererFrameRequired(
@@ -680,6 +681,12 @@ interface ProductBrowserGhostPlateFeedbackReporter {
 interface ProductBrowserRendererDiagnosticsReporter {
   readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
   readonly flush: () => Promise<void>;
+}
+
+interface ProductBrowserRendererDiagnosticsCadenceSampler {
+  readonly sample: (timeMs: number) => void;
+  readonly settle: () => Promise<void>;
+  readonly dispose: () => void;
 }
 
 function isRecoverableReportRejection(result: {
@@ -921,6 +928,70 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
   return Object.freeze({ bindRuntime, flush });
 }
 
+/** @internal Coalesces diagnostics work from the existing renderer cadence without owning a loop. */
+export function createProductBrowserRendererDiagnosticsCadenceSampler(options: {
+  readonly enqueueOperation: ProductBrowserOperationQueue['enqueue'];
+  readonly flush: () => Promise<void>;
+  readonly onFailure: (cause: unknown) => void;
+}): ProductBrowserRendererDiagnosticsCadenceSampler {
+  let lastSampledAtMs: number | null = null;
+  let maximumObservedTimeMs = 0;
+  let pendingCadenceTimeMs: number | null = null;
+  let inFlight: Promise<void> | null = null;
+  let disposed = false;
+
+  const start = (timeMs: number): void => {
+    lastSampledAtMs = timeMs;
+    inFlight = options.enqueueOperation(async () => {
+      if (disposed) return;
+      await options.flush();
+    }).then(
+      () => finish(),
+      (cause: unknown) => {
+        options.onFailure(cause);
+        finish();
+      },
+    );
+  };
+
+  const finish = (): void => {
+    inFlight = null;
+    const pendingTimeMs = pendingCadenceTimeMs;
+    pendingCadenceTimeMs = null;
+    if (disposed || pendingTimeMs === null || lastSampledAtMs === null) return;
+    if (pendingTimeMs - lastSampledAtMs >= PRODUCT_BROWSER_RENDERER_DIAGNOSTICS_INTERVAL_MS) {
+      start(pendingTimeMs);
+    }
+  };
+
+  const sample = (timeMs: number): void => {
+    if (disposed) return;
+    const orderedTimeMs = Number.isFinite(timeMs) && timeMs >= 0 ? timeMs : 0;
+    const monotonicTimeMs = Math.max(maximumObservedTimeMs, orderedTimeMs);
+    maximumObservedTimeMs = monotonicTimeMs;
+    if (lastSampledAtMs !== null
+      && monotonicTimeMs - lastSampledAtMs < PRODUCT_BROWSER_RENDERER_DIAGNOSTICS_INTERVAL_MS) {
+      return;
+    }
+    if (inFlight !== null) {
+      pendingCadenceTimeMs = monotonicTimeMs;
+      return;
+    }
+    start(monotonicTimeMs);
+  };
+
+  return Object.freeze({
+    sample,
+    settle: async (): Promise<void> => {
+      while (inFlight !== null) await inFlight;
+    },
+    dispose: (): void => {
+      disposed = true;
+      pendingCadenceTimeMs = null;
+    },
+  });
+}
+
 /** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
 export async function flushProductBrowserAudioFeedbackBeforeUpdate<T>(
   flush: () => Promise<void>,
@@ -974,6 +1045,7 @@ export async function mountProductBrowserHost(
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
   let rendererDiagnosticsReporter: ProductBrowserRendererDiagnosticsReporter | null = null;
+  let rendererDiagnosticsCadenceSampler: ProductBrowserRendererDiagnosticsCadenceSampler | null = null;
   // Renderer calls can be asynchronous (notably presentation realization),
   // while the retained runtime output port is synchronous. Keep their typed
   // realization order private to this host so a later frame cannot overtake a
@@ -1129,6 +1201,7 @@ export async function mountProductBrowserHost(
     transportClosed = true;
     started = false;
     cadence?.dispose();
+    rendererDiagnosticsCadenceSampler?.dispose();
     unsubscribeTerminalFailures?.();
     unsubscribeTerminalFailures = null;
     unsubscribeOutputs?.();
@@ -1183,7 +1256,6 @@ export async function mountProductBrowserHost(
     await audioFeedbackReporter?.flush();
     await animationFeedbackReporter?.flush();
     await ghostPlateFeedbackReporter?.flush();
-    await rendererDiagnosticsReporter?.flush();
   };
 
   const scheduleRendererFeedbackFlush = (): void => {
@@ -1445,6 +1517,11 @@ export async function mountProductBrowserHost(
     },
   });
 
+  const observeRendererCadence = (timeMs: number): void => {
+    cadence?.enqueue(timeMs);
+    if (started && state === 'ready') rendererDiagnosticsCadenceSampler?.sample(timeMs);
+  };
+
   let runtimeInput: RustyApplicationRuntimeInputOptions | undefined;
   if (options.runtimeInput !== undefined) {
     const { binding, ...runtimeInputOptions } = options.runtimeInput;
@@ -1510,13 +1587,13 @@ export async function mountProductBrowserHost(
       ...(renderer === undefined
         ? {
             renderer: {
-              onCadence: (timeMs) => cadence?.enqueue(timeMs),
+              onCadence: observeRendererCadence,
             },
           }
         : {
             renderer: {
               ...renderer,
-              onCadence: (timeMs) => cadence?.enqueue(timeMs),
+              onCadence: observeRendererCadence,
             },
           }),
     });
@@ -1552,6 +1629,13 @@ export async function mountProductBrowserHost(
         ...(options.runtimeInput?.binding === undefined
           ? {}
           : { initialRuntime: options.runtimeInput.binding }),
+      });
+      rendererDiagnosticsCadenceSampler = createProductBrowserRendererDiagnosticsCadenceSampler({
+        enqueueOperation: queue.enqueue,
+        flush: rendererDiagnosticsReporter.flush,
+        onFailure: (cause) => {
+          failAndClose(cause, 'transport_failed');
+        },
       });
     }
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
@@ -1709,6 +1793,7 @@ export async function mountProductBrowserHost(
       transportClosed = true;
       publishHealth();
       cadence?.dispose();
+      rendererDiagnosticsCadenceSampler?.dispose();
       unsubscribeTerminalFailures?.();
       unsubscribeTerminalFailures = null;
       unsubscribeOutputs?.();
