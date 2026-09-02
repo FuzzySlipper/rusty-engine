@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::c_void,
+    sync::Arc,
+};
 
 use csharp_engine_abi::{
     NativeByteLease, NativeByteLeaseHandle, NativeDiagnosticsApi, NativeDiagnosticsDisposition,
@@ -15,6 +19,33 @@ pub(crate) struct RuntimeDiagnosticsBridge {
     renderer_json: Option<Arc<[u8]>>,
     leases: BTreeMap<u64, Arc<[u8]>>,
     next_lease: u64,
+}
+
+/// Product-owned cosmetic admission can legitimately meet an Engine bound.
+/// Keep the corresponding real diagnostic useful without allowing a retrying
+/// product loop to flood the same bounded sink.
+pub(crate) fn publish_recoverable_once(
+    sink: &ProductDevLog,
+    reported_codes: &mut BTreeSet<&'static str>,
+    source: &'static str,
+    code: &'static str,
+    message: &'static str,
+) {
+    if !reported_codes.insert(code) {
+        return;
+    }
+    let Ok(event) = ProductDevLogEvent::new(
+        ProductDevLogSeverity::Warning,
+        ProductDevLogDisposition::RejectedRecoverable,
+        source,
+        code,
+        message,
+    ) else {
+        return;
+    };
+    // Recoverable product feedback must not become a callback fault merely
+    // because diagnostics persistence has become unavailable.
+    let _ = sink.publish(event);
 }
 
 impl RuntimeDiagnosticsBridge {

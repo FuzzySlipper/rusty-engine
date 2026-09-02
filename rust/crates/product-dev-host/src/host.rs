@@ -16,12 +16,14 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    CanonicalU64, ProductDevBundle, ProductDevControlOperation, ProductDevHostError,
-    ProductDevInputBatch, ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
-    ProductDevTimelineCompletion, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
-    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
-    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    CanonicalU64, ProductDevBrowserConnectionState, ProductDevBrowserDiagnosticsReport,
+    ProductDevBrowserDiagnosticsResult, ProductDevBrowserHostState, ProductDevBundle,
+    ProductDevControlOperation, ProductDevHostError, ProductDevInputBatch,
+    ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
+    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevTimelineCompletion, MAX_CONNECTIONS,
+    MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES,
+    MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
@@ -359,6 +361,12 @@ fn dispatch_request<R: ProductDevRuntime>(
         "/__rusty/product/runtime/renderer-diagnostics" => {
             invoke_renderer_diagnostics(state, &request.body)
         }
+        "/__rusty/product/runtime/diagnostics/read" => {
+            invoke_diagnostics_read(state, &request.body)
+        }
+        "/__rusty/product/runtime/browser-diagnostics" => {
+            invoke_browser_diagnostics(state, &request.body)
+        }
         _ => HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
     }
 }
@@ -630,6 +638,163 @@ fn invoke_renderer_diagnostics<R: ProductDevRuntime>(
             crate::ProductDevRendererDiagnosticsFeedbackResult::rejected_runtime(binding, error)
         },
     )
+}
+
+fn invoke_diagnostics_read<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    body: &[u8],
+) -> HttpResponse {
+    if !state.live_debug_enabled {
+        return HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted");
+    }
+    let request: DiagnosticsReadRequest = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    json_response(
+        200,
+        &state
+            .diagnostics
+            .read_after(request.after.map(CanonicalU64::get)),
+    )
+}
+
+fn invoke_browser_diagnostics<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    body: &[u8],
+) -> HttpResponse {
+    let report: ProductDevBrowserDiagnosticsReport = match decode_json(body) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(error) = report.validate() {
+        return HttpResponse::error(400, error.code(), error.detail());
+    }
+    let mut reported = 0_u8;
+    let status_disposition = if report.host_state == ProductDevBrowserHostState::Failed {
+        ProductDevLogDisposition::Degraded
+    } else {
+        ProductDevLogDisposition::Accepted
+    };
+    let status_severity = if report.host_state == ProductDevBrowserHostState::Failed {
+        ProductDevLogSeverity::Warning
+    } else {
+        ProductDevLogSeverity::Info
+    };
+    let mut status = match ProductDevLogEvent::new(
+        status_severity,
+        status_disposition,
+        "browser-host",
+        "BROWSER_HOST_STATUS",
+        "Product Browser Host diagnostic report",
+    ) {
+        Ok(event) => event,
+        Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
+    };
+    for (key, value) in [
+        (
+            "host-state",
+            browser_host_state(report.host_state).to_owned(),
+        ),
+        (
+            "runtime-progress",
+            report.runtime_progress.get().to_string(),
+        ),
+        (
+            "transport",
+            browser_connection_state(report.transport_state).to_owned(),
+        ),
+        (
+            "output",
+            browser_connection_state(report.output_state).to_owned(),
+        ),
+        (
+            "renderer-sequence",
+            report
+                .last_renderer_sequence
+                .map_or_else(|| "none".to_owned(), |value| value.get().to_string()),
+        ),
+        (
+            "renderer-age-ms",
+            report
+                .renderer_observation_age_ms
+                .map_or_else(|| "none".to_owned(), |value| value.get().to_string()),
+        ),
+    ] {
+        status = match status.with_field(key, value) {
+            Ok(event) => event,
+            Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
+        };
+    }
+    if let Err(error) = state.diagnostics.publish(status) {
+        return HttpResponse::error(503, error.code(), error.detail());
+    }
+    reported = reported.saturating_add(1);
+
+    if let Some(terminal) = report.first_terminal {
+        let event = match ProductDevLogEvent::new(
+            ProductDevLogSeverity::Error,
+            ProductDevLogDisposition::Terminal,
+            "browser-host",
+            terminal.code,
+            terminal.message,
+        ) {
+            Ok(event) => event,
+            Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
+        };
+        if let Err(error) = state.diagnostics.publish(event) {
+            return HttpResponse::error(503, error.code(), error.detail());
+        }
+        reported = reported.saturating_add(1);
+    }
+    for page_event in report.page_events {
+        let event = match ProductDevLogEvent::new(
+            ProductDevLogSeverity::Warning,
+            ProductDevLogDisposition::Degraded,
+            "browser-page",
+            page_event.code,
+            page_event.message,
+        )
+        .and_then(|event| event.with_field("kind", browser_page_diagnostic_kind(page_event.kind)))
+        {
+            Ok(event) => event,
+            Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
+        };
+        if let Err(error) = state.diagnostics.publish(event) {
+            return HttpResponse::error(503, error.code(), error.detail());
+        }
+        reported = reported.saturating_add(1);
+    }
+    json_response(
+        200,
+        &ProductDevBrowserDiagnosticsResult {
+            accepted: true,
+            reported,
+        },
+    )
+}
+
+fn browser_host_state(state: ProductDevBrowserHostState) -> &'static str {
+    match state {
+        ProductDevBrowserHostState::Loading => "loading",
+        ProductDevBrowserHostState::Ready => "ready",
+        ProductDevBrowserHostState::Failed => "failed",
+        ProductDevBrowserHostState::Disposed => "disposed",
+    }
+}
+
+fn browser_connection_state(state: ProductDevBrowserConnectionState) -> &'static str {
+    match state {
+        ProductDevBrowserConnectionState::Open => "open",
+        ProductDevBrowserConnectionState::Closed => "closed",
+    }
+}
+
+fn browser_page_diagnostic_kind(kind: crate::ProductDevBrowserPageDiagnosticKind) -> &'static str {
+    match kind {
+        crate::ProductDevBrowserPageDiagnosticKind::Error => "error",
+        crate::ProductDevBrowserPageDiagnosticKind::UnhandledRejection => "unhandled-rejection",
+    }
 }
 
 fn call_runtime<R, T, F, E>(state: &HostState<R>, call: F, error_result: E) -> HttpResponse
@@ -1625,6 +1790,12 @@ fn write_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EmptyRequest {}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DiagnosticsReadRequest {
+    after: Option<CanonicalU64>,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

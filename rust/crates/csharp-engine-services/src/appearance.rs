@@ -4,6 +4,7 @@ use asset_import::{
     GltfResource, ImportContext, SourceUri,
 };
 use csharp_engine_abi::*;
+use product_dev_host::ProductDevLog;
 use render_model::*;
 use render_presentation::{
     validate_animation_catalog, AnimationCatalog, AnimationClipAsset, AnimationCondition,
@@ -20,10 +21,10 @@ use render_presentation::{
     GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlateHandle,
     GhostPlateMapping, GhostPlatePatch, GhostPlatePlacement, GhostPlateProjectionOp,
     GhostPlateProjector, GhostPlateShellMode, ParticleAnchor, ParticleCollisionDescriptor,
-    ParticleCollisionLimitBehavior, ParticleCollisionVolume, ParticleEmitterDescriptor,
-    ParticleEmitterHandle, ParticleEmitterPatch, ParticleProjectionDiagnosticCode,
-    ParticleProjectionOp, ParticleProjector, ParticleSpriteRef, ParticleVisual,
-    PresentationFrameDiff, PresentationOpMeta,
+    ParticleCollisionLimitBehavior, ParticleCollisionVolume, ParticleEmissionAdmissionOutcome,
+    ParticleEmitterDescriptor, ParticleEmitterHandle, ParticleEmitterPatch,
+    ParticleProjectionDiagnosticCode, ParticleProjectionOp, ParticleProjector, ParticleSpriteRef,
+    ParticleVisual, PresentationFrameDiff, PresentationOpMeta,
 };
 use render_projection::{
     Appearance, RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
@@ -1562,6 +1563,8 @@ pub(crate) struct RuntimeAppearanceBridge {
     animation_realization_facts: VecDeque<AnimationRealizationFact>,
     animation_realization_evicted: u64,
     authored_content: Option<*const crate::authored_content::RuntimeAuthoredContentBridge>,
+    diagnostics_sink: Option<ProductDevLog>,
+    reported_recoverable_codes: BTreeSet<&'static str>,
 }
 
 impl RuntimeAppearanceBridge {
@@ -1622,6 +1625,8 @@ impl RuntimeAppearanceBridge {
             animation_realization_facts: VecDeque::new(),
             animation_realization_evicted: 0,
             authored_content: None,
+            diagnostics_sink: None,
+            reported_recoverable_codes: BTreeSet::new(),
         }
     }
 
@@ -1630,6 +1635,10 @@ impl RuntimeAppearanceBridge {
         authored_content: &crate::authored_content::RuntimeAuthoredContentBridge,
     ) {
         self.authored_content = Some(authored_content);
+    }
+
+    pub(crate) fn bind_diagnostics_sink(&mut self, sink: ProductDevLog) {
+        self.diagnostics_sink = Some(sink);
     }
 
     pub(crate) fn begin_call(&mut self) {
@@ -1871,15 +1880,80 @@ impl RuntimeAppearanceBridge {
         &mut self,
         signal_id: NativeUtf8Slice,
         request: &NativePresentationParticleDescriptor,
-    ) -> Result<(), CsharpEngineServicesError> {
+    ) -> Result<NativePresentationParticleEmissionReceipt, CsharpEngineServicesError> {
         let signal_id =
             unsafe { borrowed_utf8(signal_id.bytes, signal_id.len, "particle signal id")? }
                 .to_owned();
         let descriptor = self.presentation_particle_descriptor(request)?;
-        self.stage_particle(ParticleProjectionOp::Emit {
-            signal_id,
-            descriptor,
-        })
+        let result = {
+            let staged = self.staged_mut()?;
+            let assets = presentation_assets(&staged.state.render_resources);
+            staged.state.particle_projector.project_optional_emit(
+                &assets,
+                PresentationOpMeta::new(0),
+                signal_id,
+                descriptor,
+            )
+        };
+        match result {
+            Ok((admission, projected)) => {
+                if let Some(projected) = projected {
+                    let mut frame = PresentationFrameDiff::new();
+                    frame.ops.push(projected);
+                    push_presentation_frame(self.staged_mut()?, frame);
+                }
+                let outcome = match admission.outcome {
+                    ParticleEmissionAdmissionOutcome::Admitted => {
+                        NativePresentationParticleEmissionOutcome::Admitted
+                    }
+                    ParticleEmissionAdmissionOutcome::Dropped => {
+                        self.report_particle_recoverable(
+                            "CSHARP_PARTICLE_EMISSION_DROPPED",
+                            "optional particle emission was dropped because the retained particle budget is exhausted",
+                        );
+                        NativePresentationParticleEmissionOutcome::Dropped
+                    }
+                    ParticleEmissionAdmissionOutcome::Clamped => {
+                        self.report_particle_recoverable(
+                            "CSHARP_PARTICLE_EMISSION_CLAMPED",
+                            "optional particle emission was clamped to the remaining retained particle budget",
+                        );
+                        NativePresentationParticleEmissionOutcome::Clamped
+                    }
+                };
+                Ok(NativePresentationParticleEmissionReceipt {
+                    outcome,
+                    requested_particles: admission.requested_particles,
+                    admitted_particles: admission.admitted_particles,
+                    reserved_particles: admission.reserved_particles,
+                    max_reserved_particles: admission.max_reserved_particles,
+                })
+            }
+            Err(diagnostic) => {
+                self.record_presentation_diagnostic(
+                    NativePresentationDiagnosticDomain::Particle,
+                    native_particle_diagnostic_code(diagnostic.code),
+                    diagnostic.sequence,
+                    0,
+                );
+                Err(CsharpEngineServicesError::new(
+                    "CSHARP_PRESENTATION_PARTICLE",
+                    diagnostic.message,
+                ))
+            }
+        }
+    }
+
+    fn report_particle_recoverable(&mut self, code: &'static str, message: &'static str) {
+        if let Some(sink) = self.diagnostics_sink.as_ref() {
+            crate::diagnostics::publish_recoverable_once(
+                sink,
+                &mut self.reported_recoverable_codes,
+                "presentation",
+                code,
+                message,
+            );
+        }
     }
 
     pub(crate) fn presentation_create_emitter(
@@ -10317,6 +10391,28 @@ pub(super) mod tests {
         );
         assert!(bridge.take_staged_call().is_err());
         assert_eq!(bridge.presentation_readout().billboard_diagnostic_count, 1);
+    }
+
+    #[test]
+    fn particle_recoverable_admission_diagnostics_use_the_product_sink_once_per_code() {
+        let sink = ProductDevLog::new(Default::default()).expect("bounded product log");
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.bind_diagnostics_sink(sink.clone());
+        bridge.report_particle_recoverable(
+            "CSHARP_PARTICLE_EMISSION_DROPPED",
+            "optional particle emission was dropped because the retained particle budget is exhausted",
+        );
+        bridge.report_particle_recoverable(
+            "CSHARP_PARTICLE_EMISSION_DROPPED",
+            "optional particle emission was dropped because the retained particle budget is exhausted",
+        );
+        let snapshot = sink.snapshot();
+        assert_eq!(snapshot.events.len(), 1);
+        assert_eq!(
+            snapshot.events[0].code(),
+            "CSHARP_PARTICLE_EMISSION_DROPPED"
+        );
     }
 
     #[test]

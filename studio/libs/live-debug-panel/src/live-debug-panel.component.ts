@@ -12,8 +12,10 @@ import { FormsModule } from '@angular/forms';
 import {
   completeLiveDebug,
   createLiveDebugHttpTransport,
+  diagnosticRendererObservationAgeMilliseconds,
   type LiveDebugCatalog,
   type LiveDebugCommandDescriptor,
+  type LiveDebugDiagnosticEvent,
   type LiveDebugTransport,
 } from '@rusty-engine/live-debug-client';
 
@@ -31,6 +33,8 @@ type LiveDebugConnectionState = 'disconnected' | 'connecting' | 'ready' | 'unava
 
 const LIVE_DEBUG_PANEL_MAX_HISTORY_ENTRIES = 64;
 const LIVE_DEBUG_PANEL_MAX_COMPLETIONS = 12;
+const LIVE_DEBUG_PANEL_MAX_DIAGNOSTICS = 128;
+const LIVE_DEBUG_PANEL_POLL_MS = 1_000;
 let nextLiveDebugPanelInstance = 1;
 
 /**
@@ -103,6 +107,14 @@ let nextLiveDebugPanelInstance = 1;
             <pre>{{ entry.message }}</pre>
           </li>
         </ol>
+        <section class="rusty-live-debug-panel__diagnostics" aria-label="Engine diagnostics">
+          <strong>Diagnostics</strong>
+          <span>warn {{ diagnosticWarningCount() }} · error {{ diagnosticErrorCount() }} · dropped {{ diagnosticDroppedCount() }}</span>
+          <span *ngIf="diagnosticLagged()" class="rusty-live-debug-panel__error">Earlier diagnostics were evicted; reconnected at the current floor.</span>
+          <ol class="rusty-live-debug-panel__diagnostic-log" role="log" aria-live="polite">
+            <li *ngFor="let event of diagnosticEvents()"><code>#{{ event.sequence }} {{ event.source }}/{{ event.code }}</code> {{ event.message }} <small>{{ diagnosticDetail(event) }}</small></li>
+          </ol>
+        </section>
       </ng-container>
 
       <ng-template #disabledPanel>
@@ -126,6 +138,8 @@ let nextLiveDebugPanelInstance = 1;
     .rusty-live-debug-panel__transcript { max-height: 18rem; overflow: auto; margin: 0.5rem 0 0; padding-left: 1.5rem; }
     .rusty-live-debug-panel__transcript pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0.25rem 0 0.75rem; }
     .rusty-live-debug-panel__response--failure pre { color: #ffb4ab; }
+    .rusty-live-debug-panel__diagnostics { display: grid; gap: 0.35rem; margin-top: 0.75rem; }
+    .rusty-live-debug-panel__diagnostic-log { max-height: 12rem; overflow: auto; margin: 0; padding-left: 1.5rem; }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -149,6 +163,12 @@ export class LiveDebugPanelComponent implements OnDestroy {
   readonly transcript = signal<readonly LiveDebugTranscriptEntry[]>([]);
   readonly history = signal<readonly string[]>([]);
   readonly historyCursor = signal<number | null>(null);
+  readonly diagnosticEvents = signal<readonly LiveDebugDiagnosticEvent[]>([]);
+  readonly diagnosticWarningCount = signal('0');
+  readonly diagnosticErrorCount = signal('0');
+  readonly diagnosticDroppedCount = signal('0');
+  readonly diagnosticLagged = signal(false);
+  readonly diagnosticReadMonotonicNanoseconds = signal('0');
   readonly completions = computed(() => {
     const catalog = this.catalog();
     if (catalog === null || !catalog.available) return [];
@@ -172,6 +192,8 @@ export class LiveDebugPanelComponent implements OnDestroy {
   #requestRevision = 0;
   #catalogAbort: AbortController | null = null;
   #executeAbort: AbortController | null = null;
+  #diagnosticTimer: ReturnType<typeof setTimeout> | null = null;
+  #diagnosticCursor: string | undefined;
 
   constructor() {
     effect((onCleanup) => {
@@ -250,6 +272,17 @@ export class LiveDebugPanelComponent implements OnDestroy {
     return commandSummary(command);
   }
 
+  diagnosticDetail(event: LiveDebugDiagnosticEvent): string {
+    const fields = event.fields?.map((field) => `${field.key}=${field.value}`) ?? [];
+    const age = diagnosticRendererObservationAgeMilliseconds({
+      events: [], floorSequence: '0', throughSequence: '0', nextCursor: '0',
+      readMonotonicNanoseconds: this.diagnosticReadMonotonicNanoseconds(),
+      lagged: false, warningCount: '0', errorCount: '0', droppedCount: '0',
+    }, event);
+    if (age !== null) fields.push(`renderer-age-ms=${String(Math.floor(age))}`);
+    return fields.join(' · ');
+  }
+
   clearTranscript(): void {
     this.transcript.set([]);
   }
@@ -271,6 +304,15 @@ export class LiveDebugPanelComponent implements OnDestroy {
     this.#requestRevision += 1;
     this.#catalogAbort?.abort();
     this.#executeAbort?.abort();
+    if (this.#diagnosticTimer !== null) clearTimeout(this.#diagnosticTimer);
+    this.#diagnosticTimer = null;
+    this.#diagnosticCursor = undefined;
+    this.diagnosticReadMonotonicNanoseconds.set('0');
+    this.diagnosticEvents.set([]);
+    this.diagnosticWarningCount.set('0');
+    this.diagnosticErrorCount.set('0');
+    this.diagnosticDroppedCount.set('0');
+    this.diagnosticLagged.set(false);
     this.catalog.set(null);
     this.connection.set('disconnected');
     this.executing.set(false);
@@ -286,11 +328,42 @@ export class LiveDebugPanelComponent implements OnDestroy {
       if (signal.aborted || revision !== this.#requestRevision) return;
       this.catalog.set(catalog);
       this.connection.set(catalog.available ? 'ready' : 'unavailable');
+      if (catalog.available && transport.diagnostics !== undefined) {
+        this.pollDiagnostics(transport, signal, revision);
+      }
     } catch (error: unknown) {
       if (signal.aborted || revision !== this.#requestRevision) return;
       this.connection.set('error');
       this.error.set(errorMessage(error));
     }
+  }
+
+  private pollDiagnostics(transport: LiveDebugTransport, signal: AbortSignal, revision: number): void {
+    const diagnostics = transport.diagnostics;
+    if (diagnostics === undefined) return;
+    void diagnostics.call(transport, this.#diagnosticCursor, signal).then((batch) => {
+      if (signal.aborted || revision !== this.#requestRevision) return;
+      this.#diagnosticCursor = batch.nextCursor;
+      this.diagnosticReadMonotonicNanoseconds.set(batch.readMonotonicNanoseconds);
+      this.diagnosticLagged.set(batch.lagged);
+      this.diagnosticWarningCount.set(batch.warningCount);
+      this.diagnosticErrorCount.set(batch.errorCount);
+      this.diagnosticDroppedCount.set(batch.droppedCount);
+      if (batch.events.length > 0) {
+        this.diagnosticEvents.set(
+          [...this.diagnosticEvents(), ...batch.events].slice(-LIVE_DEBUG_PANEL_MAX_DIAGNOSTICS),
+        );
+      }
+    }).catch((error: unknown) => {
+      if (!signal.aborted && revision === this.#requestRevision) this.error.set(errorMessage(error));
+    }).finally(() => {
+      if (!signal.aborted && revision === this.#requestRevision) {
+        this.#diagnosticTimer = setTimeout(
+          () => this.pollDiagnostics(transport, signal, revision),
+          LIVE_DEBUG_PANEL_POLL_MS,
+        );
+      }
+    });
   }
 }
 

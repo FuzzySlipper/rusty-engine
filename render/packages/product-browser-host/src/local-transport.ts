@@ -26,6 +26,8 @@ import type {
   ProductBrowserGhostPlateFeedback,
   ProductBrowserGhostPlateFeedbackFact,
   ProductBrowserGhostPlateFeedbackResult,
+  ProductBrowserDiagnosticsReport,
+  ProductBrowserDiagnosticsResult,
   ProductBrowserHostFaultDisposition,
   ProductBrowserRendererDiagnosticsFeedback,
   ProductBrowserRendererDiagnosticsFeedbackResult,
@@ -71,6 +73,7 @@ const ROUTES = Object.freeze({
   animationFeedback: 'animation-feedback',
   ghostPlateFeedback: 'ghost-plate-feedback',
   rendererDiagnostics: 'renderer-diagnostics',
+  browserDiagnostics: 'browser-diagnostics',
   outputs: 'outputs',
   freshOutputs: 'outputs/fresh',
 });
@@ -173,6 +176,15 @@ interface ProductBrowserWireRecord {
   readonly admittedPresentations?: unknown;
   readonly droppedRealtimeSteps?: unknown;
   readonly clockRegressions?: unknown;
+  readonly hostState?: unknown;
+  readonly runtimeProgress?: unknown;
+  readonly transportState?: unknown;
+  readonly outputState?: unknown;
+  readonly lastRendererSequence?: unknown;
+  readonly rendererObservationAgeMs?: unknown;
+  readonly firstTerminal?: unknown;
+  readonly pageEvents?: unknown;
+  readonly reported?: unknown;
   readonly lastObservedTimeNs?: unknown;
   readonly replaceOwner?: unknown;
   readonly evictedFactCount?: unknown;
@@ -425,8 +437,13 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
-  const post = async <T>(route: string, body: unknown, decode: (value: unknown) => T): Promise<T> => {
-    ensureOpen();
+  const post = async <T>(
+    route: string,
+    body: unknown,
+    decode: (value: unknown) => T,
+    allowAfterDispose = false,
+  ): Promise<T> => {
+    if (!allowAfterDispose) ensureOpen();
     const url = `${basePath}${route}`;
     const encodedBody = encodeRequestBody(body, maximumResponseBytes, route);
     let response: Response;
@@ -439,7 +456,7 @@ export function createProductBrowserLocalHttpAdapter(
           'content-type': 'application/json',
         },
         body: encodedBody,
-        signal: abortController.signal,
+        ...(allowAfterDispose ? {} : { signal: abortController.signal }),
       });
     } catch (cause) {
       throw new ProductBrowserLocalTransportError(
@@ -476,7 +493,7 @@ export function createProductBrowserLocalHttpAdapter(
     }
     let decoded: T;
     try {
-      ensureOpen();
+      if (!allowAfterDispose) ensureOpen();
       decoded = decode(value);
     } catch (cause) {
       if (cause instanceof ProductBrowserLocalTransportError) throw cause;
@@ -549,6 +566,15 @@ export function createProductBrowserLocalHttpAdapter(
       snapshot,
       (value) => decodeRendererDiagnosticsResult(value, snapshot.runtime),
     );
+  };
+
+  const reportBrowserDiagnostics = (
+    report: ProductBrowserDiagnosticsReport,
+  ): Promise<ProductBrowserDiagnosticsResult> => {
+    const snapshot = snapshotBrowserDiagnosticsReport(report);
+    // The first terminal host report must survive closing the SSE transport.
+    // This exact route remains bounded and does not reopen the runtime API.
+    return post(ROUTES.browserDiagnostics, snapshot, decodeBrowserDiagnosticsResult, true);
   };
 
   const advanceRealtime = (observedTimeNs: string): Promise<ProductBrowserRuntimeOperationResult> =>
@@ -999,6 +1025,7 @@ export function createProductBrowserLocalHttpAdapter(
     reportAnimationFeedback,
     reportGhostPlateFeedback,
     reportRendererDiagnostics,
+    reportBrowserDiagnostics,
     advanceRealtime,
     admitDemandStep,
     admitExternalStep,
@@ -1413,6 +1440,56 @@ function snapshotRendererDiagnosticsFeedback(
     runtime: decodeRuntimeIdentity(record.runtime),
     snapshot,
   }) as unknown as ProductBrowserRendererDiagnosticsFeedback;
+}
+
+function snapshotBrowserDiagnosticsReport(
+  value: ProductBrowserDiagnosticsReport,
+): ProductBrowserDiagnosticsReport {
+  const record = requireRecord(value, 'browser diagnostics report');
+  requireKnownFields(record, [
+    'hostState', 'runtimeProgress', 'transportState', 'outputState',
+    'lastRendererSequence', 'rendererObservationAgeMs', 'firstTerminal', 'pageEvents',
+  ], 'browser diagnostics report');
+  const pageEvents = requirePlainArray(record.pageEvents, 'browser diagnostics page events');
+  if (pageEvents.length > 8) throw new TypeError('browser diagnostics exceeds 8 page events');
+  const terminal = record.firstTerminal === undefined
+    ? undefined
+    : snapshotBrowserDiagnostic(record.firstTerminal, 'browser terminal diagnostic');
+  return Object.freeze({
+    hostState: requireCatalogValue(record.hostState, 'browser host state', new Set(['loading', 'ready', 'failed', 'disposed'])),
+    runtimeProgress: requireU64Text(record.runtimeProgress, 'browser runtime progress'),
+    transportState: requireCatalogValue(record.transportState, 'browser transport state', new Set(['open', 'closed'])),
+    outputState: requireCatalogValue(record.outputState, 'browser output state', new Set(['open', 'closed'])),
+    ...(record.lastRendererSequence === undefined ? {} : { lastRendererSequence: requireU64Text(record.lastRendererSequence, 'browser renderer sequence') }),
+    ...(record.rendererObservationAgeMs === undefined ? {} : { rendererObservationAgeMs: requireU64Text(record.rendererObservationAgeMs, 'browser renderer observation age') }),
+    ...(terminal === undefined ? {} : { firstTerminal: terminal }),
+    pageEvents: Object.freeze(pageEvents.map((event) => {
+      const eventRecord = requireRecord(event, 'browser page diagnostic');
+      requireKnownFields(eventRecord, ['kind', 'code', 'message'], 'browser page diagnostic');
+      return Object.freeze({
+        kind: requireCatalogValue(eventRecord.kind, 'browser page diagnostic kind', new Set(['error', 'unhandled-rejection'])),
+        code: requireBrowserDiagnosticCode(eventRecord.code, 'browser page diagnostic code'),
+        message: requireDiagnostic(eventRecord['message']),
+      });
+    })),
+  }) as ProductBrowserDiagnosticsReport;
+}
+
+function snapshotBrowserDiagnostic(value: unknown, name: string): { readonly code: string; readonly message: string } {
+  const record = requireRecord(value, name);
+  requireKnownFields(record, ['code', 'message'], name);
+  const code = requireBrowserDiagnosticCode(record.code, `${name} code`);
+  const message = requireDiagnostic(record['message']);
+  return Object.freeze({ code, message });
+}
+
+function requireBrowserDiagnosticCode(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.length === 0
+    || new TextEncoder().encode(value).byteLength > 128
+    || /[^A-Za-z0-9._:-]/u.test(value)) {
+    throw new TypeError(`${name} is invalid`);
+  }
+  return value;
 }
 
 function snapshotGhostPlateFeedbackFact(value: unknown): ProductBrowserGhostPlateFeedbackFact {
@@ -1956,6 +2033,15 @@ function decodeRendererDiagnosticsResult(
     throw new TypeError('accepted renderer diagnostics cannot include diagnostic');
   }
   return Object.freeze({ accepted: record.accepted, ...fault, runtime, ...(diagnostic === undefined ? {} : { diagnostic }) });
+}
+
+function decodeBrowserDiagnosticsResult(value: unknown): ProductBrowserDiagnosticsResult {
+  const record = requireRecord(value, 'browser diagnostics result');
+  requireKnownFields(record, ['accepted', 'reported'], 'browser diagnostics result');
+  if (record.accepted !== true || !Number.isSafeInteger(record.reported) || (record.reported as number) < 1 || (record.reported as number) > 10) {
+    throw new TypeError('browser diagnostics result is invalid');
+  }
+  return Object.freeze({ accepted: true, reported: record.reported as number });
 }
 
 function decodeAnimationFeedbackResult(

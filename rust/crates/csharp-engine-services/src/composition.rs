@@ -301,13 +301,17 @@ impl EngineServiceSet {
         authored_content.bind_content_store(&mut content_store);
         let voxel_scene_presentation =
             RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        let mut appearance = crate::appearance::create(catalog.0, content_resources.clone());
+        appearance.bind_diagnostics_sink(diagnostics_sink.clone());
+        let mut audio = RuntimeAudioBridge::new(content_resources);
+        audio.bind_diagnostics_sink(diagnostics_sink.clone());
         Ok(Self {
             diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::new(diagnostics_sink),
-            appearance: crate::appearance::create(catalog.0, content_resources.clone()),
+            appearance,
             content,
             authored_content,
             content_store,
-            audio: RuntimeAudioBridge::new(content_resources),
+            audio,
             camera_view: RuntimeCameraViewBridge::new(),
             dynamics,
             spatial,

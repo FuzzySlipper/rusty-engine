@@ -313,6 +313,29 @@ pub struct NativePresentationParticleDescriptor {
     pub collision_volumes_len: usize,
 }
 
+/// Direct particle emissions are cosmetic. Valid one-shots return an
+/// admission fact instead of turning ordinary bounded-pressure into a product
+/// callback failure. Invalid descriptors and duplicate signal identities
+/// remain strict ABI errors.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePresentationParticleEmissionOutcome {
+    Admitted = 1,
+    Dropped = 2,
+    Clamped = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePresentationParticleEmissionReceipt {
+    pub outcome: NativePresentationParticleEmissionOutcome,
+    pub requested_particles: u32,
+    pub admitted_particles: u32,
+    /// Retained-emitter reservation at the time of this direct emission.
+    pub reserved_particles: u32,
+    pub max_reserved_particles: u32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativePresentationFactsReadout {

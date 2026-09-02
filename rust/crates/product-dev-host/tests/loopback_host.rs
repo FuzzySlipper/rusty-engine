@@ -476,6 +476,37 @@ fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
 }
 
 #[test]
+fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
+    let host = start_debug();
+    let origin = host.origin();
+    let report_body = r#"{"hostState":"failed","runtimeProgress":"9","transportState":"closed","outputState":"closed","lastRendererSequence":"60","rendererObservationAgeMs":"100","firstTerminal":{"code":"BROWSER_HOST_TRANSPORT_FAILED","message":"transport closed"},"pageEvents":[]}"#;
+    let reported = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/browser-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{report_body}",
+            report_body.len(),
+        ),
+    );
+    assert!(reported.starts_with("HTTP/1.1 200 OK\r\n"), "{reported}");
+    let read = request(
+        &origin,
+        "POST /__rusty/product/runtime/diagnostics/read HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+    );
+    assert!(read.starts_with("HTTP/1.1 200 OK\r\n"), "{read}");
+    assert!(read.contains("\"BROWSER_HOST_TRANSPORT_FAILED\""), "{read}");
+    assert!(
+        read.contains("\"transport\",\"value\":\"closed\""),
+        "{read}"
+    );
+    assert!(
+        read.contains("\"renderer-sequence\",\"value\":\"60\""),
+        "{read}"
+    );
+    assert!(read.contains("\"nextCursor\":\"2\""), "{read}");
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn rejects_nonclosed_routes_headers_bodies_and_canonical_integers() {
     let host = start();
     let origin = host.origin();

@@ -25,9 +25,34 @@ export interface LiveDebugResult {
   readonly message: string;
 }
 
+/** Bounded process-owned diagnostic event; it is not the presentation stream. */
+export interface LiveDebugDiagnosticEvent {
+  readonly sequence: string;
+  readonly monotonicNanoseconds: string;
+  readonly severity: 'debug' | 'info' | 'warning' | 'error';
+  readonly disposition: 'accepted' | 'rejected-recoverable' | 'degraded' | 'resync-required' | 'terminal';
+  readonly source: string;
+  readonly code: string;
+  readonly message: string;
+  readonly fields?: readonly { readonly key: string; readonly value: string }[];
+}
+
+export interface LiveDebugDiagnosticsBatch {
+  readonly events: readonly LiveDebugDiagnosticEvent[];
+  readonly floorSequence: string;
+  readonly throughSequence: string;
+  readonly nextCursor: string;
+  readonly readMonotonicNanoseconds: string;
+  readonly lagged: boolean;
+  readonly warningCount: string;
+  readonly errorCount: string;
+  readonly droppedCount: string;
+}
+
 export interface LiveDebugTransport {
   catalog(signal?: AbortSignal): Promise<LiveDebugCatalog>;
   execute(command: string, signal?: AbortSignal): Promise<LiveDebugResult>;
+  diagnostics?(after?: string, signal?: AbortSignal): Promise<LiveDebugDiagnosticsBatch>;
 }
 
 export interface LiveDebugHttpTransportOptions {
@@ -38,6 +63,8 @@ export interface LiveDebugHttpTransportOptions {
 
 const CATALOG_PATH = '/__rusty/product/runtime/debug/catalog';
 const EXECUTE_PATH = '/__rusty/product/runtime/debug/execute';
+const DIAGNOSTICS_READ_PATH = '/__rusty/product/runtime/diagnostics/read';
+const U64_MAX = 18_446_744_073_709_551_615n;
 
 /** Creates the default same-origin HTTP transport without owning UI state. */
 export function createLiveDebugHttpTransport(options: LiveDebugHttpTransportOptions = {}): LiveDebugTransport {
@@ -59,6 +86,16 @@ export function createLiveDebugHttpTransport(options: LiveDebugHttpTransportOpti
       if (response.status === 200) return { succeeded: true, message };
       if (response.status === 422) return { succeeded: false, message };
       throw new Error(message || `Live-debug host request failed (${response.status}).`);
+    },
+    async diagnostics(after?: string, signal?: AbortSignal): Promise<LiveDebugDiagnosticsBatch> {
+      if (after !== undefined && !canonicalU64(after)) {
+        throw new Error('Live-debug diagnostics cursor is invalid.');
+      }
+      const response = await request(url(DIAGNOSTICS_READ_PATH), {
+        method: 'POST', signal, headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(after === undefined ? {} : { after }),
+      });
+      return decodeDiagnosticsBatch(await requireSuccess(response));
     },
   };
 }
@@ -99,6 +136,86 @@ function decodeParameter(value: unknown): LiveDebugParameterDescriptor {
   const candidate = object(value);
   if (typeof candidate.name !== 'string' || typeof candidate.type !== 'string') throw new Error('Live-debug parameter descriptor is invalid.');
   return { name: candidate.name, type: candidate.type };
+}
+
+function decodeDiagnosticsBatch(value: unknown): LiveDebugDiagnosticsBatch {
+  const candidate = object(value);
+  if (!Array.isArray(candidate.events)
+    || !canonicalU64(candidate.floorSequence)
+    || !canonicalU64(candidate.throughSequence)
+    || !canonicalU64(candidate.nextCursor)
+    || !canonicalU64(candidate.readMonotonicNanoseconds)
+    || typeof candidate.lagged !== 'boolean'
+    || !canonicalU64(candidate.warningCount)
+    || !canonicalU64(candidate.errorCount)
+    || !canonicalU64(candidate.droppedCount)) {
+    throw new Error('Live-debug diagnostics response is invalid.');
+  }
+  return Object.freeze({
+    events: Object.freeze(candidate.events.map(decodeDiagnosticEvent)),
+    floorSequence: candidate.floorSequence,
+    throughSequence: candidate.throughSequence,
+    nextCursor: candidate.nextCursor,
+    readMonotonicNanoseconds: candidate.readMonotonicNanoseconds,
+    lagged: candidate.lagged,
+    warningCount: candidate.warningCount,
+    errorCount: candidate.errorCount,
+    droppedCount: candidate.droppedCount,
+  });
+}
+
+function decodeDiagnosticEvent(value: unknown): LiveDebugDiagnosticEvent {
+  const candidate = object(value);
+  const severity = candidate.severity;
+  const disposition = candidate.disposition;
+  if (!canonicalU64(candidate.sequence) || !canonicalU64(candidate.monotonicNanoseconds)
+    || !['debug', 'info', 'warning', 'error'].includes(String(severity))
+    || !['accepted', 'rejected-recoverable', 'degraded', 'resync-required', 'terminal'].includes(String(disposition))
+    || typeof candidate.source !== 'string' || typeof candidate.code !== 'string' || typeof candidate.message !== 'string') {
+    throw new Error('Live-debug diagnostic event is invalid.');
+  }
+  const fields = candidate.fields === undefined ? undefined : decodeDiagnosticFields(candidate.fields);
+  return Object.freeze({
+    sequence: candidate.sequence,
+    monotonicNanoseconds: candidate.monotonicNanoseconds,
+    severity: severity as LiveDebugDiagnosticEvent['severity'],
+    disposition: disposition as LiveDebugDiagnosticEvent['disposition'],
+    source: candidate.source,
+    code: candidate.code,
+    message: candidate.message,
+    ...(fields === undefined ? {} : { fields }),
+  });
+}
+
+function decodeDiagnosticFields(value: unknown): readonly { readonly key: string; readonly value: string }[] {
+  if (!Array.isArray(value) || value.length > 8) throw new Error('Live-debug diagnostic fields are invalid.');
+  return Object.freeze(value.map((field) => {
+    const candidate = object(field);
+    if (typeof candidate.key !== 'string' || typeof candidate.value !== 'string') {
+      throw new Error('Live-debug diagnostic field is invalid.');
+    }
+    return Object.freeze({ key: candidate.key, value: candidate.value });
+  }));
+}
+
+/** Computes a browser renderer observation age from the process-owned sink clock. */
+export function diagnosticRendererObservationAgeMilliseconds(
+  batch: LiveDebugDiagnosticsBatch,
+  event: LiveDebugDiagnosticEvent,
+): number | null {
+  if (event.source !== 'browser-host') return null;
+  const encodedAge = event.fields?.find((field) => field.key === 'renderer-age-ms')?.value;
+  if (encodedAge === undefined || !/^\d+$/u.test(encodedAge)) return null;
+  const reportedAge = BigInt(encodedAge);
+  const elapsed = BigInt(batch.readMonotonicNanoseconds) - BigInt(event.monotonicNanoseconds);
+  const age = reportedAge + (elapsed > 0n ? elapsed / 1_000_000n : 0n);
+  return age > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(age);
+}
+
+function canonicalU64(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^(?:0|[1-9]\d*)$/u.test(value)
+    && BigInt(value) <= U64_MAX;
 }
 
 function object(value: unknown): Record<string, unknown> {

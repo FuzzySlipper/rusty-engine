@@ -31,8 +31,16 @@ export type ProductBrowserLifecycleOperation = {
     readonly kind: 'report-fault';
 };
 export type ProductBrowserRuntimeOperationKind = ProductBrowserLifecycleOperation['kind'] | 'connect' | 'advance-realtime' | 'admit-demand-step' | 'admit-external-step';
+/**
+ * Closed Engine recovery posture for a completed local-host operation. The
+ * accompanying stable code identifies the exact condition; callers must not
+ * infer recovery policy from diagnostics.
+ */
+export type ProductBrowserHostFaultDisposition = 'accepted' | 'rejected-recoverable' | 'degraded' | 'resync-required' | 'terminal';
 export interface ProductBrowserRuntimeOperationResult {
     readonly accepted: boolean;
+    readonly code: string;
+    readonly disposition: ProductBrowserHostFaultDisposition;
     readonly operation: ProductBrowserRuntimeOperationKind;
     readonly binding?: RustyApplicationRuntimeIdentity;
     /** Engine-owned cursor after lifecycle input clear/rebind work. */
@@ -42,6 +50,8 @@ export interface ProductBrowserRuntimeOperationResult {
 }
 export interface ProductBrowserRuntimeInputResult {
     readonly accepted: boolean;
+    readonly code: string;
+    readonly disposition: ProductBrowserHostFaultDisposition;
     readonly count: number;
     readonly binding?: RustyApplicationRuntimeIdentity;
     readonly readout?: ProductBrowserRuntimeReadout;
@@ -75,6 +85,8 @@ export interface ProductBrowserAudioFeedback {
 }
 export interface ProductBrowserAudioFeedbackResult {
     readonly accepted: boolean;
+    readonly code: string;
+    readonly disposition: ProductBrowserHostFaultDisposition;
     /** The exact runtime binding which accepted or rejected this fixed report. */
     readonly runtime: RustyApplicationRuntimeIdentity;
     /** The accepted submitted boundary; absent when the fixed report had no facts. */
@@ -131,6 +143,8 @@ export interface ProductBrowserAnimationFeedback {
 }
 export interface ProductBrowserAnimationFeedbackResult {
     readonly accepted: boolean;
+    readonly code: string;
+    readonly disposition: ProductBrowserHostFaultDisposition;
     readonly runtime: RustyApplicationRuntimeIdentity;
     readonly acceptedThroughFactId?: string;
     readonly diagnostic?: string;
@@ -159,6 +173,8 @@ export interface ProductBrowserGhostPlateFeedback {
 }
 export interface ProductBrowserGhostPlateFeedbackResult {
     readonly accepted: boolean;
+    readonly code: string;
+    readonly disposition: ProductBrowserHostFaultDisposition;
     readonly runtime: RustyApplicationRuntimeIdentity;
     readonly diagnostic?: string;
 }
@@ -168,6 +184,8 @@ export interface ProductBrowserRendererDiagnosticsFeedback {
 }
 export interface ProductBrowserRendererDiagnosticsFeedbackResult {
     readonly accepted: boolean;
+    readonly code: string;
+    readonly disposition: ProductBrowserHostFaultDisposition;
     readonly runtime: RustyApplicationRuntimeIdentity;
     readonly diagnostic?: string;
 }
@@ -190,6 +208,8 @@ export interface ProductBrowserTimelineCompletion {
 }
 export interface ProductBrowserTimelineCompletionResult {
     readonly accepted: boolean;
+    readonly code: string;
+    readonly disposition: ProductBrowserHostFaultDisposition;
     /** Canonical decimal u64 ticket echoed by runtime-timeline. */
     readonly ticket: string;
     readonly binding?: RustyApplicationRuntimeIdentity;
@@ -250,6 +270,28 @@ export interface ProductBrowserRuntimeTerminalFailure {
     readonly kind: 'output-lag' | 'runtime-failure';
     readonly diagnostic: string;
 }
+/** Fixed health facts copied into the Engine diagnostic ring; never console data. */
+export interface ProductBrowserDiagnosticsReport {
+    readonly hostState: 'loading' | 'ready' | 'failed' | 'disposed';
+    readonly runtimeProgress: string;
+    readonly transportState: 'open' | 'closed';
+    readonly outputState: 'open' | 'closed';
+    readonly lastRendererSequence?: string;
+    readonly rendererObservationAgeMs?: string;
+    readonly firstTerminal?: {
+        readonly code: string;
+        readonly message: string;
+    };
+    readonly pageEvents: readonly {
+        readonly kind: 'error' | 'unhandled-rejection';
+        readonly code: string;
+        readonly message: string;
+    }[];
+}
+export interface ProductBrowserDiagnosticsResult {
+    readonly accepted: boolean;
+    readonly reported: number;
+}
 export type ProductBrowserRuntimeTerminalFailureListener = (failure: ProductBrowserRuntimeTerminalFailure) => void;
 /**
  * A source-linked local runtime adapter. The implementation may be a Rust
@@ -269,6 +311,7 @@ export interface ProductBrowserRuntimeAdapter {
     readonly reportAnimationFeedback: (feedback: ProductBrowserAnimationFeedback) => Promise<ProductBrowserAnimationFeedbackResult>;
     readonly reportGhostPlateFeedback: (feedback: ProductBrowserGhostPlateFeedback) => Promise<ProductBrowserGhostPlateFeedbackResult>;
     readonly reportRendererDiagnostics?: (feedback: ProductBrowserRendererDiagnosticsFeedback) => Promise<ProductBrowserRendererDiagnosticsFeedbackResult>;
+    readonly reportBrowserDiagnostics?: (report: ProductBrowserDiagnosticsReport) => Promise<ProductBrowserDiagnosticsResult>;
     readonly advanceRealtime: (observedTimeNs: string) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly admitDemandStep?: () => Promise<ProductBrowserRuntimeOperationResult>;
     readonly admitExternalStep?: (step: string) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -288,6 +331,7 @@ export interface ProductBrowserRuntimeTransport {
     readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
     readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
     readonly reportRendererDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportRendererDiagnostics']>;
+    readonly reportBrowserDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportBrowserDiagnostics']>;
     readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
     readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
     readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -410,6 +454,7 @@ export declare function createProductBrowserRendererDiagnosticsReporter(options:
     readonly renderer: Pick<RustyApplicationHost['renderer'], 'diagnosticsReadout'>;
     readonly report: NonNullable<ProductBrowserRuntimeTransport['reportRendererDiagnostics']>;
     readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+    readonly onObservation?: (renderSequence: number) => void;
 }): ProductBrowserRendererDiagnosticsReporter;
 /** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
 export declare function flushProductBrowserAudioFeedbackBeforeUpdate<T>(flush: () => Promise<void>, update: () => Promise<T>): Promise<T>;

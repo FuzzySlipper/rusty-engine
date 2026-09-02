@@ -279,6 +279,23 @@ export interface ProductBrowserRuntimeTerminalFailure {
   readonly diagnostic: string;
 }
 
+/** Fixed health facts copied into the Engine diagnostic ring; never console data. */
+export interface ProductBrowserDiagnosticsReport {
+  readonly hostState: 'loading' | 'ready' | 'failed' | 'disposed';
+  readonly runtimeProgress: string;
+  readonly transportState: 'open' | 'closed';
+  readonly outputState: 'open' | 'closed';
+  readonly lastRendererSequence?: string;
+  readonly rendererObservationAgeMs?: string;
+  readonly firstTerminal?: { readonly code: string; readonly message: string };
+  readonly pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[];
+}
+
+export interface ProductBrowserDiagnosticsResult {
+  readonly accepted: boolean;
+  readonly reported: number;
+}
+
 export type ProductBrowserRuntimeTerminalFailureListener = (
   failure: ProductBrowserRuntimeTerminalFailure,
 ) => void;
@@ -313,6 +330,9 @@ export interface ProductBrowserRuntimeAdapter {
   readonly reportRendererDiagnostics?: (
     feedback: ProductBrowserRendererDiagnosticsFeedback,
   ) => Promise<ProductBrowserRendererDiagnosticsFeedbackResult>;
+  readonly reportBrowserDiagnostics?: (
+    report: ProductBrowserDiagnosticsReport,
+  ) => Promise<ProductBrowserDiagnosticsResult>;
   readonly advanceRealtime: (
     observedTimeNs: string,
   ) => Promise<ProductBrowserRuntimeOperationResult>;
@@ -343,6 +363,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
   readonly reportGhostPlateFeedback: ProductBrowserRuntimeAdapter['reportGhostPlateFeedback'];
   readonly reportRendererDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportRendererDiagnostics']>;
+  readonly reportBrowserDiagnostics?: NonNullable<ProductBrowserRuntimeAdapter['reportBrowserDiagnostics']>;
   readonly advanceRealtime: ProductBrowserRuntimeAdapter['advanceRealtime'];
   readonly admitDemandStep?: NonNullable<ProductBrowserRuntimeAdapter['admitDemandStep']>;
   readonly admitExternalStep?: NonNullable<ProductBrowserRuntimeAdapter['admitExternalStep']>;
@@ -369,6 +390,9 @@ export function createProductBrowserRuntimeTransport(
   requireFunction(adapter.reportGhostPlateFeedback, 'reportGhostPlateFeedback');
   if (adapter.reportRendererDiagnostics !== undefined) {
     requireFunction(adapter.reportRendererDiagnostics, 'reportRendererDiagnostics');
+  }
+  if (adapter.reportBrowserDiagnostics !== undefined) {
+    requireFunction(adapter.reportBrowserDiagnostics, 'reportBrowserDiagnostics');
   }
   requireFunction(adapter.advanceRealtime, 'advanceRealtime');
   if (adapter.admitDemandStep !== undefined) {
@@ -398,6 +422,9 @@ export function createProductBrowserRuntimeTransport(
     ...(adapter.reportRendererDiagnostics === undefined
       ? {}
       : { reportRendererDiagnostics: adapter.reportRendererDiagnostics }),
+    ...(adapter.reportBrowserDiagnostics === undefined
+      ? {}
+      : { reportBrowserDiagnostics: adapter.reportBrowserDiagnostics }),
     advanceRealtime: adapter.advanceRealtime,
     ...(adapter.admitDemandStep === undefined ? {} : { admitDemandStep: adapter.admitDemandStep }),
     ...(adapter.admitExternalStep === undefined ? {} : { admitExternalStep: adapter.admitExternalStep }),
@@ -816,6 +843,7 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
   readonly renderer: Pick<RustyApplicationHost['renderer'], 'diagnosticsReadout'>;
   readonly report: NonNullable<ProductBrowserRuntimeTransport['reportRendererDiagnostics']>;
   readonly initialRuntime?: RustyApplicationRuntimeIdentity;
+  readonly onObservation?: (renderSequence: number) => void;
 }): ProductBrowserRendererDiagnosticsReporter {
   let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
   let lastRenderSequence: number | null = null;
@@ -838,6 +866,7 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
       throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'renderer diagnostics were rejected by the runtime');
     }
     lastRenderSequence = snapshot.submission.renderSequence;
+    options.onObservation?.(snapshot.submission.renderSequence);
   };
   return Object.freeze({ bindRuntime, flush });
 }
@@ -885,6 +914,10 @@ export async function mountProductBrowserHost(
   let failure: ProductBrowserHostError | null = null;
   let transportClosed = false;
   let runtimeProgress = 0;
+  let lastRendererSequence: string | null = null;
+  let lastRendererObservationAtMs: number | null = null;
+  let lastDiagnosticsStatusKey: string | null = null;
+  let terminalDiagnosticsReported = false;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
@@ -943,7 +976,10 @@ export async function mountProductBrowserHost(
   // These are deliberately small, product-neutral observation markers. They
   // let an outer host prove that a mounted runtime is still making accepted
   // progress without inspecting a product's UI, facts, or content vocabulary.
-  const publishHealth = (): void => {
+  const publishHealth = (
+    reportToTransport = true,
+    pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[] = [],
+  ): void => {
     const document = options.root.ownerDocument;
     const roots = [options.root, document.body].filter((root): root is HTMLElement => root !== null);
     for (const root of roots) {
@@ -955,6 +991,35 @@ export async function mountProductBrowserHost(
       } else {
         root.dataset['rustyProductRuntimeFailure'] = boundedDiagnostic(failure.message);
       }
+    }
+    const now = Date.now();
+    const terminal = failure === null
+      ? undefined
+      : Object.freeze({
+        code: `BROWSER_HOST_${failure.code.toUpperCase()}`,
+        message: boundedDiagnostic(failure.message),
+      });
+    const includeTerminal = terminal !== undefined && !terminalDiagnosticsReported;
+    const hostState = state === 'starting' ? 'loading' : state;
+    const statusKey = `${hostState}/${transportClosed ? 'closed' : 'open'}/${transportClosed ? 'closed' : 'open'}`;
+    const shouldReport = reportToTransport && transport.reportBrowserDiagnostics !== undefined
+      && (includeTerminal || pageEvents.length > 0 || statusKey !== lastDiagnosticsStatusKey);
+    if (shouldReport) {
+      lastDiagnosticsStatusKey = statusKey;
+      if (includeTerminal) terminalDiagnosticsReported = true;
+      const age = lastRendererObservationAtMs === null
+        ? undefined
+        : String(Math.max(0, now - lastRendererObservationAtMs));
+      void transport.reportBrowserDiagnostics(Object.freeze({
+        hostState,
+        runtimeProgress: String(runtimeProgress),
+        transportState: transportClosed ? 'closed' : 'open',
+        outputState: transportClosed ? 'closed' : 'open',
+        ...(lastRendererSequence === null ? {} : { lastRendererSequence }),
+        ...(age === undefined ? {} : { rendererObservationAgeMs: age }),
+        ...(includeTerminal ? { firstTerminal: terminal } : {}),
+        pageEvents: Object.freeze([...pageEvents]),
+      })).catch(() => undefined);
     }
   };
 
@@ -989,12 +1054,15 @@ export async function mountProductBrowserHost(
     if (failure === null) {
       failure = error;
       if (state !== 'disposed') state = 'failed';
-      publishHealth();
+      // The DOM remains current now; the typed terminal report waits until
+      // closeTransport has recorded the durable closed/closed state.
+      publishHealth(false);
     }
     return error;
   };
 
   let cadence: ProductBrowserCadence | null = null;
+  let removePageDiagnosticListeners: (() => void) | null = null;
   const closeTransport = (): void => {
     if (transportClosed) return;
     transportClosed = true;
@@ -1004,6 +1072,11 @@ export async function mountProductBrowserHost(
     unsubscribeTerminalFailures = null;
     unsubscribeOutputs?.();
     unsubscribeOutputs = null;
+    removePageDiagnosticListeners?.();
+    removePageDiagnosticListeners = null;
+    // This exact report route remains callable after disposal. Send after the
+    // state transition so stopped-host diagnostics never claim open streams.
+    publishHealth();
     void Promise.resolve(transport.dispose()).catch((cause: unknown) => {
       reportFailure(cause, 'transport_failed');
     });
@@ -1017,6 +1090,33 @@ export async function mountProductBrowserHost(
     closeTransport();
     return error;
   };
+
+  const pageWindow = options.root.ownerDocument.defaultView;
+  if (pageWindow !== null) {
+    const reportPageEvent = (
+      kind: 'error' | 'unhandled-rejection',
+      code: string,
+      message: string,
+    ): void => {
+      publishHealth(true, [Object.freeze({ kind, code, message: boundedDiagnostic(message) })]);
+    };
+    const onError = (event: ErrorEvent): void => {
+      reportPageEvent('error', 'BROWSER_PAGE_ERROR', event.message || 'page error');
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent): void => {
+      const reason = event.reason;
+      const message = reason instanceof Error
+        ? reason.message
+        : typeof reason === 'string' ? reason : 'unhandled promise rejection';
+      reportPageEvent('unhandled-rejection', 'BROWSER_PAGE_UNHANDLED_REJECTION', message);
+    };
+    pageWindow.addEventListener('error', onError);
+    pageWindow.addEventListener('unhandledrejection', onUnhandledRejection);
+    removePageDiagnosticListeners = () => {
+      pageWindow.removeEventListener('error', onError);
+      pageWindow.removeEventListener('unhandledrejection', onUnhandledRejection);
+    };
+  }
 
   const flushRendererFeedback = async (): Promise<void> => {
     await audioFeedbackReporter?.flush();
@@ -1358,6 +1458,10 @@ export async function mountProductBrowserHost(
       rendererDiagnosticsReporter = createProductBrowserRendererDiagnosticsReporter({
         renderer: application.renderer,
         report: transport.reportRendererDiagnostics,
+        onObservation: (renderSequence) => {
+          lastRendererSequence = String(renderSequence);
+          lastRendererObservationAtMs = Date.now();
+        },
         ...(options.runtimeInput?.binding === undefined
           ? {}
           : { initialRuntime: options.runtimeInput.binding }),
@@ -1509,12 +1613,15 @@ export async function mountProductBrowserHost(
       if (state === 'disposed') return;
       state = 'disposed';
       started = false;
+      transportClosed = true;
       publishHealth();
       cadence?.dispose();
       unsubscribeTerminalFailures?.();
       unsubscribeTerminalFailures = null;
       unsubscribeOutputs?.();
       unsubscribeOutputs = null;
+      removePageDiagnosticListeners?.();
+      removePageDiagnosticListeners = null;
       await queue.settle();
       await rendererOutputTail;
       const failures: unknown[] = [];

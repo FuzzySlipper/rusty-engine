@@ -75,11 +75,12 @@ fn run_repl(transport: &impl LiveDebugTransport) -> Result<i32, String> {
     };
     let mut history = VecDeque::with_capacity(MAX_SCROLLBACK);
     let mut scrollback = VecDeque::with_capacity(MAX_SCROLLBACK);
+    let mut diagnostics_cursor = None;
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     writeln!(
         stdout,
-        "Rusty live debug. Type `help`, `complete <prefix>`, `history`, `scrollback`, or `exit`."
+        "Rusty live debug. Type `help`, `complete <prefix>`, `diagnostics [cursor]`, `history`, `scrollback`, or `exit`."
     )
     .map_err(|error| error.to_string())?;
     loop {
@@ -120,6 +121,28 @@ fn run_repl(transport: &impl LiveDebugTransport) -> Result<i32, String> {
         }
         if let Some(prefix) = command.strip_prefix("complete ") {
             print_catalog(&mut stdout, catalog.as_ref(), Some(prefix.trim()))?;
+            continue;
+        }
+        if command == "diagnostics" || command.starts_with("diagnostics ") {
+            let supplied = command
+                .strip_prefix("diagnostics")
+                .unwrap_or_default()
+                .trim();
+            let after = if supplied.is_empty() {
+                diagnostics_cursor
+            } else {
+                if supplied
+                    .parse::<u64>()
+                    .ok()
+                    .is_none_or(|value| value.to_string() != supplied)
+                {
+                    return Err("diagnostics cursor must be a canonical u64".to_owned());
+                }
+                Some(supplied.to_owned())
+            };
+            let response = transport.diagnostics(after)?;
+            diagnostics_cursor = Some(response.next_cursor);
+            writeln!(stdout, "{}", response.body).map_err(|error| error.to_string())?;
             continue;
         }
         if command.as_bytes().len() > MAX_COMMAND_BYTES {
@@ -166,6 +189,7 @@ fn print_catalog(
 trait LiveDebugTransport {
     fn catalog(&self) -> Result<CatalogResponse, String>;
     fn execute(&self, command: &str) -> Result<ExecuteResponse, String>;
+    fn diagnostics(&self, after: Option<String>) -> Result<DiagnosticsResponse, String>;
 }
 
 struct HttpLiveDebugTransport {
@@ -269,6 +293,37 @@ impl LiveDebugTransport for HttpLiveDebugTransport {
             message: body,
         })
     }
+
+    fn diagnostics(&self, after: Option<String>) -> Result<DiagnosticsResponse, String> {
+        let body = after.map_or_else(
+            || "{}".to_owned(),
+            |cursor| format!(r#"{{"after":"{cursor}"}}"#),
+        );
+        let (status, response) = self.request(
+            "POST",
+            "/__rusty/product/runtime/diagnostics/read",
+            Some((&body, "application/json")),
+        )?;
+        if status != 200 {
+            return Err(format!("diagnostics request failed ({status}): {response}"));
+        }
+        let decoded: DiagnosticsWire = serde_json::from_str(&response)
+            .map_err(|_| "diagnostics response is invalid".to_owned())?;
+        let _ = (
+            &decoded.events,
+            decoded.floor_sequence,
+            decoded.through_sequence,
+            decoded.read_monotonic_nanoseconds,
+            decoded.lagged,
+            decoded.warning_count,
+            decoded.error_count,
+            decoded.dropped_count,
+        );
+        Ok(DiagnosticsResponse {
+            next_cursor: decoded.next_cursor,
+            body: response,
+        })
+    }
 }
 
 enum CatalogResponse {
@@ -278,6 +333,10 @@ enum CatalogResponse {
 enum ExecuteResponse {
     Completed { succeeded: bool, message: String },
     TransportFailure { status: u16, message: String },
+}
+struct DiagnosticsResponse {
+    next_cursor: String,
+    body: String,
 }
 
 #[derive(Deserialize)]
@@ -299,6 +358,19 @@ struct ParameterDescriptor {
     name: String,
     #[serde(rename = "type")]
     type_name: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DiagnosticsWire {
+    next_cursor: String,
+    events: Vec<serde_json::Value>,
+    floor_sequence: String,
+    through_sequence: String,
+    read_monotonic_nanoseconds: String,
+    lagged: bool,
+    warning_count: String,
+    error_count: String,
+    dropped_count: String,
 }
 enum Arguments {
     Help,

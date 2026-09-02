@@ -119,8 +119,9 @@ pub(crate) unsafe extern "C" fn destroy_billboard(
 pub(crate) unsafe extern "C" fn emit_particles(
     context: *mut c_void,
     request: *const NativePresentationParticleDescriptor,
+    result: *mut NativePresentationParticleEmissionReceipt,
 ) -> i32 {
-    if request.is_null() {
+    if request.is_null() || result.is_null() {
         return 0;
     }
     let Some(bridge) = (unsafe { bridge(context) }) else {
@@ -128,7 +129,10 @@ pub(crate) unsafe extern "C" fn emit_particles(
     };
     let request = unsafe { &*request };
     match bridge.presentation_emit_particles(request.signal_id, request) {
-        Ok(()) => ABI_OK,
+        Ok(receipt) => {
+            unsafe { *result = receipt };
+            ABI_OK
+        }
         Err(error) => {
             bridge.record_callback_error(error);
             0

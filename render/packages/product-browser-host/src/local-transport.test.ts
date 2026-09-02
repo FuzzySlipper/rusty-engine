@@ -693,3 +693,27 @@ test('renderer diagnostics use their own 256 KiB snapshot budget', async () => {
   assert.equal(requestBodies.length, 1);
   adapter.dispose();
 });
+
+test('terminal browser diagnostics remain postable after the output transport closes', async () => {
+  const requestBodies: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as unknown);
+      return response({ accepted: true, reported: 2 });
+    },
+    eventSource: FakeEventSource,
+  });
+  adapter.dispose();
+  await adapter.reportBrowserDiagnostics?.({
+    hostState: 'failed', runtimeProgress: '9', transportState: 'closed', outputState: 'closed',
+    lastRendererSequence: '60', rendererObservationAgeMs: '100',
+    firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'transport closed' },
+    pageEvents: [],
+  });
+  assert.deepEqual(requestBodies, [{
+    hostState: 'failed', runtimeProgress: '9', transportState: 'closed', outputState: 'closed',
+    lastRendererSequence: '60', rendererObservationAgeMs: '100',
+    firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'transport closed' },
+    pageEvents: [],
+  }]);
+});

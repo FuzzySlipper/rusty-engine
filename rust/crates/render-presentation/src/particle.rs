@@ -292,6 +292,26 @@ pub struct ParticleProjectionReadout {
     pub diagnostics: Vec<ParticleProjectionDiagnostic>,
 }
 
+/// Bounded admission fact for one direct cosmetic burst. Direct bursts do not
+/// reserve retained-emitter capacity, but are limited by the currently free
+/// retained-particle budget so the product can make a deterministic cosmetic
+/// decision without losing its callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParticleEmissionAdmission {
+    pub outcome: ParticleEmissionAdmissionOutcome,
+    pub requested_particles: u32,
+    pub admitted_particles: u32,
+    pub reserved_particles: u32,
+    pub max_reserved_particles: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParticleEmissionAdmissionOutcome {
+    Admitted,
+    Dropped,
+    Clamped,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParticleProjectionLimits {
     pub max_active_emitters: u32,
@@ -345,6 +365,78 @@ impl ParticleProjector {
     ) -> Result<PresentationOp, ParticleProjectionDiagnostic> {
         let mut projected = self.project_batch(assets, vec![(meta, op)])?;
         Ok(projected.pop().expect("one input produces one operation"))
+    }
+
+    /// Projects a direct cosmetic burst with an explicit admission receipt.
+    /// Descriptor/identity violations intentionally retain the strict
+    /// projector behavior; only ordinary budget pressure is recoverable.
+    pub fn project_optional_emit(
+        &mut self,
+        assets: &impl PresentationAssetLookup,
+        meta: PresentationOpMeta,
+        signal_id: String,
+        descriptor: ParticleEmitterDescriptor,
+    ) -> Result<(ParticleEmissionAdmission, Option<PresentationOp>), ParticleProjectionDiagnostic>
+    {
+        let mut staged = self.clone();
+        let requested_particles = descriptor.burst_count;
+        let reserved_particles = staged.reserved_particles();
+        let available_particles = staged
+            .limits
+            .max_reserved_particles
+            .saturating_sub(reserved_particles);
+
+        if signal_id.is_empty() || requested_particles == 0 {
+            return Err(self.retain_optional_emit_diagnostic(
+                ParticleProjectionDiagnosticCode::InvalidDescriptor,
+                meta.sequence,
+            ));
+        }
+        if staged.seen_signals.contains(&signal_id) {
+            return Err(self.retain_optional_emit_diagnostic(
+                ParticleProjectionDiagnosticCode::DuplicateSignal,
+                meta.sequence,
+            ));
+        }
+        if let Err(code) = staged.validate_descriptor(assets, &descriptor) {
+            return Err(self.retain_optional_emit_diagnostic(code, meta.sequence));
+        }
+
+        let mut admitted_descriptor = descriptor;
+        let (outcome, admitted_particles) = if available_particles == 0 {
+            (ParticleEmissionAdmissionOutcome::Dropped, 0)
+        } else if requested_particles > available_particles {
+            admitted_descriptor.burst_count = available_particles;
+            (
+                ParticleEmissionAdmissionOutcome::Clamped,
+                available_particles,
+            )
+        } else {
+            (
+                ParticleEmissionAdmissionOutcome::Admitted,
+                requested_particles,
+            )
+        };
+        let admission = ParticleEmissionAdmission {
+            outcome,
+            requested_particles,
+            admitted_particles,
+            reserved_particles,
+            max_reserved_particles: staged.limits.max_reserved_particles,
+        };
+        if admitted_particles == 0 {
+            return Ok((admission, None));
+        }
+
+        staged.seen_signals.insert(signal_id.clone());
+        staged.track_visual(&admitted_descriptor.visual);
+        staged.emitted_bursts = staged.emitted_bursts.saturating_add(1);
+        let op = ParticleProjectionOp::Emit {
+            signal_id,
+            descriptor: admitted_descriptor,
+        };
+        *self = staged;
+        Ok((admission, Some(PresentationOp::Particle { meta, op })))
     }
 
     pub fn project_batch(
@@ -403,6 +495,21 @@ impl ParticleProjector {
             self.diagnostics.remove(0);
         }
         self.diagnostics.push(diagnostic);
+    }
+
+    fn retain_optional_emit_diagnostic(
+        &mut self,
+        code: ParticleProjectionDiagnosticCode,
+        sequence: u32,
+    ) -> ParticleProjectionDiagnostic {
+        let diagnostic = ParticleProjectionDiagnostic {
+            code,
+            sequence,
+            handle: None,
+            message: diagnostic_message(code).to_string(),
+        };
+        self.retain_diagnostic(diagnostic.clone());
+        diagnostic
     }
 
     fn validate_and_apply(

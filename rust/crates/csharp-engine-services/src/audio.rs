@@ -1,5 +1,6 @@
+use product_dev_host::ProductDevLog;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::c_void,
     sync::Arc,
 };
@@ -139,6 +140,8 @@ pub(crate) struct RuntimeAudioBridge {
     renderer_evicted_fact_count: u64,
     local_evicted_fact_count: u64,
     accepted_through_fact_id: Option<u64>,
+    diagnostics_sink: Option<ProductDevLog>,
+    reported_recoverable_codes: BTreeSet<&'static str>,
 }
 
 impl RuntimeAudioBridge {
@@ -161,6 +164,8 @@ impl RuntimeAudioBridge {
             renderer_evicted_fact_count: 0,
             local_evicted_fact_count: 0,
             accepted_through_fact_id: None,
+            diagnostics_sink: None,
+            reported_recoverable_codes: BTreeSet::new(),
         }
     }
 
@@ -217,6 +222,10 @@ impl RuntimeAudioBridge {
         self.accepted_through_fact_id = None;
     }
 
+    pub(crate) fn bind_diagnostics_sink(&mut self, sink: ProductDevLog) {
+        self.diagnostics_sink = Some(sink);
+    }
+
     pub(crate) fn begin_call(&mut self) {
         self.staged = Some(RuntimeAudioCall {
             state: self.state.clone(),
@@ -264,6 +273,48 @@ impl RuntimeAudioBridge {
                 "audio service was called outside a product call",
             )
         })
+    }
+
+    fn staged_ref(&self) -> Result<&RuntimeAudioCall, CsharpEngineServicesError> {
+        self.staged.as_ref().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_CALL",
+                "audio service was called outside a product call",
+            )
+        })
+    }
+
+    fn optional_preload_receipt(
+        &self,
+        outcome: NativeAudioOptionalPreloadOutcome,
+        clip: NativeAudioClipHandle,
+    ) -> Result<NativeAudioOptionalPreloadReceipt, CsharpEngineServicesError> {
+        let state = &self.staged_ref()?.state;
+        let admitted_bytes = state
+            .clips
+            .values()
+            .map(|clip| clip.resource.bytes().len() as u64)
+            .sum();
+        Ok(NativeAudioOptionalPreloadReceipt {
+            outcome,
+            clip,
+            admitted_clip_count: state.clips.len() as u32,
+            admitted_bytes,
+            max_clip_count: MAX_AUDIO_RESOURCE_COUNT as u32,
+            max_total_bytes: MAX_AUDIO_RESOURCE_TOTAL_BYTES as u64,
+        })
+    }
+
+    fn report_optional_preload_skip(&mut self, code: &'static str, message: &'static str) {
+        if let Some(sink) = self.diagnostics_sink.as_ref() {
+            crate::diagnostics::publish_recoverable_once(
+                sink,
+                &mut self.reported_recoverable_codes,
+                "audio",
+                code,
+                message,
+            );
+        }
     }
 
     fn open_clip(
@@ -356,6 +407,112 @@ impl RuntimeAudioBridge {
             },
         );
         Ok(NativeAudioClipHandle { value: handle })
+    }
+
+    fn preload_optional(
+        &mut self,
+        request: &NativeAudioClipRequest,
+    ) -> Result<NativeAudioOptionalPreloadReceipt, CsharpEngineServicesError> {
+        let requested_path =
+            unsafe { borrowed_utf8(request.path.bytes, request.path.len, "audio resource path")? }
+                .to_owned();
+        let relative_path = requested_path
+            .strip_prefix("content/")
+            .unwrap_or(&requested_path)
+            .to_owned();
+        let browser_path = format!("content/{relative_path}");
+        if let Some((handle, _)) = self
+            .staged_ref()?
+            .state
+            .clips
+            .iter()
+            .find(|(_, clip)| clip.resource.path() == browser_path)
+        {
+            return self.optional_preload_receipt(
+                NativeAudioOptionalPreloadOutcome::Admitted,
+                NativeAudioClipHandle { value: *handle },
+            );
+        }
+        if self.selection_sealed {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_RESOURCE_SELECTION_CLOSED",
+                "audio clips must be selected during product Create",
+            ));
+        }
+        let Some(bytes) = self.content_resources.get(&relative_path).cloned() else {
+            let receipt = self.optional_preload_receipt(
+                NativeAudioOptionalPreloadOutcome::SkippedMissing,
+                NativeAudioClipHandle::default(),
+            )?;
+            self.report_optional_preload_skip(
+                "CSHARP_AUDIO_PRELOAD_SKIPPED_MISSING",
+                "optional audio preload was skipped because the content resource is absent",
+            );
+            return Ok(receipt);
+        };
+        // A present resource must be structurally admitted before an optional
+        // capacity receipt is allowed. Otherwise a corrupt oversized body
+        // could masquerade as routine budget pressure.
+        let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
+        let (admitted_clip_count, admitted_bytes) = {
+            let state = &self.staged_ref()?.state;
+            (
+                state.clips.len(),
+                state
+                    .clips
+                    .values()
+                    .map(|clip| clip.resource.bytes().len())
+                    .sum::<usize>(),
+            )
+        };
+        if bytes.len() > MAX_AUDIO_RESOURCE_BYTES
+            || admitted_clip_count == MAX_AUDIO_RESOURCE_COUNT
+            || admitted_bytes.saturating_add(bytes.len()) > MAX_AUDIO_RESOURCE_TOTAL_BYTES
+        {
+            let receipt = self.optional_preload_receipt(
+                NativeAudioOptionalPreloadOutcome::SkippedCapacity,
+                NativeAudioClipHandle::default(),
+            )?;
+            self.report_optional_preload_skip(
+                "CSHARP_AUDIO_PRELOAD_SKIPPED_CAPACITY",
+                "optional audio preload was skipped because the Engine preload budget is exhausted",
+            );
+            return Ok(receipt);
+        }
+        let asset = format!("audio/{relative_path}");
+        let content_hash = resource.content_hash().to_owned();
+        let handle = {
+            let staged = self.staged_mut()?;
+            let handle = staged.state.next_clip;
+            staged.state.next_clip = handle.checked_add(1).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_AUDIO_CLIP_HANDLE",
+                    "audio clip handles exhausted",
+                )
+            })?;
+            staged.state.assets.insert(
+                asset.clone(),
+                ResolvedRenderAsset {
+                    id: asset.clone(),
+                    kind: RenderAssetKind::Audio,
+                    content_hash: Some(content_hash.clone()),
+                    version: 0,
+                },
+            );
+            staged.state.clips.insert(
+                handle,
+                AudioClip {
+                    asset,
+                    content_hash,
+                    resource,
+                },
+            );
+            handle
+        };
+        self.optional_preload_receipt(
+            NativeAudioOptionalPreloadOutcome::Admitted,
+            NativeAudioClipHandle { value: handle },
+        )
     }
 
     fn descriptor(
@@ -819,6 +976,27 @@ pub(crate) unsafe extern "C" fn open_audio_clip(
         }
     }
 }
+
+pub(crate) unsafe extern "C" fn preload_optional_audio_clip(
+    context: *mut c_void,
+    request: *const NativeAudioClipRequest,
+    result: *mut NativeAudioOptionalPreloadReceipt,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.preload_optional(unsafe { &*request }) {
+        Ok(receipt) => {
+            unsafe { *result = receipt };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
 pub(crate) unsafe extern "C" fn emit_audio(
     context: *mut c_void,
     request: *const NativeAudioEmitRequest,
@@ -1111,6 +1289,7 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
     NativeAudioApi {
         context: (bridge as *mut RuntimeAudioBridge).cast(),
         open_clip: open_audio_clip,
+        preload_optional: preload_optional_audio_clip,
         emit: emit_audio,
         create_voice: create_audio_voice,
         update_voice: update_audio_voice,
@@ -1222,6 +1401,85 @@ mod tests {
             .destroy_voice(replacement)
             .expect("replacement release");
         assert_eq!(bridge.read().expect("post-stop readout").active_voices, 0);
+    }
+
+    #[test]
+    fn optional_preload_skips_missing_and_capacity_without_faulting_the_call_then_admits() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/valid.wav".to_owned(), wav());
+        let mut valid_oversized = wav().to_vec();
+        valid_oversized.resize(MAX_AUDIO_RESOURCE_BYTES + 1, 0);
+        content.insert("audio/too-large.wav".to_owned(), Arc::from(valid_oversized));
+        content.insert(
+            "audio/corrupt.wav".to_owned(),
+            Arc::from(vec![0_u8; MAX_AUDIO_RESOURCE_BYTES + 1]),
+        );
+        let sink = ProductDevLog::new(Default::default()).expect("bounded product log");
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.bind_diagnostics_sink(sink.clone());
+        bridge.begin_call();
+        let request = |path: &'static [u8]| NativeAudioClipRequest {
+            path: NativeUtf8Slice {
+                bytes: path.as_ptr(),
+                len: path.len(),
+            },
+        };
+
+        let missing = bridge
+            .preload_optional(&request(b"content/audio/missing.wav"))
+            .expect("missing optional content is a receipt");
+        assert_eq!(
+            missing.outcome,
+            NativeAudioOptionalPreloadOutcome::SkippedMissing
+        );
+        assert_eq!(missing.clip.value, 0);
+        assert!(
+            bridge
+                .preload_optional(&request(b"content/audio/corrupt.wav"))
+                .is_err(),
+            "a present corrupt optional resource remains a strict admission failure"
+        );
+        let capacity = bridge
+            .preload_optional(&request(b"content/audio/too-large.wav"))
+            .expect("capacity pressure is a receipt");
+        assert_eq!(
+            capacity.outcome,
+            NativeAudioOptionalPreloadOutcome::SkippedCapacity
+        );
+        let admitted = bridge
+            .preload_optional(&request(b"content/audio/valid.wav"))
+            .expect("later valid preload continues the same product call");
+        assert_eq!(
+            admitted.outcome,
+            NativeAudioOptionalPreloadOutcome::Admitted
+        );
+        assert_ne!(admitted.clip.value, 0);
+        assert_eq!(admitted.admitted_clip_count, 1);
+        bridge
+            .take_staged_call()
+            .expect("recoverable preload outcomes do not abort the callback");
+        let codes = sink
+            .snapshot()
+            .events
+            .into_iter()
+            .map(|event| event.code().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            vec![
+                "CSHARP_AUDIO_PRELOAD_SKIPPED_MISSING",
+                "CSHARP_AUDIO_PRELOAD_SKIPPED_CAPACITY",
+            ]
+        );
+
+        let mut required = RuntimeAudioBridge::new(BTreeMap::new());
+        required.begin_call();
+        assert!(
+            required
+                .open_clip(&request(b"content/audio/missing.wav"))
+                .is_err(),
+            "the required admission path remains strict"
+        );
     }
 
     #[test]

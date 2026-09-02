@@ -20,9 +20,35 @@ export interface LiveDebugResult {
     readonly succeeded: boolean;
     readonly message: string;
 }
+/** Bounded process-owned diagnostic event; it is not the presentation stream. */
+export interface LiveDebugDiagnosticEvent {
+    readonly sequence: string;
+    readonly monotonicNanoseconds: string;
+    readonly severity: 'debug' | 'info' | 'warning' | 'error';
+    readonly disposition: 'accepted' | 'rejected-recoverable' | 'degraded' | 'resync-required' | 'terminal';
+    readonly source: string;
+    readonly code: string;
+    readonly message: string;
+    readonly fields?: readonly {
+        readonly key: string;
+        readonly value: string;
+    }[];
+}
+export interface LiveDebugDiagnosticsBatch {
+    readonly events: readonly LiveDebugDiagnosticEvent[];
+    readonly floorSequence: string;
+    readonly throughSequence: string;
+    readonly nextCursor: string;
+    readonly readMonotonicNanoseconds: string;
+    readonly lagged: boolean;
+    readonly warningCount: string;
+    readonly errorCount: string;
+    readonly droppedCount: string;
+}
 export interface LiveDebugTransport {
     catalog(signal?: AbortSignal): Promise<LiveDebugCatalog>;
     execute(command: string, signal?: AbortSignal): Promise<LiveDebugResult>;
+    diagnostics?(after?: string, signal?: AbortSignal): Promise<LiveDebugDiagnosticsBatch>;
 }
 export interface LiveDebugHttpTransportOptions {
     /** Defaults to the current page origin, preserving same-origin dev-host use. */
@@ -33,3 +59,5 @@ export interface LiveDebugHttpTransportOptions {
 export declare function createLiveDebugHttpTransport(options?: LiveDebugHttpTransportOptions): LiveDebugTransport;
 /** Small UI/CLI-neutral helper for catalog-derived completion. */
 export declare function completeLiveDebug(catalog: LiveDebugCatalog, prefix: string): readonly LiveDebugCommandDescriptor[];
+/** Computes a browser renderer observation age from the process-owned sink clock. */
+export declare function diagnosticRendererObservationAgeMilliseconds(batch: LiveDebugDiagnosticsBatch, event: LiveDebugDiagnosticEvent): number | null;

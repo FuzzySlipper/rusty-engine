@@ -608,6 +608,119 @@ fn particle_curves_signal_ids_and_reservation_budget_fail_closed() {
 }
 
 #[test]
+fn optional_particle_emission_reports_budget_pressure_without_consuming_a_dropped_signal() {
+    let assets = assets();
+    let limits = ParticleProjectionLimits {
+        max_active_emitters: 2,
+        max_particles_per_emitter: 64,
+        max_reserved_particles: 64,
+    };
+    let mut projector = ParticleProjector::new(limits);
+    let handle = ParticleEmitterHandle::new(1);
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(0),
+            ParticleProjectionOp::Create {
+                handle,
+                descriptor: particle_descriptor(),
+            },
+        )
+        .expect("retained budget is full");
+
+    let (dropped, operation) = projector
+        .project_optional_emit(
+            &assets,
+            PresentationOpMeta::new(1),
+            "impact:retry".into(),
+            particle_descriptor(),
+        )
+        .expect("ordinary pressure is a receipt");
+    assert_eq!(dropped.outcome, ParticleEmissionAdmissionOutcome::Dropped);
+    assert_eq!(dropped.requested_particles, 8);
+    assert_eq!(dropped.admitted_particles, 0);
+    assert_eq!(dropped.reserved_particles, 64);
+    assert!(operation.is_none());
+
+    projector
+        .project(
+            &assets,
+            PresentationOpMeta::new(2),
+            ParticleProjectionOp::Destroy { handle },
+        )
+        .expect("release retained capacity");
+    let (admitted, operation) = projector
+        .project_optional_emit(
+            &assets,
+            PresentationOpMeta::new(3),
+            "impact:retry".into(),
+            particle_descriptor(),
+        )
+        .expect("dropped signal remains eligible after capacity returns");
+    assert_eq!(admitted.outcome, ParticleEmissionAdmissionOutcome::Admitted);
+    assert_eq!(admitted.admitted_particles, 8);
+    assert!(operation.is_some());
+    assert_eq!(
+        projector
+            .project_optional_emit(
+                &assets,
+                PresentationOpMeta::new(4),
+                "impact:retry".into(),
+                particle_descriptor(),
+            )
+            .expect_err("an admitted signal remains identity-strict")
+            .code,
+        ParticleProjectionDiagnosticCode::DuplicateSignal
+    );
+
+    let mut partially_reserved = ParticleProjector::new(limits);
+    let mut retained = particle_descriptor();
+    retained.max_particles = 60;
+    partially_reserved
+        .project(
+            &assets,
+            PresentationOpMeta::new(5),
+            ParticleProjectionOp::Create {
+                handle,
+                descriptor: retained,
+            },
+        )
+        .expect("leave a bounded remainder");
+    let (clamped, operation) = partially_reserved
+        .project_optional_emit(
+            &assets,
+            PresentationOpMeta::new(6),
+            "impact:clamped".into(),
+            particle_descriptor(),
+        )
+        .expect("partial capacity is recoverable");
+    assert_eq!(clamped.outcome, ParticleEmissionAdmissionOutcome::Clamped);
+    assert_eq!(clamped.admitted_particles, 4);
+    assert!(matches!(
+        operation,
+        Some(PresentationOp::Particle {
+            op: ParticleProjectionOp::Emit { descriptor, .. },
+            ..
+        }) if descriptor.burst_count == 4
+    ));
+
+    let mut malformed = particle_descriptor();
+    malformed.burst_count = 0;
+    assert_eq!(
+        partially_reserved
+            .project_optional_emit(
+                &assets,
+                PresentationOpMeta::new(7),
+                "impact:malformed".into(),
+                malformed,
+            )
+            .expect_err("malformed cosmetic requests remain strict")
+            .code,
+        ParticleProjectionDiagnosticCode::InvalidDescriptor
+    );
+}
+
+#[test]
 fn cube_particles_validate_local_collision_without_an_asset_reference() {
     let mut descriptor = particle_descriptor();
     descriptor.visual = ParticleVisual::Cube;

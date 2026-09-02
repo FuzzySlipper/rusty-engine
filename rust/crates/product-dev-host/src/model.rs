@@ -849,6 +849,106 @@ impl ProductDevRendererDiagnosticsFeedback {
     }
 }
 
+/// Fixed browser-host observation batch. This is deliberately a small health
+/// report, not a browser console or generic diagnostic transport.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevBrowserDiagnosticsReport {
+    pub host_state: ProductDevBrowserHostState,
+    pub runtime_progress: CanonicalU64,
+    pub transport_state: ProductDevBrowserConnectionState,
+    pub output_state: ProductDevBrowserConnectionState,
+    pub last_renderer_sequence: Option<CanonicalU64>,
+    pub renderer_observation_age_ms: Option<CanonicalU64>,
+    pub first_terminal: Option<ProductDevBrowserTerminalDiagnostic>,
+    pub page_events: Vec<ProductDevBrowserPageDiagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProductDevBrowserHostState {
+    Loading,
+    Ready,
+    Failed,
+    Disposed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProductDevBrowserConnectionState {
+    Open,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevBrowserTerminalDiagnostic {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevBrowserPageDiagnostic {
+    pub kind: ProductDevBrowserPageDiagnosticKind,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProductDevBrowserPageDiagnosticKind {
+    Error,
+    UnhandledRejection,
+}
+
+impl ProductDevBrowserDiagnosticsReport {
+    pub const MAX_PAGE_EVENTS: usize = 8;
+
+    pub fn validate(&self) -> Result<(), ProductDevHostError> {
+        if self.page_events.len() > Self::MAX_PAGE_EVENTS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
+                "browser diagnostics page event count exceeds its fixed bound",
+            ));
+        }
+        if let Some(diagnostic) = &self.first_terminal {
+            validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
+        }
+        for diagnostic in &self.page_events {
+            validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_browser_diagnostic(code: &str, message: &str) -> Result<(), ProductDevHostError> {
+    if code.is_empty()
+        || code.len() > 128
+        || !code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+        || message.is_empty()
+        || message.len() > 1_024
+        || message
+            .chars()
+            .any(|character| character.is_control() && character != '\t')
+    {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
+            "browser diagnostic code or message is outside fixed bounds",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevBrowserDiagnosticsResult {
+    pub accepted: bool,
+    pub reported: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevRendererDiagnosticsFeedbackResult {

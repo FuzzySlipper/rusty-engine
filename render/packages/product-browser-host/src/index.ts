@@ -40,6 +40,8 @@ export type {
   ProductBrowserGhostPlateFeedbackResult,
   ProductBrowserRendererDiagnosticsFeedback,
   ProductBrowserRendererDiagnosticsFeedbackResult,
+  ProductBrowserDiagnosticsReport,
+  ProductBrowserDiagnosticsResult,
   ProductBrowserLifecycleOperation,
   ProductBrowserRuntimeAdapter,
   ProductBrowserRuntimeBindingOutput,

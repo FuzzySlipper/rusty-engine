@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 use crate::{ProductDevHostError, ProductDevRuntimeBinding};
 
@@ -55,7 +55,9 @@ pub struct ProductDevLogField {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevLogEvent {
+    #[serde(serialize_with = "serialize_u64_as_string")]
     sequence: u64,
+    #[serde(serialize_with = "serialize_u64_as_string")]
     monotonic_nanoseconds: u64,
     severity: ProductDevLogSeverity,
     disposition: ProductDevLogDisposition,
@@ -197,6 +199,32 @@ pub struct ProductDevLogSnapshot {
     pub writer_state: ProductDevLogWriterState,
 }
 
+/// Independent bounded-reader result. A reader's cursor never advances the
+/// process-owned ring, so multiple browsers can reconnect without affecting
+/// one another.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevLogBatch {
+    pub events: Vec<ProductDevLogEvent>,
+    #[serde(serialize_with = "serialize_u64_as_string")]
+    pub floor_sequence: u64,
+    #[serde(serialize_with = "serialize_u64_as_string")]
+    pub through_sequence: u64,
+    #[serde(serialize_with = "serialize_u64_as_string")]
+    pub next_cursor: u64,
+    /// Sink monotonic time at this read, for durable age calculations without
+    /// retaining a parallel browser-health clock.
+    #[serde(serialize_with = "serialize_u64_as_string")]
+    pub read_monotonic_nanoseconds: u64,
+    pub lagged: bool,
+    #[serde(serialize_with = "serialize_u64_as_string")]
+    pub warning_count: u64,
+    #[serde(serialize_with = "serialize_u64_as_string")]
+    pub error_count: u64,
+    #[serde(serialize_with = "serialize_u64_as_string")]
+    pub dropped_count: u64,
+}
+
 #[derive(Clone)]
 pub struct ProductDevLog(Arc<Mutex<ProductDevLogInner>>);
 
@@ -313,6 +341,58 @@ impl ProductDevLog {
             },
         }
     }
+
+    /// Reads events strictly after `after`. Cursors are opaque sequence facts:
+    /// a cursor below `floor_sequence - 1` is explicitly lagged rather than
+    /// silently pretending the missing prefix was delivered.
+    pub fn read_after(&self, after: Option<u64>) -> ProductDevLogBatch {
+        let inner = self.0.lock().expect("diagnostic sink lock");
+        let floor_sequence = inner
+            .events
+            .front()
+            .map_or(inner.next_sequence, |event| event.sequence);
+        let through_sequence = inner.next_sequence.saturating_sub(1);
+        let read_monotonic_nanoseconds =
+            inner.started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        let cursor = after.unwrap_or(0);
+        let lagged = after.is_some_and(|cursor| cursor.saturating_add(1) < floor_sequence);
+        let start = cursor.max(floor_sequence.saturating_sub(1));
+        let mut encoded_bytes = 0_usize;
+        let events: Vec<_> = inner
+            .events
+            .iter()
+            .filter(|event| event.sequence > start)
+            .take_while(|event| {
+                let bytes = serde_json::to_vec(event).map_or(MAX_BATCH_BYTES, |value| value.len());
+                if encoded_bytes.saturating_add(bytes) > MAX_BATCH_BYTES {
+                    return false;
+                }
+                encoded_bytes = encoded_bytes.saturating_add(bytes);
+                true
+            })
+            .take(MAX_BATCH_EVENTS)
+            .cloned()
+            .collect();
+        let next_cursor = events.last().map_or(start, |event| event.sequence);
+        ProductDevLogBatch {
+            events,
+            floor_sequence,
+            through_sequence,
+            next_cursor,
+            read_monotonic_nanoseconds,
+            lagged,
+            warning_count: inner.warning_count,
+            error_count: inner.error_count,
+            dropped_count: inner.dropped_count,
+        }
+    }
+}
+
+const MAX_BATCH_EVENTS: usize = 64;
+const MAX_BATCH_BYTES: usize = 128 * 1024;
+
+fn serialize_u64_as_string<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&value.to_string())
 }
 
 impl Drop for ProductDevLogInner {
@@ -560,6 +640,34 @@ mod tests {
         assert_eq!(snapshot.events.len(), 2);
         assert_eq!(snapshot.dropped_count, 2);
         assert_eq!(snapshot.stderr_fallback_count, 1);
+    }
+
+    #[test]
+    fn independent_readers_observe_floor_and_lag_without_consuming_the_ring() {
+        let log = ProductDevLog::new(ProductDevLogConfig::default().with_ring_capacity(2)).unwrap();
+        for code in ["ONE", "TWO", "THREE"] {
+            log.publish(
+                ProductDevLogEvent::new(
+                    ProductDevLogSeverity::Info,
+                    ProductDevLogDisposition::Accepted,
+                    "host",
+                    code,
+                    "message",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let first_reader = log.read_after(None);
+        assert!(!first_reader.lagged);
+        assert_eq!(first_reader.floor_sequence, 2);
+        assert_eq!(first_reader.events.len(), 2);
+        let stale_reader = log.read_after(Some(0));
+        assert!(stale_reader.lagged);
+        assert_eq!(stale_reader.events.len(), 2);
+        let caught_up_reader = log.read_after(Some(first_reader.next_cursor));
+        assert!(!caught_up_reader.lagged);
+        assert!(caught_up_reader.events.is_empty());
     }
 
     #[test]

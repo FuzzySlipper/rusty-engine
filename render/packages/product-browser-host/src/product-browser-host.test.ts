@@ -242,6 +242,7 @@ test('ghost plate feedback replaces an active snapshot with an empty snapshot af
 
 test('renderer diagnostics publishes only a newly accepted renderer submission', async () => {
   const reports: unknown[] = [];
+  const observations: number[] = [];
   let renderSequence = 4;
   const renderer = {
     diagnosticsReadout: () => ({ schemaVersion: 1, submission: { renderSequence } }),
@@ -253,12 +254,14 @@ test('renderer diagnostics publishes only a newly accepted renderer submission',
       return { accepted: true, ...ACCEPTED_FAULT, runtime: feedback.runtime };
     },
     initialRuntime: AUDIO_RUNTIME,
+    onObservation: (sequence) => observations.push(sequence),
   });
   await reporter.flush();
   await reporter.flush();
   renderSequence = 5;
   await reporter.flush();
   assert.equal(reports.length, 2);
+  assert.deepEqual(observations, [4, 5]);
 });
 
 test('audio feedback flush precedes every browser-host C# update admission lane', async () => {

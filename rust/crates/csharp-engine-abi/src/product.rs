@@ -375,6 +375,11 @@ pub type NativeOpenAudioClip = unsafe extern "C" fn(
     *const NativeAudioClipRequest,
     *mut NativeAudioClipHandle,
 ) -> i32;
+pub type NativePreloadOptionalAudioClip = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioClipRequest,
+    *mut NativeAudioOptionalPreloadReceipt,
+) -> i32;
 pub type NativeEmitAudio = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioEmitRequest,
@@ -571,8 +576,11 @@ pub type NativeUpdatePresentationStructuredBillboard = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyPresentationBillboard =
     unsafe extern "C" fn(*mut c_void, NativePresentationBillboardHandle) -> i32;
-pub type NativeEmitPresentationParticles =
-    unsafe extern "C" fn(*mut c_void, *const NativePresentationParticleDescriptor) -> i32;
+pub type NativeEmitPresentationParticles = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativePresentationParticleDescriptor,
+    *mut NativePresentationParticleEmissionReceipt,
+) -> i32;
 pub type NativeCreatePresentationEmitter = unsafe extern "C" fn(
     *mut c_void,
     *const NativePresentationParticleDescriptor,
@@ -1076,6 +1084,7 @@ pub struct NativeAnimationApi {
 pub struct NativeAudioApi {
     pub context: *mut c_void,
     pub open_clip: NativeOpenAudioClip,
+    pub preload_optional: NativePreloadOptionalAudioClip,
     pub emit: NativeEmitAudio,
     pub create_voice: NativeCreateAudioVoice,
     pub update_voice: NativeUpdateAudioVoice,

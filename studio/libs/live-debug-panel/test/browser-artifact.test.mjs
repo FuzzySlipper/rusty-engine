@@ -38,6 +38,7 @@ test('browser artifact mounts independently and routes through an injected trans
   const result = await page.evaluate(async () => {
     const { mountLiveDebugPanel } = await import('/index.js');
     let catalogCalls = 0;
+    let diagnosticCalls = 0;
     const commands = [];
     let hangingSignal;
     const transport = {
@@ -51,6 +52,15 @@ test('browser artifact mounts independently and routes through an injected trans
       async execute(command) {
         commands.push(command);
         return { succeeded: true, message: `ran ${command}` };
+      },
+      async diagnostics() {
+        diagnosticCalls += 1;
+        return diagnosticCalls === 1
+          ? {
+            events: [{ sequence: '8', monotonicNanoseconds: '2000000000', severity: 'warning', disposition: 'degraded', source: 'browser-host', code: 'BROWSER_HOST_STATUS', message: 'stopped', fields: [{ key: 'renderer-age-ms', value: '100' }, { key: 'transport', value: 'closed' }] }],
+            floorSequence: '8', throughSequence: '8', nextCursor: '8', readMonotonicNanoseconds: '2000000000', lagged: false, warningCount: '1', errorCount: '0', droppedCount: '0',
+          }
+          : { events: [], floorSequence: '8', throughSequence: '8', nextCursor: '8', readMonotonicNanoseconds: '3000000000', lagged: false, warningCount: '1', errorCount: '0', droppedCount: '0' };
       },
     };
     const ready = await mountLiveDebugPanel(document.querySelector('#ready'), {
@@ -72,7 +82,7 @@ test('browser artifact mounts independently and routes through an injected trans
         },
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
     const input = document.querySelector('#ready input');
     input.value = 'inspect';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -83,18 +93,19 @@ test('browser artifact mounts independently and routes through an injected trans
     document.querySelector('#hanging form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     const ids = [...document.querySelectorAll('input')].map((element) => element.id);
-    const transcript = document.querySelector('#ready [role="log"]')?.textContent;
+    const logs = [...document.querySelectorAll('#ready [role="log"]')].map((element) => element.textContent).join('\n');
     ready.dispose();
     inert.dispose();
     hanging.dispose();
-    return { catalogCalls, commands, hangingAborted: hangingSignal?.aborted, ids, transcript };
+    return { catalogCalls, commands, hangingAborted: hangingSignal?.aborted, ids, logs };
   });
 
   assert.equal(result.catalogCalls, 2, 'the disabled panel must stay inert');
   assert.deepEqual(result.commands, ['inspect']);
   assert.equal(result.hangingAborted, true, 'disposing a panel must abort its in-flight command');
   assert.equal(new Set(result.ids).size, result.ids.length, 'mounted panels must not reuse DOM IDs');
-  assert.match(result.transcript ?? '', /ran inspect/);
+  assert.match(result.logs ?? '', /ran inspect/);
+  assert.match(result.logs ?? '', /renderer-age-ms=1100/);
 });
 
 test('browser artifact can remount after disposal into the same caller-owned host', async (context) => {
