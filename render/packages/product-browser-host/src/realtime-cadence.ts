@@ -64,13 +64,24 @@ export function createProductBrowserCadence(
   let pendingInputEnvelopeCount = 0;
   let disposed = false;
   let lastOperation: Promise<void> = Promise.resolve();
+  let maximumObservedTimeMs = 0;
 
   const enqueue = (
     timeMs: number,
     demandAdmission = false,
     capturedInput: readonly RustyApplicationRuntimeInputEnvelope[] | null = null,
+    timeAlreadyNormalized = false,
   ): void => {
     if (disposed || !dependencies.isReady()) return;
+    // requestAnimationFrame timestamps describe the start of the frame, while
+    // input wakeups sample performance.now() when the event is handled. A RAF
+    // callback can therefore execute after an input wakeup while carrying a
+    // slightly older timestamp. Normalize both sources before they enter the
+    // one ordered runtime lane; Rust can retain strict regression rejection.
+    const monotonicTimeMs = timeAlreadyNormalized
+      ? orderingTime(timeMs)
+      : Math.max(maximumObservedTimeMs, orderingTime(timeMs));
+    if (!timeAlreadyNormalized) maximumObservedTimeMs = monotonicTimeMs;
     if (cadenceInFlight) {
       if (capturedInput !== null && capturedInput.length > 0) {
         if (pendingInputEnvelopeCount + capturedInput.length > MAXIMUM_PENDING_INPUT_ENVELOPES) {
@@ -83,9 +94,9 @@ export function createProductBrowserCadence(
           return;
         }
         const preserveCadenceBeforeInput = pendingCadenceTimeMs !== null
-          && orderingTime(pendingCadenceTimeMs) <= orderingTime(timeMs);
+          && orderingTime(pendingCadenceTimeMs) <= monotonicTimeMs;
         pendingInputPulses.push({
-          timeMs,
+          timeMs: monotonicTimeMs,
           batch: capturedInput,
           priorCadenceTimeMs: preserveCadenceBeforeInput ? pendingCadenceTimeMs : null,
           priorDemandAdmission: preserveCadenceBeforeInput && pendingDemandAdmission,
@@ -101,7 +112,7 @@ export function createProductBrowserCadence(
       // later edge cannot erase an earlier held state. Ordinary renderer
       // cadence remains coalesced and never creates one promise per RAF.
       if (capturedInput === null) {
-        pendingCadenceTimeMs = timeMs;
+        pendingCadenceTimeMs = monotonicTimeMs;
         pendingDemandAdmission ||= demandAdmission;
       }
       return;
@@ -112,7 +123,7 @@ export function createProductBrowserCadence(
       if (batch.length > 0) await dependencies.sendInput(batch);
       if (dependencies.lifecycleMode === 'realtime'
         && dependencies.realtimeAdvanceOwner === 'browser') {
-        await dependencies.advanceRealtime(toNanoseconds(timeMs));
+        await dependencies.advanceRealtime(toNanoseconds(monotonicTimeMs));
       } else if (dependencies.lifecycleMode === 'demand' && demandAdmission) {
         await dependencies.admitDemandStep();
       }
@@ -135,7 +146,7 @@ export function createProductBrowserCadence(
       inputPulse.priorCadenceTimeMs = null;
       inputPulse.priorDemandAdmission = false;
       if (!disposed && dependencies.isReady()) {
-        enqueue(priorCadenceTimeMs, priorDemandAdmission);
+        enqueue(priorCadenceTimeMs, priorDemandAdmission, null, true);
       }
       return;
     }
@@ -148,6 +159,7 @@ export function createProductBrowserCadence(
           inputPulse.timeMs,
           dependencies.lifecycleMode === 'demand',
           inputPulse.batch,
+          true,
         );
       }
       return;
@@ -157,12 +169,12 @@ export function createProductBrowserCadence(
     pendingCadenceTimeMs = null;
     pendingDemandAdmission = false;
     if (nextTimeMs !== null && !disposed && dependencies.isReady()) {
-      enqueue(nextTimeMs, demandAdmission);
+      enqueue(nextTimeMs, demandAdmission, null, true);
     }
   };
 
   return Object.freeze({
-    enqueue,
+    enqueue: (timeMs: number): void => enqueue(timeMs),
     pulseInput: (timeMs: number): void => {
       if (disposed || !dependencies.isReady()) return;
       const batch = dependencies.sampleInput();

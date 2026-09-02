@@ -27111,56 +27111,56 @@ function lE(e, t) {
 //#region packages/product-browser-host/src/realtime-cadence.ts
 var uE = 1024;
 function dE(e) {
-	let t = !1, n = null, r = !1, i = [], a = 0, o = !1, s = Promise.resolve(), c = (c, u = !1, d = null) => {
-		if (!(o || !e.isReady())) {
-			if (t) {
-				if (d !== null && d.length > 0) {
-					if (a + d.length > uE) {
-						o = !0, i.length = 0, a = 0, e.onFailure(/* @__PURE__ */ Error(`pending input exceeds ${String(uE)} envelopes`));
-						return;
-					}
-					let t = n !== null && pE(n) <= pE(c);
-					i.push({
-						timeMs: c,
-						batch: d,
-						priorCadenceTimeMs: t ? n : null,
-						priorDemandAdmission: t && r
-					}), t && (n = null, r = !1), a += d.length;
+	let t = !1, n = null, r = !1, i = [], a = 0, o = !1, s = Promise.resolve(), c = 0, l = (l, d = !1, f = null, p = !1) => {
+		if (o || !e.isReady()) return;
+		let m = p ? pE(l) : Math.max(c, pE(l));
+		if (p || (c = m), t) {
+			if (f !== null && f.length > 0) {
+				if (a + f.length > uE) {
+					o = !0, i.length = 0, a = 0, e.onFailure(/* @__PURE__ */ Error(`pending input exceeds ${String(uE)} envelopes`));
+					return;
 				}
-				d === null && (n = c, r ||= u);
-				return;
+				let t = n !== null && pE(n) <= m;
+				i.push({
+					timeMs: m,
+					batch: f,
+					priorCadenceTimeMs: t ? n : null,
+					priorDemandAdmission: t && r
+				}), t && (n = null, r = !1), a += f.length;
 			}
-			t = !0, s = e.enqueueOperation(async () => {
-				let t = d ?? e.sampleInput();
-				t.length > 0 && await e.sendInput(t), e.lifecycleMode === "realtime" && e.realtimeAdvanceOwner === "browser" ? await e.advanceRealtime(fE(c)) : e.lifecycleMode === "demand" && u && await e.admitDemandStep();
-			}).then(() => l(), (t) => {
-				e.onFailure(t), l();
-			});
+			f === null && (n = m, r ||= d);
+			return;
 		}
-	}, l = () => {
+		t = !0, s = e.enqueueOperation(async () => {
+			let t = f ?? e.sampleInput();
+			t.length > 0 && await e.sendInput(t), e.lifecycleMode === "realtime" && e.realtimeAdvanceOwner === "browser" ? await e.advanceRealtime(fE(m)) : e.lifecycleMode === "demand" && d && await e.admitDemandStep();
+		}).then(() => u(), (t) => {
+			e.onFailure(t), u();
+		});
+	}, u = () => {
 		t = !1;
 		let s = i[0];
 		if (s?.priorCadenceTimeMs !== null && s?.priorCadenceTimeMs !== void 0) {
 			let t = s.priorCadenceTimeMs, n = s.priorDemandAdmission;
-			s.priorCadenceTimeMs = null, s.priorDemandAdmission = !1, !o && e.isReady() && c(t, n);
+			s.priorCadenceTimeMs = null, s.priorDemandAdmission = !1, !o && e.isReady() && l(t, n, null, !0);
 			return;
 		}
 		if (s !== void 0 && (n === null || pE(s.timeMs) <= pE(n))) {
-			i.shift(), a -= s.batch.length, !o && e.isReady() && c(s.timeMs, e.lifecycleMode === "demand", s.batch);
+			i.shift(), a -= s.batch.length, !o && e.isReady() && l(s.timeMs, e.lifecycleMode === "demand", s.batch, !0);
 			return;
 		}
-		let l = n, u = r;
-		n = null, r = !1, l !== null && !o && e.isReady() && c(l, u);
+		let c = n, u = r;
+		n = null, r = !1, c !== null && !o && e.isReady() && l(c, u, null, !0);
 	};
 	return Object.freeze({
-		enqueue: c,
+		enqueue: (e) => l(e),
 		pulseInput: (t) => {
 			if (o || !e.isReady()) return;
 			let n = e.sampleInput();
-			n.length !== 0 && c(t, e.lifecycleMode === "demand", n);
+			n.length !== 0 && l(t, e.lifecycleMode === "demand", n);
 		},
 		pulseRustHost: () => {
-			e.realtimeAdvanceOwner === "rust-host" && c(0);
+			e.realtimeAdvanceOwner === "rust-host" && l(0);
 		},
 		settle: async () => {
 			for (; t || n !== null || i.length > 0;) await s;

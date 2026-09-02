@@ -427,6 +427,45 @@ test('slow cadence preserves input pulse boundaries and chronological advancemen
   assert.deepEqual(advances, ['10000000', '20000000', '100000000', '120000000']);
 });
 
+test('cadence keeps an older same-frame RAF timestamp monotonic after an input wakeup', async () => {
+  const pressed: RustyApplicationRuntimeInputEnvelope = {
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    sequence: '1',
+    context: 'gameplay.default',
+    fact: { kind: 'key', code: 'key-a', edge: 'pressed' },
+  };
+  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
+  const advances: string[] = [];
+  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  let releaseFirstAdvance: () => void = () => undefined;
+  const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
+  const cadence = createProductBrowserCadence({
+    lifecycleMode: 'realtime',
+    realtimeAdvanceOwner: 'browser',
+    isReady: () => true,
+    enqueueOperation: (operation) => operation(),
+    sampleInput: () => queued.splice(0),
+    sendInput: async (batch) => { batches.push(batch); },
+    advanceRealtime: async (time) => {
+      advances.push(time);
+      if (advances.length === 1) await firstAdvance;
+    },
+    admitDemandStep: async () => undefined,
+    onFailure: (cause) => { assert.fail(String(cause)); },
+  });
+
+  cadence.enqueue(6_720);
+  queued.push(pressed);
+  cadence.pulseInput(6_721.4);
+  cadence.enqueue(6_721.1);
+  releaseFirstAdvance();
+  await cadence.settle();
+  cadence.dispose();
+
+  assert.deepEqual(batches, [[pressed]]);
+  assert.deepEqual(advances, ['6720000000', '6721400000', '6721400000']);
+});
+
 test('transport rejects an adapter with an arbitrary or missing operation surface', () => {
   assert.throws(
     () => createProductBrowserRuntimeTransport({
