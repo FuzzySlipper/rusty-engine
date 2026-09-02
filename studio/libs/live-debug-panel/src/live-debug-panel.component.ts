@@ -4,6 +4,8 @@ import {
   Component,
   computed,
   effect,
+  ElementRef,
+  inject,
   input,
   type OnDestroy,
   signal,
@@ -50,6 +52,7 @@ let nextLiveDebugPanelInstance = 1;
   template: `
     <section
       class="rusty-live-debug-panel"
+      data-rusty-ui-interactive
       [class.rusty-live-debug-panel--dock]="presentation() === 'dock'"
       [class.rusty-live-debug-panel--overlay]="presentation() === 'overlay'"
       [attr.aria-hidden]="!enabled()"
@@ -144,7 +147,7 @@ let nextLiveDebugPanelInstance = 1;
     .rusty-live-debug-panel__error { color: #ffb4ab; }
     .rusty-live-debug-panel__completions { list-style: none; padding: 0; margin: 0.5rem 0; }
     .rusty-live-debug-panel__completions button { display: grid; grid-template-columns: minmax(12rem, auto) 1fr; gap: 0.5rem; width: 100%; text-align: left; }
-    .rusty-live-debug-panel__transcript { max-height: 18rem; overflow: auto; margin: 0.5rem 0 0; padding-left: 1.5rem; }
+    .rusty-live-debug-panel__transcript { max-height: 18rem; overflow: auto; margin: 0.5rem 0 0; padding-left: 1.5rem; cursor: text; user-select: text; }
     .rusty-live-debug-panel__transcript pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0.25rem 0 0.75rem; }
     .rusty-live-debug-panel__response--failure pre { color: #ffb4ab; }
     .rusty-live-debug-panel__diagnostics { display: grid; gap: 0.35rem; margin-top: 0.75rem; cursor: text; user-select: text; }
@@ -154,6 +157,7 @@ let nextLiveDebugPanelInstance = 1;
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class LiveDebugPanelComponent implements OnDestroy {
+  readonly #hostElement = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
   /** The host must opt in before this component creates or uses a transport. */
   readonly enabled = input(false);
   /** A packaged host can retain transport ownership by supplying this input. */
@@ -313,7 +317,7 @@ export class LiveDebugPanelComponent implements OnDestroy {
   async copyTranscript(): Promise<void> {
     const text = this.transcript().map((entry) => `> ${entry.command}\n${entry.message}`).join('\n\n');
     try {
-      await globalThis.navigator.clipboard.writeText(text);
+      await writeLiveDebugClipboard(text, this.#hostElement.ownerDocument);
     } catch (error: unknown) {
       this.error.set(`Could not copy responses: ${errorMessage(error)}`);
     }
@@ -392,6 +396,43 @@ export class LiveDebugPanelComponent implements OnDestroy {
       }
     });
   }
+}
+
+async function writeLiveDebugClipboard(text: string, document: Document): Promise<void> {
+  const clipboard = globalThis.navigator?.clipboard;
+  if (clipboard?.writeText !== undefined) {
+    try {
+      await clipboard.writeText(text);
+      return;
+    } catch {
+      // Trusted-LAN HTTP and browser permission policy can reject the modern
+      // API even during a user gesture. Preserve the same gesture for the
+      // bounded DOM fallback below.
+    }
+  }
+  if (document.body === null) throw new Error('document body is unavailable');
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const selection = document.getSelection();
+  const ranges = selection === null
+    ? []
+    : Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange());
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.readOnly = true;
+  textarea.setAttribute('aria-hidden', 'true');
+  textarea.style.cssText = 'position:fixed;inset:-10000px auto auto -10000px;opacity:0;pointer-events:none;';
+  document.body.append(textarea);
+  let copied = false;
+  try {
+    textarea.select();
+    copied = document.execCommand('copy');
+  } finally {
+    textarea.remove();
+    selection?.removeAllRanges();
+    for (const range of ranges) selection?.addRange(range);
+    active?.focus({ preventScroll: true });
+  }
+  if (!copied) throw new Error('browser clipboard access is unavailable');
 }
 
 function appendBounded(values: readonly string[], value: string, maxEntries: number): readonly string[] {

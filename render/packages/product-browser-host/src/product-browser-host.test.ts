@@ -407,6 +407,29 @@ test('many renderer cadence callbacks coalesce to one latest follow-up sample', 
   assert.equal(flushes, 2);
 });
 
+test('renderer diagnostics cadence retries after a failed auxiliary report', async () => {
+  let flushes = 0;
+  const failures: unknown[] = [];
+  const sampler = createProductBrowserRendererDiagnosticsCadenceSampler({
+    enqueueOperation: (operation) => operation(),
+    flush: async () => {
+      flushes += 1;
+      if (flushes === 1) throw new Error('temporary diagnostics fetch failure');
+    },
+    onFailure: (cause) => failures.push(cause),
+  });
+
+  sampler.sample(0);
+  await sampler.settle();
+  sampler.sample(750);
+  await sampler.settle();
+  sampler.dispose();
+
+  assert.equal(flushes, 2);
+  assert.equal(failures.length, 1);
+  assert.match(String(failures[0]), /temporary diagnostics fetch failure/u);
+});
+
 test('renderer diagnostics cadence disposal cancels queued work before admission', async () => {
   let flushes = 0;
   const deferred: { admit: (() => void) | null } = { admit: null };

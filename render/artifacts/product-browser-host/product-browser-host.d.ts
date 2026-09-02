@@ -299,7 +299,7 @@ export interface ProductBrowserDiagnosticsReport {
     };
     /** One bounded, typed operation observation that was deliberately dropped. */
     readonly recoverableEvent?: {
-        readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION';
+        readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' | 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE';
         readonly message: string;
     };
     readonly pageEvents: readonly {

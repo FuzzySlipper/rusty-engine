@@ -304,7 +304,12 @@ export interface ProductBrowserDiagnosticsReport {
   readonly rendererObservationAgeMs?: string;
   readonly firstTerminal?: { readonly code: string; readonly message: string };
   /** One bounded, typed operation observation that was deliberately dropped. */
-  readonly recoverableEvent?: { readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'; readonly message: string };
+  readonly recoverableEvent?: {
+    readonly code:
+      | 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'
+      | 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE';
+    readonly message: string;
+  };
   readonly pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[];
 }
 
@@ -1041,6 +1046,8 @@ export async function mountProductBrowserHost(
   let terminalDiagnosticsReported = false;
   let recoverableClockDiagnosticPending = false;
   let recoverableClockDiagnosticReported = false;
+  let rendererDiagnosticsFailure: string | null = null;
+  let rendererDiagnosticsFailureReported = false;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
@@ -1131,14 +1138,23 @@ export async function mountProductBrowserHost(
           code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' as const,
           message: 'dropped a regressing browser realtime observation; awaiting a later monotonic observation',
         })
-      : undefined;
+      : rendererDiagnosticsFailure !== null && !rendererDiagnosticsFailureReported
+        ? Object.freeze({
+            code: 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE' as const,
+            message: rendererDiagnosticsFailure,
+          })
+        : undefined;
     const shouldReport = reportToTransport && transport.reportBrowserDiagnostics !== undefined
       && (includeTerminal || recoverableEvent !== undefined || pageEvents.length > 0 || statusKey !== lastDiagnosticsStatusKey);
     if (shouldReport) {
       lastDiagnosticsStatusKey = statusKey;
       if (includeTerminal) terminalDiagnosticsReported = true;
-      recoverableClockDiagnosticPending = false;
-      if (recoverableEvent !== undefined) recoverableClockDiagnosticReported = true;
+      if (recoverableEvent?.code === 'CSHARP_LIFECYCLE_CLOCK_REGRESSION') {
+        recoverableClockDiagnosticPending = false;
+        recoverableClockDiagnosticReported = true;
+      } else if (recoverableEvent?.code === 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE') {
+        rendererDiagnosticsFailureReported = true;
+      }
       const age = lastRendererObservationAtMs === null
         ? undefined
         : String(Math.max(0, now - lastRendererObservationAtMs));
@@ -1634,7 +1650,15 @@ export async function mountProductBrowserHost(
         enqueueOperation: queue.enqueue,
         flush: rendererDiagnosticsReporter.flush,
         onFailure: (cause) => {
-          failAndClose(cause, 'transport_failed');
+          // Renderer diagnostics are an auxiliary observation lane. A failed
+          // sample must never stop authoritative output, input, or lifecycle
+          // work. Report the first failure as a bounded warning and let the
+          // existing cadence retry later snapshots.
+          if (rendererDiagnosticsFailureReported || rendererDiagnosticsFailure !== null) return;
+          rendererDiagnosticsFailure = boundedDiagnostic(
+            `renderer diagnostics reporting was temporarily unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
+          publishHealth();
         },
       });
     }

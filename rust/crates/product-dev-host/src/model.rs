@@ -922,10 +922,13 @@ impl ProductDevBrowserDiagnosticsReport {
         }
         if let Some(diagnostic) = &self.recoverable_event {
             validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
-            if diagnostic.code != "CSHARP_LIFECYCLE_CLOCK_REGRESSION" {
+            if !matches!(
+                diagnostic.code.as_str(),
+                "CSHARP_LIFECYCLE_CLOCK_REGRESSION" | "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE"
+            ) {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
-                    "browser recoverable diagnostic must identify a dropped lifecycle clock regression",
+                    "browser recoverable diagnostic code is not admitted",
                 ));
             }
         }

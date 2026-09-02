@@ -37,6 +37,12 @@ test('browser artifact mounts independently and routes through an injected trans
 
   const result = await page.evaluate(async () => {
     const { mountLiveDebugPanel } = await import('/index.js');
+    Object.defineProperty(globalThis.navigator, 'clipboard', { configurable: true, value: undefined });
+    let copiedText = null;
+    document.addEventListener('copy', (event) => {
+      copiedText = document.activeElement?.value ?? null;
+      event.preventDefault();
+    });
     let catalogCalls = 0;
     let diagnosticCalls = 0;
     const commands = [];
@@ -101,6 +107,10 @@ test('browser artifact mounts independently and routes through an injected trans
     hangingInput.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('#hanging form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
+    const copyButton = [...document.querySelectorAll('#ready button')]
+      .find((button) => button.textContent?.trim() === 'Copy');
+    copyButton.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
     const ids = [...document.querySelectorAll('input')].map((element) => element.id);
     const logs = [...document.querySelectorAll('#ready [role="log"]')].map((element) => element.textContent).join('\n');
     const panelText = document.querySelector('#ready .rusty-live-debug-panel')?.textContent ?? '';
@@ -109,10 +119,21 @@ test('browser artifact mounts independently and routes through an injected trans
       cursor: diagnosticStyles.cursor,
       userSelect: diagnosticStyles.userSelect,
     };
+    const transcriptStyles = getComputedStyle(document.querySelector('#ready .rusty-live-debug-panel__transcript'));
+    const transcriptSelection = {
+      cursor: transcriptStyles.cursor,
+      userSelect: transcriptStyles.userSelect,
+    };
+    const panelOwnsUiInput = document.querySelector('#ready .rusty-live-debug-panel')
+      ?.hasAttribute('data-rusty-ui-interactive') ?? false;
+    const fallbackTextareaCount = document.querySelectorAll('textarea[aria-hidden="true"]').length;
     ready.dispose();
     inert.dispose();
     hanging.dispose();
-    return { catalogCalls, commands, hangingAborted: hangingSignal?.aborted, ids, logs, panelText, diagnosticSelection };
+    return {
+      catalogCalls, commands, copiedText, fallbackTextareaCount, hangingAborted: hangingSignal?.aborted,
+      ids, logs, panelText, panelOwnsUiInput, diagnosticSelection, transcriptSelection,
+    };
   });
 
   assert.equal(result.catalogCalls, 2, 'the disabled panel must stay inert');
@@ -124,7 +145,11 @@ test('browser artifact mounts independently and routes through an injected trans
   assert.match(result.logs ?? '', /event-age-ms=1000/);
   assert.match(result.panelText ?? '', /Product\/runtime lane/);
   assert.match(result.panelText ?? '', /Runtime progress: 60\.000\/s/);
+  assert.match(result.copiedText ?? '', /> inspect\nran inspect/u);
+  assert.equal(result.fallbackTextareaCount, 0, 'the LAN clipboard fallback must remove its temporary textarea');
+  assert.equal(result.panelOwnsUiInput, true, 'the whole panel must stay outside gameplay input admission');
   assert.deepEqual(result.diagnosticSelection, { cursor: 'text', userSelect: 'text' });
+  assert.deepEqual(result.transcriptSelection, { cursor: 'text', userSelect: 'text' });
 });
 
 test('browser artifact can remount after disposal into the same caller-owned host', async (context) => {

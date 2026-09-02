@@ -20,6 +20,19 @@ const STAGED_PRODUCT_PROPERTY: &str = "RustyEngineStagedProductDirectory";
 const WATCH_PATHS_PROPERTY: &str = "RustyEngineWatchPaths";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CLEAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const IGNORED_WATCH_DIRECTORY_NAMES: &[&str] = &[
+    ".git",
+    ".idea",
+    ".runtime",
+    ".vs",
+    ".vscode",
+    "bin",
+    "dist",
+    "generated",
+    "node_modules",
+    "obj",
+    "target",
+];
 
 fn main() -> Result<(), String> {
     let arguments = Arguments::parse(env::args().skip(1))?;
@@ -584,16 +597,19 @@ fn capture_path(path: &Path, files: &mut BTreeMap<PathBuf, FileStamp>) -> Result
                 )
             })?;
             let child = entry.path();
-            if matches!(
-                child.file_name().and_then(|name| name.to_str()),
-                Some("bin" | "obj" | ".git")
-            ) {
+            if ignored_watch_directory(&child) {
                 continue;
             }
             capture_path(&child, files)?;
         }
     }
     Ok(())
+}
+
+fn ignored_watch_directory(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| IGNORED_WATCH_DIRECTORY_NAMES.contains(&name))
 }
 
 fn absolute(path: &Path) -> Result<PathBuf, String> {
@@ -726,5 +742,21 @@ mod tests {
         .map(str::to_owned)
         .collect::<Vec<_>>();
         assert_eq!(arguments, expected);
+    }
+
+    #[test]
+    fn generated_and_tool_owned_directories_are_excluded_from_source_watches() {
+        for name in IGNORED_WATCH_DIRECTORY_NAMES {
+            assert!(
+                ignored_watch_directory(Path::new("/product/src").join(name).as_path()),
+                "{name} must not restart rusty dev"
+            );
+        }
+        for name in ["Modules", "content", "ui", "Shaders"] {
+            assert!(
+                !ignored_watch_directory(Path::new("/product/src").join(name).as_path()),
+                "{name} remains an authored source directory"
+            );
+        }
     }
 }
