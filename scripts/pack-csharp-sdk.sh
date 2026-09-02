@@ -47,6 +47,7 @@ sed \
     -e "s|@RUSTY_ENGINE_SDK_BUILD_IDENTITY@|$sdk_identity|g" \
     -e "s|@RUSTY_ENGINE_PRODUCT_ABI_PROTOCOL_VERSION@|$protocol_version|g" \
     -e "s|@RUSTY_ENGINE_PRODUCT_ABI_FINGERPRINT@|$fingerprint|g" \
+    -e "s|@RUSTY_ENGINE_SDK_PACKAGE_VERSION@|$package_version|g" \
     "$repo_root/csharp/Rusty.Engine/buildTransitive/Rusty.Engine.props.in" \
     > "$package_metadata_dir/Rusty.Engine.props"
 

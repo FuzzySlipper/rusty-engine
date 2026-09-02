@@ -4,8 +4,32 @@
     <RustyEngineSdkBuildIdentity>@RUSTY_ENGINE_SDK_BUILD_IDENTITY@</RustyEngineSdkBuildIdentity>
     <RustyEngineProductAbiProtocolVersion>@RUSTY_ENGINE_PRODUCT_ABI_PROTOCOL_VERSION@</RustyEngineProductAbiProtocolVersion>
     <RustyEngineProductAbiFingerprint>@RUSTY_ENGINE_PRODUCT_ABI_FINGERPRINT@</RustyEngineProductAbiFingerprint>
+    <RustyEngineSdkPackageVersion>@RUSTY_ENGINE_SDK_PACKAGE_VERSION@</RustyEngineSdkPackageVersion>
     <!-- Source use is intentionally opt-in; no checkout is discovered automatically. -->
     <RustyEngineUseSourceDevelopment Condition="'$(RustyEngineUseSourceDevelopment)' == ''">false</RustyEngineUseSourceDevelopment>
+    <!--
+      One ordinary project declares this concrete product type. The SDK writes
+      the NativeAOT composition around it below obj; this is deliberately not
+      an assembly scan or a product framework registration point.
+    -->
+    <RustyEngineProductEntryType Condition="'$(RustyEngineProductEntryType)' == ''"></RustyEngineProductEntryType>
+    <RustyEngineProductId Condition="'$(RustyEngineProductId)' == ''">product.local</RustyEngineProductId>
+    <RustyEngineProductTitle Condition="'$(RustyEngineProductTitle)' == ''">Rusty Engine Product</RustyEngineProductTitle>
+    <RustyEngineProductUiRoot Condition="'$(RustyEngineProductUiRoot)' == ''">$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
+    <RustyEngineProductContentRoot Condition="'$(RustyEngineProductContentRoot)' == ''">$(MSBuildProjectDirectory)/content</RustyEngineProductContentRoot>
+    <RustyEngineProductBindHost Condition="'$(RustyEngineProductBindHost)' == ''">127.0.0.1</RustyEngineProductBindHost>
+    <RustyEngineProductPort Condition="'$(RustyEngineProductPort)' == ''">0</RustyEngineProductPort>
+    <RustyEngineProductLiveDebug Condition="'$(RustyEngineProductLiveDebug)' == ''">false</RustyEngineProductLiveDebug>
+    <RustyEngineProductUiEntry Condition="'$(RustyEngineProductUiEntry)' == ''">main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductUiAssets Condition="'$(RustyEngineProductUiAssets)' == ''">assets</RustyEngineProductUiAssets>
+    <RustyEngineProductLifecycleMode Condition="'$(RustyEngineProductLifecycleMode)' == ''">demand</RustyEngineProductLifecycleMode>
+    <RustyEngineProductFixedStepHz Condition="'$(RustyEngineProductFixedStepHz)' == ''"></RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps Condition="'$(RustyEngineProductFixedStepMaxCatchUpSteps)' == ''"></RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineNativeAotRuntimeIdentifier Condition="'$(RustyEngineNativeAotRuntimeIdentifier)' == ''">linux-x64</RustyEngineNativeAotRuntimeIdentifier>
+    <!-- This is intentionally absolute so a launcher can query it without
+         guessing an intermediate-path convention or adjacent checkout. -->
+    <RustyEngineStagedProductDirectory Condition="'$(RustyEngineStagedProductDirectory)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)Rusty.Engine/Product', '$(MSBuildProjectDirectory)'))</RustyEngineStagedProductDirectory>
+    <RustyEngineWatchPaths Condition="'$(RustyEngineWatchPaths)' == ''">$(MSBuildProjectDirectory);$([System.IO.Path]::GetFullPath('$(RustyEngineProductUiRoot)', '$(MSBuildProjectDirectory)'));$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)', '$(MSBuildProjectDirectory)'))</RustyEngineWatchPaths>
   </PropertyGroup>
   <Target Name="ValidateRustyEngineSourceDevelopmentPackageAssets" BeforeTargets="PrepareForBuild"
           Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">

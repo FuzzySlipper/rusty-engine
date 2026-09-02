@@ -4,7 +4,14 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/rusty-engine-sdk-consumer.XXXXXX")
-trap 'rm -rf -- "$work_dir"' EXIT
+cleanup() {
+    if [[ "${RUSTY_ENGINE_SDK_TEST_KEEP_WORK:-}" == "1" ]]; then
+        echo "test-csharp-sdk-package: retained disposable consumer at $work_dir" >&2
+        return
+    fi
+    rm -rf -- "$work_dir"
+}
+trap cleanup EXIT
 feed_dir="$work_dir/feed"
 consumer_dir="$work_dir/consumer"
 source_override_dir="$work_dir/source-override"
@@ -60,12 +67,21 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Library</OutputType>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <NoWarn>0649</NoWarn>
+    <RustyEngineProductEntryType>SdkPackageConsumer.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>fixture.sdk-package</RustyEngineProductId>
+    <RustyEngineProductTitle>SDK package fixture</RustyEngineProductTitle>
+    <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductUiAssets>assets</RustyEngineProductUiAssets>
+    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
+    <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$package_version" />
+    <RustyEngineProductInputIntent Include="fixture.move" Value="digital" />
+    <RustyEngineProductInputMapping Include="fixture.move" Intent="fixture.move" Trigger="key:key-w:held" />
   </ItemGroup>
 </Project>
 EOF
@@ -101,8 +117,6 @@ cp "$consumer_dir/Library.cs" "$source_override_dir/Library.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
-[assembly: EngineProduct(typeof(SdkPackageConsumer.Product))]
-
 namespace SdkPackageConsumer;
 
 public sealed class Product : IEngineProduct
@@ -118,6 +132,11 @@ public sealed class Product : IEngineProduct
     public void Dispose() { }
 }
 EOF
+mkdir -p "$consumer_dir/product-ui/assets" "$consumer_dir/content"
+cat > "$consumer_dir/product-ui/main.js" <<'EOF'
+// package-only staged product UI
+EOF
+printf 'package-only staged content\n' > "$consumer_dir/content/trial.txt"
 
 # The only available package source is the fresh local feed. The SDK's source
 # tree is not an input to restore or build; consumer assets must not name it.
@@ -134,6 +153,11 @@ mkdir -p "$consumer_home" "$consumer_packages"
         dotnet build Library.csproj --no-restore
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
         dotnet build Consumer.csproj --no-restore
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet msbuild Consumer.csproj -t:StageRustyEngineCoreClrProduct \
+            -p:RustyEngineProductBindHost=127.0.0.1 \
+            -p:RustyEngineProductPort=40821 \
+            -p:RustyEngineProductLiveDebug=true
 )
 (
     cd "$source_override_dir"
@@ -149,14 +173,68 @@ jq -e --arg package "Rusty.Engine/$package_version" \
     exit 1
 }
 
-rg -q 'BindV1' "$consumer_dir/obj" || {
-    echo "test-csharp-sdk-package: ProductGenerator did not emit BindV1 from the package." >&2
+staged_product_directory=$(cd "$consumer_dir" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+    dotnet msbuild Consumer.csproj -getProperty:RustyEngineStagedProductDirectory | tail -n 1)
+[[ "$staged_product_directory" = /* ]] || {
+    echo "test-csharp-sdk-package: staged Product directory was not absolute: $staged_product_directory" >&2
     exit 1
 }
-rg -q 'rusty-engine-sdk/v1' "$consumer_dir/obj" || {
-    echo "test-csharp-sdk-package: generated product identity does not match #7696." >&2
+[[ -f "$staged_product_directory/product.json" ]] || {
+    echo "test-csharp-sdk-package: CoreCLR staging did not emit product.json." >&2
     exit 1
 }
+[[ -f "$staged_product_directory/coreclr/Rusty.Engine.Product.dll" ]] || {
+    echo "test-csharp-sdk-package: CoreCLR staging did not emit the generated composition assembly." >&2
+    exit 1
+}
+[[ -f "$staged_product_directory/coreclr/Rusty.Engine.Product.runtimeconfig.json" ]] || {
+    echo "test-csharp-sdk-package: CoreCLR staging did not emit the generated runtimeconfig." >&2
+    exit 1
+}
+[[ -f "$staged_product_directory/coreclr/Rusty.Engine.dll" && -f "$staged_product_directory/coreclr/Rusty.Engine.Product.deps.json" ]] || {
+    echo "test-csharp-sdk-package: CoreCLR staging did not retain its managed dependency closure." >&2
+    exit 1
+}
+[[ -f "$staged_product_directory/ui/main.js" && -f "$staged_product_directory/content/trial.txt" ]] || {
+    echo "test-csharp-sdk-package: Product UI/content were not staged." >&2
+    exit 1
+}
+jq -e '.coreclr.assembly == "coreclr/Rusty.Engine.Product.dll" and (.nativeAot | not)' \
+    "$staged_product_directory/product.json" >/dev/null || {
+    echo "test-csharp-sdk-package: CoreCLR manifest shape is not the V1 Product bundle." >&2
+    exit 1
+}
+jq -e '.server == {"bindHost":"127.0.0.1","port":40821,"liveDebug":true}' \
+    "$staged_product_directory/product.json" >/dev/null || {
+    echo "test-csharp-sdk-package: SDK staging did not apply the server override properties." >&2
+    exit 1
+}
+jq -e '.lifecycle == {"mode":"realtime","fixedStep":{"hz":60,"maxCatchUpSteps":4}} and .input.intents == [{"id":"fixture.move","value":"digital"}] and .input.mappings == [{"id":"fixture.move","intent":"fixture.move","trigger":"key:key-w:held"}]' \
+    "$staged_product_directory/product.json" >/dev/null || {
+    echo "test-csharp-sdk-package: SDK staging did not emit the declared lifecycle/input metadata." >&2
+    exit 1
+}
+(
+    cd "$consumer_dir"
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet msbuild Consumer.csproj -t:VerifyRustyEngineAot \
+            -p:RustyEngineProductBindHost=127.0.0.1 \
+            -p:RustyEngineProductPort=40821 \
+            -p:RustyEngineProductLiveDebug=true
+)
+[[ -f "$staged_product_directory/native/Rusty.Engine.Product.so" ]] || {
+    echo "test-csharp-sdk-package: explicit linux-x64 NativeAOT verification did not stage its module." >&2
+    exit 1
+}
+jq -e '.nativeAot.module == "native/Rusty.Engine.Product.so" and .coreclr.assembly == "coreclr/Rusty.Engine.Product.dll"' \
+    "$staged_product_directory/product.json" >/dev/null || {
+    echo "test-csharp-sdk-package: NativeAOT staging did not preserve the same Product bundle." >&2
+    exit 1
+}
+if find "$consumer_dir" -path '*/NativeProduct.cs' -o -path '*/NativeProduct.csproj' | grep -q .; then
+    echo "test-csharp-sdk-package: ordinary package consumer acquired a checked NativeProduct bridge." >&2
+    exit 1
+fi
 if rg -F -q "$repo_root" "$consumer_dir/obj" "$consumer_packages"; then
     echo "test-csharp-sdk-package: package-only consumer leaked an Engine source path." >&2
     exit 1

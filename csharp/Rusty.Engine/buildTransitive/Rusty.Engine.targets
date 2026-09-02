@@ -2,4 +2,139 @@
   <ItemGroup Condition="'$(RustyEngineUseSourceDevelopment)' != 'true'">
     <Analyzer Include="$(MSBuildThisFileDirectory)analyzers/Rusty.Engine.ProductGenerator.dll" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <_RustyEngineCompositionRoot>$([System.IO.Path]::GetFullPath('$(RustyEngineStagedProductDirectory)/../Composition'))</_RustyEngineCompositionRoot>
+    <_RustyEngineCoreClrCompositionProject>$(_RustyEngineCompositionRoot)/coreclr/Rusty.Engine.Product.csproj</_RustyEngineCoreClrCompositionProject>
+    <_RustyEngineNativeAotCompositionProject>$(_RustyEngineCompositionRoot)/nativeaot/Rusty.Engine.Product.csproj</_RustyEngineNativeAotCompositionProject>
+    <_RustyEngineCoreClrOutputDirectory>$(_RustyEngineCompositionRoot)/coreclr/output</_RustyEngineCoreClrOutputDirectory>
+    <_RustyEngineNativeAotOutputDirectory>$(_RustyEngineCompositionRoot)/nativeaot/output</_RustyEngineNativeAotOutputDirectory>
+    <_RustyEngineStagingDirectory>$(RustyEngineStagedProductDirectory).next</_RustyEngineStagingDirectory>
+    <_RustyEngineProductAssembly>Rusty.Engine.Product.dll</_RustyEngineProductAssembly>
+    <_RustyEngineProductRuntimeConfig>Rusty.Engine.Product.runtimeconfig.json</_RustyEngineProductRuntimeConfig>
+    <_RustyEngineProductNativeModule>Rusty.Engine.Product.so</_RustyEngineProductNativeModule>
+    <_RustyEngineCompositionPackageExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</_RustyEngineCompositionPackageExcludeAssets>
+    <_RustyEngineManifestFixedStep Condition="'$(RustyEngineProductLifecycleMode)' == 'realtime'">,&quot;fixedStep&quot;:{&quot;hz&quot;:$(RustyEngineProductFixedStepHz),&quot;maxCatchUpSteps&quot;:$(RustyEngineProductFixedStepMaxCatchUpSteps)}</_RustyEngineManifestFixedStep>
+  </PropertyGroup>
+
+  <!-- The generated project names one explicit ordinary-product type. It does
+       not scan assemblies or introduce a product framework registration API. -->
+  <Target Name="GenerateRustyEngineProductComposition"
+          BeforeTargets="StageRustyEngineCoreClrProduct;VerifyRustyEngineAot">
+    <Error Condition="'$(RustyEngineProductEntryType)' == ''"
+           Text="RustyEngineProductEntryType is required. Set it to the fully-qualified IEngineProduct implementation in the ordinary product project." />
+    <Error Condition="!Exists('$(RustyEngineProductUiRoot)')"
+           Text="RustyEngineProductUiRoot does not exist: $(RustyEngineProductUiRoot)" />
+    <Error Condition="!Exists('$(RustyEngineProductContentRoot)')"
+           Text="RustyEngineProductContentRoot does not exist: $(RustyEngineProductContentRoot)" />
+    <Error Condition="'$(RustyEngineProductLifecycleMode)' == 'realtime' and ('$(RustyEngineProductFixedStepHz)' == '' or '$(RustyEngineProductFixedStepMaxCatchUpSteps)' == '')"
+           Text="Realtime RustyEngineProductLifecycleMode requires RustyEngineProductFixedStepHz and RustyEngineProductFixedStepMaxCatchUpSteps." />
+    <MakeDir Directories="$(_RustyEngineCompositionRoot)/coreclr;$(_RustyEngineCompositionRoot)/nativeaot;$(_RustyEngineCoreClrOutputDirectory);$(_RustyEngineNativeAotOutputDirectory)" />
+    <WriteLinesToFile File="$(_RustyEngineCompositionRoot)/ProductEntry.g.cs" Overwrite="true"
+                      Lines="using Rusty.Engine%3B&#xA;[assembly: EngineProduct(typeof($(RustyEngineProductEntryType)))]" />
+    <WriteLinesToFile File="$(_RustyEngineCompositionRoot)/Directory.Build.props" Overwrite="true"
+                      Lines="&lt;Project&gt;&lt;PropertyGroup&gt;&lt;AllowUnsafeBlocks&gt;true&lt;/AllowUnsafeBlocks&gt;&lt;CopyLocalLockFileAssemblies&gt;true&lt;/CopyLocalLockFileAssemblies&gt;&lt;EmitCompilerGeneratedFiles&gt;true&lt;/EmitCompilerGeneratedFiles&gt;&lt;/PropertyGroup&gt;&lt;/Project&gt;" />
+    <WriteLinesToFile File="$(_RustyEngineCoreClrCompositionProject)" Overwrite="true"
+                      Lines="&lt;Project Sdk=&quot;Microsoft.NET.Sdk&quot;&gt;&#xA;  &lt;PropertyGroup&gt;&#xA;    &lt;TargetFramework&gt;$(TargetFramework)&lt;/TargetFramework&gt;&#xA;    &lt;OutputType&gt;Library&lt;/OutputType&gt;&#xA;    &lt;GenerateRuntimeConfigurationFiles&gt;true&lt;/GenerateRuntimeConfigurationFiles&gt;&#xA;    &lt;EnableDefaultCompileItems&gt;false&lt;/EnableDefaultCompileItems&gt;&#xA;    &lt;AssemblyName&gt;Rusty.Engine.Product&lt;/AssemblyName&gt;&#xA;    &lt;OutputPath&gt;$(_RustyEngineCoreClrOutputDirectory)/&lt;/OutputPath&gt;&#xA;    &lt;BaseIntermediateOutputPath&gt;$(_RustyEngineCompositionRoot)/coreclr/obj/&lt;/BaseIntermediateOutputPath&gt;&#xA;    &lt;AppendTargetFrameworkToOutputPath&gt;false&lt;/AppendTargetFrameworkToOutputPath&gt;&#xA;    &lt;AppendRuntimeIdentifierToOutputPath&gt;false&lt;/AppendRuntimeIdentifierToOutputPath&gt;&#xA;    &lt;RustyEngineUseSourceDevelopment&gt;$(RustyEngineUseSourceDevelopment)&lt;/RustyEngineUseSourceDevelopment&gt;&#xA;    &lt;RustyEngineSourceDevelopmentPath&gt;$(RustyEngineSourceDevelopmentPath)&lt;/RustyEngineSourceDevelopmentPath&gt;&#xA;  &lt;/PropertyGroup&gt;&#xA;  &lt;ItemGroup&gt;&#xA;    &lt;Compile Include=&quot;../ProductEntry.g.cs&quot; /&gt;&#xA;    &lt;ProjectReference Include=&quot;$(MSBuildProjectFullPath)&quot; /&gt;&#xA;    &lt;PackageReference Include=&quot;Rusty.Engine&quot; Version=&quot;$(RustyEngineSdkPackageVersion)&quot; ExcludeAssets=&quot;$(_RustyEngineCompositionPackageExcludeAssets)&quot; /&gt;&#xA;  &lt;/ItemGroup&gt;&#xA;&lt;/Project&gt;" />
+    <WriteLinesToFile File="$(_RustyEngineNativeAotCompositionProject)" Overwrite="true"
+                      Lines="&lt;Project Sdk=&quot;Microsoft.NET.Sdk&quot;&gt;&#xA;  &lt;PropertyGroup&gt;&#xA;    &lt;TargetFramework&gt;$(TargetFramework)&lt;/TargetFramework&gt;&#xA;    &lt;OutputType&gt;Library&lt;/OutputType&gt;&#xA;    &lt;EnableDefaultCompileItems&gt;false&lt;/EnableDefaultCompileItems&gt;&#xA;    &lt;AssemblyName&gt;Rusty.Engine.Product&lt;/AssemblyName&gt;&#xA;    &lt;PublishAot&gt;true&lt;/PublishAot&gt;&#xA;    &lt;NativeLib&gt;Shared&lt;/NativeLib&gt;&#xA;    &lt;AllowUnsafeBlocks&gt;true&lt;/AllowUnsafeBlocks&gt;&#xA;    &lt;InvariantGlobalization&gt;true&lt;/InvariantGlobalization&gt;&#xA;    &lt;StripSymbols&gt;true&lt;/StripSymbols&gt;&#xA;    &lt;RuntimeIdentifier&gt;$(RustyEngineNativeAotRuntimeIdentifier)&lt;/RuntimeIdentifier&gt;&#xA;    &lt;OutputPath&gt;$(_RustyEngineNativeAotOutputDirectory)/&lt;/OutputPath&gt;&#xA;    &lt;PublishDir&gt;$(_RustyEngineNativeAotOutputDirectory)/&lt;/PublishDir&gt;&#xA;    &lt;BaseIntermediateOutputPath&gt;$(_RustyEngineCompositionRoot)/nativeaot/obj/&lt;/BaseIntermediateOutputPath&gt;&#xA;    &lt;AppendTargetFrameworkToOutputPath&gt;false&lt;/AppendTargetFrameworkToOutputPath&gt;&#xA;    &lt;AppendRuntimeIdentifierToOutputPath&gt;false&lt;/AppendRuntimeIdentifierToOutputPath&gt;&#xA;    &lt;RustyEngineUseSourceDevelopment&gt;$(RustyEngineUseSourceDevelopment)&lt;/RustyEngineUseSourceDevelopment&gt;&#xA;    &lt;RustyEngineSourceDevelopmentPath&gt;$(RustyEngineSourceDevelopmentPath)&lt;/RustyEngineSourceDevelopmentPath&gt;&#xA;  &lt;/PropertyGroup&gt;&#xA;  &lt;ItemGroup&gt;&#xA;    &lt;Compile Include=&quot;../ProductEntry.g.cs&quot; /&gt;&#xA;    &lt;ProjectReference Include=&quot;$(MSBuildProjectFullPath)&quot; /&gt;&#xA;    &lt;PackageReference Include=&quot;Rusty.Engine&quot; Version=&quot;$(RustyEngineSdkPackageVersion)&quot; ExcludeAssets=&quot;$(_RustyEngineCompositionPackageExcludeAssets)&quot; /&gt;&#xA;  &lt;/ItemGroup&gt;&#xA;&lt;/Project&gt;" />
+  </Target>
+
+  <Target Name="BuildRustyEngineCoreClrProduct"
+          DependsOnTargets="GenerateRustyEngineProductComposition">
+    <MSBuild Projects="$(_RustyEngineCoreClrCompositionProject)" Targets="Restore;Build"
+             Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <!-- CoreCLR is the normal, explicit staging operation used by development. -->
+  <Target Name="StageRustyEngineCoreClrProduct"
+          DependsOnTargets="BuildRustyEngineCoreClrProduct">
+    <PropertyGroup>
+      <_RustyEngineManifestIntents>@(RustyEngineProductInputIntent-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;value&quot;:&quot;%(Value)&quot;}', ',')</_RustyEngineManifestIntents>
+      <_RustyEngineManifestMappings>@(RustyEngineProductInputMapping-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;intent&quot;:&quot;%(Intent)&quot;,&quot;trigger&quot;:&quot;%(Trigger)&quot;}', ',')</_RustyEngineManifestMappings>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_RustyEngineStagingDirectory)" />
+    <MakeDir Directories="$(_RustyEngineStagingDirectory)/coreclr;$(_RustyEngineStagingDirectory)/ui;$(_RustyEngineStagingDirectory)/ui/$(RustyEngineProductUiAssets);$(_RustyEngineStagingDirectory)/content" />
+    <ItemGroup>
+      <_RustyEngineCoreClrOutputFiles Include="$(_RustyEngineCoreClrOutputDirectory)/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_RustyEngineCoreClrOutputFiles)"
+          DestinationFolder="$(_RustyEngineStagingDirectory)/coreclr" />
+    <ItemGroup>
+      <_RustyEngineUiFiles Include="$(RustyEngineProductUiRoot)/**/*" />
+      <_RustyEngineContentFiles Include="$(RustyEngineProductContentRoot)/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_RustyEngineUiFiles)"
+          DestinationFiles="@(_RustyEngineUiFiles->'$(_RustyEngineStagingDirectory)/ui/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="@(_RustyEngineContentFiles)"
+          DestinationFiles="@(_RustyEngineContentFiles->'$(_RustyEngineStagingDirectory)/content/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <WriteLinesToFile File="$(_RustyEngineStagingDirectory)/product.json" Overwrite="true"
+                      Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;},&quot;coreclr&quot;:{&quot;assembly&quot;:&quot;coreclr/$(_RustyEngineProductAssembly)&quot;,&quot;runtimeconfig&quot;:&quot;coreclr/$(_RustyEngineProductRuntimeConfig)&quot;},&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
+    <CallTarget Targets="PromoteRustyEngineStagedProduct" />
+    <Message Importance="High" Text="Rusty Engine CoreCLR Product staged atomically at $(RustyEngineStagedProductDirectory)" />
+  </Target>
+
+  <!-- NativeAOT is opt-in and shares the one generated composition location. -->
+  <Target Name="VerifyRustyEngineAot"
+          DependsOnTargets="StageRustyEngineCoreClrProduct;GenerateRustyEngineProductComposition">
+    <PropertyGroup>
+      <_RustyEngineManifestIntents>@(RustyEngineProductInputIntent-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;value&quot;:&quot;%(Value)&quot;}', ',')</_RustyEngineManifestIntents>
+      <_RustyEngineManifestMappings>@(RustyEngineProductInputMapping-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;intent&quot;:&quot;%(Intent)&quot;,&quot;trigger&quot;:&quot;%(Trigger)&quot;}', ',')</_RustyEngineManifestMappings>
+    </PropertyGroup>
+    <Error Condition="'$(RustyEngineNativeAotRuntimeIdentifier)' != 'linux-x64'"
+           Text="VerifyRustyEngineAot currently proves the supported linux-x64 NativeAOT module; set RustyEngineNativeAotRuntimeIdentifier=linux-x64." />
+    <Exec Command="dotnet publish &quot;$(_RustyEngineNativeAotCompositionProject)&quot; --configuration &quot;$(Configuration)&quot; --runtime &quot;$(RustyEngineNativeAotRuntimeIdentifier)&quot; --output &quot;$(_RustyEngineNativeAotOutputDirectory)&quot;" />
+    <Error Condition="!Exists('$(_RustyEngineNativeAotOutputDirectory)/$(_RustyEngineProductNativeModule)')"
+           Text="NativeAOT publish did not produce $(_RustyEngineProductNativeModule)." />
+    <RemoveDir Directories="$(_RustyEngineStagingDirectory)" />
+    <ItemGroup>
+      <_RustyEngineExistingStagedFiles Include="$(RustyEngineStagedProductDirectory)/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_RustyEngineExistingStagedFiles)"
+          DestinationFiles="@(_RustyEngineExistingStagedFiles->'$(_RustyEngineStagingDirectory)/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <MakeDir Directories="$(_RustyEngineStagingDirectory)/native" />
+    <Copy SourceFiles="$(_RustyEngineNativeAotOutputDirectory)/$(_RustyEngineProductNativeModule)"
+          DestinationFolder="$(_RustyEngineStagingDirectory)/native" />
+    <WriteLinesToFile File="$(_RustyEngineStagingDirectory)/product.json" Overwrite="true"
+                      Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;},&quot;nativeAot&quot;:{&quot;module&quot;:&quot;native/$(_RustyEngineProductNativeModule)&quot;},&quot;coreclr&quot;:{&quot;assembly&quot;:&quot;coreclr/$(_RustyEngineProductAssembly)&quot;,&quot;runtimeconfig&quot;:&quot;coreclr/$(_RustyEngineProductRuntimeConfig)&quot;},&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
+    <CallTarget Targets="PromoteRustyEngineAotStagedProduct" />
+    <Message Importance="High" Text="Rusty Engine linux-x64 NativeAOT Product verified and staged atomically at $(RustyEngineStagedProductDirectory)" />
+  </Target>
+
+  <!-- The supervisor stops the old child before staging and starts a new one
+       only after this target succeeds. Publish all bytes before product.json:
+       a new host therefore admits a complete bundle or no manifest at all. -->
+  <Target Name="PromoteRustyEngineStagedProduct">
+    <RemoveDir Directories="$(RustyEngineStagedProductDirectory)" />
+    <MakeDir Directories="$(RustyEngineStagedProductDirectory);$(RustyEngineStagedProductDirectory)/ui/$(RustyEngineProductUiAssets)" />
+    <ItemGroup>
+      <_RustyEnginePromotionFiles Include="$(_RustyEngineStagingDirectory)/**/*"
+                                   Exclude="$(_RustyEngineStagingDirectory)/product.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_RustyEnginePromotionFiles)"
+          DestinationFiles="@(_RustyEnginePromotionFiles->'$(RustyEngineStagedProductDirectory)/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="$(_RustyEngineStagingDirectory)/product.json"
+          DestinationFolder="$(RustyEngineStagedProductDirectory)" />
+    <RemoveDir Directories="$(_RustyEngineStagingDirectory)" />
+  </Target>
+
+  <!-- MSBuild executes a named target once per invocation. NativeAOT follows
+       CoreCLR in VerifyRustyEngineAot, so it needs its own final promotion. -->
+  <Target Name="PromoteRustyEngineAotStagedProduct">
+    <RemoveDir Directories="$(RustyEngineStagedProductDirectory)" />
+    <MakeDir Directories="$(RustyEngineStagedProductDirectory);$(RustyEngineStagedProductDirectory)/ui/$(RustyEngineProductUiAssets)" />
+    <ItemGroup>
+      <_RustyEngineAotPromotionFiles Include="$(_RustyEngineStagingDirectory)/**/*"
+                                      Exclude="$(_RustyEngineStagingDirectory)/product.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_RustyEngineAotPromotionFiles)"
+          DestinationFiles="@(_RustyEngineAotPromotionFiles->'$(RustyEngineStagedProductDirectory)/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="$(_RustyEngineStagingDirectory)/product.json"
+          DestinationFolder="$(RustyEngineStagedProductDirectory)" />
+    <RemoveDir Directories="$(_RustyEngineStagingDirectory)" />
+  </Target>
+
+  <Target Name="StageRustyEngineProductBundle"
+          DependsOnTargets="StageRustyEngineCoreClrProduct"
+          Returns="$(RustyEngineStagedProductDirectory)" />
 </Project>
