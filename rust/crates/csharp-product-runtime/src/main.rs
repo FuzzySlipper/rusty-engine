@@ -11,15 +11,17 @@ use csharp_product_runtime::{
     CsharpProductRuntimeConfig,
 };
 use product_dev_host::{
-    product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
-    ProductDevHostConfig, ProductDevLog, ProductDevRendererResource,
+    ProductDevBundle, ProductDevBundleEntry, ProductDevHost, ProductDevHostConfig, ProductDevLog,
+    ProductDevRendererResource,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
     InputAxis, InputContext, InputEdge, IntentValueKind, KeyboardControl, PointerButton,
     RuntimeInputMapping, RuntimeInputTrigger,
 };
-use runtime_lifecycle::RuntimeLifecycleConfig;
+
+mod product_bundle;
+use product_bundle::ProductBundle;
 
 const MAX_PHYSICAL_MAPPINGS: usize = 256;
 const MAX_MAPPING_CHORD_CONTROLS: usize = 8;
@@ -44,24 +46,33 @@ fn main() -> Result<(), String> {
     };
     let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
     let content =
-        CsharpProductContent::admit(&args.content_dir).map_err(|error| error.to_string())?;
+        CsharpProductContent::admit(args.content_root()).map_err(|error| error.to_string())?;
+    let (library, runtimeconfig) = args.selected_artifacts()?;
     let mut runtime = match args.loader {
         ProductLoader::NativeAot => CsharpProductRuntime::load_admitted(
-            &args.library,
+            library,
             content,
             args.runtime_config().with_diagnostics(diagnostics.clone()),
         ),
         ProductLoader::CoreClr => CsharpProductRuntime::load_coreclr_admitted(
-            &args.library,
-            args.runtime_config_path
-                .as_ref()
-                .expect("CoreCLR arguments require a runtimeconfig path"),
+            library,
+            runtimeconfig.expect("CoreCLR Product manifest declares runtimeconfig"),
             content,
             args.runtime_config().with_diagnostics(diagnostics.clone()),
         ),
     }
     .map_err(|error| error.to_string())?;
-    let bundle = load_bundle(&args.bundle_dir, runtime.render_resources())?;
+    let bundle = match &args.product {
+        Some(product) => load_bundle(
+            &runtime_browser_root()?,
+            product,
+            runtime.render_resources(),
+        )?,
+        None => load_legacy_bundle(
+            args.bundle_dir.as_deref().expect("legacy bundle path"),
+            runtime.render_resources(),
+        )?,
+    };
     if args.exercise {
         runtime
             .exercise_updates()
@@ -78,9 +89,9 @@ fn main() -> Result<(), String> {
         .transpose()?;
     let host = ProductDevHost::start(
         runtime,
-        ProductDevHostConfig::new(args.port, bundle)
-            .with_bind_host(args.bind_host)
-            .with_live_debug(args.live_debug)
+        ProductDevHostConfig::new(args.port(), bundle)
+            .with_bind_host(args.bind_host())
+            .with_live_debug(args.live_debug())
             .with_diagnostics(diagnostics),
     )
     .map_err(|error| error.to_string())?;
@@ -282,18 +293,19 @@ fn performance_summary(lane: &str, iterations: u32, durations: &[u128]) -> serde
 #[derive(Debug)]
 struct Arguments {
     loader: ProductLoader,
-    library: PathBuf,
+    product: Option<ProductBundle>,
+    library: Option<PathBuf>,
     runtime_config_path: Option<PathBuf>,
-    bundle_dir: PathBuf,
-    content_dir: PathBuf,
+    bundle_dir: Option<PathBuf>,
+    content_dir: Option<PathBuf>,
     port: u16,
     bind_host: Ipv4Addr,
-    mode: RuntimeMode,
+    mode: Option<RuntimeMode>,
     direct_intents: Vec<DirectInputIntentDescriptor>,
     physical_mappings: Vec<RuntimeInputMapping>,
+    legacy_live_debug: bool,
     persistence_root: Option<PathBuf>,
     content_store_root: Option<PathBuf>,
-    live_debug: bool,
     exercise: bool,
     performance_probe: Option<u32>,
 }
@@ -308,7 +320,6 @@ struct StagedLaunchInput {
 
 impl StagedLaunchInput {
     const ARTIFACT: &'static str = "rusty.product.runtime-launch";
-
     fn read(path: &Path) -> Result<ProductLoader, String> {
         let bytes = fs::read(path).map_err(|error| {
             format!(
@@ -317,10 +328,7 @@ impl StagedLaunchInput {
             )
         })?;
         let input: Self = serde_json::from_slice(&bytes).map_err(|error| {
-            format!(
-                "--staged-launch `{}` is not a valid runtime launch input: {error}",
-                path.display()
-            )
+            format!("--staged-launch `{}` is not valid: {error}", path.display())
         })?;
         if input.artifact != Self::ARTIFACT || input.schema_version != 1 {
             return Err(format!(
@@ -373,12 +381,11 @@ impl RuntimeMode {
             _ => Err("--mode must be realtime, demand, or external".to_owned()),
         }
     }
-
-    fn lifecycle_config(self) -> RuntimeLifecycleConfig {
+    fn lifecycle_config(self) -> runtime_lifecycle::RuntimeLifecycleConfig {
         match self {
             Self::Realtime => CsharpProductRuntime::standard_realtime_config(),
-            Self::Demand => RuntimeLifecycleConfig::Demand,
-            Self::External => RuntimeLifecycleConfig::External,
+            Self::Demand => runtime_lifecycle::RuntimeLifecycleConfig::Demand,
+            Self::External => runtime_lifecycle::RuntimeLifecycleConfig::External,
         }
     }
 }
@@ -386,9 +393,15 @@ impl RuntimeMode {
 impl Arguments {
     fn runtime_config(&self) -> CsharpProductRuntimeConfig {
         let (direct_intents, physical_mappings) = self.input_configuration();
-        let mut config =
-            CsharpProductRuntimeConfig::new(self.mode.lifecycle_config(), direct_intents)
-                .with_physical_mappings(physical_mappings);
+        let lifecycle = match &self.product {
+            Some(product) => product.lifecycle,
+            None => self
+                .mode
+                .expect("legacy mode is required")
+                .lifecycle_config(),
+        };
+        let mut config = CsharpProductRuntimeConfig::new(lifecycle, direct_intents)
+            .with_physical_mappings(physical_mappings);
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());
         }
@@ -398,22 +411,27 @@ impl Arguments {
         config
     }
 
-    /// The exercise retains its existing fixed declaration while normal launch
-    /// declarations remain exactly in command-line order.
     fn input_configuration(&self) -> (Vec<DirectInputIntentDescriptor>, Vec<RuntimeInputMapping>) {
-        let mut direct_intents = self.direct_intents.clone();
-        let mut physical_mappings = self.physical_mappings.clone();
-        if self.exercise
-            && !direct_intents
+        let (mut direct_intents, mut physical_mappings) = match &self.product {
+            Some(product) => (
+                product.direct_intents.clone(),
+                product.physical_mappings.clone(),
+            ),
+            None => (self.direct_intents.clone(), self.physical_mappings.clone()),
+        };
+        if self.product.is_none() && self.exercise {
+            if !direct_intents
                 .iter()
                 .any(|descriptor| descriptor.id() == "runtime.exercise.move")
-        {
-            direct_intents.push(
-                DirectInputIntentDescriptor::new("runtime.exercise.move", IntentValueKind::Digital)
+            {
+                direct_intents.push(
+                    DirectInputIntentDescriptor::new(
+                        "runtime.exercise.move",
+                        IntentValueKind::Digital,
+                    )
                     .expect("fixed exercise mapping intent"),
-            );
-        }
-        if self.exercise {
+                );
+            }
             physical_mappings.push(
                 RuntimeInputMapping::new(
                     "runtime.exercise.move",
@@ -431,17 +449,48 @@ impl Arguments {
         (direct_intents, physical_mappings)
     }
 
-    fn validate_input_configuration(&self) -> Result<(), String> {
-        let (direct_intents, physical_mappings) = self.input_configuration();
-        CompiledInputMappings::standard(direct_intents, physical_mappings)
-            .map(|_| ())
-            .map_err(|error| format!("--physical-mapping configuration is invalid: {error}"))
+    fn selected_artifacts(&self) -> Result<(&Path, Option<&Path>), String> {
+        match &self.product {
+            Some(product) => product.selected_artifacts(self.loader),
+            None => Ok((
+                self.library.as_deref().expect("legacy library required"),
+                self.runtime_config_path.as_deref(),
+            )),
+        }
+    }
+
+    fn content_root(&self) -> &Path {
+        self.product
+            .as_ref()
+            .map(|product| product.content_root.as_path())
+            .unwrap_or_else(|| {
+                self.content_dir
+                    .as_deref()
+                    .expect("legacy content required")
+            })
+    }
+    fn port(&self) -> u16 {
+        self.product
+            .as_ref()
+            .map_or(self.port, |product| product.port)
+    }
+    fn bind_host(&self) -> Ipv4Addr {
+        self.product
+            .as_ref()
+            .map_or(self.bind_host, |product| product.bind_host)
+    }
+    fn live_debug(&self) -> bool {
+        self.product
+            .as_ref()
+            .is_some_and(|product| product.live_debug)
+            || self.legacy_live_debug
     }
 
     fn parse_from(values: impl IntoIterator<Item = String>) -> Result<Self, String> {
-        let mut library = None;
         let mut loader = None;
+        let mut product = None;
         let mut staged_launch = None;
+        let mut library = None;
         let mut runtime_config_path = None;
         let mut bundle_dir = None;
         let mut content_dir = None;
@@ -462,6 +511,11 @@ impl Arguments {
                     loader = Some(ProductLoader::parse(
                         &values.next().ok_or("--loader requires a value")?,
                     )?)
+                }
+                "--product" => {
+                    product = Some(PathBuf::from(
+                        values.next().ok_or("--product requires a directory")?,
+                    ))
                 }
                 "--staged-launch" => {
                     staged_launch = Some(PathBuf::from(
@@ -491,6 +545,22 @@ impl Arguments {
                         &values.next().ok_or("--mode requires a value")?,
                     )?)
                 }
+                "--live-debug" => live_debug = true,
+                "--direct-intent" => {
+                    direct_intents.push(parse_direct_intent(&values.next().ok_or(
+                        "--direct-intent requires id=digital, id=axis, or id=payload:contract",
+                    )?)?)
+                }
+                "--physical-mapping" => {
+                    if physical_mappings.len() == MAX_PHYSICAL_MAPPINGS {
+                        return Err(format!("--physical-mapping accepts at most {MAX_PHYSICAL_MAPPINGS} declarations"));
+                    }
+                    physical_mappings.push(parse_physical_mapping(
+                        &values
+                            .next()
+                            .ok_or("--physical-mapping requires a declaration")?,
+                    )?);
+                }
                 "--persistence-root" => {
                     persistence_root = Some(PathBuf::from(
                         values.next().ok_or("--persistence-root requires a value")?,
@@ -502,24 +572,6 @@ impl Arguments {
                             .next()
                             .ok_or("--content-store-root requires a value")?,
                     ))
-                }
-                "--live-debug" => live_debug = true,
-                "--direct-intent" => {
-                    direct_intents.push(parse_direct_intent(&values.next().ok_or(
-                        "--direct-intent requires id=digital, id=axis, or id=payload:contract",
-                    )?)?)
-                }
-                "--physical-mapping" => {
-                    if physical_mappings.len() == MAX_PHYSICAL_MAPPINGS {
-                        return Err(format!(
-                            "--physical-mapping accepts at most {MAX_PHYSICAL_MAPPINGS} declarations"
-                        ));
-                    }
-                    physical_mappings.push(parse_physical_mapping(
-                        &values
-                            .next()
-                            .ok_or("--physical-mapping requires a declaration")?,
-                    )?);
                 }
                 "--exercise" => exercise = true,
                 "--performance-probe" => {
@@ -535,7 +587,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host [--loader <nativeaot|coreclr> | --staged-launch <runtime-launch.json>] --library <product.so|product.dll> [--runtimeconfig <product.runtimeconfig.json>] --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--live-debug] [--exercise] [--performance-probe <1..=256>]\n\n`--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity. `--staged-launch` is the deliberately narrow V1 runtime input: it selects only `nativeaot` or `coreclr` and leaves product bundle layout to the later product-bundle owner. `--live-debug` explicitly admits the trusted product live-debug HTTP routes; they are absent by default. `--performance-probe` runs bounded demand-update crossover and local HTTP timing, prints RUSTY_PERF JSON, and exits. The default loader is `nativeaot`, preserving the V1-only generated `rusty_product_bind_v1` symbol. Select `coreclr` explicitly for development-only managed loading; it requires --runtimeconfig and resolves the same generated ProductExports.BindV1 entry point through nethost/hostfxr.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -548,42 +600,91 @@ impl Arguments {
         if loader.is_some() && staged_loader.is_some() {
             return Err("--loader and --staged-launch are mutually exclusive".to_owned());
         }
+        let product = product.map(|root| ProductBundle::read(&root)).transpose()?;
+        if product.is_some()
+            && (library.is_some()
+                || runtime_config_path.is_some()
+                || bundle_dir.is_some()
+                || content_dir.is_some()
+                || mode.is_some()
+                || staged_launch.is_some()
+                || port != 0
+                || bind_host != Ipv4Addr::LOCALHOST
+                || live_debug
+                || !direct_intents.is_empty()
+                || !physical_mappings.is_empty())
+        {
+            return Err("--product is the canonical bundle launch and cannot be combined with legacy product arguments".to_owned());
+        }
+        let loader = match (product.as_ref(), loader.or(staged_loader)) {
+            (Some(_), Some(loader)) => loader,
+            (Some(_), None) => {
+                return Err(
+                    "--loader is required with --product; choose nativeaot or coreclr".to_owned(),
+                )
+            }
+            (None, Some(loader)) => loader,
+            (None, None) => ProductLoader::NativeAot,
+        };
         let arguments = Self {
-            loader: loader.or(staged_loader).unwrap_or(ProductLoader::NativeAot),
-            library: library.ok_or("--library is required")?,
+            loader,
+            product,
+            library,
             runtime_config_path,
-            bundle_dir: bundle_dir.ok_or("--bundle-dir is required")?,
-            content_dir: content_dir.ok_or("--content-dir is required")?,
+            bundle_dir,
+            content_dir,
             port,
             bind_host,
-            mode: mode.ok_or("--mode is required")?,
+            mode,
             direct_intents,
             physical_mappings,
             persistence_root,
             content_store_root,
-            live_debug,
+            legacy_live_debug: live_debug,
             exercise,
             performance_probe,
         };
         if arguments.exercise && arguments.performance_probe.is_some() {
             return Err("--exercise and --performance-probe are mutually exclusive".to_owned());
         }
-        if arguments.performance_probe.is_some() && !matches!(arguments.mode, RuntimeMode::Demand) {
+        let is_demand = match &arguments.product {
+            Some(product) => matches!(
+                product.lifecycle,
+                runtime_lifecycle::RuntimeLifecycleConfig::Demand
+            ),
+            None => matches!(arguments.mode, Some(RuntimeMode::Demand)),
+        };
+        if arguments.performance_probe.is_some() && !is_demand {
             return Err("--performance-probe requires --mode demand".to_owned());
         }
-        match (arguments.loader, &arguments.runtime_config_path) {
-            (ProductLoader::CoreClr, None) => {
-                return Err(
-                    "--loader coreclr requires --runtimeconfig <product.runtimeconfig.json>"
-                        .to_owned(),
-                );
+        if let Some(product) = &arguments.product {
+            product.selected_artifacts(arguments.loader)?;
+        } else {
+            if arguments.library.is_none()
+                || arguments.bundle_dir.is_none()
+                || arguments.content_dir.is_none()
+                || arguments.mode.is_none()
+            {
+                return Err("legacy launch requires --library, --bundle-dir, --content-dir, and --mode (or use --product)".to_owned());
             }
-            (ProductLoader::NativeAot, Some(_)) => {
-                return Err("--runtimeconfig is only valid with --loader coreclr".to_owned());
+            match (arguments.loader, &arguments.runtime_config_path) {
+                (ProductLoader::CoreClr, None) => {
+                    return Err(
+                        "--loader coreclr requires --runtimeconfig <product.runtimeconfig.json>"
+                            .to_owned(),
+                    )
+                }
+                (ProductLoader::NativeAot, Some(_)) => {
+                    return Err("--runtimeconfig is only valid with --loader coreclr".to_owned())
+                }
+                _ => {}
             }
-            _ => {}
+            CompiledInputMappings::standard(
+                arguments.direct_intents.clone(),
+                arguments.physical_mappings.clone(),
+            )
+            .map_err(|error| format!("--physical-mapping configuration is invalid: {error}"))?;
         }
-        arguments.validate_input_configuration()?;
         Ok(arguments)
     }
 }
@@ -842,14 +943,42 @@ fn parse_controller_axis(value: &str) -> Result<ControllerAxis, String> {
     }
 }
 
+fn runtime_browser_root() -> Result<PathBuf, String> {
+    let executable = env::current_exe()
+        .map_err(|error| format!("could not locate runtime-pack executable: {error}"))?;
+    let pack_root = executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("runtime-pack executable has no pack root")?;
+    let browser = pack_root.join("share/browser");
+    if !browser.is_dir() {
+        return Err(format!(
+            "matched runtime browser shell is missing at `{}`; launch through a runtime pack",
+            browser.display()
+        ));
+    }
+    Ok(browser)
+}
+
 fn load_bundle(
+    root: &Path,
+    product: &ProductBundle,
+    render_resources: &[ProductDevRendererResource],
+) -> Result<ProductDevBundle, String> {
+    let mut entries = Vec::new();
+    collect_bundle(root, root, &mut entries)?;
+    entries.extend(product.browser_entries(render_resources)?);
+    ProductDevBundle::new(entries).map_err(|error| error.to_string())
+}
+
+fn load_legacy_bundle(
     root: &Path,
     render_resources: &[ProductDevRendererResource],
 ) -> Result<ProductDevBundle, String> {
     let mut entries = Vec::new();
     collect_bundle(root, root, &mut entries)?;
     entries.extend(
-        product_dev_renderer_preload_entries(render_resources)
+        product_dev_host::product_dev_renderer_preload_entries(render_resources)
             .map_err(|error| error.to_string())?,
     );
     ProductDevBundle::new(entries).map_err(|error| error.to_string())
