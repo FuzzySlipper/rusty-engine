@@ -45,6 +45,8 @@ export interface ProductBrowserRuntimeOperationResult {
     readonly binding?: RustyApplicationRuntimeIdentity;
     /** Engine-owned cursor after lifecycle input clear/rebind work. */
     readonly nextInputSequence?: string;
+    /** Last simulation step admitted before a resync-required operation result. */
+    readonly admittedThrough?: string;
     readonly readout?: ProductBrowserRuntimeReadout;
     readonly diagnostic?: string;
 }
@@ -52,7 +54,15 @@ export interface ProductBrowserRuntimeInputResult {
     readonly accepted: boolean;
     readonly code: string;
     readonly disposition: ProductBrowserHostFaultDisposition;
+    /** Number of submitted input events (the existing count field). */
     readonly count: number;
+    /** Number of events admitted by the Engine input lane. */
+    readonly acceptedCount?: number;
+    /** Number of safe stale/duplicate events deliberately dropped. */
+    readonly droppedCount?: number;
+    readonly acceptedThrough?: string;
+    readonly consumedThrough?: string;
+    readonly nextInputSequence?: string;
     readonly binding?: RustyApplicationRuntimeIdentity;
     readonly readout?: ProductBrowserRuntimeReadout;
     readonly diagnostic?: string;

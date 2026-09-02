@@ -679,6 +679,80 @@ pub enum RuntimeInputError {
     SnapshotOutOfOrder,
 }
 
+/// Receipt for an ordered input batch. The lane either applies every
+/// non-stale event or restores its checkpoint when a hard error is found.
+/// `accepted_indices` identifies the entries that callers may forward to a
+/// product callback without replaying a safely dropped stale observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeInputBatchReceipt {
+    submitted_count: usize,
+    accepted_count: usize,
+    dropped_count: usize,
+    accepted_through: Option<u64>,
+    consumed_through: Option<u64>,
+    next_sequence: Option<u64>,
+    accepted_indices: Vec<usize>,
+}
+
+impl RuntimeInputBatchReceipt {
+    pub(crate) fn new(
+        submitted_count: usize,
+        accepted_count: usize,
+        dropped_count: usize,
+        accepted_through: Option<u64>,
+        consumed_through: Option<u64>,
+        next_sequence: Option<u64>,
+        accepted_indices: Vec<usize>,
+    ) -> Self {
+        Self {
+            submitted_count,
+            accepted_count,
+            dropped_count,
+            accepted_through,
+            consumed_through,
+            next_sequence,
+            accepted_indices,
+        }
+    }
+
+    pub const fn submitted_count(&self) -> usize {
+        self.submitted_count
+    }
+
+    pub const fn accepted_count(&self) -> usize {
+        self.accepted_count
+    }
+
+    pub const fn dropped_count(&self) -> usize {
+        self.dropped_count
+    }
+
+    /// Highest sequence accepted by this batch, excluding stale/duplicate
+    /// entries. It is absent when the batch contains no newly accepted event.
+    pub const fn accepted_through(&self) -> Option<u64> {
+        self.accepted_through
+    }
+
+    /// Highest sequence observed by this batch, including entries deliberately
+    /// dropped as safe stale/duplicates. This is a batch observation frontier;
+    /// `next_sequence` is the lane's authoritative follow-up cursor.
+    pub const fn consumed_through(&self) -> Option<u64> {
+        self.consumed_through
+    }
+
+    /// Next sequence which the lane will admit, or `None` after sequence space
+    /// is exhausted.
+    pub const fn next_sequence(&self) -> Option<u64> {
+        self.next_sequence
+    }
+
+    /// Indices of entries that changed lane state. The slice is borrowed from
+    /// the receipt and has no ownership of the submitted events.
+    pub fn accepted_indices(&self) -> &[usize] {
+        &self.accepted_indices
+    }
+}
+
 fn validate_product_payload_json(value: &serde_json::Value) -> Result<Vec<u8>, RuntimeInputError> {
     let bytes = serde_json::to_vec(value).map_err(|_| RuntimeInputError::WireMalformed)?;
     if bytes.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES {

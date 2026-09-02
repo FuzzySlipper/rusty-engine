@@ -58,6 +58,26 @@ void test('Engine-published runtime cursor starts physical and direct UI input a
   assert.deepEqual(queue.drain().map((entry) => entry.sequence), ['1', '2']);
 });
 
+void test('same-binding Engine cursor synchronization drops stale input and preserves concurrent entries', () => {
+  const queue = createRustyApplicationInputQueue(8);
+  queue.bindRuntime(INITIAL);
+  queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' });
+  assert.equal(queue.bindRuntime({ ...INITIAL, nextSequence: '2' }), false);
+  assert.equal(queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'released' }), false);
+  assert.deepEqual(queue.drain().map((entry) => entry.sequence), ['2']);
+
+  const concurrent = createRustyApplicationInputQueue(8);
+  concurrent.bindRuntime(INITIAL);
+  concurrent.enqueueFact({ kind: 'key', code: 'key-a', edge: 'pressed' });
+  concurrent.enqueueFact({ kind: 'key', code: 'key-a', edge: 'released' });
+  concurrent.enqueueFact({ kind: 'wheel', x: 0, y: 1 });
+  assert.equal(concurrent.bindRuntime({ ...INITIAL, nextSequence: '2' }), false);
+  assert.deepEqual(concurrent.drain().map((entry) => entry.sequence), ['2']);
+  assert.equal(concurrent.bindRuntime({ ...INITIAL, nextSequence: '1' }), false);
+  assert.equal(concurrent.enqueueFact({ kind: 'key', code: 'key-d', edge: 'pressed' }), false);
+  assert.equal(concurrent.drain()[0]?.sequence, '3');
+});
+
 void test('direct product payload claims are deeply plain, bounded, and immutable', () => {
   const queue = createRustyApplicationInputQueue(8);
   queue.bindRuntime(INITIAL);

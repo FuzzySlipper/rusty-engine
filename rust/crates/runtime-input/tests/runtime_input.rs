@@ -109,6 +109,167 @@ fn compiled_mappings() -> CompiledInputMappings {
     .unwrap()
 }
 
+#[test]
+fn input_batch_rolls_back_a_valid_prefix_and_preserves_pending_held_state() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    let initial = physical(
+        binding,
+        0,
+        RuntimeInputFact::Key {
+            code: KeyboardControl::KeyW,
+            edge: PhysicalEdge::Pressed,
+        },
+    );
+    lane.ingest(initial.clone()).unwrap();
+
+    let invalid_batch = [
+        physical(
+            binding,
+            1,
+            RuntimeInputFact::PointerDelta {
+                x: axis(0.5),
+                y: axis(-0.25),
+            },
+        ),
+        physical(
+            binding,
+            2,
+            RuntimeInputFact::ControllerAxis {
+                axis: ControllerAxis::Axis0,
+                value: axis(1.01),
+            },
+        ),
+    ];
+    assert!(matches!(
+        lane.ingest_batch(&invalid_batch),
+        Err(RuntimeInputError::InvalidControllerAxisValue)
+    ));
+    assert_eq!(lane.last_sequence(), Some(0));
+
+    let correct = physical(
+        binding,
+        1,
+        RuntimeInputFact::PointerDelta {
+            x: axis(0.25),
+            y: axis(0.0),
+        },
+    );
+    let receipt = lane.ingest_batch(std::slice::from_ref(&correct)).unwrap();
+    assert_eq!(receipt.submitted_count(), 1);
+    assert_eq!(receipt.accepted_count(), 1);
+    assert_eq!(receipt.dropped_count(), 0);
+    assert_eq!(receipt.accepted_through(), Some(1));
+    assert_eq!(receipt.consumed_through(), Some(1));
+    assert_eq!(receipt.next_sequence(), Some(2));
+    assert_eq!(receipt.accepted_indices(), &[0]);
+
+    // A lane that never saw the failed prefix must produce the same frame and
+    // envelopes. This covers both the held key and the pending press/axis
+    // mappings that are not directly exposed as mutable implementation state.
+    let (mut expected_lifecycle, expected_binding) = lifecycle_and_binding();
+    let mut expected = RuntimeInputLane::new(compiled_mappings(), expected_binding, context());
+    expected.ingest(initial).unwrap();
+    expected
+        .ingest(physical(
+            expected_binding,
+            1,
+            RuntimeInputFact::PointerDelta {
+                x: axis(0.25),
+                y: axis(0.0),
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        snapshot(&mut lane, &mut lifecycle).unwrap(),
+        snapshot(&mut expected, &mut expected_lifecycle).unwrap()
+    );
+}
+
+#[test]
+fn input_batch_drops_safe_stale_duplicates_without_changing_frontier_or_state() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    let initial = physical(
+        binding,
+        0,
+        RuntimeInputFact::Key {
+            code: KeyboardControl::KeyW,
+            edge: PhysicalEdge::Pressed,
+        },
+    );
+    lane.ingest(initial.clone()).unwrap();
+    lane.ingest(physical(
+        binding,
+        1,
+        RuntimeInputFact::PointerDelta {
+            x: axis(0.5),
+            y: axis(-0.25),
+        },
+    ))
+    .unwrap();
+
+    let stale = physical(
+        binding,
+        1,
+        RuntimeInputFact::PointerDelta {
+            x: axis(4.0),
+            y: axis(4.0),
+        },
+    );
+    let receipt = lane.ingest_batch(std::slice::from_ref(&stale)).unwrap();
+    assert_eq!(receipt.submitted_count(), 1);
+    assert_eq!(receipt.accepted_count(), 0);
+    assert_eq!(receipt.dropped_count(), 1);
+    assert_eq!(receipt.accepted_through(), None);
+    assert_eq!(receipt.consumed_through(), Some(1));
+    assert_eq!(receipt.next_sequence(), Some(2));
+    assert!(receipt.accepted_indices().is_empty());
+    assert_eq!(lane.last_sequence(), Some(1));
+
+    let correct = physical(
+        binding,
+        2,
+        RuntimeInputFact::PointerDelta {
+            x: axis(0.25),
+            y: axis(0.0),
+        },
+    );
+    let correct_receipt = lane.ingest_batch(std::slice::from_ref(&correct)).unwrap();
+    assert_eq!(correct_receipt.accepted_count(), 1);
+    assert_eq!(correct_receipt.accepted_through(), Some(2));
+    assert_eq!(correct_receipt.next_sequence(), Some(3));
+
+    let (mut expected_lifecycle, expected_binding) = lifecycle_and_binding();
+    let mut expected = RuntimeInputLane::new(compiled_mappings(), expected_binding, context());
+    expected.ingest(initial).unwrap();
+    expected
+        .ingest(physical(
+            expected_binding,
+            1,
+            RuntimeInputFact::PointerDelta {
+                x: axis(0.5),
+                y: axis(-0.25),
+            },
+        ))
+        .unwrap();
+    expected
+        .ingest(physical(
+            expected_binding,
+            2,
+            RuntimeInputFact::PointerDelta {
+                x: axis(0.25),
+                y: axis(0.0),
+            },
+        ))
+        .unwrap();
+
+    assert_eq!(
+        snapshot(&mut lane, &mut lifecycle).unwrap(),
+        snapshot(&mut expected, &mut expected_lifecycle).unwrap()
+    );
+}
+
 fn assert_input_snapshot_is_lifecycle_fenced(transition: fn(&mut RuntimeLifecycle)) {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());

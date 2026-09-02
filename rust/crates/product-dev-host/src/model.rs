@@ -1123,6 +1123,11 @@ pub struct ProductDevOperationResult {
     binding: Option<ProductDevRuntimeBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_input_sequence: Option<CanonicalU64>,
+    /// Last lifecycle simulation step admitted before this operation result.
+    /// It is present on a resync receipt when admission has already advanced
+    /// but the downstream callback/update could not be completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admitted_through: Option<CanonicalU64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     readout: Option<ProductDevRuntimeReadout>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1281,6 +1286,18 @@ impl ProductDevDebugResult {
 }
 
 impl ProductDevOperationResult {
+    pub const fn is_accepted(&self) -> bool {
+        self.accepted
+    }
+
+    pub const fn disposition(&self) -> ProductDevFaultDisposition {
+        self.disposition
+    }
+
+    pub const fn admitted_through(&self) -> Option<CanonicalU64> {
+        self.admitted_through
+    }
+
     pub fn accepted(
         operation: ProductDevOperationKind,
         binding: ProductDevRuntimeBinding,
@@ -1300,6 +1317,7 @@ impl ProductDevOperationResult {
             operation,
             binding: Some(binding),
             next_input_sequence: Some(next_input_sequence),
+            admitted_through: None,
             readout: Some(readout),
             diagnostic: None,
         })
@@ -1317,6 +1335,7 @@ impl ProductDevOperationResult {
             operation,
             binding: None,
             next_input_sequence: None,
+            admitted_through: None,
             readout: None,
             diagnostic: Some(diagnostic),
         })
@@ -1334,8 +1353,41 @@ impl ProductDevOperationResult {
             operation,
             binding: None,
             next_input_sequence: None,
+            admitted_through: None,
             readout: None,
             diagnostic: Some(diagnostic),
+        })
+    }
+
+    /// Reports a lifecycle admission which already advanced Rust-owned
+    /// counters but could not safely claim completion of the downstream
+    /// callback. The current binding/readout and admitted frontier let the
+    /// host resynchronize without replaying the operation.
+    pub fn resync_required(
+        operation: ProductDevOperationKind,
+        binding: ProductDevRuntimeBinding,
+        next_input_sequence: CanonicalU64,
+        readout: ProductDevRuntimeReadout,
+        admitted_through: Option<CanonicalU64>,
+        code: impl Into<String>,
+        diagnostic: impl Into<String>,
+    ) -> Result<Self, ProductDevHostError> {
+        if readout.runtime() != binding {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RESULT_BINDING",
+                "runtime resync receipt binding does not match its readout",
+            ));
+        }
+        Ok(Self {
+            accepted: false,
+            code: code.into(),
+            disposition: ProductDevFaultDisposition::ResyncRequired,
+            operation,
+            binding: Some(binding),
+            next_input_sequence: Some(next_input_sequence),
+            admitted_through,
+            readout: Some(readout),
+            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
         })
     }
 }
@@ -1383,7 +1435,19 @@ pub struct ProductDevInputResult {
     accepted: bool,
     code: String,
     disposition: ProductDevFaultDisposition,
+    /// Number of submitted events in this batch. Kept as `count` for
+    /// compatibility with existing host adapters.
     count: usize,
+    /// Number of events admitted into the input lane. A safe stale/duplicate
+    /// drop makes this less than `count` while retaining the current cursor.
+    accepted_count: usize,
+    dropped_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_through: Option<CanonicalU64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consumed_through: Option<CanonicalU64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_input_sequence: Option<CanonicalU64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     binding: Option<ProductDevRuntimeBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1393,6 +1457,10 @@ pub struct ProductDevInputResult {
 }
 
 impl ProductDevInputResult {
+    pub const fn is_accepted(&self) -> bool {
+        self.accepted
+    }
+
     pub fn accepted(
         count: usize,
         binding: ProductDevRuntimeBinding,
@@ -1415,6 +1483,11 @@ impl ProductDevInputResult {
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
             count,
+            accepted_count: count,
+            dropped_count: 0,
+            accepted_through: None,
+            consumed_through: None,
+            next_input_sequence: None,
             binding: Some(binding),
             readout: Some(readout),
             diagnostic: None,
@@ -1427,6 +1500,11 @@ impl ProductDevInputResult {
             code: "DEV_HOST_INPUT_REJECTED".to_owned(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
             count: 0,
+            accepted_count: 0,
+            dropped_count: 0,
+            accepted_through: None,
+            consumed_through: None,
+            next_input_sequence: None,
             binding: None,
             readout: None,
             diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
@@ -1440,9 +1518,80 @@ impl ProductDevInputResult {
             code,
             disposition,
             count: 0,
+            accepted_count: 0,
+            dropped_count: 0,
+            accepted_through: None,
+            consumed_through: None,
+            next_input_sequence: None,
             binding: None,
             readout: None,
             diagnostic: Some(diagnostic),
+        })
+    }
+
+    /// Constructs the input receipt for a completed or safely degraded batch.
+    /// `accepted` is true only when every submitted event was admitted. A
+    /// stale/duplicate drop is recoverable, names the current cursor, and is
+    /// never an invitation to replay the original batch.
+    pub fn with_progress(
+        count: usize,
+        accepted_count: usize,
+        dropped_count: usize,
+        accepted_through: Option<CanonicalU64>,
+        consumed_through: Option<CanonicalU64>,
+        next_input_sequence: CanonicalU64,
+        binding: ProductDevRuntimeBinding,
+        readout: ProductDevRuntimeReadout,
+    ) -> Result<Self, ProductDevHostError> {
+        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS
+            || accepted_count > count
+            || dropped_count > count
+            || accepted_count
+                .checked_add(dropped_count)
+                .is_none_or(|total| total != count)
+            || (accepted_count == 0 && accepted_through.is_some())
+            || (accepted_count > 0 && accepted_through.is_none())
+            || (count == 0 && consumed_through.is_some())
+        {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_INPUT_RESULT_BOUNDS",
+                "runtime input progress receipt has incoherent batch boundaries",
+            ));
+        }
+        if readout.runtime() != binding {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RESULT_BINDING",
+                "runtime input receipt binding does not match its readout",
+            ));
+        }
+        let complete = dropped_count == 0;
+        Ok(Self {
+            accepted: complete,
+            code: if complete {
+                ACCEPTED_FAULT_CODE.to_owned()
+            } else {
+                "CSHARP_INPUT_STALE_DROPPED".to_owned()
+            },
+            disposition: if complete {
+                ProductDevFaultDisposition::Accepted
+            } else {
+                ProductDevFaultDisposition::RejectedRecoverable
+            },
+            count,
+            accepted_count,
+            dropped_count,
+            accepted_through,
+            consumed_through,
+            next_input_sequence: Some(next_input_sequence),
+            binding: Some(binding),
+            readout: Some(readout),
+            diagnostic: if complete {
+                None
+            } else {
+                Some(bounded_diagnostic(format!(
+                    "dropped {dropped_count} stale or duplicate input event(s); synchronize the input cursor and do not replay them"
+                ))?)
+            },
         })
     }
 }
@@ -1635,14 +1784,14 @@ impl ProductDevTimelineCompletionResult {
         })
     }
 
-    /// A fail-atomic completion rejection still names the current runtime so
-    /// a browser can retain its exact binding rather than treating the result
-    /// as a stale-output failure.
+    /// A completion rejected before product callback entry still names the
+    /// current runtime so a browser can retain its exact binding rather than
+    /// treating the result as a stale-output failure.
     pub fn rejected_with_current(
         ticket: CanonicalU64,
         binding: ProductDevRuntimeBinding,
         readout: ProductDevRuntimeReadout,
-        code: &'static str,
+        code: impl Into<String>,
         diagnostic: impl Into<String>,
     ) -> Result<Self, ProductDevHostError> {
         if readout.runtime() != binding {
@@ -1653,8 +1802,35 @@ impl ProductDevTimelineCompletionResult {
         }
         Ok(Self {
             accepted: false,
-            code: code.to_owned(),
+            code: code.into(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            ticket,
+            binding: Some(binding),
+            readout: Some(readout),
+            diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
+        })
+    }
+
+    /// Reports a timeline callback/receipt failure after the callback was
+    /// entered. The current binding/readout are evidence for resync only; no
+    /// rollback or retry of the product-owned callback is implied.
+    pub fn resync_required_with_current(
+        ticket: CanonicalU64,
+        binding: ProductDevRuntimeBinding,
+        readout: ProductDevRuntimeReadout,
+        code: impl Into<String>,
+        diagnostic: impl Into<String>,
+    ) -> Result<Self, ProductDevHostError> {
+        if readout.runtime() != binding {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RESULT_BINDING",
+                "timeline resync receipt binding does not match its readout",
+            ));
+        }
+        Ok(Self {
+            accepted: false,
+            code: code.into(),
+            disposition: ProductDevFaultDisposition::ResyncRequired,
             ticket,
             binding: Some(binding),
             readout: Some(readout),

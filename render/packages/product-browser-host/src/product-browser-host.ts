@@ -73,6 +73,8 @@ export interface ProductBrowserRuntimeOperationResult {
   readonly binding?: RustyApplicationRuntimeIdentity;
   /** Engine-owned cursor after lifecycle input clear/rebind work. */
   readonly nextInputSequence?: string;
+  /** Last simulation step admitted before a resync-required operation result. */
+  readonly admittedThrough?: string;
   readonly readout?: ProductBrowserRuntimeReadout;
   readonly diagnostic?: string;
 }
@@ -81,7 +83,15 @@ export interface ProductBrowserRuntimeInputResult {
   readonly accepted: boolean;
   readonly code: string;
   readonly disposition: ProductBrowserHostFaultDisposition;
+  /** Number of submitted input events (the existing count field). */
   readonly count: number;
+  /** Number of events admitted by the Engine input lane. */
+  readonly acceptedCount?: number;
+  /** Number of safe stale/duplicate events deliberately dropped. */
+  readonly droppedCount?: number;
+  readonly acceptedThrough?: string;
+  readonly consumedThrough?: string;
+  readonly nextInputSequence?: string;
   readonly binding?: RustyApplicationRuntimeIdentity;
   readonly readout?: ProductBrowserRuntimeReadout;
   readonly diagnostic?: string;
@@ -1342,12 +1352,6 @@ export async function mountProductBrowserHost(
       publishHealth();
       return false;
     }
-    if (!result.accepted) {
-      throw new ProductBrowserHostError(
-        rejectedCode,
-        result.diagnostic ?? `${result.operation} was rejected by the runtime`,
-      );
-    }
     if (result.binding !== undefined && result.nextInputSequence !== undefined) {
       applyOutput({
         kind: 'binding',
@@ -1356,17 +1360,37 @@ export async function mountProductBrowserHost(
       });
     }
     if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
+    if (!result.accepted) {
+      // A typed recoverable or resync receipt is a completed operation. The
+      // runtime may already have consumed lifecycle work, so never replay it
+      // merely because its callback did not produce a normal output.
+      if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') {
+        return false;
+      }
+      throw new ProductBrowserHostError(
+        rejectedCode,
+        result.diagnostic ?? `${result.operation} was rejected by the runtime`,
+      );
+    }
     return true;
   };
 
   const applyInputResult = (result: ProductBrowserRuntimeInputResult): void => {
+    if (result.binding !== undefined && result.nextInputSequence !== undefined) {
+      applyOutput({
+        kind: 'binding',
+        runtime: result.binding,
+        nextInputSequence: result.nextInputSequence,
+      });
+    }
+    if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
     if (!result.accepted) {
+      if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') return;
       throw new ProductBrowserHostError(
         'transport_failed',
         result.diagnostic ?? 'runtime input batch was rejected by the runtime',
       );
     }
-    if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
   };
 
   cadence = createProductBrowserCadence({
@@ -1589,13 +1613,19 @@ export async function mountProductBrowserHost(
     }
     return queue.enqueue(async () => {
       const result = await transport.completeTimeline!(completion);
+      if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
       if (!result.accepted) {
+        if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') {
+          // Callback-entry failures carry the current ticket/binding/readout;
+          // they are completed receipts, never permission to replay the
+          // product callback from the browser.
+          return result;
+        }
         throw new ProductBrowserHostError(
           'transport_failed',
           result.diagnostic ?? 'timeline completion was rejected by the runtime',
         );
       }
-      if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
       return result;
     }).catch((cause: unknown) => {
       throw failAndClose(cause, 'transport_failed');

@@ -523,7 +523,17 @@ export function createRustyApplicationInputQueue(
     bindRuntime: (next) => {
       const normalized = validateBinding(next);
       const previous = binding;
-      if (previous !== null && sameBinding(previous, normalized)) return false;
+      if (previous !== null && sameBinding(previous, normalized)) {
+        // A binding observation can also carry the Engine's authoritative
+        // next-input cursor. Reconcile only when it is present; ordinary
+        // same-binding observations must not clear browser held state.
+        if (terminal || normalized.nextSequence === undefined) return false;
+        synchronizeSameBindingCursor(BigInt(normalized.nextSequence));
+        // This is cursor reconciliation, not an epoch/context rebind. The
+        // managed ingress uses `true` to clear held DOM state, which would
+        // lose a later release for a key the Engine already accepted.
+        return false;
+      }
       // An exhausted epoch cannot adopt a different context. Its one terminal
       // clear is the final wire value for that epoch; only a newer epoch can
       // reset the sequence and recover input.
@@ -596,6 +606,15 @@ export function createRustyApplicationInputQueue(
       return Object.freeze(drained);
     },
   };
+
+  function synchronizeSameBindingCursor(authoritative: bigint): void {
+    // A terminal epoch has already published its final clear and is handled
+    // by the caller. Keep this guard local as well so future call paths cannot
+    // reopen an exhausted queue.
+    if (terminal) return;
+    entries = entries.filter((entry) => BigInt(entry.sequence) >= authoritative);
+    if (sequence < authoritative) sequence = authoritative;
+  }
 }
 
 function freezeIngress(

@@ -294,27 +294,49 @@ test('ghost plate feedback replaces an active snapshot with an empty snapshot af
   assert.equal(reports[1]?.replaceOwner, false);
 });
 
-test('renderer diagnostics publishes only a newly accepted renderer submission', async () => {
-  const reports: unknown[] = [];
+test('renderer diagnostics retries one recoverable rejection without loss or flood', async () => {
+  const reports: number[] = [];
   const observations: number[] = [];
   let renderSequence = 4;
+  let recoverableRejection = true;
   const renderer = {
     diagnosticsReadout: () => ({ schemaVersion: 1, submission: { renderSequence } }),
   } as unknown as Parameters<typeof createProductBrowserRendererDiagnosticsReporter>[0]['renderer'];
   const reporter = createProductBrowserRendererDiagnosticsReporter({
     renderer,
     report: async (feedback) => {
-      reports.push(feedback.snapshot);
+      reports.push(feedback.snapshot.submission.renderSequence);
+      if (recoverableRejection) {
+        recoverableRejection = false;
+        return {
+          accepted: false as const,
+          code: 'DEV_HOST_RENDERER_DIAGNOSTICS_RETRY',
+          disposition: 'rejected-recoverable' as const,
+          runtime: feedback.runtime,
+          diagnostic: 'renderer diagnostics report was temporarily unavailable',
+        };
+      }
       return { accepted: true, ...ACCEPTED_FAULT, runtime: feedback.runtime };
     },
     initialRuntime: AUDIO_RUNTIME,
     onObservation: (sequence) => observations.push(sequence),
   });
+
   await reporter.flush();
+  assert.deepEqual(reports, [4]);
+  assert.deepEqual(observations, []);
+
+  // A recoverable response does not acknowledge the observation. The same
+  // snapshot is retried once, then becomes quiet after acceptance.
   await reporter.flush();
+  assert.deepEqual(reports, [4, 4]);
+  assert.deepEqual(observations, [4]);
+  await reporter.flush();
+  assert.deepEqual(reports, [4, 4]);
+
   renderSequence = 5;
   await reporter.flush();
-  assert.equal(reports.length, 2);
+  assert.deepEqual(reports, [4, 4, 5]);
   assert.deepEqual(observations, [4, 5]);
 });
 

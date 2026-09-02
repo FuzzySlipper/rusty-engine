@@ -1526,7 +1526,11 @@ impl CsharpProductRuntime {
                         })?,
                 );
                 if ghost_rollback_probe {
-                    if self.advance_realtime(observation).is_ok() {
+                    if self
+                        .advance_realtime(observation)
+                        .map(|receipt| receipt.result().is_accepted())
+                        .unwrap_or(false)
+                    {
                         return Err(CsharpProductRuntimeError::new(
                             "CSHARP_EXERCISE_GHOST_ROLLBACK",
                             "ghost rollback probe callback unexpectedly succeeded",
@@ -1552,7 +1556,11 @@ impl CsharpProductRuntime {
             }
             RuntimeMode::Demand => {
                 if ghost_rollback_probe {
-                    if self.admit_demand_step().is_ok() {
+                    if self
+                        .admit_demand_step()
+                        .map(|receipt| receipt.result().is_accepted())
+                        .unwrap_or(false)
+                    {
                         return Err(CsharpProductRuntimeError::new(
                             "CSHARP_EXERCISE_GHOST_ROLLBACK",
                             "ghost rollback probe callback unexpectedly succeeded",
@@ -1566,7 +1574,11 @@ impl CsharpProductRuntime {
             RuntimeMode::External => {
                 let accepted_step = CanonicalU64::new(admitted_before);
                 if ghost_rollback_probe {
-                    if self.admit_external_step(accepted_step).is_ok() {
+                    if self
+                        .admit_external_step(accepted_step)
+                        .map(|receipt| receipt.result().is_accepted())
+                        .unwrap_or(false)
+                    {
                         return Err(CsharpProductRuntimeError::new(
                             "CSHARP_EXERCISE_GHOST_ROLLBACK",
                             "ghost rollback probe callback unexpectedly succeeded",
@@ -1842,6 +1854,70 @@ impl CsharpProductRuntime {
         ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
     }
 
+    /// A lifecycle admission advances Rust-owned counters before the product
+    /// callback is entered. Once the following update path fails, neither the
+    /// callback's product state nor the retained Engine service state can be
+    /// assumed to be replay-safe. Return a current receipt instead of making
+    /// the host retry an operation which may already have been consumed.
+    fn resync_operation(
+        &mut self,
+        operation: ProductDevOperationKind,
+        error: CsharpProductRuntimeError,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        let error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
+            .expect("fixed bounded NativeAOT error");
+        self.resync_operation_runtime_error(operation, error)
+    }
+
+    fn resync_operation_runtime_error(
+        &mut self,
+        operation: ProductDevOperationKind,
+        error: ProductDevRuntimeError,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        // The admitted update has crossed the callback boundary or consumed
+        // its input snapshot. Do not leave those borrowed native events queued
+        // for a later caller to replay after this resync receipt.
+        self.pending_inputs.clear();
+        self.publish_diagnostic_as(&error, ProductDevFaultDisposition::ResyncRequired);
+        let result = ProductDevOperationResult::resync_required(
+            operation,
+            self.binding(),
+            self.next_input_sequence(),
+            self.readout(),
+            self.lifecycle
+                .readout()
+                .admitted_simulation_steps()
+                .checked_sub(1)
+                .map(CanonicalU64::new),
+            error.code().to_owned(),
+            error.diagnostic().to_owned(),
+        )
+        .map_err(host_runtime_error)?;
+        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
+    }
+
+    /// Timeline completion has no Rust-owned rollback contract for product
+    /// state. Once its C# callback is entered, every callback/receipt failure
+    /// therefore returns the ticket and current runtime identity as a resync
+    /// receipt instead of exposing an apparently retryable error.
+    fn resync_timeline(
+        &self,
+        ticket: CanonicalU64,
+        error: CsharpProductRuntimeError,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>, ProductDevRuntimeError>
+    {
+        let error = self.resync_runtime_error(error);
+        let result = ProductDevTimelineCompletionResult::resync_required_with_current(
+            ticket,
+            self.binding(),
+            self.readout(),
+            error.code().to_owned(),
+            error.diagnostic().to_owned(),
+        )
+        .map_err(host_runtime_error)?;
+        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
+    }
+
     fn readout(&self) -> ProductDevRuntimeReadout {
         dev_readout(self.lifecycle.readout())
     }
@@ -1850,6 +1926,13 @@ impl CsharpProductRuntime {
         let runtime_error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
             .expect("fixed bounded NativeAOT error");
         self.publish_diagnostic(&runtime_error);
+        runtime_error
+    }
+
+    fn resync_runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
+        let runtime_error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
+            .expect("fixed bounded NativeAOT error");
+        self.publish_diagnostic_as(&runtime_error, ProductDevFaultDisposition::ResyncRequired);
         runtime_error
     }
 
@@ -1863,6 +1946,14 @@ impl CsharpProductRuntime {
     }
 
     fn publish_diagnostic(&self, error: &ProductDevRuntimeError) {
+        self.publish_diagnostic_as(error, runtime_fault_disposition(error));
+    }
+
+    fn publish_diagnostic_as(
+        &self,
+        error: &ProductDevRuntimeError,
+        disposition: ProductDevFaultDisposition,
+    ) {
         let message = if error.diagnostic().is_empty() {
             "runtime operation failed"
         } else {
@@ -1871,7 +1962,7 @@ impl CsharpProductRuntime {
         let _ = self.diagnostics.publish(
             ProductDevLogEvent::new(
                 ProductDevLogSeverity::Error,
-                match runtime_fault_disposition(error) {
+                match disposition {
                     ProductDevFaultDisposition::Accepted => ProductDevLogDisposition::Accepted,
                     ProductDevFaultDisposition::RejectedRecoverable => {
                         ProductDevLogDisposition::RejectedRecoverable
@@ -2213,29 +2304,51 @@ impl ProductDevRuntime for CsharpProductRuntime {
             )
             .expect("fixed input-state diagnostic"));
         }
-        let native = batch
-            .events()
+        // RuntimeInputLane owns the checkpoint. This keeps a valid prefix from
+        // reaching the product when a later event is malformed or from a
+        // foreign binding, and gives the host a precise safe-drop cursor.
+        let receipt = self
+            .input_lane
+            .ingest_batch(batch.events())
+            .map_err(input_runtime_error)?;
+        if receipt.dropped_count() > 0 {
+            let _ = self.diagnostics.publish(
+                ProductDevLogEvent::new(
+                    ProductDevLogSeverity::Warning,
+                    ProductDevLogDisposition::RejectedRecoverable,
+                    "csharp-runtime",
+                    "CSHARP_INPUT_STALE_DROPPED",
+                    format!(
+                        "dropped {} stale or duplicate input event(s); the current input cursor remains authoritative",
+                        receipt.dropped_count()
+                    ),
+                )
+                .expect("stale input diagnostic is bounded")
+                .with_runtime(self.binding()),
+            );
+        }
+        let native = receipt
+            .accepted_indices()
             .iter()
-            .map(|event| {
-                self.input_lane
-                    .ingest(event.clone())
-                    .map_err(input_runtime_error)?;
-                // Direct product claims become semantic envelopes at the
-                // admitted input snapshot. Queueing them here as raw events
-                // would bypass that ordering and deliver each claim twice.
-                Ok(match event {
-                    RuntimeInputEvent::Physical(_) => Some(native_event(event)),
-                    RuntimeInputEvent::DirectIntent(_) => None,
-                })
-            })
-            .collect::<Result<Vec<_>, ProductDevRuntimeError>>()?
-            .into_iter()
-            .flatten()
+            .filter(|index| matches!(batch.events()[**index], RuntimeInputEvent::Physical(_)))
+            .map(|index| native_event(&batch.events()[*index]))
             .collect::<Vec<_>>();
         self.pending_inputs.extend(native);
-        let result =
-            ProductDevInputResult::accepted(batch.events().len(), self.binding(), self.readout())
-                .map_err(host_runtime_error)?;
+        let next_input_sequence = receipt
+            .next_sequence()
+            .map(CanonicalU64::new)
+            .unwrap_or_else(|| self.next_input_sequence());
+        let result = ProductDevInputResult::with_progress(
+            receipt.submitted_count(),
+            receipt.accepted_count(),
+            receipt.dropped_count(),
+            receipt.accepted_through().map(CanonicalU64::new),
+            receipt.consumed_through().map(CanonicalU64::new),
+            next_input_sequence,
+            self.binding(),
+            self.readout(),
+        )
+        .map_err(host_runtime_error)?;
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
 
@@ -2333,17 +2446,25 @@ impl ProductDevRuntime for CsharpProductRuntime {
             // Input snapshots once with the last admitted phase token; the
             // product receives one update per accepted host observation while
             // retaining the host observation as its realtime timing value.
-            Some(simulation) => self
-                .update_admitted(
-                    REALTIME_UPDATE_MODE,
-                    Some(observed_time_ns.get()),
-                    simulation,
-                    admission.dropped_steps(),
-                )
-                .map_err(|error| self.runtime_error(error))?,
+            Some(simulation) => match self.update_admitted(
+                REALTIME_UPDATE_MODE,
+                Some(observed_time_ns.get()),
+                simulation,
+                admission.dropped_steps(),
+            ) {
+                Ok(outputs) => outputs,
+                Err(error) => {
+                    return self.resync_operation(ProductDevOperationKind::AdvanceRealtime, error)
+                }
+            },
             None => Vec::new(),
         };
-        self.receipt(ProductDevOperationKind::AdvanceRealtime, outputs)
+        match self.receipt(ProductDevOperationKind::AdvanceRealtime, outputs) {
+            Ok(receipt) => Ok(receipt),
+            Err(error) => {
+                self.resync_operation_runtime_error(ProductDevOperationKind::AdvanceRealtime, error)
+            }
+        }
     }
 
     fn admit_demand_step(
@@ -2353,10 +2474,18 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .lifecycle
             .admit_demand_step()
             .map_err(|error| self.lifecycle_runtime_error(error))?;
-        let outputs = self
-            .update_admitted(DEMAND_UPDATE_MODE, None, admission, 0)
-            .map_err(|error| self.runtime_error(error))?;
-        self.receipt(ProductDevOperationKind::AdmitDemandStep, outputs)
+        let outputs = match self.update_admitted(DEMAND_UPDATE_MODE, None, admission, 0) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                return self.resync_operation(ProductDevOperationKind::AdmitDemandStep, error)
+            }
+        };
+        match self.receipt(ProductDevOperationKind::AdmitDemandStep, outputs) {
+            Ok(receipt) => Ok(receipt),
+            Err(error) => {
+                self.resync_operation_runtime_error(ProductDevOperationKind::AdmitDemandStep, error)
+            }
+        }
     }
 
     fn admit_external_step(
@@ -2367,10 +2496,17 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .lifecycle
             .admit_external_step(ExternalStep::new(step.get()))
             .map_err(|error| self.lifecycle_runtime_error(error))?;
-        let outputs = self
-            .update_admitted(EXTERNAL_UPDATE_MODE, None, admission, 0)
-            .map_err(|error| self.runtime_error(error))?;
-        self.receipt(ProductDevOperationKind::AdmitExternalStep, outputs)
+        let outputs = match self.update_admitted(EXTERNAL_UPDATE_MODE, None, admission, 0) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                return self.resync_operation(ProductDevOperationKind::AdmitExternalStep, error)
+            }
+        };
+        match self.receipt(ProductDevOperationKind::AdmitExternalStep, outputs) {
+            Ok(receipt) => Ok(receipt),
+            Err(error) => self
+                .resync_operation_runtime_error(ProductDevOperationKind::AdmitExternalStep, error),
+        }
     }
 
     fn complete_timeline(
@@ -2448,41 +2584,55 @@ impl ProductDevRuntime for CsharpProductRuntime {
             Ok(accepted) => accepted,
             Err(error) => {
                 self.discard_staged_call();
-                return Err(self.runtime_error(error));
+                return self.resync_timeline(ticket, error);
             }
         };
         if !accepted {
             self.discard_staged_call();
-            let result = ProductDevTimelineCompletionResult::rejected_with_current(
+            return self.resync_timeline(
                 ticket,
-                current,
-                self.readout(),
-                "CSHARP_TIMELINE_PRODUCT_REJECTED",
-                "C# product rejected timeline completion",
-            )
-            .map_err(host_runtime_error)?;
-            return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
+                CsharpProductRuntimeError::new(
+                    "CSHARP_TIMELINE_PRODUCT_REJECTED",
+                    "C# product rejected timeline completion after callback entry; resynchronize before any retry",
+                ),
+            );
         }
         let staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
                 self.discard_staged_call();
-                return Err(self.runtime_error(error.into()));
+                return self.resync_timeline(ticket, error.into());
             }
         };
         let outputs = match service_outputs(self.services.outputs(&staged)) {
             Ok(outputs) => outputs,
             Err(error) => {
                 self.discard_staged_call();
-                return Err(self.runtime_error(error));
+                return self.resync_timeline(ticket, error);
             }
         };
         self.services.commit_call(staged);
         complete_product_call(&self.api, self.handle, true, false);
-        let result =
-            ProductDevTimelineCompletionResult::accepted(ticket, self.binding(), self.readout())
-                .map_err(host_runtime_error)?;
-        ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
+        let result = match ProductDevTimelineCompletionResult::accepted(
+            ticket,
+            self.binding(),
+            self.readout(),
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                return self.resync_timeline(
+                    ticket,
+                    CsharpProductRuntimeError::new(error.code(), error.detail().to_owned()),
+                )
+            }
+        };
+        match ProductDevRuntimeReceipt::new(result, outputs) {
+            Ok(receipt) => Ok(receipt),
+            Err(error) => self.resync_timeline(
+                ticket,
+                CsharpProductRuntimeError::new(error.code(), error.detail().to_owned()),
+            ),
+        }
     }
 
     fn report_audio_feedback(
@@ -4723,6 +4873,7 @@ mod tests {
     static DEBUG_RELEASES: AtomicUsize = AtomicUsize::new(0);
     static DROP_FIXTURE_GATE: Mutex<()> = Mutex::new(());
     static DROP_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(ABI_OK);
+    static UPDATE_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(ABI_OK);
     static DROP_EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
     static PRODUCT_ERROR_RELEASES: AtomicUsize = AtomicUsize::new(0);
     static DIRECT_INPUT_FIXTURE_GATE: Mutex<()> = Mutex::new(());
@@ -4929,7 +5080,7 @@ mod tests {
     ) -> i32 {
         // SAFETY: the fixture owns the provided writable result pointer.
         unsafe { *result = NativeProductUpdateResult::None };
-        ABI_OK
+        UPDATE_CALLBACK_STATUS.load(Ordering::SeqCst)
     }
 
     unsafe extern "C" fn drop_fixture_timeline(
@@ -5070,6 +5221,34 @@ mod tests {
         )
         .expect("direct-input fixture runtime");
         (runtime, root)
+    }
+
+    #[test]
+    fn post_admission_update_failure_returns_current_resync_receipt() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
+        let (mut runtime, root) = drop_fixture_runtime("post-admission-resync");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("fixture start");
+        let receipt = runtime
+            .admit_demand_step()
+            .expect("post-admission failures are typed receipts");
+        let result = receipt.result();
+        assert!(!result.is_accepted());
+        assert_eq!(
+            result.disposition(),
+            ProductDevFaultDisposition::ResyncRequired
+        );
+        assert_eq!(result.admitted_through(), Some(CanonicalU64::new(0)));
+        let encoded = serde_json::to_value(result).expect("resync receipt serializes");
+        assert_eq!(encoded["binding"]["instanceId"], "1");
+        assert_eq!(encoded["nextInputSequence"], "1");
+        assert_eq!(encoded["readout"]["admittedSimulationSteps"], "1");
+        assert_eq!(encoded["disposition"], "resync-required");
+        UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove post-admission fixture content");
     }
 
     // This is the complete table as generated at 11b1319, before descriptor
@@ -5398,6 +5577,66 @@ mod tests {
 
         drop(runtime);
         fs::remove_dir_all(root).expect("remove direct-input fixture content");
+    }
+
+    #[test]
+    fn duplicate_input_returns_recoverable_cursor_without_replaying_the_event() {
+        let _guard = DIRECT_INPUT_FIXTURE_GATE
+            .lock()
+            .expect("direct-input fixture gate");
+        let _drop_guard = DROP_FIXTURE_GATE
+            .lock()
+            .expect("shared callback fixture gate");
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("direct-input callback events")
+            .clear();
+        let (mut runtime, root) = direct_input_fixture_runtime("duplicate-input-recovery");
+
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start duplicate-input fixture");
+        runtime
+            .admit_demand_step()
+            .expect("drain start clear before duplicate input");
+        DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("direct-input callback events")
+            .clear();
+
+        let binding = input_binding(&runtime.lifecycle);
+        let first = input_clear(binding, 1);
+        runtime
+            .input(ProductDevInputBatch::new(vec![first.clone()]))
+            .expect("admit first input");
+        let duplicate = runtime
+            .input(ProductDevInputBatch::new(vec![first]))
+            .expect("safe duplicate returns a typed receipt");
+        let result = duplicate.result();
+        assert!(!result.is_accepted());
+        let encoded = serde_json::to_value(result).expect("duplicate receipt serializes");
+        assert_eq!(encoded["code"], "CSHARP_INPUT_STALE_DROPPED");
+        assert_eq!(encoded["disposition"], "rejected-recoverable");
+        assert_eq!(encoded["acceptedCount"], 0);
+        assert_eq!(encoded["droppedCount"], 1);
+        assert_eq!(encoded["acceptedThrough"], serde_json::Value::Null);
+        assert_eq!(encoded["consumedThrough"], "1");
+        assert_eq!(encoded["nextInputSequence"], "2");
+
+        runtime
+            .admit_demand_step()
+            .expect("deliver only the first input");
+        let events = DIRECT_INPUT_CALLBACK_EVENTS
+            .lock()
+            .expect("direct-input callback events")
+            .clone();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].len(), 1);
+        assert_eq!(events[0][0].kind, NativeInputEventKind::Clear);
+        assert_eq!(events[0][0].sequence, 1);
+
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove duplicate-input fixture content");
     }
 
     #[test]

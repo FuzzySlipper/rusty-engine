@@ -26392,7 +26392,8 @@ function bT(e, t = 0n) {
 	return {
 		bindRuntime: (e) => {
 			let s = TT(e), c = n;
-			if (c !== null && RT(c, s) || a && c !== null && zT(c.runtime, s.runtime)) return !1;
+			if (c !== null && RT(c, s)) return a || s.nextSequence === void 0 || f(BigInt(s.nextSequence)), !1;
+			if (a && c !== null && zT(c.runtime, s.runtime)) return !1;
 			if (c !== null && c.runtime.instanceId === s.runtime.instanceId) {
 				let e = BigInt(c.runtime.generation), t = BigInt(s.runtime.generation);
 				if (t < e) throw RangeError("runtime generation cannot move backward within one instance");
@@ -26425,6 +26426,9 @@ function bT(e, t = 0n) {
 			return o = [], Object.freeze(e);
 		}
 	};
+	function f(e) {
+		a || (o = o.filter((t) => BigInt(t.sequence) >= e), r < e && (r = e));
+	}
 }
 function xT(e, t, n) {
 	return Object.freeze({

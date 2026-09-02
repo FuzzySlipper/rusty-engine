@@ -5,9 +5,9 @@ use crate::{
     AxisValue, ButtonSnapshot, CompiledInputMappings, ControllerAxis, ControllerButton, InputAxis,
     InputClearReason, InputContext, InputEdge, InputFrame, IntentPhase, IntentProvenance,
     IntentValueKind, KeyboardControl, PhysicalEdge, PointerButton, RuntimeDirectIntentClaim,
-    RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent, RuntimeInputFact,
-    RuntimeInputIngress, RuntimeInputTrigger, RuntimeIntentEnvelope, RuntimeIntentValue,
-    MAX_PENDING_INGRESS,
+    RuntimeInputBatchReceipt, RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent,
+    RuntimeInputFact, RuntimeInputIngress, RuntimeInputTrigger, RuntimeIntentEnvelope,
+    RuntimeIntentValue, MAX_PENDING_INGRESS,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -46,6 +46,23 @@ struct PendingIntent {
     value: RuntimeIntentValue,
     phase: IntentPhase,
     provenance: IntentProvenance,
+}
+
+#[derive(Debug, Clone)]
+struct InputLaneCheckpoint {
+    binding: RuntimeInputBinding,
+    context: InputContext,
+    last_sequence: Option<u64>,
+    last_snapshot_step: Option<u64>,
+    keyboard: Vec<(KeyboardControl, ButtonState)>,
+    pointer_buttons: Vec<(PointerButton, ButtonState)>,
+    controller_buttons: Vec<(ControllerButton, ButtonState)>,
+    pointer: (AxisValue, AxisValue),
+    wheel: (AxisValue, AxisValue),
+    controller_axes: Vec<(ControllerAxis, AxisValue)>,
+    mapping_active: Vec<bool>,
+    pending_intents: Vec<PendingIntent>,
+    disposed: bool,
 }
 
 type OrderedEnvelope = (RuntimeIntentEnvelope, (u8, usize));
@@ -107,6 +124,54 @@ impl RuntimeInputLane {
     }
     pub fn last_sequence(&self) -> Option<u64> {
         self.last_sequence
+    }
+
+    /// Ingests an ordered batch as one lane transaction. A same-binding,
+    /// same-context event whose sequence is already behind the lane cursor is
+    /// a safe stale/duplicate observation and is dropped without changing
+    /// held or pending state. Any other error restores the complete
+    /// pre-batch checkpoint, so callers never forward a successfully ingested
+    /// prefix while reporting a failed batch.
+    pub fn ingest_batch(
+        &mut self,
+        events: &[RuntimeInputEvent],
+    ) -> Result<RuntimeInputBatchReceipt, RuntimeInputError> {
+        let checkpoint = self.checkpoint();
+        let mut accepted_count = 0;
+        let mut dropped_count = 0;
+        let mut accepted_through: Option<u64> = None;
+        let mut consumed_through: Option<u64> = None;
+        let mut accepted_indices = Vec::with_capacity(events.len());
+
+        for (index, event) in events.iter().enumerate() {
+            if self.is_safe_stale_duplicate(event) {
+                dropped_count += 1;
+                consumed_through = Some(
+                    consumed_through.map_or(event.sequence(), |value| value.max(event.sequence())),
+                );
+                continue;
+            }
+            if let Err(error) = self.ingest(event.clone()) {
+                self.restore(checkpoint);
+                return Err(error);
+            }
+            accepted_count += 1;
+            accepted_indices.push(index);
+            accepted_through = Some(event.sequence());
+            consumed_through = Some(
+                consumed_through.map_or(event.sequence(), |value| value.max(event.sequence())),
+            );
+        }
+
+        Ok(RuntimeInputBatchReceipt::new(
+            events.len(),
+            accepted_count,
+            dropped_count,
+            accepted_through,
+            consumed_through,
+            expected_sequence(self.last_sequence).ok(),
+            accepted_indices,
+        ))
     }
 
     /// Accepts one host-normalized fact or direct product UI claim. The host
@@ -252,6 +317,47 @@ impl RuntimeInputLane {
         self.clear_transient();
         self.last_snapshot_step = Some(simulation_step.value());
         Ok((frame, envelopes))
+    }
+
+    fn is_safe_stale_duplicate(&self, event: &RuntimeInputEvent) -> bool {
+        event.runtime() == self.binding
+            && event.context() == &self.context
+            && expected_sequence(self.last_sequence)
+                .is_ok_and(|expected| event.sequence() < expected)
+    }
+
+    fn checkpoint(&self) -> InputLaneCheckpoint {
+        InputLaneCheckpoint {
+            binding: self.binding,
+            context: self.context.clone(),
+            last_sequence: self.last_sequence,
+            last_snapshot_step: self.last_snapshot_step,
+            keyboard: self.keyboard.clone(),
+            pointer_buttons: self.pointer_buttons.clone(),
+            controller_buttons: self.controller_buttons.clone(),
+            pointer: self.pointer,
+            wheel: self.wheel,
+            controller_axes: self.controller_axes.clone(),
+            mapping_active: self.mapping_active.clone(),
+            pending_intents: self.pending_intents.clone(),
+            disposed: self.disposed,
+        }
+    }
+
+    fn restore(&mut self, checkpoint: InputLaneCheckpoint) {
+        self.binding = checkpoint.binding;
+        self.context = checkpoint.context;
+        self.last_sequence = checkpoint.last_sequence;
+        self.last_snapshot_step = checkpoint.last_snapshot_step;
+        self.keyboard = checkpoint.keyboard;
+        self.pointer_buttons = checkpoint.pointer_buttons;
+        self.controller_buttons = checkpoint.controller_buttons;
+        self.pointer = checkpoint.pointer;
+        self.wheel = checkpoint.wheel;
+        self.controller_axes = checkpoint.controller_axes;
+        self.mapping_active = checkpoint.mapping_active;
+        self.pending_intents = checkpoint.pending_intents;
+        self.disposed = checkpoint.disposed;
     }
 
     fn rebind_event(&mut self, event: RuntimeInputEvent) -> Result<(), RuntimeInputError> {

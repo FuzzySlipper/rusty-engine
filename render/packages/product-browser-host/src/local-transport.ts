@@ -1983,7 +1983,7 @@ function decodeOperationResult(
   expectedOperation: ProductBrowserRuntimeOperationKind,
 ): ProductBrowserRuntimeOperationResult {
   const record = requireRecord(value, 'operation result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'operation', 'binding', 'nextInputSequence', 'readout', 'diagnostic'], 'operation result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'operation', 'binding', 'nextInputSequence', 'admittedThrough', 'readout', 'diagnostic'], 'operation result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
@@ -1995,8 +1995,9 @@ function decodeOperationResult(
     throw new TypeError('operation binding and nextInputSequence must be present together');
   }
   if (record.accepted === false
-    && (record.binding !== undefined || record['nextInputSequence'] !== undefined || record.readout !== undefined)) {
-    throw new TypeError('rejected operation result cannot include binding, input cursor, or readout');
+    && (record.binding !== undefined || record['nextInputSequence'] !== undefined || record.readout !== undefined)
+    && fault.disposition !== 'resync-required') {
+    throw new TypeError('only resync-required operation results may include current binding, input cursor, or readout');
   }
   if (record.accepted === true && record.diagnostic !== undefined) {
     throw new TypeError('accepted operation result cannot include diagnostic');
@@ -2009,6 +2010,9 @@ function decodeOperationResult(
     ...(record['nextInputSequence'] === undefined
       ? {}
       : { nextInputSequence: requireU64Text(record['nextInputSequence'], 'operation nextInputSequence') }),
+    ...(record['admittedThrough'] === undefined
+      ? {}
+      : { admittedThrough: requireU64Text(record['admittedThrough'], 'operation admittedThrough') }),
     ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   };
@@ -2024,7 +2028,7 @@ function decodeConnectionResult(value: unknown): ProductBrowserRuntimeOperationR
 
 function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
   const record = requireRecord(value, 'input result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'count', 'binding', 'readout', 'diagnostic'], 'input result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'count', 'acceptedCount', 'droppedCount', 'acceptedThrough', 'consumedThrough', 'nextInputSequence', 'binding', 'readout', 'diagnostic'], 'input result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
@@ -2034,8 +2038,53 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
     throw new TypeError(`count must be a non-negative integer no greater than ${String(MAXIMUM_INPUT_BATCH_LENGTH)}`);
   }
   const fault = decodeFault(record, 'input result');
-  if (record.accepted === false && (record.binding !== undefined || record.readout !== undefined)) {
-    throw new TypeError('rejected input result cannot include binding or readout');
+  if (record['acceptedCount'] !== undefined
+    && (!Number.isSafeInteger(record['acceptedCount'])
+      || (record['acceptedCount'] as number) < 0
+      || (record['acceptedCount'] as number) > (record.count as number))) {
+    throw new TypeError('acceptedCount must be a non-negative integer no greater than count');
+  }
+  if (record['droppedCount'] !== undefined
+    && (!Number.isSafeInteger(record['droppedCount'])
+      || (record['droppedCount'] as number) < 0
+      || (record['droppedCount'] as number) > (record.count as number))) {
+    throw new TypeError('droppedCount must be a non-negative integer no greater than count');
+  }
+  const acceptedCount = record['acceptedCount'] === undefined
+    ? (record.accepted ? record.count as number : 0)
+    : record['acceptedCount'] as number;
+  const droppedCount = record['droppedCount'] === undefined ? 0 : record['droppedCount'] as number;
+  if (acceptedCount + droppedCount !== (record.count as number)) {
+    throw new TypeError('input result acceptedCount and droppedCount must account for count');
+  }
+  if (record.accepted === false
+    && (record.binding !== undefined || record.readout !== undefined || record['nextInputSequence'] !== undefined)
+    && (fault.disposition !== 'rejected-recoverable' && fault.disposition !== 'resync-required')) {
+    throw new TypeError('only recoverable input results may include current binding, input cursor, or readout');
+  }
+  if (record['nextInputSequence'] !== undefined && record.binding === undefined) {
+    throw new TypeError('input nextInputSequence requires a runtime binding');
+  }
+  if (record.accepted === false
+    && (record.binding !== undefined || record.readout !== undefined)
+    && record['nextInputSequence'] === undefined) {
+    throw new TypeError('recoverable input result with current state must include nextInputSequence');
+  }
+  if ((record.binding !== undefined) !== (record.readout !== undefined)) {
+    throw new TypeError('input binding and readout must be present together');
+  }
+  const acceptedThrough = record['acceptedThrough'] === undefined
+    ? undefined
+    : requireU64Text(record['acceptedThrough'], 'input acceptedThrough');
+  const consumedThrough = record['consumedThrough'] === undefined
+    ? undefined
+    : requireU64Text(record['consumedThrough'], 'input consumedThrough');
+  if (acceptedCount === 0 && acceptedThrough !== undefined) {
+    throw new TypeError('input acceptedThrough requires an accepted event');
+  }
+  if (acceptedThrough !== undefined && consumedThrough !== undefined
+    && BigInt(acceptedThrough) > BigInt(consumedThrough)) {
+    throw new TypeError('input acceptedThrough cannot exceed consumedThrough');
   }
   if (record.accepted === true && record.diagnostic !== undefined) {
     throw new TypeError('accepted input result cannot include diagnostic');
@@ -2044,6 +2093,13 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
     accepted: record.accepted,
     ...fault,
     count: record.count as number,
+    acceptedCount,
+    droppedCount,
+    ...(acceptedThrough === undefined ? {} : { acceptedThrough }),
+    ...(consumedThrough === undefined ? {} : { consumedThrough }),
+    ...(record['nextInputSequence'] === undefined
+      ? {}
+      : { nextInputSequence: requireU64Text(record['nextInputSequence'], 'input nextInputSequence') }),
     ...(record.binding === undefined ? {} : { binding: decodeRuntimeIdentity(record.binding) }),
     ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),

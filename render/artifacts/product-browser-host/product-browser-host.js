@@ -26316,7 +26316,8 @@ function uT(e, t = 0n) {
 	return {
 		bindRuntime: (e) => {
 			let s = hT(e), c = n;
-			if (c !== null && OT(c, s) || a && c !== null && kT(c.runtime, s.runtime)) return !1;
+			if (c !== null && OT(c, s)) return a || s.nextSequence === void 0 || f(BigInt(s.nextSequence)), !1;
+			if (a && c !== null && kT(c.runtime, s.runtime)) return !1;
 			if (c !== null && c.runtime.instanceId === s.runtime.instanceId) {
 				let e = BigInt(c.runtime.generation), t = BigInt(s.runtime.generation);
 				if (t < e) throw RangeError("runtime generation cannot move backward within one instance");
@@ -26349,6 +26350,9 @@ function uT(e, t = 0n) {
 			return o = [], Object.freeze(e);
 		}
 	};
+	function f(e) {
+		a || (o = o.filter((t) => BigInt(t.sequence) >= e), r < e && (r = e));
+	}
 }
 function dT(e, t, n) {
 	return Object.freeze({
@@ -27994,21 +27998,30 @@ async function iD(e) {
 		ae(new Z("transport_failed", t.diagnostic), "transport_failed");
 	}, fe = (e, t = "transport_failed", n = !1) => {
 		if (n && XE(e)) return v = !0, ee(), !1;
-		if (!e.accepted) throw new Z(t, e.diagnostic ?? `${e.operation} was rejected by the runtime`);
-		return e.binding !== void 0 && e.nextInputSequence !== void 0 && ue({
+		if (e.binding !== void 0 && e.nextInputSequence !== void 0 && ue({
 			kind: "binding",
 			runtime: e.binding,
 			nextInputSequence: e.nextInputSequence
 		}), e.readout !== void 0 && ue({
 			kind: "runtime-readout",
 			readout: e.readout
-		}), !0;
+		}), !e.accepted) {
+			if (e.disposition === "rejected-recoverable" || e.disposition === "resync-required") return !1;
+			throw new Z(t, e.diagnostic ?? `${e.operation} was rejected by the runtime`);
+		}
+		return !0;
 	}, pe = (e) => {
-		if (!e.accepted) throw new Z("transport_failed", e.diagnostic ?? "runtime input batch was rejected by the runtime");
-		e.readout !== void 0 && ue({
+		if (e.binding !== void 0 && e.nextInputSequence !== void 0 && ue({
+			kind: "binding",
+			runtime: e.binding,
+			nextInputSequence: e.nextInputSequence
+		}), e.readout !== void 0 && ue({
 			kind: "runtime-readout",
 			readout: e.readout
-		});
+		}), !e.accepted) {
+			if (e.disposition === "rejected-recoverable" || e.disposition === "resync-required") return;
+			throw new Z("transport_failed", e.diagnostic ?? "runtime input batch was rejected by the runtime");
+		}
 	};
 	M = zE({
 		lifecycleMode: e.lifecycleMode,
@@ -28130,11 +28143,14 @@ async function iD(e) {
 			}
 			return n.completeTimeline === void 0 ? Promise.reject(new Z("timeline_unavailable", "this native product did not provide a timeline completion lane")) : r.enqueue(async () => {
 				let t = await n.completeTimeline(e);
-				if (!t.accepted) throw new Z("transport_failed", t.diagnostic ?? "timeline completion was rejected by the runtime");
-				return t.readout !== void 0 && ue({
+				if (t.readout !== void 0 && ue({
 					kind: "runtime-readout",
 					readout: t.readout
-				}), t;
+				}), !t.accepted) {
+					if (t.disposition === "rejected-recoverable" || t.disposition === "resync-required") return t;
+					throw new Z("transport_failed", t.diagnostic ?? "timeline completion was rejected by the runtime");
+				}
+				return t;
 			}).catch((e) => {
 				throw ae(e, "transport_failed");
 			});
@@ -29648,13 +29664,14 @@ function sk(e, t) {
 		"operation",
 		"binding",
 		"nextInputSequence",
+		"admittedThrough",
 		"readout",
 		"diagnostic"
 	], "operation result"), n.accepted !== !0 && n.accepted !== !1) throw TypeError("accepted must be boolean");
 	if (n.operation !== t) throw TypeError(`operation must be ${t}`);
 	let r = ok(n, "operation result");
 	if (n.binding === void 0 != (n.nextInputSequence === void 0)) throw TypeError("operation binding and nextInputSequence must be present together");
-	if (n.accepted === !1 && (n.binding !== void 0 || n.nextInputSequence !== void 0 || n.readout !== void 0)) throw TypeError("rejected operation result cannot include binding, input cursor, or readout");
+	if (n.accepted === !1 && (n.binding !== void 0 || n.nextInputSequence !== void 0 || n.readout !== void 0) && r.disposition !== "resync-required") throw TypeError("only resync-required operation results may include current binding, input cursor, or readout");
 	if (n.accepted === !0 && n.diagnostic !== void 0) throw TypeError("accepted operation result cannot include diagnostic");
 	return {
 		accepted: n.accepted,
@@ -29662,6 +29679,7 @@ function sk(e, t) {
 		operation: t,
 		...n.binding === void 0 ? {} : { binding: xk(n.binding) },
 		...n.nextInputSequence === void 0 ? {} : { nextInputSequence: DO(n.nextInputSequence, "operation nextInputSequence") },
+		...n.admittedThrough === void 0 ? {} : { admittedThrough: DO(n.admittedThrough, "operation admittedThrough") },
 		...n.readout === void 0 ? {} : { readout: Ck(n.readout) },
 		...n.diagnostic === void 0 ? {} : { diagnostic: Ek(n.diagnostic) }
 	};
@@ -29678,18 +29696,38 @@ function lk(e) {
 		"code",
 		"disposition",
 		"count",
+		"acceptedCount",
+		"droppedCount",
+		"acceptedThrough",
+		"consumedThrough",
+		"nextInputSequence",
 		"binding",
 		"readout",
 		"diagnostic"
 	], "input result"), t.accepted !== !0 && t.accepted !== !1) throw TypeError("accepted must be boolean");
 	if (!Number.isSafeInteger(t.count) || t.count < 0 || t.count > QD) throw TypeError(`count must be a non-negative integer no greater than ${String(QD)}`);
 	let n = ok(t, "input result");
-	if (t.accepted === !1 && (t.binding !== void 0 || t.readout !== void 0)) throw TypeError("rejected input result cannot include binding or readout");
+	if (t.acceptedCount !== void 0 && (!Number.isSafeInteger(t.acceptedCount) || t.acceptedCount < 0 || t.acceptedCount > t.count)) throw TypeError("acceptedCount must be a non-negative integer no greater than count");
+	if (t.droppedCount !== void 0 && (!Number.isSafeInteger(t.droppedCount) || t.droppedCount < 0 || t.droppedCount > t.count)) throw TypeError("droppedCount must be a non-negative integer no greater than count");
+	let r = t.acceptedCount === void 0 ? t.accepted ? t.count : 0 : t.acceptedCount, i = t.droppedCount === void 0 ? 0 : t.droppedCount;
+	if (r + i !== t.count) throw TypeError("input result acceptedCount and droppedCount must account for count");
+	if (t.accepted === !1 && (t.binding !== void 0 || t.readout !== void 0 || t.nextInputSequence !== void 0) && n.disposition !== "rejected-recoverable" && n.disposition !== "resync-required") throw TypeError("only recoverable input results may include current binding, input cursor, or readout");
+	if (t.nextInputSequence !== void 0 && t.binding === void 0) throw TypeError("input nextInputSequence requires a runtime binding");
+	if (t.accepted === !1 && (t.binding !== void 0 || t.readout !== void 0) && t.nextInputSequence === void 0) throw TypeError("recoverable input result with current state must include nextInputSequence");
+	if (t.binding !== void 0 != (t.readout !== void 0)) throw TypeError("input binding and readout must be present together");
+	let a = t.acceptedThrough === void 0 ? void 0 : DO(t.acceptedThrough, "input acceptedThrough"), o = t.consumedThrough === void 0 ? void 0 : DO(t.consumedThrough, "input consumedThrough");
+	if (r === 0 && a !== void 0) throw TypeError("input acceptedThrough requires an accepted event");
+	if (a !== void 0 && o !== void 0 && BigInt(a) > BigInt(o)) throw TypeError("input acceptedThrough cannot exceed consumedThrough");
 	if (t.accepted === !0 && t.diagnostic !== void 0) throw TypeError("accepted input result cannot include diagnostic");
 	return {
 		accepted: t.accepted,
 		...n,
 		count: t.count,
+		acceptedCount: r,
+		droppedCount: i,
+		...a === void 0 ? {} : { acceptedThrough: a },
+		...o === void 0 ? {} : { consumedThrough: o },
+		...t.nextInputSequence === void 0 ? {} : { nextInputSequence: DO(t.nextInputSequence, "input nextInputSequence") },
 		...t.binding === void 0 ? {} : { binding: xk(t.binding) },
 		...t.readout === void 0 ? {} : { readout: Ck(t.readout) },
 		...t.diagnostic === void 0 ? {} : { diagnostic: Ek(t.diagnostic) }

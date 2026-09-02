@@ -578,8 +578,14 @@ test('ordinary outputs honor the configured quota below the hard event bound', (
 test('named output lag is a terminal typed failure and never reconnects', async () => {
   FakeEventSource.instances.length = 0;
   const terminalFailures: unknown[] = [];
+  const requestBodies: unknown[] = [];
+  const requestUrls: string[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' }),
+    fetch: async (input, init) => {
+      requestUrls.push(String(input));
+      requestBodies.push(JSON.parse(String(init?.body)) as unknown);
+      return response({ accepted: true, reported: 1 });
+    },
     eventSource: FakeEventSource,
     onTransportError: (error) => terminalFailures.push(error),
   });
@@ -596,6 +602,24 @@ test('named output lag is a terminal typed failure and never reconnects', async 
   }]);
   assert.equal(terminalFailures.length, 1);
   assert.equal(FakeEventSource.instances.length, 1);
+
+  // The output stream is terminally closed, but the bounded browser-health
+  // route remains available so the failure can be recorded without reopening
+  // or replaying the runtime stream.
+  const terminalReport = {
+    hostState: 'failed' as const,
+    runtimeProgress: '9',
+    transportState: 'closed' as const,
+    outputState: 'closed' as const,
+    lastRendererSequence: '60',
+    rendererObservationAgeMs: '100',
+    firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'output stream lagged' },
+    pageEvents: [],
+  };
+  await adapter.reportBrowserDiagnostics?.(terminalReport);
+  assert.deepEqual(requestUrls, [`${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}browser-diagnostics`]);
+  assert.deepEqual(requestBodies, [terminalReport]);
+
   await assert.rejects(
     adapter.advanceRealtime('1'),
     (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'stream_failed',
