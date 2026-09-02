@@ -11,6 +11,7 @@ repo_root=$(cd -- "$script_dir/.." && pwd)
 crate_dir="$repo_root/rust/crates/csharp-engine-abi"
 output_dir=${1:-"$repo_root/fixtures/csharp-nativeaot-trial/obj/Generated"}
 inputs_dir=${2:-"$output_dir/GeneratedInputs"}
+identity_rust="$crate_dir/src/generated_abi_identity.rs"
 if [[ "$output_dir" != /* ]]; then
     output_dir="$repo_root/$output_dir"
 fi
@@ -53,4 +54,4 @@ rm -f -- "$output_dir/NativeBindings.g.cs"
 dotnet run \
     --project "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj" \
     --no-restore \
-    -- "$header" "$contracts" "$values" "$inputs_dir" "$clang_resource_dir"
+    -- "$header" "$contracts" "$values" "$inputs_dir" "$clang_resource_dir" "$identity_rust"

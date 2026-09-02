@@ -14,6 +14,7 @@
   <ItemGroup>
     <EmbeddedResource Include="obj/GeneratedInputs/Interop.g.cs" LogicalName="Rusty.Engine.ProductGenerator.GeneratedInputs.Interop.g.cs" />
     <EmbeddedResource Include="obj/GeneratedInputs/EngineServiceImplementations.g.cs" LogicalName="Rusty.Engine.ProductGenerator.GeneratedInputs.EngineServiceImplementations.g.cs" />
+    <EmbeddedResource Include="obj/GeneratedInputs/AbiIdentity.g.cs" LogicalName="Rusty.Engine.ProductGenerator.GeneratedInputs.AbiIdentity.g.cs" />
   </ItemGroup>
   <Target Name="GenerateNativeProductInputs" BeforeTargets="PrepareResources">
     <Exec Command="&quot;$(MSBuildThisFileDirectory)../../scripts/generate-csharp-native-bindings.sh&quot; &quot;$(MSBuildProjectDirectory)/obj/Generated&quot; &quot;$(MSBuildProjectDirectory)/obj/GeneratedInputs&quot;" />

@@ -15,6 +15,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
         {
             output.AddSource("Interop.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.Interop.g.cs"));
             output.AddSource("EngineServiceImplementations.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.EngineServiceImplementations.g.cs"));
+            output.AddSource("AbiIdentity.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.AbiIdentity.g.cs"));
         });
 
         context.RegisterSourceOutput(context.CompilationProvider, static (output, compilation) =>
@@ -227,28 +228,64 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
             internal static unsafe class ProductExports
             {
-                [UnmanagedCallersOnly(EntryPoint = "rusty_product_bind", CallConvs = [typeof(CallConvCdecl)])]
-                internal static int Bind(NativeProductApi* api)
+                private readonly struct AbiIdentityStorage
                 {
-                    if (api is null) return 2;
-                    api->create = &Create;
-                    api->start = &Start;
-                    api->update = &Update;
-                    api->pause = &Pause;
-                    api->resume = &Resume;
-                    api->restart = &Restart;
-                    api->shutdown = &Shutdown;
-                    api->destroy = &Destroy;
-                    api->complete_timeline = &CompleteTimeline;
-                    api->complete_call = &CompleteCall;
-                    api->execute_debug = &ExecuteDebug;
-                    api->describe_debug = &DescribeDebug;
-                    api->release_debug_result = &ReleaseDebugResult;
-                    api->observe_runtime = &ObserveRuntime;
-                    api->attach = &Attach;
-                    api->create_with_error = &CreateWithError;
-                    api->read_call_error = &ReadCallError;
-                    api->release_call_error = &ReleaseCallError;
+                    internal AbiIdentityStorage(byte* pointer, nuint length) { Pointer = pointer; Length = length; }
+                    internal byte* Pointer { get; }
+                    internal nuint Length { get; }
+                }
+
+                private static readonly AbiIdentityStorage AbiIdentity = CreateAbiIdentity();
+                private static readonly NativeProductApi* Api = CreateApi();
+
+                private static AbiIdentityStorage CreateAbiIdentity()
+                {
+                    byte[] source = Encoding.UTF8.GetBytes(NativeProductAbiIdentity.SdkBuildIdentity);
+                    byte* copy = (byte*)NativeMemory.Alloc((nuint)source.Length);
+                    fixed (byte* input = source) Buffer.MemoryCopy(input, copy, source.Length, source.Length);
+                    return new AbiIdentityStorage(copy, (nuint)source.Length);
+                }
+
+                private static NativeProductApi* CreateApi()
+                {
+                    NativeProductApi* api = (NativeProductApi*)NativeMemory.Alloc((nuint)sizeof(NativeProductApi));
+                    *api = new NativeProductApi
+                    {
+                        create = &Create,
+                        start = &Start,
+                        update = &Update,
+                        pause = &Pause,
+                        resume = &Resume,
+                        restart = &Restart,
+                        shutdown = &Shutdown,
+                        destroy = &Destroy,
+                        complete_timeline = &CompleteTimeline,
+                        complete_call = &CompleteCall,
+                        execute_debug = &ExecuteDebug,
+                        describe_debug = &DescribeDebug,
+                        release_debug_result = &ReleaseDebugResult,
+                        observe_runtime = &ObserveRuntime,
+                        attach = &Attach,
+                        create_with_error = &CreateWithError,
+                        read_call_error = &ReadCallError,
+                        release_call_error = &ReleaseCallError,
+                    };
+                    return api;
+                }
+
+                [UnmanagedCallersOnly(EntryPoint = "rusty_product_bind_v1", CallConvs = [typeof(CallConvCdecl)])]
+                internal static int BindV1(NativeProductAbiHandshakeV1* host, NativeProductAbiHandshakeV1* product)
+                {
+                    if (host is null || product is null) return 2;
+                    *product = new NativeProductAbiHandshakeV1
+                    {
+                        protocol_version = NativeProductAbiIdentity.ProtocolVersion,
+                        engine_api_size = (nuint)sizeof(NativeEngineApi),
+                        product_api_size = (nuint)sizeof(NativeProductApi),
+                        fingerprint = NativeProductAbiIdentity.Fingerprint(),
+                        build_identity = new NativeUtf8Slice { bytes = AbiIdentity.Pointer, len = AbiIdentity.Length },
+                        product_api = Api,
+                    };
                     return 1;
                 }
 

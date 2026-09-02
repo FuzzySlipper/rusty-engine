@@ -657,5 +657,7 @@ include = [
     "NativeProductReadCallError",
     "NativeProductReleaseCallError",
     "NativeProductApi",
-    "NativeProductBind",
+    "NativeProductAbiFingerprint",
+    "NativeProductAbiHandshakeV1",
+    "NativeProductBindV1",
 ]

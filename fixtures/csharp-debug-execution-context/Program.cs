@@ -12,9 +12,11 @@ internal static class Program
 {
     private static unsafe int Main()
     {
-        NativeProductApi api = default;
-        delegate* unmanaged[Cdecl]<NativeProductApi*, int> bind = &ProductExports.Bind;
-        Expect(bind(&api) == 1, "generated product bootstrap did not bind");
+        NativeProductAbiHandshakeV1 host = default;
+        NativeProductAbiHandshakeV1 handshake = default;
+        delegate* unmanaged[Cdecl]<NativeProductAbiHandshakeV1*, NativeProductAbiHandshakeV1*, int> bind = &ProductExports.BindV1;
+        Expect(bind(&host, &handshake) == 1 && handshake.product_api is not null, "generated product bootstrap did not return its V1 table");
+        NativeProductApi api = *handshake.product_api;
 
         NativeProductCreateArgs create = default;
         void* handle = null;

@@ -1,25 +1,69 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using ClangSharp.Interop;
 
-if (args.Length != 5) throw new ArgumentException("usage: BindingGenerator <header> <contracts.cs> <values.cs> <inputs-dir> <clang-resource-dir>");
+if (args.Length != 6) throw new ArgumentException("usage: BindingGenerator <header> <contracts.cs> <values.cs> <inputs-dir> <clang-resource-dir> <rust-identity.rs>");
 BindingModel model = BindingModel.Parse(args[0], args[4]);
 Directory.CreateDirectory(Path.GetDirectoryName(args[1])!);
 Directory.CreateDirectory(args[3]);
-File.WriteAllText(args[1], Emit.Contracts(model));
-File.WriteAllText(args[2], Emit.Values(model));
-File.WriteAllText(Path.Combine(args[3], "Interop.g.cs"), Emit.Interop(model));
-File.WriteAllText(Path.Combine(args[3], "EngineServiceImplementations.g.cs"), Emit.Implementations(model));
+WriteIfChanged(args[1], Emit.Contracts(model));
+WriteIfChanged(args[2], Emit.Values(model));
+WriteIfChanged(Path.Combine(args[3], "Interop.g.cs"), Emit.Interop(model));
+WriteIfChanged(Path.Combine(args[3], "EngineServiceImplementations.g.cs"), Emit.Implementations(model));
+AbiIdentity identity = AbiIdentity.From(model);
+WriteIfChanged(Path.Combine(args[3], "AbiIdentity.g.cs"), Emit.AbiIdentity(identity));
+WriteIfChanged(args[5], Emit.RustAbiIdentity(identity));
+
+static void WriteIfChanged(string path, string content)
+{
+    if (File.Exists(path) && File.ReadAllText(path) == content) return;
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    File.WriteAllText(path, content);
+}
 
 internal sealed record FixedArray(string ElementType, long Length);
-internal sealed record Field(string Name, string Type, FixedArray? Array = null);
+internal sealed record Field(string Name, string Type, FixedArray? Array = null, long Offset = 0);
 internal sealed record LeaseCollection(Field Pointer, Field Count);
-internal sealed record Struct(string Name, IReadOnlyList<Field> Fields);
+internal sealed record Struct(string Name, IReadOnlyList<Field> Fields, long Size, long Alignment);
 internal sealed record EnumMember(string Name, long Value);
-internal sealed record Enum(string Name, IReadOnlyList<EnumMember> Members);
+internal sealed record Enum(string Name, IReadOnlyList<EnumMember> Members, string UnderlyingType);
 internal sealed record Callback(string Name, string ReturnType, IReadOnlyList<string> Parameters);
 internal sealed record Service(string Name, IReadOnlyList<(string Name, string Callback)> Operations);
+internal sealed record AbiIdentity(byte[] Hash)
+{
+    internal static AbiIdentity From(BindingModel model)
+    {
+        // The fingerprint is a canonical rendering of the parsed C ABI model,
+        // not generated source text. Any crossed layout, enum, or callback
+        // signature changes this exact input deterministically.
+        StringBuilder input = new("target=x86_64-unknown-linux-gnu;c-abi=cdecl;pointer-bits=64\n");
+        foreach (Struct value in model.Structs.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            input.Append("struct ").Append(value.Name).Append(" size=").Append(value.Size).Append(" align=").Append(value.Alignment).Append('\n');
+            foreach (Field field in value.Fields)
+            {
+                input.Append(" field ").Append(field.Name).Append(' ').Append(field.Type).Append(" offset=").Append(field.Offset);
+                if (field.Array is FixedArray array) input.Append("[").Append(array.Length).Append(':').Append(array.ElementType).Append(']');
+                input.Append('\n');
+            }
+        }
+        foreach (Enum value in model.Enums.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            input.Append("enum ").Append(value.Name).Append(" underlying=").Append(value.UnderlyingType).Append('\n');
+            foreach (EnumMember member in value.Members) input.Append(" member ").Append(member.Name).Append('=').Append(member.Value).Append('\n');
+        }
+        foreach (Callback value in model.Callbacks.Values.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            input.Append("callback ").Append(value.Name).Append(' ').Append(value.ReturnType).Append('(')
+                .Append(string.Join(",", value.Parameters)).Append(")\n");
+        }
+        return new AbiIdentity(SHA256.HashData(Encoding.UTF8.GetBytes(input.ToString())));
+    }
+
+    internal ulong Word(int offset) => BitConverter.ToUInt64(Hash, offset);
+}
 
 internal sealed class BindingModel
 {
@@ -35,10 +79,10 @@ internal sealed class BindingModel
             ["-x", "c", "-std=c11", "--target=x86_64-unknown-linux-gnu", $"-resource-dir={clangResourceDirectory}"], [], CXTranslationUnit_Flags.CXTranslationUnit_None);
         List<CXCursor> declarations = Children(unit.Cursor);
         Dictionary<string, Struct> structs = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_StructDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
-            .Select(cursor => new Struct(cursor.Spelling.ToString(), Children(cursor).Where(field => field.Kind == CXCursorKind.CXCursor_FieldDecl).Select(ParseField).ToArray()))
+            .Select(cursor => new Struct(cursor.Spelling.ToString(), Children(cursor).Where(field => field.Kind == CXCursorKind.CXCursor_FieldDecl).Select(ParseField).ToArray(), cursor.Type.SizeOf, cursor.Type.AlignOf))
             .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, Enum> enums = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_EnumDecl && cursor.IsDefinition && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
-            .Select(cursor => new Enum(cursor.Spelling.ToString(), Children(cursor).Where(member => member.Kind == CXCursorKind.CXCursor_EnumConstantDecl).Select(member => new EnumMember(member.Spelling.ToString(), member.EnumConstantDeclValue)).ToArray()))
+            .Select(cursor => new Enum(cursor.Spelling.ToString(), Children(cursor).Where(member => member.Kind == CXCursorKind.CXCursor_EnumConstantDecl).Select(member => new EnumMember(member.Spelling.ToString(), member.EnumConstantDeclValue)).ToArray(), cursor.EnumDecl_IntegerType.Spelling.ToString()))
             .GroupBy(value => value.Name).ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, Callback> callbacks = declarations.Where(cursor => cursor.Kind == CXCursorKind.CXCursor_TypedefDecl && cursor.Spelling.ToString().StartsWith("Native", StringComparison.Ordinal))
             .Select(cursor => new Callback(cursor.Spelling.ToString(), cursor.Type.CanonicalType.Spelling.ToString().Split(" (*)", StringSplitOptions.None)[0], Children(cursor).Where(parameter => parameter.Kind == CXCursorKind.CXCursor_ParmDecl).Select(parameter => parameter.Type.Spelling.ToString()).ToArray()))
@@ -77,7 +121,7 @@ internal sealed class BindingModel
             }
             array = new FixedArray(element.Spelling.ToString(), length);
         }
-        return new Field(cursor.Spelling.ToString(), type.Spelling.ToString(), array);
+        return new Field(cursor.Spelling.ToString(), type.Spelling.ToString(), array, cursor.OffsetOfField);
     }
 
     private static void Validate(string family, string method, Callback callback, IReadOnlyDictionary<string, Struct> structs, IReadOnlyDictionary<string, Enum> enums)
@@ -347,6 +391,33 @@ internal sealed class BindingModel
 
 internal static class Emit
 {
+    public static string AbiIdentity(AbiIdentity identity)
+    {
+        StringBuilder output = Header("internal product ABI identity input");
+        output.AppendLine("namespace Rusty.Engine.NativeProduct;").AppendLine();
+        output.AppendLine("internal static class NativeProductAbiIdentity").AppendLine("{");
+        output.AppendLine("    internal const uint ProtocolVersion = 1;");
+        output.AppendLine("    internal const string SdkBuildIdentity = \"rusty-engine-sdk/v1\";");
+        output.AppendLine("    internal static NativeProductAbiFingerprint Fingerprint() => new()").AppendLine("    {");
+        for (int index = 0; index < 4; index++) output.AppendLine($"        word{index} = 0x{identity.Word(index * 8):X16}UL,");
+        output.AppendLine("    };").AppendLine("}");
+        return output.ToString();
+    }
+
+    public static string RustAbiIdentity(AbiIdentity identity)
+    {
+        StringBuilder output = new();
+        output.AppendLine("// @generated by Rusty.Engine.BindingGenerator from its parsed C ABI model.")
+            .AppendLine("// Do not edit; run scripts/generate-csharp-native-bindings.sh.")
+            .AppendLine("use crate::NativeProductAbiFingerprint;")
+            .AppendLine()
+            .AppendLine("pub const PRODUCT_ABI_PROTOCOL_VERSION: u32 = 1;")
+            .AppendLine("pub const PRODUCT_ABI_FINGERPRINT: NativeProductAbiFingerprint = NativeProductAbiFingerprint {");
+        for (int index = 0; index < 4; index++) output.AppendLine($"    word{index}: 0x{identity.Word(index * 8):X16},");
+        output.AppendLine("};");
+        return output.ToString();
+    }
+
     public static string Contracts(BindingModel model)
     {
         StringBuilder output = Header("safe contracts");
@@ -1001,7 +1072,7 @@ internal static class Emit
         return (service.Name, operation.Name);
     }
 
-    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductCreateArgs" and not "NativeProductTimelineCompletion" and not "NativeProductUpdateArgs" and not "NativeProductCallError" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" and not "NativeAnimationFeedbackText" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
+    private static bool IsSafeValue(Struct value, BindingModel model) => value.Name is not "NativeEngineApi" and not "NativeProductApi" and not "NativeProductAbiHandshakeV1" and not "NativeProductCreateArgs" and not "NativeProductTimelineCompletion" and not "NativeProductUpdateArgs" and not "NativeProductCallError" and not "NativeContentFile" and not "NativeInputBinding" and not "NativeInputSequence" and not "NativeInputDescriptor" and not "NativeInputMapping" and not "NativeInputConfiguration" and not "NativeInputEvent" and not "NativeUtf8Slice" and not "NativeByteSlice" and not "NativeWritableByteSlice" and not "NativeStructuredValue" and not "NativeOperationErrorReceipt" and not "NativeVec2" and not "NativeVec3" and not "NativeQuat" and not "NativeAnimationFeedbackText" && !value.Name.EndsWith("Api", StringComparison.Ordinal) && !BindingModel.IsLeaseResult(value.Name, model.Structs) && !LeaseHandleTypes(model).Contains(value.Name, StringComparer.Ordinal);
     private static IReadOnlyList<(Field Field, string Type)> SafeFields(Struct value, BindingModel model)
     {
         List<(Field, string)> fields = [];

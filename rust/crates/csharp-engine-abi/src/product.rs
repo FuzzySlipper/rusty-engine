@@ -1310,8 +1310,8 @@ pub type NativeProductReadCallError =
 /// where its callback returned a non-success status after initializing it.
 pub type NativeProductReleaseCallError = unsafe extern "C" fn(*mut c_void, NativeProductCallError);
 
-/// Product functions supplied to Rust by the one NativeAOT bootstrap export.
-/// Nullable fields let Rust receive and inspect an initially empty table safely.
+/// Product functions supplied to Rust by the generated V1 bootstrap handshake.
+/// Nullable fields let Rust inspect the copied table after exact ABI agreement.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeProductApi {
@@ -1371,4 +1371,54 @@ pub struct NativeProductApi {
     pub release_call_error: Option<unsafe extern "C" fn(*mut c_void, NativeProductCallError)>,
 }
 
-pub type NativeProductBind = unsafe extern "C" fn(*mut NativeProductApi) -> i32;
+/// Fixed SHA-256 ABI fingerprint emitted from BindingGenerator's parsed C ABI
+/// model. Four explicit words keep the representation straightforward in both
+/// Rust and generated C# without a managed array pinning contract.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeProductAbiFingerprint {
+    pub word0: u64,
+    pub word1: u64,
+    pub word2: u64,
+    pub word3: u64,
+}
+
+/// The V1 product ABI handshake. The host supplies its expected declaration;
+/// the product reports its independently generated declaration and a pointer
+/// to its immutable API table. The host copies that table only after exact
+/// agreement, so a product never receives host-owned table storage to write.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeProductAbiHandshakeV1 {
+    pub protocol_version: u32,
+    pub engine_api_size: usize,
+    pub product_api_size: usize,
+    pub fingerprint: NativeProductAbiFingerprint,
+    /// Bounded, copied immediately by the peer, diagnostic provenance only.
+    pub build_identity: NativeUtf8Slice,
+    /// Set only by the product response. It is ignored until exact agreement.
+    pub product_api: *const NativeProductApi,
+}
+
+impl Default for NativeProductAbiHandshakeV1 {
+    fn default() -> Self {
+        Self {
+            protocol_version: 0,
+            engine_api_size: 0,
+            product_api_size: 0,
+            fingerprint: NativeProductAbiFingerprint::default(),
+            build_identity: NativeUtf8Slice {
+                bytes: std::ptr::null(),
+                len: 0,
+            },
+            product_api: std::ptr::null(),
+        }
+    }
+}
+
+/// V1-only generated product bootstrap. There is deliberately no legacy bind
+/// alias or compatibility fallback.
+pub type NativeProductBindV1 = unsafe extern "C" fn(
+    *const NativeProductAbiHandshakeV1,
+    *mut NativeProductAbiHandshakeV1,
+) -> i32;

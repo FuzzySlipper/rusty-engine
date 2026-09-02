@@ -85,6 +85,13 @@ const MAX_CONTENT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DEBUG_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_DEBUG_RESULT_BYTES: usize = 64 * 1024;
 const MAX_PRODUCT_ERROR_BYTES: usize = 64 * 1024;
+const MAX_PRODUCT_ABI_IDENTITY_BYTES: usize = 128;
+const HOST_ABI_BUILD_IDENTITY: &[u8] = b"rusty-engine-host/v1";
+
+type CoreclrProductBindV1 = unsafe extern "system" fn(
+    *const NativeProductAbiHandshakeV1,
+    *mut NativeProductAbiHandshakeV1,
+) -> i32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RendererDebugCommand {
@@ -345,7 +352,7 @@ impl LoadedProductApi {
                     )
                 })
         }
-        let bind: NativeProductBind = unsafe { symbol(&library, b"rusty_product_bind\0") }?;
+        let bind: NativeProductBindV1 = unsafe { symbol(&library, b"rusty_product_bind_v1\0") }?;
         Self::from_bound_product(
             product_from_bind(bind)?,
             LoadedProductHost::NativeAot(Some(library)),
@@ -386,7 +393,7 @@ impl LoadedProductApi {
                 format!("could not encode generated product export type: {error}"),
             )
         })?;
-        let method_name = PdCString::from_os_str("Bind").expect("fixed managed method name");
+        let method_name = PdCString::from_os_str("BindV1").expect("fixed managed method name");
         let hostfxr = nethost::load_hostfxr().map_err(|error| {
             CsharpProductRuntimeError::new(
                 "CSHARP_CORECLR_HOSTFXR",
@@ -415,28 +422,22 @@ impl LoadedProductApi {
                     ),
                 )
             })?;
-        // `ProductExports.Bind` is generated with UnmanagedCallersOnly and
+        // `ProductExports.BindV1` is generated with UnmanagedCallersOnly and
         // `CallConvCdecl`; on the supported x64 hosts `system` is the native
         // ABI used by hostfxr's typed delegate loader.
-        type CoreclrProductBind = unsafe extern "system" fn(*mut NativeProductApi) -> i32;
         let bind = loader
-            .get_function_with_unmanaged_callers_only::<CoreclrProductBind>(
+            .get_function_with_unmanaged_callers_only::<CoreclrProductBindV1>(
                 &type_name,
                 &method_name,
             )
             .map_err(|error| {
                 CsharpProductRuntimeError::new(
                     "CSHARP_CORECLR_BIND_EXPORT",
-                    format!("generated export `{type_label}.Bind` is unavailable: {error}",),
+                    format!("generated export `{type_label}.BindV1` is unavailable: {error}",),
                 )
             })?;
-        let mut product = NativeProductApi::default();
-        // SAFETY: `product` is a writable generated table with exact C layout
-        // and `bind` is the hostfxr-resolved generated UCO entry point.
-        let status = unsafe { (*bind)(&mut product) };
-        checked_status(status, "bind")?;
         Self::from_bound_product(
-            product,
+            product_from_coreclr_bind(*bind)?,
             LoadedProductHost::CoreClr {
                 _host: CoreclrProductHost { _context: context },
             },
@@ -529,13 +530,107 @@ fn optional_describe_callback(
 }
 
 fn product_from_bind(
-    bind: NativeProductBind,
+    bind: NativeProductBindV1,
 ) -> Result<NativeProductApi, CsharpProductRuntimeError> {
-    let mut product = NativeProductApi::default();
-    // SAFETY: `product` is a writable generated table with exact C layout.
-    let status = unsafe { bind(&mut product) };
+    let host = host_abi_handshake();
+    let mut product = NativeProductAbiHandshakeV1::default();
+    // SAFETY: descriptor storage has exact C layout. The product receives no
+    // host-owned API table to write and returns only its immutable table pointer.
+    let status = unsafe { bind(&host, &mut product) };
     checked_status(status, "bind")?;
-    Ok(product)
+    product_from_handshake(&host, product)
+}
+
+fn product_from_coreclr_bind(
+    bind: CoreclrProductBindV1,
+) -> Result<NativeProductApi, CsharpProductRuntimeError> {
+    let host = host_abi_handshake();
+    let mut product = NativeProductAbiHandshakeV1::default();
+    // SAFETY: descriptor storage has exact C layout and `bind` is the
+    // hostfxr-resolved generated V1 entry point. No product API storage is
+    // passed to the product; it returns an owned immutable table pointer.
+    let status = unsafe { bind(&host, &mut product) };
+    checked_status(status, "bind")?;
+    product_from_handshake(&host, product)
+}
+
+fn host_abi_handshake() -> NativeProductAbiHandshakeV1 {
+    NativeProductAbiHandshakeV1 {
+        protocol_version: PRODUCT_ABI_PROTOCOL_VERSION,
+        engine_api_size: std::mem::size_of::<NativeEngineApi>(),
+        product_api_size: std::mem::size_of::<NativeProductApi>(),
+        fingerprint: PRODUCT_ABI_FINGERPRINT,
+        build_identity: NativeUtf8Slice {
+            bytes: HOST_ABI_BUILD_IDENTITY.as_ptr(),
+            len: HOST_ABI_BUILD_IDENTITY.len(),
+        },
+        product_api: ptr::null(),
+    }
+}
+
+fn product_from_handshake(
+    host: &NativeProductAbiHandshakeV1,
+    product: NativeProductAbiHandshakeV1,
+) -> Result<NativeProductApi, CsharpProductRuntimeError> {
+    if host.protocol_version != product.protocol_version
+        || host.engine_api_size != product.engine_api_size
+        || host.product_api_size != product.product_api_size
+        || host.fingerprint != product.fingerprint
+    {
+        return Err(abi_handshake_mismatch(host, &product));
+    }
+    if product.product_api.is_null() {
+        return Err(CsharpProductRuntimeError::new(
+            "CSHARP_PRODUCT_ABI_POINTER",
+            "V1 ABI handshake matched but the product returned a null immutable product table pointer",
+        ));
+    }
+    // SAFETY: exact V1 protocol/table-size/fingerprint equality was checked
+    // before copying the product-owned immutable table. A non-null pointer is
+    // the remaining fixed ABI pointer/length coherence requirement.
+    Ok(unsafe { *product.product_api })
+}
+
+fn abi_handshake_mismatch(
+    host: &NativeProductAbiHandshakeV1,
+    product: &NativeProductAbiHandshakeV1,
+) -> CsharpProductRuntimeError {
+    CsharpProductRuntimeError::new(
+        "CSHARP_PRODUCT_ABI_MISMATCH",
+        format!(
+            "expected protocol={} engine_table_bytes={} product_table_bytes={} fingerprint={} host_build={}; observed protocol={} engine_table_bytes={} product_table_bytes={} fingerprint={} sdk_build={}; restore the matching runtime pack or rebuild the product",
+            host.protocol_version,
+            host.engine_api_size,
+            host.product_api_size,
+            abi_fingerprint_text(host.fingerprint),
+            abi_identity_text(host.build_identity),
+            product.protocol_version,
+            product.engine_api_size,
+            product.product_api_size,
+            abi_fingerprint_text(product.fingerprint),
+            abi_identity_text(product.build_identity),
+        ),
+    )
+}
+
+fn abi_fingerprint_text(value: NativeProductAbiFingerprint) -> String {
+    format!(
+        "{:016x}{:016x}{:016x}{:016x}",
+        value.word0, value.word1, value.word2, value.word3
+    )
+}
+
+fn abi_identity_text(value: NativeUtf8Slice) -> String {
+    if value.len == 0 {
+        return "<missing>".to_owned();
+    }
+    if value.len > MAX_PRODUCT_ABI_IDENTITY_BYTES || value.bytes.is_null() {
+        return "<invalid>".to_owned();
+    }
+    // SAFETY: the V1 bind contract keeps the bounded identity valid until the
+    // host has copied it during this immediate handshake result processing.
+    String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(value.bytes, value.len) })
+        .into_owned()
 }
 
 fn coreclr_path(
@@ -5380,79 +5475,6 @@ mod tests {
         fs::remove_dir_all(root).expect("remove post-admission fixture content");
     }
 
-    // This is the complete table as generated at 11b1319, before descriptor
-    // publication existed. Its final execute/release fields must remain an
-    // exact prefix of the current ABI table.
-    #[repr(C)]
-    #[derive(Default)]
-    struct PriorDebugProductApi {
-        create: Option<NativeProductCreate>,
-        start: Option<NativeProductAction>,
-        update: Option<NativeProductUpdate>,
-        pause: Option<NativeProductAction>,
-        resume: Option<NativeProductAction>,
-        restart: Option<NativeProductAction>,
-        shutdown: Option<NativeProductAction>,
-        destroy: Option<NativeProductDestroy>,
-        complete_timeline: Option<NativeProductCompleteTimeline>,
-        complete_call: Option<NativeProductCompleteCall>,
-        execute_debug: Option<NativeProductExecuteDebug>,
-        release_debug_result: Option<NativeProductReleaseDebugResult>,
-    }
-
-    unsafe extern "C" fn prior_create(
-        _args: *const NativeProductCreateArgs,
-        _handle: *mut *mut c_void,
-    ) -> i32 {
-        ABI_OK
-    }
-
-    unsafe extern "C" fn prior_action(_handle: *mut c_void) -> i32 {
-        ABI_OK
-    }
-
-    unsafe extern "C" fn prior_update(
-        _handle: *mut c_void,
-        _args: *const NativeProductUpdateArgs,
-        _result: *mut NativeProductUpdateResult,
-    ) -> i32 {
-        ABI_OK
-    }
-
-    unsafe extern "C" fn prior_timeline(
-        _handle: *mut c_void,
-        _completion: *const NativeProductTimelineCompletion,
-        _accepted: *mut u8,
-    ) -> i32 {
-        ABI_OK
-    }
-
-    unsafe extern "C" fn prior_complete_call(_handle: *mut c_void, _committed: u8, _terminal: u8) {}
-
-    unsafe extern "C" fn prior_destroy(_handle: *mut c_void) {}
-
-    unsafe extern "C" fn prior_bind(api: *mut PriorDebugProductApi) -> i32 {
-        // SAFETY: this is a test-only bind callback writing the exact prior
-        // table layout into storage provided by its caller.
-        unsafe {
-            *api = PriorDebugProductApi {
-                create: Some(prior_create),
-                start: Some(prior_action),
-                update: Some(prior_update),
-                pause: Some(prior_action),
-                resume: Some(prior_action),
-                restart: Some(prior_action),
-                shutdown: Some(prior_action),
-                destroy: Some(prior_destroy),
-                complete_timeline: Some(prior_timeline),
-                complete_call: Some(prior_complete_call),
-                execute_debug: Some(debug_success),
-                release_debug_result: Some(release_debug_fixture),
-            };
-        }
-        ABI_OK
-    }
-
     unsafe extern "C" fn debug_semantic_failure(
         _handle: *mut c_void,
         _command: *const NativeUtf8Slice,
@@ -5825,29 +5847,85 @@ mod tests {
         .is_none());
     }
 
+    const HANDSHAKE_FIXTURE_IDENTITY: &[u8] = b"fixture-sdk/v1";
+
+    unsafe extern "C" fn matching_native_bind(
+        host: *const NativeProductAbiHandshakeV1,
+        product: *mut NativeProductAbiHandshakeV1,
+    ) -> i32 {
+        let mut response = unsafe { *host };
+        response.build_identity = NativeUtf8Slice {
+            bytes: HANDSHAKE_FIXTURE_IDENTITY.as_ptr(),
+            len: HANDSHAKE_FIXTURE_IDENTITY.len(),
+        };
+        response.product_api = Box::into_raw(Box::new(NativeProductApi::default()));
+        unsafe { *product = response };
+        ABI_OK
+    }
+
+    unsafe extern "system" fn matching_coreclr_bind(
+        host: *const NativeProductAbiHandshakeV1,
+        product: *mut NativeProductAbiHandshakeV1,
+    ) -> i32 {
+        unsafe { matching_native_bind(host, product) }
+    }
+
+    unsafe extern "C" fn version_mismatch_bind(
+        host: *const NativeProductAbiHandshakeV1,
+        product: *mut NativeProductAbiHandshakeV1,
+    ) -> i32 {
+        unsafe { matching_native_bind(host, product) };
+        unsafe { (*product).protocol_version += 1 };
+        ABI_OK
+    }
+
+    unsafe extern "C" fn table_size_mismatch_bind(
+        host: *const NativeProductAbiHandshakeV1,
+        product: *mut NativeProductAbiHandshakeV1,
+    ) -> i32 {
+        unsafe { matching_native_bind(host, product) };
+        unsafe { (*product).product_api_size += 8 };
+        ABI_OK
+    }
+
+    unsafe extern "C" fn fingerprint_mismatch_bind(
+        host: *const NativeProductAbiHandshakeV1,
+        product: *mut NativeProductAbiHandshakeV1,
+    ) -> i32 {
+        unsafe { matching_native_bind(host, product) };
+        unsafe { (*product).fingerprint.word0 ^= 1 };
+        ABI_OK
+    }
+
+    fn assert_handshake_rejection(bind: NativeProductBindV1) {
+        let error =
+            product_from_bind(bind).expect_err("mismatched ABI must reject before table copy");
+        assert_eq!(error.code(), "CSHARP_PRODUCT_ABI_MISMATCH");
+        assert!(error.detail().contains("expected protocol="));
+        assert!(error.detail().contains("observed protocol="));
+        assert!(error
+            .detail()
+            .contains("restore the matching runtime pack or rebuild the product"));
+    }
+
     #[test]
-    fn prior_execute_release_debug_table_remains_a_loadable_current_prefix() {
+    fn v1_handshake_accepts_matching_nativeaot_and_coreclr_binds() {
+        product_from_bind(matching_native_bind).expect("matching NativeAOT V1 bind");
+        product_from_coreclr_bind(matching_coreclr_bind).expect("matching CoreCLR V1 bind");
+    }
+
+    #[test]
+    fn v1_handshake_rejects_version_table_size_and_fingerprint_without_writing_a_sentinel() {
+        let mut sentinel = NativeProductApi::default();
+        sentinel.create = Some(drop_fixture_create);
+        let before = sentinel.create.expect("sentinel callback") as usize;
+        assert_handshake_rejection(version_mismatch_bind);
+        assert_handshake_rejection(table_size_mismatch_bind);
+        assert_handshake_rejection(fingerprint_mismatch_bind);
         assert_eq!(
-            std::mem::size_of::<PriorDebugProductApi>(),
-            std::mem::offset_of!(NativeProductApi, describe_debug),
-            "describe_debug must be appended after the prior execute/release table",
-        );
-        let mut current = NativeProductApi::default();
-        // SAFETY: the test writes only the established prefix fields through
-        // the historical bind signature; `current` remains zero-initialized
-        // for the appended descriptor callback.
-        let status = unsafe { prior_bind((&mut current as *mut NativeProductApi).cast()) };
-        assert_eq!(status, ABI_OK);
-        let loaded =
-            LoadedProductApi::from_bound_product(current, LoadedProductHost::NativeAot(None))
-                .expect("an execute/release-only prior product remains loadable");
-        assert!(loaded.debug.is_some());
-        assert!(loaded.debug_describe.is_none());
-        assert!(loaded.observe_runtime.is_none());
-        assert!(
-            std::mem::offset_of!(NativeProductApi, observe_runtime)
-                > std::mem::offset_of!(NativeProductApi, describe_debug),
-            "committed runtime observer must remain an appended optional field",
+            sentinel.create.expect("sentinel callback") as usize,
+            before,
+            "a mismatched product never receives host-owned product-table storage"
         );
     }
 
