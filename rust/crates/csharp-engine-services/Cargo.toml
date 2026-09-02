@@ -8,6 +8,7 @@ asset-import.workspace = true
 asset-catalog.workspace = true
 authored-scene.workspace = true
 csharp-engine-abi.workspace = true
+product-dev-host.workspace = true
 content-store.workspace = true
 core-assets.workspace = true
 core-ids.workspace = true

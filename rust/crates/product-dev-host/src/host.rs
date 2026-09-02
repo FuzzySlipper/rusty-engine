@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::{
     CanonicalU64, ProductDevBundle, ProductDevControlOperation, ProductDevHostError,
-    ProductDevInputBatch, ProductDevLifecycleOperation, ProductDevOperationKind,
+    ProductDevInputBatch, ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationKind,
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevTimelineCompletion, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
     MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
@@ -29,13 +29,14 @@ const SSE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Configuration for the fixed development host.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProductDevHostConfig {
     /// `0` asks the operating system for a free port.
     pub port: u16,
     pub bundle: ProductDevBundle,
     bind_host: Ipv4Addr,
     live_debug_enabled: bool,
+    diagnostics: ProductDevLog,
 }
 
 impl ProductDevHostConfig {
@@ -45,6 +46,7 @@ impl ProductDevHostConfig {
             bundle,
             bind_host: Ipv4Addr::LOCALHOST,
             live_debug_enabled: false,
+            diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
         }
     }
 
@@ -61,6 +63,11 @@ impl ProductDevHostConfig {
     /// command endpoint accidentally.
     pub fn with_live_debug(mut self, enabled: bool) -> Self {
         self.live_debug_enabled = enabled;
+        self
+    }
+
+    pub fn with_diagnostics(mut self, diagnostics: ProductDevLog) -> Self {
+        self.diagnostics = diagnostics;
         self
     }
 }
@@ -87,6 +94,7 @@ impl ProductDevHost {
             bind_host: config.bind_host,
             expected_port: address.port(),
             live_debug_enabled: config.live_debug_enabled,
+            diagnostics: config.diagnostics.clone(),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
         });
@@ -102,6 +110,7 @@ impl ProductDevHost {
             shutdown,
             listener_thread: Some(listener_thread),
             handler_threads,
+            diagnostics: config.diagnostics,
         })
     }
 }
@@ -113,6 +122,7 @@ pub struct RunningProductDevHost {
     shutdown: Arc<AtomicBool>,
     listener_thread: Option<JoinHandle<()>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    diagnostics: ProductDevLog,
 }
 
 impl RunningProductDevHost {
@@ -148,6 +158,7 @@ impl RunningProductDevHost {
                 ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "connection handler panicked")
             })?;
         }
+        self.diagnostics.flush();
         Ok(())
     }
 }
@@ -166,6 +177,7 @@ struct HostState<R> {
     bind_host: Ipv4Addr,
     expected_port: u16,
     live_debug_enabled: bool,
+    diagnostics: ProductDevLog,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
 }
@@ -640,6 +652,37 @@ where
     let receipt = match call(&mut runtime) {
         Ok(receipt) => receipt,
         Err(error) => {
+            let message = if error.diagnostic().is_empty() {
+                "runtime operation failed"
+            } else {
+                error.diagnostic()
+            };
+            let _ = state.diagnostics.publish(
+                crate::ProductDevLogEvent::new(
+                    crate::ProductDevLogSeverity::Error,
+                    match crate::runtime_fault_disposition(&error) {
+                        crate::ProductDevFaultDisposition::Accepted => {
+                            crate::ProductDevLogDisposition::Accepted
+                        }
+                        crate::ProductDevFaultDisposition::RejectedRecoverable => {
+                            crate::ProductDevLogDisposition::RejectedRecoverable
+                        }
+                        crate::ProductDevFaultDisposition::Degraded => {
+                            crate::ProductDevLogDisposition::Degraded
+                        }
+                        crate::ProductDevFaultDisposition::ResyncRequired => {
+                            crate::ProductDevLogDisposition::ResyncRequired
+                        }
+                        crate::ProductDevFaultDisposition::Terminal => {
+                            crate::ProductDevLogDisposition::Terminal
+                        }
+                    },
+                    "runtime",
+                    error.code(),
+                    message,
+                )
+                .expect("runtime diagnostics are bounded"),
+            );
             return match error_result(error) {
                 Ok(result) => json_response(200, &result),
                 Err(host_error) => HttpResponse::error(500, host_error.code(), host_error.detail()),

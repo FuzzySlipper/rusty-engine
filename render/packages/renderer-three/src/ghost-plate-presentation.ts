@@ -15,6 +15,9 @@ export interface RendererThreeGhostPlateReadout {
   readonly disposed: boolean;
 }
 interface ActiveGhostPlate { readonly descriptor: GhostPlateDescriptor; readonly presentation: GhostPlateDirectionalPresentation; readonly captures: readonly GhostPlateRuntimeCapture[]; readonly captureCpuSubmissionMilliseconds: number | null; }
+const GHOST_CAPTURE_MAX_RETAINED_BYTES = 256 * 1024 * 1024;
+const GHOST_CAPTURE_BYTES_PER_PIXEL_PER_SECTOR = 20;
+const ghostCaptureBytesByRenderer = new WeakMap<THREE.WebGLRenderer, number>();
 
 /** Dedicated retained realization: frozen source capture, directional bank, and ghost shell only. */
 export class RendererThreeGhostPlatePresentation {
@@ -66,10 +69,15 @@ export class RendererThreeGhostPlatePresentation {
   dispose(): void { if (this.#disposed) return; if (this.#active !== null) this.#disposeActive(this.#active); this.#active = null; this.#disposed = true; this.#invalidate(); this.#onDispose(); }
 
   #replace(descriptor: GhostPlateDescriptor): RendererThreeGhostPlateReceipt {
+    const candidateBytes = captureBytes(descriptor); const currentBytes = this.#active === null ? 0 : captureBytes(this.#active.descriptor);
+    const retainedBytes = ghostCaptureBytesByRenderer.get(this.#webgl) ?? 0;
+    // Current + candidate is the actual replacement peak; do not dispose the
+    // valid plate merely to make an oversized replacement fit.
+    if (retainedBytes + candidateBytes > GHOST_CAPTURE_MAX_RETAINED_BYTES) return rejected('captureFailed', 'ghost capture aggregate budget exceeded');
     let candidate: ActiveGhostPlate | null = null;
     try { candidate = this.#build(descriptor); this.#backend.scene.add(candidate.presentation.object); }
-    catch (cause) { if (candidate !== null) this.#disposeActive(candidate); return rejected('captureFailed', cause instanceof Error ? cause.message : String(cause)); }
-    const previous = this.#active; this.#active = candidate; if (previous !== null) this.#disposeActive(previous); this.#invalidate(); return applied();
+    catch (cause) { if (candidate !== null) this.#disposeActive(candidate, false); return rejected('captureFailed', cause instanceof Error ? cause.message : String(cause)); }
+    const previous = this.#active; if (previous !== null) this.#disposeActive(previous); this.#active = candidate; ghostCaptureBytesByRenderer.set(this.#webgl, retainedBytes + candidateBytes - currentBytes); this.#invalidate(); return applied();
   }
   #build(descriptor: GhostPlateDescriptor): ActiveGhostPlate {
     const retained = this.#backend.objectFor(descriptor.source);
@@ -103,7 +111,7 @@ export class RendererThreeGhostPlatePresentation {
       for (const capture of captures) capture.dispose(); throw cause;
     }
   }
-  #disposeActive(active: ActiveGhostPlate): void { active.presentation.object.removeFromParent(); active.presentation.dispose(); for (const capture of active.captures) capture.dispose(); }
+  #disposeActive(active: ActiveGhostPlate, releaseAccounting = true): void { active.presentation.object.removeFromParent(); active.presentation.dispose(); for (const capture of active.captures) capture.dispose(); if (releaseAccounting) { const current = ghostCaptureBytesByRenderer.get(this.#webgl) ?? 0; ghostCaptureBytesByRenderer.set(this.#webgl, Math.max(0, current - captureBytes(active.descriptor))); } }
 }
 
 function ghostPlateLimitationMask(limitations: readonly string[]): number {
@@ -145,3 +153,4 @@ function cloneSceneLights(source: THREE.Scene, target: THREE.Scene): () => void 
 function addStudioRig(scene: THREE.Scene, camera: THREE.Camera, center: THREE.Vector3, size: THREE.Vector3, lighting: Exclude<GhostPlateCaptureSettings['lighting'], { readonly mode: 'scene' }>): () => void { camera.updateMatrixWorld(true); const distance = Math.max(2, size.length() * 2); const directional = (direction: readonly [number, number, number], color: readonly [number, number, number], intensity: number) => { const towardLight = new THREE.Vector3(...direction).applyQuaternion(camera.quaternion).normalize(); const light = new THREE.DirectionalLight(new THREE.Color().setRGB(...color), intensity); const target = new THREE.Object3D(); target.position.copy(center); light.position.copy(center).addScaledVector(towardLight, distance); light.target = target; return { light, target }; }; const ambient = new THREE.AmbientLight(new THREE.Color().setRGB(...lighting.ambientColor), lighting.ambientIntensity); const key = directional(lighting.keyDirection, lighting.keyColor, lighting.keyIntensity); const fill = directional(lighting.fillDirection, lighting.fillColor, lighting.fillIntensity); scene.add(ambient, key.light, key.target, fill.light, fill.target); return () => scene.remove(ambient, key.light, key.target, fill.light, fill.target); }
 function emptyCapture(): GhostPlateCaptureSettings { return Object.freeze({ resolution: 8, azimuthDegrees: 0, elevationDegrees: 0, near: 0.001, far: 1, fieldOfViewDegrees: 35, lighting: { mode: 'isolated' as const, ambientColor: [1, 1, 1] as const, ambientIntensity: 0, keyDirection: [1, 0, 0] as const, keyColor: [1, 1, 1] as const, keyIntensity: 0, fillDirection: [0, 1, 0] as const, fillColor: [1, 1, 1] as const, fillIntensity: 0 } }); }
 function emptyConfig(): GhostPlateConfig { return Object.freeze({ depthRetention: 0.02, anchorPolicy: 'bounds-center', anchorValue: 0, plateMapping: 'plate-locked', shellMode: 'whole-mesh', shellDepthEpsilon: 0, sectorCount: 1, sectorHysteresisDegrees: 0 }); }
+function captureBytes(descriptor: GhostPlateDescriptor): number { return descriptor.capture.resolution * descriptor.capture.resolution * descriptor.config.sectorCount * GHOST_CAPTURE_BYTES_PER_PIXEL_PER_SECTOR; }

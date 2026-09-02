@@ -11,7 +11,7 @@ use csharp_product_runtime::{
 };
 use product_dev_host::{
     product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
-    ProductDevHostConfig, ProductDevRendererResource,
+    ProductDevHostConfig, ProductDevLog, ProductDevRendererResource,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -35,19 +35,22 @@ keyboard controls: key-a..key-z, digit-0..digit-9, space, enter, escape, shift-l
 
 fn main() -> Result<(), String> {
     let args = Arguments::parse()?;
+    let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
     let content =
         CsharpProductContent::admit(&args.content_dir).map_err(|error| error.to_string())?;
     let mut runtime = match args.loader {
-        ProductLoader::NativeAot => {
-            CsharpProductRuntime::load_admitted(&args.library, content, args.runtime_config())
-        }
+        ProductLoader::NativeAot => CsharpProductRuntime::load_admitted(
+            &args.library,
+            content,
+            args.runtime_config().with_diagnostics(diagnostics.clone()),
+        ),
         ProductLoader::CoreClr => CsharpProductRuntime::load_coreclr_admitted(
             &args.library,
             args.runtime_config_path
                 .as_ref()
                 .expect("CoreCLR arguments require a runtimeconfig path"),
             content,
-            args.runtime_config(),
+            args.runtime_config().with_diagnostics(diagnostics.clone()),
         ),
     }
     .map_err(|error| error.to_string())?;
@@ -70,7 +73,8 @@ fn main() -> Result<(), String> {
         runtime,
         ProductDevHostConfig::new(args.port, bundle)
             .with_bind_host(args.bind_host)
-            .with_live_debug(args.live_debug),
+            .with_live_debug(args.live_debug)
+            .with_diagnostics(diagnostics),
     )
     .map_err(|error| error.to_string())?;
     if args.exercise {

@@ -221,15 +221,18 @@ export class GhostPlateRuntimeCapture {
       return this.#rejected('invalid_capture_request', messageFrom(cause));
     }
 
-    const targets = createCaptureTargets(validated.width, validated.height);
     const state = rendererState(this.#renderer);
     const originalOverride = validated.scene.overrideMaterial;
     const originalBackground = validated.scene.background;
     const originalFog = validated.scene.fog;
     const started = nowMilliseconds();
     let nextFrame: GhostPlateFrame | null = null;
+    let targets: CaptureTargets | null = null;
 
     try {
+      // Target creation belongs to the same candidate transaction as rendering:
+      // a constructor failure after one allocated attachment must not strand it.
+      targets = createCaptureTargets(validated.width, validated.height);
       this.#prepareRenderer(validated.width, validated.height);
       validated.scene.background = null;
       validated.scene.fog = null;
@@ -243,10 +246,10 @@ export class GhostPlateRuntimeCapture {
       this.#resolveDepth(targets, validated.camera);
       this.#resolveCoverage(targets, validated.coverageAlphaCutoff);
 
-      const descriptor = capturedDescriptor(validated, targets);
-      nextFrame = GhostPlateFrame.owned(descriptor, () => disposePersistentTargets(targets));
+      const descriptor = capturedDescriptor(validated, targets!);
+      nextFrame = GhostPlateFrame.owned(descriptor, () => disposePersistentTargets(targets!));
     } catch (cause) {
-      disposeCaptureTargets(targets);
+      if (targets !== null) disposeCaptureTargets(targets);
       this.#lastCpuSubmissionMilliseconds = nowMilliseconds() - started;
       return this.#rejected('capture_failed', messageFrom(cause));
     } finally {
@@ -256,8 +259,9 @@ export class GhostPlateRuntimeCapture {
       restoreRendererState(this.#renderer, state);
     }
 
-    targets.hardwareDepth.dispose();
-    targets.color.depthTexture = null;
+    // A successful capture always initialized the candidate targets.
+    targets!.hardwareDepth.dispose();
+    targets!.color.depthTexture = null;
     const previous = this.#currentFrame;
     this.#currentFrame = nextFrame;
     this.#captureCount += 1;
@@ -464,21 +468,32 @@ function freezeBounds(bounds: GhostPlateFrameBounds): GhostPlateFrameBounds {
 }
 
 function createCaptureTargets(width: number, height: number): CaptureTargets {
-  const color = renderTarget('ghost-plate-color', width, height, true);
-  const hardwareDepth = new THREE.DepthTexture(width, height, THREE.UnsignedIntType);
-  hardwareDepth.name = 'ghost-plate-hardware-depth';
-  hardwareDepth.format = THREE.DepthFormat;
-  hardwareDepth.minFilter = THREE.NearestFilter;
-  hardwareDepth.magFilter = THREE.NearestFilter;
-  color.depthTexture = hardwareDepth;
-  color.texture.colorSpace = THREE.SRGBColorSpace;
-  return {
-    color,
-    depth: renderTarget('ghost-plate-linear-depth', width, height, false),
-    normal: renderTarget('ghost-plate-view-normal', width, height, true),
-    coverage: renderTarget('ghost-plate-coverage', width, height, false),
-    hardwareDepth,
-  };
+  let color: THREE.WebGLRenderTarget | null = null;
+  let depth: THREE.WebGLRenderTarget | null = null;
+  let normal: THREE.WebGLRenderTarget | null = null;
+  let coverage: THREE.WebGLRenderTarget | null = null;
+  let hardwareDepth: THREE.DepthTexture | null = null;
+  try {
+    color = renderTarget('ghost-plate-color', width, height, true);
+    hardwareDepth = new THREE.DepthTexture(width, height, THREE.UnsignedIntType);
+    hardwareDepth.name = 'ghost-plate-hardware-depth';
+    hardwareDepth.format = THREE.DepthFormat;
+    hardwareDepth.minFilter = THREE.NearestFilter;
+    hardwareDepth.magFilter = THREE.NearestFilter;
+    color.depthTexture = hardwareDepth;
+    color.texture.colorSpace = THREE.SRGBColorSpace;
+    depth = renderTarget('ghost-plate-linear-depth', width, height, false);
+    normal = renderTarget('ghost-plate-view-normal', width, height, true);
+    coverage = renderTarget('ghost-plate-coverage', width, height, false);
+    return { color, depth, normal, coverage, hardwareDepth };
+  } catch (cause) {
+    hardwareDepth?.dispose();
+    coverage?.dispose();
+    normal?.dispose();
+    depth?.dispose();
+    color?.dispose();
+    throw cause;
+  }
 }
 
 function renderTarget(

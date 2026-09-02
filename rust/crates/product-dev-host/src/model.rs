@@ -203,7 +203,7 @@ fn ordinary_runtime_rejection(code: &str) -> bool {
     )
 }
 
-fn runtime_fault_disposition(error: &ProductDevRuntimeError) -> ProductDevFaultDisposition {
+pub fn runtime_fault_disposition(error: &ProductDevRuntimeError) -> ProductDevFaultDisposition {
     // Runtime errors are terminal unless an explicitly mapped operation is
     // known to reject before mutating authoritative state. This keeps new,
     // ABI, ownership, stream, persistence, and partially-applied failures on

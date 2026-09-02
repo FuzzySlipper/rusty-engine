@@ -29,18 +29,20 @@ use netcorehost::{
     pdcstring::PdCString,
 };
 use product_dev_host::{
-    CanonicalU64, ProductDevAnimationCueDefinition, ProductDevAnimationCueSignalDomain,
-    ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult,
-    ProductDevAudioCompletionSource, ProductDevAudioFeedback, ProductDevAudioFeedbackFact,
-    ProductDevAudioFeedbackResult, ProductDevControlOperation, ProductDevDebugResult,
-    ProductDevGhostPlateFallbackReason, ProductDevGhostPlateFeedback,
-    ProductDevGhostPlateFeedbackFact, ProductDevGhostPlateFeedbackResult, ProductDevInputBatch,
-    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRendererDiagnosticsFeedback,
-    ProductDevRendererDiagnosticsFeedbackResult, ProductDevRendererResource, ProductDevRuntime,
-    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
-    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
-    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    runtime_fault_disposition, CanonicalU64, ProductDevAnimationCueDefinition,
+    ProductDevAnimationCueSignalDomain, ProductDevAnimationFeedback,
+    ProductDevAnimationFeedbackResult, ProductDevAudioCompletionSource, ProductDevAudioFeedback,
+    ProductDevAudioFeedbackFact, ProductDevAudioFeedbackResult, ProductDevControlOperation,
+    ProductDevDebugResult, ProductDevFaultDisposition, ProductDevGhostPlateFallbackReason,
+    ProductDevGhostPlateFeedback, ProductDevGhostPlateFeedbackFact,
+    ProductDevGhostPlateFeedbackResult, ProductDevInputBatch, ProductDevInputResult,
+    ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
+    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult,
+    ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
+    ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
+    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeOutput,
+    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
+    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -177,7 +179,7 @@ pub struct CsharpProductRuntimeError {
 /// Explicit standard-runtime configuration. Lifecycle selection, direct input
 /// descriptors, and physical mappings are Engine-owned host configuration,
 /// not product policy.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CsharpProductRuntimeConfig {
     lifecycle: RuntimeLifecycleConfig,
     direct_intents: Vec<DirectInputIntentDescriptor>,
@@ -188,6 +190,7 @@ pub struct CsharpProductRuntimeConfig {
     /// Optional host-selected root for admitted content-store generations.
     /// Omitting it leaves this distinct service unavailable.
     content_store_root: Option<PathBuf>,
+    diagnostics: ProductDevLog,
 }
 
 impl CsharpProductRuntimeConfig {
@@ -201,6 +204,7 @@ impl CsharpProductRuntimeConfig {
             physical_mappings: Vec::new(),
             persistence_root: None,
             content_store_root: None,
+            diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
         }
     }
 
@@ -223,6 +227,11 @@ impl CsharpProductRuntimeConfig {
     /// Selects the explicit host-owned root for content-store execution.
     pub fn with_content_store_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.content_store_root = Some(root.into());
+        self
+    }
+
+    pub fn with_diagnostics(mut self, diagnostics: ProductDevLog) -> Self {
+        self.diagnostics = diagnostics;
         self
     }
 }
@@ -568,6 +577,7 @@ pub struct CsharpProductRuntime {
     render_resources: Vec<ProductDevRendererResource>,
     renderer_metrics_visible: bool,
     shutdown_called: bool,
+    diagnostics: ProductDevLog,
 }
 
 // The development host serializes every call with one mutex. The native handle
@@ -706,6 +716,7 @@ impl CsharpProductRuntime {
             content_resources,
             persistence_root,
             content_store_root,
+            config.diagnostics.clone(),
         )?);
         let native_content: Vec<NativeContentFile> = content
             .iter()
@@ -806,6 +817,7 @@ impl CsharpProductRuntime {
             render_resources,
             renderer_metrics_visible: false,
             shutdown_called: false,
+            diagnostics: config.diagnostics,
         })
     }
 
@@ -1835,8 +1847,48 @@ impl CsharpProductRuntime {
     }
 
     fn runtime_error(&self, error: CsharpProductRuntimeError) -> ProductDevRuntimeError {
-        ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
-            .expect("fixed bounded NativeAOT error")
+        let runtime_error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
+            .expect("fixed bounded NativeAOT error");
+        self.publish_diagnostic(&runtime_error);
+        runtime_error
+    }
+
+    fn lifecycle_runtime_error(
+        &self,
+        error: runtime_lifecycle::RuntimeLifecycleError,
+    ) -> ProductDevRuntimeError {
+        let runtime_error = lifecycle_runtime_error(error);
+        self.publish_diagnostic(&runtime_error);
+        runtime_error
+    }
+
+    fn publish_diagnostic(&self, error: &ProductDevRuntimeError) {
+        let message = if error.diagnostic().is_empty() {
+            "runtime operation failed"
+        } else {
+            error.diagnostic()
+        };
+        let _ = self.diagnostics.publish(
+            ProductDevLogEvent::new(
+                ProductDevLogSeverity::Error,
+                match runtime_fault_disposition(error) {
+                    ProductDevFaultDisposition::Accepted => ProductDevLogDisposition::Accepted,
+                    ProductDevFaultDisposition::RejectedRecoverable => {
+                        ProductDevLogDisposition::RejectedRecoverable
+                    }
+                    ProductDevFaultDisposition::Degraded => ProductDevLogDisposition::Degraded,
+                    ProductDevFaultDisposition::ResyncRequired => {
+                        ProductDevLogDisposition::ResyncRequired
+                    }
+                    ProductDevFaultDisposition::Terminal => ProductDevLogDisposition::Terminal,
+                },
+                "csharp-runtime",
+                error.code(),
+                message,
+            )
+            .expect("runtime diagnostics are bounded")
+            .with_runtime(self.binding()),
+        );
     }
 
     fn binding(&self) -> ProductDevRuntimeBinding {
@@ -2096,7 +2148,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 // owner fault.
                 self.lifecycle
                     .report_fault(runtime_lifecycle::RuntimeFault::OwnerReported)
-                    .map_err(lifecycle_runtime_error)?;
+                    .map_err(|error| self.lifecycle_runtime_error(error))?;
                 self.rebind_input(InputClearReason::ControlRevisionChange)
                     .map_err(|error| self.runtime_error(error))?;
                 observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
@@ -2140,7 +2192,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         };
         self.lifecycle
             .change_control(lifecycle_operation)
-            .map_err(lifecycle_runtime_error)?;
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
         self.rebind_input(InputClearReason::ControlRevisionChange)
             .map_err(|error| self.runtime_error(error))?;
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
@@ -2275,7 +2327,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let admission = self
             .lifecycle
             .advance_realtime(HostMonotonicTime::from_nanoseconds(observed_time_ns.get()))
-            .map_err(lifecycle_runtime_error)?;
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
         let outputs = match admission.simulation() {
             // The lifecycle owns admission and its readout counters. Runtime
             // Input snapshots once with the last admitted phase token; the
@@ -2300,7 +2352,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let admission = self
             .lifecycle
             .admit_demand_step()
-            .map_err(lifecycle_runtime_error)?;
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
         let outputs = self
             .update_admitted(DEMAND_UPDATE_MODE, None, admission, 0)
             .map_err(|error| self.runtime_error(error))?;
@@ -2314,7 +2366,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let admission = self
             .lifecycle
             .admit_external_step(ExternalStep::new(step.get()))
-            .map_err(lifecycle_runtime_error)?;
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
         let outputs = self
             .update_admitted(EXTERNAL_UPDATE_MODE, None, admission, 0)
             .map_err(|error| self.runtime_error(error))?;

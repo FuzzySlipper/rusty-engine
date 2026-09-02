@@ -190,6 +190,79 @@ void test('failed recapture retains the last successful frame and restores state
   assert.equal(disposed.diagnostics[0]?.code, 'capture_disposed');
 });
 
+void test('partial capture-target allocation disposes earlier attachments exactly once and returns a typed rejection', () => {
+  const renderer = new FakeRenderer();
+  const capture = new GhostPlateRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
+  const scene = captureScene();
+  const camera = captureCamera();
+  const renderTargetPrototype = Object.getPrototypeOf(THREE.WebGLRenderTarget.prototype);
+  const textureDescriptor = Object.getOwnPropertyDescriptor(renderTargetPrototype, 'texture');
+  const renderTargetDisposeDescriptor = Object.getOwnPropertyDescriptor(renderTargetPrototype, 'dispose');
+  const textureDisposeDescriptor = Object.getOwnPropertyDescriptor(THREE.Texture.prototype, 'dispose');
+  const textureGetter = textureDescriptor?.get;
+  const renderTargetDispose = renderTargetDisposeDescriptor?.value as
+    ((this: THREE.WebGLRenderTarget) => void) | undefined;
+  const textureDispose = textureDisposeDescriptor?.value as
+    ((this: THREE.Texture) => void) | undefined;
+  if (textureGetter === undefined || renderTargetDispose === undefined || textureDispose === undefined) {
+    throw new Error('Three render-target disposal seam is unavailable');
+  }
+
+  let renderTargetDisposals = 0;
+  let textureDisposals = 0;
+  let textureIdDefinitions = 0;
+  const originalDefineProperty = Object.defineProperty;
+  Object.defineProperty = ((target: object, property: PropertyKey, attributes: PropertyDescriptor) => {
+    // Each render target creates two textures and the hardware depth texture
+    // creates one. Fail at the first texture of the second target, after the
+    // color target and hardware depth attachment have been admitted.
+    if (target instanceof THREE.Texture && property === 'id') {
+      textureIdDefinitions += 1;
+      if (textureIdDefinitions === 4) throw new Error('synthetic target allocation failure');
+    }
+    return originalDefineProperty(target, property, attributes);
+  }) as typeof Object.defineProperty;
+  Object.defineProperty(renderTargetPrototype, 'texture', {
+    ...textureDescriptor,
+    get(this: THREE.WebGLRenderTarget) {
+      return textureGetter.call(this);
+    },
+  });
+  Object.defineProperty(renderTargetPrototype, 'dispose', {
+    ...renderTargetDisposeDescriptor,
+    value(this: THREE.WebGLRenderTarget) {
+      renderTargetDisposals += 1;
+      renderTargetDispose.call(this);
+    },
+  });
+  Object.defineProperty(THREE.Texture.prototype, 'dispose', {
+    ...textureDisposeDescriptor,
+    value(this: THREE.Texture) {
+      textureDisposals += 1;
+      textureDispose.call(this);
+    },
+  });
+
+  try {
+    const receipt = capture.capture({ scene, camera, width: 16, height: 16 });
+    assert.equal(receipt.applied, false);
+    assert.equal(receipt.diagnostics[0]?.code, 'capture_failed');
+    assert.equal(receipt.frame, null);
+    assert.equal(receipt.readout.currentFrame, null);
+    assert.equal(renderTargetDisposals, 1, 'the earlier color target is disposed once');
+    assert.equal(textureDisposals, 1, 'the earlier hardware depth attachment is disposed once');
+  } finally {
+    Object.defineProperty = originalDefineProperty;
+    if (textureDescriptor === undefined) throw new Error('missing texture descriptor');
+    Object.defineProperty(renderTargetPrototype, 'texture', textureDescriptor);
+    if (renderTargetDisposeDescriptor === undefined) throw new Error('missing render-target dispose descriptor');
+    Object.defineProperty(renderTargetPrototype, 'dispose', renderTargetDisposeDescriptor);
+    if (textureDisposeDescriptor === undefined) throw new Error('missing texture dispose descriptor');
+    Object.defineProperty(THREE.Texture.prototype, 'dispose', textureDisposeDescriptor);
+    capture.dispose();
+  }
+});
+
 function captureScene(): THREE.Scene {
   const scene = new THREE.Scene();
   scene.add(new THREE.Mesh(

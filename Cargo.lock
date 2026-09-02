@@ -692,6 +692,7 @@ dependencies = [
  "csharp-engine-abi",
  "engine-spatial",
  "entity-state",
+ "product-dev-host",
  "render-host-contracts",
  "render-model",
  "render-presentation",

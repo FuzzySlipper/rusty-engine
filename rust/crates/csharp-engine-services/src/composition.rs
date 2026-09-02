@@ -286,6 +286,7 @@ impl EngineServiceSet {
         content_resources: BTreeMap<String, Arc<[u8]>>,
         persistence_root: Option<PathBuf>,
         content_store_root: Option<PathBuf>,
+        diagnostics_sink: product_dev_host::ProductDevLog,
     ) -> Result<Self, CsharpEngineServicesError> {
         let mut spatial = crate::spatial::RuntimeSpatialBridge::new();
         let perception = crate::perception::RuntimePerceptionBridge::new(&spatial);
@@ -301,7 +302,7 @@ impl EngineServiceSet {
         let voxel_scene_presentation =
             RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         Ok(Self {
-            diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::default(),
+            diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::new(diagnostics_sink),
             appearance: crate::appearance::create(catalog.0, content_resources.clone()),
             content,
             authored_content,
@@ -636,6 +637,7 @@ mod tests {
             content,
             None,
             None,
+            product_dev_host::ProductDevLog::new(Default::default()).unwrap(),
         )
         .expect("service set");
 
@@ -730,6 +732,7 @@ mod tests {
             BTreeMap::new(),
             None,
             None,
+            product_dev_host::ProductDevLog::new(Default::default()).unwrap(),
         )
         .expect("service set");
         services.begin_call(binding());
@@ -840,6 +843,7 @@ mod tests {
             content,
             None,
             None,
+            product_dev_host::ProductDevLog::new(Default::default()).unwrap(),
         )
         .expect("service set");
         services.begin_call(binding());

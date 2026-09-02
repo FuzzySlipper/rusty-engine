@@ -18,6 +18,7 @@
 mod bundle;
 mod error;
 mod host;
+mod log;
 mod model;
 mod session;
 
@@ -28,22 +29,26 @@ pub use bundle::{
 };
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
 pub use host::{ProductDevHost, ProductDevHostConfig, RunningProductDevHost};
+pub use log::{
+    ProductDevLog, ProductDevLogConfig, ProductDevLogDisposition, ProductDevLogEvent,
+    ProductDevLogSeverity, ProductDevLogSnapshot, ProductDevLogWriterState,
+};
 pub use model::{
-    CanonicalU64, ProductDevAnimationCueDefinition, ProductDevAnimationCueSignalDomain,
-    ProductDevAnimationFeedback, ProductDevAnimationFeedbackFact,
-    ProductDevAnimationFeedbackResult, ProductDevAudioCompletionSource, ProductDevAudioFeedback,
-    ProductDevAudioFeedbackFact, ProductDevAudioFeedbackResult, ProductDevControlOperation,
-    ProductDevDebugCatalog, ProductDevDebugCommandDescriptor,
-    ProductDevDebugCommandParameterDescriptor, ProductDevDebugResult, ProductDevFaultDisposition,
-    ProductDevGhostPlateFallbackReason, ProductDevGhostPlateFeedback,
-    ProductDevGhostPlateFeedbackFact, ProductDevGhostPlateFeedbackResult, ProductDevInputBatch,
-    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRendererDiagnosticsFeedback,
-    ProductDevRendererDiagnosticsFeedbackResult, ProductDevRuntime, ProductDevRuntimeBinding,
-    ProductDevRuntimeFault, ProductDevRuntimeMode, ProductDevRuntimeOutput,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, PRODUCT_DEV_HOST_ARTIFACT,
-    PRODUCT_DEV_RUNTIME_BASE_PATH,
+    runtime_fault_disposition, CanonicalU64, ProductDevAnimationCueDefinition,
+    ProductDevAnimationCueSignalDomain, ProductDevAnimationFeedback,
+    ProductDevAnimationFeedbackFact, ProductDevAnimationFeedbackResult,
+    ProductDevAudioCompletionSource, ProductDevAudioFeedback, ProductDevAudioFeedbackFact,
+    ProductDevAudioFeedbackResult, ProductDevControlOperation, ProductDevDebugCatalog,
+    ProductDevDebugCommandDescriptor, ProductDevDebugCommandParameterDescriptor,
+    ProductDevDebugResult, ProductDevFaultDisposition, ProductDevGhostPlateFallbackReason,
+    ProductDevGhostPlateFeedback, ProductDevGhostPlateFeedbackFact,
+    ProductDevGhostPlateFeedbackResult, ProductDevInputBatch, ProductDevInputResult,
+    ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevOperationResult,
+    ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
+    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeFault, ProductDevRuntimeMode,
+    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
+    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use session::ProductDevOperationOwner;
 

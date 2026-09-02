@@ -1,22 +1,90 @@
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
 
-use csharp_engine_abi::{NativeByteLease, NativeByteLeaseHandle, NativeDiagnosticsApi};
+use csharp_engine_abi::{
+    NativeByteLease, NativeByteLeaseHandle, NativeDiagnosticsApi, NativeDiagnosticsDisposition,
+    NativeDiagnosticsPublishRequest, NativeDiagnosticsSeverity,
+};
+use product_dev_host::{
+    ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent, ProductDevLogSeverity,
+};
 
 use crate::composition::ABI_OK;
 
 pub(crate) struct RuntimeDiagnosticsBridge {
+    sink: ProductDevLog,
     renderer_json: Option<Arc<[u8]>>,
     leases: BTreeMap<u64, Arc<[u8]>>,
     next_lease: u64,
 }
 
-impl Default for RuntimeDiagnosticsBridge {
-    fn default() -> Self {
+impl RuntimeDiagnosticsBridge {
+    pub(crate) fn new(sink: ProductDevLog) -> Self {
         Self {
             renderer_json: None,
             leases: BTreeMap::new(),
             next_lease: 1,
+            sink,
         }
+    }
+
+    fn publish(&self, request: &NativeDiagnosticsPublishRequest) -> Result<(), ()> {
+        let source = unsafe {
+            crate::composition::borrowed_utf8(
+                request.source.bytes,
+                request.source.len,
+                "diagnostics source",
+            )
+        }
+        .map_err(|_| ())?;
+        let code = unsafe {
+            crate::composition::borrowed_utf8(
+                request.code.bytes,
+                request.code.len,
+                "diagnostics code",
+            )
+        }
+        .map_err(|_| ())?;
+        let message = unsafe {
+            crate::composition::borrowed_utf8(
+                request.message.bytes,
+                request.message.len,
+                "diagnostics message",
+            )
+        }
+        .map_err(|_| ())?;
+        let severity = match request.severity {
+            NativeDiagnosticsSeverity::Debug => ProductDevLogSeverity::Debug,
+            NativeDiagnosticsSeverity::Info => ProductDevLogSeverity::Info,
+            NativeDiagnosticsSeverity::Warning => ProductDevLogSeverity::Warning,
+            NativeDiagnosticsSeverity::Error => ProductDevLogSeverity::Error,
+        };
+        let disposition = match request.disposition {
+            NativeDiagnosticsDisposition::Accepted => ProductDevLogDisposition::Accepted,
+            NativeDiagnosticsDisposition::RejectedRecoverable => {
+                ProductDevLogDisposition::RejectedRecoverable
+            }
+            NativeDiagnosticsDisposition::Degraded => ProductDevLogDisposition::Degraded,
+            NativeDiagnosticsDisposition::ResyncRequired => {
+                ProductDevLogDisposition::ResyncRequired
+            }
+            NativeDiagnosticsDisposition::Terminal => ProductDevLogDisposition::Terminal,
+        };
+        let event = ProductDevLogEvent::new(severity, disposition, source, code, message)
+            .map_err(|_| ())?;
+        let correlation = unsafe {
+            crate::composition::borrowed_utf8(
+                request.correlation.bytes,
+                request.correlation.len,
+                "diagnostics correlation",
+            )
+        }
+        .map_err(|_| ())?;
+        let event = if correlation.is_empty() {
+            event
+        } else {
+            event.with_correlation(correlation).map_err(|_| ())?
+        };
+        self.sink.publish(event).map_err(|_| ())
     }
 }
 
@@ -40,8 +108,21 @@ pub(crate) fn api(bridge: &mut RuntimeDiagnosticsBridge) -> NativeDiagnosticsApi
     NativeDiagnosticsApi {
         context: (bridge as *mut RuntimeDiagnosticsBridge).cast(),
         read_renderer,
+        publish,
         destroy_byte_lease,
     }
+}
+
+unsafe extern "C" fn publish(
+    context: *mut c_void,
+    request: *const NativeDiagnosticsPublishRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *(context.cast::<RuntimeDiagnosticsBridge>()) };
+    let request = unsafe { &*request };
+    bridge.publish(request).map(|()| ABI_OK).unwrap_or(0)
 }
 
 unsafe extern "C" fn read_renderer(context: *mut c_void, readout: *mut NativeByteLease) -> i32 {
@@ -85,7 +166,8 @@ mod tests {
 
     #[test]
     fn renderer_snapshot_is_borrowed_through_one_exact_release() {
-        let mut bridge = RuntimeDiagnosticsBridge::default();
+        let mut bridge =
+            RuntimeDiagnosticsBridge::new(ProductDevLog::new(Default::default()).unwrap());
         bridge
             .ingest_renderer(&serde_json::json!({"schemaVersion": 1, "renderer": "accelerated"}))
             .unwrap();
@@ -112,5 +194,50 @@ mod tests {
             unsafe { (api.destroy_byte_lease)(api.context, lease.handle) },
             0
         );
+    }
+
+    #[test]
+    fn publish_copies_bounded_csharp_diagnostic_into_the_engine_sink() {
+        let sink = ProductDevLog::new(Default::default()).unwrap();
+        let mut bridge = RuntimeDiagnosticsBridge::new(sink.clone());
+        let api = api(&mut bridge);
+        let source = b"product";
+        let code = b"PRODUCT_NOTICE";
+        let message = b"bounded diagnostic";
+        let correlation = b"update-7";
+        let request = NativeDiagnosticsPublishRequest {
+            severity: NativeDiagnosticsSeverity::Warning,
+            disposition: NativeDiagnosticsDisposition::Degraded,
+            source: csharp_engine_abi::NativeUtf8Slice {
+                bytes: source.as_ptr(),
+                len: source.len(),
+            },
+            code: csharp_engine_abi::NativeUtf8Slice {
+                bytes: code.as_ptr(),
+                len: code.len(),
+            },
+            message: csharp_engine_abi::NativeUtf8Slice {
+                bytes: message.as_ptr(),
+                len: message.len(),
+            },
+            correlation: csharp_engine_abi::NativeUtf8Slice {
+                bytes: correlation.as_ptr(),
+                len: correlation.len(),
+            },
+        };
+        assert_eq!(unsafe { (api.publish)(api.context, &request) }, ABI_OK);
+        let snapshot = sink.snapshot();
+        assert_eq!(snapshot.warning_count, 1);
+        assert_eq!(snapshot.events[0].code(), "PRODUCT_NOTICE");
+
+        let invalid = NativeDiagnosticsPublishRequest {
+            message: csharp_engine_abi::NativeUtf8Slice {
+                bytes: b"\xff".as_ptr(),
+                len: 1,
+            },
+            ..request
+        };
+        assert_eq!(unsafe { (api.publish)(api.context, &invalid) }, 0);
+        assert_eq!(sink.snapshot().events.len(), 1);
     }
 }

@@ -1265,9 +1265,7 @@ mod tests {
         );
         assert!(
             !bridge
-                .read_diagnostic_at(NativeAudioDiagnosticAtRequest {
-                    index: 1,
-                })
+                .read_diagnostic_at(NativeAudioDiagnosticAtRequest { index: 1 })
                 .expect("out-of-window diagnostic")
                 .present
         );
