@@ -53,10 +53,10 @@ pub use occlusion::{
 };
 pub use perception::{
     SpatialPerceptionAggregate, SpatialPerceptionError, SpatialPerceptionObserver,
-    SpatialPerceptionPair, SpatialPerceptionPairKind, SpatialPerceptionQuery,
-    SpatialPerceptionReadout, SpatialPerceptionService, SpatialPerceptionTarget,
-    MAX_PERCEPTION_AGGREGATES, MAX_PERCEPTION_OBSERVERS, MAX_PERCEPTION_PAIRS,
-    MAX_PERCEPTION_TARGETS,
+    SpatialPerceptionPage, SpatialPerceptionPair, SpatialPerceptionPairKind,
+    SpatialPerceptionQuery, SpatialPerceptionReadout, SpatialPerceptionService,
+    SpatialPerceptionTarget, MAX_PERCEPTION_AGGREGATES, MAX_PERCEPTION_OBSERVERS,
+    MAX_PERCEPTION_PAIRS, MAX_PERCEPTION_TARGETS,
 };
 pub use physics::{
     integrate_kinematic, integrate_kinematic_with_query, CollisionMode, CollisionResolution,
@@ -71,8 +71,8 @@ pub use rigid_body::{
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerGeometrySource, TriggerLifecycleReceipt, TriggerOverlapFact,
-    TriggerOverlapFactKind, TriggerOverlapPair, TriggerOverlapReadout, TriggerReconcileCause,
-    TriggerReconcileReceipt, TriggerRestoreReceipt, TriggerVolumeDiagnostic,
+    TriggerOverlapFactKind, TriggerOverlapPage, TriggerOverlapPair, TriggerOverlapReadout,
+    TriggerReconcileCause, TriggerReconcileReceipt, TriggerRestoreReceipt, TriggerVolumeDiagnostic,
     TriggerVolumeDiagnosticCode, TriggerVolumeError, TriggerVolumeSystem,
     MAX_ACTIVE_TRIGGER_OVERLAPS, MAX_TRIGGER_DEFINITIONS, TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION,
 };

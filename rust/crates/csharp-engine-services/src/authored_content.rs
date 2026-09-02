@@ -1406,34 +1406,66 @@ impl RuntimeAuthoredContentBridge {
             request.reference_hash,
         )
         .map_err(AuthoredError::simple)?;
-        let entry = catalog
-            .catalog()
-            .resolve_reference(&reference)
-            .map_err(|error| match error {
-                CatalogResolveError::Missing { .. } => AuthoredError::Simple {
-                    code: "AUTHORED_CONTENT_REFERENCE_MISSING",
-                    message: "catalog reference is missing".into(),
+        let fallback_context = fallback_context(request.fallback_context)?;
+        let (entry, outcome, use_fallback) = match catalog.catalog().resolve_reference(&reference) {
+            Ok(entry) => (
+                Some(entry.clone()),
+                NativeAuthoredResolutionKind::Present,
+                false,
+            ),
+            Err(CatalogResolveError::Missing { .. })
+                if !request.required && !request.reference_has_hash =>
+            {
+                (None, NativeAuthoredResolutionKind::Missing, true)
+            }
+            Err(CatalogResolveError::Stale { .. })
+                if !request.required && !request.reference_has_hash =>
+            {
+                (None, NativeAuthoredResolutionKind::Stale, true)
+            }
+            Err(CatalogResolveError::Missing { .. }) => {
+                return Err(AuthoredError::Simple {
+                    code: "AUTHORED_CONTENT_REQUIRED_REFERENCE_MISSING",
+                    message: "required catalog reference is missing".into(),
                     source: reference.id().as_str().into(),
-                },
-                CatalogResolveError::Stale { .. } => AuthoredError::Simple {
-                    code: "AUTHORED_CONTENT_REFERENCE_STALE",
-                    message: "catalog reference is stale".into(),
+                });
+            }
+            Err(CatalogResolveError::Stale { .. }) => {
+                return Err(AuthoredError::Simple {
+                    code: "AUTHORED_CONTENT_REQUIRED_OR_HASHED_REFERENCE_STALE",
+                    message: "required or hash-pinned catalog reference is stale".into(),
                     source: reference.id().as_str().into(),
-                },
-            })?
-            .clone();
+                });
+            }
+        };
         let value = self.next_resolved_lease;
         self.next_resolved_lease = value
             .checked_add(1)
             .ok_or_else(|| AuthoredError::simple("resolved entry lease exhausted"))?;
         let mut text = Text { values: vec![] };
-        let dependencies = entry
-            .dependencies
-            .iter()
-            .map(|dependency| dependency_row(&mut text, &entry, dependency))
-            .collect();
-        let rows = vec![entry_row(&mut text, &entry)];
-        let payloads = payload_rows(&mut text, std::iter::once(&entry));
+        let mut dependencies = Vec::new();
+        let mut rows = Vec::new();
+        if let Some(entry) = entry.as_ref() {
+            dependencies.extend(
+                entry
+                    .dependencies
+                    .iter()
+                    .map(|dependency| dependency_row(&mut text, entry, dependency)),
+            );
+            rows.push(entry_row(&mut text, entry));
+        }
+        let payloads = payload_rows(&mut text, entry.iter());
+        let fallback = use_fallback.then(|| {
+            fallback_row(
+                &mut text,
+                asset_catalog::fallback_for(reference.id().kind(), fallback_context),
+            )
+        });
+        let no_fallback = NativeAuthoredFallbackReadout {
+            outcome: NativeAuthoredFallbackOutcomeKind::Skip,
+            visual: NativeAuthoredFallbackVisual::None,
+            reason: text.copy(""),
+        };
         let lease = ResolvedLease {
             _text: text,
             entry: rows,
@@ -1460,6 +1492,9 @@ impl RuntimeAuthoredContentBridge {
             atlas_regions_len: lease.atlas_regions.len(),
             voxel_surfaces: lease.voxel_surfaces.as_ptr(),
             voxel_surfaces_len: lease.voxel_surfaces.len(),
+            outcome,
+            has_fallback: fallback.is_some(),
+            fallback: fallback.unwrap_or(no_fallback),
         };
         self.resolved_leases.insert(value, lease);
         Ok(out)
@@ -4425,6 +4460,16 @@ mod tests {
             atlas_regions_len: 0,
             voxel_surfaces: std::ptr::null(),
             voxel_surfaces_len: 0,
+            outcome: NativeAuthoredResolutionKind::Present,
+            has_fallback: false,
+            fallback: NativeAuthoredFallbackReadout {
+                outcome: NativeAuthoredFallbackOutcomeKind::Skip,
+                visual: NativeAuthoredFallbackVisual::None,
+                reason: NativeUtf8Slice {
+                    bytes: std::ptr::null(),
+                    len: 0,
+                },
+            },
         };
         assert_eq!(
             unsafe {
@@ -4437,6 +4482,8 @@ mod tests {
                         reference_version: 2,
                         reference_has_hash: true,
                         reference_hash: slice(b"aabb"),
+                        required: true,
+                        fallback_context: NativeAuthoredFallbackContext::CosmeticSurface,
                     },
                     &mut resolved,
                     &mut receipt,
@@ -4445,9 +4492,79 @@ mod tests {
             ABI_OK
         );
         assert_eq!(resolved.entry_len, 1);
+        assert_eq!(resolved.outcome, NativeAuthoredResolutionKind::Present);
+        assert!(!resolved.has_fallback);
         assert_eq!(
             unsafe { (api.destroy_resolved_entry_lease)(api.context, resolved.handle) },
             ABI_OK
+        );
+        let mut missing = resolved;
+        assert_eq!(
+            unsafe {
+                (api.resolve_reference)(
+                    api.context,
+                    &NativeAuthoredCatalogResolveRequest {
+                        catalog: from_content,
+                        reference_id: slice(b"scene/missing"),
+                        reference_version_kind: NativeAssetVersionRequirementKind::Any,
+                        reference_version: 0,
+                        reference_has_hash: false,
+                        reference_hash: slice(b""),
+                        required: false,
+                        fallback_context: NativeAuthoredFallbackContext::CosmeticSurface,
+                    },
+                    &mut missing,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(missing.outcome, NativeAuthoredResolutionKind::Missing);
+        assert!(missing.has_fallback);
+        assert_eq!(missing.entry_len, 0);
+        assert_eq!(
+            unsafe { (api.destroy_resolved_entry_lease)(api.context, missing.handle) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.resolve_reference)(
+                    api.context,
+                    &NativeAuthoredCatalogResolveRequest {
+                        catalog: from_content,
+                        reference_id: slice(b"scene/missing"),
+                        reference_version_kind: NativeAssetVersionRequirementKind::Any,
+                        reference_version: 0,
+                        reference_has_hash: true,
+                        reference_hash: slice(b"deadbeef"),
+                        required: false,
+                        fallback_context: NativeAuthoredFallbackContext::CosmeticSurface,
+                    },
+                    &mut missing,
+                    &mut receipt,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                (api.resolve_reference)(
+                    api.context,
+                    &NativeAuthoredCatalogResolveRequest {
+                        catalog: from_content,
+                        reference_id: slice(b"scene/missing"),
+                        reference_version_kind: NativeAssetVersionRequirementKind::Any,
+                        reference_version: 0,
+                        reference_has_hash: false,
+                        reference_hash: slice(b""),
+                        required: true,
+                        fallback_context: NativeAuthoredFallbackContext::CosmeticSurface,
+                    },
+                    &mut missing,
+                    &mut receipt,
+                )
+            },
+            0
         );
         assert_eq!(
             unsafe { (api.destroy_catalog)(api.context, from_content) },

@@ -420,12 +420,7 @@ fn invoke_lifecycle<R: ProductDevRuntime>(
     call_runtime(
         state,
         |runtime| runtime.lifecycle_with_binding(operation, request.runtime),
-        |error| {
-            ProductDevOperationResult::rejected(
-                operation.operation_kind(),
-                format!("{}: {}", error.code(), error.diagnostic()),
-            )
-        },
+        |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
     )
 }
 
@@ -441,12 +436,7 @@ fn invoke_control<R: ProductDevRuntime>(
     call_runtime(
         state,
         |runtime| runtime.control(operation, request.runtime),
-        |error| {
-            ProductDevOperationResult::rejected(
-                operation.operation_kind(),
-                format!("{}: {}", error.code(), error.diagnostic()),
-            )
-        },
+        |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
     )
 }
 
@@ -478,13 +468,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
     call_runtime(
         state,
         |runtime| runtime.input(ProductDevInputBatch::new(events)),
-        |error| {
-            crate::ProductDevInputResult::rejected(format!(
-                "{}: {}",
-                error.code(),
-                error.diagnostic()
-            ))
-        },
+        |error| crate::ProductDevInputResult::rejected_runtime(error),
     )
 }
 
@@ -497,9 +481,9 @@ fn invoke_realtime<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
         state,
         |runtime| runtime.advance_realtime(request.observed_time_ns),
         |error| {
-            ProductDevOperationResult::rejected(
+            ProductDevOperationResult::rejected_runtime(
                 ProductDevOperationKind::AdvanceRealtime,
-                format!("{}: {}", error.code(), error.diagnostic()),
+                error,
             )
         },
     )
@@ -517,9 +501,9 @@ fn invoke_demand<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Htt
         state,
         |runtime| runtime.admit_demand_step(),
         |error| {
-            ProductDevOperationResult::rejected(
+            ProductDevOperationResult::rejected_runtime(
                 ProductDevOperationKind::AdmitDemandStep,
-                format!("{}: {}", error.code(), error.diagnostic()),
+                error,
             )
         },
     )
@@ -534,9 +518,9 @@ fn invoke_external<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
         state,
         |runtime| runtime.admit_external_step(request.step),
         |error| {
-            ProductDevOperationResult::rejected(
+            ProductDevOperationResult::rejected_runtime(
                 ProductDevOperationKind::AdmitExternalStep,
-                format!("{}: {}", error.code(), error.diagnostic()),
+                error,
             )
         },
     )
@@ -556,9 +540,9 @@ fn invoke_timeline<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
         state,
         |runtime| runtime.complete_timeline(request),
         |error| {
-            crate::ProductDevTimelineCompletionResult::rejected(
+            crate::ProductDevTimelineCompletionResult::rejected_runtime(
                 CanonicalU64::new(ticket),
-                format!("{}: {}", error.code(), error.diagnostic()),
+                error,
             )
         },
     )
@@ -576,12 +560,7 @@ fn invoke_audio_feedback<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]
     call_runtime(
         state,
         |runtime| runtime.report_audio_feedback(request),
-        |error| {
-            crate::ProductDevAudioFeedbackResult::rejected(
-                binding,
-                format!("{}: {}", error.code(), error.diagnostic()),
-            )
-        },
+        |error| crate::ProductDevAudioFeedbackResult::rejected_runtime(binding, error),
     )
 }
 
@@ -600,12 +579,7 @@ fn invoke_animation_feedback<R: ProductDevRuntime>(
     call_runtime(
         state,
         |runtime| runtime.report_animation_feedback(request),
-        |error| {
-            crate::ProductDevAnimationFeedbackResult::rejected(
-                binding,
-                format!("{}: {}", error.code(), error.diagnostic()),
-            )
-        },
+        |error| crate::ProductDevAnimationFeedbackResult::rejected_runtime(binding, error),
     )
 }
 
@@ -624,12 +598,7 @@ fn invoke_ghost_plate_feedback<R: ProductDevRuntime>(
     call_runtime(
         state,
         |runtime| runtime.report_ghost_plate_feedback(request),
-        |error| {
-            crate::ProductDevGhostPlateFeedbackResult::rejected(
-                binding,
-                format!("{}: {}", error.code(), error.diagnostic()),
-            )
-        },
+        |error| crate::ProductDevGhostPlateFeedbackResult::rejected_runtime(binding, error),
     )
 }
 
@@ -646,10 +615,7 @@ fn invoke_renderer_diagnostics<R: ProductDevRuntime>(
         state,
         |runtime| runtime.report_renderer_diagnostics(request),
         |error| {
-            crate::ProductDevRendererDiagnosticsFeedbackResult::rejected(
-                binding,
-                format!("{}: {}", error.code(), error.diagnostic()),
-            )
+            crate::ProductDevRendererDiagnosticsFeedbackResult::rejected_runtime(binding, error)
         },
     )
 }

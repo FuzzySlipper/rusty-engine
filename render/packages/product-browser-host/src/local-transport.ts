@@ -26,6 +26,7 @@ import type {
   ProductBrowserGhostPlateFeedback,
   ProductBrowserGhostPlateFeedbackFact,
   ProductBrowserGhostPlateFeedbackResult,
+  ProductBrowserHostFaultDisposition,
   ProductBrowserRendererDiagnosticsFeedback,
   ProductBrowserRendererDiagnosticsFeedbackResult,
   ProductBrowserRuntimeAdapter,
@@ -122,6 +123,9 @@ const AUDIO_DIAGNOSTIC_CODES = new Set<string>([
   'invalidDescriptor', 'assetMissing', 'assetKindMismatch', 'contentHashMismatch',
   'duplicateSignal', 'duplicateHandle', 'unknownHandle', 'unavailableHost',
   'audioContextBlocked', 'decodeFailed', 'hostFailure', 'invalidControl',
+]);
+const HOST_FAULT_DISPOSITIONS = new Set<string>([
+  'accepted', 'rejected-recoverable', 'degraded', 'resync-required', 'terminal',
 ]);
 
 interface ProductBrowserWireRecord {
@@ -1108,6 +1112,15 @@ function requireProductIdentity(value: unknown, name: string): string {
   return value;
 }
 
+function requireFaultCode(value: unknown, name: string): string {
+  if (typeof value !== 'string'
+    || new TextEncoder().encode(value).byteLength > 128
+    || !/^[A-Z0-9][A-Z0-9._-]*$/u.test(value)) {
+    throw new TypeError(`${name} must be a bounded stable host fault code`);
+  }
+  return value;
+}
+
 function requireBoundedString(value: unknown, name: string, maximumBytes = 256): string {
   if (typeof value !== 'string' || value.length === 0
     || new TextEncoder().encode(value).byteLength > maximumBytes
@@ -1763,18 +1776,38 @@ function decodeOutputLagEvent(
   });
 }
 
+function decodeFault(
+  record: ProductBrowserWireRecord,
+  name: string,
+): { readonly code: string; readonly disposition: ProductBrowserHostFaultDisposition } {
+  if (record.accepted !== true && record.accepted !== false) {
+    throw new TypeError(`${name} accepted must be boolean`);
+  }
+  const code = requireFaultCode(record.code, `${name} code`);
+  const disposition = requireCatalogValue<ProductBrowserHostFaultDisposition>(
+    record['disposition'],
+    `${name} disposition`,
+    HOST_FAULT_DISPOSITIONS,
+  );
+  if ((record.accepted === true) !== (disposition === 'accepted')) {
+    throw new TypeError(`${name} accepted and disposition are incoherent`);
+  }
+  return { code, disposition };
+}
+
 function decodeOperationResult(
   value: unknown,
   expectedOperation: ProductBrowserRuntimeOperationKind,
 ): ProductBrowserRuntimeOperationResult {
   const record = requireRecord(value, 'operation result');
-  requireKnownFields(record, ['accepted', 'operation', 'binding', 'nextInputSequence', 'readout', 'diagnostic'], 'operation result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'operation', 'binding', 'nextInputSequence', 'readout', 'diagnostic'], 'operation result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
   if (record.operation !== expectedOperation) {
     throw new TypeError(`operation must be ${expectedOperation}`);
   }
+  const fault = decodeFault(record, 'operation result');
   if ((record.binding === undefined) !== (record['nextInputSequence'] === undefined)) {
     throw new TypeError('operation binding and nextInputSequence must be present together');
   }
@@ -1787,6 +1820,7 @@ function decodeOperationResult(
   }
   return {
     accepted: record.accepted,
+    ...fault,
     operation: expectedOperation,
     ...(record.binding === undefined ? {} : { binding: decodeRuntimeIdentity(record.binding) }),
     ...(record['nextInputSequence'] === undefined
@@ -1807,7 +1841,7 @@ function decodeConnectionResult(value: unknown): ProductBrowserRuntimeOperationR
 
 function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
   const record = requireRecord(value, 'input result');
-  requireKnownFields(record, ['accepted', 'count', 'binding', 'readout', 'diagnostic'], 'input result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'count', 'binding', 'readout', 'diagnostic'], 'input result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
@@ -1816,6 +1850,7 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
     || (record.count as number) > MAXIMUM_INPUT_BATCH_LENGTH) {
     throw new TypeError(`count must be a non-negative integer no greater than ${String(MAXIMUM_INPUT_BATCH_LENGTH)}`);
   }
+  const fault = decodeFault(record, 'input result');
   if (record.accepted === false && (record.binding !== undefined || record.readout !== undefined)) {
     throw new TypeError('rejected input result cannot include binding or readout');
   }
@@ -1824,6 +1859,7 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
   }
   return {
     accepted: record.accepted,
+    ...fault,
     count: record.count as number,
     ...(record.binding === undefined ? {} : { binding: decodeRuntimeIdentity(record.binding) }),
     ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
@@ -1837,11 +1873,12 @@ function decodeAudioFeedbackResult(
   submittedFacts: readonly ProductBrowserAudioFeedbackFact[],
 ): ProductBrowserAudioFeedbackResult {
   const record = requireRecord(value, 'audio feedback result');
-  requireKnownFields(record, ['accepted', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'audio feedback result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'audio feedback result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('audio feedback accepted must be boolean');
   }
   const runtime = decodeRuntimeIdentity(record.runtime);
+  const fault = decodeFault(record, 'audio feedback result');
   if (!sameRuntimeIdentity(runtime, expectedRuntime)) {
     throw new TypeError('audio feedback result runtime does not match request runtime');
   }
@@ -1854,6 +1891,7 @@ function decodeAudioFeedbackResult(
     }
     return Object.freeze({
       accepted: false,
+      ...fault,
       runtime,
       ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
     });
@@ -1863,7 +1901,7 @@ function decodeAudioFeedbackResult(
     if (record.acceptedThroughFactId !== undefined) {
       throw new TypeError('empty audio feedback cannot include acceptedThroughFactId');
     }
-    return Object.freeze({ accepted: true, runtime });
+    return Object.freeze({ accepted: true, ...fault, runtime });
   }
   const acceptedThroughFactId = requireU64Text(
     record.acceptedThroughFactId,
@@ -1872,7 +1910,7 @@ function decodeAudioFeedbackResult(
   if (acceptedThroughFactId !== expectedThroughFactId) {
     throw new TypeError('audio feedback acknowledgement boundary does not match submitted facts');
   }
-  return Object.freeze({ accepted: true, runtime, acceptedThroughFactId });
+  return Object.freeze({ accepted: true, ...fault, runtime, acceptedThroughFactId });
 }
 
 function decodeGhostPlateFeedbackResult(
@@ -1880,16 +1918,18 @@ function decodeGhostPlateFeedbackResult(
   expectedRuntime: RustyApplicationRuntimeIdentity,
 ): ProductBrowserGhostPlateFeedbackResult {
   const record = requireRecord(value, 'ghost plate feedback result');
-  requireKnownFields(record, ['accepted', 'runtime', 'diagnostic'], 'ghost plate feedback result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'diagnostic'], 'ghost plate feedback result');
   if (record.accepted !== true && record.accepted !== false) throw new TypeError('ghost plate feedback accepted must be boolean');
   const runtime = decodeRuntimeIdentity(record.runtime);
+  const fault = decodeFault(record, 'ghost plate feedback result');
   if (!sameRuntimeIdentity(runtime, expectedRuntime)) throw new TypeError('ghost plate feedback result runtime does not match request runtime');
   if (record.accepted) {
     if (record.diagnostic !== undefined) throw new TypeError('accepted ghost plate feedback cannot include diagnostic');
-    return Object.freeze({ accepted: true, runtime });
+    return Object.freeze({ accepted: true, ...fault, runtime });
   }
   return Object.freeze({
     accepted: false,
+    ...fault,
     runtime,
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   });
@@ -1900,11 +1940,12 @@ function decodeRendererDiagnosticsResult(
   expectedRuntime: RustyApplicationRuntimeIdentity,
 ): ProductBrowserRendererDiagnosticsFeedbackResult {
   const record = requireRecord(value, 'renderer diagnostics result');
-  requireKnownFields(record, ['accepted', 'runtime', 'diagnostic'], 'renderer diagnostics result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'diagnostic'], 'renderer diagnostics result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('renderer diagnostics accepted must be boolean');
   }
   const runtime = decodeRuntimeIdentity(record.runtime);
+  const fault = decodeFault(record, 'renderer diagnostics result');
   if (!sameRuntimeIdentity(runtime, expectedRuntime)) {
     throw new TypeError('renderer diagnostics result runtime does not match request runtime');
   }
@@ -1914,7 +1955,7 @@ function decodeRendererDiagnosticsResult(
   if (record.accepted && diagnostic !== undefined) {
     throw new TypeError('accepted renderer diagnostics cannot include diagnostic');
   }
-  return Object.freeze({ accepted: record.accepted, runtime, ...(diagnostic === undefined ? {} : { diagnostic }) });
+  return Object.freeze({ accepted: record.accepted, ...fault, runtime, ...(diagnostic === undefined ? {} : { diagnostic }) });
 }
 
 function decodeAnimationFeedbackResult(
@@ -1923,23 +1964,24 @@ function decodeAnimationFeedbackResult(
   submittedFacts: readonly ProductBrowserAnimationFeedbackFact[],
 ): ProductBrowserAnimationFeedbackResult {
   const record = requireRecord(value, 'animation feedback result');
-  requireKnownFields(record, ['accepted', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'animation feedback result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'animation feedback result');
   if (record.accepted !== true && record.accepted !== false) throw new TypeError('animation feedback accepted must be boolean');
   const runtime = decodeRuntimeIdentity(record.runtime);
+  const fault = decodeFault(record, 'animation feedback result');
   if (!sameRuntimeIdentity(runtime, expectedRuntime)) throw new TypeError('animation feedback result runtime does not match request runtime');
   const expectedThroughFactId = submittedFacts.length === 0 ? undefined : submittedFacts[submittedFacts.length - 1]!.factId;
   if (!record.accepted) {
     if (record.acceptedThroughFactId !== undefined) throw new TypeError('rejected animation feedback cannot include acceptedThroughFactId');
-    return Object.freeze({ accepted: false, runtime, ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }) });
+    return Object.freeze({ accepted: false, ...fault, runtime, ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }) });
   }
   if (record.diagnostic !== undefined) throw new TypeError('accepted animation feedback cannot include diagnostic');
   if (expectedThroughFactId === undefined) {
     if (record.acceptedThroughFactId !== undefined) throw new TypeError('empty animation feedback cannot include acceptedThroughFactId');
-    return Object.freeze({ accepted: true, runtime });
+    return Object.freeze({ accepted: true, ...fault, runtime });
   }
   const acceptedThroughFactId = requireU64Text(record.acceptedThroughFactId, 'animation feedback acceptedThroughFactId');
   if (acceptedThroughFactId !== expectedThroughFactId) throw new TypeError('animation feedback acknowledgement boundary does not match submitted facts');
-  return Object.freeze({ accepted: true, runtime, acceptedThroughFactId });
+  return Object.freeze({ accepted: true, ...fault, runtime, acceptedThroughFactId });
 }
 
 function decodeTimelineCompletionResult(
@@ -1947,23 +1989,30 @@ function decodeTimelineCompletionResult(
   expectedTicket: string,
 ): ProductBrowserTimelineCompletionResult {
   const record = requireRecord(value, 'timeline completion result');
-  requireKnownFields(record, ['accepted', 'ticket', 'binding', 'readout', 'diagnostic'], 'timeline completion result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'ticket', 'binding', 'readout', 'diagnostic'], 'timeline completion result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
   const ticket = requireU64Text(record.ticket, 'timeline result ticket');
+  const fault = decodeFault(record, 'timeline completion result');
   if (ticket !== expectedTicket) throw new TypeError('ticket does not match completion request');
-  if (record.accepted === false && (record.binding !== undefined || record.readout !== undefined)) {
-    throw new TypeError('rejected timeline result cannot include binding or readout');
+  if ((record.binding === undefined) !== (record.readout === undefined)) {
+    throw new TypeError('timeline binding and readout must be present together');
   }
   if (record.accepted === true && record.diagnostic !== undefined) {
     throw new TypeError('accepted timeline result cannot include diagnostic');
   }
+  const binding = record.binding === undefined ? undefined : decodeRuntimeIdentity(record.binding);
+  const readout = record.readout === undefined ? undefined : decodeRuntimeReadout(record.readout);
+  if (binding !== undefined && readout !== undefined && !sameRuntimeIdentity(binding, readout.runtime)) {
+    throw new TypeError('timeline result binding does not match its readout');
+  }
   return {
     accepted: record.accepted,
+    ...fault,
     ticket,
-    ...(record.binding === undefined ? {} : { binding: decodeRuntimeIdentity(record.binding) }),
-    ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
+    ...(binding === undefined ? {} : { binding }),
+    ...(readout === undefined ? {} : { readout }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   };
 }

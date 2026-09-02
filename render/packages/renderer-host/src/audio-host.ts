@@ -619,6 +619,15 @@ export class RendererAudioHost {
   }
 
   #recordDiagnostic(diagnostic: AudioProjectionDiagnostic): void {
+    const duplicate = this.#diagnostics.findIndex((candidate) => (
+      candidate.code === diagnostic.code
+      && candidate.handle === diagnostic.handle
+      && candidate.message === diagnostic.message
+    ));
+    if (duplicate >= 0) {
+      this.#diagnostics[duplicate] = diagnostic;
+      return;
+    }
     if (this.#diagnostics.length === this.#maxRetainedDiagnostics) {
       this.#diagnostics.shift();
       this.#evictedDiagnosticCount += 1;

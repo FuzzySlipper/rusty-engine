@@ -19,6 +19,7 @@ const MAX_SPACING_PIXELS: f32 = 128.0;
 const MAX_RADIUS_PIXELS: f32 = 128.0;
 const MAX_SAFE_AREA_PIXELS: f32 = 4_096.0;
 const MAX_DISTANCE_SCALE: f32 = 16.0;
+const MAX_BILLBOARD_DIAGNOSTICS: usize = 128;
 pub(crate) const MIN_POSITIVE_BILLBOARD_VALUE: f32 = f32::EPSILON;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -389,7 +390,7 @@ impl BillboardProjector {
                     handle: operation_handle(&op),
                     message: diagnostic_message(code).to_string(),
                 };
-                self.diagnostics.push(diagnostic.clone());
+                self.retain_diagnostic(diagnostic.clone());
                 return Err(diagnostic);
             }
             projected.push(PresentationOp::Billboard { meta, op });
@@ -413,6 +414,21 @@ impl BillboardProjector {
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    fn retain_diagnostic(&mut self, diagnostic: BillboardProjectionDiagnostic) {
+        if let Some(index) = self.diagnostics.iter().position(|existing| {
+            existing.code == diagnostic.code
+                && existing.handle == diagnostic.handle
+                && existing.message == diagnostic.message
+        }) {
+            self.diagnostics[index] = diagnostic;
+            return;
+        }
+        if self.diagnostics.len() == MAX_BILLBOARD_DIAGNOSTICS {
+            self.diagnostics.remove(0);
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     fn validate_and_apply(

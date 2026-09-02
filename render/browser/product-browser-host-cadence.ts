@@ -59,10 +59,12 @@ const mountUi: RustyApplicationUiMount = (uiRoot) => {
 };
 
 const adapter: ProductBrowserRuntimeAdapter = {
-  lifecycle: async (operation) => ({ accepted: true, operation: operation.kind, binding: runtime }),
-  input: async (batch) => ({ accepted: true, count: batch.length, binding: runtime }),
+  lifecycle: async (operation) => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', operation: operation.kind, binding: runtime }),
+  input: async (batch) => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', count: batch.length, binding: runtime }),
   reportAudioFeedback: async (feedback) => ({
     accepted: true,
+    code: 'DEV_HOST_ACCEPTED',
+    disposition: 'accepted',
     runtime: feedback.runtime,
     ...(feedback.facts.at(-1) === undefined
       ? {}
@@ -70,12 +72,14 @@ const adapter: ProductBrowserRuntimeAdapter = {
   }),
   reportAnimationFeedback: async (feedback) => ({
     accepted: true,
+    code: 'DEV_HOST_ACCEPTED',
+    disposition: 'accepted',
     runtime: feedback.runtime,
     ...(feedback.facts.at(-1) === undefined
       ? {}
       : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
   }),
-  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, runtime: feedback.runtime }),
+  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', runtime: feedback.runtime }),
   advanceRealtime: async (observedTimeNs) => {
     window.__rustyProductCadenceAdvanceCalls = (window.__rustyProductCadenceAdvanceCalls ?? 0) + 1;
     const active = (window.__rustyProductCadenceActiveRequests ?? 0) + 1;
@@ -94,10 +98,12 @@ const adapter: ProductBrowserRuntimeAdapter = {
         resolve(rejectRealtimeAdvance
           ? {
               accepted: false,
+              code: 'DEV_HOST_FIXTURE_REALTIME_REJECTED',
+              disposition: 'rejected-recoverable',
               operation: 'advance-realtime',
               diagnostic: 'fixture realtime advancement was rejected',
             }
-          : { accepted: true, operation: 'advance-realtime', binding: runtime });
+          : { accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', operation: 'advance-realtime', binding: runtime });
       }, 50);
     });
   },

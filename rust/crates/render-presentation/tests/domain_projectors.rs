@@ -241,6 +241,60 @@ fn audio_diagnostics_are_bounded_oldest_first_and_reset_eviction_state() {
 }
 
 #[test]
+fn audio_diagnostics_coalesce_repeated_failures_without_consuming_ring_capacity() {
+    let assets = assets();
+    let mut projector = AudioProjector::default();
+    for sequence in [1, 2, 3] {
+        projector
+            .project(
+                &assets,
+                PresentationOpMeta::new(sequence),
+                AudioProjectionOp::Destroy {
+                    handle: AudioHandle::new(7),
+                },
+            )
+            .expect_err("the same unknown handle remains rejected");
+    }
+    let readout = projector.readout();
+    assert_eq!(readout.retained_diagnostic_count, 1);
+    assert_eq!(readout.evicted_diagnostic_count, 0);
+    assert_eq!(readout.diagnostics[0].sequence, 3);
+}
+
+#[test]
+fn optional_projector_diagnostics_are_bounded_and_coalesce_repeated_failures() {
+    let mut projector = TelemetryOverlayProjector::default();
+    for sequence in 0..200 {
+        let result = projector.project(
+            PresentationOpMeta::new(sequence),
+            TelemetryOverlayProjectionOp::Destroy {
+                handle: TelemetryOverlayHandle::new(sequence as u64),
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(TelemetryOverlayDiagnostic {
+                code: TelemetryOverlayDiagnosticCode::UnknownHandle,
+                ..
+            })
+        ));
+    }
+    assert_eq!(projector.readout().diagnostics.len(), 128);
+
+    projector
+        .project(
+            PresentationOpMeta::new(999),
+            TelemetryOverlayProjectionOp::Destroy {
+                handle: TelemetryOverlayHandle::new(199),
+            },
+        )
+        .expect_err("the retained unknown handle remains rejected");
+    let readout = projector.readout();
+    assert_eq!(readout.diagnostics.len(), 128);
+    assert_eq!(readout.diagnostics.last().unwrap().sequence, 999);
+}
+
+#[test]
 fn audio_retained_voice_controls_and_fixed_bus_state_are_owner_truth() {
     let assets = assets();
     let handle = AudioHandle::new(7);

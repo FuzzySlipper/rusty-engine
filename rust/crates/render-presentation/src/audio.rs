@@ -324,6 +324,14 @@ impl AudioProjector {
     }
 
     fn retain_diagnostic(&mut self, diagnostic: AudioProjectionDiagnostic) {
+        if let Some(index) = self.diagnostics.iter().position(|existing| {
+            existing.code == diagnostic.code
+                && existing.handle == diagnostic.handle
+                && existing.message == diagnostic.message
+        }) {
+            self.diagnostics[index] = diagnostic;
+            return;
+        }
         if self.diagnostics.len() == MAX_AUDIO_DIAGNOSTICS {
             self.diagnostics.remove(0);
             self.evicted_diagnostic_count = self.evicted_diagnostic_count.saturating_add(1);

@@ -1225,7 +1225,7 @@ mod tests {
     }
 
     #[test]
-    fn exposes_retained_and_evicted_projector_diagnostic_counts() {
+    fn coalesces_repeated_projector_diagnostics_without_eviction() {
         let mut content = BTreeMap::new();
         content.insert("audio/trial.wav".to_owned(), wav());
         let mut bridge = RuntimeAudioBridge::new(content);
@@ -1255,11 +1255,8 @@ mod tests {
         }
 
         let readout = bridge.read().expect("diagnostic readout");
-        assert_eq!(
-            readout.retained_diagnostic_count,
-            MAX_AUDIO_DIAGNOSTICS as u32
-        );
-        assert_eq!(readout.evicted_diagnostic_count, 2);
+        assert_eq!(readout.retained_diagnostic_count, 1);
+        assert_eq!(readout.evicted_diagnostic_count, 0);
         assert!(
             bridge
                 .read_diagnostic_at(NativeAudioDiagnosticAtRequest { index: 0 })
@@ -1269,7 +1266,7 @@ mod tests {
         assert!(
             !bridge
                 .read_diagnostic_at(NativeAudioDiagnosticAtRequest {
-                    index: MAX_AUDIO_DIAGNOSTICS as u32,
+                    index: 1,
                 })
                 .expect("out-of-window diagnostic")
                 .present

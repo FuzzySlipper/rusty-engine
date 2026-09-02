@@ -83,6 +83,24 @@ pub struct SpatialPerceptionReadout {
     pub occlusion_rejects: usize,
 }
 
+/// One deterministic bounded page of a perception evaluation. The aggregate facts always cover
+/// the complete accepted query while `pairs` is the requested contiguous page of qualified
+/// observer/target rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpatialPerceptionPage {
+    pub pairs: Vec<SpatialPerceptionPair>,
+    pub aggregates: Vec<SpatialPerceptionAggregate>,
+    pub pair_total: usize,
+    pub next_pair_cursor: Option<usize>,
+    pub selected_observers: usize,
+    pub selected_targets: usize,
+    pub selection_comparisons: usize,
+    pub distance_rejects: usize,
+    pub facing_rejects: usize,
+    pub visibility_casts: usize,
+    pub occlusion_rejects: usize,
+}
+
 /// Inputs for one read-only perception evaluation.
 pub struct SpatialPerceptionQuery<'a> {
     pub scene: &'a VoxelCollisionScene,
@@ -103,6 +121,40 @@ impl SpatialPerceptionService {
         self,
         query: SpatialPerceptionQuery<'_>,
     ) -> Result<SpatialPerceptionReadout, SpatialPerceptionError> {
+        let page = self.evaluate_page(query, 0, MAX_PERCEPTION_PAIRS)?;
+        if page.next_pair_cursor.is_some() {
+            return Err(SpatialPerceptionError::TooManyPairs {
+                actual: page.pair_total,
+                limit: MAX_PERCEPTION_PAIRS,
+            });
+        }
+        Ok(SpatialPerceptionReadout {
+            pairs: page.pairs,
+            aggregates: page.aggregates,
+            selected_observers: page.selected_observers,
+            selected_targets: page.selected_targets,
+            selection_comparisons: page.selection_comparisons,
+            distance_rejects: page.distance_rejects,
+            facing_rejects: page.facing_rejects,
+            visibility_casts: page.visibility_casts,
+            occlusion_rejects: page.occlusion_rejects,
+        })
+    }
+
+    /// Evaluates the complete bounded query but retains only the requested contiguous pair page.
+    /// This preserves deterministic aggregate facts without silently discarding qualified pairs.
+    pub fn evaluate_page(
+        self,
+        query: SpatialPerceptionQuery<'_>,
+        pair_cursor: usize,
+        page_size: usize,
+    ) -> Result<SpatialPerceptionPage, SpatialPerceptionError> {
+        if page_size == 0 || page_size > MAX_PERCEPTION_PAIRS {
+            return Err(SpatialPerceptionError::InvalidPageSize {
+                actual: page_size,
+                limit: MAX_PERCEPTION_PAIRS,
+            });
+        }
         if query.observers.len() > MAX_PERCEPTION_OBSERVERS {
             return Err(SpatialPerceptionError::TooManyObservers {
                 actual: query.observers.len(),
@@ -133,6 +185,7 @@ impl SpatialPerceptionService {
         }
 
         let mut pairs = Vec::new();
+        let mut pair_total = 0usize;
         let mut selection_comparisons = 0usize;
         let mut distance_rejects = 0usize;
         let mut facing_rejects = 0usize;
@@ -156,12 +209,6 @@ impl SpatialPerceptionService {
                     continue;
                 }
 
-                if pairs.len() >= MAX_PERCEPTION_PAIRS {
-                    return Err(SpatialPerceptionError::TooManyPairs {
-                        actual: pairs.len() + 1,
-                        limit: MAX_PERCEPTION_PAIRS,
-                    });
-                }
                 let distance = distance_squared.sqrt();
                 let facing_cosine = if distance <= 0.0 {
                     0.0
@@ -175,14 +222,15 @@ impl SpatialPerceptionService {
                     facing_rejects = facing_rejects
                         .checked_add(1)
                         .ok_or(SpatialPerceptionError::ArithmeticOverflow)?;
-                    pairs.push(SpatialPerceptionPair {
+                    let pair = SpatialPerceptionPair {
                         observer: observer.entity,
                         target: target.entity,
                         distance,
                         facing_cosine,
                         kind: SpatialPerceptionPairKind::FacingRejected,
                         evidence: observer.evidence,
-                    });
+                    };
+                    retain_page_pair(&mut pairs, &mut pair_total, pair_cursor, page_size, pair)?;
                     continue;
                 }
 
@@ -218,14 +266,15 @@ impl SpatialPerceptionService {
                     }
                     SpatialPerceptionPairKind::Visible
                 };
-                pairs.push(SpatialPerceptionPair {
+                let pair = SpatialPerceptionPair {
                     observer: observer.entity,
                     target: target.entity,
                     distance,
                     facing_cosine,
                     kind,
                     evidence: observer.evidence,
-                });
+                };
+                retain_page_pair(&mut pairs, &mut pair_total, pair_cursor, page_size, pair)?;
             }
         }
 
@@ -245,9 +294,18 @@ impl SpatialPerceptionService {
                 },
             )
             .collect();
-        Ok(SpatialPerceptionReadout {
+        if pair_cursor > pair_total {
+            return Err(SpatialPerceptionError::InvalidPairCursor {
+                cursor: pair_cursor,
+                total: pair_total,
+            });
+        }
+        Ok(SpatialPerceptionPage {
             pairs,
             aggregates,
+            pair_total,
+            next_pair_cursor: (pair_cursor + page_size < pair_total)
+                .then_some(pair_cursor + page_size),
             selected_observers: observers.len(),
             selected_targets: targets.len(),
             selection_comparisons,
@@ -265,6 +323,8 @@ pub enum SpatialPerceptionError {
     TooManyTargets { actual: usize, limit: usize },
     TooManyPairs { actual: usize, limit: usize },
     TooManyAggregates { actual: usize, limit: usize },
+    InvalidPageSize { actual: usize, limit: usize },
+    InvalidPairCursor { cursor: usize, total: usize },
     DuplicateObserver(EntityId),
     DuplicateTarget(EntityId),
     InvalidObserver(EntityId),
@@ -272,6 +332,23 @@ pub enum SpatialPerceptionError {
     NonFiniteEvidence,
     ArithmeticOverflow,
     Occlusion(SpatialOcclusionError),
+}
+
+fn retain_page_pair(
+    pairs: &mut Vec<SpatialPerceptionPair>,
+    pair_total: &mut usize,
+    pair_cursor: usize,
+    page_size: usize,
+    pair: SpatialPerceptionPair,
+) -> Result<(), SpatialPerceptionError> {
+    let index = *pair_total;
+    *pair_total = pair_total
+        .checked_add(1)
+        .ok_or(SpatialPerceptionError::ArithmeticOverflow)?;
+    if index >= pair_cursor && index - pair_cursor < page_size {
+        pairs.push(pair);
+    }
+    Ok(())
 }
 
 impl std::fmt::Display for SpatialPerceptionError {

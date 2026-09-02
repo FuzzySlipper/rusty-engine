@@ -358,6 +358,45 @@ pub struct NativeSpatialTriggerOverlapAtReceipt {
     pub revision: u64,
 }
 
+/// Continuation-aware, bounded trigger-overlap read. A zero expected revision starts a read;
+/// continuations must echo the revision returned by their prior page.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialTriggerOverlapPageRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub trigger: u64,
+    pub expected_revision: u64,
+    pub cursor: u32,
+    pub page_size: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSpatialTriggerOverlapPageLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialTriggerOverlapSubject {
+    pub subject: u64,
+}
+
+/// Copied page of current overlap subjects. `total` is the complete observed count and the
+/// next cursor is present only when another page is available.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialTriggerOverlapPageLease {
+    pub handle: NativeSpatialTriggerOverlapPageLeaseHandle,
+    pub subjects: *const NativeSpatialTriggerOverlapSubject,
+    pub subjects_len: usize,
+    pub trigger: u64,
+    pub revision: u64,
+    pub total: u32,
+    pub has_next_cursor: bool,
+    pub next_cursor: u32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpatialTriggerFactAtRequest {

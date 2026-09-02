@@ -19,6 +19,7 @@ import {
   mountRendererBrowserSurface,
   RendererThreeParticleSink,
   RendererLightingPolicyError,
+  RendererTerminalError,
   type AnimatedMeshAssetSource,
   type RendererBrowserSurface,
   type RendererBrowserSurfacePickDiagnostic,
@@ -216,7 +217,48 @@ export interface RendererSurfaceDiagnosticsReadout {
     readonly materialFallbackCount: number;
     readonly voxelSpecializedMaterialCount: number;
   };
+  /** Bounded automatic-cadence failures; repeated identical failures coalesce. */
+  readonly cadence: RendererSurfaceCadenceReadout;
 }
+
+export type RendererSurfaceCadenceState = 'ready' | 'contextLost' | 'terminal';
+
+export interface RendererSurfaceCadenceFailure {
+  readonly stage: 'animationCallback' | 'automaticSubmission' | 'backendRender' | 'contextLost';
+  readonly message: string;
+  readonly occurrences: number;
+}
+
+export interface RendererSurfaceCadenceReadout {
+  readonly state: RendererSurfaceCadenceState;
+  readonly retainedFailureCount: number;
+  readonly evictedFailureCount: number;
+  readonly failures: readonly RendererSurfaceCadenceFailure[];
+}
+
+export class RendererSurfaceCadenceError extends Error {
+  readonly state: Exclude<RendererSurfaceCadenceState, 'ready'>;
+
+  constructor(state: Exclude<RendererSurfaceCadenceState, 'ready'>) {
+    super(state === 'contextLost'
+      ? 'renderer surface is paused because its WebGL context was lost; remount to recover'
+      : 'renderer surface is terminal after a backend lifetime failure; remount to recover');
+    this.name = 'RendererSurfaceCadenceError';
+    this.state = state;
+  }
+}
+
+class RendererSurfaceBackendRenderError extends Error {
+  override readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'RendererSurfaceBackendRenderError';
+    this.cause = cause;
+  }
+}
+
+const MAX_RETAINED_CADENCE_FAILURES = 64;
 
 export interface RendererSurfaceOptions {
   readonly autoStart?: boolean;
@@ -689,12 +731,21 @@ function mountPreparedRendererSurface(
     controls.dispose();
     throw cause;
   }
-  const animationProjection = surfaceAnimationProjection(
-    backendSurface,
-    resources.contentHashes ?? new Map(),
-  );
+  let animationProjection: RendererAnimatedMeshProjection;
+  try {
+    animationProjection = surfaceAnimationProjection(
+      backendSurface,
+      resources.contentHashes ?? new Map(),
+    );
+  } catch (cause) {
+    backendSurface.dispose();
+    controls.dispose();
+    throw cause;
+  }
   let presentationHosts = options.presentationHosts ?? null;
   let animationFrame: number | null = null;
+  let cadenceGeneration = 0;
+  let cadenceRunning = false;
   let lastRenderTimeMs: number | null = null;
   const timing = new RendererSurfaceTimingTracker();
   let latestSubmission: RendererSurfaceSubmissionSample | null = null;
@@ -702,7 +753,35 @@ function mountPreparedRendererSurface(
   const automaticSubmissionAdmission =
     new RendererSurfaceAutomaticSubmissionAdmissionObservation();
   let disposed = false;
+  let cadenceState: RendererSurfaceCadenceState = 'ready';
+  const cadenceFailures: RendererSurfaceCadenceFailure[] = [];
+  let evictedCadenceFailureCount = 0;
   const particleSinks = new Set<RendererParticleSceneSink>();
+  const rememberCadenceFailure = (
+    stage: RendererSurfaceCadenceFailure['stage'],
+    cause: unknown,
+  ): void => {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const existing = cadenceFailures.find((failure) => (
+      failure.stage === stage && failure.message === message
+    ));
+    if (existing !== undefined) {
+      const index = cadenceFailures.indexOf(existing);
+      cadenceFailures[index] = { ...existing, occurrences: existing.occurrences + 1 };
+      return;
+    }
+    if (cadenceFailures.length === MAX_RETAINED_CADENCE_FAILURES) {
+      cadenceFailures.shift();
+      evictedCadenceFailureCount += 1;
+    }
+    cadenceFailures.push({ stage, message, occurrences: 1 });
+  };
+  const cadenceReadout = (): RendererSurfaceCadenceReadout => Object.freeze({
+    state: cadenceState,
+    retainedFailureCount: cadenceFailures.length,
+    evictedFailureCount: evictedCadenceFailureCount,
+    failures: Object.freeze(cadenceFailures.map((failure) => Object.freeze({ ...failure }))),
+  });
   const continuousDemand = () => ({
     controls: controls.requiresAnimationFrame(),
     presentation: presentationHosts?.requiresAnimationFrame() ?? false,
@@ -711,6 +790,14 @@ function mountPreparedRendererSurface(
   const requestAutomaticSubmission = (): void => {
     submissionDemand.request();
   };
+  const onContextLost = (event: Event): void => {
+    event.preventDefault();
+    if (disposed || cadenceState === 'terminal') return;
+    cadenceState = 'contextLost';
+    rememberCadenceFailure('contextLost', 'WebGL context lost; automatic rendering is paused until remount');
+    stop();
+  };
+  canvas.addEventListener('webglcontextlost', onContextLost);
   const syncListener = (fallback: RendererSurfaceCameraSnapshot): void => {
     presentationHosts?.syncListener(resolveRendererAudioListenerPose(
       backendSurface.viewCompositionReadout(),
@@ -731,6 +818,7 @@ function mountPreparedRendererSurface(
     source: RendererSurfaceTimingSource,
   ): RenderFrameResult => {
     if (disposed) throw new Error('renderer surface is disposed');
+    if (cadenceState !== 'ready') throw new RendererSurfaceCadenceError(cadenceState);
     assertRendererSurfaceSourceTime(timeMs);
     const deltaSeconds = lastRenderTimeMs === null
       ? 0
@@ -745,7 +833,12 @@ function mountPreparedRendererSurface(
     presentationHosts?.advance(deltaSeconds);
     const presentationAdvancedAtMs = surfaceTimingNow();
     const backendSubmissionStartedMs = surfaceTimingNow();
-    const backendStatistics = backendSurface.renderOnce(timeMs);
+    let backendStatistics: RendererBrowserSurfaceSubmissionStatistics;
+    try {
+      backendStatistics = backendSurface.renderOnce(timeMs);
+    } catch (cause) {
+      throw new RendererSurfaceBackendRenderError(cause);
+    }
     const backendSubmissionEndedMs = surfaceTimingNow();
     latestSubmission = surfaceSubmissionSample(timing.record({
       source,
@@ -765,91 +858,161 @@ function mountPreparedRendererSurface(
   const renderOnce = (
     timeMs = globalThis.performance?.now() ?? 0,
   ): RendererSurfaceSubmissionSample => {
-    return renderFrame(timeMs, 'explicit').submission;
+    try {
+      return renderFrame(timeMs, 'explicit').submission;
+    } catch (cause) {
+      if (cause instanceof RendererSurfaceBackendRenderError) {
+        terminalizeBackend(cause.cause);
+        throw cause.cause;
+      }
+      throw cause;
+    }
   };
 
-  const tick = (timeMs: number): void => {
+  const tick = (timeMs: number, generation: number): void => {
     const callbackStartedAtMs = surfaceTimingNow();
+    // A successor can race with stop/dispose. Never requeue from a callback
+    // that was already dequeued when the surface stopped.
+    if (!cadenceRunning || generation !== cadenceGeneration || disposed || cadenceState !== 'ready') {
+      return;
+    }
+    animationFrame = null;
     // Register the sole successor before camera, presentation, and WebGL work.
     // Browsers can otherwise miss the next display scheduling window when the
     // callback requests its successor only after submitting the current frame.
-    animationFrame = globalThis.requestAnimationFrame(tick);
+    animationFrame = globalThis.requestAnimationFrame((nextTimeMs) => tick(nextTimeMs, generation));
     const successorQueuedAtMs = surfaceTimingNow();
-    options.onAnimationFrame?.(timeMs);
-    const demand = submissionDemand.consumeDecision(
-      surfaceViewport(canvas),
-      continuousDemand(),
-    );
-    const demandObservedAtMs = surfaceTimingNow();
-    if (!demand.shouldSubmit) {
-      const callbackEndedAtMs = surfaceTimingNow();
-      automaticSubmissionAdmission.record(
-        timeMs,
-        'noDemand',
-        demand,
-        backendSurface.automaticSubmissionPacing(),
-        callbackPhases({
-          callbackStartedAtMs,
-          successorQueuedAtMs,
-          demandObservedAtMs,
-          callbackEndedAtMs,
-        }),
+    try {
+      try {
+        options.onAnimationFrame?.(timeMs);
+      } catch (cause) {
+        // Callers may observe the Engine cadence, but cannot own or halt it.
+        rememberCadenceFailure('animationCallback', cause);
+      }
+      const demand = submissionDemand.consumeDecision(
+        surfaceViewport(canvas),
+        continuousDemand(),
       );
-    } else {
-      const ready = backendSurface.automaticSubmissionReady(timeMs);
-      const backendReadinessObservedAtMs = surfaceTimingNow();
-      const backendPacing = backendSurface.automaticSubmissionPacing();
-      if (ready) {
-        const rendered = renderFrame(timeMs, 'animationFrame');
+      const demandObservedAtMs = surfaceTimingNow();
+      if (!demand.shouldSubmit) {
         const callbackEndedAtMs = surfaceTimingNow();
         automaticSubmissionAdmission.record(
           timeMs,
-          'admitted',
+          'noDemand',
           demand,
-          backendPacing,
+          backendSurface.automaticSubmissionPacing(),
           callbackPhases({
             callbackStartedAtMs,
             successorQueuedAtMs,
             demandObservedAtMs,
-            backendReadinessObservedAtMs,
-            controlsUpdatedAtMs: rendered.controlsUpdatedAtMs,
-            cameraUpdatedAtMs: rendered.cameraUpdatedAtMs,
-            presentationAdvancedAtMs: rendered.presentationAdvancedAtMs,
-            backendSubmittedAtMs: rendered.backendSubmittedAtMs,
             callbackEndedAtMs,
           }),
         );
       } else {
-        const callbackEndedAtMs = surfaceTimingNow();
-        automaticSubmissionAdmission.record(
-          timeMs,
-          'backendBlocked',
-          demand,
-          backendPacing,
-          callbackPhases({
-            callbackStartedAtMs,
-            successorQueuedAtMs,
-            demandObservedAtMs,
-            backendReadinessObservedAtMs,
-            callbackEndedAtMs,
-          }),
-        );
-        requestAutomaticSubmission();
+        const ready = backendSurface.automaticSubmissionReady(timeMs);
+        const backendReadinessObservedAtMs = surfaceTimingNow();
+        const backendPacing = backendSurface.automaticSubmissionPacing();
+        if (ready) {
+          try {
+            const rendered = renderFrame(timeMs, 'animationFrame');
+            const callbackEndedAtMs = surfaceTimingNow();
+            automaticSubmissionAdmission.record(
+              timeMs,
+              'admitted',
+              demand,
+              backendPacing,
+              callbackPhases({
+                callbackStartedAtMs,
+                successorQueuedAtMs,
+                demandObservedAtMs,
+                backendReadinessObservedAtMs,
+                controlsUpdatedAtMs: rendered.controlsUpdatedAtMs,
+                cameraUpdatedAtMs: rendered.cameraUpdatedAtMs,
+                presentationAdvancedAtMs: rendered.presentationAdvancedAtMs,
+                backendSubmittedAtMs: rendered.backendSubmittedAtMs,
+                callbackEndedAtMs,
+              }),
+            );
+          } catch (cause) {
+            // A failed backend may have partially consumed renderer ownership;
+            // do not keep submitting until a fresh surface remounts it.
+            terminalizeBackend(cause instanceof RendererSurfaceBackendRenderError ? cause.cause : cause);
+          }
+        } else {
+          const callbackEndedAtMs = surfaceTimingNow();
+          automaticSubmissionAdmission.record(
+            timeMs,
+            'backendBlocked',
+            demand,
+            backendPacing,
+            callbackPhases({
+              callbackStartedAtMs,
+              successorQueuedAtMs,
+              demandObservedAtMs,
+              backendReadinessObservedAtMs,
+              callbackEndedAtMs,
+            }),
+          );
+          requestAutomaticSubmission();
+        }
       }
+    } catch (cause) {
+      // Admission/pacing failures are backend lifetime failures as well: no
+      // later automatic frame may probe a potentially invalid owner.
+      rememberCadenceFailure('automaticSubmission', cause);
+      cadenceState = 'terminal';
+      stop();
     }
   };
   const start = (): void => {
     if (disposed) throw new Error('renderer surface is disposed');
+    if (cadenceState !== 'ready') throw new RendererSurfaceCadenceError(cadenceState);
     if (animationFrame === null) {
-      animationFrame = globalThis.requestAnimationFrame(tick);
+      cadenceRunning = true;
+      const generation = ++cadenceGeneration;
+      animationFrame = globalThis.requestAnimationFrame((timeMs) => tick(timeMs, generation));
       requestAutomaticSubmission();
     }
   };
   const stop = (): void => {
+    cadenceRunning = false;
+    cadenceGeneration += 1;
     if (animationFrame !== null) {
       globalThis.cancelAnimationFrame(animationFrame);
       animationFrame = null;
     }
+  };
+  const terminalizeBackend = (cause: unknown): void => {
+    rememberCadenceFailure('backendRender', cause);
+    cadenceState = 'terminal';
+    stop();
+  };
+  const disposeOwners = (): unknown | null => {
+    const failures: unknown[] = [];
+    const attempt = (operation: () => void): void => {
+      try {
+        operation();
+      } catch (cause) {
+        failures.push(cause);
+      }
+    };
+    try {
+      // Stop first so an already-dequeued RAF observes the new generation and
+      // cannot queue another callback while owner cleanup is in progress.
+      stop();
+      attempt(() => canvas.removeEventListener('webglcontextlost', onContextLost));
+      attempt(() => presentationHosts?.dispose());
+      presentationHosts = null;
+      attempt(() => controls.dispose());
+      for (const sink of [...particleSinks]) attempt(() => sink.dispose());
+      particleSinks.clear();
+      attempt(() => backendSurface.dispose());
+    } finally {
+      cadenceState = 'terminal';
+      cadenceRunning = false;
+      disposed = true;
+    }
+    return failures[0] ?? null;
   };
   const applyFrame = (nextFrame: RenderFrameDiff): RendererAnimatedMeshFrameReceipt => {
     try {
@@ -862,6 +1025,10 @@ function mountPreparedRendererSurface(
       requestAutomaticSubmission();
       return { applied: true, diagnostics: [] };
     } catch (cause) {
+      if (cause instanceof RendererTerminalError) {
+        terminalizeBackend(cause);
+        throw cause;
+      }
       return {
         applied: false,
         diagnostics: [{
@@ -876,9 +1043,14 @@ function mountPreparedRendererSurface(
     }
   };
 
-  renderFrame(0, 'mount');
-  if (options.autoStart !== false) {
-    start();
+  try {
+    renderFrame(0, 'mount');
+    if (options.autoStart !== false) {
+      start();
+    }
+  } catch (cause) {
+    disposeOwners();
+    throw cause;
   }
 
   return {
@@ -972,6 +1144,7 @@ function mountPreparedRendererSurface(
           voxelSpecializedMaterialCount:
             backendSurface.renderer.voxelSurfaceMaterialReadout().length,
         }),
+        cadence: cadenceReadout(),
       });
     },
     cameraPose: controls.cameraPose,
@@ -1038,14 +1211,8 @@ function mountPreparedRendererSurface(
     timing: timing.read.bind(timing),
     dispose: () => {
       if (disposed) return;
-      stop();
-      presentationHosts?.dispose();
-      presentationHosts = null;
-      controls.dispose();
-      for (const sink of [...particleSinks]) sink.dispose();
-      particleSinks.clear();
-      backendSurface.dispose();
-      disposed = true;
+      const failure = disposeOwners();
+      if (failure !== null) throw failure;
     },
   };
 }
@@ -1107,6 +1274,7 @@ function surfaceAnimationProjection(
         surface.applyFrame(frame);
         return { applied: true, diagnostics: [] };
       } catch (cause) {
+        if (cause instanceof RendererTerminalError) throw cause;
         return {
           applied: false,
           diagnostics: [{

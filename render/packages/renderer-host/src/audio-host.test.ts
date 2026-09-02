@@ -334,10 +334,10 @@ void test('audio realization and diagnostic retention are bounded while fact IDs
   });
   await audio.applyPresentation(frame([
     operation(0, {
-      op: 'emit', signalHandle: audioSignalHandle(1), signalId: 'missing:1', descriptor: descriptor(),
+      op: 'create', handle: audioHandle(1), descriptor: descriptor(),
     }),
     operation(1, {
-      op: 'emit', signalHandle: audioSignalHandle(2), signalId: 'missing:2', descriptor: descriptor(),
+      op: 'create', handle: audioHandle(2), descriptor: descriptor(),
     }),
   ]));
 
@@ -363,8 +363,11 @@ void test('listener updates after disposal retain a diagnostic without writing W
   const diagnostics = audio.updateListener({
     position: [4, 5, 6], forward: [0, 0, -1], up: [0, 1, 0],
   });
+  audio.updateListener({ position: [4, 5, 6], forward: [0, 0, -1], up: [0, 1, 0] });
   assert.equal(diagnostics[0]?.code, 'hostFailure');
   assert.deepEqual(context.listener.positionX.writes, []);
+  assert.equal(audio.readout().retainedDiagnosticCount, 1);
+  assert.equal(audio.realizedFacts().retainedFactCount, 1);
   assert.equal(audio.readout().diagnostics.at(-1)?.message, 'audio host is disposed');
 });
 

@@ -7,6 +7,7 @@ use crate::{PresentationOp, PresentationOpMeta, RenderTargetLookup};
 
 pub const GHOST_PLATE_MIN_CAPTURE_RESOLUTION: u16 = 8;
 pub const GHOST_PLATE_MAX_CAPTURE_RESOLUTION: u16 = 4096;
+const MAX_GHOST_PLATE_DIAGNOSTICS: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -199,7 +200,7 @@ impl GhostPlateProjector {
                     handle: operation_handle(&op),
                     message: diagnostic_message(code).to_string(),
                 };
-                self.diagnostics.push(diagnostic.clone());
+                self.retain_diagnostic(diagnostic.clone());
                 return Err(diagnostic);
             }
             output.push(PresentationOp::GhostPlate { meta, op });
@@ -219,6 +220,21 @@ impl GhostPlateProjector {
     }
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    fn retain_diagnostic(&mut self, diagnostic: GhostPlateProjectionDiagnostic) {
+        if let Some(index) = self.diagnostics.iter().position(|existing| {
+            existing.code == diagnostic.code
+                && existing.handle == diagnostic.handle
+                && existing.message == diagnostic.message
+        }) {
+            self.diagnostics[index] = diagnostic;
+            return;
+        }
+        if self.diagnostics.len() == MAX_GHOST_PLATE_DIAGNOSTICS {
+            self.diagnostics.remove(0);
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     fn validate_and_apply(

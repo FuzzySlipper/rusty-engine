@@ -110,3 +110,48 @@ fn distance_rejected_pairs_are_not_retained_and_duplicate_ids_are_rejected() {
         Err(SpatialPerceptionError::DuplicateObserver(EntityId::new(1)))
     );
 }
+
+#[test]
+fn qualified_pairs_page_deterministically_without_silent_cap_loss() {
+    let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let entities = EntityState::default();
+    let observers = [
+        observer(9, [0.0, 0.0, 0.0], 0.25),
+        observer(3, [0.0, 0.0, 0.0], 0.75),
+    ];
+    let targets = [target(22, [4.0, 0.0, 0.0]), target(11, [4.0, 0.0, 0.0])];
+
+    let first = SpatialPerceptionService
+        .evaluate_page(query(&scene, &entities, &observers, &targets), 0, 2)
+        .unwrap();
+    assert_eq!(first.pair_total, 4);
+    assert_eq!(first.next_pair_cursor, Some(2));
+    assert_eq!(first.pairs.len(), 2);
+    assert_eq!(first.pairs[0].observer, EntityId::new(3));
+    assert_eq!(first.pairs[0].target, EntityId::new(11));
+    assert_eq!(first.aggregates.len(), 2);
+
+    let second = SpatialPerceptionService
+        .evaluate_page(query(&scene, &entities, &observers, &targets), 2, 2)
+        .unwrap();
+    assert_eq!(second.pair_total, 4);
+    assert_eq!(second.next_pair_cursor, None);
+    assert_eq!(second.pairs.len(), 2);
+
+    let final_empty = SpatialPerceptionService
+        .evaluate_page(query(&scene, &entities, &observers, &targets), 4, 2)
+        .unwrap();
+    assert!(final_empty.pairs.is_empty());
+    assert_eq!(final_empty.next_pair_cursor, None);
+    assert!(matches!(
+        SpatialPerceptionService.evaluate_page(
+            query(&scene, &entities, &observers, &targets),
+            5,
+            2
+        ),
+        Err(SpatialPerceptionError::InvalidPairCursor {
+            cursor: 5,
+            total: 4
+        })
+    ));
+}

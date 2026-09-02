@@ -470,6 +470,36 @@ fn malformed_definitions_stale_entities_and_read_quotas_are_typed() {
 }
 
 #[test]
+fn trigger_overlap_pages_report_total_empty_final_page_and_stale_revision() {
+    let (mut entities, mut triggers, trigger, subject) = trigger_fixture();
+    move_entity(&mut entities, subject, Vec3::ZERO);
+    let reconcile = triggers
+        .reconcile(&entities, 1, TriggerReconcileCause::Teleport)
+        .unwrap();
+
+    let first = triggers.current_overlaps_page(trigger, None, 0, 1).unwrap();
+    assert_eq!(first.revision, reconcile.revision);
+    assert_eq!(first.total, 1);
+    assert_eq!(first.subjects, vec![subject]);
+    assert_eq!(first.next_cursor, None);
+
+    let final_empty = triggers
+        .current_overlaps_page(trigger, Some(first.revision), 1, 1)
+        .unwrap();
+    assert!(final_empty.subjects.is_empty());
+    assert_eq!(final_empty.total, 1);
+    assert_eq!(final_empty.next_cursor, None);
+    assert_eq!(
+        triggers
+            .current_overlaps_page(trigger, Some(first.revision + 1), 1, 1)
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        TriggerVolumeDiagnosticCode::StaleRevision
+    );
+}
+
+#[test]
 fn non_solid_trigger_senses_kinematic_traversal_with_one_enter_and_one_exit() {
     let trigger = EntityId::new(10);
     let subject = EntityId::new(20);

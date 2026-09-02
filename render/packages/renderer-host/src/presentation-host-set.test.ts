@@ -57,6 +57,65 @@ void test('billboard hosts advance while indicators are active', () => {
   assert.equal(hosts.requiresAnimationFrame(), false);
 });
 
+void test('one failing optional advancing domain degrades while later domains and future advances continue', () => {
+  let billboardAdvances = 0;
+  let particleAdvances = 0;
+  const hosts = new RendererPresentationHostSet({
+    animation: {
+      applyPresentation: (_frame: PresentationFrameDiff) => EMPTY_RECEIPT,
+      advance: () => {
+        throw new Error('injected animation host failure after mutation');
+      },
+    },
+    billboard: {
+      applyPresentation: (_frame: PresentationFrameDiff) => EMPTY_RECEIPT,
+      advance: () => {
+        billboardAdvances += 1;
+        return EMPTY_RECEIPT;
+      },
+    },
+    particle: {
+      applyPresentation: (_frame: PresentationFrameDiff) => EMPTY_RECEIPT,
+      advance: () => {
+        particleAdvances += 1;
+        return EMPTY_RECEIPT;
+      },
+    },
+  });
+
+  assert.deepEqual(hosts.advance(1 / 60).advancedDomains, ['billboard', 'particle']);
+  assert.deepEqual(hosts.advance(1 / 60).advancedDomains, ['billboard', 'particle']);
+  assert.equal(billboardAdvances, 2);
+  assert.equal(particleAdvances, 2);
+  assert.deepEqual(hosts.failureReadout(), {
+    retainedFailureCount: 1,
+    evictedFailureCount: 0,
+    failures: [{
+      domain: 'animation',
+      stage: 'advance',
+      message: 'injected animation host failure after mutation',
+      occurrences: 1,
+    }],
+  });
+});
+
+void test('listener host exceptions degrade audio once and never escape the render cadence', () => {
+  const hosts = new RendererPresentationHostSet({
+    audio: {
+      applyPresentation: (_frame: PresentationFrameDiff) => EMPTY_RECEIPT,
+      updateListener: () => {
+        throw new Error('injected listener failure');
+      },
+    },
+  });
+  const pose = { position: [0, 0, 0] as const, forward: [0, 0, -1] as const, up: [0, 1, 0] as const };
+
+  assert.equal(hosts.syncListener(pose).diagnostics[0]?.code, 'hostFailure');
+  assert.equal(hosts.syncListener(pose).diagnostics[0]?.code, 'hostFailure');
+  assert.equal(hosts.failureReadout().retainedFailureCount, 1);
+  assert.equal(hosts.failureReadout().failures[0]?.occurrences, 1);
+});
+
 void test('listener synchronization is typed, local, and forwards only to audio hosts that support it', () => {
   const poses: unknown[] = [];
   const hosts = new RendererPresentationHostSet({

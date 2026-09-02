@@ -99,6 +99,22 @@ export interface RendererPresentationAdvanceReceipt {
   readonly diagnostics: readonly PresentationHostDiagnostic[];
 }
 
+/** A bounded, coalesced record of an optional presentation host failure. */
+export interface RendererPresentationHostFailure {
+  readonly domain: RendererPresentationDomain;
+  readonly stage: 'apply' | 'advance' | 'listenerSync' | 'dispose';
+  readonly message: string;
+  readonly occurrences: number;
+}
+
+export interface RendererPresentationHostFailureReadout {
+  readonly retainedFailureCount: number;
+  readonly evictedFailureCount: number;
+  readonly failures: readonly RendererPresentationHostFailure[];
+}
+
+const MAX_RETAINED_HOST_FAILURES = 64;
+
 /**
  * A small, typed fan-out over optional presentation mechanisms.
  *
@@ -108,6 +124,9 @@ export interface RendererPresentationAdvanceReceipt {
  */
 export class RendererPresentationHostSet {
   readonly #hosts: RendererPresentationHosts;
+  readonly #degradedDomains = new Set<RendererPresentationDomain>();
+  readonly #failures: RendererPresentationHostFailure[] = [];
+  #evictedFailureCount = 0;
 
   constructor(hosts: RendererPresentationHosts) {
     this.#hosts = { ...hosts };
@@ -135,7 +154,21 @@ export class RendererPresentationHostSet {
         domains.push({ domain, configured: true, requested: 0, applied: 0, diagnostics: [] });
         continue;
       }
-      const receipt = await host.applyPresentation({ schemaVersion: 1, ops: operations });
+      if (this.#degradedDomains.has(domain)) {
+        domains.push(degradedReceipt(domain, operations));
+        continue;
+      }
+      let receipt: PresentationDomainReceipt;
+      try {
+        receipt = await host.applyPresentation({ schemaVersion: 1, ops: operations });
+      } catch (cause) {
+        this.#degrade(domain, 'apply', cause);
+        domains.push(degradedReceipt(domain, operations));
+        continue;
+      }
+      if (receipt.diagnostics.some((diagnostic) => diagnostic.code === 'hostFailure')) {
+        this.#degrade(domain, 'apply', receipt.diagnostics[0]?.message ?? 'presentation host failure');
+      }
       domains.push({
         domain,
         configured: true,
@@ -160,7 +193,17 @@ export class RendererPresentationHostSet {
       if (host === undefined) {
         continue;
       }
-      const receipt = host.advance(deltaSeconds);
+      if (this.#degradedDomains.has(domain)) continue;
+      let receipt: PresentationDomainReceipt;
+      try {
+        receipt = host.advance(deltaSeconds);
+      } catch (cause) {
+        this.#degrade(domain, 'advance', cause);
+        continue;
+      }
+      if (receipt.diagnostics.some((diagnostic) => diagnostic.code === 'hostFailure')) {
+        this.#degrade(domain, 'advance', receipt.diagnostics[0]?.message ?? 'presentation host failure');
+      }
       advancedDomains.push(domain);
       applied += receipt.applied;
       diagnostics.push(...receipt.diagnostics.map((diagnostic) => ({ domain, ...diagnostic })));
@@ -176,7 +219,16 @@ export class RendererPresentationHostSet {
     if (!hasListenerSynchronization(host)) {
       return { schemaVersion: 1, configured: true, applied: false, diagnostics: [] };
     }
-    const diagnostics = host.updateListener(pose);
+    if (this.#degradedDomains.has('audio')) {
+      return listenerFailureReceipt('audio presentation host is degraded after an earlier failure');
+    }
+    let diagnostics: readonly AudioProjectionDiagnostic[];
+    try {
+      diagnostics = host.updateListener(pose);
+    } catch (cause) {
+      this.#degrade('audio', 'listenerSync', cause);
+      return listenerFailureReceipt(errorMessage(cause));
+    }
     return {
       schemaVersion: 1,
       configured: true,
@@ -235,12 +287,49 @@ export class RendererPresentationHostSet {
   requiresAnimationFrame(): boolean {
     return ADVANCING_DOMAIN_ORDER.some((domain) => {
       const host = this.#hosts[domain];
-      return host !== undefined && (host.requiresAnimationFrame?.() ?? true);
+      return !this.#degradedDomains.has(domain)
+        && host !== undefined
+        && (host.requiresAnimationFrame?.() ?? true);
+    });
+  }
+
+  /** Optional host failures are coalesced so a stuck mechanism cannot grow diagnostics per frame. */
+  failureReadout(): RendererPresentationHostFailureReadout {
+    return Object.freeze({
+      retainedFailureCount: this.#failures.length,
+      evictedFailureCount: this.#evictedFailureCount,
+      failures: Object.freeze(this.#failures.map((failure) => Object.freeze({ ...failure }))),
     });
   }
 
   dispose(): void {
-    this.#hosts.ghostPlate?.dispose?.();
+    try {
+      this.#hosts.ghostPlate?.dispose?.();
+    } catch (cause) {
+      this.#degrade('ghostPlate', 'dispose', cause);
+    }
+  }
+
+  #degrade(
+    domain: RendererPresentationDomain,
+    stage: RendererPresentationHostFailure['stage'],
+    cause: unknown,
+  ): void {
+    this.#degradedDomains.add(domain);
+    const message = errorMessage(cause);
+    const existing = this.#failures.find((failure) => (
+      failure.domain === domain && failure.stage === stage && failure.message === message
+    ));
+    if (existing !== undefined) {
+      const index = this.#failures.indexOf(existing);
+      this.#failures[index] = { ...existing, occurrences: existing.occurrences + 1 };
+      return;
+    }
+    if (this.#failures.length === MAX_RETAINED_HOST_FAILURES) {
+      this.#failures.shift();
+      this.#evictedFailureCount += 1;
+    }
+    this.#failures.push({ domain, stage, message, occurrences: 1 });
   }
 }
 
@@ -279,6 +368,39 @@ function unavailableDiagnostic(operation: PresentationOp): PresentationHostDiagn
 function operationHandle(operation: PresentationOp): number | null {
   const op = operation.op;
   return 'handle' in op ? op.handle as number : null;
+}
+
+function degradedReceipt(
+  domain: RendererPresentationDomain,
+  operations: readonly PresentationOp[],
+): RendererPresentationDomainReceipt {
+  const operation = operations[0];
+  return {
+    domain,
+    configured: true,
+    requested: operations.length,
+    applied: 0,
+    diagnostics: operation === undefined ? [] : [{
+      domain,
+      code: 'hostFailure',
+      sequence: operation.meta.sequence,
+      handle: operationHandle(operation),
+      message: `${domain} presentation host is degraded after an earlier failure`,
+    }],
+  };
+}
+
+function listenerFailureReceipt(message: string): RendererPresentationListenerSyncReceipt {
+  return {
+    schemaVersion: 1,
+    configured: true,
+    applied: false,
+    diagnostics: [{ code: 'hostFailure', sequence: 0, handle: null, message }],
+  };
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function frameReceipt(

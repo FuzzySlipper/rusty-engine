@@ -13,6 +13,8 @@ use super::{
     AnimationTransitionState, ResolvedAnimationMotion, BLEND_WEIGHT_SCALE,
 };
 
+const MAX_ANIMATION_DIAGNOSTICS: usize = 128;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AnimationProjectionHandle(u64);
@@ -200,7 +202,7 @@ impl AnimationProjector {
                     target: operation_target(&op),
                     message: diagnostic_message(code).to_string(),
                 };
-                self.diagnostics.push(diagnostic.clone());
+                self.retain_diagnostic(diagnostic.clone());
                 return Err(diagnostic);
             }
             projected.push(PresentationOp::Animation { meta, op });
@@ -227,7 +229,7 @@ impl AnimationProjector {
                 message: diagnostic_message(AnimationProjectionDiagnosticCode::HandleExhausted)
                     .to_string(),
             };
-            self.diagnostics.push(diagnostic.clone());
+            self.retain_diagnostic(diagnostic.clone());
             return Err(diagnostic);
         };
         let result = self.project(
@@ -265,7 +267,7 @@ impl AnimationProjector {
                 message: diagnostic_message(AnimationProjectionDiagnosticCode::UnknownController)
                     .to_string(),
             };
-            self.diagnostics.push(diagnostic.clone());
+            self.retain_diagnostic(diagnostic.clone());
             return Err(diagnostic);
         };
         self.project(
@@ -293,7 +295,7 @@ impl AnimationProjector {
                 message: diagnostic_message(AnimationProjectionDiagnosticCode::UnknownController)
                     .to_string(),
             };
-            self.diagnostics.push(diagnostic.clone());
+            self.retain_diagnostic(diagnostic.clone());
             return Err(diagnostic);
         };
         self.active
@@ -327,6 +329,22 @@ impl AnimationProjector {
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    fn retain_diagnostic(&mut self, diagnostic: AnimationProjectionDiagnostic) {
+        if let Some(index) = self.diagnostics.iter().position(|existing| {
+            existing.code == diagnostic.code
+                && existing.handle == diagnostic.handle
+                && existing.target == diagnostic.target
+                && existing.message == diagnostic.message
+        }) {
+            self.diagnostics[index] = diagnostic;
+            return;
+        }
+        if self.diagnostics.len() == MAX_ANIMATION_DIAGNOSTICS {
+            self.diagnostics.remove(0);
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     fn validate_and_apply(

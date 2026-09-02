@@ -86,6 +86,18 @@ export class RenderApplyError extends Error {
 }
 
 /**
+ * A backend realization failed after the logical projection was committed.
+ * The renderer intentionally becomes terminal: callers must replace the
+ * surface rather than treating the rejected receipt as fail-atomic.
+ */
+export class RendererTerminalError extends RenderApplyError {
+  constructor(message: string, readonly phase: 'static_instance_batch' | 'shadow_realization') {
+    super(message);
+    this.name = 'RendererTerminalError';
+  }
+}
+
+/**
  * The capability the renderer needs to upload a shared-buffer mesh payload.
  *
  * Lifetime semantics: **borrow → copy → release**. The renderer borrows the
@@ -373,6 +385,7 @@ export class ThreeRenderer {
   readonly #staticInstanceBatchByObject = new Map<THREE.InstancedMesh, StaticInstanceBatch>();
   readonly #staticInstanceCandidateObjects = new WeakSet<THREE.Object3D>();
   #disposed = false;
+  #terminalError: RendererTerminalError | null = null;
 
   constructor(options: {
     meshBufferSource?: MeshBufferSource;
@@ -426,6 +439,9 @@ export class ThreeRenderer {
   applyFrame(frame: RenderFrameDiff): void {
     if (this.#disposed) {
       throw new RenderApplyError('renderer is disposed');
+    }
+    if (this.#terminalError !== null) {
+      throw this.#terminalError;
     }
     try {
       const instructions = this.#projection.validateFrame(frame);
@@ -493,16 +509,37 @@ export class ThreeRenderer {
     disposePreparedFrame(prepared);
     this.#projection.applyFrame(frame);
     if (staticInstanceBatchesChanged) {
-      this.#syncStaticInstanceBatches();
+      try {
+        this.#syncStaticInstanceBatches();
+      } catch (cause) {
+        throw this.#enterTerminal('static_instance_batch', cause);
+      }
     }
     if (this.#shadowsEnabled) {
-      this.#sceneGroup.traverse((object) => {
-        if (object instanceof THREE.Mesh && object.userData['rustySpriteShadowManaged'] !== true) {
-          object.castShadow = true;
-          object.receiveShadow = true;
-        }
-      });
+      try {
+        this.#sceneGroup.traverse((object) => {
+          if (object instanceof THREE.Mesh && object.userData['rustySpriteShadowManaged'] !== true) {
+            object.castShadow = true;
+            object.receiveShadow = true;
+          }
+        });
+      } catch (cause) {
+        throw this.#enterTerminal('shadow_realization', cause);
+      }
     }
+  }
+
+  #enterTerminal(
+    phase: RendererTerminalError['phase'],
+    cause: unknown,
+  ): RendererTerminalError {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    const terminal = new RendererTerminalError(
+      `renderer entered terminal state during ${phase} realization: ${detail}`,
+      phase,
+    );
+    this.#terminalError = terminal;
+    return terminal;
   }
 
   #preflightSpriteMaterials(frame: RenderFrameDiff, prepared: PreparedFrameResources): void {

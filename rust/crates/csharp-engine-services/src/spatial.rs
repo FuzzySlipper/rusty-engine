@@ -56,6 +56,7 @@ const SET_TRIGGER_ACTIVE_OPERATION: &[u8] = b"SetTriggerActive";
 const RESTORE_TRIGGERS_OPERATION: &[u8] = b"RestoreTriggers";
 const MAX_TRIGGER_OPERATION_DIAGNOSTICS: usize = 64;
 const MAX_TRIGGER_DIAGNOSTIC_TEXT_BYTES: usize = 512;
+const MAX_TRIGGER_OVERLAP_PAGE_ITEMS: usize = 1_024;
 const MAX_SPATIAL_CONTENT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_SPATIAL_CONTENT_VERTICES: usize = 1_000_000;
 const MAX_SPATIAL_CONTENT_TRIANGLES: usize = 1_000_000;
@@ -134,11 +135,13 @@ pub(crate) struct RuntimeSpatialBridge {
     pub(crate) sessions: BTreeMap<u64, SpatialSession>,
     pub(crate) voxel_history_exports: BTreeMap<u64, Arc<[u8]>>,
     trigger_diagnostic_leases: BTreeMap<u64, SpatialTriggerDiagnosticLease>,
+    trigger_overlap_page_leases: BTreeMap<u64, TriggerOverlapPageLease>,
     collision_source: SpatialCollisionSource,
     content: Option<*const crate::content::RuntimeContentBridge>,
     next_session: u64,
     pub(crate) next_voxel_history_export: u64,
     next_trigger_diagnostic_lease: u64,
+    next_trigger_overlap_page_lease: u64,
     pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
     pub(crate) next_world_origin_prepared: u64,
     pub(crate) kinematic_motion_leases:
@@ -162,6 +165,10 @@ pub(crate) struct SpatialSession {
     last_character_content_authority_hash: Option<u64>,
     triggers: TriggerVolumeSystem,
     last_trigger_facts: Vec<TriggerOverlapFact>,
+}
+
+struct TriggerOverlapPageLease {
+    _subjects: Box<[NativeSpatialTriggerOverlapSubject]>,
 }
 
 /// Facts returned after an admitted asset becomes the canonical scene for a
@@ -320,13 +327,20 @@ impl NavigationState {
 /// binding request; it never retains or observes this projection directly.
 #[derive(Clone)]
 pub(crate) struct SpatialCollisionSource {
-    scenes: Rc<RefCell<BTreeMap<u64, Arc<VoxelCollisionScene>>>>,
+    scenes: Rc<RefCell<BTreeMap<u64, SpatialCollisionSceneState>>>,
+    next_cursor_identity: Rc<RefCell<u64>>,
+}
+
+struct SpatialCollisionSceneState {
+    scene: Arc<VoxelCollisionScene>,
+    cursor_identity: u64,
 }
 
 impl SpatialCollisionSource {
     fn new() -> Self {
         Self {
             scenes: Rc::new(RefCell::new(BTreeMap::new())),
+            next_cursor_identity: Rc::new(RefCell::new(1)),
         }
     }
 
@@ -337,7 +351,25 @@ impl SpatialCollisionSource {
         self.scenes
             .borrow()
             .get(&handle.value)
-            .cloned()
+            .map(|value| value.scene.clone())
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPATIAL_SESSION",
+                    "C# used an unknown or disposed spatial session",
+                )
+            })
+    }
+
+    /// A monotonically assigned publication identity. Unlike a projection-local revision, it
+    /// cannot alias when a rebuilt scene begins again at projection version one.
+    pub(crate) fn cursor_identity(
+        &self,
+        handle: NativeSpatialSessionHandle,
+    ) -> Result<u64, CsharpEngineServicesError> {
+        self.scenes
+            .borrow()
+            .get(&handle.value)
+            .map(|value| value.cursor_identity)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_SPATIAL_SESSION",
@@ -351,7 +383,18 @@ impl SpatialCollisionSource {
         handle: NativeSpatialSessionHandle,
         scene: Arc<VoxelCollisionScene>,
     ) {
-        self.scenes.borrow_mut().insert(handle.value, scene);
+        let mut next_identity = self.next_cursor_identity.borrow_mut();
+        let cursor_identity = *next_identity;
+        *next_identity = next_identity
+            .checked_add(1)
+            .expect("spatial collision cursor identities exhausted");
+        self.scenes.borrow_mut().insert(
+            handle.value,
+            SpatialCollisionSceneState {
+                scene,
+                cursor_identity,
+            },
+        );
     }
 }
 
@@ -361,11 +404,13 @@ impl RuntimeSpatialBridge {
             sessions: BTreeMap::new(),
             voxel_history_exports: BTreeMap::new(),
             trigger_diagnostic_leases: BTreeMap::new(),
+            trigger_overlap_page_leases: BTreeMap::new(),
             collision_source: SpatialCollisionSource::new(),
             content: None,
             next_session: 1,
             next_voxel_history_export: 1,
             next_trigger_diagnostic_lease: 1,
+            next_trigger_overlap_page_lease: 1,
             prepared_world_origins: BTreeMap::new(),
             next_world_origin_prepared: 1,
             kinematic_motion_leases: BTreeMap::new(),
@@ -446,9 +491,7 @@ impl RuntimeSpatialBridge {
             },
         );
         self.collision_source
-            .scenes
-            .borrow_mut()
-            .insert(value, scene);
+            .publish_scene(NativeSpatialSessionHandle { value }, scene);
         Ok(NativeSpatialSessionHandle { value })
     }
 
@@ -648,10 +691,7 @@ impl RuntimeSpatialBridge {
             session.content_artifact = None;
             (candidate, receipt)
         };
-        self.collision_source
-            .scenes
-            .borrow_mut()
-            .insert(request.session.value, scene);
+        self.collision_source.publish_scene(request.session, scene);
         Ok(NativeCollisionReplaceReceipt {
             revision_before: receipt.revision_before,
             revision_after: receipt.revision_after,
@@ -797,10 +837,7 @@ impl RuntimeSpatialBridge {
             session.content_artifact = Some(identity);
             (scene, identity, collision.revision_before)
         };
-        self.collision_source
-            .scenes
-            .borrow_mut()
-            .insert(request.session.value, scene);
+        self.collision_source.publish_scene(request.session, scene);
         Ok(NativeSpatialContentArtifactReplaceReceipt {
             content_reference_value: identity.content_reference.value,
             content_sha256: identity.content_sha256,
@@ -2382,6 +2419,85 @@ impl RuntimeSpatialBridge {
             subject: subject.raw(),
             revision: readout.revision,
         })
+    }
+
+    fn read_trigger_overlap_page(
+        &mut self,
+        request: NativeSpatialTriggerOverlapPageRequest,
+    ) -> Result<NativeSpatialTriggerOverlapPageLease, CsharpEngineServicesError> {
+        let page_size = usize::try_from(request.page_size).map_err(|_| {
+            spatial_error(
+                "CSHARP_SPATIAL_TRIGGER",
+                "trigger overlap page size overflow",
+            )
+        })?;
+        if page_size > MAX_TRIGGER_OVERLAP_PAGE_ITEMS {
+            return Err(spatial_error(
+                "CSHARP_SPATIAL_TRIGGER",
+                "trigger overlap page size exceeds the C# service bound",
+            ));
+        }
+        let page = self
+            .session_mut(request.session)?
+            .triggers
+            .current_overlaps_page(
+                EntityId::new(request.trigger),
+                (request.expected_revision != 0).then_some(request.expected_revision),
+                request.cursor as usize,
+                page_size,
+            )
+            .map_err(|error| spatial_error("CSHARP_SPATIAL_TRIGGER", error.to_string()))?;
+        let value = self.next_trigger_overlap_page_lease;
+        self.next_trigger_overlap_page_lease = value.checked_add(1).ok_or_else(|| {
+            spatial_error(
+                "CSHARP_SPATIAL_TRIGGER",
+                "trigger overlap page lease handles exhausted",
+            )
+        })?;
+        let subjects = page
+            .subjects
+            .into_iter()
+            .map(|subject| NativeSpatialTriggerOverlapSubject {
+                subject: subject.raw(),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let result = NativeSpatialTriggerOverlapPageLease {
+            handle: NativeSpatialTriggerOverlapPageLeaseHandle { value },
+            subjects: if subjects.is_empty() {
+                std::ptr::null()
+            } else {
+                subjects.as_ptr()
+            },
+            subjects_len: subjects.len(),
+            trigger: page.trigger.raw(),
+            revision: page.revision,
+            total: checked_u32(page.total, "trigger overlap total")?,
+            has_next_cursor: page.next_cursor.is_some(),
+            next_cursor: page
+                .next_cursor
+                .map(|cursor| checked_u32(cursor, "trigger overlap cursor"))
+                .transpose()?
+                .unwrap_or_default(),
+        };
+        self.trigger_overlap_page_leases.insert(
+            value,
+            TriggerOverlapPageLease {
+                _subjects: subjects,
+            },
+        );
+        Ok(result)
+    }
+
+    fn destroy_trigger_overlap_page_lease(
+        &mut self,
+        handle: NativeSpatialTriggerOverlapPageLeaseHandle,
+    ) -> bool {
+        handle.value != 0
+            && self
+                .trigger_overlap_page_leases
+                .remove(&handle.value)
+                .is_some()
     }
 
     fn read_trigger_fact_at(
@@ -3978,6 +4094,37 @@ unsafe extern "C" fn read_trigger_overlap_at(
     }
 }
 
+unsafe extern "C" fn read_trigger_overlap_page(
+    context: *mut c_void,
+    request: NativeSpatialTriggerOverlapPageRequest,
+    result: *mut NativeSpatialTriggerOverlapPageLease,
+) -> i32 {
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_trigger_overlap_page(request)
+    {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(_) => 0,
+    }
+}
+
+unsafe extern "C" fn destroy_trigger_overlap_page_lease(
+    context: *mut c_void,
+    handle: NativeSpatialTriggerOverlapPageLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    i32::from(
+        unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
+            .destroy_trigger_overlap_page_lease(handle),
+    )
+}
+
 unsafe extern "C" fn read_trigger_fact_at(
     context: *mut c_void,
     request: NativeSpatialTriggerFactAtRequest,
@@ -4043,6 +4190,8 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         destroy_operation_diagnostic_lease: destroy_trigger_operation_diagnostic_lease,
         read_trigger,
         read_trigger_overlap_at,
+        read_trigger_overlap_page,
+        destroy_trigger_overlap_page_lease,
         read_trigger_fact_at,
     }
 }

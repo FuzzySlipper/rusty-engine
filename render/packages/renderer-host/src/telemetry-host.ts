@@ -335,7 +335,7 @@ export class RendererTelemetryOverlayHost {
         applied += 1;
       } else {
         diagnostics.push(diagnostic);
-        this.#diagnostics.push(diagnostic);
+        retainTelemetryDiagnostic(this.#diagnostics, diagnostic);
       }
     }
     return { applied, diagnostics, readout: this.readout() };
@@ -451,6 +451,25 @@ export class RendererTelemetryOverlayHost {
       );
     }
   }
+}
+
+const MAX_RETAINED_TELEMETRY_DIAGNOSTICS = 256;
+
+function retainTelemetryDiagnostic(
+  diagnostics: TelemetryOverlayDiagnostic[],
+  diagnostic: TelemetryOverlayDiagnostic,
+): void {
+  const duplicate = diagnostics.findIndex((candidate) => (
+    candidate.code === diagnostic.code
+    && candidate.handle === diagnostic.handle
+    && candidate.message === diagnostic.message
+  ));
+  if (duplicate >= 0) {
+    diagnostics[duplicate] = diagnostic;
+    return;
+  }
+  diagnostics.push(diagnostic);
+  if (diagnostics.length > MAX_RETAINED_TELEMETRY_DIAGNOSTICS) diagnostics.shift();
 }
 
 function durationObservation(

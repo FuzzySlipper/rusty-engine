@@ -25,15 +25,19 @@ import type {
 import { createProductBrowserCadence } from './realtime-cadence.js';
 
 const AUDIO_RUNTIME = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
+const ACCEPTED_FAULT = { code: 'DEV_HOST_ACCEPTED', disposition: 'accepted' } as const;
+const RECOVERABLE_FAULT = { code: 'DEV_HOST_TEST_REJECTED', disposition: 'rejected-recoverable' } as const;
 
 const adapter: ProductBrowserRuntimeAdapter = {
   lifecycle: async (operation) => ({
     accepted: true,
+    ...ACCEPTED_FAULT,
     operation: operation.kind,
   }),
-  input: async (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => ({ accepted: true, count: batch.length }),
+  input: async (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => ({ accepted: true, ...ACCEPTED_FAULT, count: batch.length }),
   reportAudioFeedback: async (feedback) => ({
     accepted: true,
+    ...ACCEPTED_FAULT,
     runtime: feedback.runtime,
     ...(feedback.facts.length === 0
       ? {}
@@ -41,13 +45,14 @@ const adapter: ProductBrowserRuntimeAdapter = {
   }),
   reportAnimationFeedback: async (feedback) => ({
     accepted: true,
+    ...ACCEPTED_FAULT,
     runtime: feedback.runtime,
     ...(feedback.facts.length === 0
       ? {}
       : { acceptedThroughFactId: feedback.facts[feedback.facts.length - 1]!.factId }),
   }),
-  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, runtime: feedback.runtime }),
-  advanceRealtime: async () => ({ accepted: true, operation: 'advance-realtime' as const }),
+  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+  advanceRealtime: async () => ({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
   subscribeOutputs: () => () => undefined,
   dispose: () => undefined,
 };
@@ -152,18 +157,19 @@ test('audio feedback claims the initial owner, retries without loss, and acknowl
     report: async (feedback) => {
       reports.push(feedback as unknown as Record<string, unknown>);
       if (reports.length === 1) {
-        return { accepted: true as const, runtime: feedback.runtime };
+        return { accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime };
       }
       if (reports.length === 2) {
-        return { accepted: false as const, runtime: feedback.runtime, diagnostic: 'retry' };
+        return { accepted: false as const, ...RECOVERABLE_FAULT, runtime: feedback.runtime, diagnostic: 'retry' };
       }
       if (reports.length === 3) {
         return new Promise((resolve) => { deferred.resolve = resolve; }) as never;
       }
       const acceptedThroughFactId = feedback.facts.at(-1)?.factId;
-      if (acceptedThroughFactId === undefined) return { accepted: true as const, runtime: feedback.runtime };
+      if (acceptedThroughFactId === undefined) return { accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime };
       return {
         accepted: true as const,
+        ...ACCEPTED_FAULT,
         runtime: feedback.runtime,
         acceptedThroughFactId,
       };
@@ -188,7 +194,7 @@ test('audio feedback claims the initial owner, retries without loss, and acknowl
     diagnostic: { code: 'decodeFailed', sequence: 4, handle: null, message: 'test-only' },
   });
   assert.ok(deferred.resolve);
-  deferred.resolve({ accepted: true, runtime: AUDIO_RUNTIME, acceptedThroughFactId: '1' });
+  deferred.resolve({ accepted: true, ...ACCEPTED_FAULT, runtime: AUDIO_RUNTIME, acceptedThroughFactId: '1' });
   await inFlight;
   assert.deepEqual(acknowledgements, [1]);
   assert.deepEqual((reports[1]!['facts'] as Array<Record<string, unknown>>).map((fact) => fact['factId']), ['1']);
@@ -220,7 +226,7 @@ test('ghost plate feedback replaces an active snapshot with an empty snapshot af
     renderer,
     report: async (feedback) => {
       reports.push(feedback);
-      return { accepted: true, runtime: feedback.runtime };
+      return { accepted: true, ...ACCEPTED_FAULT, runtime: feedback.runtime };
     },
     initialRuntime: AUDIO_RUNTIME,
   });
@@ -244,7 +250,7 @@ test('renderer diagnostics publishes only a newly accepted renderer submission',
     renderer,
     report: async (feedback) => {
       reports.push(feedback.snapshot);
-      return { accepted: true, runtime: feedback.runtime };
+      return { accepted: true, ...ACCEPTED_FAULT, runtime: feedback.runtime };
     },
     initialRuntime: AUDIO_RUNTIME,
   });

@@ -326,6 +326,13 @@ pub type NativeSpatialReadTriggerOverlapAt = unsafe extern "C" fn(
     NativeSpatialTriggerOverlapAtRequest,
     *mut NativeSpatialTriggerOverlapAtReceipt,
 ) -> i32;
+pub type NativeSpatialReadTriggerOverlapPage = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpatialTriggerOverlapPageRequest,
+    *mut NativeSpatialTriggerOverlapPageLease,
+) -> i32;
+pub type NativeDestroySpatialTriggerOverlapPageLease =
+    unsafe extern "C" fn(*mut c_void, NativeSpatialTriggerOverlapPageLeaseHandle) -> i32;
 pub type NativeSpatialReadTriggerFactAt = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialTriggerFactAtRequest,
@@ -882,6 +889,8 @@ pub struct NativeSpatialApi {
     pub destroy_operation_diagnostic_lease: NativeDestroySpatialOperationDiagnosticLease,
     pub read_trigger: NativeSpatialReadTrigger,
     pub read_trigger_overlap_at: NativeSpatialReadTriggerOverlapAt,
+    pub read_trigger_overlap_page: NativeSpatialReadTriggerOverlapPage,
+    pub destroy_trigger_overlap_page_lease: NativeDestroySpatialTriggerOverlapPageLease,
     pub read_trigger_fact_at: NativeSpatialReadTriggerFactAt,
 }
 

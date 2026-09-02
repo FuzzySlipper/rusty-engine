@@ -535,7 +535,8 @@ export async function mountRustyApplication(
   return mountRustyApplicationWithEnvironment(options, BROWSER_ENVIRONMENT);
 }
 
-async function mountRustyApplicationWithEnvironment(
+/** Internal injection seam for focused host lifecycle tests. Not exported by the package root. */
+export async function mountRustyApplicationWithEnvironment(
   options: RustyApplicationHostOptions,
   environment: RustyApplicationHostEnvironment,
 ): Promise<RustyApplicationHost> {
@@ -678,21 +679,26 @@ async function mountRustyApplicationWithEnvironment(
     });
     const resolveAudio = rustyApplicationAudioResourceResolver(content);
     const presentationUrls = new Set<string>();
+    let audio: RendererAudioHost | null = null;
+    let animation: RendererAnimationHost | null = null;
+    let billboard: RendererBillboardHost | null = null;
     let particle: RendererParticleHost | null = null;
+    let ghostPlate: RendererGhostPlateHost | null = null;
+    let presentationHostsInstalled = false;
     try {
       // Bus controls are valid presentation operations even when a product has
       // no admitted clips. Keep the Engine audio mechanism available and let
       // its typed resolver reject only an actually missing clip request.
-      const audio = new RendererAudioHost({ resolveResource: resolveAudio });
+      audio = new RendererAudioHost({ resolveResource: resolveAudio });
       // The generic application host owns the renderer animation mechanism as
       // well as audio. Product Browser therefore observes only fixed typed
       // renderer facts, never a downstream animation substitute.
-      const animation = new RendererAnimationHost(mounted.animationProjection);
+      animation = new RendererAnimationHost(mounted.animationProjection);
       const resources = new Map(content.resources.map((resource) => [resource.identity, resource]));
       const resourcesByHash = new Map(
         content.resources.map((resource) => [resource.contentHash, resource]),
       );
-      const billboard = new RendererBillboardHost({
+      billboard = new RendererBillboardHost({
         container: layout.indicators,
         projectWorld: (position) => ({
           ...mounted.projectWorldPoint(position),
@@ -723,7 +729,7 @@ async function mountRustyApplicationWithEnvironment(
         },
         sink: mounted.createParticleSink(),
       });
-      const ghostPlate = new RendererGhostPlateHost({
+      ghostPlate = new RendererGhostPlateHost({
         createPresentation: mounted.createGhostPlatePresentation,
       });
       mounted.setPresentationHosts(new RendererPresentationHostSet({
@@ -733,6 +739,7 @@ async function mountRustyApplicationWithEnvironment(
         particle,
         ghostPlate,
       }));
+      presentationHostsInstalled = true;
       return {
         audio,
         animation,
@@ -743,9 +750,48 @@ async function mountRustyApplicationWithEnvironment(
         surface: mounted,
       };
     } catch (cause) {
-      particle?.dispose();
-      mounted.dispose();
-      for (const url of presentationUrls) URL.revokeObjectURL(url);
+      // `RendererPresentationHostSet` currently owns ghost-plate disposal
+      // only. Until it has been installed, this outer transaction must release
+      // every independently-created presentation owner itself.
+      if (!presentationHostsInstalled) {
+        try {
+          ghostPlate?.dispose();
+        } catch {
+          // Preserve the primary construction failure.
+        }
+      }
+      try {
+        animation?.cleanup();
+      } catch {
+        // Preserve the primary construction failure.
+      }
+      try {
+        particle?.dispose();
+      } catch {
+        // Preserve the primary construction failure.
+      }
+      try {
+        billboard?.dispose();
+      } catch {
+        // Preserve the primary construction failure.
+      }
+      try {
+        await audio?.dispose();
+      } catch {
+        // Preserve the primary construction failure.
+      }
+      try {
+        mounted.dispose();
+      } catch {
+        // Preserve the primary construction failure.
+      }
+      for (const url of presentationUrls) {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // Preserve the primary construction failure.
+        }
+      }
       throw cause;
     }
   };
@@ -773,18 +819,25 @@ async function mountRustyApplicationWithEnvironment(
         return;
       }
       const oldCanvas = activeCanvas;
-      const candidateCanvas = createRendererCanvas(document);
+      let candidateCanvas: HTMLCanvasElement | null = null;
+      let inputRebindAttempted = false;
       let candidateSurface: RendererSurface | null = null;
       let candidateAudio: RendererAudioHost | null = null;
+      let candidateAnimation: RendererAnimationHost | null = null;
       let candidateBillboard: RendererBillboardHost | null = null;
       let candidateParticle: RendererParticleHost | null = null;
       let candidateBillboardUrls = new Set<string>();
       try {
+        // Canvas allocation and input rebinding are both fallible candidate
+        // steps. Neither is allowed to occur after the old DOM/state owner is
+        // committed away.
+        candidateCanvas = createRendererCanvas(document);
         const candidateContent = candidate();
         const priorViewComposition = oldSurface.viewCompositionReadout();
         const mounted = await mountSurface(candidateCanvas, candidateContent);
         candidateSurface = mounted.surface;
         candidateAudio = mounted.audio;
+        candidateAnimation = mounted.animation;
         mounted.animation.replaceCueDefinitions(oldAnimation?.cueDefinitions() ?? []);
         candidateBillboard = mounted.billboard;
         candidateParticle = mounted.particle;
@@ -805,6 +858,8 @@ async function mountRustyApplicationWithEnvironment(
         }
         candidateSurface.setCameraPose(oldSurface.cameraPose());
         candidateSurface.renderOnce();
+        inputRebindAttempted = true;
+        input?.rebindCanvas(candidateCanvas);
         oldCanvas.replaceWith(candidateCanvas);
         surface = candidateSurface;
         activeAudio = candidateAudio;
@@ -815,11 +870,15 @@ async function mountRustyApplicationWithEnvironment(
         activeContent = candidateContent;
         contentRevision += 1;
         activeCanvas = candidateCanvas;
-        input?.rebindCanvas(candidateCanvas);
         try {
           oldParticle?.dispose();
         } catch {
           // Particle cleanup is best-effort after the replacement transaction commits.
+        }
+        try {
+          oldAnimation?.cleanup();
+        } catch {
+          // Animation cleanup is best-effort after the replacement commits.
         }
         try {
           oldSurface.dispose();
@@ -831,11 +890,27 @@ async function mountRustyApplicationWithEnvironment(
         } catch {
           // Audio disposal is best-effort after the replacement commits.
         }
-        disposeBillboardOwner(oldBillboard, oldBillboardUrls);
+        try {
+          disposeBillboardOwner(oldBillboard, oldBillboardUrls);
+        } catch {
+          // Billboard cleanup is best-effort after the replacement commits.
+        }
         receipt = Object.freeze({ applied: true, diagnostics: [] });
       } catch (cause) {
+        if (inputRebindAttempted) {
+          try {
+            input?.rebindCanvas(oldCanvas);
+          } catch {
+            // Preserve the candidate failure and the old renderer owner.
+          }
+        }
         try {
           candidateParticle?.dispose();
+        } catch {
+          // Preserve the authoritative prior surface if candidate cleanup is noisy.
+        }
+        try {
+          candidateAnimation?.cleanup();
         } catch {
           // Preserve the authoritative prior surface if candidate cleanup is noisy.
         }
@@ -849,8 +924,16 @@ async function mountRustyApplicationWithEnvironment(
         } catch {
           // Preserve the authoritative prior surface if candidate cleanup is noisy.
         }
-        disposeBillboardOwner(candidateBillboard, candidateBillboardUrls);
-        candidateCanvas.remove();
+        try {
+          disposeBillboardOwner(candidateBillboard, candidateBillboardUrls);
+        } catch {
+          // Preserve the authoritative prior surface if candidate cleanup is noisy.
+        }
+        try {
+          candidateCanvas?.remove();
+        } catch {
+          // Preserve the authoritative prior surface if candidate cleanup is noisy.
+        }
         receipt = replacementFailure(cause);
       }
     });
@@ -1116,6 +1199,7 @@ async function mountRustyApplicationWithEnvironment(
       removeListeners,
       surface,
       activeAudio,
+      activeAnimation,
       activeBillboard,
       activeParticle,
       activeBillboardUrls,
@@ -1168,6 +1252,7 @@ async function mountRustyApplicationWithEnvironment(
           removeListeners,
           surface,
           activeAudio,
+          activeAnimation,
           activeBillboard,
           activeParticle,
           activeBillboardUrls,
@@ -1464,6 +1549,7 @@ async function cleanupApplicationOwners(
   removeListeners: () => void,
   surface: RendererSurface | null,
   audio: RendererAudioHost | null,
+  animation: RendererAnimationHost | null,
   billboard: RendererBillboardHost | null,
   particle: RendererParticleHost | null,
   billboardUrls: ReadonlySet<string>,
@@ -1497,6 +1583,11 @@ async function cleanupApplicationOwners(
     failures.push(cause);
   }
   try {
+    animation?.cleanup();
+  } catch (cause) {
+    failures.push(cause);
+  }
+  try {
     surface?.dispose();
   } catch (cause) {
     failures.push(cause);
@@ -1524,8 +1615,22 @@ function disposeBillboardOwner(
   billboard: RendererBillboardHost | null,
   urls: ReadonlySet<string>,
 ): void {
-  billboard?.dispose();
-  for (const url of urls) URL.revokeObjectURL(url);
+  const failures: unknown[] = [];
+  try {
+    billboard?.dispose();
+  } catch (cause) {
+    failures.push(cause);
+  }
+  for (const url of urls) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (cause) {
+      failures.push(cause);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'renderer billboard cleanup failed');
+  }
 }
 
 function clearPreviousFailure(root: HTMLElement): void {

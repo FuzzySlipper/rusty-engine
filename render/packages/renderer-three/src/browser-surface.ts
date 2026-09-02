@@ -342,12 +342,16 @@ export function mountRendererBrowserSurface(
       maximumActiveShadowLights: lighting.shadows.maximumActiveLights,
     },
   );
+  // Mount has several independent WebGL owners. Keep their release actions in
+  // one outer transaction so a context/allocation/configuration failure never
+  // strands a renderer or canvas-backed context before the surface exists.
+  const constructionCleanup: (() => void)[] = [() => renderer.dispose()];
+  try {
   if (options.fog !== undefined) {
     const { color, near, far } = options.fog;
     if (!Number.isInteger(color) || color < 0 || color > 0xff_ffff
       || !Number.isFinite(near) || near < 0
       || !Number.isFinite(far) || far <= near) {
-      renderer.dispose();
       throw new RangeError('renderer fog requires an RGB integer and finite 0 <= near < far distances');
     }
     renderer.scene.fog = new THREE.Fog(color, near, far);
@@ -365,11 +369,11 @@ export function mountRendererBrowserSurface(
   try {
     renderer.applyFrame(frame);
   } catch (cause) {
-    renderer.dispose();
     throw cause;
   }
 
   const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
+  constructionCleanup.push(() => webgl.dispose());
   webgl.shadowMap.enabled = lighting.shadows.enabled;
   const webglContext = webgl.getContext();
   const gpuSubmissionClass = classifyGpuSubmissionRenderer(webglContext);
@@ -383,6 +387,7 @@ export function mountRendererBrowserSurface(
     gpuSubmissionFenceDriver,
     { maximumPendingSubmissions: selectedAutomaticSubmissionCapacity },
   );
+  constructionCleanup.push(() => gpuSubmissionFence.dispose());
   const gpuSubmissionDuty = new RendererGpuSubmissionDuty(
     gpuSubmissionTimerDriver,
     {
@@ -390,6 +395,7 @@ export function mountRendererBrowserSurface(
       rendererClass: gpuSubmissionClass,
     },
   );
+  constructionCleanup.push(() => gpuSubmissionDuty.dispose());
   webgl.autoClear = false;
   // One surface submission contains both world and viewmodel render passes.
   // Disable Three's per-pass reset so its public info object accumulates exact
@@ -439,12 +445,10 @@ export function mountRendererBrowserSurface(
   let disposed = false;
   const ghostPlatePresentations = new Set<RendererThreeGhostPlatePresentation>();
   const viewComposition = new RendererViewCompositionBackend(webgl, renderer, viewmodelCamera);
+  constructionCleanup.push(() => viewComposition.dispose());
   if (options.viewComposition !== undefined) {
     const receipt = viewComposition.configure(options.viewComposition);
     if (!receipt.applied) {
-      viewComposition.dispose();
-      webgl.dispose();
-      renderer.dispose();
       throw new RendererViewCompositionPolicyError(
         receipt.diagnostics[0]?.message ?? 'view composition was rejected',
       );
@@ -593,15 +597,28 @@ export function mountRendererBrowserSurface(
 
   const dispose = (): void => {
     if (disposed) return;
-    stop();
-    for (const ghostPlatePresentation of ghostPlatePresentations) ghostPlatePresentation.dispose();
+    const failures: unknown[] = [];
+    const release = (owner: () => void): void => {
+      try {
+        owner();
+      } catch (cause) {
+        failures.push(cause);
+      }
+    };
+    release(stop);
+    for (const ghostPlatePresentation of ghostPlatePresentations) {
+      release(() => ghostPlatePresentation.dispose());
+    }
     ghostPlatePresentations.clear();
-    gpuSubmissionFence.dispose();
-    gpuSubmissionDuty.dispose();
-    viewComposition.dispose();
-    webgl.dispose();
-    renderer.dispose();
+    release(() => gpuSubmissionFence.dispose());
+    release(() => gpuSubmissionDuty.dispose());
+    release(() => viewComposition.dispose());
+    release(() => webgl.dispose());
+    release(() => renderer.dispose());
     disposed = true;
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'renderer browser surface disposal failed');
+    }
   };
 
   setCameraPose(currentCameraPose, currentCameraBasis ?? undefined);
@@ -685,6 +702,16 @@ export function mountRendererBrowserSurface(
     stop,
     dispose,
   };
+  } catch (cause) {
+    for (const cleanup of constructionCleanup.reverse()) {
+      try {
+        cleanup();
+      } catch {
+        // A candidate construction error remains the diagnostic authority.
+      }
+    }
+    throw cause;
+  }
 }
 
 function normalizeLightingOptions(

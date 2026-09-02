@@ -2335,8 +2335,11 @@ impl ProductDevRuntime for CsharpProductRuntime {
             || binding.generation().value() != current.generation.get()
             || binding.control_revision().value() != current.control_revision.get()
         {
-            let result = ProductDevTimelineCompletionResult::rejected(
+            let result = ProductDevTimelineCompletionResult::rejected_with_current(
                 ticket,
+                current,
+                self.readout(),
+                "CSHARP_TIMELINE_BINDING",
                 "timeline completion does not name the current running product binding",
             )
             .map_err(host_runtime_error)?;
@@ -2398,8 +2401,11 @@ impl ProductDevRuntime for CsharpProductRuntime {
         };
         if !accepted {
             self.discard_staged_call();
-            let result = ProductDevTimelineCompletionResult::rejected(
+            let result = ProductDevTimelineCompletionResult::rejected_with_current(
                 ticket,
+                current,
+                self.readout(),
+                "CSHARP_TIMELINE_PRODUCT_REJECTED",
                 "C# product rejected timeline completion",
             )
             .map_err(host_runtime_error)?;
@@ -3122,19 +3128,91 @@ fn prepare_content_store_root(
 }
 
 fn input_runtime_error(error: runtime_input::RuntimeInputError) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new("CSHARP_INPUT_ADMISSION", error.to_string())
+    ProductDevRuntimeError::new(input_error_code(&error), error.to_string())
         .expect("bounded input admission diagnostic")
 }
 
 fn lifecycle_error(error: runtime_lifecycle::RuntimeLifecycleError) -> CsharpProductRuntimeError {
-    CsharpProductRuntimeError::new("CSHARP_LIFECYCLE_ADMISSION", error.to_string())
+    CsharpProductRuntimeError::new(lifecycle_error_code(&error), error.to_string())
 }
 
 fn lifecycle_runtime_error(
     error: runtime_lifecycle::RuntimeLifecycleError,
 ) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new("CSHARP_LIFECYCLE_ADMISSION", error.to_string())
+    ProductDevRuntimeError::new(lifecycle_error_code(&error), error.to_string())
         .expect("bounded lifecycle admission diagnostic")
+}
+
+fn lifecycle_error_code(error: &runtime_lifecycle::RuntimeLifecycleError) -> &'static str {
+    use runtime_lifecycle::RuntimeLifecycleError;
+
+    match error {
+        RuntimeLifecycleError::WrongMode { .. } => "CSHARP_LIFECYCLE_WRONG_MODE",
+        RuntimeLifecycleError::WrongState { .. } => "CSHARP_LIFECYCLE_WRONG_STATE",
+        RuntimeLifecycleError::ClockRegression { .. } => "CSHARP_LIFECYCLE_CLOCK_REGRESSION",
+        RuntimeLifecycleError::ExternalStepOutOfOrder { .. } => {
+            "CSHARP_LIFECYCLE_EXTERNAL_STEP_OUT_OF_ORDER"
+        }
+        RuntimeLifecycleError::StaleToken { .. } => "CSHARP_LIFECYCLE_STALE_TOKEN",
+        RuntimeLifecycleError::ForeignInstance { .. } => "CSHARP_LIFECYCLE_FOREIGN_INSTANCE",
+        RuntimeLifecycleError::WrongPhaseToken { .. } => "CSHARP_LIFECYCLE_WRONG_PHASE_TOKEN",
+        RuntimeLifecycleError::UnknownSimulationStep { .. } => {
+            "CSHARP_LIFECYCLE_UNKNOWN_SIMULATION_STEP"
+        }
+        RuntimeLifecycleError::UnknownPresentation { .. } => {
+            "CSHARP_LIFECYCLE_UNKNOWN_PRESENTATION"
+        }
+        RuntimeLifecycleError::CounterExhausted => "CSHARP_LIFECYCLE_COUNTER_EXHAUSTED",
+    }
+}
+
+fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
+    use runtime_input::RuntimeInputError;
+
+    match error {
+        RuntimeInputError::InvalidContext => "CSHARP_INPUT_INVALID_CONTEXT",
+        RuntimeInputError::InvalidIntent => "CSHARP_INPUT_INVALID_INTENT",
+        RuntimeInputError::InvalidAxisValue => "CSHARP_INPUT_INVALID_AXIS_VALUE",
+        RuntimeInputError::InvalidDirectIntentAxisValue => {
+            "CSHARP_INPUT_INVALID_DIRECT_INTENT_AXIS_VALUE"
+        }
+        RuntimeInputError::InvalidProductPayloadContract => {
+            "CSHARP_INPUT_INVALID_PRODUCT_PAYLOAD_CONTRACT"
+        }
+        RuntimeInputError::ProductPayloadTooLarge { .. } => {
+            "CSHARP_INPUT_PRODUCT_PAYLOAD_TOO_LARGE"
+        }
+        RuntimeInputError::ProductPayloadStructureOutOfBounds(_) => {
+            "CSHARP_INPUT_PRODUCT_PAYLOAD_STRUCTURE_OUT_OF_BOUNDS"
+        }
+        RuntimeInputError::ProductPayloadContractMismatch => {
+            "CSHARP_INPUT_PRODUCT_PAYLOAD_CONTRACT_MISMATCH"
+        }
+        RuntimeInputError::InvalidControllerAxisValue => {
+            "CSHARP_INPUT_INVALID_CONTROLLER_AXIS_VALUE"
+        }
+        RuntimeInputError::NonCanonicalWireInteger => "CSHARP_INPUT_NON_CANONICAL_WIRE_INTEGER",
+        RuntimeInputError::WireMalformed => "CSHARP_INPUT_WIRE_MALFORMED",
+        RuntimeInputError::WireTooLarge => "CSHARP_INPUT_WIRE_TOO_LARGE",
+        RuntimeInputError::WireEventLimit => "CSHARP_INPUT_WIRE_EVENT_LIMIT",
+        RuntimeInputError::SequenceOutOfOrder { .. } => "CSHARP_INPUT_SEQUENCE_OUT_OF_ORDER",
+        RuntimeInputError::SequenceExhausted => "CSHARP_INPUT_SEQUENCE_EXHAUSTED",
+        RuntimeInputError::BindingMismatch => "CSHARP_INPUT_BINDING_MISMATCH",
+        RuntimeInputError::InvalidRebindClear => "CSHARP_INPUT_INVALID_REBIND_CLEAR",
+        RuntimeInputError::PendingIngressOverflow => "CSHARP_INPUT_PENDING_INGRESS_OVERFLOW",
+        RuntimeInputError::DuplicateIntent => "CSHARP_INPUT_DUPLICATE_INTENT",
+        RuntimeInputError::InvalidMapping => "CSHARP_INPUT_INVALID_MAPPING",
+        RuntimeInputError::DuplicateMapping => "CSHARP_INPUT_DUPLICATE_MAPPING",
+        RuntimeInputError::DirectIntentPayloadUnsupported => {
+            "CSHARP_INPUT_DIRECT_INTENT_PAYLOAD_UNSUPPORTED"
+        }
+        RuntimeInputError::UnknownIntent => "CSHARP_INPUT_UNKNOWN_INTENT",
+        RuntimeInputError::IntentValueKindMismatch => "CSHARP_INPUT_INTENT_VALUE_KIND_MISMATCH",
+        RuntimeInputError::Disposed => "CSHARP_INPUT_DISPOSED",
+        RuntimeInputError::WrongSnapshotPhase => "CSHARP_INPUT_WRONG_SNAPSHOT_PHASE",
+        RuntimeInputError::LifecycleValidation => "CSHARP_INPUT_LIFECYCLE_VALIDATION",
+        RuntimeInputError::SnapshotOutOfOrder => "CSHARP_INPUT_SNAPSHOT_OUT_OF_ORDER",
+    }
 }
 
 fn exercise_runtime_error(error: ProductDevRuntimeError) -> CsharpProductRuntimeError {
@@ -5659,5 +5737,26 @@ mod tests {
         assert_eq!(error.code(), "CSHARP_PERSISTENCE_ROOT");
 
         fs::remove_dir_all(root).expect("remove fixture root");
+    }
+
+    #[test]
+    fn lifecycle_and_input_fault_codes_preserve_variant_identity() {
+        let clock_regression = runtime_lifecycle::RuntimeLifecycleError::ClockRegression {
+            previous: HostMonotonicTime::from_nanoseconds(2),
+            observed: HostMonotonicTime::from_nanoseconds(1),
+        };
+        assert_eq!(
+            lifecycle_runtime_error(clock_regression).code(),
+            "CSHARP_LIFECYCLE_CLOCK_REGRESSION"
+        );
+        assert_eq!(
+            lifecycle_runtime_error(runtime_lifecycle::RuntimeLifecycleError::CounterExhausted)
+                .code(),
+            "CSHARP_LIFECYCLE_COUNTER_EXHAUSTED"
+        );
+        assert_eq!(
+            input_runtime_error(runtime_input::RuntimeInputError::BindingMismatch).code(),
+            "CSHARP_INPUT_BINDING_MISMATCH"
+        );
     }
 }

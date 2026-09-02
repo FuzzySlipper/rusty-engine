@@ -181,6 +181,15 @@ pub enum NativeAuthoredFallbackVisual {
     MagentaSquare = 1,
     GreyMaterial = 2,
 }
+/// Resolution outcomes that are ordinary read facts rather than transport failures. Invalid
+/// references and required/hash-pinned misses remain strict operation errors.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAuthoredResolutionKind {
+    Present = 1,
+    Missing = 2,
+    Stale = 3,
+}
 
 /// Typed stable identity. `id` carries its kind-prefixed canonical spelling.
 #[repr(C)]
@@ -603,6 +612,10 @@ pub struct NativeAuthoredCatalogResolveRequest {
     pub reference_version: u32,
     pub reference_has_hash: bool,
     pub reference_hash: NativeUtf8Slice,
+    /// Required references reject absence or staleness rather than returning a fallback fact.
+    pub required: bool,
+    /// Applies only to optional Missing/Stale outcomes.
+    pub fallback_context: NativeAuthoredFallbackContext,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -767,6 +780,9 @@ pub struct NativeAuthoredResolvedEntryLease {
     pub atlas_regions_len: usize,
     pub voxel_surfaces: *const NativeAuthoredVoxelSurfaceReadout,
     pub voxel_surfaces_len: usize,
+    pub outcome: NativeAuthoredResolutionKind,
+    pub has_fallback: bool,
+    pub fallback: NativeAuthoredFallbackReadout,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

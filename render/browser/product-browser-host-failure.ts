@@ -16,9 +16,11 @@ const adapter: ProductBrowserRuntimeAdapter = {
   lifecycle: async () => {
     throw new Error(startupDiagnostic);
   },
-  input: async (batch) => ({ accepted: true, count: batch.length }),
+  input: async (batch) => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', count: batch.length }),
   reportAudioFeedback: async (feedback) => ({
     accepted: true,
+    code: 'DEV_HOST_ACCEPTED',
+    disposition: 'accepted',
     runtime: feedback.runtime,
     ...(feedback.facts.at(-1) === undefined
       ? {}
@@ -26,13 +28,15 @@ const adapter: ProductBrowserRuntimeAdapter = {
   }),
   reportAnimationFeedback: async (feedback) => ({
     accepted: true,
+    code: 'DEV_HOST_ACCEPTED',
+    disposition: 'accepted',
     runtime: feedback.runtime,
     ...(feedback.facts.at(-1) === undefined
       ? {}
       : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
   }),
-  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, runtime: feedback.runtime }),
-  advanceRealtime: async () => ({ accepted: true, operation: 'advance-realtime' }),
+  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', runtime: feedback.runtime }),
+  advanceRealtime: async () => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', operation: 'advance-realtime' }),
   subscribeOutputs: () => () => undefined,
   dispose: () => { root.dataset['transportDisposed'] = 'true'; },
 };

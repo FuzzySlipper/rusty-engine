@@ -17,6 +17,8 @@ import type {
 
 type AnimationPresentationOp = Extract<PresentationOp, { readonly domain: 'animation' }>;
 
+const MAX_DIAGNOSTICS = 256;
+
 export type RendererAnimationCueSignalDomain = 'audio' | 'particle';
 
 export interface RendererAnimationClipCueDefinition {
@@ -444,7 +446,7 @@ export class RendererAnimationHost {
     diagnostic: AnimationProjectionDiagnostic,
     realizationOrOperation?: AnimationControllerRealization | AnimationPresentationOp,
   ): void {
-    this.#diagnostics.push(diagnostic);
+    retainDiagnostic(this.#diagnostics, diagnostic);
     const realization = realizationOrOperation !== undefined && 'objectId' in realizationOrOperation
       ? realizationOrOperation
       : undefined;
@@ -490,6 +492,23 @@ export class RendererAnimationHost {
     }
     this.#realizedFacts.push({ ...fact, factId: this.#nextFactId++ } as RendererAnimationRealizedFact);
   }
+}
+
+function retainDiagnostic(
+  diagnostics: AnimationProjectionDiagnostic[],
+  diagnostic: AnimationProjectionDiagnostic,
+): void {
+  const duplicate = diagnostics.findIndex((candidate) => (
+    candidate.code === diagnostic.code
+    && candidate.handle === diagnostic.handle
+    && candidate.message === diagnostic.message
+  ));
+  if (duplicate >= 0) {
+    diagnostics[duplicate] = diagnostic;
+    return;
+  }
+  diagnostics.push(diagnostic);
+  if (diagnostics.length > MAX_DIAGNOSTICS) diagnostics.shift();
 }
 
 function validateCueDefinitions(

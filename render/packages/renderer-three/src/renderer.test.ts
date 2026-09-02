@@ -16,6 +16,7 @@ import {
   AnimatedMeshRegistry,
   animationRigFingerprint,
   RenderApplyError,
+  RendererTerminalError,
   RenderResourceError,
   RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES,
   RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES,
@@ -1785,6 +1786,37 @@ void test('compatible repeated static instances batch without losing handle iden
   renderer.dispose();
   assert.equal(renderer.handleCount, 0);
   assert.equal(renderer.resourceStatistics().geometryResourceCount, 0);
+});
+
+void test('a static batch realization failure makes the mutated renderer explicitly terminal', () => {
+  const renderer = new ThreeRenderer();
+  const originalSetMatrixAt = THREE.InstancedMesh.prototype.setMatrixAt;
+  THREE.InstancedMesh.prototype.setMatrixAt = function failStaticBatchRealization() {
+    throw new Error('injected instance allocator failure');
+  };
+  try {
+    assert.throws(
+      () => renderer.applyFrame({
+        schemaVersion: 1,
+        ops: [
+          { op: 'defineStaticMesh', asset: crateAsset() },
+          { op: 'createStaticMeshInstance', handle: renderHandle(1), parent: null, instance: crateInstance() },
+          { op: 'createStaticMeshInstance', handle: renderHandle(2), parent: null, instance: crateInstance() },
+        ],
+      }),
+      (cause: unknown) => cause instanceof RendererTerminalError
+        && cause.phase === 'static_instance_batch'
+        && cause.message.includes('terminal state'),
+    );
+    assert.throws(
+      () => renderer.applyDiff(createDiff(3, cubeNode())),
+      (cause: unknown) => cause instanceof RendererTerminalError
+        && cause.message.includes('injected instance allocator failure'),
+    );
+  } finally {
+    THREE.InstancedMesh.prototype.setMatrixAt = originalSetMatrixAt;
+    renderer.dispose();
+  }
 });
 
 void test('dense level-scale repeated instances compact visible members into bounded definition batches', () => {

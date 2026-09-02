@@ -862,6 +862,27 @@ sealed class SpatialServiceFake : ISpatialService
 
     public SpatialTriggerReadReceipt ReadTrigger(SpatialTriggerReadRequest arg0) => throw new NotSupportedException();
     public SpatialTriggerOverlapAtReceipt ReadTriggerOverlapAt(SpatialTriggerOverlapAtRequest arg0) => throw new NotSupportedException();
+    public SpatialTriggerOverlapPageLeaseReceipt ReadTriggerOverlapPage(SpatialTriggerOverlapPageRequest request)
+    {
+        if (request.PageSize == 0 || request.Cursor != 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request));
+        }
+
+        ulong revision = (ulong)ReconcileCalls;
+        if (request.ExpectedRevision != 0 && request.ExpectedRevision != revision)
+        {
+            throw new InvalidOperationException("trigger overlap continuation revision is stale");
+        }
+
+        return new SpatialTriggerOverlapPageLeaseReceipt(
+            ReadOnlyMemory<SpatialTriggerOverlapSubject>.Empty,
+            request.Trigger,
+            revision,
+            0,
+            false,
+            0);
+    }
 
     public SpatialTriggerFactAtReceipt ReadTriggerFactAt(SpatialTriggerFactAtRequest request)
         => request.Index == 0 && _entities.Length != 0

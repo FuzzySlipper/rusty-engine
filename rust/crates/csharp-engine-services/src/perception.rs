@@ -55,6 +55,21 @@ impl RuntimePerceptionBridge {
             )
         }?;
         let scene = self.collision_source.scene(request.session)?;
+        let projection_identity = self.collision_source.cursor_identity(request.session)?;
+        if request.expected_projection_identity != 0
+            && request.expected_projection_identity != projection_identity
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_PERCEPTION_STALE_CURSOR",
+                "perception continuation projection identity changed",
+            ));
+        }
+        let pair_cursor = usize::try_from(request.pair_cursor).map_err(|_| {
+            CsharpEngineServicesError::new("CSHARP_PERCEPTION", "perception pair cursor overflow")
+        })?;
+        let page_size = usize::try_from(request.page_size).map_err(|_| {
+            CsharpEngineServicesError::new("CSHARP_PERCEPTION", "perception page size overflow")
+        })?;
         let entities = entity_state(occluders)?;
         let observers = observers
             .iter()
@@ -75,12 +90,16 @@ impl RuntimePerceptionBridge {
             })
             .collect::<Vec<_>>();
         let readout = SpatialPerceptionService
-            .evaluate(SpatialPerceptionQuery {
-                scene: scene.as_ref(),
-                entities: &entities,
-                observers: &observers,
-                targets: &targets,
-            })
+            .evaluate_page(
+                SpatialPerceptionQuery {
+                    scene: scene.as_ref(),
+                    entities: &entities,
+                    observers: &observers,
+                    targets: &targets,
+                },
+                pair_cursor,
+                page_size,
+            )
             .map_err(|error| {
                 CsharpEngineServicesError::new("CSHARP_PERCEPTION", error.to_string())
             })?;
@@ -115,6 +134,14 @@ impl RuntimePerceptionBridge {
             pairs_len: pairs.len(),
             aggregates: pointer_or_null(&aggregates),
             aggregates_len: aggregates.len(),
+            pair_total: checked_count(readout.pair_total, "pairs")?,
+            has_next_pair_cursor: readout.next_pair_cursor.is_some(),
+            next_pair_cursor: readout
+                .next_pair_cursor
+                .map(|value| checked_count(value, "pair cursor"))
+                .transpose()?
+                .unwrap_or_default(),
+            projection_identity,
             selected_observers: checked_count(readout.selected_observers, "observers")?,
             selected_targets: checked_count(readout.selected_targets, "targets")?,
             selection_comparisons: readout.selection_comparisons as u64,
@@ -212,6 +239,7 @@ fn checked_count(value: usize, field: &'static str) -> Result<u32, CsharpEngineS
 mod tests {
     use super::*;
     use crate::spatial;
+    use std::sync::Arc;
 
     #[test]
     fn native_query_copies_typed_pairs_and_aggregates_and_releases_lease() {
@@ -263,6 +291,9 @@ mod tests {
             targets_len: targets.len(),
             occluders: std::ptr::null(),
             occluders_len: occluders.len(),
+            expected_projection_identity: 0,
+            pair_cursor: 0,
+            page_size: 64,
         };
         let perception_api = api(&mut perception_bridge);
         let mut result = NativePerceptionReadoutLease::default();
@@ -289,6 +320,117 @@ mod tests {
                 (perception_api.destroy_readout_lease)(perception_api.context, result.handle)
             },
             ABI_OK
+        );
+        assert_eq!(
+            unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },
+            ABI_OK
+        );
+    }
+
+    #[test]
+    fn continuation_rejects_a_rebuilt_projection_that_reuses_its_local_version() {
+        let mut spatial_bridge = RuntimeSpatialBridge::new();
+        let mut perception_bridge = RuntimePerceptionBridge::new(&spatial_bridge);
+        let spatial_api = spatial::api(&mut spatial_bridge);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.create_session)(
+                    spatial_api.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        let observers = [NativePerceptionObserver {
+            entity: 1,
+            origin: NativeVec3::default(),
+            forward: NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            maximum_distance: 10.0,
+            minimum_facing_cosine: 0.5,
+            evidence: 1.0,
+        }];
+        let targets = [
+            NativePerceptionTarget {
+                entity: 2,
+                center: NativeVec3 {
+                    x: 2.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            },
+            NativePerceptionTarget {
+                entity: 3,
+                center: NativeVec3 {
+                    x: 3.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            },
+        ];
+        let mut request = NativePerceptionQueryRequest {
+            session,
+            observers: observers.as_ptr(),
+            observers_len: observers.len(),
+            targets: targets.as_ptr(),
+            targets_len: targets.len(),
+            occluders: std::ptr::null(),
+            occluders_len: 0,
+            expected_projection_identity: 0,
+            pair_cursor: 0,
+            page_size: 1,
+        };
+        let perception_api = api(&mut perception_bridge);
+        let mut first = NativePerceptionReadoutLease::default();
+        assert_eq!(
+            unsafe {
+                (perception_api.query_visibility)(perception_api.context, &request, &mut first)
+            },
+            ABI_OK
+        );
+        assert!(first.has_next_pair_cursor);
+        let initial_local_version = spatial_bridge
+            .collision_source()
+            .scene(session)
+            .unwrap()
+            .projection_version();
+        assert_eq!(initial_local_version, 1);
+        assert_eq!(
+            unsafe { (perception_api.destroy_readout_lease)(perception_api.context, first.handle) },
+            ABI_OK
+        );
+
+        spatial_bridge.publish_scene(
+            session,
+            Arc::new(engine_spatial::VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap()),
+        );
+        assert_eq!(
+            spatial_bridge
+                .collision_source()
+                .scene(session)
+                .unwrap()
+                .projection_version(),
+            initial_local_version,
+            "rebuilt scenes reset their projection-local counter",
+        );
+        request.expected_projection_identity = first.projection_identity;
+        request.pair_cursor = first.next_pair_cursor;
+        let mut continued = NativePerceptionReadoutLease::default();
+        assert_eq!(
+            unsafe {
+                (perception_api.query_visibility)(perception_api.context, &request, &mut continued)
+            },
+            0,
+            "publication identity must reject a cursor from the replaced scene",
         );
         assert_eq!(
             unsafe { (spatial_api.destroy_session)(spatial_api.context, session) },

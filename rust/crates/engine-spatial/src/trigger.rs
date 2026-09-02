@@ -198,6 +198,16 @@ pub struct TriggerOverlapReadout {
     pub revision: u64,
 }
 
+/// A deterministic, bounded page of current subjects for one trigger definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerOverlapPage {
+    pub trigger: EntityId,
+    pub subjects: Vec<EntityId>,
+    pub revision: u64,
+    pub total: usize,
+    pub next_cursor: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TriggerReconcileReceipt {
     pub tick: u64,
@@ -513,6 +523,74 @@ impl TriggerVolumeSystem {
             trigger,
             subjects,
             revision: self.revision,
+        })
+    }
+
+    /// Reads one contiguous page without requiring callers to guess whether a quota hid facts.
+    /// The revision fences continuations against trigger-set changes between pages.
+    pub fn current_overlaps_page(
+        &self,
+        trigger: EntityId,
+        expected_revision: Option<u64>,
+        cursor: usize,
+        page_size: usize,
+    ) -> Result<TriggerOverlapPage, TriggerVolumeError> {
+        if page_size == 0 || page_size > MAX_TRIGGER_READ_ITEMS {
+            return Err(TriggerVolumeError {
+                diagnostics: vec![diagnostic(
+                    TriggerVolumeDiagnosticCode::QuotaExceeded,
+                    Some(trigger),
+                    format!(
+                        "trigger page size {page_size} is outside 1..={MAX_TRIGGER_READ_ITEMS}"
+                    ),
+                )],
+            });
+        }
+        if !self.definitions.contains_key(&trigger) {
+            return Err(TriggerVolumeError {
+                diagnostics: vec![diagnostic(
+                    TriggerVolumeDiagnosticCode::MissingDefinition,
+                    Some(trigger),
+                    "trigger definition is not registered",
+                )],
+            });
+        }
+        if expected_revision.is_some_and(|value| value != self.revision) {
+            return Err(TriggerVolumeError {
+                diagnostics: vec![diagnostic(
+                    TriggerVolumeDiagnosticCode::StaleRevision,
+                    Some(trigger),
+                    "trigger overlap continuation revision is stale",
+                )],
+            });
+        }
+        let subjects = self
+            .active_overlaps
+            .range(
+                TriggerOverlapPair::new(trigger, EntityId::new(0))
+                    ..=TriggerOverlapPair::new(trigger, EntityId::new(u64::MAX)),
+            )
+            .map(|pair| pair.subject_id())
+            .collect::<Vec<_>>();
+        if cursor > subjects.len() {
+            return Err(TriggerVolumeError {
+                diagnostics: vec![diagnostic(
+                    TriggerVolumeDiagnosticCode::StaleRevision,
+                    Some(trigger),
+                    format!(
+                        "trigger overlap cursor {cursor} exceeds total {}",
+                        subjects.len()
+                    ),
+                )],
+            });
+        }
+        let end = cursor.saturating_add(page_size).min(subjects.len());
+        Ok(TriggerOverlapPage {
+            trigger,
+            subjects: subjects[cursor..end].to_vec(),
+            revision: self.revision,
+            total: subjects.len(),
+            next_cursor: (end < subjects.len()).then_some(end),
         })
     }
 

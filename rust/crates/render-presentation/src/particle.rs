@@ -9,6 +9,7 @@ use crate::{
 };
 
 const MAX_CURVE_KEYS: usize = 8;
+const MAX_PARTICLE_DIAGNOSTICS: usize = 128;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ParticleEmitterHandle(u64);
@@ -361,7 +362,7 @@ impl ParticleProjector {
                     handle: operation_handle(&op),
                     message: diagnostic_message(code).to_string(),
                 };
-                self.diagnostics.push(diagnostic.clone());
+                self.retain_diagnostic(diagnostic.clone());
                 return Err(diagnostic);
             }
             projected.push(PresentationOp::Particle { meta, op });
@@ -387,6 +388,21 @@ impl ParticleProjector {
     pub fn reset(&mut self) {
         let limits = self.limits;
         *self = Self::new(limits);
+    }
+
+    fn retain_diagnostic(&mut self, diagnostic: ParticleProjectionDiagnostic) {
+        if let Some(index) = self.diagnostics.iter().position(|existing| {
+            existing.code == diagnostic.code
+                && existing.handle == diagnostic.handle
+                && existing.message == diagnostic.message
+        }) {
+            self.diagnostics[index] = diagnostic;
+            return;
+        }
+        if self.diagnostics.len() == MAX_PARTICLE_DIAGNOSTICS {
+            self.diagnostics.remove(0);
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     fn validate_and_apply(

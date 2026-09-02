@@ -154,7 +154,7 @@ export class RendererParticleHost {
         applied += 1;
       } else {
         diagnostics.push(diagnostic);
-        this.#diagnostics.push(diagnostic);
+        retainParticleDiagnostic(this.#diagnostics, diagnostic);
       }
     }
     return { applied, diagnostics, readout: this.readout() };
@@ -166,7 +166,7 @@ export class RendererParticleHost {
         'invalidDescriptor',
         'particle frame delta must be finite and between zero and one second',
       );
-      this.#diagnostics.push(diagnostic);
+      retainParticleDiagnostic(this.#diagnostics, diagnostic);
       return { applied: 0, diagnostics: [diagnostic], readout: this.readout() };
     }
     const diagnostics: ParticleProjectionDiagnostic[] = [];
@@ -195,7 +195,7 @@ export class RendererParticleHost {
       this.#sink.update(projectParticle(particle));
     }
     this.#cleanupFinishedBursts();
-    this.#diagnostics.push(...diagnostics);
+    for (const diagnostic of diagnostics) retainParticleDiagnostic(this.#diagnostics, diagnostic);
     return { applied: this.#particles.size, diagnostics, readout: this.readout() };
   }
 
@@ -506,6 +506,25 @@ export class RendererParticleHost {
     };
   }
 
+}
+
+const MAX_RETAINED_PARTICLE_DIAGNOSTICS = 256;
+
+function retainParticleDiagnostic(
+  diagnostics: ParticleProjectionDiagnostic[],
+  diagnostic: ParticleProjectionDiagnostic,
+): void {
+  const duplicate = diagnostics.findIndex((candidate) => (
+    candidate.code === diagnostic.code
+    && candidate.handle === diagnostic.handle
+    && candidate.message === diagnostic.message
+  ));
+  if (duplicate >= 0) {
+    diagnostics[duplicate] = diagnostic;
+    return;
+  }
+  diagnostics.push(diagnostic);
+  if (diagnostics.length > MAX_RETAINED_PARTICLE_DIAGNOSTICS) diagnostics.shift();
 }
 
 function createEmitter(

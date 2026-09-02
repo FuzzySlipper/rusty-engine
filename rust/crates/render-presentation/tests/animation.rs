@@ -458,3 +458,21 @@ fn animation_projection_validates_handles_targets_revisions_and_batches_atomical
         .unwrap();
     assert_eq!(projector.handle(7), Some(AnimationProjectionHandle::new(1)));
 }
+
+#[test]
+fn animation_projector_diagnostics_coalesce_repeated_failures() {
+    let mut projector = AnimationProjector::new();
+    for entity in 0..200 {
+        projector
+            .destroy_entity(entity, PresentationOpMeta::new(entity as u32))
+            .expect_err("unknown controller remains rejected");
+    }
+    assert_eq!(projector.readout().diagnostics.len(), 1);
+
+    projector
+        .destroy_entity(199, PresentationOpMeta::new(999))
+        .expect_err("the retained unknown controller remains rejected");
+    let readout = projector.readout();
+    assert_eq!(readout.diagnostics.len(), 1);
+    assert_eq!(readout.diagnostics[0].sequence, 999);
+}

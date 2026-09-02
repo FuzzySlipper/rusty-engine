@@ -9,6 +9,7 @@ import {
 import type { RustyApplicationRuntimeInputEnvelope } from '@rusty-engine/application-host';
 
 const RUNTIME = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
+const ACCEPTED_FAULT = { code: 'DEV_HOST_ACCEPTED', disposition: 'accepted' } as const;
 const READOUT = {
   artifact: 'rusty.product.runtime-readout',
   runtime: RUNTIME,
@@ -84,6 +85,7 @@ function response(body: unknown, status = 200, headers: Record<string, string> =
 function result(operation: string): Record<string, unknown> {
   return {
     accepted: true,
+    ...ACCEPTED_FAULT,
     operation,
     binding: RUNTIME,
     nextInputSequence: '1',
@@ -112,7 +114,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
           return response(result('start'));
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}input`:
           batches.push([...(body?.['batch'] as readonly RustyApplicationRuntimeInputEnvelope[])]);
-          return response({ accepted: true, count: (body?.['batch'] as readonly unknown[]).length, binding: RUNTIME, readout: READOUT });
+          return response({ accepted: true, ...ACCEPTED_FAULT, count: (body?.['batch'] as readonly unknown[]).length, binding: RUNTIME, readout: READOUT });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}advance-realtime`:
           assert.equal(body?.['observedTimeNs'], '100');
           return response(result('advance-realtime'));
@@ -123,7 +125,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
           return response(result('admit-external-step'));
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`:
           assert.equal(body?.['ticket'], '1');
-          return response({ accepted: true, ticket: '1', binding: RUNTIME, readout: READOUT });
+          return response({ accepted: true, ...ACCEPTED_FAULT, ticket: '1', binding: RUNTIME, readout: READOUT });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}audio-feedback`:
           assert.deepEqual(body, {
             runtime: RUNTIME,
@@ -133,7 +135,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
               kind: 'naturalCompletion', source: 'oneShot', factId: '7', sequence: 3, signalHandle: '11',
             }],
           });
-          return response({ accepted: true, runtime: RUNTIME, acceptedThroughFactId: '7' });
+          return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '7' });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}animation-feedback`:
           assert.deepEqual(body, {
             runtime: RUNTIME,
@@ -144,7 +146,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
               code: 'assetMissing', sequence: 4,
             }],
           });
-          return response({ accepted: true, runtime: RUNTIME, acceptedThroughFactId: '8' });
+          return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '8' });
         default:
           return response({ error: 'missing route' }, 404);
       }
@@ -205,7 +207,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
     facts: [{
       kind: 'naturalCompletion', source: 'oneShot', factId: '7', sequence: 3, signalHandle: '11',
     }],
-  }), { accepted: true, runtime: RUNTIME, acceptedThroughFactId: '7' });
+  }), { accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '7' });
   assert.deepEqual(await adapter.reportAnimationFeedback({
     runtime: RUNTIME,
     replaceOwner: true,
@@ -214,7 +216,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
       kind: 'diagnostic', factId: '8', objectId: null, generation: null,
       code: 'assetMissing', sequence: 4,
     }],
-  }), { accepted: true, runtime: RUNTIME, acceptedThroughFactId: '8' });
+  }), { accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME, acceptedThroughFactId: '8' });
   assert.throws(
     () => adapter.completeTimeline?.({
       ticket: '01',
@@ -450,7 +452,7 @@ function fragment(overrides: Record<string, unknown> = {}): Record<string, unkno
 test('local transport rejects malformed typed output and bounded paths', () => {
   const errors: ProductBrowserLocalTransportError[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({ accepted: true, operation: 'advance-realtime' }),
+    fetch: async () => response({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' }),
     eventSource: FakeEventSource,
     onTransportError: (error) => errors.push(error),
   });
@@ -478,6 +480,29 @@ test('local transport rejects malformed typed output and bounded paths', () => {
   );
 });
 
+test('local transport rejects missing or incoherent host fault facts', async () => {
+  const missingFault = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({ accepted: true, operation: 'advance-realtime' }),
+    eventSource: FakeEventSource,
+  });
+  await assert.rejects(missingFault.advanceRealtime('1'), /operation result code/u);
+
+  const incoherentFault = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({
+      accepted: false,
+      code: 'CSHARP_CONTROL_BINDING',
+      disposition: 'accepted',
+      operation: 'advance-realtime',
+      diagnostic: 'stale binding',
+    }),
+    eventSource: FakeEventSource,
+  });
+  await assert.rejects(
+    incoherentFault.advanceRealtime('1'),
+    /accepted and disposition are incoherent/u,
+  );
+});
+
 test('ordinary outputs honor the configured quota below the hard event bound', () => {
   FakeEventSource.instances.length = 0;
   const errors: ProductBrowserLocalTransportError[] = [];
@@ -502,7 +527,7 @@ test('named output lag is a terminal typed failure and never reconnects', async 
   FakeEventSource.instances.length = 0;
   const terminalFailures: unknown[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response({ accepted: true, operation: 'advance-realtime' }),
+    fetch: async () => response({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' }),
     eventSource: FakeEventSource,
     onTransportError: (error) => terminalFailures.push(error),
   });
@@ -532,7 +557,7 @@ test('local transport hardens the JSON border before requests', async () => {
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async (_input, init) => {
       assert.equal(new Headers(init?.headers).get('content-type'), 'application/json');
-      return response({ accepted: true, operation: 'advance-realtime' });
+      return response({ accepted: true, ...ACCEPTED_FAULT, operation: 'advance-realtime' });
     },
     eventSource: FakeEventSource,
   });
@@ -569,7 +594,7 @@ test('local transport carries immutable bounded product payload intents', async 
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async (_input, init) => {
       requestBodies.push(JSON.parse(String(init?.body)) as unknown);
-      return response({ accepted: true, count: 1, binding: RUNTIME, readout: READOUT });
+      return response({ accepted: true, ...ACCEPTED_FAULT, count: 1, binding: RUNTIME, readout: READOUT });
     },
     eventSource: FakeEventSource,
   });
@@ -631,7 +656,7 @@ test('renderer diagnostics use their own 256 KiB snapshot budget', async () => {
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async (_input, init) => {
       requestBodies.push(JSON.parse(String(init?.body)) as unknown);
-      return response({ accepted: true, runtime: RUNTIME });
+      return response({ accepted: true, ...ACCEPTED_FAULT, runtime: RUNTIME });
     },
     eventSource: FakeEventSource,
   });

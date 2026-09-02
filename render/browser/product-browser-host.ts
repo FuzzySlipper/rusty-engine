@@ -82,6 +82,8 @@ const adapter: ProductBrowserRuntimeAdapter = {
     }
     return {
       accepted: true,
+      code: 'DEV_HOST_ACCEPTED',
+      disposition: 'accepted',
       operation: operation.kind,
       binding: RUNTIME,
       nextInputSequence: '1',
@@ -90,10 +92,12 @@ const adapter: ProductBrowserRuntimeAdapter = {
   },
   input: async (batch) => {
     inputBatches.push(batch);
-    return { accepted: true, count: batch.length, binding: RUNTIME, readout: runtimeReadout('running') };
+    return { accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', count: batch.length, binding: RUNTIME, readout: runtimeReadout('running') };
   },
   reportAudioFeedback: async (feedback) => ({
     accepted: true,
+    code: 'DEV_HOST_ACCEPTED',
+    disposition: 'accepted',
     runtime: feedback.runtime,
     ...(feedback.facts.at(-1) === undefined
       ? {}
@@ -101,17 +105,21 @@ const adapter: ProductBrowserRuntimeAdapter = {
   }),
   reportAnimationFeedback: async (feedback) => ({
     accepted: true,
+    code: 'DEV_HOST_ACCEPTED',
+    disposition: 'accepted',
     runtime: feedback.runtime,
     ...(feedback.facts.at(-1) === undefined
       ? {}
       : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
   }),
-  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, runtime: feedback.runtime }),
+  reportGhostPlateFeedback: async (feedback) => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', runtime: feedback.runtime }),
   advanceRealtime: async (observedTimeNs) => {
     realtimeTicks.push(observedTimeNs);
     emit({ kind: 'runtime-readout', readout: runtimeReadout('running') });
     return {
       accepted: true,
+      code: 'DEV_HOST_ACCEPTED',
+      disposition: 'accepted',
       operation: 'advance-realtime',
       binding: RUNTIME,
       nextInputSequence: '1',

@@ -9,6 +9,7 @@ const MIN_REFRESH_INTERVAL_MS: u32 = 100;
 const MAX_REFRESH_INTERVAL_MS: u32 = 5_000;
 const MIN_FRAME_TIME_SAMPLES: u16 = 1;
 const MAX_FRAME_TIME_SAMPLES: u16 = 240;
+const MAX_TELEMETRY_DIAGNOSTICS: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -131,7 +132,7 @@ impl TelemetryOverlayProjector {
                     handle: operation_handle(&op),
                     message: diagnostic_message(code).to_string(),
                 };
-                self.diagnostics.push(diagnostic.clone());
+                self.retain_diagnostic(diagnostic.clone());
                 return Err(diagnostic);
             }
             projected.push(PresentationOp::TelemetryOverlay { meta, op });
@@ -156,6 +157,21 @@ impl TelemetryOverlayProjector {
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    fn retain_diagnostic(&mut self, diagnostic: TelemetryOverlayDiagnostic) {
+        if let Some(index) = self.diagnostics.iter().position(|existing| {
+            existing.code == diagnostic.code
+                && existing.handle == diagnostic.handle
+                && existing.message == diagnostic.message
+        }) {
+            self.diagnostics[index] = diagnostic;
+            return;
+        }
+        if self.diagnostics.len() == MAX_TELEMETRY_DIAGNOSTICS {
+            self.diagnostics.remove(0);
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     fn validate_and_apply(
