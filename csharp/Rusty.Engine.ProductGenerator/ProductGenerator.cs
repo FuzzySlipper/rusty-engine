@@ -11,22 +11,18 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        context.RegisterPostInitializationOutput(static output =>
-        {
-            output.AddSource("Interop.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.Interop.g.cs"));
-            output.AddSource("EngineServiceImplementations.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.EngineServiceImplementations.g.cs"));
-            output.AddSource("AbiIdentity.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.AbiIdentity.g.cs"));
-        });
-
         context.RegisterSourceOutput(context.CompilationProvider, static (output, compilation) =>
         {
-            DebugCommandCatalogGenerator.Generate(output, compilation);
             INamedTypeSymbol[] candidates = compilation.Assembly.GetAttributes()
                 .Where(attribute => attribute.AttributeClass?.ToDisplayString() == ProductAttribute)
                 .Select(ProductType)
                 .Where(product => product is not null)
                 .Cast<INamedTypeSymbol>()
                 .ToArray();
+            // The analyzer is carried transitively by Rusty.Engine. Most of
+            // those compilations are ordinary libraries, not product roots;
+            // do not inject unsafe bootstrap inputs or require an attribute.
+            if (candidates.Length == 0) return;
             if (candidates.Length != 1)
             {
                 output.ReportDiagnostic(Diagnostic.Create(
@@ -36,6 +32,10 @@ public sealed class ProductGenerator : IIncrementalGenerator
             }
 
             INamedTypeSymbol product = candidates[0];
+            output.AddSource("Interop.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.Interop.g.cs"));
+            output.AddSource("EngineServiceImplementations.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.EngineServiceImplementations.g.cs"));
+            output.AddSource("AbiIdentity.g.cs", SourceText("Rusty.Engine.ProductGenerator.GeneratedInputs.AbiIdentity.g.cs"));
+            DebugCommandCatalogGenerator.Generate(output, compilation);
             output.AddSource("ProductExports.g.cs", Exports(product));
         });
     }

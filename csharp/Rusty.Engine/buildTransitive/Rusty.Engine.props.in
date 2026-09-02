@@ -1,0 +1,29 @@
+<Project>
+  <PropertyGroup>
+    <!-- #7696 exact product/host handshake identity, staged from AbiIdentity.g.cs. -->
+    <RustyEngineSdkBuildIdentity>@RUSTY_ENGINE_SDK_BUILD_IDENTITY@</RustyEngineSdkBuildIdentity>
+    <RustyEngineProductAbiProtocolVersion>@RUSTY_ENGINE_PRODUCT_ABI_PROTOCOL_VERSION@</RustyEngineProductAbiProtocolVersion>
+    <RustyEngineProductAbiFingerprint>@RUSTY_ENGINE_PRODUCT_ABI_FINGERPRINT@</RustyEngineProductAbiFingerprint>
+    <!-- Source use is intentionally opt-in; no checkout is discovered automatically. -->
+    <RustyEngineUseSourceDevelopment Condition="'$(RustyEngineUseSourceDevelopment)' == ''">false</RustyEngineUseSourceDevelopment>
+  </PropertyGroup>
+  <Target Name="ValidateRustyEngineSourceDevelopmentPackageAssets" BeforeTargets="PrepareForBuild"
+          Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">
+    <ItemGroup>
+      <_RustyEngineSourceOverridePackageReference Include="@(PackageReference)"
+          Condition="'%(PackageReference.Identity)' == 'Rusty.Engine' and '%(PackageReference.ExcludeAssets)' != 'compile;runtime'" />
+    </ItemGroup>
+    <Error Condition="'@(_RustyEngineSourceOverridePackageReference)' != ''"
+           Text="RustyEngineUseSourceDevelopment=true requires PackageReference Rusty.Engine to set ExcludeAssets=compile;runtime so the explicit source project is the sole Rusty.Engine type reference." />
+  </Target>
+  <Target Name="ValidateRustyEngineSourceDevelopmentOverride" BeforeTargets="PrepareForBuild"
+          Condition="'$(RustyEngineUseSourceDevelopment)' == 'true' and '$(RustyEngineSourceDevelopmentPath)' == ''">
+    <Error Text="RustyEngineUseSourceDevelopment=true requires an explicit RustyEngineSourceDevelopmentPath; source checkouts are never discovered automatically." />
+  </Target>
+  <ItemGroup Condition="'$(RustyEngineUseSourceDevelopment)' == 'true' and '$(RustyEngineSourceDevelopmentPath)' != ''">
+    <ProjectReference Include="$(RustyEngineSourceDevelopmentPath)/csharp/Rusty.Engine/Rusty.Engine.csproj" />
+    <ProjectReference Include="$(RustyEngineSourceDevelopmentPath)/csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,5 @@
+<Project>
+  <ItemGroup Condition="'$(RustyEngineUseSourceDevelopment)' != 'true'">
+    <Analyzer Include="$(MSBuildThisFileDirectory)analyzers/Rusty.Engine.ProductGenerator.dll" />
+  </ItemGroup>
+</Project>
