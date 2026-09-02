@@ -2293,6 +2293,18 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
     case 'runtime-readout':
       requireKnownFields(record, ['kind', 'readout'], 'runtime readout output');
       return { kind: 'runtime-readout', readout: decodeRuntimeReadout(record.readout) };
+    case 'runtime-progress':
+      requireKnownFields(record, ['kind', 'owner'], 'runtime progress output');
+      if (record['owner'] !== 'rust-host') {
+        throw new TypeError('runtime progress owner is invalid');
+      }
+      return { kind: 'runtime-progress', owner: 'rust-host' };
+    case 'runtime-input-result':
+      requireKnownFields(record, ['kind', 'result'], 'runtime input result output');
+      return {
+        kind: 'runtime-input-result',
+        result: decodeInputResult(record['result']),
+      };
     default:
       throw new TypeError('runtime output kind is not admitted');
   }

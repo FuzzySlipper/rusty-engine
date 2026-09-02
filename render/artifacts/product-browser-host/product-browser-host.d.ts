@@ -250,6 +250,11 @@ export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
  | {
     readonly kind: 'runtime-progress';
     readonly owner: 'rust-host';
+}
+/** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
+ | {
+    readonly kind: 'runtime-input-result';
+    readonly result: ProductBrowserRuntimeInputResult;
 } | {
     readonly kind: 'frame';
     readonly frame: RustyApplicationFrame;
@@ -522,7 +527,7 @@ export interface ProductBrowserBundleTemplateOptions {
      */
     readonly runtimeAdapterModule: string;
     readonly lifecycleMode: ProductBrowserRuntimeMode;
-    /** Defaults to `browser`; `rust-host` leaves realtime advancement to the packaged Rust host. */
+    /** Defaults to `rust-host` for realtime bundles and `browser` otherwise. */
     readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
     readonly uiProjection?: {
         readonly expectedStream: string;

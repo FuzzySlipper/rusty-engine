@@ -300,6 +300,130 @@ test('completed unnumbered baseline discards a cursorless replacement attach aft
   adapter.dispose();
 });
 
+test('local transport decodes Rust-host realtime progress output', () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const outputs: unknown[] = [];
+  const unsubscribe = adapter.subscribeOutputs((output) => outputs.push(output));
+  const stream = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(stream);
+  stream.emit({ kind: 'runtime-progress', owner: 'rust-host' }, '1');
+  assert.deepEqual(outputs.at(-1), { kind: 'runtime-progress', owner: 'rust-host' });
+  unsubscribe();
+  adapter.dispose();
+});
+
+test('local transport decodes scheduled input receipts with authoritative progress and recovery cursors', () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const outputs: unknown[] = [];
+  const unsubscribe = adapter.subscribeOutputs((output) => outputs.push(output));
+  const stream = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(stream);
+
+  stream.emit({
+    kind: 'runtime-input-result',
+    result: {
+      accepted: true,
+      code: 'DEV_HOST_ACCEPTED',
+      disposition: 'accepted',
+      count: 2,
+      acceptedCount: 2,
+      droppedCount: 0,
+      acceptedThrough: '4',
+      consumedThrough: '4',
+      nextInputSequence: '5',
+      binding: RUNTIME,
+      readout: READOUT,
+    },
+  }, '1');
+  assert.deepEqual(outputs.at(-1), {
+    kind: 'runtime-input-result',
+    result: {
+      accepted: true,
+      code: 'DEV_HOST_ACCEPTED',
+      disposition: 'accepted',
+      count: 2,
+      acceptedCount: 2,
+      droppedCount: 0,
+      acceptedThrough: '4',
+      consumedThrough: '4',
+      nextInputSequence: '5',
+      binding: RUNTIME,
+      readout: READOUT,
+    },
+  });
+
+  stream.emit({
+    kind: 'runtime-input-result',
+    result: {
+      accepted: false,
+      code: 'CSHARP_INPUT_STALE_DROPPED',
+      disposition: 'rejected-recoverable',
+      count: 2,
+      acceptedCount: 1,
+      droppedCount: 1,
+      acceptedThrough: '6',
+      consumedThrough: '7',
+      nextInputSequence: '8',
+      binding: RUNTIME,
+      readout: READOUT,
+      diagnostic: 'dropped one stale input event',
+    },
+  }, '2');
+  assert.deepEqual((outputs.at(-1) as { readonly result: Record<string, unknown> }).result, {
+    accepted: false,
+    code: 'CSHARP_INPUT_STALE_DROPPED',
+    disposition: 'rejected-recoverable',
+    count: 2,
+    acceptedCount: 1,
+    droppedCount: 1,
+    acceptedThrough: '6',
+    consumedThrough: '7',
+    nextInputSequence: '8',
+    binding: RUNTIME,
+    readout: READOUT,
+    diagnostic: 'dropped one stale input event',
+  });
+
+  stream.emit({
+    kind: 'runtime-input-result',
+    result: {
+      accepted: false,
+      code: 'DEV_HOST_INPUT_MAILBOX_FULL',
+      disposition: 'resync-required',
+      count: 2,
+      acceptedCount: 0,
+      droppedCount: 2,
+      nextInputSequence: '9',
+      binding: RUNTIME,
+      readout: READOUT,
+      diagnostic: 'input mailbox requires a fresh binding',
+    },
+  }, '3');
+  assert.deepEqual((outputs.at(-1) as { readonly result: Record<string, unknown> }).result, {
+    accepted: false,
+    code: 'DEV_HOST_INPUT_MAILBOX_FULL',
+    disposition: 'resync-required',
+    count: 2,
+    acceptedCount: 0,
+    droppedCount: 2,
+    nextInputSequence: '9',
+    binding: RUNTIME,
+    readout: READOUT,
+    diagnostic: 'input mailbox requires a fresh binding',
+  });
+
+  unsubscribe();
+  adapter.dispose();
+});
+
 test('operation response waits for its exact retained-output cursor', async () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({

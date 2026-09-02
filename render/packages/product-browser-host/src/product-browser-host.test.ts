@@ -859,3 +859,16 @@ test('packaged Rust-host realtime ownership propagates through the generated bri
   assert.match(assets[1]!.content, /realtimeAdvanceOwner: bridge\.realtimeAdvanceOwner/u);
   assert.match(assets[2]!.content, /realtimeAdvanceOwner: "rust-host"/u);
 });
+
+test('standard realtime bundles default to Rust-host ownership while explicit browser ownership remains available', () => {
+  const options = {
+    engineHostModule: 'export const engineHost = true;\n',
+    uiModule: './ui/main.js',
+    runtimeAdapterModule: './runtime-adapter.js',
+    lifecycleMode: 'realtime' as const,
+  };
+  const standard = productBrowserBundleAssets(options);
+  assert.match(standard[2]!.content, /realtimeAdvanceOwner: "rust-host"/u);
+  const browserOwned = productBrowserBundleAssets({ ...options, realtimeAdvanceOwner: 'browser' });
+  assert.match(browserOwned[2]!.content, /realtimeAdvanceOwner: "browser"/u);
+});

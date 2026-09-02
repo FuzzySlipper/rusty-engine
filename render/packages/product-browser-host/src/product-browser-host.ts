@@ -258,6 +258,11 @@ export type ProductBrowserRuntimeOutput =
   | ProductBrowserRuntimeBindingOutput
   /** Fixed host evidence that one Rust-owned realtime advance was accepted. */
   | { readonly kind: 'runtime-progress'; readonly owner: 'rust-host' }
+  /** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
+  | {
+      readonly kind: 'runtime-input-result';
+      readonly result: ProductBrowserRuntimeInputResult;
+    }
   | { readonly kind: 'frame'; readonly frame: RustyApplicationFrame }
   | { readonly kind: 'view-composition'; readonly composition: RustyApplicationViewComposition }
   | {
@@ -1256,6 +1261,9 @@ export async function mountProductBrowserHost(
           }
           cadence?.pulseRustHost();
           return;
+        case 'runtime-input-result':
+          applyInputResult(output.result);
+          return;
         case 'frame': {
           enqueueRendererOutput(() => {
             const receipt = host.renderer.applyFrame(output.frame);
@@ -1375,7 +1383,7 @@ export async function mountProductBrowserHost(
     return true;
   };
 
-  const applyInputResult = (result: ProductBrowserRuntimeInputResult): void => {
+  function applyInputResult(result: ProductBrowserRuntimeInputResult): void {
     if (result.binding !== undefined && result.nextInputSequence !== undefined) {
       applyOutput({
         kind: 'binding',
@@ -1391,7 +1399,7 @@ export async function mountProductBrowserHost(
         result.diagnostic ?? 'runtime input batch was rejected by the runtime',
       );
     }
-  };
+  }
 
   cadence = createProductBrowserCadence({
     lifecycleMode: options.lifecycleMode,
@@ -1957,7 +1965,7 @@ export interface ProductBrowserBundleTemplateOptions {
    */
   readonly runtimeAdapterModule: string;
   readonly lifecycleMode: ProductBrowserRuntimeMode;
-  /** Defaults to `browser`; `rust-host` leaves realtime advancement to the packaged Rust host. */
+  /** Defaults to `rust-host` for realtime bundles and `browser` otherwise. */
   readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
   readonly uiProjection?: {
     readonly expectedStream: string;
@@ -2123,7 +2131,8 @@ export function productBrowserBundleAssets(
         '  return {',
         '    transport: createProductBrowserRuntimeTransport(adapter),',
         `    lifecycleMode: ${JSON.stringify(options.lifecycleMode)},`,
-        `    realtimeAdvanceOwner: ${JSON.stringify(options.realtimeAdvanceOwner ?? 'browser')},`,
+        `    realtimeAdvanceOwner: ${JSON.stringify(options.realtimeAdvanceOwner
+          ?? (options.lifecycleMode === 'realtime' ? 'rust-host' : 'browser'))},`,
         ...(options.uiProjection === undefined || options.uiProjection === null
           ? ['    uiProjection: undefined,']
           : [`    uiProjection: ${JSON.stringify(options.uiProjection)},`]),

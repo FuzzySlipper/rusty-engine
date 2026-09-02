@@ -1104,6 +1104,22 @@ pub enum ProductDevRuntimeState {
     Shutdown,
 }
 
+/// Host scheduling posture reported by one runtime owner. The host uses this
+/// small state seam to decide when its monotonic realtime loop may run; it
+/// does not infer product lifecycle from browser cadence or duplicate the
+/// lifecycle state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductDevRuntimeScheduleState {
+    /// This runtime is demand/external driven or otherwise does not opt into
+    /// the standard Rust-host realtime scheduler.
+    Unsupported,
+    Created,
+    Running,
+    Paused,
+    Faulted,
+    Shutdown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevRuntimeFault {
@@ -1296,6 +1312,18 @@ impl ProductDevOperationResult {
 
     pub const fn admitted_through(&self) -> Option<CanonicalU64> {
         self.admitted_through
+    }
+
+    pub const fn binding(&self) -> Option<ProductDevRuntimeBinding> {
+        self.binding
+    }
+
+    pub const fn next_input_sequence(&self) -> Option<CanonicalU64> {
+        self.next_input_sequence
+    }
+
+    pub fn readout(&self) -> Option<&ProductDevRuntimeReadout> {
+        self.readout.as_ref()
     }
 
     pub fn accepted(
@@ -1491,6 +1519,62 @@ impl ProductDevInputResult {
             binding: Some(binding),
             readout: Some(readout),
             diagnostic: None,
+        })
+    }
+
+    /// Acknowledges that the host mailbox accepted the submitted batch. This
+    /// deliberately does not claim that RuntimeInputLane or C# has consumed
+    /// it; the later scheduled update remains the semantic admission point.
+    pub fn queued(count: usize) -> Result<Self, ProductDevHostError> {
+        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_INPUT_RESULT_BOUNDS",
+                "queued runtime input count exceeds admitted batch bound",
+            ));
+        }
+        Ok(Self {
+            accepted: true,
+            code: "DEV_HOST_INPUT_QUEUED".to_owned(),
+            disposition: ProductDevFaultDisposition::Accepted,
+            count,
+            accepted_count: count,
+            dropped_count: 0,
+            accepted_through: None,
+            consumed_through: None,
+            next_input_sequence: None,
+            binding: None,
+            readout: None,
+            diagnostic: None,
+        })
+    }
+
+    /// Reports a bounded mailbox refusal without pretending that the runtime
+    /// consumed the batch. Overflow clears the queued prefix and fences the
+    /// runtime on the next host observation, so retrying against the old
+    /// binding would be incoherent; the transport must request a fresh
+    /// baseline instead.
+    pub fn mailbox_full(count: usize) -> Result<Self, ProductDevHostError> {
+        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_INPUT_RESULT_BOUNDS",
+                "mailbox refusal count exceeds admitted batch bound",
+            ));
+        }
+        Ok(Self {
+            accepted: false,
+            code: "DEV_HOST_INPUT_MAILBOX_FULL".to_owned(),
+            disposition: ProductDevFaultDisposition::ResyncRequired,
+            count,
+            accepted_count: 0,
+            dropped_count: count,
+            accepted_through: None,
+            consumed_through: None,
+            next_input_sequence: None,
+            binding: None,
+            readout: None,
+            diagnostic: Some(bounded_diagnostic(
+                "Rust-host input mailbox overflow cleared queued input; obtain a fresh runtime baseline before retrying".to_owned(),
+            )?),
         })
     }
 
@@ -1890,6 +1974,19 @@ enum ProductDevRuntimeOutputWire {
     RuntimeReadout {
         readout: ProductDevRuntimeReadout,
     },
+    /// One input batch admitted by the runtime at a scheduled update
+    /// boundary. The result carries the authoritative input cursor and
+    /// recovery disposition that cannot be returned by the earlier queued
+    /// HTTP acknowledgement.
+    RuntimeInputResult {
+        result: ProductDevInputResult,
+    },
+    /// One host-owned realtime observation was admitted. This is a progress
+    /// pulse, not a simulation step count; the accompanying readout carries
+    /// authoritative counters when the runtime supplies one.
+    RuntimeProgress {
+        owner: &'static str,
+    },
 }
 
 /// Closed renderer realization families for a sampled animation marker.
@@ -2077,6 +2174,23 @@ impl ProductDevRuntimeOutput {
             wire: ProductDevRuntimeOutputWire::RuntimeReadout { readout },
         }
     }
+
+    /// Publishes one scheduled input admission result through the ordered
+    /// runtime output stream. The HTTP input route only acknowledges mailbox
+    /// admission; this is the later runtime-owned receipt.
+    pub fn runtime_input_result(result: ProductDevInputResult) -> Self {
+        Self {
+            wire: ProductDevRuntimeOutputWire::RuntimeInputResult { result },
+        }
+    }
+
+    /// Marks one realtime observation admitted by the Rust host scheduler.
+    /// Browser hosts use this to update progress without becoming the clock.
+    pub fn runtime_progress() -> Self {
+        Self {
+            wire: ProductDevRuntimeOutputWire::RuntimeProgress { owner: "rust-host" },
+        }
+    }
     /// Marks the end of one complete current-binding projection. The host
     /// buffers its preceding binding-tagged facts and exposes them together;
     /// later facts for that binding are incremental.
@@ -2196,6 +2310,20 @@ impl<T> ProductDevRuntimeReceipt<T> {
 /// input, schedule, timeline, mutation, and projection authority. They return
 /// exact output receipts, so this trait has no subscription/callback method.
 pub trait ProductDevRuntime: Send + 'static {
+    /// Reports whether the runtime participates in the standard Rust-host
+    /// realtime scheduler. Older/demand/external runtimes remain caller
+    /// driven and return `Unsupported` by default.
+    fn realtime_schedule_state(&self) -> ProductDevRuntimeScheduleState {
+        ProductDevRuntimeScheduleState::Unsupported
+    }
+
+    /// Returns the admitted realtime observation interval. A standard host
+    /// must derive cadence from the runtime's own fixed-step configuration;
+    /// it must not duplicate a product-specific hertz constant.
+    fn realtime_schedule_interval(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// Establishes one browser connection to the current runtime generation.
     /// A concrete runtime may start from `Created` or publish a fresh baseline
     /// for an already-active generation, but must not reset active product
@@ -2244,6 +2372,20 @@ pub trait ProductDevRuntime: Send + 'static {
         &mut self,
         batch: ProductDevInputBatch,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError>;
+
+    /// Clears a host-mailbox overflow at the runtime binding fence. A
+    /// binding-aware runtime can advance its control revision and publish a
+    /// fresh baseline; older runtime implementations remain source-compatible
+    /// and simply report that this recovery lane is unavailable.
+    fn recover_input_overflow(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        Err(ProductDevRuntimeError::new(
+            "DEV_HOST_INPUT_RESYNC_UNSUPPORTED",
+            "runtime does not expose host input-overflow recovery",
+        )
+        .expect("fixed input-resync unsupported diagnostic"))
+    }
 
     /// Executes one bounded product-owned generated debug command between
     /// normal runtime operations. A semantic command failure remains a typed

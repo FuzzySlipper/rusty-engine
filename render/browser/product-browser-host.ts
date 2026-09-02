@@ -48,6 +48,7 @@ window.requestAnimationFrame = (callback: FrameRequestCallback): number => {
 let outputListeners = new Set<(output: ProductBrowserRuntimeOutput) => void>();
 let terminalFailureListeners = new Set<(failure: ProductBrowserRuntimeTerminalFailure) => void>();
 let disposed = false;
+let scheduledInputResultIndex = 0;
 const inputBatches: (readonly RustyApplicationRuntimeInputEnvelope[])[] = [];
 const realtimeTicks: string[] = [];
 const outputs: ProductBrowserRuntimeOutput[] = [];
@@ -213,6 +214,64 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
   fakeProgress.addEventListener('click', () => {
     emit({ kind: 'runtime-progress', owner: 'rust-host' });
   });
+  const scheduledInputResult = document.createElement('button');
+  scheduledInputResult.id = 'product-runtime-input-result';
+  scheduledInputResult.textContent = 'Emit scheduled input result';
+  scheduledInputResult.addEventListener('click', () => {
+    const results: readonly ProductBrowserRuntimeOutput[] = [
+      {
+        kind: 'runtime-input-result',
+        result: {
+          accepted: true,
+          code: 'DEV_HOST_ACCEPTED',
+          disposition: 'accepted',
+          count: 2,
+          acceptedCount: 2,
+          droppedCount: 0,
+          acceptedThrough: '4',
+          consumedThrough: '4',
+          nextInputSequence: '5',
+          binding: RUNTIME,
+          readout: runtimeReadout('running'),
+        },
+      },
+      {
+        kind: 'runtime-input-result',
+        result: {
+          accepted: false,
+          code: 'CSHARP_INPUT_STALE_DROPPED',
+          disposition: 'rejected-recoverable',
+          count: 2,
+          acceptedCount: 1,
+          droppedCount: 1,
+          acceptedThrough: '6',
+          consumedThrough: '7',
+          nextInputSequence: '8',
+          binding: RUNTIME,
+          readout: runtimeReadout('running'),
+          diagnostic: 'dropped one stale input event',
+        },
+      },
+      {
+        kind: 'runtime-input-result',
+        result: {
+          accepted: false,
+          code: 'DEV_HOST_INPUT_MAILBOX_FULL',
+          disposition: 'resync-required',
+          count: 2,
+          acceptedCount: 0,
+          droppedCount: 2,
+          nextInputSequence: '9',
+          binding: RUNTIME,
+          readout: runtimeReadout('running'),
+          diagnostic: 'input mailbox requires a fresh binding',
+        },
+      },
+    ];
+    const output = results[Math.min(scheduledInputResultIndex, results.length - 1)];
+    scheduledInputResultIndex += 1;
+    if (output !== undefined) emit(output);
+  });
   const dispose = document.createElement('button');
   dispose.id = 'product-dispose';
   dispose.textContent = 'Dispose product host';
@@ -225,7 +284,7 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
       root.append(disposedState);
     });
   });
-  ui.append(button, projection, state, lag, malformed, fakeProgress, dispose);
+  ui.append(button, projection, state, lag, malformed, fakeProgress, scheduledInputResult, dispose);
   uiRoot.append(ui);
 };
 void mountProductBrowserHost({

@@ -5,8 +5,9 @@ use std::sync::MutexGuard;
 
 use crate::{
     CanonicalU64, ProductDevDebugResult, ProductDevHostError, ProductDevInputBatch,
-    ProductDevLifecycleOperation, ProductDevOperationResult, ProductDevRuntime,
-    ProductDevRuntimeError, ProductDevRuntimeReceipt, ProductDevTimelineCompletion,
+    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationResult,
+    ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeReceipt,
+    ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
     ProductDevTimelineCompletionResult,
 };
 
@@ -27,6 +28,24 @@ impl<R> ProductDevOperationOwner<R> {
 }
 
 impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
+    /// Reads the runtime's explicit scheduler posture while holding the same
+    /// serialization guard as every mutating operation.
+    pub fn realtime_schedule_state(
+        &self,
+    ) -> Result<ProductDevRuntimeScheduleState, ProductDevRuntimeError> {
+        let runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        Ok(runtime.realtime_schedule_state())
+    }
+
+    /// Reads the runtime's admitted realtime observation interval under the
+    /// same owner lock used by lifecycle and update operations.
+    pub fn realtime_schedule_interval(
+        &self,
+    ) -> Result<Option<std::time::Duration>, ProductDevRuntimeError> {
+        let runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        Ok(runtime.realtime_schedule_interval())
+    }
+
     /// Runs one explicit lifecycle operation while holding the session's
     /// serialization guard for the complete owner call.
     pub fn lifecycle(
@@ -72,6 +91,46 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         observed_time_ns: CanonicalU64,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
         self.with_runtime(|runtime| runtime.advance_realtime(observed_time_ns))
+    }
+
+    /// Atomically drains one host-mailbox snapshot through the runtime input
+    /// owner immediately before one realtime advance. Each successful input
+    /// receipt is delivered to `publish_input` before the update receipt;
+    /// input admission errors are returned as recoverable observations while
+    /// the scheduled advance still proceeds. Lifecycle/update serialization
+    /// never has a second owner or an input queue hidden inside the browser
+    /// route. Both publication callbacks run while this owner lock is held, so
+    /// output ordering cannot race a lifecycle/control operation.
+    pub fn advance_realtime_with_input_and_publish<F, I, P>(
+        &self,
+        drain: F,
+        observed_time_ns: CanonicalU64,
+        mut publish_input: I,
+        mut publish: P,
+    ) -> Result<Vec<ProductDevRuntimeError>, ProductDevRuntimeError>
+    where
+        F: FnOnce() -> (Vec<ProductDevInputBatch>, bool),
+        I: FnMut(ProductDevRuntimeReceipt<ProductDevInputResult>),
+        P: FnMut(ProductDevRuntimeReceipt<ProductDevOperationResult>),
+    {
+        let mut runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        let (batches, overflowed) = drain();
+        let mut input_errors = Vec::new();
+        if overflowed {
+            match runtime.recover_input_overflow() {
+                Ok(receipt) => publish(receipt),
+                Err(error) => input_errors.push(error),
+            }
+        }
+        for batch in batches {
+            match runtime.input(batch) {
+                Ok(receipt) => publish_input(receipt),
+                Err(error) => input_errors.push(error),
+            }
+        }
+        let receipt = runtime.advance_realtime(observed_time_ns)?;
+        publish(receipt);
+        Ok(input_errors)
     }
 
     /// Strictly admits a canonical JSON u64 and advances the realtime lane.
@@ -129,12 +188,22 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.complete_timeline(completion)
     }
 
-    fn with_runtime<T, F>(
+    pub(crate) fn with_runtime<T, F>(
         &self,
         call: F,
     ) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>
     where
         F: FnOnce(&mut R) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
+    {
+        self.with_locked_runtime(call)
+    }
+
+    /// Runs an owner operation while retaining the serialization guard for
+    /// the complete callback. Host routes use this when they must publish a
+    /// receipt before another runtime mutation can begin.
+    pub(crate) fn with_locked_runtime<T, F>(&self, call: F) -> Result<T, ProductDevRuntimeError>
+    where
+        F: FnOnce(&mut R) -> Result<T, ProductDevRuntimeError>,
     {
         let mut runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
         call(&mut runtime)
@@ -218,9 +287,22 @@ mod tests {
             batch: ProductDevInputBatch,
         ) -> Result<ProductDevRuntimeReceipt<crate::ProductDevInputResult>, ProductDevRuntimeError>
         {
+            let accepted_through = batch
+                .events()
+                .last()
+                .map(|event| CanonicalU64::new(event.sequence()));
             Ok(ProductDevRuntimeReceipt::new(
-                crate::ProductDevInputResult::accepted(batch.events().len(), binding(), readout())
-                    .unwrap(),
+                crate::ProductDevInputResult::with_progress(
+                    batch.events().len(),
+                    batch.events().len(),
+                    0,
+                    accepted_through,
+                    accepted_through,
+                    CanonicalU64::new(2),
+                    binding(),
+                    readout(),
+                )
+                .unwrap(),
                 vec![crate::ProductDevRuntimeOutput::binding(
                     binding(),
                     CanonicalU64::new(0),
@@ -369,5 +451,63 @@ mod tests {
             .expect_err("fixture does not implement debug execution");
         assert_eq!(error.code(), "DEV_HOST_DEBUG_UNSUPPORTED");
         join.join().expect("debug worker");
+    }
+
+    #[test]
+    fn scheduled_publication_stays_inside_owner_serialization() {
+        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime));
+        let (published, published_ready) = mpsc::channel();
+        let (release, release_publication) = mpsc::channel();
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let input_order = Arc::clone(&order);
+        let update_order = Arc::clone(&order);
+        let scheduled_session = Arc::clone(&session);
+        let scheduled = thread::spawn(move || {
+            scheduled_session
+                .advance_realtime_with_input_and_publish(
+                    || (vec![ProductDevInputBatch::new(Vec::new())], false),
+                    CanonicalU64::new(1),
+                    |receipt| {
+                        let _ = receipt;
+                        input_order.lock().expect("input order lock").push("input");
+                    },
+                    |receipt| {
+                        let _ = receipt;
+                        update_order
+                            .lock()
+                            .expect("update order lock")
+                            .push("advance");
+                        published.send(()).expect("publication marker");
+                        release_publication
+                            .recv_timeout(Duration::from_secs(1))
+                            .expect("publication release");
+                    },
+                )
+                .expect("scheduled fixture advance");
+        });
+        published_ready
+            .recv_timeout(Duration::from_secs(1))
+            .expect("scheduled publication started");
+
+        let competing_session = Arc::clone(&session);
+        let (finished, competing_finished) = mpsc::channel();
+        let competing = thread::spawn(move || {
+            let result = competing_session.lifecycle(ProductDevLifecycleOperation::Start);
+            finished.send(result).expect("competing result");
+        });
+        assert!(
+            competing_finished
+                .recv_timeout(Duration::from_millis(25))
+                .is_err(),
+            "a later runtime operation overtook scheduled output publication"
+        );
+        release.send(()).expect("release scheduled publication");
+        scheduled.join().expect("scheduled worker");
+        competing.join().expect("competing worker");
+        assert_eq!(
+            *order.lock().expect("final order lock"),
+            vec!["input", "advance"],
+            "runtime input receipts must publish before the scheduled advance receipt"
+        );
     }
 }

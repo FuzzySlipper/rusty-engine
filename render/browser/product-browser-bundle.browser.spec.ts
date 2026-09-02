@@ -62,6 +62,10 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
     await expect.poll(() => requests.some((request) => request === 'GET /__rusty/product/runtime/outputs/fresh')).toBe(true);
     expect(requests).not.toContain('POST /__rusty/product/runtime/lifecycle/start');
     await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    }));
+    expect(requests).not.toContain('POST /__rusty/product/runtime/advance-realtime');
     await expect.poll(() => readStartupRendererProof(page)).not.toBeNull();
     const pixels = await readStartupRendererProof(page);
     expect(pixels).not.toBeNull();
@@ -143,7 +147,7 @@ test('demand Product UI intent wakes input and one Engine-owned demand admission
     await page.goto(`http://127.0.0.1:${String(address.port)}/index.html`);
     await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
     await expect(page.locator('#bundle-value')).toHaveText('status: ready');
-    await page.locator('#bundle-regenerate').click();
+    await page.locator('#bundle-regenerate').evaluate((element) => (element as HTMLButtonElement).click());
     await expect(page.locator('#bundle-value')).toHaveText('status: regenerated');
     await expect.poll(() => inputBodies.flatMap((body) => {
       if (body === null || typeof body !== 'object') return [];
@@ -328,6 +332,8 @@ async function handleRequest(
       }
       response.write(`event: rusty-output-baseline\ndata: ${JSON.stringify({
         accepted: true,
+        code: 'DEV_HOST_ACCEPTED',
+        disposition: 'accepted',
         operation: 'start',
         binding: RUNTIME,
         nextInputSequence: '1',
@@ -378,12 +384,19 @@ async function handleRequest(
         })}\n\n`);
       }
       const result = operation === 'input'
-        ? { accepted: true, count: inputCount, binding: RUNTIME, readout: READOUT }
+        ? {
+          accepted: true,
+          code: 'DEV_HOST_ACCEPTED',
+          disposition: 'accepted',
+          count: inputCount,
+          binding: RUNTIME,
+          readout: READOUT,
+        }
         : operation === 'audio-feedback'
           || operation === 'animation-feedback'
           || operation === 'ghost-plate-feedback'
           || operation === 'renderer-diagnostics'
-          ? { accepted: true, runtime: RUNTIME }
+          ? { accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', runtime: RUNTIME }
           : {
             accepted: true,
             operation: operation === 'lifecycle/start' ? 'start' : operation,

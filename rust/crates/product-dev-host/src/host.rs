@@ -4,7 +4,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::{
     CanonicalU64, ProductDevBrowserConnectionState, ProductDevBrowserDiagnosticsReport,
     ProductDevBrowserDiagnosticsResult, ProductDevBrowserHostState, ProductDevBundle,
-    ProductDevControlOperation, ProductDevHostError, ProductDevInputBatch,
+    ProductDevControlOperation, ProductDevHostError, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
     ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
     ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevTimelineCompletion, MAX_CONNECTIONS,
@@ -26,11 +26,18 @@ use crate::{
     MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
+use crate::session::ProductDevOperationOwner;
+
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
 const SSE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_INITIAL_BACKOFF: Duration = Duration::from_millis(5);
 const ACCEPT_RETRY_MAX_BACKOFF: Duration = Duration::from_millis(200);
+const SCHEDULER_IDLE_WAIT: Duration = Duration::from_millis(100);
+/// Maximum number of transport batches retained between Rust-host realtime
+/// observations. Each batch is independently bounded by runtime-input's wire
+/// event limit; the host never grows this queue to match renderer cadence.
+pub const MAX_HOST_INPUT_BATCHES: usize = 256;
 
 /// A deliberately narrow test seam for one listener accept decision. It is
 /// not a transport abstraction: production always invokes `TcpListener`.
@@ -106,12 +113,24 @@ impl ProductDevHost {
         let address = listener
             .local_addr()
             .map_err(|error| ProductDevHostError::io("DEV_HOST_ADDRESS", error))?;
+        // Capture only the runtime's scheduler participation, not its
+        // mutable lifecycle state. Input admission must never reacquire the
+        // runtime owner behind a slow product update; Created/Paused realtime
+        // products still retain their bounded mailbox for the next boundary.
+        let realtime_scheduler_enabled = !matches!(
+            runtime.realtime_schedule_state(),
+            crate::ProductDevRuntimeScheduleState::Unsupported
+        );
         let shutdown = Arc::new(AtomicBool::new(false));
+        let scheduler_wake = Arc::new(SchedulerWake::default());
         let state = Arc::new(HostState {
             bundle: config.bundle,
-            runtime: Mutex::new(runtime),
+            runtime: Arc::new(ProductDevOperationOwner::new(runtime)),
+            input_mailbox: Arc::new(HostInputMailbox::default()),
+            realtime_scheduler_enabled,
             outputs: Mutex::new(OutputBus::default()),
             shutdown: Arc::clone(&shutdown),
+            scheduler_wake: Arc::clone(&scheduler_wake),
             bind_host: config.bind_host,
             expected_port: address.port(),
             live_debug_enabled: config.live_debug_enabled,
@@ -134,9 +153,34 @@ impl ProductDevHost {
                 )
             })
             .map_err(|error| ProductDevHostError::io("DEV_HOST_THREAD", error))?;
+        let scheduler_state = Arc::clone(&state);
+        let scheduler_wake_thread = Arc::clone(&scheduler_wake);
+        let scheduler_thread = match thread::Builder::new()
+            .name("rusty-product-realtime-scheduler".to_owned())
+            .spawn(move || scheduler_loop(scheduler_state, scheduler_wake_thread))
+        {
+            Ok(thread) => thread,
+            Err(error) => {
+                // The listener already owns a live socket at this point. If
+                // scheduler creation fails, close that ownership explicitly
+                // before returning so a half-started host cannot survive.
+                shutdown.store(true, Ordering::SeqCst);
+                scheduler_wake.notify();
+                let _ = TcpStream::connect_timeout(&address, SOCKET_TIMEOUT);
+                let _ = listener_thread.join();
+                if let Ok(mut handlers) = handler_threads.lock() {
+                    for handler in std::mem::take(&mut *handlers) {
+                        let _ = handler.join();
+                    }
+                }
+                return Err(ProductDevHostError::io("DEV_HOST_THREAD", error));
+            }
+        };
         Ok(RunningProductDevHost {
             address,
             shutdown,
+            scheduler_wake,
+            scheduler_thread: Some(scheduler_thread),
             listener_thread: Some(listener_thread),
             handler_threads,
             diagnostics: config.diagnostics,
@@ -149,6 +193,8 @@ impl ProductDevHost {
 pub struct RunningProductDevHost {
     address: SocketAddr,
     shutdown: Arc<AtomicBool>,
+    scheduler_wake: Arc<SchedulerWake>,
+    scheduler_thread: Option<JoinHandle<()>>,
     listener_thread: Option<JoinHandle<()>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
     diagnostics: ProductDevLog,
@@ -170,6 +216,15 @@ impl RunningProductDevHost {
     fn stop(&mut self) -> Result<(), ProductDevHostError> {
         if self.shutdown.swap(true, Ordering::SeqCst) {
             return Ok(());
+        }
+        // Stop the host-owned realtime loop first. It may be in a product
+        // callback, so joining it before connection handlers/runtime drop
+        // preserves one clear teardown order and prevents post-shutdown work.
+        self.scheduler_wake.notify();
+        if let Some(thread) = self.scheduler_thread.take() {
+            thread.join().map_err(|_| {
+                ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "scheduler thread panicked")
+            })?;
         }
         // Wake a nonblocking accept loop promptly. The connection is accepted
         // and observes the same shutdown flag before it parses a request.
@@ -200,15 +255,297 @@ impl Drop for RunningProductDevHost {
 
 struct HostState<R> {
     bundle: ProductDevBundle,
-    runtime: Mutex<R>,
+    runtime: Arc<ProductDevOperationOwner<R>>,
+    input_mailbox: Arc<HostInputMailbox>,
+    realtime_scheduler_enabled: bool,
     outputs: Mutex<OutputBus>,
     shutdown: Arc<AtomicBool>,
+    scheduler_wake: Arc<SchedulerWake>,
     bind_host: Ipv4Addr,
     expected_port: u16,
     live_debug_enabled: bool,
     diagnostics: ProductDevLog,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
+}
+
+#[derive(Default)]
+struct SchedulerWake {
+    state: Mutex<bool>,
+    signal: Condvar,
+}
+
+impl SchedulerWake {
+    fn notify(&self) {
+        if let Ok(mut pending) = self.state.lock() {
+            *pending = true;
+            self.signal.notify_all();
+        }
+    }
+
+    fn wait_timeout(&self, timeout: Duration) {
+        let Ok(mut pending) = self.state.lock() else {
+            return;
+        };
+        if *pending {
+            *pending = false;
+            return;
+        }
+        let Ok((mut pending, _)) = self.signal.wait_timeout(pending, timeout) else {
+            return;
+        };
+        *pending = false;
+    }
+}
+
+struct HostInputMailbox {
+    state: Mutex<HostInputMailboxState>,
+}
+
+#[derive(Default)]
+struct HostInputMailboxState {
+    batches: VecDeque<ProductDevInputBatch>,
+    overflowed: bool,
+}
+
+impl Default for HostInputMailbox {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(HostInputMailboxState::default()),
+        }
+    }
+}
+
+impl HostInputMailbox {
+    fn enqueue(&self, batch: ProductDevInputBatch) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.batches.len() >= MAX_HOST_INPUT_BATCHES {
+            // Drop the retained transport prefix and leave an explicit
+            // recovery marker. The scheduler will advance the runtime control
+            // fence before its next update, so the browser receives a fresh
+            // binding instead of a terminal host closure or a hidden gap.
+            state.batches.clear();
+            state.overflowed = true;
+            return false;
+        }
+        state.batches.push_back(batch);
+        true
+    }
+
+    fn drain(&self) -> (Vec<ProductDevInputBatch>, bool) {
+        let Ok(mut state) = self.state.lock() else {
+            return (Vec::new(), false);
+        };
+        let batches = state.batches.drain(..).collect();
+        let overflowed = std::mem::take(&mut state.overflowed);
+        (batches, overflowed)
+    }
+
+    fn clear(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.batches.clear();
+            state.overflowed = false;
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.state
+            .lock()
+            .map(|state| state.batches.len())
+            .unwrap_or_default()
+    }
+}
+
+fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<SchedulerWake>) {
+    let clock = Instant::now();
+    let mut next_tick = clock;
+    loop {
+        if state.shutdown.load(Ordering::Acquire) {
+            break;
+        }
+        let schedule_state = match state.runtime.realtime_schedule_state() {
+            Ok(value) => value,
+            Err(error) => {
+                publish_host_diagnostic(
+                    &state.diagnostics,
+                    ProductDevLogSeverity::Error,
+                    ProductDevLogDisposition::Terminal,
+                    error.code(),
+                    error.diagnostic(),
+                    [],
+                );
+                break;
+            }
+        };
+        match schedule_state {
+            crate::ProductDevRuntimeScheduleState::Unsupported => {
+                wake.wait_timeout(SCHEDULER_IDLE_WAIT);
+                continue;
+            }
+            crate::ProductDevRuntimeScheduleState::Shutdown => break,
+            crate::ProductDevRuntimeScheduleState::Created
+            | crate::ProductDevRuntimeScheduleState::Paused
+            | crate::ProductDevRuntimeScheduleState::Faulted => {
+                // Resume from a lifecycle transition at the next admitted
+                // observation; this reset is only a phase marker, never a
+                // substitute for the runtime's fixed-step interval.
+                next_tick = Instant::now();
+                wake.wait_timeout(SCHEDULER_IDLE_WAIT);
+                continue;
+            }
+            crate::ProductDevRuntimeScheduleState::Running => {}
+        }
+
+        let Some(interval) = (match state.runtime.realtime_schedule_interval() {
+            Ok(interval) => interval,
+            Err(error) => {
+                publish_host_diagnostic(
+                    &state.diagnostics,
+                    ProductDevLogSeverity::Error,
+                    ProductDevLogDisposition::Terminal,
+                    error.code(),
+                    error.diagnostic(),
+                    [],
+                );
+                break;
+            }
+        }) else {
+            publish_host_diagnostic(
+                &state.diagnostics,
+                ProductDevLogSeverity::Error,
+                ProductDevLogDisposition::Terminal,
+                "DEV_HOST_SCHEDULER_CONFIGURATION",
+                "realtime runtime did not provide an admitted observation interval",
+                [],
+            );
+            break;
+        };
+        let fixed_interval = interval.max(Duration::from_nanos(1));
+
+        let now = Instant::now();
+        if now < next_tick {
+            wake.wait_timeout(next_tick.saturating_duration_since(now));
+            continue;
+        }
+        let observed = clock.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        let input_errors = state.runtime.advance_realtime_with_input_and_publish(
+            || state.input_mailbox.drain(),
+            CanonicalU64::new(observed),
+            |receipt| publish_scheduled_input_receipt(&state, receipt),
+            |receipt| publish_scheduled_receipt(&state, receipt),
+        );
+        match input_errors {
+            Ok(errors) => {
+                for error in errors {
+                    publish_host_diagnostic(
+                        &state.diagnostics,
+                        ProductDevLogSeverity::Warning,
+                        disposition_for_runtime_error(&error),
+                        error.code(),
+                        error.diagnostic(),
+                        [],
+                    );
+                }
+            }
+            Err(error) => {
+                publish_host_diagnostic(
+                    &state.diagnostics,
+                    ProductDevLogSeverity::Warning,
+                    disposition_for_runtime_error(&error),
+                    error.code(),
+                    error.diagnostic(),
+                    [],
+                );
+            }
+        }
+        let after = Instant::now();
+        next_tick = next_tick
+            .checked_add(fixed_interval)
+            .filter(|deadline| *deadline > after)
+            .unwrap_or_else(|| after + fixed_interval);
+    }
+}
+
+fn disposition_for_runtime_error(error: &ProductDevRuntimeError) -> ProductDevLogDisposition {
+    match crate::runtime_fault_disposition(error) {
+        crate::ProductDevFaultDisposition::Accepted => ProductDevLogDisposition::Accepted,
+        crate::ProductDevFaultDisposition::RejectedRecoverable => {
+            ProductDevLogDisposition::RejectedRecoverable
+        }
+        crate::ProductDevFaultDisposition::Degraded => ProductDevLogDisposition::Degraded,
+        crate::ProductDevFaultDisposition::ResyncRequired => {
+            ProductDevLogDisposition::ResyncRequired
+        }
+        crate::ProductDevFaultDisposition::Terminal => ProductDevLogDisposition::Terminal,
+    }
+}
+
+fn publish_scheduled_input_receipt<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    receipt: crate::ProductDevRuntimeReceipt<ProductDevInputResult>,
+) {
+    let (result, mut outputs) = receipt.into_parts();
+    // Input is admitted by the Rust-host scheduler rather than by the HTTP
+    // request thread. Carry the complete typed result through the same
+    // ordered SSE output family so accepted/consumed cursors and recoverable
+    // stale drops remain observable without delaying POST acknowledgement.
+    outputs.insert(0, ProductDevRuntimeOutput::runtime_input_result(result));
+    // Before a browser has attached there is no active output binding to
+    // publish against. A later fresh SSE connection receives its own complete
+    // baseline, so dropping this pre-attachment receipt is safe.
+    let active = state
+        .outputs
+        .lock()
+        .map(|outputs| outputs.active_binding.is_some())
+        .unwrap_or(false);
+    if !active {
+        return;
+    }
+    if let Err(error) = push_outputs(&state.outputs, outputs) {
+        publish_host_diagnostic(
+            &state.diagnostics,
+            ProductDevLogSeverity::Warning,
+            ProductDevLogDisposition::ResyncRequired,
+            "DEV_HOST_SCHEDULE_INPUT_OUTPUT_RESYNC",
+            error.detail(),
+            [("cause", error.code().to_owned())],
+        );
+    }
+}
+
+fn publish_scheduled_receipt<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    receipt: crate::ProductDevRuntimeReceipt<ProductDevOperationResult>,
+) {
+    let (result, mut outputs) = receipt.into_parts();
+    if let Some(readout) = result.readout().cloned() {
+        outputs.push(ProductDevRuntimeOutput::runtime_readout(readout));
+    }
+    outputs.push(ProductDevRuntimeOutput::runtime_progress());
+    // Before a browser has attached there is no active output binding to
+    // publish against. A later fresh SSE connection receives its own complete
+    // baseline, so dropping these pre-attachment progress pulses is safe.
+    let active = state
+        .outputs
+        .lock()
+        .map(|outputs| outputs.active_binding.is_some())
+        .unwrap_or(false);
+    if !active {
+        return;
+    }
+    if let Err(error) = push_outputs(&state.outputs, outputs) {
+        publish_host_diagnostic(
+            &state.diagnostics,
+            ProductDevLogSeverity::Warning,
+            ProductDevLogDisposition::ResyncRequired,
+            "DEV_HOST_SCHEDULE_OUTPUT_RESYNC",
+            error.detail(),
+            [("cause", error.code().to_owned())],
+        );
+    }
 }
 
 fn accept_loop<R: ProductDevRuntime>(
@@ -486,27 +823,21 @@ fn dispatch_request<R: ProductDevRuntime>(
 }
 
 fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpResponse {
-    let mut runtime = match state.runtime.lock() {
-        Ok(runtime) => runtime,
-        Err(_) => {
-            return HttpResponse::error(
-                500,
-                "DEV_HOST_RUNTIME_POISONED",
-                "runtime serialization lock is poisoned",
-            );
-        }
-    };
-    let receipt = match runtime.describe_debug() {
-        Ok(receipt) => receipt,
-        Err(error) => return HttpResponse::error(500, error.code(), error.diagnostic()),
-    };
-    drop(runtime);
-    let (catalog, outputs) = receipt.into_parts();
-    let output_through = match push_outputs(&state.outputs, outputs) {
-        Ok(output_through) => output_through,
-        Err(error) => return HttpResponse::error(503, error.code(), error.detail()),
-    };
-    json_response(200, &catalog).with_output_through(output_through)
+    match state.runtime.with_locked_runtime(|runtime| {
+        let receipt = match runtime.describe_debug() {
+            Ok(receipt) => receipt,
+            Err(error) => return Ok(HttpResponse::error(500, error.code(), error.diagnostic())),
+        };
+        let (catalog, outputs) = receipt.into_parts();
+        let output_through = match push_outputs(&state.outputs, outputs) {
+            Ok(output_through) => output_through,
+            Err(error) => return Ok(HttpResponse::error(503, error.code(), error.detail())),
+        };
+        Ok(json_response(200, &catalog).with_output_through(output_through))
+    }) {
+        Ok(response) => response,
+        Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
+    }
 }
 
 fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
@@ -517,29 +848,35 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
         Ok(command) => command,
         Err(_) => return debug_text_error(400, "debug command body must be valid UTF-8"),
     };
-    let mut runtime = match state.runtime.lock() {
-        Ok(runtime) => runtime,
-        Err(_) => return debug_text_error(500, "runtime serialization lock is poisoned"),
-    };
-    let receipt = match runtime.execute_debug(command) {
-        Ok(receipt) => receipt,
-        Err(error) => {
-            return debug_text_error(500, &format!("{}: {}", error.code(), error.diagnostic()));
-        }
-    };
-    drop(runtime);
-    let (result, outputs) = receipt.into_parts();
-    let output_through = match push_outputs(&state.outputs, outputs) {
-        Ok(output_through) => output_through,
-        Err(error) => {
-            return debug_text_error(503, &format!("{}: {}", error.code(), error.detail()));
-        }
-    };
-    HttpResponse::text(
-        if result.succeeded() { 200 } else { 422 },
-        result.message().to_owned(),
-    )
-    .with_output_through(output_through)
+    match state.runtime.with_locked_runtime(|runtime| {
+        let receipt = match runtime.execute_debug(command) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                return Ok(debug_text_error(
+                    500,
+                    &format!("{}: {}", error.code(), error.diagnostic()),
+                ));
+            }
+        };
+        let (result, outputs) = receipt.into_parts();
+        let output_through = match push_outputs(&state.outputs, outputs) {
+            Ok(output_through) => output_through,
+            Err(error) => {
+                return Ok(debug_text_error(
+                    503,
+                    &format!("{}: {}", error.code(), error.detail()),
+                ));
+            }
+        };
+        Ok(HttpResponse::text(
+            if result.succeeded() { 200 } else { 422 },
+            result.message().to_owned(),
+        )
+        .with_output_through(output_through))
+    }) {
+        Ok(response) => response,
+        Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
+    }
 }
 
 fn invoke_lifecycle<R: ProductDevRuntime>(
@@ -551,11 +888,18 @@ fn invoke_lifecycle<R: ProductDevRuntime>(
         Ok(value) => value,
         Err(response) => return response,
     };
-    call_runtime(
+    // A lifecycle transition changes the input binding or terminal state.
+    // Discard transport work queued before that fence before taking the owner
+    // operation; a concurrent scheduler still serializes its already-drained
+    // prefix through the same runtime lock.
+    state.input_mailbox.clear();
+    let response = call_runtime(
         state,
         |runtime| runtime.lifecycle_with_binding(operation, request.runtime),
         |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
-    )
+    );
+    state.scheduler_wake.notify();
+    response
 }
 
 fn invoke_control<R: ProductDevRuntime>(
@@ -567,11 +911,14 @@ fn invoke_control<R: ProductDevRuntime>(
         Ok(value) => value,
         Err(response) => return response,
     };
-    call_runtime(
+    state.input_mailbox.clear();
+    let response = call_runtime(
         state,
         |runtime| runtime.control(operation, request.runtime),
         |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
-    )
+    );
+    state.scheduler_wake.notify();
+    response
 }
 
 fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
@@ -599,9 +946,33 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
             );
         }
     };
+    let batch = ProductDevInputBatch::new(events);
+    // Realtime products enqueue at the host edge so a product callback cannot
+    // hold up browser input transport. The cached capability covers
+    // Created/Paused states as well; demand/external runtimes retain their
+    // direct receipt semantics and remain caller-driven.
+    if state.realtime_scheduler_enabled {
+        let count = batch.events().len();
+        return match state.input_mailbox.enqueue(batch) {
+            true => {
+                state.scheduler_wake.notify();
+                match ProductDevInputResult::queued(count) {
+                    Ok(result) => json_response(200, &result),
+                    Err(error) => HttpResponse::error(500, error.code(), error.detail()),
+                }
+            }
+            false => {
+                state.scheduler_wake.notify();
+                match ProductDevInputResult::mailbox_full(count) {
+                    Ok(result) => json_response(200, &result).with_resync_required(),
+                    Err(error) => HttpResponse::error(500, error.code(), error.detail()),
+                }
+            }
+        };
+    }
     call_runtime(
         state,
-        |runtime| runtime.input(ProductDevInputBatch::new(events)),
+        |runtime| runtime.input(batch),
         |error| crate::ProductDevInputResult::rejected_runtime(error),
     )
 }
@@ -934,94 +1305,75 @@ where
     F: FnOnce(&mut R) -> Result<crate::ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
     E: FnOnce(ProductDevRuntimeError) -> Result<T, ProductDevHostError>,
 {
-    let mut runtime = match state.runtime.lock() {
-        Ok(runtime) => runtime,
-        Err(_) => {
-            return HttpResponse::error(
-                500,
-                "DEV_HOST_RUNTIME_POISONED",
-                "runtime serialization lock is poisoned",
-            );
-        }
-    };
-    let receipt = match call(&mut runtime) {
-        Ok(receipt) => receipt,
-        Err(error) => {
-            let message = if error.diagnostic().is_empty() {
-                "runtime operation failed"
-            } else {
-                error.diagnostic()
-            };
-            let _ = state.diagnostics.publish(
-                crate::ProductDevLogEvent::new(
-                    crate::ProductDevLogSeverity::Error,
-                    match crate::runtime_fault_disposition(&error) {
-                        crate::ProductDevFaultDisposition::Accepted => {
-                            crate::ProductDevLogDisposition::Accepted
-                        }
-                        crate::ProductDevFaultDisposition::RejectedRecoverable => {
-                            crate::ProductDevLogDisposition::RejectedRecoverable
-                        }
-                        crate::ProductDevFaultDisposition::Degraded => {
-                            crate::ProductDevLogDisposition::Degraded
-                        }
-                        crate::ProductDevFaultDisposition::ResyncRequired => {
-                            crate::ProductDevLogDisposition::ResyncRequired
-                        }
-                        crate::ProductDevFaultDisposition::Terminal => {
-                            crate::ProductDevLogDisposition::Terminal
-                        }
-                    },
-                    "runtime",
-                    error.code(),
-                    message,
-                )
-                .expect("runtime diagnostics are bounded"),
-            );
-            return match error_result(error) {
-                Ok(result) => json_response(200, &result),
-                Err(host_error) => HttpResponse::error(500, host_error.code(), host_error.detail()),
-            };
-        }
-    };
-    let (result, outputs) = receipt.into_parts();
-    // Encoding is a host-owned preflight. A bad response must not first
-    // publish retained output for a runtime mutation the client cannot name.
-    let encoded_result = match encode_runtime_result(&result) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            publish_host_diagnostic(
-                &state.diagnostics,
-                ProductDevLogSeverity::Warning,
-                ProductDevLogDisposition::ResyncRequired,
-                "DEV_HOST_RESPONSE_ENCODE_RESYNC",
-                "runtime result could not be encoded after mutation; reconnect for a fresh readout instead of replaying",
-                [("cause", error.code().to_owned())],
-            );
-            return HttpResponse::error(500, error.code(), error.detail());
-        }
-    };
-    let output_through = match push_outputs(&state.outputs, outputs) {
-        Ok(output_through) => output_through,
-        Err(error) => {
-            // The typed route result names the exact consumed binding, input
-            // sequence/readout, or timeline ticket. Preserve it with the
-            // closed resync disposition so callers never blindly replay a
-            // request after the runtime has already mutated.
-            publish_host_diagnostic(
-                &state.diagnostics,
-                ProductDevLogSeverity::Warning,
-                ProductDevLogDisposition::ResyncRequired,
-                "DEV_HOST_OUTPUT_COMMIT_RESYNC",
-                "retained output publication failed after an authoritative runtime receipt; reconnect for a fresh readout instead of replaying",
-                [("cause", error.code().to_owned())],
-            );
-            return HttpResponse::bytes(200, "application/json", encoded_result)
-                .with_resync_required();
-        }
-    };
-    drop(runtime);
-    HttpResponse::bytes(200, "application/json", encoded_result).with_output_through(output_through)
+    match state.runtime.with_locked_runtime(|runtime| {
+        let receipt = match call(runtime) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let message = if error.diagnostic().is_empty() {
+                    "runtime operation failed"
+                } else {
+                    error.diagnostic()
+                };
+                let _ = state.diagnostics.publish(
+                    crate::ProductDevLogEvent::new(
+                        crate::ProductDevLogSeverity::Error,
+                        disposition_for_runtime_error(&error),
+                        "runtime",
+                        error.code(),
+                        message,
+                    )
+                    .expect("runtime diagnostics are bounded"),
+                );
+                return Ok(match error_result(error) {
+                    Ok(result) => json_response(200, &result),
+                    Err(host_error) => {
+                        HttpResponse::error(500, host_error.code(), host_error.detail())
+                    }
+                });
+            }
+        };
+        let (result, outputs) = receipt.into_parts();
+        // Encoding is a host-owned preflight. A bad response must not first
+        // publish retained output for a runtime mutation the client cannot name.
+        let encoded_result = match encode_runtime_result(&result) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                publish_host_diagnostic(
+                    &state.diagnostics,
+                    ProductDevLogSeverity::Warning,
+                    ProductDevLogDisposition::ResyncRequired,
+                    "DEV_HOST_RESPONSE_ENCODE_RESYNC",
+                    "runtime result could not be encoded after mutation; reconnect for a fresh readout instead of replaying",
+                    [("cause", error.code().to_owned())],
+                );
+                return Ok(HttpResponse::error(500, error.code(), error.detail()));
+            }
+        };
+        let output_through = match push_outputs(&state.outputs, outputs) {
+            Ok(output_through) => output_through,
+            Err(error) => {
+                // The typed route result names the exact consumed binding,
+                // input sequence/readout, or timeline ticket. Preserve it with
+                // the closed resync disposition so callers never blindly
+                // replay a request after the runtime has already mutated.
+                publish_host_diagnostic(
+                    &state.diagnostics,
+                    ProductDevLogSeverity::Warning,
+                    ProductDevLogDisposition::ResyncRequired,
+                    "DEV_HOST_OUTPUT_COMMIT_RESYNC",
+                    "retained output publication failed after an authoritative runtime receipt; reconnect for a fresh readout instead of replaying",
+                    [("cause", error.code().to_owned())],
+                );
+                return Ok(HttpResponse::bytes(200, "application/json", encoded_result)
+                    .with_resync_required());
+            }
+        };
+        Ok(HttpResponse::bytes(200, "application/json", encoded_result)
+            .with_output_through(output_through))
+    }) {
+        Ok(response) => response,
+        Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
+    }
 }
 
 fn encode_runtime_result<T: Serialize>(value: &T) -> Result<Vec<u8>, ProductDevHostError> {
@@ -1087,22 +1439,68 @@ fn handle_sse<R: ProductDevRuntime>(
             }
         },
         None if fresh_connection => {
-            let mut runtime = match state.runtime.lock() {
-                Ok(runtime) => runtime,
-                Err(_) => {
-                    let _ = write_response(
-                        &mut stream,
-                        HttpResponse::error(
+            let connection = state.runtime.with_locked_runtime(|runtime| {
+                let receipt = runtime.connect()?;
+                let (result, outputs) = receipt.into_parts();
+                let isolated = Mutex::new(OutputBus::default());
+                if let Err(error) = push_outputs(&isolated, outputs) {
+                    return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
+                }
+                let isolated = match isolated.into_inner() {
+                    Ok(bus) => bus,
+                    Err(_) => {
+                        return Ok(Err(HttpResponse::error(
                             500,
-                            "DEV_HOST_RUNTIME_POISONED",
-                            "runtime serialization lock is poisoned",
-                        ),
-                    );
+                            "DEV_HOST_OUTPUT_POISONED",
+                            "isolated output queue lock is poisoned",
+                        )));
+                    }
+                };
+                let Some(connection_binding) = isolated.active_binding else {
+                    return Ok(Err(HttpResponse::error(
+                        503,
+                        "DEV_HOST_OUTPUT_BASELINE",
+                        "runtime connection did not publish a complete binding baseline",
+                    )));
+                };
+                let result_json = match serde_json::to_string(&result) {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Ok(Err(HttpResponse::error(
+                            500,
+                            "DEV_HOST_RESPONSE_ENCODE",
+                            "runtime connection result could not be encoded",
+                        )));
+                    }
+                };
+                let mut outputs = match state.outputs.lock() {
+                    Ok(outputs) => outputs,
+                    Err(_) => {
+                        return Ok(Err(HttpResponse::error(
+                            500,
+                            "DEV_HOST_OUTPUT_POISONED",
+                            "output queue lock is poisoned",
+                        )));
+                    }
+                };
+                // Keep runtime connection, binding publication, and cursor
+                // assignment in one owner section so a scheduler receipt
+                // cannot be emitted between them.
+                outputs.active_binding = Some(connection_binding);
+                private_events = isolated.events.into_iter().collect();
+                connection_result = Some(result_json);
+                let cursor = outputs.next_id;
+                Ok(Ok(cursor))
+            });
+            match connection {
+                Ok(Ok(cursor)) => {
+                    state.scheduler_wake.notify();
+                    cursor
+                }
+                Ok(Err(response)) => {
+                    let _ = write_response(&mut stream, response);
                     return;
                 }
-            };
-            let receipt = match runtime.connect() {
-                Ok(receipt) => receipt,
                 Err(error) => {
                     let _ = write_response(
                         &mut stream,
@@ -1110,56 +1508,7 @@ fn handle_sse<R: ProductDevRuntime>(
                     );
                     return;
                 }
-            };
-            let (result, outputs) = receipt.into_parts();
-            let isolated = Mutex::new(OutputBus::default());
-            if let Err(error) = push_outputs(&isolated, outputs) {
-                let _ = write_response(
-                    &mut stream,
-                    HttpResponse::error(503, error.code(), error.detail()),
-                );
-                return;
             }
-            let isolated = match isolated.into_inner() {
-                Ok(bus) => bus,
-                Err(_) => return,
-            };
-            let Some(connection_binding) = isolated.active_binding else {
-                let _ = write_response(
-                    &mut stream,
-                    HttpResponse::error(
-                        503,
-                        "DEV_HOST_OUTPUT_BASELINE",
-                        "runtime connection did not publish a complete binding baseline",
-                    ),
-                );
-                return;
-            };
-            let result_json = match serde_json::to_string(&result) {
-                Ok(result) => result,
-                Err(_) => {
-                    let _ = write_response(
-                        &mut stream,
-                        HttpResponse::error(
-                            500,
-                            "DEV_HOST_RESPONSE_ENCODE",
-                            "runtime connection result could not be encoded",
-                        ),
-                    );
-                    return;
-                }
-            };
-            let mut outputs = match state.outputs.lock() {
-                Ok(outputs) => outputs,
-                Err(_) => return,
-            };
-            outputs.active_binding = Some(connection_binding);
-            private_events = isolated.events.into_iter().collect();
-            connection_result = Some(result_json);
-            let cursor = outputs.next_id;
-            drop(outputs);
-            drop(runtime);
-            cursor
         }
         None => 0,
     };
@@ -1537,12 +1886,226 @@ fn try_acquire(counter: &AtomicUsize, maximum: usize) -> bool {
 mod tests {
     use super::*;
 
+    struct BlockingRealtimeRuntime;
+
+    fn blocking_runtime_error() -> crate::ProductDevRuntimeError {
+        crate::ProductDevRuntimeError::new("TEST_RUNTIME", "test runtime operation").unwrap()
+    }
+
+    impl crate::ProductDevRuntime for BlockingRealtimeRuntime {
+        fn realtime_schedule_state(&self) -> crate::ProductDevRuntimeScheduleState {
+            crate::ProductDevRuntimeScheduleState::Running
+        }
+
+        fn realtime_schedule_interval(&self) -> Option<Duration> {
+            Some(Duration::from_millis(1))
+        }
+
+        fn lifecycle(
+            &mut self,
+            _operation: crate::ProductDevLifecycleOperation,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn input(
+            &mut self,
+            _batch: crate::ProductDevInputBatch,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevInputResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn advance_realtime(
+            &mut self,
+            _observed_time_ns: CanonicalU64,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn admit_demand_step(
+            &mut self,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn admit_external_step(
+            &mut self,
+            _step: CanonicalU64,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevOperationResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+
+        fn complete_timeline(
+            &mut self,
+            _completion: crate::ProductDevTimelineCompletion,
+        ) -> Result<
+            crate::ProductDevRuntimeReceipt<crate::ProductDevTimelineCompletionResult>,
+            crate::ProductDevRuntimeError,
+        > {
+            Err(blocking_runtime_error())
+        }
+    }
+
     fn binding() -> crate::ProductDevRuntimeBinding {
         crate::ProductDevRuntimeBinding {
             instance_id: CanonicalU64::new(7),
             generation: CanonicalU64::new(1),
             control_revision: CanonicalU64::new(2),
         }
+    }
+
+    #[test]
+    fn input_mailbox_overflow_clears_prefix_and_marks_resync() {
+        let mailbox = HostInputMailbox::default();
+        for _ in 0..MAX_HOST_INPUT_BATCHES {
+            assert!(mailbox.enqueue(ProductDevInputBatch::new(Vec::new())));
+        }
+        assert_eq!(mailbox.len(), MAX_HOST_INPUT_BATCHES);
+        assert!(!mailbox.enqueue(ProductDevInputBatch::new(Vec::new())));
+
+        let (batches, overflowed) = mailbox.drain();
+        assert!(
+            batches.is_empty(),
+            "overflow must not retain a stale prefix"
+        );
+        assert!(
+            overflowed,
+            "scheduler must receive an explicit resync marker"
+        );
+
+        assert!(mailbox.enqueue(ProductDevInputBatch::new(Vec::new())));
+        let (batches, overflowed) = mailbox.drain();
+        assert_eq!(batches.len(), 1);
+        assert!(!overflowed);
+    }
+
+    #[test]
+    fn scheduled_input_result_preserves_cursor_and_recovery_disposition() {
+        let accepted = ProductDevInputResult::with_progress(
+            2,
+            2,
+            0,
+            Some(CanonicalU64::new(4)),
+            Some(CanonicalU64::new(4)),
+            CanonicalU64::new(5),
+            binding(),
+            crate::ProductDevRuntimeReadout::new(
+                binding(),
+                crate::ProductDevRuntimeMode::Realtime,
+                crate::ProductDevRuntimeState::Running,
+            ),
+        )
+        .unwrap();
+        let accepted_wire =
+            serde_json::to_value(ProductDevRuntimeOutput::runtime_input_result(accepted)).unwrap();
+        assert_eq!(accepted_wire["kind"], "runtime-input-result");
+        assert_eq!(accepted_wire["result"]["acceptedThrough"], "4");
+        assert_eq!(accepted_wire["result"]["consumedThrough"], "4");
+        assert_eq!(accepted_wire["result"]["nextInputSequence"], "5");
+        assert_eq!(accepted_wire["result"]["disposition"], "accepted");
+
+        let stale = ProductDevInputResult::with_progress(
+            2,
+            1,
+            1,
+            Some(CanonicalU64::new(6)),
+            Some(CanonicalU64::new(7)),
+            CanonicalU64::new(8),
+            binding(),
+            crate::ProductDevRuntimeReadout::new(
+                binding(),
+                crate::ProductDevRuntimeMode::Realtime,
+                crate::ProductDevRuntimeState::Running,
+            ),
+        )
+        .unwrap();
+        let stale_wire =
+            serde_json::to_value(ProductDevRuntimeOutput::runtime_input_result(stale)).unwrap();
+        assert_eq!(stale_wire["result"]["accepted"], false);
+        assert_eq!(stale_wire["result"]["disposition"], "rejected-recoverable");
+        assert_eq!(stale_wire["result"]["acceptedThrough"], "6");
+        assert_eq!(stale_wire["result"]["consumedThrough"], "7");
+
+        let overflow = ProductDevInputResult::mailbox_full(2).unwrap();
+        let overflow_wire =
+            serde_json::to_value(ProductDevRuntimeOutput::runtime_input_result(overflow)).unwrap();
+        assert_eq!(overflow_wire["result"]["accepted"], false);
+        assert_eq!(overflow_wire["result"]["disposition"], "resync-required");
+    }
+
+    #[test]
+    fn realtime_input_admission_does_not_wait_for_runtime_owner() {
+        let runtime = Arc::new(ProductDevOperationOwner::new(BlockingRealtimeRuntime));
+        let state = Arc::new(HostState {
+            bundle: ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+                "index.html",
+                "text/html; charset=utf-8",
+                Vec::new(),
+            )
+            .unwrap()])
+            .unwrap(),
+            runtime: Arc::clone(&runtime),
+            input_mailbox: Arc::new(HostInputMailbox::default()),
+            realtime_scheduler_enabled: true,
+            outputs: Mutex::new(OutputBus::default()),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            scheduler_wake: Arc::new(SchedulerWake::default()),
+            bind_host: Ipv4Addr::LOCALHOST,
+            expected_port: 0,
+            live_debug_enabled: false,
+            diagnostics: ProductDevLog::new(Default::default()).unwrap(),
+            connections: AtomicUsize::new(0),
+            subscribers: AtomicUsize::new(0),
+        });
+        let (held, held_ready) = std::sync::mpsc::channel();
+        let (release, release_owner) = std::sync::mpsc::channel();
+        let locked_runtime = Arc::clone(&runtime);
+        let owner_thread = thread::spawn(move || {
+            locked_runtime
+                .with_locked_runtime(|_| {
+                    held.send(()).expect("owner lock marker");
+                    release_owner
+                        .recv_timeout(Duration::from_secs(1))
+                        .expect("owner lock release");
+                    Ok(())
+                })
+                .expect("owner lock fixture");
+        });
+        held_ready
+            .recv_timeout(Duration::from_secs(1))
+            .expect("runtime owner was locked");
+
+        let (response, response_ready) = std::sync::mpsc::channel();
+        let input_state = Arc::clone(&state);
+        let input_thread = thread::spawn(move || {
+            response
+                .send(invoke_input(&input_state, br#"{"batch":[]}"#))
+                .expect("input response");
+        });
+        let input_response = response_ready
+            .recv_timeout(Duration::from_millis(100))
+            .expect("input enqueue must not wait for a slow product update");
+        assert_eq!(input_response.status, 200);
+        assert_eq!(state.input_mailbox.len(), 1);
+
+        release.send(()).expect("release runtime owner");
+        input_thread.join().expect("input worker");
+        owner_thread.join().expect("owner worker");
     }
 
     #[test]

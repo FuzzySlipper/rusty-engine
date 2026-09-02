@@ -39,6 +39,42 @@ test('generated product browser host owns one canvas, cadence, input drain, and 
   await expect(page.locator('body')).not.toHaveAttribute('data-rusty-product-runtime-failure');
 });
 
+test('scheduled input receipts apply accepted and recovery cursors to later product claims', async ({ page }) => {
+  await page.goto('/browser/product-browser-host.html');
+  await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');
+
+  const emitScheduledResult = async (): Promise<void> => {
+    await page.locator('#product-runtime-input-result').evaluate((element) => {
+      (element as HTMLButtonElement).click();
+    });
+  };
+  const claimProductIntent = async (): Promise<void> => {
+    await page.locator('#product-intent').evaluate((element) => {
+      (element as HTMLButtonElement).click();
+    });
+  };
+  const expectClaimSequence = async (sequence: string): Promise<void> => {
+    await expect.poll(() => page.evaluate((expected) => (window.__rustyProductBrowserInputBatches ?? [])
+      .flat()
+      .some((value) => typeof value === 'object'
+        && value !== null
+        && 'intent' in value
+        && (value as { readonly sequence?: unknown }).sequence === expected), sequence)).toBe(true);
+  };
+
+  await emitScheduledResult();
+  await claimProductIntent();
+  await expectClaimSequence('5');
+
+  await emitScheduledResult();
+  await claimProductIntent();
+  await expectClaimSequence('8');
+
+  await emitScheduledResult();
+  await claimProductIntent();
+  await expectClaimSequence('9');
+});
+
 test('generated product browser host keeps UI controls out of gameplay pointer input and focuses canvas once', async ({ page }) => {
   await page.goto('/browser/product-browser-host.html');
   await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');

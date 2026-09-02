@@ -41,8 +41,8 @@ use product_dev_host::{
     ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
     ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
     ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeOutput,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
+    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -63,6 +63,11 @@ const RUNTIME_INSTANCE_ID: u64 = 1;
 const STANDARD_REALTIME_HZ: u32 = 60;
 const STANDARD_MAX_CATCH_UP_STEPS: u32 = 4;
 const STANDARD_REALTIME_EXERCISE_ADMISSION_NS: u64 = 16_666_667;
+/// Native input events are held only until the next admitted product update.
+/// Keep this second, callback-facing queue no larger than one accepted wire
+/// batch; the Rust-host mailbox is the only place allowed to absorb cadence
+/// pressure between observations.
+const MAX_PENDING_NATIVE_INPUTS: usize = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS;
 // The Engine-owned Product Browser Host uses this same default when its
 // generated bundle does not supply an input-context override. Keeping the
 // standard native runtime on that typed host default lets generated physical
@@ -572,6 +577,11 @@ pub struct CsharpProductRuntime {
     input_lane: RuntimeInputLane,
     direct_intents: Vec<DirectInputIntentDescriptor>,
     pending_inputs: Vec<NativeInputOwned>,
+    /// A recovery baseline produced while input was being admitted. The host
+    /// can call `input` without receiving an operation receipt, so retain at
+    /// most the latest bounded baseline until the next scheduled receipt can
+    /// publish it.
+    pending_recovery_outputs: Vec<ProductDevRuntimeOutput>,
     services: Box<EngineServiceSet>,
     initial_output: Option<CsharpEngineCallOutput>,
     render_resources: Vec<ProductDevRendererResource>,
@@ -812,6 +822,7 @@ impl CsharpProductRuntime {
             input_lane,
             direct_intents: config.direct_intents,
             pending_inputs: Vec::new(),
+            pending_recovery_outputs: Vec::new(),
             services,
             initial_output,
             render_resources,
@@ -1719,7 +1730,7 @@ impl CsharpProductRuntime {
             .iter()
             .map(|envelope| native_intent_event(envelope, &context))
             .collect::<Vec<_>>();
-        self.pending_inputs.extend(mapped);
+        self.append_pending_inputs(mapped)?;
         let facts = update_facts(
             &self.lifecycle,
             kind,
@@ -1736,6 +1747,71 @@ impl CsharpProductRuntime {
     fn discard_staged_call(&mut self) {
         self.services.discard_call();
         complete_product_call(&self.api, self.handle, false, false);
+    }
+
+    /// Advances the input binding fence after a host or callback-facing queue
+    /// overflow. The dropped prefix cannot be replayed safely: RuntimeInputLane
+    /// has already admitted its sequence, while the product callback has not
+    /// observed it. Rebinding clears held/pending state and gives the next
+    /// update an explicit clear event on a fresh control revision.
+    fn recover_pending_input_overflow(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.lifecycle
+            .change_control(RuntimeControlOperation::Replace)
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
+        // RuntimeInputLane's control-fence contract uses this reason for any
+        // same-generation rebind; the overflow code remains explicit in the
+        // surrounding runtime diagnostic.
+        self.rebind_input(InputClearReason::ControlRevisionChange)
+            .map_err(|error| self.runtime_error(error))?;
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
+        // A previous admission failure may already have staged a recovery
+        // baseline. Replace it with this newer fence rather than accumulating
+        // receipts when input pressure persists across host observations.
+        self.pending_recovery_outputs.clear();
+        self.receipt(
+            ProductDevOperationKind::ReplaceControl,
+            self.tag_complete_baseline(Vec::new()),
+        )
+    }
+
+    /// Appends callback-facing native input only when the bounded queue can
+    /// retain the complete ordered prefix. A partial append would create a
+    /// sequence hole at the C# boundary, so overflow clears and rebinds the
+    /// entire input lane instead.
+    fn append_pending_inputs(
+        &mut self,
+        inputs: Vec<NativeInputOwned>,
+    ) -> Result<(), CsharpProductRuntimeError> {
+        if self
+            .pending_inputs
+            .len()
+            .checked_add(inputs.len())
+            .is_none_or(|length| length > MAX_PENDING_NATIVE_INPUTS)
+        {
+            let error = CsharpProductRuntimeError::new(
+                "CSHARP_INPUT_PENDING_BOUNDS",
+                format!(
+                    "pending native input exceeded the {}-event callback bound; input was resynchronized",
+                    MAX_PENDING_NATIVE_INPUTS
+                ),
+            );
+            let recovery = self.recover_pending_input_overflow().map_err(|recovery| {
+                CsharpProductRuntimeError::new(
+                    "CSHARP_INPUT_RECOVERY",
+                    format!("{}: {}", recovery.code(), recovery.diagnostic()),
+                )
+            })?;
+            let (_, outputs) = recovery.into_parts();
+            // `input` has no operation-output channel of its own. Keep the
+            // latest complete baseline so the following scheduled operation
+            // publishes the new binding instead of leaving the browser stale.
+            self.pending_recovery_outputs = outputs;
+            return Err(error);
+        }
+        self.pending_inputs.extend(inputs);
+        Ok(())
     }
 
     fn action<F, T>(
@@ -1839,10 +1915,12 @@ impl CsharpProductRuntime {
     }
 
     fn receipt(
-        &self,
+        &mut self,
         operation: ProductDevOperationKind,
         outputs: Vec<ProductDevRuntimeOutput>,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        let mut all_outputs = self.take_pending_recovery_outputs();
+        all_outputs.extend(outputs);
         let readout = self.readout();
         let result = ProductDevOperationResult::accepted(
             operation,
@@ -1851,7 +1929,11 @@ impl CsharpProductRuntime {
             readout,
         )
         .map_err(host_runtime_error)?;
-        ProductDevRuntimeReceipt::new(result, outputs).map_err(host_runtime_error)
+        ProductDevRuntimeReceipt::new(result, all_outputs).map_err(host_runtime_error)
+    }
+
+    fn take_pending_recovery_outputs(&mut self) -> Vec<ProductDevRuntimeOutput> {
+        std::mem::take(&mut self.pending_recovery_outputs)
     }
 
     /// A lifecycle admission advances Rust-owned counters before the product
@@ -1877,7 +1959,9 @@ impl CsharpProductRuntime {
         // The admitted update has crossed the callback boundary or consumed
         // its input snapshot. Do not leave those borrowed native events queued
         // for a later caller to replay after this resync receipt.
-        self.pending_inputs.clear();
+        if self.pending_recovery_outputs.is_empty() {
+            self.pending_inputs.clear();
+        }
         self.publish_diagnostic_as(&error, ProductDevFaultDisposition::ResyncRequired);
         let result = ProductDevOperationResult::resync_required(
             operation,
@@ -1893,7 +1977,8 @@ impl CsharpProductRuntime {
             error.diagnostic().to_owned(),
         )
         .map_err(host_runtime_error)?;
-        ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
+        ProductDevRuntimeReceipt::new(result, self.take_pending_recovery_outputs())
+            .map_err(host_runtime_error)
     }
 
     /// Timeline completion has no Rust-owned rollback contract for product
@@ -2124,6 +2209,31 @@ impl CsharpProductRuntime {
 }
 
 impl ProductDevRuntime for CsharpProductRuntime {
+    fn realtime_schedule_state(&self) -> ProductDevRuntimeScheduleState {
+        if !matches!(self.lifecycle.mode(), RuntimeMode::Realtime) {
+            return ProductDevRuntimeScheduleState::Unsupported;
+        }
+        match self.lifecycle.state() {
+            RuntimeState::Created => ProductDevRuntimeScheduleState::Created,
+            RuntimeState::Running => ProductDevRuntimeScheduleState::Running,
+            RuntimeState::Paused => ProductDevRuntimeScheduleState::Paused,
+            RuntimeState::Faulted => ProductDevRuntimeScheduleState::Faulted,
+            RuntimeState::Shutdown => ProductDevRuntimeScheduleState::Shutdown,
+        }
+    }
+
+    fn realtime_schedule_interval(&self) -> Option<std::time::Duration> {
+        let RuntimeLifecycleConfig::Realtime(config) = self.lifecycle.configuration() else {
+            return None;
+        };
+        // The host cadence is derived from the admitted lifecycle setting. The
+        // standard 60 Hz value belongs only to standard_realtime_config(); it
+        // is not a second scheduler policy here.
+        Some(std::time::Duration::from_nanos(
+            1_000_000_000_u64 / u64::from(config.fixed_step_hz()),
+        ))
+    }
+
     fn connect(
         &mut self,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
@@ -2333,7 +2443,8 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .filter(|index| matches!(batch.events()[**index], RuntimeInputEvent::Physical(_)))
             .map(|index| native_event(&batch.events()[*index]))
             .collect::<Vec<_>>();
-        self.pending_inputs.extend(native);
+        self.append_pending_inputs(native)
+            .map_err(|error| self.runtime_error(error))?;
         let next_input_sequence = receipt
             .next_sequence()
             .map(CanonicalU64::new)
@@ -2350,6 +2461,12 @@ impl ProductDevRuntime for CsharpProductRuntime {
         )
         .map_err(host_runtime_error)?;
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
+    }
+
+    fn recover_input_overflow(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.recover_pending_input_overflow()
     }
 
     fn execute_debug(
@@ -5193,12 +5310,24 @@ mod tests {
     }
 
     fn drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+        drop_fixture_runtime_with_config(label, RuntimeLifecycleConfig::Demand)
+    }
+
+    fn realtime_drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+        let config = RealtimeLifecycleConfig::new(30, 2).expect("realtime fixture config");
+        drop_fixture_runtime_with_config(label, RuntimeLifecycleConfig::Realtime(config))
+    }
+
+    fn drop_fixture_runtime_with_config(
+        label: &str,
+        lifecycle_config: RuntimeLifecycleConfig,
+    ) -> (CsharpProductRuntime, PathBuf) {
         let root = content_fixture_root(label);
         fs::create_dir_all(&root).expect("drop fixture content root");
         let content = CsharpProductContent::admit(&root).expect("drop fixture content");
         let runtime = CsharpProductRuntime::load_admitted_with(
             content,
-            CsharpProductRuntimeConfig::new(RuntimeLifecycleConfig::Demand, Vec::new()),
+            CsharpProductRuntimeConfig::new(lifecycle_config, Vec::new()),
             || Ok(drop_fixture_api()),
         )
         .expect("drop fixture runtime");
@@ -5964,6 +6093,109 @@ mod tests {
             let lifecycle = RuntimeLifecycle::new(RuntimeInstanceId::new(1), config);
             assert_eq!(dev_readout(lifecycle.readout()).mode(), expected_mode);
         }
+    }
+
+    #[test]
+    fn realtime_schedule_state_tracks_lifecycle_and_uses_admitted_hz() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        let (mut realtime, root) = realtime_drop_fixture_runtime("realtime-schedule-seam");
+        assert_eq!(
+            realtime.realtime_schedule_state(),
+            ProductDevRuntimeScheduleState::Created
+        );
+        assert_eq!(
+            realtime.realtime_schedule_interval(),
+            Some(std::time::Duration::from_nanos(33_333_333))
+        );
+
+        realtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start realtime fixture");
+        assert_eq!(
+            realtime.realtime_schedule_state(),
+            ProductDevRuntimeScheduleState::Running
+        );
+        realtime
+            .lifecycle(ProductDevLifecycleOperation::Pause)
+            .expect("pause realtime fixture");
+        assert_eq!(
+            realtime.realtime_schedule_state(),
+            ProductDevRuntimeScheduleState::Paused
+        );
+        realtime
+            .lifecycle(ProductDevLifecycleOperation::Resume)
+            .expect("resume realtime fixture");
+        assert_eq!(
+            realtime.realtime_schedule_state(),
+            ProductDevRuntimeScheduleState::Running
+        );
+        realtime
+            .lifecycle(ProductDevLifecycleOperation::Shutdown)
+            .expect("shutdown realtime fixture");
+        assert_eq!(
+            realtime.realtime_schedule_state(),
+            ProductDevRuntimeScheduleState::Shutdown
+        );
+        drop(realtime);
+        fs::remove_dir_all(root).expect("remove realtime schedule fixture content");
+
+        let (demand, root) = drop_fixture_runtime("demand-schedule-seam");
+        assert_eq!(
+            demand.realtime_schedule_state(),
+            ProductDevRuntimeScheduleState::Unsupported
+        );
+        assert_eq!(demand.realtime_schedule_interval(), None);
+        drop(demand);
+        fs::remove_dir_all(root).expect("remove demand schedule fixture content");
+    }
+
+    #[test]
+    fn pending_input_overflow_rebinds_and_publishes_recovery_baseline() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        let (mut runtime, root) = drop_fixture_runtime("pending-input-recovery");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start pending-input fixture");
+        let previous_binding = runtime.binding();
+        let pending_binding = input_binding(&runtime.lifecycle);
+        runtime.pending_inputs = (0..MAX_PENDING_NATIVE_INPUTS)
+            .map(|_| clear_input_owned(pending_binding, InputClearReason::FocusLoss))
+            .collect();
+
+        let error = runtime
+            .append_pending_inputs(vec![clear_input_owned(
+                pending_binding,
+                InputClearReason::FocusLoss,
+            )])
+            .expect_err("callback input bound must reject an overflowing append");
+        assert_eq!(error.code(), "CSHARP_INPUT_PENDING_BOUNDS");
+        assert_ne!(runtime.binding(), previous_binding);
+        assert_eq!(runtime.pending_inputs.len(), 1);
+        assert_eq!(
+            runtime.pending_inputs[0].clear_reason,
+            NativeInputClearReason::ControlRevisionChange
+        );
+        assert_eq!(runtime.pending_recovery_outputs.len(), 2);
+
+        let (_, outputs) = runtime
+            .admit_demand_step()
+            .expect("next operation remains usable after input recovery")
+            .into_parts();
+        let encoded = outputs
+            .iter()
+            .map(|output| serde_json::to_value(output).expect("recovery output serializes"))
+            .collect::<Vec<_>>();
+        assert!(encoded.iter().any(|output| output["kind"] == "binding"));
+        assert!(
+            encoded
+                .iter()
+                .any(|output| output["kind"] == "complete-baseline"),
+            "the next scheduled receipt must carry the retained recovery baseline"
+        );
+        assert!(runtime.pending_recovery_outputs.is_empty());
+
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove pending input recovery fixture content");
     }
 
     #[test]
