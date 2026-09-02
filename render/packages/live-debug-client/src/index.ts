@@ -47,6 +47,51 @@ export interface LiveDebugDiagnosticsBatch {
   readonly warningCount: string;
   readonly errorCount: string;
   readonly droppedCount: string;
+  /** Optional host-owned product lane facts; renderer telemetry is separate. */
+  readonly telemetry?: LiveDebugTelemetrySnapshot;
+}
+
+export type LiveDebugOperationKind =
+  | 'connect'
+  | 'start'
+  | 'pause'
+  | 'resume'
+  | 'restart'
+  | 'shutdown'
+  | 'report-fault'
+  | 'replace-control'
+  | 'release-control'
+  | 'input'
+  | 'advance-realtime'
+  | 'admit-demand-step'
+  | 'admit-external-step'
+  | 'complete-timeline'
+  | 'report-audio-feedback'
+  | 'report-animation-feedback'
+  | 'report-ghost-plate-feedback'
+  | 'report-renderer-diagnostics'
+  | 'execute-debug';
+
+/** Bounded product/runtime lane observations returned by the Engine host. */
+export interface LiveDebugTelemetrySnapshot {
+  readonly inFlightOperation: LiveDebugOperationKind | null;
+  readonly inFlightAgeMs: string | null;
+  readonly lastProductAdmissionLatencyMs: string | null;
+  readonly lastInputAdmissionLatencyMs: string | null;
+  readonly queuedInputBatches: number;
+  readonly queuedInputEvents: number;
+  readonly inputBatchCapacity: number;
+  readonly oldestInputAgeMs: string | null;
+  readonly inputOverflowPending: boolean;
+  /** Progress rate in millihertz (1000 = one update per second). */
+  readonly runtimeProgressRateMillihertz: string | null;
+  readonly runtimeProgressAgeMs: string | null;
+  readonly connections: number;
+  readonly subscribers: number;
+  readonly outputQueueItems: number;
+  readonly outputQueueCapacity: number;
+  readonly outputQueueFloor: string;
+  readonly outputBindingActive: boolean;
 }
 
 export interface LiveDebugTransport {
@@ -161,7 +206,76 @@ function decodeDiagnosticsBatch(value: unknown): LiveDebugDiagnosticsBatch {
     warningCount: candidate.warningCount,
     errorCount: candidate.errorCount,
     droppedCount: candidate.droppedCount,
+    ...(candidate.telemetry === undefined ? {} : { telemetry: decodeTelemetrySnapshot(candidate.telemetry) }),
   });
+}
+
+function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
+  const candidate = object(value);
+  const fields = [
+    'inFlightOperation', 'inFlightAgeMs', 'lastProductAdmissionLatencyMs',
+    'lastInputAdmissionLatencyMs', 'queuedInputBatches', 'queuedInputEvents',
+    'inputBatchCapacity', 'oldestInputAgeMs', 'inputOverflowPending',
+    'runtimeProgressRateMillihertz', 'runtimeProgressAgeMs', 'connections',
+    'subscribers', 'outputQueueItems', 'outputQueueCapacity', 'outputQueueFloor',
+    'outputBindingActive',
+  ];
+  if (Object.keys(candidate).some((key) => !fields.includes(key))) {
+    throw new Error('Live-debug telemetry snapshot contains unknown fields.');
+  }
+  const operation = candidate.inFlightOperation;
+  const admittedOperations: readonly LiveDebugOperationKind[] = [
+    'connect', 'start', 'pause', 'resume', 'restart', 'shutdown', 'report-fault',
+    'replace-control', 'release-control', 'input', 'advance-realtime', 'admit-demand-step',
+    'admit-external-step', 'complete-timeline', 'report-audio-feedback',
+    'report-animation-feedback', 'report-ghost-plate-feedback',
+    'report-renderer-diagnostics', 'execute-debug',
+  ];
+  if (operation !== null && !admittedOperations.includes(operation as LiveDebugOperationKind)) {
+    throw new Error('Live-debug telemetry in-flight operation is invalid.');
+  }
+  for (const field of [
+    'inFlightAgeMs', 'lastProductAdmissionLatencyMs', 'lastInputAdmissionLatencyMs',
+    'oldestInputAgeMs', 'runtimeProgressRateMillihertz', 'runtimeProgressAgeMs',
+  ]) {
+    if (candidate[field] !== null && !canonicalU64(candidate[field])) {
+      throw new Error(`Live-debug telemetry ${field} is invalid.`);
+    }
+  }
+  for (const field of [
+    'queuedInputBatches', 'queuedInputEvents', 'inputBatchCapacity', 'connections',
+    'subscribers', 'outputQueueItems', 'outputQueueCapacity',
+  ]) {
+    if (!boundedCount(candidate[field])) throw new Error(`Live-debug telemetry ${field} is invalid.`);
+  }
+  if (typeof candidate.inputOverflowPending !== 'boolean'
+    || typeof candidate.outputBindingActive !== 'boolean'
+    || !canonicalU64(candidate.outputQueueFloor)) {
+    throw new Error('Live-debug telemetry snapshot is invalid.');
+  }
+  return Object.freeze({
+    inFlightOperation: operation as LiveDebugOperationKind | null,
+    inFlightAgeMs: candidate.inFlightAgeMs as string | null,
+    lastProductAdmissionLatencyMs: candidate.lastProductAdmissionLatencyMs as string | null,
+    lastInputAdmissionLatencyMs: candidate.lastInputAdmissionLatencyMs as string | null,
+    queuedInputBatches: candidate.queuedInputBatches as number,
+    queuedInputEvents: candidate.queuedInputEvents as number,
+    inputBatchCapacity: candidate.inputBatchCapacity as number,
+    oldestInputAgeMs: candidate.oldestInputAgeMs as string | null,
+    inputOverflowPending: candidate.inputOverflowPending,
+    runtimeProgressRateMillihertz: candidate.runtimeProgressRateMillihertz as string | null,
+    runtimeProgressAgeMs: candidate.runtimeProgressAgeMs as string | null,
+    connections: candidate.connections as number,
+    subscribers: candidate.subscribers as number,
+    outputQueueItems: candidate.outputQueueItems as number,
+    outputQueueCapacity: candidate.outputQueueCapacity as number,
+    outputQueueFloor: candidate.outputQueueFloor,
+    outputBindingActive: candidate.outputBindingActive,
+  });
+}
+
+function boundedCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
 }
 
 function decodeDiagnosticEvent(value: unknown): LiveDebugDiagnosticEvent {
@@ -204,12 +318,26 @@ export function diagnosticRendererObservationAgeMilliseconds(
   event: LiveDebugDiagnosticEvent,
 ): number | null {
   if (event.source !== 'browser-host') return null;
-  const encodedAge = event.fields?.find((field) => field.key === 'renderer-age-ms')?.value;
+  const encodedAge = event.fields?.find((field) => field.key === 'renderer-observation-age-ms')?.value;
   if (encodedAge === undefined || !/^\d+$/u.test(encodedAge)) return null;
   const reportedAge = BigInt(encodedAge);
   const elapsed = BigInt(batch.readMonotonicNanoseconds) - BigInt(event.monotonicNanoseconds);
   const age = reportedAge + (elapsed > 0n ? elapsed / 1_000_000n : 0n);
   return age > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(age);
+}
+
+/**
+ * Computes how old a diagnostic event is at the response read clock. This is
+ * distinct from any age fact carried by the event itself (for example the
+ * browser host's renderer observation age).
+ */
+export function diagnosticEventAgeMilliseconds(
+  batch: LiveDebugDiagnosticsBatch,
+  event: LiveDebugDiagnosticEvent,
+): number | null {
+  const elapsed = BigInt(batch.readMonotonicNanoseconds) - BigInt(event.monotonicNanoseconds);
+  if (elapsed < 0n || elapsed / 1_000_000n > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(elapsed / 1_000_000n);
 }
 
 function canonicalU64(value: unknown): value is string {

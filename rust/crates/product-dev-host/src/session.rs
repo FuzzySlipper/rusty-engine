@@ -101,19 +101,24 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     /// never has a second owner or an input queue hidden inside the browser
     /// route. Both publication callbacks run while this owner lock is held, so
     /// output ordering cannot race a lifecycle/control operation.
-    pub fn advance_realtime_with_input_and_publish<F, I, P>(
+    pub fn advance_realtime_with_input_and_publish<F, I, P, B, E>(
         &self,
         drain: F,
         observed_time_ns: CanonicalU64,
         mut publish_input: I,
         mut publish: P,
+        begin: B,
+        finish: E,
     ) -> Result<Vec<ProductDevRuntimeError>, ProductDevRuntimeError>
     where
         F: FnOnce() -> (Vec<ProductDevInputBatch>, bool),
         I: FnMut(ProductDevRuntimeReceipt<ProductDevInputResult>),
         P: FnMut(ProductDevRuntimeReceipt<ProductDevOperationResult>),
+        B: FnOnce(),
+        E: FnOnce(),
     {
         let mut runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        begin();
         let (batches, overflowed) = drain();
         let mut input_errors = Vec::new();
         if overflowed {
@@ -128,9 +133,16 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
                 Err(error) => input_errors.push(error),
             }
         }
-        let receipt = runtime.advance_realtime(observed_time_ns)?;
-        publish(receipt);
-        Ok(input_errors)
+        let result = runtime.advance_realtime(observed_time_ns);
+        let result = match result {
+            Ok(receipt) => {
+                publish(receipt);
+                Ok(input_errors)
+            }
+            Err(error) => Err(error),
+        };
+        finish();
+        result
     }
 
     /// Strictly admits a canonical JSON u64 and advances the realtime lane.
@@ -207,6 +219,27 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     {
         let mut runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
         call(&mut runtime)
+    }
+
+    /// Runs a serialized owner operation with lifecycle callbacks inside the
+    /// owner lock. Host telemetry uses this to represent the operation that is
+    /// actually executing, rather than a contender merely waiting for it.
+    pub(crate) fn with_locked_runtime_timed<T, F, B, E>(
+        &self,
+        begin: B,
+        call: F,
+        finish: E,
+    ) -> Result<T, ProductDevRuntimeError>
+    where
+        F: FnOnce(&mut R) -> Result<T, ProductDevRuntimeError>,
+        B: FnOnce(),
+        E: FnOnce(),
+    {
+        let mut runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        begin();
+        let result = call(&mut runtime);
+        finish();
+        result
     }
 
     #[cfg(test)]
@@ -482,6 +515,8 @@ mod tests {
                             .recv_timeout(Duration::from_secs(1))
                             .expect("publication release");
                     },
+                    || {},
+                    || {},
                 )
                 .expect("scheduled fixture advance");
         });

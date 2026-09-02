@@ -343,6 +343,17 @@ impl ProductDevLog {
             }
         }
     }
+
+    /// Returns the monotonic timestamp used by diagnostic events and reads.
+    /// Keeping this clock behind the diagnostic sink gives host telemetry one
+    /// origin without exposing its `Instant` or creating a second clock.
+    pub fn now_monotonic_nanoseconds(&self) -> Option<u64> {
+        self.0
+            .lock()
+            .ok()
+            .map(|inner| inner.started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64)
+    }
+
     pub fn snapshot(&self) -> ProductDevLogSnapshot {
         let inner = self.0.lock().expect("diagnostic sink lock");
         ProductDevLogSnapshot {

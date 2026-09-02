@@ -44,6 +44,30 @@ export interface LiveDebugDiagnosticsBatch {
     readonly warningCount: string;
     readonly errorCount: string;
     readonly droppedCount: string;
+    /** Optional host-owned product lane facts; renderer telemetry is separate. */
+    readonly telemetry?: LiveDebugTelemetrySnapshot;
+}
+export type LiveDebugOperationKind = 'connect' | 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' | 'replace-control' | 'release-control' | 'input' | 'advance-realtime' | 'admit-demand-step' | 'admit-external-step' | 'complete-timeline' | 'report-audio-feedback' | 'report-animation-feedback' | 'report-ghost-plate-feedback' | 'report-renderer-diagnostics' | 'execute-debug';
+/** Bounded product/runtime lane observations returned by the Engine host. */
+export interface LiveDebugTelemetrySnapshot {
+    readonly inFlightOperation: LiveDebugOperationKind | null;
+    readonly inFlightAgeMs: string | null;
+    readonly lastProductAdmissionLatencyMs: string | null;
+    readonly lastInputAdmissionLatencyMs: string | null;
+    readonly queuedInputBatches: number;
+    readonly queuedInputEvents: number;
+    readonly inputBatchCapacity: number;
+    readonly oldestInputAgeMs: string | null;
+    readonly inputOverflowPending: boolean;
+    /** Progress rate in millihertz (1000 = one update per second). */
+    readonly runtimeProgressRateMillihertz: string | null;
+    readonly runtimeProgressAgeMs: string | null;
+    readonly connections: number;
+    readonly subscribers: number;
+    readonly outputQueueItems: number;
+    readonly outputQueueCapacity: number;
+    readonly outputQueueFloor: string;
+    readonly outputBindingActive: boolean;
 }
 export interface LiveDebugTransport {
     catalog(signal?: AbortSignal): Promise<LiveDebugCatalog>;
@@ -61,3 +85,9 @@ export declare function createLiveDebugHttpTransport(options?: LiveDebugHttpTran
 export declare function completeLiveDebug(catalog: LiveDebugCatalog, prefix: string): readonly LiveDebugCommandDescriptor[];
 /** Computes a browser renderer observation age from the process-owned sink clock. */
 export declare function diagnosticRendererObservationAgeMilliseconds(batch: LiveDebugDiagnosticsBatch, event: LiveDebugDiagnosticEvent): number | null;
+/**
+ * Computes how old a diagnostic event is at the response read clock. This is
+ * distinct from any age fact carried by the event itself (for example the
+ * browser host's renderer observation age).
+ */
+export declare function diagnosticEventAgeMilliseconds(batch: LiveDebugDiagnosticsBatch, event: LiveDebugDiagnosticEvent): number | null;

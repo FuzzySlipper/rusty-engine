@@ -21,9 +21,10 @@ use crate::{
     ProductDevControlOperation, ProductDevHostError, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
     ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
-    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevTimelineCompletion, MAX_CONNECTIONS,
-    MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES,
-    MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevTelemetrySnapshot,
+    ProductDevTimelineCompletion, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
+    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -127,6 +128,7 @@ impl ProductDevHost {
             bundle: config.bundle,
             runtime: Arc::new(ProductDevOperationOwner::new(runtime)),
             input_mailbox: Arc::new(HostInputMailbox::default()),
+            telemetry: Mutex::new(HostTelemetry::default()),
             realtime_scheduler_enabled,
             outputs: Mutex::new(OutputBus::default()),
             shutdown: Arc::clone(&shutdown),
@@ -257,6 +259,7 @@ struct HostState<R> {
     bundle: ProductDevBundle,
     runtime: Arc<ProductDevOperationOwner<R>>,
     input_mailbox: Arc<HostInputMailbox>,
+    telemetry: Mutex<HostTelemetry>,
     realtime_scheduler_enabled: bool,
     outputs: Mutex<OutputBus>,
     shutdown: Arc<AtomicBool>,
@@ -267,6 +270,127 @@ struct HostState<R> {
     diagnostics: ProductDevLog,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
+}
+
+/// Small process-local observation state. It intentionally has no runtime
+/// reference: diagnostics can read it while the product owner is in a slow
+/// callback and therefore never become another source of input backpressure.
+#[derive(Default)]
+struct HostTelemetry {
+    in_flight_operation: Option<ProductDevOperationKind>,
+    in_flight_started_ns: Option<u64>,
+    last_product_admission_latency_ms: Option<u64>,
+    last_input_admission_latency_ms: Option<u64>,
+    progress_samples_ns: VecDeque<u64>,
+}
+
+impl HostTelemetry {
+    const MAX_PROGRESS_SAMPLES: usize = 32;
+    const PROGRESS_WINDOW_NS: u64 = 5_000_000_000;
+
+    fn begin(&mut self, operation: ProductDevOperationKind, started_ns: u64) {
+        self.in_flight_operation = Some(operation);
+        self.in_flight_started_ns = Some(started_ns);
+    }
+
+    fn finish(&mut self, finished_ns: u64) -> Option<u64> {
+        let latency_ms = self.in_flight_started_ns.take().map(|started_ns| {
+            finished_ns
+                .saturating_sub(started_ns)
+                .saturating_div(1_000_000)
+        });
+        if let Some(latency_ms) = latency_ms {
+            self.last_product_admission_latency_ms = Some(latency_ms);
+        }
+        self.in_flight_operation = None;
+        latency_ms
+    }
+
+    fn record_input_admission(&mut self, latency_ms: u64) {
+        self.last_input_admission_latency_ms = Some(latency_ms);
+    }
+
+    fn record_progress(&mut self, now_ns: u64) {
+        self.progress_samples_ns.push_back(now_ns);
+        while self.progress_samples_ns.len() > Self::MAX_PROGRESS_SAMPLES {
+            self.progress_samples_ns.pop_front();
+        }
+        while self
+            .progress_samples_ns
+            .front()
+            .is_some_and(|sample| now_ns.saturating_sub(*sample) > Self::PROGRESS_WINDOW_NS)
+        {
+            self.progress_samples_ns.pop_front();
+        }
+    }
+
+    fn snapshot(
+        &self,
+        now_ns: u64,
+        input: InputTelemetry,
+        transport: TransportTelemetry,
+    ) -> ProductDevTelemetrySnapshot {
+        let progress_age_ms = self
+            .progress_samples_ns
+            .back()
+            .map(|sample| now_ns.saturating_sub(*sample).saturating_div(1_000_000));
+        let progress_rate_millihertz = match (
+            self.progress_samples_ns.front(),
+            self.progress_samples_ns.back(),
+        ) {
+            (Some(first), Some(last)) if last > first => Some(CanonicalU64::new(
+                ((self.progress_samples_ns.len().saturating_sub(1) as u128)
+                    .saturating_mul(1_000_000_000_000)
+                    .saturating_div(u128::from(last - first)))
+                .min(u128::from(u64::MAX)) as u64,
+            )),
+            _ => None,
+        };
+        ProductDevTelemetrySnapshot {
+            in_flight_operation: self.in_flight_operation,
+            in_flight_age_ms: self.in_flight_started_ns.map(|started| {
+                CanonicalU64::new(now_ns.saturating_sub(started).saturating_div(1_000_000))
+            }),
+            last_product_admission_latency_ms: self
+                .last_product_admission_latency_ms
+                .map(CanonicalU64::new),
+            last_input_admission_latency_ms: self
+                .last_input_admission_latency_ms
+                .map(CanonicalU64::new),
+            queued_input_batches: input.batches,
+            queued_input_events: input.events,
+            input_batch_capacity: MAX_HOST_INPUT_BATCHES,
+            oldest_input_age_ms: input.oldest_ns.map(|oldest| {
+                CanonicalU64::new(now_ns.saturating_sub(oldest).saturating_div(1_000_000))
+            }),
+            input_overflow_pending: input.overflowed,
+            runtime_progress_rate_millihertz: progress_rate_millihertz,
+            runtime_progress_age_ms: progress_age_ms.map(CanonicalU64::new),
+            connections: transport.connections,
+            subscribers: transport.subscribers,
+            output_queue_items: transport.output_queue_items,
+            output_queue_capacity: MAX_OUTPUT_QUEUE_ITEMS,
+            output_queue_floor: CanonicalU64::new(transport.output_queue_floor),
+            output_binding_active: transport.output_binding_active,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct InputTelemetry {
+    batches: usize,
+    events: usize,
+    oldest_ns: Option<u64>,
+    overflowed: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TransportTelemetry {
+    connections: usize,
+    subscribers: usize,
+    output_queue_items: usize,
+    output_queue_floor: u64,
+    output_binding_active: bool,
 }
 
 #[derive(Default)]
@@ -305,6 +429,9 @@ struct HostInputMailbox {
 #[derive(Default)]
 struct HostInputMailboxState {
     batches: VecDeque<ProductDevInputBatch>,
+    queued_events: usize,
+    oldest_enqueued_ns: Option<u64>,
+    last_drained_oldest_ns: Option<u64>,
     overflowed: bool,
 }
 
@@ -317,7 +444,7 @@ impl Default for HostInputMailbox {
 }
 
 impl HostInputMailbox {
-    fn enqueue(&self, batch: ProductDevInputBatch) -> bool {
+    fn enqueue(&self, batch: ProductDevInputBatch, enqueued_ns: Option<u64>) -> bool {
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
@@ -327,8 +454,14 @@ impl HostInputMailbox {
             // fence before its next update, so the browser receives a fresh
             // binding instead of a terminal host closure or a hidden gap.
             state.batches.clear();
+            state.queued_events = 0;
+            state.oldest_enqueued_ns = None;
             state.overflowed = true;
             return false;
+        }
+        state.queued_events = state.queued_events.saturating_add(batch.events().len());
+        if state.oldest_enqueued_ns.is_none() {
+            state.oldest_enqueued_ns = enqueued_ns;
         }
         state.batches.push_back(batch);
         true
@@ -339,13 +472,37 @@ impl HostInputMailbox {
             return (Vec::new(), false);
         };
         let batches = state.batches.drain(..).collect();
+        state.last_drained_oldest_ns = state.oldest_enqueued_ns.take();
+        state.queued_events = 0;
         let overflowed = std::mem::take(&mut state.overflowed);
         (batches, overflowed)
+    }
+
+    fn telemetry(&self) -> InputTelemetry {
+        self.state
+            .lock()
+            .map(|state| InputTelemetry {
+                batches: state.batches.len(),
+                events: state.queued_events,
+                oldest_ns: state.oldest_enqueued_ns,
+                overflowed: state.overflowed,
+            })
+            .unwrap_or_default()
+    }
+
+    fn take_last_drained_oldest_ns(&self) -> Option<u64> {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|mut state| state.last_drained_oldest_ns.take())
     }
 
     fn clear(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.batches.clear();
+            state.queued_events = 0;
+            state.oldest_enqueued_ns = None;
+            state.last_drained_oldest_ns = None;
             state.overflowed = false;
         }
     }
@@ -436,6 +593,25 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             CanonicalU64::new(observed),
             |receipt| publish_scheduled_input_receipt(&state, receipt),
             |receipt| publish_scheduled_receipt(&state, receipt),
+            || {
+                begin_telemetry(&state, ProductDevOperationKind::AdvanceRealtime);
+            },
+            || {
+                let finished_ns = state.diagnostics.now_monotonic_nanoseconds();
+                let oldest_ns = state.input_mailbox.take_last_drained_oldest_ns();
+                if let Ok(mut telemetry) = state.telemetry.lock() {
+                    if let Some(finished_ns) = finished_ns {
+                        telemetry.finish(finished_ns);
+                        if let Some(oldest_ns) = oldest_ns {
+                            telemetry.record_input_admission(
+                                finished_ns
+                                    .saturating_sub(oldest_ns)
+                                    .saturating_div(1_000_000),
+                            );
+                        }
+                    }
+                }
+            },
         );
         match input_errors {
             Ok(errors) => {
@@ -520,6 +696,12 @@ fn publish_scheduled_receipt<R: ProductDevRuntime>(
     state: &HostState<R>,
     receipt: crate::ProductDevRuntimeReceipt<ProductDevOperationResult>,
 ) {
+    let progress_ns = state.diagnostics.now_monotonic_nanoseconds();
+    if let Some(progress_ns) = progress_ns {
+        if let Ok(mut telemetry) = state.telemetry.lock() {
+            telemetry.record_progress(progress_ns);
+        }
+    }
     let (result, mut outputs) = receipt.into_parts();
     if let Some(readout) = result.readout().cloned() {
         outputs.push(ProductDevRuntimeOutput::runtime_readout(readout));
@@ -823,18 +1005,24 @@ fn dispatch_request<R: ProductDevRuntime>(
 }
 
 fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpResponse {
-    match state.runtime.with_locked_runtime(|runtime| {
-        let receipt = match runtime.describe_debug() {
-            Ok(receipt) => receipt,
-            Err(error) => return Ok(HttpResponse::error(500, error.code(), error.diagnostic())),
-        };
-        let (catalog, outputs) = receipt.into_parts();
-        let output_through = match push_outputs(&state.outputs, outputs) {
-            Ok(output_through) => output_through,
-            Err(error) => return Ok(HttpResponse::error(503, error.code(), error.detail())),
-        };
-        Ok(json_response(200, &catalog).with_output_through(output_through))
-    }) {
+    match state.runtime.with_locked_runtime_timed(
+        || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+        |runtime| {
+            let receipt = match runtime.describe_debug() {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    return Ok(HttpResponse::error(500, error.code(), error.diagnostic()))
+                }
+            };
+            let (catalog, outputs) = receipt.into_parts();
+            let output_through = match push_outputs(&state.outputs, outputs) {
+                Ok(output_through) => output_through,
+                Err(error) => return Ok(HttpResponse::error(503, error.code(), error.detail())),
+            };
+            Ok(json_response(200, &catalog).with_output_through(output_through))
+        },
+        || finish_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+    ) {
         Ok(response) => response,
         Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
     }
@@ -848,32 +1036,36 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
         Ok(command) => command,
         Err(_) => return debug_text_error(400, "debug command body must be valid UTF-8"),
     };
-    match state.runtime.with_locked_runtime(|runtime| {
-        let receipt = match runtime.execute_debug(command) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                return Ok(debug_text_error(
-                    500,
-                    &format!("{}: {}", error.code(), error.diagnostic()),
-                ));
-            }
-        };
-        let (result, outputs) = receipt.into_parts();
-        let output_through = match push_outputs(&state.outputs, outputs) {
-            Ok(output_through) => output_through,
-            Err(error) => {
-                return Ok(debug_text_error(
-                    503,
-                    &format!("{}: {}", error.code(), error.detail()),
-                ));
-            }
-        };
-        Ok(HttpResponse::text(
-            if result.succeeded() { 200 } else { 422 },
-            result.message().to_owned(),
-        )
-        .with_output_through(output_through))
-    }) {
+    match state.runtime.with_locked_runtime_timed(
+        || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+        |runtime| {
+            let receipt = match runtime.execute_debug(command) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    return Ok(debug_text_error(
+                        500,
+                        &format!("{}: {}", error.code(), error.diagnostic()),
+                    ));
+                }
+            };
+            let (result, outputs) = receipt.into_parts();
+            let output_through = match push_outputs(&state.outputs, outputs) {
+                Ok(output_through) => output_through,
+                Err(error) => {
+                    return Ok(debug_text_error(
+                        503,
+                        &format!("{}: {}", error.code(), error.detail()),
+                    ));
+                }
+            };
+            Ok(HttpResponse::text(
+                if result.succeeded() { 200 } else { 422 },
+                result.message().to_owned(),
+            )
+            .with_output_through(output_through))
+        },
+        || finish_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+    ) {
         Ok(response) => response,
         Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
     }
@@ -895,6 +1087,7 @@ fn invoke_lifecycle<R: ProductDevRuntime>(
     state.input_mailbox.clear();
     let response = call_runtime(
         state,
+        operation.operation_kind(),
         |runtime| runtime.lifecycle_with_binding(operation, request.runtime),
         |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
     );
@@ -914,6 +1107,7 @@ fn invoke_control<R: ProductDevRuntime>(
     state.input_mailbox.clear();
     let response = call_runtime(
         state,
+        operation.operation_kind(),
         |runtime| runtime.control(operation, request.runtime),
         |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
     );
@@ -953,7 +1147,8 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
     // direct receipt semantics and remain caller-driven.
     if state.realtime_scheduler_enabled {
         let count = batch.events().len();
-        return match state.input_mailbox.enqueue(batch) {
+        let enqueued_ns = state.diagnostics.now_monotonic_nanoseconds();
+        return match state.input_mailbox.enqueue(batch, enqueued_ns) {
             true => {
                 state.scheduler_wake.notify();
                 match ProductDevInputResult::queued(count) {
@@ -972,6 +1167,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
     }
     call_runtime(
         state,
+        ProductDevOperationKind::Input,
         |runtime| runtime.input(batch),
         |error| crate::ProductDevInputResult::rejected_runtime(error),
     )
@@ -984,6 +1180,7 @@ fn invoke_realtime<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
     };
     call_runtime(
         state,
+        ProductDevOperationKind::AdvanceRealtime,
         |runtime| runtime.advance_realtime(request.observed_time_ns),
         |error| {
             ProductDevOperationResult::rejected_runtime(
@@ -1004,6 +1201,7 @@ fn invoke_demand<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Htt
     }
     call_runtime(
         state,
+        ProductDevOperationKind::AdmitDemandStep,
         |runtime| runtime.admit_demand_step(),
         |error| {
             ProductDevOperationResult::rejected_runtime(
@@ -1021,6 +1219,7 @@ fn invoke_external<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
     };
     call_runtime(
         state,
+        ProductDevOperationKind::AdmitExternalStep,
         |runtime| runtime.admit_external_step(request.step),
         |error| {
             ProductDevOperationResult::rejected_runtime(
@@ -1043,6 +1242,7 @@ fn invoke_timeline<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
     let ticket = request.envelope().ticket().value();
     call_runtime(
         state,
+        ProductDevOperationKind::CompleteTimeline,
         |runtime| runtime.complete_timeline(request),
         |error| {
             crate::ProductDevTimelineCompletionResult::rejected_runtime(
@@ -1064,6 +1264,7 @@ fn invoke_audio_feedback<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]
     let binding = request.runtime;
     call_runtime(
         state,
+        ProductDevOperationKind::ReportAudioFeedback,
         |runtime| runtime.report_audio_feedback(request),
         |error| crate::ProductDevAudioFeedbackResult::rejected_runtime(binding, error),
     )
@@ -1083,6 +1284,7 @@ fn invoke_animation_feedback<R: ProductDevRuntime>(
     let binding = request.runtime;
     call_runtime(
         state,
+        ProductDevOperationKind::ReportAnimationFeedback,
         |runtime| runtime.report_animation_feedback(request),
         |error| crate::ProductDevAnimationFeedbackResult::rejected_runtime(binding, error),
     )
@@ -1102,6 +1304,7 @@ fn invoke_ghost_plate_feedback<R: ProductDevRuntime>(
     let binding = request.runtime;
     call_runtime(
         state,
+        ProductDevOperationKind::ReportGhostPlateFeedback,
         |runtime| runtime.report_ghost_plate_feedback(request),
         |error| crate::ProductDevGhostPlateFeedbackResult::rejected_runtime(binding, error),
     )
@@ -1118,6 +1321,7 @@ fn invoke_renderer_diagnostics<R: ProductDevRuntime>(
     let binding = request.runtime;
     call_runtime(
         state,
+        ProductDevOperationKind::ReportRendererDiagnostics,
         |runtime| runtime.report_renderer_diagnostics(request),
         |error| {
             crate::ProductDevRendererDiagnosticsFeedbackResult::rejected_runtime(binding, error)
@@ -1136,12 +1340,38 @@ fn invoke_diagnostics_read<R: ProductDevRuntime>(
         Ok(value) => value,
         Err(response) => return response,
     };
-    json_response(
-        200,
-        &state
-            .diagnostics
-            .read_after(request.after.map(CanonicalU64::get)),
-    )
+    let batch = state
+        .diagnostics
+        .read_after(request.after.map(CanonicalU64::get));
+    let telemetry = telemetry_snapshot(state, batch.read_monotonic_nanoseconds);
+    json_response(200, &DiagnosticsReadResponse { batch, telemetry })
+}
+
+fn telemetry_snapshot<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    now_ns: u64,
+) -> ProductDevTelemetrySnapshot {
+    let input = state.input_mailbox.telemetry();
+    let transport = state
+        .outputs
+        .lock()
+        .map(|outputs| TransportTelemetry {
+            connections: state.connections.load(Ordering::Acquire),
+            subscribers: state.subscribers.load(Ordering::Acquire),
+            output_queue_items: outputs.events.len(),
+            output_queue_floor: outputs.floor_cursor,
+            output_binding_active: outputs.active_binding.is_some(),
+        })
+        .unwrap_or_else(|_| TransportTelemetry {
+            connections: state.connections.load(Ordering::Acquire),
+            subscribers: state.subscribers.load(Ordering::Acquire),
+            ..TransportTelemetry::default()
+        });
+    state
+        .telemetry
+        .lock()
+        .map(|telemetry| telemetry.snapshot(now_ns, input, transport))
+        .unwrap_or_else(|_| HostTelemetry::default().snapshot(now_ns, input, transport))
 }
 
 fn invoke_browser_diagnostics<R: ProductDevRuntime>(
@@ -1200,7 +1430,7 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
                 .map_or_else(|| "none".to_owned(), |value| value.get().to_string()),
         ),
         (
-            "renderer-age-ms",
+            "renderer-observation-age-ms",
             report
                 .renderer_observation_age_ms
                 .map_or_else(|| "none".to_owned(), |value| value.get().to_string()),
@@ -1298,14 +1528,44 @@ fn browser_page_diagnostic_kind(kind: crate::ProductDevBrowserPageDiagnosticKind
     }
 }
 
-fn call_runtime<R, T, F, E>(state: &HostState<R>, call: F, error_result: E) -> HttpResponse
+fn begin_telemetry<R: ProductDevRuntime>(state: &HostState<R>, operation: ProductDevOperationKind) {
+    if let Some(started_ns) = state.diagnostics.now_monotonic_nanoseconds() {
+        if let Ok(mut telemetry) = state.telemetry.lock() {
+            telemetry.begin(operation, started_ns);
+        }
+    }
+}
+
+fn finish_telemetry<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    operation: ProductDevOperationKind,
+) {
+    if let Some(finished_ns) = state.diagnostics.now_monotonic_nanoseconds() {
+        if let Ok(mut telemetry) = state.telemetry.lock() {
+            if let Some(latency_ms) = telemetry.finish(finished_ns) {
+                if matches!(operation, ProductDevOperationKind::Input) {
+                    telemetry.record_input_admission(latency_ms);
+                }
+            }
+        }
+    }
+}
+
+fn call_runtime<R, T, F, E>(
+    state: &HostState<R>,
+    operation: ProductDevOperationKind,
+    call: F,
+    error_result: E,
+) -> HttpResponse
 where
     R: ProductDevRuntime,
     T: Serialize,
     F: FnOnce(&mut R) -> Result<crate::ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
     E: FnOnce(ProductDevRuntimeError) -> Result<T, ProductDevHostError>,
 {
-    match state.runtime.with_locked_runtime(|runtime| {
+    let response = state.runtime.with_locked_runtime_timed(
+        || begin_telemetry(state, operation),
+        |runtime| {
         let receipt = match call(runtime) {
             Ok(receipt) => receipt,
             Err(error) => {
@@ -1370,7 +1630,10 @@ where
         };
         Ok(HttpResponse::bytes(200, "application/json", encoded_result)
             .with_output_through(output_through))
-    }) {
+        },
+        || finish_telemetry(state, operation),
+    );
+    match response {
         Ok(response) => response,
         Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
     }
@@ -1439,59 +1702,63 @@ fn handle_sse<R: ProductDevRuntime>(
             }
         },
         None if fresh_connection => {
-            let connection = state.runtime.with_locked_runtime(|runtime| {
-                let receipt = runtime.connect()?;
-                let (result, outputs) = receipt.into_parts();
-                let isolated = Mutex::new(OutputBus::default());
-                if let Err(error) = push_outputs(&isolated, outputs) {
-                    return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
-                }
-                let isolated = match isolated.into_inner() {
-                    Ok(bus) => bus,
-                    Err(_) => {
-                        return Ok(Err(HttpResponse::error(
-                            500,
-                            "DEV_HOST_OUTPUT_POISONED",
-                            "isolated output queue lock is poisoned",
-                        )));
+            let connection = state.runtime.with_locked_runtime_timed(
+                || begin_telemetry(&state, ProductDevOperationKind::Connect),
+                |runtime| {
+                    let receipt = runtime.connect()?;
+                    let (result, outputs) = receipt.into_parts();
+                    let isolated = Mutex::new(OutputBus::default());
+                    if let Err(error) = push_outputs(&isolated, outputs) {
+                        return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
                     }
-                };
-                let Some(connection_binding) = isolated.active_binding else {
-                    return Ok(Err(HttpResponse::error(
-                        503,
-                        "DEV_HOST_OUTPUT_BASELINE",
-                        "runtime connection did not publish a complete binding baseline",
-                    )));
-                };
-                let result_json = match serde_json::to_string(&result) {
-                    Ok(result) => result,
-                    Err(_) => {
+                    let isolated = match isolated.into_inner() {
+                        Ok(bus) => bus,
+                        Err(_) => {
+                            return Ok(Err(HttpResponse::error(
+                                500,
+                                "DEV_HOST_OUTPUT_POISONED",
+                                "isolated output queue lock is poisoned",
+                            )));
+                        }
+                    };
+                    let Some(connection_binding) = isolated.active_binding else {
                         return Ok(Err(HttpResponse::error(
-                            500,
-                            "DEV_HOST_RESPONSE_ENCODE",
-                            "runtime connection result could not be encoded",
+                            503,
+                            "DEV_HOST_OUTPUT_BASELINE",
+                            "runtime connection did not publish a complete binding baseline",
                         )));
-                    }
-                };
-                let mut outputs = match state.outputs.lock() {
-                    Ok(outputs) => outputs,
-                    Err(_) => {
-                        return Ok(Err(HttpResponse::error(
-                            500,
-                            "DEV_HOST_OUTPUT_POISONED",
-                            "output queue lock is poisoned",
-                        )));
-                    }
-                };
-                // Keep runtime connection, binding publication, and cursor
-                // assignment in one owner section so a scheduler receipt
-                // cannot be emitted between them.
-                outputs.active_binding = Some(connection_binding);
-                private_events = isolated.events.into_iter().collect();
-                connection_result = Some(result_json);
-                let cursor = outputs.next_id;
-                Ok(Ok(cursor))
-            });
+                    };
+                    let result_json = match serde_json::to_string(&result) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return Ok(Err(HttpResponse::error(
+                                500,
+                                "DEV_HOST_RESPONSE_ENCODE",
+                                "runtime connection result could not be encoded",
+                            )));
+                        }
+                    };
+                    let mut outputs = match state.outputs.lock() {
+                        Ok(outputs) => outputs,
+                        Err(_) => {
+                            return Ok(Err(HttpResponse::error(
+                                500,
+                                "DEV_HOST_OUTPUT_POISONED",
+                                "output queue lock is poisoned",
+                            )));
+                        }
+                    };
+                    // Keep runtime connection, binding publication, and cursor
+                    // assignment in one owner section so a scheduler receipt
+                    // cannot be emitted between them.
+                    outputs.active_binding = Some(connection_binding);
+                    private_events = isolated.events.into_iter().collect();
+                    connection_result = Some(result_json);
+                    let cursor = outputs.next_id;
+                    Ok(Ok(cursor))
+                },
+                || finish_telemetry(&state, ProductDevOperationKind::Connect),
+            );
             match connection {
                 Ok(Ok(cursor)) => {
                     state.scheduler_wake.notify();
@@ -1973,10 +2240,10 @@ mod tests {
     fn input_mailbox_overflow_clears_prefix_and_marks_resync() {
         let mailbox = HostInputMailbox::default();
         for _ in 0..MAX_HOST_INPUT_BATCHES {
-            assert!(mailbox.enqueue(ProductDevInputBatch::new(Vec::new())));
+            assert!(mailbox.enqueue(ProductDevInputBatch::new(Vec::new()), Some(0)));
         }
         assert_eq!(mailbox.len(), MAX_HOST_INPUT_BATCHES);
-        assert!(!mailbox.enqueue(ProductDevInputBatch::new(Vec::new())));
+        assert!(!mailbox.enqueue(ProductDevInputBatch::new(Vec::new()), Some(0)));
 
         let (batches, overflowed) = mailbox.drain();
         assert!(
@@ -1988,10 +2255,54 @@ mod tests {
             "scheduler must receive an explicit resync marker"
         );
 
-        assert!(mailbox.enqueue(ProductDevInputBatch::new(Vec::new())));
+        assert!(mailbox.enqueue(ProductDevInputBatch::new(Vec::new()), Some(0)));
         let (batches, overflowed) = mailbox.drain();
         assert_eq!(batches.len(), 1);
         assert!(!overflowed);
+    }
+
+    #[test]
+    fn telemetry_snapshot_is_bounded_and_keeps_subsecond_rates() {
+        let mut telemetry = HostTelemetry::default();
+        telemetry.begin(ProductDevOperationKind::AdvanceRealtime, 1_000_000);
+        telemetry.record_progress(1_000_000_000);
+        telemetry.record_progress(3_000_000_000);
+        let snapshot = telemetry.snapshot(
+            4_000_000_000,
+            InputTelemetry {
+                batches: MAX_HOST_INPUT_BATCHES,
+                events: runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS,
+                oldest_ns: Some(1_500_000_000),
+                overflowed: true,
+            },
+            TransportTelemetry {
+                connections: 2,
+                subscribers: 1,
+                output_queue_items: MAX_OUTPUT_QUEUE_ITEMS,
+                output_queue_floor: 8,
+                output_binding_active: true,
+            },
+        );
+        assert_eq!(
+            snapshot.in_flight_operation,
+            Some(ProductDevOperationKind::AdvanceRealtime)
+        );
+        assert_eq!(snapshot.in_flight_age_ms, Some(CanonicalU64::new(3999)));
+        assert_eq!(
+            snapshot.runtime_progress_rate_millihertz,
+            Some(CanonicalU64::new(500)),
+            "one update per two seconds remains distinguishable from zero",
+        );
+        assert_eq!(
+            snapshot.runtime_progress_age_ms,
+            Some(CanonicalU64::new(1000))
+        );
+        assert_eq!(snapshot.oldest_input_age_ms, Some(CanonicalU64::new(2500)));
+        assert!(snapshot.input_overflow_pending);
+        let wire = serde_json::to_value(&snapshot).expect("telemetry is serializable");
+        assert_eq!(wire["outputQueueItems"], MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(wire["runtimeProgressRateMillihertz"], "500");
+        assert!(serde_json::to_vec(&snapshot).unwrap().len() < 4 * 1024);
     }
 
     #[test]
@@ -2061,6 +2372,7 @@ mod tests {
             .unwrap(),
             runtime: Arc::clone(&runtime),
             input_mailbox: Arc::new(HostInputMailbox::default()),
+            telemetry: Mutex::new(HostTelemetry::default()),
             realtime_scheduler_enabled: true,
             outputs: Mutex::new(OutputBus::default()),
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -2580,6 +2892,14 @@ struct EmptyRequest {}
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DiagnosticsReadRequest {
     after: Option<CanonicalU64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsReadResponse {
+    #[serde(flatten)]
+    batch: crate::ProductDevLogBatch,
+    telemetry: ProductDevTelemetrySnapshot,
 }
 
 #[derive(Deserialize)]

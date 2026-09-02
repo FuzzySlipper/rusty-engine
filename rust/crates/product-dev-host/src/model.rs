@@ -153,11 +153,15 @@ pub enum ProductDevOperationKind {
     ReportFault,
     ReplaceControl,
     ReleaseControl,
+    Input,
     AdvanceRealtime,
     AdmitDemandStep,
     AdmitExternalStep,
+    CompleteTimeline,
     ReportAudioFeedback,
     ReportAnimationFeedback,
+    ReportGhostPlateFeedback,
+    ReportRendererDiagnostics,
     ExecuteDebug,
 }
 
@@ -957,6 +961,34 @@ fn validate_browser_diagnostic(code: &str, message: &str) -> Result<(), ProductD
 pub struct ProductDevBrowserDiagnosticsResult {
     pub accepted: bool,
     pub reported: u8,
+}
+
+/// Bounded host-owned product-lane telemetry returned alongside the existing
+/// diagnostics batch. These are observations only; renderer cadence remains
+/// in the browser renderer diagnostics report and is intentionally not folded
+/// into this product-lane snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevTelemetrySnapshot {
+    pub in_flight_operation: Option<ProductDevOperationKind>,
+    pub in_flight_age_ms: Option<CanonicalU64>,
+    pub last_product_admission_latency_ms: Option<CanonicalU64>,
+    pub last_input_admission_latency_ms: Option<CanonicalU64>,
+    pub queued_input_batches: usize,
+    pub queued_input_events: usize,
+    pub input_batch_capacity: usize,
+    pub oldest_input_age_ms: Option<CanonicalU64>,
+    pub input_overflow_pending: bool,
+    /// Progress rate in millihertz, retaining useful values below one update
+    /// per second without introducing floating point into the wire snapshot.
+    pub runtime_progress_rate_millihertz: Option<CanonicalU64>,
+    pub runtime_progress_age_ms: Option<CanonicalU64>,
+    pub connections: usize,
+    pub subscribers: usize,
+    pub output_queue_items: usize,
+    pub output_queue_capacity: usize,
+    pub output_queue_floor: CanonicalU64,
+    pub output_binding_active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

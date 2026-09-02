@@ -318,6 +318,7 @@ impl LiveDebugTransport for HttpLiveDebugTransport {
             decoded.warning_count,
             decoded.error_count,
             decoded.dropped_count,
+            &decoded.telemetry,
         );
         Ok(DiagnosticsResponse {
             next_cursor: decoded.next_cursor,
@@ -371,6 +372,59 @@ struct DiagnosticsWire {
     warning_count: String,
     error_count: String,
     dropped_count: String,
+    /// Hosts predating the product-lane telemetry snapshot omit this field.
+    /// Keep the outer response backward compatible while still decoding the
+    /// complete, closed telemetry shape when a current host supplies it.
+    telemetry: Option<DiagnosticsTelemetryWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+// This is intentionally a decode-only schema; the CLI preserves and prints
+// the original JSON so callers can select telemetry with ordinary JSON tools.
+#[allow(dead_code)]
+struct DiagnosticsTelemetryWire {
+    in_flight_operation: Option<DiagnosticsOperationWire>,
+    in_flight_age_ms: Option<String>,
+    last_product_admission_latency_ms: Option<String>,
+    last_input_admission_latency_ms: Option<String>,
+    queued_input_batches: usize,
+    queued_input_events: usize,
+    input_batch_capacity: usize,
+    oldest_input_age_ms: Option<String>,
+    input_overflow_pending: bool,
+    runtime_progress_rate_millihertz: Option<String>,
+    runtime_progress_age_ms: Option<String>,
+    connections: usize,
+    subscribers: usize,
+    output_queue_items: usize,
+    output_queue_capacity: usize,
+    output_queue_floor: String,
+    output_binding_active: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum DiagnosticsOperationWire {
+    Connect,
+    Start,
+    Pause,
+    Resume,
+    Restart,
+    Shutdown,
+    ReportFault,
+    ReplaceControl,
+    ReleaseControl,
+    Input,
+    AdvanceRealtime,
+    AdmitDemandStep,
+    AdmitExternalStep,
+    CompleteTimeline,
+    ReportAudioFeedback,
+    ReportAnimationFeedback,
+    ReportGhostPlateFeedback,
+    ReportRendererDiagnostics,
+    ExecuteDebug,
 }
 enum Arguments {
     Help,

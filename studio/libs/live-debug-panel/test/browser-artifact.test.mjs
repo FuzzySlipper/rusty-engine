@@ -57,8 +57,17 @@ test('browser artifact mounts independently and routes through an injected trans
         diagnosticCalls += 1;
         return diagnosticCalls === 1
           ? {
-            events: [{ sequence: '8', monotonicNanoseconds: '2000000000', severity: 'warning', disposition: 'degraded', source: 'browser-host', code: 'BROWSER_HOST_STATUS', message: 'stopped', fields: [{ key: 'renderer-age-ms', value: '100' }, { key: 'transport', value: 'closed' }] }],
+            events: [{ sequence: '8', monotonicNanoseconds: '2000000000', severity: 'warning', disposition: 'degraded', source: 'browser-host', code: 'BROWSER_HOST_STATUS', message: 'stopped', fields: [{ key: 'renderer-observation-age-ms', value: '100' }, { key: 'transport', value: 'closed' }] }],
             floorSequence: '8', throughSequence: '8', nextCursor: '8', readMonotonicNanoseconds: '2000000000', lagged: false, warningCount: '1', errorCount: '0', droppedCount: '0',
+            telemetry: {
+              inFlightOperation: 'advance-realtime', inFlightAgeMs: '4',
+              lastProductAdmissionLatencyMs: '6', lastInputAdmissionLatencyMs: '2',
+              queuedInputBatches: 3, queuedInputEvents: 4, inputBatchCapacity: 256,
+              oldestInputAgeMs: '9', inputOverflowPending: false,
+              runtimeProgressRateMillihertz: '60000', runtimeProgressAgeMs: '1',
+              connections: 1, subscribers: 1, outputQueueItems: 2, outputQueueCapacity: 256,
+              outputQueueFloor: '7', outputBindingActive: true,
+            },
           }
           : { events: [], floorSequence: '8', throughSequence: '8', nextCursor: '8', readMonotonicNanoseconds: '3000000000', lagged: false, warningCount: '1', errorCount: '0', droppedCount: '0' };
       },
@@ -94,6 +103,7 @@ test('browser artifact mounts independently and routes through an injected trans
     await new Promise((resolve) => setTimeout(resolve, 20));
     const ids = [...document.querySelectorAll('input')].map((element) => element.id);
     const logs = [...document.querySelectorAll('#ready [role="log"]')].map((element) => element.textContent).join('\n');
+    const panelText = document.querySelector('#ready .rusty-live-debug-panel')?.textContent ?? '';
     const diagnosticStyles = getComputedStyle(document.querySelector('#ready .rusty-live-debug-panel__diagnostics'));
     const diagnosticSelection = {
       cursor: diagnosticStyles.cursor,
@@ -102,7 +112,7 @@ test('browser artifact mounts independently and routes through an injected trans
     ready.dispose();
     inert.dispose();
     hanging.dispose();
-    return { catalogCalls, commands, hangingAborted: hangingSignal?.aborted, ids, logs, diagnosticSelection };
+    return { catalogCalls, commands, hangingAborted: hangingSignal?.aborted, ids, logs, panelText, diagnosticSelection };
   });
 
   assert.equal(result.catalogCalls, 2, 'the disabled panel must stay inert');
@@ -110,7 +120,10 @@ test('browser artifact mounts independently and routes through an injected trans
   assert.equal(result.hangingAborted, true, 'disposing a panel must abort its in-flight command');
   assert.equal(new Set(result.ids).size, result.ids.length, 'mounted panels must not reuse DOM IDs');
   assert.match(result.logs ?? '', /ran inspect/);
-  assert.match(result.logs ?? '', /renderer-age-ms=1100/);
+  assert.match(result.logs ?? '', /renderer-observation-age-ms=100/);
+  assert.match(result.logs ?? '', /event-age-ms=1000/);
+  assert.match(result.panelText ?? '', /Product\/runtime lane/);
+  assert.match(result.panelText ?? '', /Runtime progress: 60\.000\/s/);
   assert.deepEqual(result.diagnosticSelection, { cursor: 'text', userSelect: 'text' });
 });
 

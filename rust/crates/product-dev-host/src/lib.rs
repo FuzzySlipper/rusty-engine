@@ -51,8 +51,8 @@ pub use model::{
     ProductDevRendererDiagnosticsFeedbackResult, ProductDevRuntime, ProductDevRuntimeBinding,
     ProductDevRuntimeFault, ProductDevRuntimeMode, ProductDevRuntimeOutput,
     ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
-    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
-    PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
+    ProductDevRuntimeState, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
+    ProductDevTimelineCompletionResult, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use session::ProductDevOperationOwner;
 

@@ -12,10 +12,11 @@ import { FormsModule } from '@angular/forms';
 import {
   completeLiveDebug,
   createLiveDebugHttpTransport,
-  diagnosticRendererObservationAgeMilliseconds,
+  diagnosticEventAgeMilliseconds,
   type LiveDebugCatalog,
   type LiveDebugCommandDescriptor,
   type LiveDebugDiagnosticEvent,
+  type LiveDebugTelemetrySnapshot,
   type LiveDebugTransport,
 } from '@rusty-engine/live-debug-client';
 
@@ -115,6 +116,14 @@ let nextLiveDebugPanelInstance = 1;
             <li *ngFor="let event of diagnosticEvents()"><code>#{{ event.sequence }} {{ event.source }}/{{ event.code }}</code> {{ event.message }} <small>{{ diagnosticDetail(event) }}</small></li>
           </ol>
         </section>
+        <section class="rusty-live-debug-panel__product-telemetry" *ngIf="diagnosticTelemetry() as telemetry" aria-label="Product/runtime lane">
+          <strong>Product/runtime lane</strong>
+          <span>In flight: {{ telemetry.inFlightOperation || 'none' }} · age {{ milliseconds(telemetry.inFlightAgeMs) }}</span>
+          <span>Admission: product {{ milliseconds(telemetry.lastProductAdmissionLatencyMs) }} · input {{ milliseconds(telemetry.lastInputAdmissionLatencyMs) }}</span>
+          <span>Input queue: {{ telemetry.queuedInputBatches }}/{{ telemetry.inputBatchCapacity }} batches · {{ telemetry.queuedInputEvents }} events · oldest {{ milliseconds(telemetry.oldestInputAgeMs) }}<ng-container *ngIf="telemetry.inputOverflowPending"> · overflow pending</ng-container></span>
+          <span>Runtime progress: {{ millihertz(telemetry.runtimeProgressRateMillihertz) }} · last {{ milliseconds(telemetry.runtimeProgressAgeMs) }}</span>
+          <span>Transport: {{ telemetry.connections }} connection(s) · {{ telemetry.subscribers }} subscriber(s) · output {{ telemetry.outputQueueItems }}/{{ telemetry.outputQueueCapacity }} · floor {{ telemetry.outputQueueFloor }} · binding {{ telemetry.outputBindingActive ? 'active' : 'inactive' }}</span>
+        </section>
       </ng-container>
 
       <ng-template #disabledPanel>
@@ -140,6 +149,7 @@ let nextLiveDebugPanelInstance = 1;
     .rusty-live-debug-panel__response--failure pre { color: #ffb4ab; }
     .rusty-live-debug-panel__diagnostics { display: grid; gap: 0.35rem; margin-top: 0.75rem; cursor: text; user-select: text; }
     .rusty-live-debug-panel__diagnostic-log { max-height: 12rem; overflow: auto; margin: 0; padding-left: 1.5rem; cursor: text; user-select: text; }
+    .rusty-live-debug-panel__product-telemetry { display: grid; gap: 0.35rem; margin-top: 0.75rem; cursor: text; user-select: text; }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -169,6 +179,7 @@ export class LiveDebugPanelComponent implements OnDestroy {
   readonly diagnosticDroppedCount = signal('0');
   readonly diagnosticLagged = signal(false);
   readonly diagnosticReadMonotonicNanoseconds = signal('0');
+  readonly diagnosticTelemetry = signal<LiveDebugTelemetrySnapshot | null>(null);
   readonly completions = computed(() => {
     const catalog = this.catalog();
     if (catalog === null || !catalog.available) return [];
@@ -274,13 +285,25 @@ export class LiveDebugPanelComponent implements OnDestroy {
 
   diagnosticDetail(event: LiveDebugDiagnosticEvent): string {
     const fields = event.fields?.map((field) => `${field.key}=${field.value}`) ?? [];
-    const age = diagnosticRendererObservationAgeMilliseconds({
+    const eventAge = diagnosticEventAgeMilliseconds({
       events: [], floorSequence: '0', throughSequence: '0', nextCursor: '0',
       readMonotonicNanoseconds: this.diagnosticReadMonotonicNanoseconds(),
       lagged: false, warningCount: '0', errorCount: '0', droppedCount: '0',
     }, event);
-    if (age !== null) fields.push(`renderer-age-ms=${String(Math.floor(age))}`);
+    if (eventAge !== null) fields.push(`event-age-ms=${String(Math.floor(eventAge))}`);
     return fields.join(' · ');
+  }
+
+  millihertz(value: string | null): string {
+    if (value === null || !/^\d+$/u.test(value)) return 'unavailable';
+    const encoded = BigInt(value);
+    const whole = encoded / 1_000n;
+    const fraction = String(encoded % 1_000n).padStart(3, '0');
+    return `${whole.toString()}.${fraction}/s`;
+  }
+
+  milliseconds(value: string | null): string {
+    return value === null || !/^\d+$/u.test(value) ? 'unavailable' : `${value} ms`;
   }
 
   clearTranscript(): void {
@@ -313,6 +336,7 @@ export class LiveDebugPanelComponent implements OnDestroy {
     this.diagnosticErrorCount.set('0');
     this.diagnosticDroppedCount.set('0');
     this.diagnosticLagged.set(false);
+    this.diagnosticTelemetry.set(null);
     this.catalog.set(null);
     this.connection.set('disconnected');
     this.executing.set(false);
@@ -349,6 +373,9 @@ export class LiveDebugPanelComponent implements OnDestroy {
       this.diagnosticWarningCount.set(batch.warningCount);
       this.diagnosticErrorCount.set(batch.errorCount);
       this.diagnosticDroppedCount.set(batch.droppedCount);
+      // Keep the last snapshot when an older host omits the optional field.
+      // A disconnect/reset clears it explicitly above.
+      if (batch.telemetry !== undefined) this.diagnosticTelemetry.set(batch.telemetry);
       if (batch.events.length > 0) {
         this.diagnosticEvents.set(
           [...this.diagnosticEvents(), ...batch.events].slice(-LIVE_DEBUG_PANEL_MAX_DIAGNOSTICS),

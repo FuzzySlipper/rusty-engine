@@ -697,6 +697,11 @@ fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
         "{read}"
     );
     assert!(read.contains("\"nextCursor\":\"3\""), "{read}");
+    assert!(read.contains("\"telemetry\":{"), "{read}");
+    assert!(
+        read.contains("\"runtimeProgressRateMillihertz\":null"),
+        "{read}"
+    );
     host.shutdown().unwrap();
 }
 
