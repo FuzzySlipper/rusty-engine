@@ -23,3 +23,22 @@ The artifact contains Angular and the Engine live-debug client. It owns only
 this optional DOM UI and forwards raw command lines to the generated product
 debug surface. It does not read gameplay state, render game elements, define
 commands, or replace a product transport.
+
+For a compact Engine-owned renderer readout, mount the widget beside the
+product's canvas or developer UI. `initiallyVisible` is explicit: omitting it
+preserves the Engine default of hidden, while `true` establishes a visible
+shared state for every mounted widget. The ordinary console commands
+`engine.renderer.show`, `.hide`, `.toggle`, and `.status` change that shared
+state. The widget only polls the latest admitted renderer observation; it does
+not schedule an animation frame or submit rendering work.
+
+```ts
+import { mountRendererMetricsWidget } from './vendor/live-debug-panel/index.js';
+
+const metrics = mountRendererMetricsWidget(metricsElement, {
+  initiallyVisible: true,
+});
+
+// When the product-owned UI is removed:
+metrics.dispose();
+```

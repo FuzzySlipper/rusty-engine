@@ -6,7 +6,8 @@
   "include": [
     "src/browser-mount.ts",
     "src/live-debug-panel.component.ts",
-    "src/live-debug-panel-model.ts"
+    "src/live-debug-panel-model.ts",
+    "src/renderer-metrics-widget.ts"
   ],
   "angularCompilerOptions": {
     "compilationMode": "full",

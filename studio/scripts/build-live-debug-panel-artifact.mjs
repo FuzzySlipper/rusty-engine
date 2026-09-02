@@ -42,6 +42,7 @@ normalizeGeneratedLineEndings(new URL('index.js', artifact));
 
 copyDeclaration('browser-mount.d.ts', 'index.d.ts');
 copyDeclaration('live-debug-panel-model.d.ts');
+copyDeclaration('renderer-metrics-widget.d.ts');
 copyClientDeclaration();
 writeFileSync(
   new URL('package.json', artifact),
@@ -52,7 +53,7 @@ writeFileSync(
     main: './index.js',
     types: './index.d.ts',
     exports: { '.': { import: './index.js', types: './index.d.ts' } },
-    files: ['index.js', 'index.d.ts', 'live-debug-client.d.ts', 'live-debug-panel-model.d.ts'],
+    files: ['index.js', 'index.d.ts', 'live-debug-client.d.ts', 'live-debug-panel-model.d.ts', 'renderer-metrics-widget.d.ts'],
   }, null, 2)}\n`,
 );
 

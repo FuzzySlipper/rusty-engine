@@ -79,6 +79,95 @@ const MAX_DEBUG_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_DEBUG_RESULT_BYTES: usize = 64 * 1024;
 const MAX_PRODUCT_ERROR_BYTES: usize = 64 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RendererDebugCommand {
+    Read,
+    Show,
+    Hide,
+    Toggle,
+    Status,
+}
+
+/// Keeps the Engine's renderer-debug vocabulary exact. Product-owned command
+/// prefixes continue through the generated callback untouched.
+fn renderer_debug_command(command: &str) -> Option<RendererDebugCommand> {
+    match command.trim() {
+        "engine.renderer" => Some(RendererDebugCommand::Read),
+        "engine.renderer.show" => Some(RendererDebugCommand::Show),
+        "engine.renderer.hide" => Some(RendererDebugCommand::Hide),
+        "engine.renderer.toggle" => Some(RendererDebugCommand::Toggle),
+        "engine.renderer.status" => Some(RendererDebugCommand::Status),
+        _ => None,
+    }
+}
+
+fn renderer_diagnostics_summary(snapshot: Option<&str>, widget_visible: bool) -> serde_json::Value {
+    let Some(snapshot) =
+        snapshot.and_then(|snapshot| serde_json::from_str::<serde_json::Value>(snapshot).ok())
+    else {
+        return serde_json::json!({
+            "schemaVersion": 1,
+            "available": false,
+            "widget": { "visible": widget_visible },
+            "diagnostic": "No browser renderer snapshot has been admitted yet.",
+        });
+    };
+    let object = snapshot.as_object();
+    let value = |path: &[&str]| -> serde_json::Value {
+        let mut current =
+            object.and_then(|object| object.get(path.first().copied().unwrap_or_default()));
+        for key in path.iter().skip(1) {
+            current = current
+                .and_then(serde_json::Value::as_object)
+                .and_then(|object| object.get(*key));
+        }
+        current.cloned().unwrap_or(serde_json::Value::Null)
+    };
+    let interval_ms = value(&["submission", "frameIntervalMs"]);
+    let fps = interval_ms
+        .as_f64()
+        .filter(|interval| *interval > 0.0)
+        .map(|interval| 1_000.0 / interval)
+        .map_or(serde_json::Value::Null, |fps| serde_json::json!(fps));
+    serde_json::json!({
+        "schemaVersion": 1,
+        "available": true,
+        "widget": { "visible": widget_visible },
+        "renderer": {
+            "name": value(&["renderer"]),
+            "vendor": value(&["vendor"]),
+            "class": value(&["pacing", "rendererClass"]),
+        },
+        "canvas": value(&["canvas"]),
+        "frame": {
+            "renderSequence": value(&["submission", "renderSequence"]),
+            "intervalMs": interval_ms,
+            "intervalStatus": value(&["submission", "frameIntervalStatus"]),
+            "fps": fps,
+            "syncSubmissionMs": value(&["submission", "backendSubmissionDurationMs"]),
+            "syncSubmissionStatus": value(&["submission", "backendSubmissionDurationStatus"]),
+        },
+        "pacing": {
+            "mode": value(&["pacing", "mode"]),
+            "state": value(&["pacing", "state"]),
+            "effectiveDurationMs": value(&["pacing", "effectiveDurationMs"]),
+            "timerDurationMs": value(&["pacing", "timerDurationMs"]),
+            "completionAgeMs": value(&["pacing", "completionAgeMs"]),
+            "completionFenceMode": value(&["pacing", "completionFenceMode"]),
+            "pendingSubmissionCount": value(&["pacing", "pendingSubmissionCount"]),
+            "pendingMeasurementCount": value(&["pacing", "pendingMeasurementCount"]),
+        },
+        "statistics": value(&["submission", "statistics"]),
+        "resources": {
+            "definedTextureCount": value(&["resources", "definedTextureCount"]),
+            "spriteAtlasCount": value(&["resources", "spriteAtlasCount"]),
+            "spriteFallbackCount": value(&["resources", "spriteFallbackCount"]),
+            "materialFallbackCount": value(&["resources", "materialFallbackCount"]),
+            "voxelSpecializedMaterialCount": value(&["resources", "voxelSpecializedMaterialCount"]),
+        },
+    })
+}
+
 #[derive(Debug)]
 pub struct CsharpProductRuntimeError {
     code: &'static str,
@@ -477,6 +566,7 @@ pub struct CsharpProductRuntime {
     services: Box<EngineServiceSet>,
     initial_output: Option<CsharpEngineCallOutput>,
     render_resources: Vec<ProductDevRendererResource>,
+    renderer_metrics_visible: bool,
     shutdown_called: bool,
 }
 
@@ -714,6 +804,7 @@ impl CsharpProductRuntime {
             services,
             initial_output,
             render_resources,
+            renderer_metrics_visible: false,
             shutdown_called: false,
         })
     }
@@ -1851,6 +1942,42 @@ impl CsharpProductRuntime {
         }
         self.rebind_input(InputClearReason::Restart)
     }
+
+    fn execute_renderer_debug(
+        &mut self,
+        action: RendererDebugCommand,
+    ) -> Result<ProductDevDebugResult, ProductDevRuntimeError> {
+        match action {
+            RendererDebugCommand::Show => self.renderer_metrics_visible = true,
+            RendererDebugCommand::Hide => self.renderer_metrics_visible = false,
+            RendererDebugCommand::Toggle => {
+                self.renderer_metrics_visible = !self.renderer_metrics_visible
+            }
+            RendererDebugCommand::Read | RendererDebugCommand::Status => {}
+        }
+        let summary = renderer_diagnostics_summary(
+            self.services.renderer_diagnostics_json(),
+            self.renderer_metrics_visible,
+        );
+        let message = serde_json::to_string_pretty(&summary).map_err(|error| {
+            ProductDevRuntimeError::new(
+                "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
+                format!("renderer diagnostics summary could not be encoded: {error}"),
+            )
+            .expect("fixed renderer diagnostics encoding diagnostic")
+        })?;
+        // A read with no browser snapshot remains a failed observation for
+        // callers. Visibility operations are successful even before the first
+        // frame so a mounted widget can accurately show its unavailable state.
+        let succeeded = match action {
+            RendererDebugCommand::Read => summary["available"].as_bool().unwrap_or(false),
+            RendererDebugCommand::Show
+            | RendererDebugCommand::Hide
+            | RendererDebugCommand::Toggle
+            | RendererDebugCommand::Status => true,
+        };
+        ProductDevDebugResult::new(succeeded, message).map_err(host_runtime_error)
+    }
 }
 
 impl ProductDevRuntime for CsharpProductRuntime {
@@ -2064,23 +2191,8 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         command: &str,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
-        if command.trim() == "engine.renderer" {
-            let message = self.services.renderer_diagnostics_json().map_or_else(
-                || {
-                    "renderer diagnostics unavailable: no browser snapshot has been admitted"
-                        .to_owned()
-                },
-                |snapshot| {
-                    serde_json::to_string_pretty(snapshot).unwrap_or_else(|_| {
-                        "renderer diagnostics unavailable: snapshot encoding failed".to_owned()
-                    })
-                },
-            );
-            let result = ProductDevDebugResult::new(
-                self.services.renderer_diagnostics_json().is_some(),
-                message,
-            )
-            .map_err(host_runtime_error)?;
+        if let Some(action) = renderer_debug_command(command) {
+            let result = self.execute_renderer_debug(action)?;
             return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
         }
         if command.len() > MAX_DEBUG_COMMAND_BYTES {
@@ -4486,6 +4598,116 @@ mod tests {
     static DIRECT_INPUT_FIXTURE_GATE: Mutex<()> = Mutex::new(());
     static DIRECT_INPUT_CALLBACK_EVENTS: Mutex<Vec<Vec<DirectInputCallbackEvent>>> =
         Mutex::new(Vec::new());
+
+    #[test]
+    fn renderer_debug_summary_is_compact_and_owns_only_exact_engine_commands() {
+        assert_eq!(
+            renderer_debug_command("engine.renderer"),
+            Some(RendererDebugCommand::Read)
+        );
+        assert_eq!(
+            renderer_debug_command(" engine.renderer.toggle "),
+            Some(RendererDebugCommand::Toggle)
+        );
+        assert_eq!(renderer_debug_command("engine.renderer.product"), None);
+
+        let snapshot = serde_json::json!({
+            "schemaVersion": 1,
+            "renderer": "Fixture GPU",
+            "vendor": "Fixture Vendor",
+            "canvas": { "cssWidth": 800, "cssHeight": 600, "backingWidth": 1600, "backingHeight": 1200, "effectivePixelRatio": 2.0 },
+            "submission": {
+                "renderSequence": 42,
+                "frameIntervalMs": 20.0,
+                "frameIntervalStatus": "available",
+                "backendSubmissionDurationMs": 3.0,
+                "backendSubmissionDurationStatus": "available",
+                "statistics": {
+                    "drawCallCount": { "scope": "perSubmission", "status": "available", "value": 12 },
+                    "renderHandleCount": { "scope": "liveResident", "status": "available", "value": 8 },
+                    "geometryResourceCount": { "scope": "liveResident", "status": "available", "value": 3 },
+                    "materialResourceCount": { "scope": "liveResident", "status": "available", "value": 4 },
+                    "textureResourceCount": { "scope": "liveResident", "status": "available", "value": 5 },
+                    "animatedInstanceCount": { "scope": "liveResident", "status": "available", "value": 0 },
+                    "triangleCount": { "scope": "perSubmission", "status": "available", "value": 90 }
+                }
+            },
+            "pacing": { "rendererClass": "accelerated", "mode": "timerQuery", "state": "ready", "timerDurationMs": 2.0, "effectiveDurationMs": 4.0, "completionAgeMs": 1.0, "completionFenceMode": "active", "pendingSubmissionCount": 0, "pendingMeasurementCount": 0 },
+            "resources": {
+                "definedTextureCount": 1000,
+                "realizedTextures": (0..1000).map(|id| serde_json::json!({ "id": format!("texture-{id:04}-{}", "x".repeat(128)) })).collect::<Vec<_>>(),
+                "spriteAtlasCount": 1,
+                "spriteFallbackCount": 0,
+                "materialFallbackCount": 0,
+                "voxelSpecializedMaterialCount": 2
+            }
+        });
+        let encoded = serde_json::to_string(&snapshot).expect("fixture snapshot encodes");
+        let summary = renderer_diagnostics_summary(Some(&encoded), true);
+        let summary_encoded = serde_json::to_vec(&summary).expect("summary encodes");
+        assert!(
+            summary_encoded.len() < 8 * 1024,
+            "summary must not retain per-texture rows"
+        );
+        assert_eq!(summary["widget"]["visible"], true);
+        assert_eq!(summary["frame"]["fps"], 50.0);
+        assert!(summary["resources"].get("realizedTextures").is_none());
+
+        let unavailable = renderer_diagnostics_summary(None, false);
+        assert_eq!(unavailable["available"], false);
+        assert_eq!(unavailable["widget"]["visible"], false);
+    }
+
+    #[test]
+    fn renderer_debug_commands_publish_widget_state_without_a_product_debug_callback() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        let (mut runtime, root) = drop_fixture_runtime("renderer-debug-commands");
+        let (shown, _) = runtime
+            .execute_debug("engine.renderer.show")
+            .expect("Engine show command completes")
+            .into_parts();
+        assert!(shown.succeeded());
+        let shown: serde_json::Value =
+            serde_json::from_str(shown.message()).expect("show readout is JSON");
+        assert_eq!(shown["widget"]["visible"], true);
+        assert_eq!(shown["available"], false);
+
+        let (hidden, _) = runtime
+            .execute_debug("engine.renderer.hide")
+            .expect("Engine hide command completes")
+            .into_parts();
+        let hidden: serde_json::Value =
+            serde_json::from_str(hidden.message()).expect("hide readout is JSON");
+        assert_eq!(hidden["widget"]["visible"], false);
+
+        let (toggled, _) = runtime
+            .execute_debug("engine.renderer.toggle")
+            .expect("Engine toggle command completes")
+            .into_parts();
+        let toggled: serde_json::Value =
+            serde_json::from_str(toggled.message()).expect("toggle readout is JSON");
+        assert_eq!(toggled["widget"]["visible"], true);
+        let (status, _) = runtime
+            .execute_debug("engine.renderer.status")
+            .expect("Engine status command completes")
+            .into_parts();
+        let status: serde_json::Value =
+            serde_json::from_str(status.message()).expect("status readout is JSON");
+        assert_eq!(status["widget"]["visible"], true);
+
+        let (catalog, _) = runtime
+            .describe_debug()
+            .expect("catalog completes")
+            .into_parts();
+        let catalog = serde_json::to_value(catalog).expect("catalog serializes");
+        assert!(catalog["commands"]
+            .as_array()
+            .expect("catalog commands")
+            .iter()
+            .any(|command| command["name"] == "engine.renderer.status"));
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove renderer debug fixture content");
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct DirectInputCallbackEvent {

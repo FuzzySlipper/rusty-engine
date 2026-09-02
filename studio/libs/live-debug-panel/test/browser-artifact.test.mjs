@@ -150,3 +150,96 @@ test('browser artifact can remount after disposal into the same caller-owned hos
   assert.equal(result.secondConnected, true, 'a caller-owned host must support a later remount');
   assert.equal(result.finalChildCount, 0);
 });
+
+test('renderer metrics widget establishes visibility once, refreshes admitted facts, and disposes its polling', async (context) => {
+  const bundle = await readFile(new URL('index.js', artifactRoot), 'utf8');
+  const server = createServer(async (request, response) => {
+    if (request.url === '/fixture.html') {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<main><div id="first"></div><div id="second"></div></main>');
+      return;
+    }
+    if (request.url === '/index.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript' });
+      response.end(bundle);
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+
+  const browser = await chromium.launch({ headless: true });
+  context.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.goto(`http://127.0.0.1:${address.port}/fixture.html`);
+
+  const result = await page.evaluate(async () => {
+    const { mountRendererMetricsWidget } = await import('/index.js');
+    let visible = false;
+    let statusCalls = 0;
+    const commands = [];
+    const summary = () => JSON.stringify({
+      schemaVersion: 1,
+      available: true,
+      widget: { visible },
+      renderer: { class: 'accelerated', name: 'Fixture GPU', vendor: null },
+      canvas: { cssWidth: 800, cssHeight: 600, backingWidth: 1600, backingHeight: 1200, effectivePixelRatio: 2 },
+      frame: { fps: 60, intervalMs: 16.67, syncSubmissionMs: 2.5 },
+      pacing: { timerDurationMs: null, effectiveDurationMs: 3.2, state: 'ready', mode: 'timerQuery' },
+      statistics: {
+        drawCallCount: { value: 4 }, triangleCount: { value: 12 }, renderHandleCount: { value: 2 },
+        geometryResourceCount: { value: 2 }, materialResourceCount: { value: 1 }, textureResourceCount: { value: 3 },
+      },
+      resources: { definedTextureCount: 3, spriteFallbackCount: 0, materialFallbackCount: 1 },
+    });
+    const transport = {
+      async catalog() { return { available: true, commands: [] }; },
+      async execute(command) {
+        commands.push(command);
+        if (command === 'engine.renderer.show') visible = true;
+        if (command === 'engine.renderer.hide') visible = false;
+        if (command === 'engine.renderer.toggle') visible = !visible;
+        if (command === 'engine.renderer.status') statusCalls += 1;
+        return { succeeded: true, message: summary() };
+      },
+    };
+    const firstHost = document.querySelector('#first');
+    const secondHost = document.querySelector('#second');
+    const first = mountRendererMetricsWidget(firstHost, { initiallyVisible: true, transport });
+    const second = mountRendererMetricsWidget(secondHost, { transport });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const firstText = firstHost.textContent;
+    const secondVisible = secondHost.querySelector('.rusty-renderer-metrics-widget')?.hidden === false;
+    await transport.execute('engine.renderer.hide');
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const hiddenAfterConsole = firstHost.querySelector('.rusty-renderer-metrics-widget')?.hidden === true
+      && secondHost.querySelector('.rusty-renderer-metrics-widget')?.hidden === true;
+    first.dispose();
+    second.dispose();
+    const callsAtDispose = statusCalls;
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    return {
+      commands,
+      firstText,
+      secondVisible,
+      hiddenAfterConsole,
+      callsAtDispose,
+      callsAfterDispose: statusCalls,
+      firstChildren: firstHost.childElementCount,
+      secondChildren: secondHost.childElementCount,
+    };
+  });
+
+  assert.ok(result.commands.includes('engine.renderer.show'));
+  assert.ok(result.commands.filter((command) => command === 'engine.renderer.status').length >= 2);
+  assert.match(result.firstText ?? '', /FPS: 60\.0/);
+  assert.match(result.firstText ?? '', /GPU timer: unavailable/);
+  assert.equal(result.secondVisible, true, 'separate mounts read the one shared runtime visibility state');
+  assert.equal(result.hiddenAfterConsole, true, 'a console state update reaches every mounted widget');
+  assert.equal(result.callsAfterDispose, result.callsAtDispose, 'disposed widgets must stop polling');
+  assert.equal(result.firstChildren, 0);
+  assert.equal(result.secondChildren, 0);
+});

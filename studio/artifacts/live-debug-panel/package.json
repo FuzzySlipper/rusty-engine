@@ -14,6 +14,7 @@
     "index.js",
     "index.d.ts",
     "live-debug-client.d.ts",
-    "live-debug-panel-model.d.ts"
+    "live-debug-panel-model.d.ts",
+    "renderer-metrics-widget.d.ts"
   ]
 }

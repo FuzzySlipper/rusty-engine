@@ -381,6 +381,52 @@ test('input availability wakes static realtime and demand admission without a se
   assert.deepEqual(await run('external'), { batches: [[input]], advances: [], demandSteps: 0 });
 });
 
+test('slow cadence preserves input pulse boundaries and chronological advancement', async () => {
+  const pressed: RustyApplicationRuntimeInputEnvelope = {
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    sequence: '1',
+    context: 'gameplay.default',
+    fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+  };
+  const released: RustyApplicationRuntimeInputEnvelope = {
+    ...pressed,
+    sequence: '2',
+    fact: { kind: 'key', code: 'key-w', edge: 'released' },
+  };
+  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
+  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const advances: string[] = [];
+  let releaseFirstAdvance: () => void = () => undefined;
+  const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
+  const cadence = createProductBrowserCadence({
+    lifecycleMode: 'realtime',
+    realtimeAdvanceOwner: 'browser',
+    isReady: () => true,
+    enqueueOperation: (operation) => operation(),
+    sampleInput: () => queued.splice(0),
+    sendInput: async (batch) => { batches.push(batch); },
+    advanceRealtime: async (time) => {
+      advances.push(time);
+      if (advances.length === 1) await firstAdvance;
+    },
+    admitDemandStep: async () => undefined,
+    onFailure: (cause) => { assert.fail(String(cause)); },
+  });
+
+  cadence.enqueue(10);
+  queued.push(pressed);
+  cadence.pulseInput(20);
+  for (let time = 61; time <= 100; time += 1) cadence.enqueue(time);
+  queued.push(released);
+  cadence.pulseInput(120);
+  releaseFirstAdvance();
+  await cadence.settle();
+  cadence.dispose();
+
+  assert.deepEqual(batches, [[pressed], [released]]);
+  assert.deepEqual(advances, ['10000000', '20000000', '100000000', '120000000']);
+});
+
 test('transport rejects an adapter with an arbitrary or missing operation surface', () => {
   assert.throws(
     () => createProductBrowserRuntimeTransport({

@@ -918,14 +918,34 @@ impl ProductDevDebugCatalog {
 
     pub fn with_renderer_diagnostics(mut self) -> Self {
         self.available = true;
-        if !self
-            .commands
-            .iter()
-            .any(|command| command.name == "engine.renderer")
-        {
+        for (name, description) in [
+            (
+                "engine.renderer",
+                "Show the latest compact browser renderer timing, pacing, canvas, and resource summary",
+            ),
+            (
+                "engine.renderer.show",
+                "Show every mounted Engine renderer metrics widget",
+            ),
+            (
+                "engine.renderer.hide",
+                "Hide every mounted Engine renderer metrics widget",
+            ),
+            (
+                "engine.renderer.toggle",
+                "Toggle every mounted Engine renderer metrics widget",
+            ),
+            (
+                "engine.renderer.status",
+                "Show renderer metrics widget visibility and the latest compact summary",
+            ),
+        ] {
+            if self.commands.iter().any(|command| command.name == name) {
+                continue;
+            }
             self.commands.push(ProductDevDebugCommandDescriptor {
-                name: "engine.renderer".to_owned(),
-                description: "Show the latest browser renderer timing, pacing, canvas, and resource realization snapshot".to_owned(),
+                name: name.to_owned(),
+                description: description.to_owned(),
                 parameters: Vec::new(),
             });
         }
