@@ -466,7 +466,7 @@ test('input availability wakes static realtime and demand admission without a se
   assert.deepEqual(await run('external'), { batches: [[input]], advances: [], demandSteps: 0 });
 });
 
-test('slow cadence preserves input pulse boundaries and chronological advancement', async () => {
+test('slow cadence coalesces an input wake while ingress preserves ordered edges', async () => {
   const pressed: RustyApplicationRuntimeInputEnvelope = {
     runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
     sequence: '1',
@@ -508,8 +508,153 @@ test('slow cadence preserves input pulse boundaries and chronological advancemen
   await cadence.settle();
   cadence.dispose();
 
-  assert.deepEqual(batches, [[pressed], [released]]);
-  assert.deepEqual(advances, ['10000000', '20000000', '100000000', '120000000']);
+  assert.deepEqual(batches, [[pressed, released]]);
+  assert.deepEqual(advances, ['10000000', '20000000', '100000000']);
+});
+
+test('a renderer cadence before a pending input wake does not drain later input early', async () => {
+  const pressed: RustyApplicationRuntimeInputEnvelope = {
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    sequence: '1',
+    context: 'gameplay.default',
+    fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+  };
+  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
+  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const advances: string[] = [];
+  let samples = 0;
+  let releaseFirstAdvance: () => void = () => undefined;
+  const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
+  const cadence = createProductBrowserCadence({
+    lifecycleMode: 'realtime',
+    realtimeAdvanceOwner: 'browser',
+    isReady: () => true,
+    enqueueOperation: (operation) => operation(),
+    sampleInput: () => {
+      samples += 1;
+      return queued.splice(0);
+    },
+    sendInput: async (batch) => { batches.push(batch); },
+    advanceRealtime: async (time) => {
+      advances.push(time);
+      if (advances.length === 1) await firstAdvance;
+    },
+    admitDemandStep: async () => undefined,
+    onFailure: (cause) => { assert.fail(String(cause)); },
+  });
+
+  cadence.enqueue(10);
+  cadence.enqueue(100);
+  queued.push(pressed);
+  cadence.pulseInput(120);
+  releaseFirstAdvance();
+  await cadence.settle();
+  cadence.dispose();
+
+  assert.deepEqual(batches, [[pressed]]);
+  assert.deepEqual(advances, ['10000000', '100000000', '120000000']);
+  assert.equal(samples, 2);
+});
+
+test('a cadence deferred by the serialized lane does not drain a later input wake', async () => {
+  const pressed: RustyApplicationRuntimeInputEnvelope = {
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    sequence: '1',
+    context: 'gameplay.default',
+    fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+  };
+  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
+  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const advances: string[] = [];
+  let samples = 0;
+  let releasePriorOperation: () => void = () => undefined;
+  const priorOperation = new Promise<void>((resolve) => { releasePriorOperation = resolve; });
+  let operationTail: Promise<void> = priorOperation;
+  const cadence = createProductBrowserCadence({
+    lifecycleMode: 'realtime',
+    realtimeAdvanceOwner: 'browser',
+    isReady: () => true,
+    enqueueOperation: async <T>(operation: () => Promise<T>): Promise<T> => {
+      const result = operationTail.then(operation);
+      operationTail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    },
+    sampleInput: () => {
+      samples += 1;
+      return queued.splice(0);
+    },
+    sendInput: async (batch) => { batches.push(batch); },
+    advanceRealtime: async (time) => { advances.push(time); },
+    admitDemandStep: async () => undefined,
+    onFailure: (cause) => { assert.fail(String(cause)); },
+  });
+
+  cadence.enqueue(10);
+  queued.push(pressed);
+  cadence.pulseInput(20);
+  releasePriorOperation();
+  await cadence.settle();
+  cadence.dispose();
+
+  assert.deepEqual(batches, [[pressed]]);
+  assert.deepEqual(advances, ['10000000', '20000000']);
+  assert.equal(samples, 1);
+});
+
+test('slow admission keeps ingress overflow recovery bounded after more than 1024 input wakes', async () => {
+  const overflowClear: RustyApplicationRuntimeInputEnvelope = {
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    sequence: '0',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'ingress-overflow' },
+  };
+  const laterPressed: RustyApplicationRuntimeInputEnvelope = {
+    ...overflowClear,
+    sequence: '1',
+    fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+  };
+  const queued: RustyApplicationRuntimeInputEnvelope[] = [];
+  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const advances: string[] = [];
+  const failures: unknown[] = [];
+  let samples = 0;
+  let releaseFirstAdvance: () => void = () => undefined;
+  const firstAdvance = new Promise<void>((resolve) => { releaseFirstAdvance = resolve; });
+  const cadence = createProductBrowserCadence({
+    lifecycleMode: 'realtime',
+    realtimeAdvanceOwner: 'browser',
+    isReady: () => true,
+    enqueueOperation: (operation) => operation(),
+    sampleInput: () => {
+      samples += 1;
+      return queued.splice(0);
+    },
+    sendInput: async (batch) => { batches.push(batch); },
+    advanceRealtime: async (time) => {
+      advances.push(time);
+      if (advances.length === 1) await firstAdvance;
+    },
+    admitDemandStep: async () => undefined,
+    onFailure: (cause) => { failures.push(cause); },
+  });
+
+  cadence.enqueue(10);
+  for (let wake = 0; wake < 1_025; wake += 1) cadence.pulseInput(20 + wake);
+  // This is the application ingress outcome: overflow replaces stale input
+  // with its one clear, and a later physical edge follows it in queue order.
+  queued.push(overflowClear, laterPressed);
+  assert.equal(samples, 1);
+  releaseFirstAdvance();
+  await cadence.settle();
+  cadence.dispose();
+
+  assert.deepEqual(failures, []);
+  assert.deepEqual(batches, [[overflowClear, laterPressed]]);
+  assert.deepEqual(advances, ['10000000', '20000000']);
+  assert.equal(samples, 2);
 });
 
 test('cadence keeps an older same-frame RAF timestamp monotonic after an input wakeup', async () => {

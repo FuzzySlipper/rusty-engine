@@ -39,15 +39,6 @@ export interface ProductBrowserCadence {
   readonly dispose: () => void;
 }
 
-const MAXIMUM_PENDING_INPUT_ENVELOPES = 1_024;
-
-interface PendingInputPulse {
-  readonly timeMs: number;
-  readonly batch: readonly RustyApplicationRuntimeInputEnvelope[];
-  priorCadenceTimeMs: number | null;
-  priorDemandAdmission: boolean;
-}
-
 /**
  * Owns coalescing for the existing application-host cadence callback. It
  * never creates an animation frame source. In `rust-host` mode the callback
@@ -60,70 +51,40 @@ export function createProductBrowserCadence(
   let cadenceInFlight = false;
   let pendingCadenceTimeMs: number | null = null;
   let pendingDemandAdmission = false;
-  const pendingInputPulses: PendingInputPulse[] = [];
-  let pendingInputEnvelopeCount = 0;
+  // Input ingress is the sole envelope queue. While an operation owns the
+  // serialized lane, retain only the first wake timestamp: it gets the next
+  // admission opportunity without retaining, copying, or reordering input
+  // envelopes outside ingress.
+  let pendingInputWakeTimeMs: number | null = null;
   let disposed = false;
   let lastOperation: Promise<void> = Promise.resolve();
   let maximumObservedTimeMs = 0;
 
-  const enqueue = (
+  const startOperation = (
     timeMs: number,
     demandAdmission = false,
-    capturedInput: readonly RustyApplicationRuntimeInputEnvelope[] | null = null,
-    timeAlreadyNormalized = false,
+    inputWake = false,
+    sampleInput = true,
   ): void => {
-    if (disposed || !dependencies.isReady()) return;
-    // requestAnimationFrame timestamps describe the start of the frame, while
-    // input wakeups sample performance.now() when the event is handled. A RAF
-    // callback can therefore execute after an input wakeup while carrying a
-    // slightly older timestamp. Normalize both sources before they enter the
-    // one ordered runtime lane; Rust can retain strict regression rejection.
-    const monotonicTimeMs = timeAlreadyNormalized
-      ? orderingTime(timeMs)
-      : Math.max(maximumObservedTimeMs, orderingTime(timeMs));
-    if (!timeAlreadyNormalized) maximumObservedTimeMs = monotonicTimeMs;
-    if (cadenceInFlight) {
-      if (capturedInput !== null && capturedInput.length > 0) {
-        if (pendingInputEnvelopeCount + capturedInput.length > MAXIMUM_PENDING_INPUT_ENVELOPES) {
-          disposed = true;
-          pendingInputPulses.length = 0;
-          pendingInputEnvelopeCount = 0;
-          dependencies.onFailure(new Error(
-            `pending input exceeds ${String(MAXIMUM_PENDING_INPUT_ENVELOPES)} envelopes`,
-          ));
-          return;
-        }
-        const preserveCadenceBeforeInput = pendingCadenceTimeMs !== null
-          && orderingTime(pendingCadenceTimeMs) <= monotonicTimeMs;
-        pendingInputPulses.push({
-          timeMs: monotonicTimeMs,
-          batch: capturedInput,
-          priorCadenceTimeMs: preserveCadenceBeforeInput ? pendingCadenceTimeMs : null,
-          priorDemandAdmission: preserveCadenceBeforeInput && pendingDemandAdmission,
-        });
-        if (preserveCadenceBeforeInput) {
-          pendingCadenceTimeMs = null;
-          pendingDemandAdmission = false;
-        }
-        pendingInputEnvelopeCount += capturedInput.length;
-      }
-      // Keep only the newest observed host time while the Rust operation is
-      // outstanding. Sparse input pulses are captured separately above so a
-      // later edge cannot erase an earlier held state. Ordinary renderer
-      // cadence remains coalesced and never creates one promise per RAF.
-      if (capturedInput === null) {
-        pendingCadenceTimeMs = monotonicTimeMs;
-        pendingDemandAdmission ||= demandAdmission;
-      }
-      return;
-    }
     cadenceInFlight = true;
     const operation = dependencies.enqueueOperation(async () => {
-      const batch = capturedInput ?? dependencies.sampleInput();
+      // enqueueOperation can defer this callback behind an already-admitted
+      // runtime operation. Re-evaluate at execution time so a cadence that
+      // predates a wake received while it waited cannot drain future input.
+      const cadencePrecedesPendingInputWake = !inputWake
+        && pendingInputWakeTimeMs !== null
+        && orderingTime(timeMs) < orderingTime(pendingInputWakeTimeMs);
+      const batch = sampleInput && !cadencePrecedesPendingInputWake
+        ? dependencies.sampleInput()
+        : [];
       if (batch.length > 0) await dependencies.sendInput(batch);
+      // A wake can become redundant when an earlier renderer cadence drains
+      // ingress. Preserve the old availability contract by not advancing or
+      // admitting demand work solely for that empty wake.
+      if (inputWake && batch.length === 0) return;
       if (dependencies.lifecycleMode === 'realtime'
         && dependencies.realtimeAdvanceOwner === 'browser') {
-        await dependencies.advanceRealtime(toNanoseconds(monotonicTimeMs));
+        await dependencies.advanceRealtime(toNanoseconds(timeMs));
       } else if (dependencies.lifecycleMode === 'demand' && demandAdmission) {
         await dependencies.admitDemandStep();
       }
@@ -137,30 +98,47 @@ export function createProductBrowserCadence(
     );
   };
 
-  const finish = (): void => {
-    cadenceInFlight = false;
-    const inputPulse = pendingInputPulses[0];
-    if (inputPulse?.priorCadenceTimeMs !== null && inputPulse?.priorCadenceTimeMs !== undefined) {
-      const priorCadenceTimeMs = inputPulse.priorCadenceTimeMs;
-      const priorDemandAdmission = inputPulse.priorDemandAdmission;
-      inputPulse.priorCadenceTimeMs = null;
-      inputPulse.priorDemandAdmission = false;
-      if (!disposed && dependencies.isReady()) {
-        enqueue(priorCadenceTimeMs, priorDemandAdmission, null, true);
-      }
+  const enqueue = (timeMs: number, demandAdmission = false): void => {
+    if (disposed || !dependencies.isReady()) return;
+    // requestAnimationFrame timestamps describe the start of the frame, while
+    // input wakeups sample performance.now() when the event is handled. A RAF
+    // callback can therefore execute after an input wakeup while carrying a
+    // slightly older timestamp. Normalize both sources before they enter the
+    // one ordered runtime lane; Rust can retain strict regression rejection.
+    const monotonicTimeMs = Math.max(maximumObservedTimeMs, orderingTime(timeMs));
+    maximumObservedTimeMs = monotonicTimeMs;
+    if (cadenceInFlight) {
+      // Keep only the newest renderer time while the Rust operation is
+      // outstanding. This is intentionally separate from the input wake,
+      // whose earlier timestamp determines when ingress next gets sampled.
+      pendingCadenceTimeMs = monotonicTimeMs;
+      pendingDemandAdmission ||= demandAdmission;
       return;
     }
-    if (inputPulse !== undefined && (pendingCadenceTimeMs === null
-      || orderingTime(inputPulse.timeMs) <= orderingTime(pendingCadenceTimeMs))) {
-      pendingInputPulses.shift();
-      pendingInputEnvelopeCount -= inputPulse.batch.length;
+    startOperation(monotonicTimeMs, demandAdmission);
+  };
+
+  const pulseInput = (timeMs: number): void => {
+    if (disposed || !dependencies.isReady()) return;
+    const monotonicTimeMs = Math.max(maximumObservedTimeMs, orderingTime(timeMs));
+    maximumObservedTimeMs = monotonicTimeMs;
+    if (cadenceInFlight) {
+      // Do not drain while busy. Application ingress retains the bounded,
+      // ordered envelope batch and its overflow-clear recovery fact.
+      if (pendingInputWakeTimeMs === null) pendingInputWakeTimeMs = monotonicTimeMs;
+      return;
+    }
+    startOperation(monotonicTimeMs, dependencies.lifecycleMode === 'demand', true);
+  };
+
+  const finish = (): void => {
+    cadenceInFlight = false;
+    const inputWakeTimeMs = pendingInputWakeTimeMs;
+    if (inputWakeTimeMs !== null && (pendingCadenceTimeMs === null
+      || orderingTime(inputWakeTimeMs) <= orderingTime(pendingCadenceTimeMs))) {
+      pendingInputWakeTimeMs = null;
       if (!disposed && dependencies.isReady()) {
-        enqueue(
-          inputPulse.timeMs,
-          dependencies.lifecycleMode === 'demand',
-          inputPulse.batch,
-          true,
-        );
+        startOperation(inputWakeTimeMs, dependencies.lifecycleMode === 'demand', true);
       }
       return;
     }
@@ -169,23 +147,23 @@ export function createProductBrowserCadence(
     pendingCadenceTimeMs = null;
     pendingDemandAdmission = false;
     if (nextTimeMs !== null && !disposed && dependencies.isReady()) {
-      enqueue(nextTimeMs, demandAdmission, null, true);
+      // A renderer cadence that predates a queued input wake may still advance
+      // its clock, but it must not drain input that became available later.
+      // The following wake samples the one ingress queue at its own time.
+      const cadencePrecedesInputWake = pendingInputWakeTimeMs !== null
+        && orderingTime(nextTimeMs) < orderingTime(pendingInputWakeTimeMs);
+      startOperation(nextTimeMs, demandAdmission, false, !cadencePrecedesInputWake);
     }
   };
 
   return Object.freeze({
     enqueue: (timeMs: number): void => enqueue(timeMs),
-    pulseInput: (timeMs: number): void => {
-      if (disposed || !dependencies.isReady()) return;
-      const batch = dependencies.sampleInput();
-      if (batch.length === 0) return;
-      enqueue(timeMs, dependencies.lifecycleMode === 'demand', batch);
-    },
+    pulseInput,
     pulseRustHost: (): void => {
       if (dependencies.realtimeAdvanceOwner === 'rust-host') enqueue(0);
     },
     settle: async (): Promise<void> => {
-      while (cadenceInFlight || pendingCadenceTimeMs !== null || pendingInputPulses.length > 0) {
+      while (cadenceInFlight || pendingCadenceTimeMs !== null || pendingInputWakeTimeMs !== null) {
         await lastOperation;
       }
     },
@@ -193,8 +171,7 @@ export function createProductBrowserCadence(
       disposed = true;
       pendingCadenceTimeMs = null;
       pendingDemandAdmission = false;
-      pendingInputPulses.length = 0;
-      pendingInputEnvelopeCount = 0;
+      pendingInputWakeTimeMs = null;
     },
   });
 }
