@@ -435,6 +435,10 @@ export declare class ProductBrowserHostError extends Error {
 type ProductBrowserJson = null | boolean | number | string | readonly ProductBrowserJson[] | {
     readonly [key: string]: ProductBrowserJson;
 };
+interface ProductBrowserOperationQueue {
+    readonly enqueue: <T>(operation: () => Promise<T>) => Promise<T>;
+    readonly settle: () => Promise<void>;
+}
 interface ProductBrowserAudioFeedbackReporter {
     readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
     readonly flush: () => Promise<void>;
@@ -450,6 +454,11 @@ interface ProductBrowserGhostPlateFeedbackReporter {
 interface ProductBrowserRendererDiagnosticsReporter {
     readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
     readonly flush: () => Promise<void>;
+}
+interface ProductBrowserRendererDiagnosticsCadenceSampler {
+    readonly sample: (timeMs: number) => void;
+    readonly settle: () => Promise<void>;
+    readonly dispose: () => void;
 }
 /** This is the sole browser cadence observation that can be safely dropped. */
 export declare function isDroppedClockRegression(result: ProductBrowserRuntimeOperationResult): boolean;
@@ -482,6 +491,12 @@ export declare function createProductBrowserRendererDiagnosticsReporter(options:
     readonly initialRuntime?: RustyApplicationRuntimeIdentity;
     readonly onObservation?: (renderSequence: number) => void;
 }): ProductBrowserRendererDiagnosticsReporter;
+/** @internal Coalesces diagnostics work from the existing renderer cadence without owning a loop. */
+export declare function createProductBrowserRendererDiagnosticsCadenceSampler(options: {
+    readonly enqueueOperation: ProductBrowserOperationQueue['enqueue'];
+    readonly flush: () => Promise<void>;
+    readonly onFailure: (cause: unknown) => void;
+}): ProductBrowserRendererDiagnosticsCadenceSampler;
 /** @internal Keeps the fixed feedback lane ahead of an operation that enters C# Update. */
 export declare function flushProductBrowserAudioFeedbackBeforeUpdate<T>(flush: () => Promise<void>, update: () => Promise<T>): Promise<T>;
 /** @internal Flushes both fixed renderer feedback families before C# update work. */
