@@ -103,6 +103,7 @@ export type {
 export { sampleCameraTransition } from './camera-transition.js';
 
 export {
+  RendererAnimationProjectionRejectedError,
   RendererHostError,
   createRendererAnimatedMeshProjection,
   validEmbeddedMaterialSlots,
@@ -139,6 +140,7 @@ export type {
   RendererAnimationControllerClip,
   RendererAnimationClipPackResourceDescriptor,
   RendererAnimatedMeshFrameReceipt,
+  RendererOperationOutcome,
   RendererAnimatedMeshPlaybackReadout,
   RendererAnimatedMeshEffectiveClip,
   RendererAnimatedMeshPoseSample,
@@ -151,7 +153,7 @@ export type {
   RendererHostDiagnosticCode,
 } from './animated-mesh-host.js';
 
-export { RendererAnimationHost } from './animation-host.js';
+export { RendererAnimationCueDefinitionError, RendererAnimationHost } from './animation-host.js';
 export type {
   RendererAnimationClipCueDefinition,
   RendererAnimationCueSignalDomain,
@@ -159,6 +161,13 @@ export type {
   RendererAnimationHostOptions,
   RendererAnimationSampledCue,
 } from './animation-host.js';
+
+export { RendererPresentationFrameValidationError, RendererPresentationHostSet } from './presentation-host-set.js';
+export type {
+  RendererPresentationAdvanceReceipt,
+  RendererPresentationDomainReceipt,
+  RendererPresentationFrameReceipt,
+} from './presentation-host-set.js';
 
 export { RendererAudioHost } from './audio-host.js';
 export type {

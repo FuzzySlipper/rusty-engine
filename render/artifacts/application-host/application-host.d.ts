@@ -1,4 +1,4 @@
-import { type RendererSurfaceDiagnosticsReadout } from '@rusty-engine/renderer-host';
+import { type RendererSurface, type RendererSurfaceDiagnosticsReadout, type RendererSurfaceOptions, type RendererSurfaceResourceOptions } from '@rusty-engine/renderer-host';
 import { type RustyApplicationContent } from './application-content.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
 import { type RustyApplicationInputPort, type RustyApplicationRuntimeInputOptions, type RustyApplicationRuntimeIntentValue } from './input-ingress.js';
@@ -145,6 +145,7 @@ export interface RustyApplicationFrameDiagnostic {
 }
 export interface RustyApplicationFrameReceipt {
     readonly applied: boolean;
+    readonly outcome: 'applied' | 'rejected_atomic' | 'terminal';
     readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
 }
 export interface RustyApplicationPresentationDiagnostic {
@@ -154,6 +155,7 @@ export interface RustyApplicationPresentationDiagnostic {
 }
 export interface RustyApplicationPresentationReceipt {
     readonly applied: number;
+    readonly outcome: 'applied' | 'partial' | 'rejected_atomic' | 'terminal';
     readonly diagnostics: readonly RustyApplicationPresentationDiagnostic[];
 }
 export interface RustyApplicationAudioResumeReceipt {
@@ -243,6 +245,7 @@ export interface RustyApplicationAnimationRealizedFactsReadout {
 }
 export interface RustyApplicationViewCompositionReceipt {
     readonly applied: boolean;
+    readonly outcome: 'applied' | 'rejected_atomic' | 'terminal';
     readonly diagnostics: readonly {
         readonly code: 'invalid_view_composition' | 'stale_target_revision' | 'surface_disposed' | 'target_allocation_failed';
         readonly message: string;
@@ -381,4 +384,10 @@ export declare class RustyApplicationHostError extends Error {
     readonly code: 'invalid_presentation_aspect_bounds' | 'invalid_root' | 'mount_failed' | 'disposed' | 'stale_renderer_port';
     constructor(code: RustyApplicationHostError['code'], message: string, options?: ErrorOptions);
 }
+interface RustyApplicationHostEnvironment {
+    readonly mountSurface: (canvas: HTMLCanvasElement, options: RendererSurfaceOptions | RendererSurfaceResourceOptions) => RendererSurface | Promise<RendererSurface>;
+}
 export declare function mountRustyApplication(options: RustyApplicationHostOptions): Promise<RustyApplicationHost>;
+/** Internal injection seam for focused host lifecycle tests. Not exported by the package root. */
+export declare function mountRustyApplicationWithEnvironment(options: RustyApplicationHostOptions, environment: RustyApplicationHostEnvironment): Promise<RustyApplicationHost>;
+export {};

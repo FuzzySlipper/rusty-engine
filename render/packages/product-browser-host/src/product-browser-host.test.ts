@@ -7,6 +7,9 @@ import {
   createProductBrowserAudioFeedbackReporter,
   createProductBrowserGhostPlateFeedbackReporter,
   createProductBrowserRendererDiagnosticsReporter,
+  isDroppedClockRegression,
+  productBrowserAtomicReceiptMayContinue,
+  productBrowserPresentationReceiptMayContinue,
   createProductBrowserRuntimeTransport,
   flushProductBrowserAudioFeedbackBeforeUpdate,
   productBrowserInitialRendererFrameRequired,
@@ -63,6 +66,33 @@ test('fixed runtime transport preserves only named operations', async () => {
   assert.equal((await transport.input([])).count, 0);
   assert.equal((await transport.advanceRealtime('1000000')).operation, 'advance-realtime');
   assert.equal('call' in transport, false);
+});
+
+test('only the typed lifecycle clock regression is a dropped cadence observation', () => {
+  const dropped = {
+    accepted: false,
+    code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION',
+    disposition: 'rejected-recoverable' as const,
+    operation: 'advance-realtime' as const,
+    diagnostic: 'observed clock regressed',
+  };
+  assert.equal(isDroppedClockRegression(dropped), true);
+  assert.equal(isDroppedClockRegression({ ...dropped, code: 'CSHARP_LIFECYCLE_COUNTER_EXHAUSTED' }), false);
+  assert.equal(isDroppedClockRegression({ ...dropped, disposition: 'terminal' }), false);
+  assert.equal(isDroppedClockRegression({ ...dropped, operation: 'admit-demand-step' }), false);
+});
+
+test('renderer receipt policy keeps atomic rejections and partial presentation observable for later valid output', () => {
+  assert.equal(productBrowserAtomicReceiptMayContinue('rejected_atomic'), true);
+  assert.equal(productBrowserAtomicReceiptMayContinue('applied'), true);
+  assert.equal(productBrowserPresentationReceiptMayContinue('rejected_atomic'), true);
+  assert.equal(productBrowserPresentationReceiptMayContinue('partial'), true);
+  assert.equal(productBrowserPresentationReceiptMayContinue('applied'), true);
+});
+
+test('renderer receipt policy closes only a typed terminal outcome', () => {
+  assert.equal(productBrowserAtomicReceiptMayContinue('terminal'), false);
+  assert.equal(productBrowserPresentationReceiptMayContinue('terminal'), false);
 });
 
 test('animation preloads bind to the first retained frame without replacing admitted bytes', () => {
@@ -184,7 +214,7 @@ test('audio feedback claims the initial owner, retries without loss, and acknowl
   facts.push({ kind: 'naturalCompletion', factId: 1, source: 'oneShot', sequence: 3, signalHandle: 11 });
   reporter.bindRuntime(AUDIO_RUNTIME);
   assert.equal(resets, 0);
-  await assert.rejects(reporter.flush(), /retry/u);
+  await reporter.flush();
   assert.deepEqual(acknowledgements, []);
 
   const inFlight = reporter.flush();
@@ -203,6 +233,30 @@ test('audio feedback claims the initial owner, retries without loss, and acknowl
   await reporter.flush();
   assert.deepEqual((reports[3]!['facts'] as Array<Record<string, unknown>>).map((fact) => fact['factId']), ['2']);
   assert.deepEqual(acknowledgements, [1, 2]);
+});
+
+test('terminal feedback rejection preserves the candidate and fails the caller', async () => {
+  const acknowledgements: number[] = [];
+  const renderer = {
+    audioRealizedFacts: () => ({ evictedFactCount: 0, facts: [{
+      kind: 'naturalCompletion', factId: 4, source: 'oneShot', sequence: 1, signalHandle: 3,
+    }] }),
+    acknowledgeAudioRealizedFacts: (throughFactId: number) => { acknowledgements.push(throughFactId); return true; },
+    resetAudioRealizationOwner: () => true,
+  } as unknown as Parameters<typeof createProductBrowserAudioFeedbackReporter>[0]['renderer'];
+  const reporter = createProductBrowserAudioFeedbackReporter({
+    renderer,
+    report: async (feedback) => ({
+      accepted: false,
+      code: 'CSHARP_LIFECYCLE_COUNTER_EXHAUSTED',
+      disposition: 'terminal',
+      runtime: feedback.runtime,
+      diagnostic: 'counter exhausted',
+    }),
+    initialRuntime: AUDIO_RUNTIME,
+  });
+  await assert.rejects(reporter.flush(), /counter exhausted/u);
+  assert.deepEqual(acknowledgements, []);
 });
 
 test('ghost plate feedback replaces an active snapshot with an empty snapshot after disposal', async () => {

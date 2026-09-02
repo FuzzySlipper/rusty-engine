@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { PresentationFrameDiff } from '@rusty-engine/render-contracts';
+import { telemetryOverlayHandle, type PresentationFrameDiff } from '@rusty-engine/render-contracts';
 
 import { RendererPresentationHostSet } from './presentation-host-set.js';
 
@@ -97,6 +97,58 @@ void test('one failing optional advancing domain degrades while later domains an
       occurrences: 1,
     }],
   });
+});
+
+void test('a local optional presentation rejection preserves other domains and a later valid operation', async () => {
+  let rejectAudio = true;
+  let overlayApplications = 0;
+  const hosts = new RendererPresentationHostSet({
+    audio: {
+      applyPresentation: () => rejectAudio
+        ? {
+            applied: 0,
+            diagnostics: [{
+              code: 'assetMissing', sequence: 0, handle: null, message: 'optional clip is absent',
+            }],
+          }
+        : { applied: 1, diagnostics: [] },
+    },
+    telemetryOverlay: {
+      applyPresentation: () => {
+        overlayApplications += 1;
+        return { applied: 1, diagnostics: [] };
+      },
+    },
+  });
+  const frame = {
+    schemaVersion: 1 as const,
+    ops: [{
+      domain: 'audio' as const,
+      meta: { sequence: 0 },
+      op: { op: 'busControl' as const, bus: 'sfx' as const, control: { kind: 'setMuted' as const, muted: false } },
+    }, {
+      domain: 'telemetryOverlay' as const,
+      meta: { sequence: 1 },
+      op: {
+        op: 'create' as const,
+        handle: telemetryOverlayHandle(7),
+        descriptor: {
+          title: 'renderer', corner: 'topLeft' as const, refreshIntervalMs: 100,
+          maxFrameTimeSamples: 1, visible: true,
+        },
+      },
+    }],
+  } satisfies PresentationFrameDiff;
+
+  const rejected = await hosts.apply(frame);
+  assert.equal(rejected.outcome, 'partial');
+  assert.equal(rejected.domains.find((domain) => domain.domain === 'audio')?.outcome, 'rejected_atomic');
+  assert.equal(overlayApplications, 1, 'the unrelated optional domain remains realized');
+
+  rejectAudio = false;
+  const accepted = await hosts.apply(frame);
+  assert.equal(accepted.outcome, 'applied');
+  assert.equal(overlayApplications, 2, 'a later valid operation still reaches the same host set');
 });
 
 void test('listener host exceptions degrade audio once and never escape the render cadence', () => {

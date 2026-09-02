@@ -39,6 +39,56 @@ void test('replacement canvas allocation failure retains the mounted surface and
   }
 });
 
+void test('a fail-atomic frame rejection keeps the application renderer usable for a later valid frame', async () => {
+  const previousAudioContext = globalThis.AudioContext;
+  Object.defineProperty(globalThis, 'AudioContext', { configurable: true, value: FakeAudioContext });
+  try {
+    const document = new FakeDocument();
+    const receipts = [
+      { applied: false, outcome: 'rejected_atomic' as const, diagnostics: [{ code: 'renderer_frame_rejected', message: 'stale handle' }] },
+      { applied: true, outcome: 'applied' as const, diagnostics: [] },
+    ];
+    const host = await mountRustyApplicationWithEnvironment({
+      root: document.createElement('div') as unknown as HTMLElement,
+      mountUi: async () => undefined,
+    }, {
+      mountSurface: (canvas) => fakeSurface(canvas, () => undefined, () => receipts.shift()!) as never,
+    });
+
+    assert.equal(host.renderer.applyFrame({ schemaVersion: 1, ops: [] }).outcome, 'rejected_atomic');
+    assert.equal(host.renderer.applyFrame({ schemaVersion: 1, ops: [] }).outcome, 'applied');
+    assert.equal(host.readout().state, 'ready');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'AudioContext', { configurable: true, value: previousAudioContext });
+  }
+});
+
+void test('a terminal frame outcome closes the current renderer port instead of retrying it', async () => {
+  const previousAudioContext = globalThis.AudioContext;
+  Object.defineProperty(globalThis, 'AudioContext', { configurable: true, value: FakeAudioContext });
+  try {
+    const document = new FakeDocument();
+    let applications = 0;
+    const host = await mountRustyApplicationWithEnvironment({
+      root: document.createElement('div') as unknown as HTMLElement,
+      mountUi: async () => undefined,
+    }, {
+      mountSurface: (canvas) => fakeSurface(canvas, () => undefined, () => {
+        applications += 1;
+        return { applied: false, outcome: 'terminal' as const, diagnostics: [{ code: 'renderer_terminal', message: 'backend owner changed' }] };
+      }) as never,
+    });
+
+    assert.equal(host.renderer.applyFrame({ schemaVersion: 1, ops: [] }).outcome, 'terminal');
+    assert.equal(host.renderer.applyFrame({ schemaVersion: 1, ops: [] }).outcome, 'terminal');
+    assert.equal(applications, 1, 'later frame output must not touch a terminal backend owner');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'AudioContext', { configurable: true, value: previousAudioContext });
+  }
+});
+
 class FakeAudioContext {
   readonly currentTime = 0;
   readonly destination = { connect: () => undefined, disconnect: () => undefined };
@@ -124,13 +174,18 @@ class FakeElement {
   }
 }
 
-function fakeSurface(canvas: HTMLCanvasElement, dispose: () => void): unknown {
+function fakeSurface(
+  canvas: HTMLCanvasElement,
+  dispose: () => void,
+  applyFrame: () => unknown = () => ({ applied: true, outcome: 'applied', diagnostics: [] }),
+): unknown {
   return {
     canvas,
     animationProjection: { subscribeNaturalCompletions: () => () => undefined },
     projectWorldPoint: () => ({ x: 0, y: 0, visible: false }),
     createParticleSink: () => ({ dispose: () => undefined }),
     createGhostPlatePresentation: () => ({ dispose: () => undefined }),
+    applyFrame,
     setPresentationHosts: () => undefined,
     viewCompositionReadout: () => ({
       schemaVersion: 1,

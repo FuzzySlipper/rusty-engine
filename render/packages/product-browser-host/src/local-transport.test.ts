@@ -322,6 +322,58 @@ test('operation response waits for its exact retained-output cursor', async () =
   adapter.dispose();
 });
 
+test('resync-required commit reconnects the fresh output baseline without replaying the operation', async () => {
+  FakeEventSource.instances.length = 0;
+  let operations = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => {
+      operations += 1;
+      return response(result('start'), 200, {
+        'x-rusty-commit-disposition': 'resync-required',
+        'x-rusty-resync-outputs': 'fresh',
+      });
+    },
+    eventSource: FakeEventSource,
+  });
+  const outputs: unknown[] = [];
+  adapter.subscribeOutputs((output) => outputs.push(output));
+  const first = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(first);
+
+  const operation = adapter.lifecycle({ kind: 'start' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(operations, 1);
+  assert.equal(first.closed, true);
+  assert.equal(FakeEventSource.instances.length, 2);
+  const fresh = FakeEventSource.instances[1]!;
+  assert.equal(fresh.url, `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}outputs/fresh`);
+  completeConnectionBaseline(fresh);
+
+  assert.equal((await operation).operation, 'start');
+  assert.equal(operations, 1, 'fresh output resync never replays the operation request');
+  assert.equal(outputs.length, 2);
+  adapter.dispose();
+});
+
+test('incoherent commit headers close the local transport terminally', async () => {
+  const failures: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response(result('start'), 200, {
+      'x-rusty-commit-disposition': 'committed',
+      'x-rusty-resync-outputs': 'fresh',
+    }),
+    eventSource: FakeEventSource,
+  });
+  adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
+  await assert.rejects(adapter.lifecycle({ kind: 'start' }), /unknown or incoherent commit disposition/u);
+  assert.equal(failures.length, 1);
+  await assert.rejects(
+    adapter.advanceRealtime('1'),
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'stream_failed',
+  );
+  adapter.dispose();
+});
+
 test('duplicate and decreasing output event ids fail before subscriber publication', () => {
   for (const staleId of ['1', '0']) {
     FakeEventSource.instances.length = 0;
@@ -708,12 +760,14 @@ test('terminal browser diagnostics remain postable after the output transport cl
     hostState: 'failed', runtimeProgress: '9', transportState: 'closed', outputState: 'closed',
     lastRendererSequence: '60', rendererObservationAgeMs: '100',
     firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'transport closed' },
+    recoverableEvent: { code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION', message: 'dropped clock observation' },
     pageEvents: [],
   });
   assert.deepEqual(requestBodies, [{
     hostState: 'failed', runtimeProgress: '9', transportState: 'closed', outputState: 'closed',
     lastRendererSequence: '60', rendererObservationAgeMs: '100',
     firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'transport closed' },
+    recoverableEvent: { code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION', message: 'dropped clock observation' },
     pageEvents: [],
   }]);
 });

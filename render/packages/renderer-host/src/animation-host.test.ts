@@ -12,6 +12,7 @@ import {
 } from '@rusty-engine/render-contracts';
 import {
   RendererAnimationHost,
+  RendererAnimationCueDefinitionError,
   RendererPresentationHostSet,
   createRendererAnimatedMeshProjection,
   type RendererAnimatedMeshResourceManifest,
@@ -150,6 +151,22 @@ function fixtureResolver(): Promise<ArrayBuffer> {
   const bytes = readFileSync(ANIMATED_FIXTURE);
   return Promise.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 }
+
+void test('cue definition validation is typed and preserves the prior retained cue snapshot', () => {
+  const host = new RendererAnimationHost({
+    subscribeNaturalCompletions: () => () => undefined,
+  } as never);
+  const valid = [{
+    cueId: 'footfall', asset: 'mesh/player', clip: 'walk', atSeconds: 0.1,
+    signal: { domain: 'audio' as const, id: 'footstep' },
+  }];
+  host.replaceCueDefinitions(valid);
+  assert.throws(
+    () => host.replaceCueDefinitions([{ ...valid[0]!, cueId: '' }]),
+    RendererAnimationCueDefinitionError,
+  );
+  assert.deepEqual(host.cueDefinitions(), valid);
+});
 
 void test('G1 controller sequence drives deterministic renderer-local blend and smooth sampling', async () => {
   const testGlobal = globalThis as unknown as { self: unknown };

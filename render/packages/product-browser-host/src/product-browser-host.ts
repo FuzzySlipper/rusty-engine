@@ -288,6 +288,8 @@ export interface ProductBrowserDiagnosticsReport {
   readonly lastRendererSequence?: string;
   readonly rendererObservationAgeMs?: string;
   readonly firstTerminal?: { readonly code: string; readonly message: string };
+  /** One bounded, typed operation observation that was deliberately dropped. */
+  readonly recoverableEvent?: { readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'; readonly message: string };
   readonly pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[];
 }
 
@@ -665,6 +667,35 @@ interface ProductBrowserRendererDiagnosticsReporter {
   readonly flush: () => Promise<void>;
 }
 
+function isRecoverableReportRejection(result: {
+  readonly accepted: boolean;
+  readonly disposition: ProductBrowserHostFaultDisposition;
+}): boolean {
+  return !result.accepted && result.disposition === 'rejected-recoverable';
+}
+
+/** This is the sole browser cadence observation that can be safely dropped. */
+export function isDroppedClockRegression(result: ProductBrowserRuntimeOperationResult): boolean {
+  return !result.accepted
+    && result.disposition === 'rejected-recoverable'
+    && result.code === 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'
+    && result.operation === 'advance-realtime';
+}
+
+/** @internal Closed policy for atomic frame, view, and cue outputs. */
+export function productBrowserAtomicReceiptMayContinue(
+  outcome: 'applied' | 'rejected_atomic' | 'terminal',
+): boolean {
+  return outcome !== 'terminal';
+}
+
+/** @internal Presentation can be partial because later domains already ran. */
+export function productBrowserPresentationReceiptMayContinue(
+  outcome: 'applied' | 'partial' | 'rejected_atomic' | 'terminal',
+): boolean {
+  return outcome !== 'terminal';
+}
+
 /** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
 export function createProductBrowserAudioFeedbackReporter(options: {
   readonly renderer: Pick<RustyApplicationHost['renderer'],
@@ -713,6 +744,7 @@ export function createProductBrowserAudioFeedbackReporter(options: {
         'audio feedback result did not match the current Product runtime binding',
       );
     }
+    if (isRecoverableReportRejection(result)) return;
     if (!result.accepted) {
       throw new ProductBrowserHostError(
         'transport_failed',
@@ -776,6 +808,7 @@ export function createProductBrowserAnimationFeedbackReporter(options: {
     if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
       throw new ProductBrowserHostError('transport_failed', 'animation feedback result did not match the current Product runtime binding');
     }
+    if (isRecoverableReportRejection(result)) return;
     if (!result.accepted) throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'animation feedback was rejected by the runtime');
     if (result.diagnostic !== undefined) throw new ProductBrowserHostError('transport_failed', 'accepted animation feedback cannot include a diagnostic');
     const expectedThrough = submittedThrough === undefined ? undefined : canonicalSafeU64(submittedThrough, 'animation feedback factId');
@@ -830,6 +863,7 @@ export function createProductBrowserGhostPlateFeedbackReporter(options: {
     if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
       throw new ProductBrowserHostError('transport_failed', 'ghost plate feedback result did not match the current Product runtime binding');
     }
+    if (isRecoverableReportRejection(result)) return;
     if (!result.accepted || result.diagnostic !== undefined) {
       throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'ghost plate feedback was rejected by the runtime');
     }
@@ -862,6 +896,7 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
     if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
       throw new ProductBrowserHostError('transport_failed', 'renderer diagnostics result did not match the current Product runtime binding');
     }
+    if (isRecoverableReportRejection(result)) return;
     if (!result.accepted || result.diagnostic !== undefined) {
       throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'renderer diagnostics were rejected by the runtime');
     }
@@ -918,6 +953,8 @@ export async function mountProductBrowserHost(
   let lastRendererObservationAtMs: number | null = null;
   let lastDiagnosticsStatusKey: string | null = null;
   let terminalDiagnosticsReported = false;
+  let recoverableClockDiagnosticPending = false;
+  let recoverableClockDiagnosticReported = false;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
@@ -1002,11 +1039,19 @@ export async function mountProductBrowserHost(
     const includeTerminal = terminal !== undefined && !terminalDiagnosticsReported;
     const hostState = state === 'starting' ? 'loading' : state;
     const statusKey = `${hostState}/${transportClosed ? 'closed' : 'open'}/${transportClosed ? 'closed' : 'open'}`;
+    const recoverableEvent = recoverableClockDiagnosticPending && !recoverableClockDiagnosticReported
+      ? Object.freeze({
+          code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' as const,
+          message: 'dropped a regressing browser realtime observation; awaiting a later monotonic observation',
+        })
+      : undefined;
     const shouldReport = reportToTransport && transport.reportBrowserDiagnostics !== undefined
-      && (includeTerminal || pageEvents.length > 0 || statusKey !== lastDiagnosticsStatusKey);
+      && (includeTerminal || recoverableEvent !== undefined || pageEvents.length > 0 || statusKey !== lastDiagnosticsStatusKey);
     if (shouldReport) {
       lastDiagnosticsStatusKey = statusKey;
       if (includeTerminal) terminalDiagnosticsReported = true;
+      recoverableClockDiagnosticPending = false;
+      if (recoverableEvent !== undefined) recoverableClockDiagnosticReported = true;
       const age = lastRendererObservationAtMs === null
         ? undefined
         : String(Math.max(0, now - lastRendererObservationAtMs));
@@ -1018,6 +1063,7 @@ export async function mountProductBrowserHost(
         ...(lastRendererSequence === null ? {} : { lastRendererSequence }),
         ...(age === undefined ? {} : { rendererObservationAgeMs: age }),
         ...(includeTerminal ? { firstTerminal: terminal } : {}),
+        ...(recoverableEvent === undefined ? {} : { recoverableEvent }),
         pageEvents: Object.freeze([...pageEvents]),
       })).catch(() => undefined);
     }
@@ -1203,10 +1249,10 @@ export async function mountProductBrowserHost(
         case 'frame': {
           enqueueRendererOutput(() => {
             const receipt = host.renderer.applyFrame(output.frame);
-            if (!receipt.applied) {
+            if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
               throw new ProductBrowserHostError(
                 'output_failed',
-                receipt.diagnostics.map((item) => item.message).join('; ') || 'retained frame was rejected',
+                'renderer frame reported a terminal outcome',
               );
             }
           });
@@ -1215,10 +1261,10 @@ export async function mountProductBrowserHost(
         case 'view-composition': {
           enqueueRendererOutput(() => {
             const receipt = host.renderer.configureViews(output.composition);
-            if (!receipt.applied) {
+            if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
               throw new ProductBrowserHostError(
                 'output_failed',
-                receipt.diagnostics.map((item) => item.message).join('; ') || 'view composition was rejected',
+                'renderer view composition reported a terminal outcome',
               );
             }
           });
@@ -1227,11 +1273,10 @@ export async function mountProductBrowserHost(
         case 'animation-cue-definitions': {
           enqueueRendererOutput(() => {
             const receipt = host.renderer.replaceAnimationCueDefinitions(output.definitions);
-            if (!receipt.applied) {
+            if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
               throw new ProductBrowserHostError(
                 'output_failed',
-                receipt.diagnostics.map((item) => item.message).join('; ')
-                  || 'animation cue definitions were rejected',
+                'renderer animation cue definitions reported a terminal outcome',
               );
             }
           });
@@ -1240,11 +1285,7 @@ export async function mountProductBrowserHost(
         case 'presentation':
           enqueueRendererOutput(async () => {
             const receipt = await host.renderer.applyPresentation(output.frame);
-            if (receipt.diagnostics.length > 0) {
-              const presentationFailure = new ProductBrowserHostError(
-                'output_failed',
-                receipt.diagnostics.map((item) => item.message).join('; '),
-              );
+            if (!productBrowserPresentationReceiptMayContinue(receipt.outcome)) {
               // Preserve the existing terminal presentation posture, but give
               // the fixed audio-feedback lane one serialized attempt first so
               // a just-realized audio diagnostic reaches its C# readout.
@@ -1254,7 +1295,10 @@ export async function mountProductBrowserHost(
                 failAndClose(cause, 'transport_failed');
                 return;
               }
-              throw presentationFailure;
+              throw new ProductBrowserHostError(
+                'output_failed',
+                'renderer presentation reported a terminal outcome',
+              );
             }
             scheduleRendererFeedbackFlush();
           });
@@ -1291,7 +1335,13 @@ export async function mountProductBrowserHost(
   const applyOperationResult = (
     result: ProductBrowserRuntimeOperationResult,
     rejectedCode: ProductBrowserHostError['code'] = 'transport_failed',
-  ): void => {
+    allowDroppedClockRegression = false,
+  ): boolean => {
+    if (allowDroppedClockRegression && isDroppedClockRegression(result)) {
+      recoverableClockDiagnosticPending = true;
+      publishHealth();
+      return false;
+    }
     if (!result.accepted) {
       throw new ProductBrowserHostError(
         rejectedCode,
@@ -1306,6 +1356,7 @@ export async function mountProductBrowserHost(
       });
     }
     if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
+    return true;
   };
 
   const applyInputResult = (result: ProductBrowserRuntimeInputResult): void => {
@@ -1332,11 +1383,15 @@ export async function mountProductBrowserHost(
       applyInputResult(await transport.input(batch));
     },
     advanceRealtime: async (observedTimeNs) => {
-      applyOperationResult(await flushProductBrowserRendererFeedbackBeforeUpdate(
+      const accepted = applyOperationResult(await flushProductBrowserRendererFeedbackBeforeUpdate(
         flushRendererFeedback,
         () => transport.advanceRealtime(observedTimeNs),
-      ));
-      if (options.lifecycleMode === 'realtime' && realtimeAdvanceOwner === 'browser') {
+      ), 'transport_failed', true);
+      if (accepted) {
+        recoverableClockDiagnosticPending = false;
+        recoverableClockDiagnosticReported = false;
+      }
+      if (accepted && options.lifecycleMode === 'realtime' && realtimeAdvanceOwner === 'browser') {
         runtimeProgress += 1;
         publishHealth();
       }

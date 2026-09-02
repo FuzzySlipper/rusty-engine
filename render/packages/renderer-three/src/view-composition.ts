@@ -24,6 +24,8 @@ export interface RendererViewCompositionDiagnostic {
 
 export interface RendererViewCompositionReceipt {
   readonly applied: boolean;
+  /** Only an atomically rejected composition may be retried on this surface. */
+  readonly outcome: 'applied' | 'rejected_atomic' | 'terminal';
   readonly diagnostics: readonly RendererViewCompositionDiagnostic[];
   readonly revision: number;
 }
@@ -106,6 +108,7 @@ export class RendererViewCompositionBackend {
   #cameras: ReadonlyMap<string, THREE.Camera> = new Map();
   #composition = EMPTY_COMPOSITION;
   #disposed = false;
+  #terminal = false;
   #presentations: ReadonlyMap<string, PresentationResource> = new Map();
   #revision = 0;
   #targets: ReadonlyMap<string, TargetResource> = new Map();
@@ -121,7 +124,7 @@ export class RendererViewCompositionBackend {
   }
 
   configure(input: RendererViewComposition): RendererViewCompositionReceipt {
-    if (this.#disposed) {
+    if (this.#disposed || this.#terminal) {
       return this.#rejected('surface_disposed', 'renderer view composition is disposed');
     }
 
@@ -132,10 +135,19 @@ export class RendererViewCompositionBackend {
       this.#validateTargetRevisions(composition);
       prepared = this.#prepare(composition);
       this.#publish(prepared);
-      return Object.freeze({ applied: true, diagnostics: Object.freeze([]), revision: this.#revision });
+      return Object.freeze({
+        applied: true,
+        outcome: 'applied',
+        diagnostics: Object.freeze([]),
+        revision: this.#revision,
+      });
     } catch (cause) {
       if (prepared !== null) disposePrepared(prepared, this.#targets);
       const diagnostic = diagnosticFrom(cause);
+      // A WebGL target allocation/init failure has an uncertain context and
+      // resource-ownership aftermath. #7687 cleans the candidate, but it is
+      // still not a retryable operation-local validation rejection.
+      if (diagnostic.code === 'target_allocation_failed') this.#terminal = true;
       return this.#rejected(diagnostic.code, diagnostic.message);
     }
   }
@@ -317,6 +329,9 @@ export class RendererViewCompositionBackend {
   ): RendererViewCompositionReceipt {
     return Object.freeze({
       applied: false,
+      outcome: code === 'invalid_view_composition' || code === 'stale_target_revision'
+        ? 'rejected_atomic'
+        : 'terminal',
       diagnostics: Object.freeze([Object.freeze({ code, message })]),
       revision: this.#revision,
     });

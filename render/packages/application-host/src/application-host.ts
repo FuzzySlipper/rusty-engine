@@ -1,11 +1,13 @@
 import type { PresentationFrameDiff, RenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   RendererAnimationHost,
+  RendererAnimationCueDefinitionError,
   RendererAudioHost,
   RendererBillboardHost,
   RendererParticleHost,
   RendererGhostPlateHost,
   RendererPresentationHostSet,
+  RendererPresentationFrameValidationError,
   createRendererDefaultSurfaceFrame,
   mountRendererSurface,
   type RendererSurface,
@@ -188,6 +190,7 @@ export interface RustyApplicationFrameDiagnostic {
 
 export interface RustyApplicationFrameReceipt {
   readonly applied: boolean;
+  readonly outcome: 'applied' | 'rejected_atomic' | 'terminal';
   readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
 }
 
@@ -199,6 +202,7 @@ export interface RustyApplicationPresentationDiagnostic {
 
 export interface RustyApplicationPresentationReceipt {
   readonly applied: number;
+  readonly outcome: 'applied' | 'partial' | 'rejected_atomic' | 'terminal';
   readonly diagnostics: readonly RustyApplicationPresentationDiagnostic[];
 }
 
@@ -331,6 +335,7 @@ export interface RustyApplicationAnimationRealizedFactsReadout {
 
 export interface RustyApplicationViewCompositionReceipt {
   readonly applied: boolean;
+  readonly outcome: 'applied' | 'rejected_atomic' | 'terminal';
   readonly diagnostics: readonly {
     readonly code:
       | 'invalid_view_composition'
@@ -602,6 +607,10 @@ export async function mountRustyApplicationWithEnvironment(
   let contentRevision = 0;
   let replacementPending = 0;
   let replacementQueue: Promise<void> = Promise.resolve();
+  // Once a lower renderer reports an ownership/lifetime terminal outcome, no
+  // later product output may probe the same surface as though its prior state
+  // were still authoritative.
+  let rendererTerminal = false;
   let intents: RustyApplicationUiIntentsPort | null = null;
   const removePresentationResizeListener = installPresentationFrameSizing(
     root,
@@ -802,6 +811,7 @@ export async function mountRustyApplicationWithEnvironment(
     replacementPending += 1;
     let receipt: RustyApplicationFrameReceipt = Object.freeze({
       applied: false,
+      outcome: 'rejected_atomic',
       diagnostics: [],
     });
     replacementQueue = replacementQueue.then(async () => {
@@ -870,6 +880,7 @@ export async function mountRustyApplicationWithEnvironment(
         activeContent = candidateContent;
         contentRevision += 1;
         activeCanvas = candidateCanvas;
+        rendererTerminal = false;
         try {
           oldParticle?.dispose();
         } catch {
@@ -895,7 +906,7 @@ export async function mountRustyApplicationWithEnvironment(
         } catch {
           // Billboard cleanup is best-effort after the replacement commits.
         }
-        receipt = Object.freeze({ applied: true, diagnostics: [] });
+        receipt = Object.freeze({ applied: true, outcome: 'applied', diagnostics: [] });
       } catch (cause) {
         if (inputRebindAttempted) {
           try {
@@ -978,9 +989,11 @@ export async function mountRustyApplicationWithEnvironment(
 
   const renderer: RustyApplicationRendererPort = Object.freeze({
     applyFrame: (frame: RustyApplicationFrame) => {
+      if (rendererTerminal) return terminalFrameReceipt('renderer_terminal');
       if (replacementPending > 0) {
         return Object.freeze({
           applied: false,
+          outcome: 'rejected_atomic',
           diagnostics: Object.freeze([Object.freeze({
             code: 'content_replacement_in_progress',
             message:
@@ -989,18 +1002,23 @@ export async function mountRustyApplicationWithEnvironment(
         });
       }
       const receipt = requireActive().applyFrame(frame as unknown as RenderFrameDiff);
-      return Object.freeze({
+      const result = Object.freeze({
         applied: receipt.applied,
+        outcome: receipt.outcome,
         diagnostics: Object.freeze(receipt.diagnostics.map((diagnostic) => Object.freeze({
           code: diagnostic.code,
           message: diagnostic.message,
         }))),
       });
+      if (result.outcome === 'terminal') rendererTerminal = true;
+      return result;
     },
     applyPresentation: async (frame: RustyApplicationPresentationFrame) => {
+      if (rendererTerminal) return terminalPresentationReceipt('renderer_terminal');
       if (replacementPending > 0) {
         return Object.freeze({
           applied: 0,
+          outcome: 'rejected_atomic',
           diagnostics: Object.freeze([Object.freeze({
             code: 'content_replacement_in_progress',
             domain: 'application',
@@ -1012,31 +1030,41 @@ export async function mountRustyApplicationWithEnvironment(
         const receipt = await requireActive().applyPresentation(
           frame as unknown as PresentationFrameDiff,
         );
-        return Object.freeze({
+        const result = Object.freeze({
           applied: receipt.applied,
+          outcome: receipt.outcome,
           diagnostics: Object.freeze(receipt.diagnostics.map((diagnostic) => Object.freeze({
             code: diagnostic.code,
             domain: diagnostic.domain,
             message: diagnostic.message,
           }))),
         });
+        if (result.outcome === 'terminal') rendererTerminal = true;
+        return result;
       } catch (cause) {
-        return Object.freeze({
+        const result = Object.freeze({
           applied: 0,
+          outcome: cause instanceof RendererPresentationFrameValidationError
+            ? 'rejected_atomic'
+            : 'terminal',
           diagnostics: Object.freeze([Object.freeze({
             code: 'presentation_frame_rejected',
             domain: 'application',
             message: cause instanceof Error ? cause.message : String(cause),
           })]),
         });
+        if (result.outcome === 'terminal') rendererTerminal = true;
+        return result;
       }
     },
     replaceAnimationCueDefinitions: (
       definitions: readonly RustyApplicationAnimationCueDefinition[],
     ) => {
+      if (rendererTerminal) return terminalFrameReceipt('renderer_terminal');
       if (replacementPending > 0) {
         return Object.freeze({
           applied: false,
+          outcome: 'rejected_atomic',
           diagnostics: Object.freeze([Object.freeze({
             code: 'content_replacement_in_progress',
             message: 'animation cue definitions are rejected while content replacement is pending',
@@ -1048,15 +1076,20 @@ export async function mountRustyApplicationWithEnvironment(
           throw new RustyApplicationHostError('disposed', 'Rusty Application animation host is unavailable');
         }
         activeAnimation.replaceCueDefinitions(definitions);
-        return Object.freeze({ applied: true, diagnostics: [] });
+        return Object.freeze({ applied: true, outcome: 'applied', diagnostics: [] });
       } catch (cause) {
-        return Object.freeze({
+        const result = Object.freeze({
           applied: false,
+          outcome: cause instanceof RendererAnimationCueDefinitionError
+            ? 'rejected_atomic'
+            : 'terminal',
           diagnostics: Object.freeze([Object.freeze({
             code: 'animation_cue_definitions_rejected',
             message: cause instanceof Error ? cause.message : String(cause),
           })]),
         });
+        if (result.outcome === 'terminal') rendererTerminal = true;
+        return result;
       }
     },
     clear: async () => {
@@ -1109,7 +1142,22 @@ export async function mountRustyApplicationWithEnvironment(
     resetAnimationRealizationOwner: () => requireActive().resetAnimationRealizationOwner(),
     resetAudioRealizationOwner: () => requireActive().resetAudioRealizationOwner(),
     setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
-    configureViews: (composition: RustyApplicationViewComposition) => requireActive().configureViews(composition),
+    configureViews: (composition: RustyApplicationViewComposition) => {
+      if (rendererTerminal) {
+        return Object.freeze({
+          applied: false,
+          outcome: 'terminal' as const,
+          diagnostics: Object.freeze([Object.freeze({
+            code: 'surface_disposed' as const,
+            message: 'renderer is terminal after an earlier backend failure',
+          })]),
+          revision: requireActive().viewCompositionReadout().revision,
+        });
+      }
+      const receipt = requireActive().configureViews(composition);
+      if (receipt.outcome === 'terminal') rendererTerminal = true;
+      return receipt;
+    },
   });
   const ui: RustyApplicationUiPort = Object.freeze({
     active: () => !closing && !disposed,
@@ -1280,6 +1328,7 @@ export async function mountRustyApplicationWithEnvironment(
 function replacementFailure(cause: unknown): RustyApplicationFrameReceipt {
   return Object.freeze({
     applied: false,
+    outcome: 'rejected_atomic',
     diagnostics: Object.freeze([Object.freeze({
       code: replacementDiagnosticCode(cause),
       message: cause instanceof Error ? cause.message : String(cause),
@@ -1287,15 +1336,31 @@ function replacementFailure(cause: unknown): RustyApplicationFrameReceipt {
   });
 }
 
+function terminalFrameReceipt(code: string): RustyApplicationFrameReceipt {
+  return Object.freeze({
+    applied: false,
+    outcome: 'terminal',
+    diagnostics: Object.freeze([Object.freeze({
+      code,
+      message: 'renderer is terminal after an earlier backend failure',
+    })]),
+  });
+}
+
+function terminalPresentationReceipt(code: string): RustyApplicationPresentationReceipt {
+  return Object.freeze({
+    applied: 0,
+    outcome: 'terminal',
+    diagnostics: Object.freeze([Object.freeze({
+      code,
+      domain: 'application',
+      message: 'renderer is terminal after an earlier backend failure',
+    })]),
+  });
+}
+
 function replacementDiagnosticCode(cause: unknown): string {
   if (cause instanceof RustyApplicationContentError) return cause.code;
-  if (typeof cause === 'object' && cause !== null && 'code' in cause
-    && typeof cause.code === 'string' && cause.code.includes('resource')) {
-    return 'resource_admission_failed';
-  }
-  if (cause instanceof Error && cause.message.toLowerCase().includes('resource')) {
-    return 'resource_admission_failed';
-  }
   return 'retained_frame_replacement_failed';
 }
 

@@ -13,10 +13,10 @@ use product_dev_host::{
     CanonicalU64, ProductDevAudioFeedback, ProductDevAudioFeedbackResult, ProductDevBundle,
     ProductDevBundleEntry, ProductDevDebugCatalog, ProductDevDebugResult, ProductDevHost,
     ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
-    ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevOperationResult,
-    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeMode, ProductDevRuntimeOutput,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationKind,
+    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeMode,
+    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
+    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
 
 #[derive(Default)]
@@ -26,6 +26,10 @@ struct ReconnectRuntime {
     started: bool,
     starts: Arc<AtomicUsize>,
     attaches: Arc<AtomicUsize>,
+}
+
+struct OutputFailureRuntime {
+    inputs: Arc<AtomicUsize>,
 }
 
 impl FixtureRuntime {
@@ -326,6 +330,111 @@ impl ProductDevRuntime for FixtureRuntime {
     }
 }
 
+impl ProductDevRuntime for OutputFailureRuntime {
+    fn connect(
+        &mut self,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(ProductDevOperationKind::Connect))
+    }
+
+    fn lifecycle(
+        &mut self,
+        operation: ProductDevLifecycleOperation,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(operation.operation_kind()))
+    }
+
+    fn input(
+        &mut self,
+        batch: ProductDevInputBatch,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevInputResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        let call = self.inputs.fetch_add(1, Ordering::SeqCst);
+        let outputs = if call == 0 {
+            // This receipt is valid, but it cannot be attached to a retained
+            // stream until a binding baseline exists. It models publication
+            // failure after the authoritative input call has consumed once.
+            vec![ProductDevRuntimeOutput::runtime_readout(
+                FixtureRuntime::readout(),
+            )]
+        } else {
+            Vec::new()
+        };
+        Ok(ProductDevRuntimeReceipt::new(
+            ProductDevInputResult::accepted(
+                batch.events().len(),
+                FixtureRuntime::binding(),
+                FixtureRuntime::readout(),
+            )
+            .unwrap(),
+            outputs,
+        )
+        .unwrap())
+    }
+
+    fn advance_realtime(
+        &mut self,
+        _observed_time_ns: CanonicalU64,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(
+            ProductDevOperationKind::AdvanceRealtime,
+        ))
+    }
+
+    fn admit_demand_step(
+        &mut self,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(
+            ProductDevOperationKind::AdmitDemandStep,
+        ))
+    }
+
+    fn admit_external_step(
+        &mut self,
+        _step: CanonicalU64,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(
+            ProductDevOperationKind::AdmitExternalStep,
+        ))
+    }
+
+    fn complete_timeline(
+        &mut self,
+        completion: ProductDevTimelineCompletion,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(ProductDevRuntimeReceipt::new(
+            ProductDevTimelineCompletionResult::accepted(
+                CanonicalU64::new(completion.envelope().ticket().value()),
+                FixtureRuntime::binding(),
+                FixtureRuntime::readout(),
+            )
+            .unwrap(),
+            Vec::new(),
+        )
+        .unwrap())
+    }
+}
+
 fn start() -> product_dev_host::RunningProductDevHost {
     let bundle = ProductDevBundle::new(vec![
         ProductDevBundleEntry::new(
@@ -445,6 +554,86 @@ fn request_bytes(origin: &str, raw: &[u8]) -> String {
 }
 
 #[test]
+fn retries_one_injected_listener_accept_error_then_serves_the_next_connection() {
+    let diagnostics = ProductDevLog::new(Default::default()).unwrap();
+    let decisions = Arc::new(AtomicUsize::new(0));
+    let hook_decisions = Arc::clone(&decisions);
+    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    let host = ProductDevHost::start(
+        FixtureRuntime,
+        ProductDevHostConfig::new(0, bundle)
+            .with_diagnostics(diagnostics.clone())
+            .with_test_accept_decision_hook(move || {
+                (hook_decisions.fetch_add(1, Ordering::SeqCst) == 0)
+                    .then_some(std::io::ErrorKind::Interrupted)
+            }),
+    )
+    .unwrap();
+    let response = request(
+        &host.origin(),
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(decisions.load(Ordering::SeqCst) >= 2);
+    let snapshot = diagnostics.snapshot();
+    assert!(snapshot
+        .events
+        .iter()
+        .any(|event| event.code() == "DEV_HOST_LISTENER_ACCEPT_RETRY"));
+    assert!(format!("{:?}", snapshot.events).contains("RejectedRecoverable"));
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn output_publication_failure_returns_the_consumed_receipt_for_resync_without_replay() {
+    let inputs = Arc::new(AtomicUsize::new(0));
+    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    let host = ProductDevHost::start(
+        OutputFailureRuntime {
+            inputs: Arc::clone(&inputs),
+        },
+        ProductDevHostConfig::new(0, bundle),
+    )
+    .unwrap();
+    let origin = host.origin();
+    let input = "POST /__rusty/product/runtime/input HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 12\r\n\r\n{\"batch\":[]}";
+    let first = request(&origin, input);
+    assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "{first}");
+    assert!(first.contains("X-Rusty-Commit-Disposition: resync-required\r\n"));
+    assert!(first.contains("X-Rusty-Resync-Outputs: fresh\r\n"));
+    assert!(first.contains("\"accepted\":true"));
+    assert!(first.contains("\"binding\":{\"instanceId\":\"7\""));
+    assert!(first.contains("\"readout\":{\"artifact\":\"rusty.product.runtime-readout\""));
+    assert_eq!(inputs.load(Ordering::SeqCst), 1);
+
+    let mut fresh = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let baseline = read_until(&mut fresh, "event: rusty-output-baseline");
+    assert!(baseline.contains("\"operation\":\"connect\""));
+
+    let second = request(&origin, input);
+    assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "{second}");
+    assert!(second.contains("X-Rusty-Commit-Disposition: committed\r\n"));
+    assert_eq!(
+        inputs.load(Ordering::SeqCst),
+        2,
+        "resync readout did not replay the already-consumed input",
+    );
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
     let host = start();
     let origin = host.origin();
@@ -479,7 +668,7 @@ fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
 fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
     let host = start_debug();
     let origin = host.origin();
-    let report_body = r#"{"hostState":"failed","runtimeProgress":"9","transportState":"closed","outputState":"closed","lastRendererSequence":"60","rendererObservationAgeMs":"100","firstTerminal":{"code":"BROWSER_HOST_TRANSPORT_FAILED","message":"transport closed"},"pageEvents":[]}"#;
+    let report_body = r#"{"hostState":"failed","runtimeProgress":"9","transportState":"closed","outputState":"closed","lastRendererSequence":"60","rendererObservationAgeMs":"100","firstTerminal":{"code":"BROWSER_HOST_TRANSPORT_FAILED","message":"transport closed"},"recoverableEvent":{"code":"CSHARP_LIFECYCLE_CLOCK_REGRESSION","message":"dropped clock observation"},"pageEvents":[]}"#;
     let reported = request(
         &origin,
         &format!(
@@ -495,6 +684,11 @@ fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
     assert!(read.starts_with("HTTP/1.1 200 OK\r\n"), "{read}");
     assert!(read.contains("\"BROWSER_HOST_TRANSPORT_FAILED\""), "{read}");
     assert!(
+        read.contains("\"CSHARP_LIFECYCLE_CLOCK_REGRESSION\""),
+        "{read}"
+    );
+    assert!(read.contains("\"rejected-recoverable\""), "{read}");
+    assert!(
         read.contains("\"transport\",\"value\":\"closed\""),
         "{read}"
     );
@@ -502,7 +696,7 @@ fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
         read.contains("\"renderer-sequence\",\"value\":\"60\""),
         "{read}"
     );
-    assert!(read.contains("\"nextCursor\":\"2\""), "{read}");
+    assert!(read.contains("\"nextCursor\":\"3\""), "{read}");
     host.shutdown().unwrap();
 }
 

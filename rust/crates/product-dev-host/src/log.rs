@@ -23,6 +23,7 @@ const MAX_FIELD_VALUE_BYTES: usize = 256;
 const MAX_LINE_BYTES: usize = 4 * 1024;
 const DEFAULT_ROTATE_BYTES: u64 = 6 * 1024 * 1024;
 const MAX_RETENTION_FILES: u8 = 4;
+const MAX_RECOVERABLE_CODES: usize = 64;
 
 /// Severity deliberately remains smaller than a general logging framework.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -237,6 +238,9 @@ struct ProductDevLogInner {
     error_count: u64,
     dropped_count: u64,
     stderr_fallback_count: u64,
+    /// Process-owned duplicate suppression across runtime, host, and browser
+    /// layers. It is deliberately a small code-only window, not a logger.
+    recoverable_codes: VecDeque<String>,
     writer: Writer,
     last_stderr_fallback: Option<Instant>,
 }
@@ -279,6 +283,7 @@ impl ProductDevLog {
             error_count: 0,
             dropped_count: 0,
             stderr_fallback_count: 0,
+            recoverable_codes: VecDeque::new(),
             writer,
             last_stderr_fallback: None,
         }))))
@@ -288,6 +293,18 @@ impl ProductDevLog {
         let mut inner = self.0.lock().map_err(|_| {
             ProductDevHostError::new("DEV_HOST_LOG_POISONED", "diagnostic sink lock is poisoned")
         })?;
+        if event.disposition == ProductDevLogDisposition::RejectedRecoverable {
+            if inner.recoverable_codes.contains(&event.code) {
+                return Ok(());
+            }
+            if inner.recoverable_codes.len() == MAX_RECOVERABLE_CODES {
+                inner.recoverable_codes.pop_front();
+            }
+            inner.recoverable_codes.push_back(event.code.clone());
+            // Recoverable rejections are operational warnings even when an
+            // upstream layer originally constructed them as runtime errors.
+            event.severity = ProductDevLogSeverity::Warning;
+        }
         event.sequence = inner.next_sequence;
         inner.next_sequence = inner.next_sequence.checked_add(1).ok_or_else(|| {
             ProductDevHostError::new("DEV_HOST_LOG_SEQUENCE", "diagnostic sequence exhausted")
@@ -589,6 +606,78 @@ mod tests {
         assert!(rotated_path(&path, 1).exists());
         drop(log);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recoverable_codes_coalesce_across_cloned_runtime_host_and_browser_sinks() {
+        let log = ProductDevLog::new(ProductDevLogConfig::default()).unwrap();
+        let host_log = log.clone();
+        let browser_log = log.clone();
+        for (sink, source, message) in [
+            (&log, "csharp-runtime", "clock regressed in runtime"),
+            (&host_log, "runtime", "clock regressed in host"),
+            (&browser_log, "browser-host", "clock observation dropped"),
+        ] {
+            sink.publish(
+                ProductDevLogEvent::new(
+                    ProductDevLogSeverity::Error,
+                    ProductDevLogDisposition::RejectedRecoverable,
+                    source,
+                    "CSHARP_LIFECYCLE_CLOCK_REGRESSION",
+                    message,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let snapshot = log.snapshot();
+        assert_eq!(snapshot.events.len(), 1);
+        assert_eq!(snapshot.warning_count, 1);
+        assert_eq!(snapshot.error_count, 0);
+        assert_eq!(snapshot.events[0].severity, ProductDevLogSeverity::Warning);
+        assert_eq!(
+            snapshot.events[0].disposition,
+            ProductDevLogDisposition::RejectedRecoverable
+        );
+
+        browser_log
+            .publish(
+                ProductDevLogEvent::new(
+                    ProductDevLogSeverity::Info,
+                    ProductDevLogDisposition::Accepted,
+                    "browser-host",
+                    "BROWSER_HOST_PROGRESS",
+                    "later cadence accepted",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let snapshot = log.snapshot();
+        assert_eq!(snapshot.events.len(), 2);
+        assert_eq!(snapshot.warning_count, 1);
+        assert_eq!(snapshot.error_count, 0);
+        assert_eq!(snapshot.events[1].code, "BROWSER_HOST_PROGRESS");
+
+        host_log
+            .publish(
+                ProductDevLogEvent::new(
+                    ProductDevLogSeverity::Error,
+                    ProductDevLogDisposition::Terminal,
+                    "runtime",
+                    "CSHARP_LIFECYCLE_COUNTER_EXHAUSTED",
+                    "counter exhausted",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let snapshot = log.snapshot();
+        assert_eq!(snapshot.events.len(), 3);
+        assert_eq!(snapshot.warning_count, 1);
+        assert_eq!(snapshot.error_count, 1);
+        assert_eq!(
+            snapshot.events[2].disposition,
+            ProductDevLogDisposition::Terminal
+        );
     }
     #[test]
     fn invalid_event_and_failed_writer_keep_memory() {

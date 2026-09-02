@@ -29,6 +29,12 @@ use crate::{
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
 const SSE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+const ACCEPT_RETRY_INITIAL_BACKOFF: Duration = Duration::from_millis(5);
+const ACCEPT_RETRY_MAX_BACKOFF: Duration = Duration::from_millis(200);
+
+/// A deliberately narrow test seam for one listener accept decision. It is
+/// not a transport abstraction: production always invokes `TcpListener`.
+type AcceptDecisionHook = Arc<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>;
 
 /// Configuration for the fixed development host.
 #[derive(Clone)]
@@ -39,6 +45,7 @@ pub struct ProductDevHostConfig {
     bind_host: Ipv4Addr,
     live_debug_enabled: bool,
     diagnostics: ProductDevLog,
+    accept_decision_hook: Option<AcceptDecisionHook>,
 }
 
 impl ProductDevHostConfig {
@@ -49,6 +56,7 @@ impl ProductDevHostConfig {
             bind_host: Ipv4Addr::LOCALHOST,
             live_debug_enabled: false,
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
+            accept_decision_hook: None,
         }
     }
 
@@ -70,6 +78,17 @@ impl ProductDevHostConfig {
 
     pub fn with_diagnostics(mut self, diagnostics: ProductDevLog) -> Self {
         self.diagnostics = diagnostics;
+        self
+    }
+
+    /// Injects synthetic listener errors for the loopback-host integration
+    /// proof. Returning `None` delegates directly to the real listener.
+    #[doc(hidden)]
+    pub fn with_test_accept_decision_hook(
+        mut self,
+        hook: impl Fn() -> Option<io::ErrorKind> + Send + Sync + 'static,
+    ) -> Self {
+        self.accept_decision_hook = Some(Arc::new(hook));
         self
     }
 }
@@ -103,9 +122,17 @@ impl ProductDevHost {
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
         let listener_state = Arc::clone(&state);
         let listener_threads = Arc::clone(&handler_threads);
+        let accept_decision_hook = config.accept_decision_hook;
         let listener_thread = thread::Builder::new()
             .name("rusty-product-dev-host".to_owned())
-            .spawn(move || accept_loop(listener, listener_state, listener_threads))
+            .spawn(move || {
+                accept_loop(
+                    listener,
+                    listener_state,
+                    listener_threads,
+                    accept_decision_hook,
+                )
+            })
             .map_err(|error| ProductDevHostError::io("DEV_HOST_THREAD", error))?;
         Ok(RunningProductDevHost {
             address,
@@ -188,11 +215,14 @@ fn accept_loop<R: ProductDevRuntime>(
     listener: TcpListener,
     state: Arc<HostState<R>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    accept_decision_hook: Option<AcceptDecisionHook>,
 ) {
+    let mut retry_backoff = ACCEPT_RETRY_INITIAL_BACKOFF;
     while !state.shutdown.load(Ordering::Acquire) {
         reap_finished_handlers(&handler_threads);
-        match listener.accept() {
+        match accept_once(&listener, accept_decision_hook.as_deref()) {
             Ok((stream, _)) => {
+                retry_backoff = ACCEPT_RETRY_INITIAL_BACKOFF;
                 if !try_acquire(&state.connections, MAX_CONNECTIONS) {
                     let mut stream = stream;
                     let _ = write_response(
@@ -223,9 +253,81 @@ fn accept_loop<R: ProductDevRuntime>(
                     }
                 }
             }
-            Err(_) => break,
+            Err(error) => match classify_accept_error(&error) {
+                AcceptErrorDisposition::Retry => {
+                    publish_host_diagnostic(
+                        &state.diagnostics,
+                        ProductDevLogSeverity::Warning,
+                        ProductDevLogDisposition::RejectedRecoverable,
+                        "DEV_HOST_LISTENER_ACCEPT_RETRY",
+                        "listener accept failed transiently; retaining listener ownership and retrying",
+                        [("backoff-ms", retry_backoff.as_millis().to_string())],
+                    );
+                    thread::sleep(retry_backoff);
+                    retry_backoff = retry_backoff
+                        .saturating_mul(2)
+                        .min(ACCEPT_RETRY_MAX_BACKOFF);
+                }
+                AcceptErrorDisposition::Terminal => {
+                    publish_host_diagnostic(
+                        &state.diagnostics,
+                        ProductDevLogSeverity::Error,
+                        ProductDevLogDisposition::Terminal,
+                        "DEV_HOST_LISTENER_ACCEPT_TERMINAL",
+                        "listener accept failed with an irrecoverable listener or ownership state",
+                        [("error-kind", format!("{:?}", error.kind()))],
+                    );
+                    break;
+                }
+            },
         }
     }
+}
+
+fn accept_once(
+    listener: &TcpListener,
+    test_hook: Option<&(dyn Fn() -> Option<io::ErrorKind> + Send + Sync)>,
+) -> io::Result<(TcpStream, SocketAddr)> {
+    if let Some(kind) = test_hook.and_then(|hook| hook()) {
+        return Err(io::Error::new(kind, "injected listener accept failure"));
+    }
+    listener.accept()
+}
+
+#[derive(Clone, Copy)]
+enum AcceptErrorDisposition {
+    Retry,
+    Terminal,
+}
+
+fn classify_accept_error(error: &io::Error) -> AcceptErrorDisposition {
+    match error.kind() {
+        io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+            AcceptErrorDisposition::Retry
+        }
+        _ => AcceptErrorDisposition::Terminal,
+    }
+}
+
+fn publish_host_diagnostic<const N: usize>(
+    diagnostics: &ProductDevLog,
+    severity: ProductDevLogSeverity,
+    disposition: ProductDevLogDisposition,
+    code: &str,
+    message: &str,
+    fields: [(&str, String); N],
+) {
+    let Ok(mut event) = ProductDevLogEvent::new(severity, disposition, "dev-host", code, message)
+    else {
+        return;
+    };
+    for (key, value) in fields {
+        let Ok(next) = event.with_field(key, value) else {
+            return;
+        };
+        event = next;
+    }
+    let _ = diagnostics.publish(event);
 }
 
 fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<HostState<R>>) {
@@ -261,7 +363,19 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
         return;
     }
     let response = dispatch_request(&state, request);
-    let _ = write_response(&mut stream, response);
+    let commit = response.commit_disposition;
+    if let Err(error) = write_response(&mut stream, response) {
+        if commit.is_some() {
+            publish_host_diagnostic(
+                &state.diagnostics,
+                ProductDevLogSeverity::Warning,
+                ProductDevLogDisposition::ResyncRequired,
+                "DEV_HOST_RESPONSE_WRITE_RESYNC",
+                "response delivery failed after an authoritative runtime receipt; reconnect for a fresh readout instead of replaying",
+                [("error-kind", format!("{:?}", error.kind()))],
+            );
+        }
+    }
 }
 
 fn dispatch_request<R: ProductDevRuntime>(
@@ -747,6 +861,22 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
         }
         reported = reported.saturating_add(1);
     }
+    if let Some(recoverable) = report.recoverable_event {
+        let event = match ProductDevLogEvent::new(
+            ProductDevLogSeverity::Warning,
+            ProductDevLogDisposition::RejectedRecoverable,
+            "browser-host",
+            recoverable.code,
+            recoverable.message,
+        ) {
+            Ok(event) => event,
+            Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
+        };
+        if let Err(error) = state.diagnostics.publish(event) {
+            return HttpResponse::error(503, error.code(), error.detail());
+        }
+        reported = reported.saturating_add(1);
+    }
     for page_event in report.page_events {
         let event = match ProductDevLogEvent::new(
             ProductDevLogSeverity::Warning,
@@ -855,25 +985,56 @@ where
         }
     };
     let (result, outputs) = receipt.into_parts();
+    // Encoding is a host-owned preflight. A bad response must not first
+    // publish retained output for a runtime mutation the client cannot name.
+    let encoded_result = match encode_runtime_result(&result) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            publish_host_diagnostic(
+                &state.diagnostics,
+                ProductDevLogSeverity::Warning,
+                ProductDevLogDisposition::ResyncRequired,
+                "DEV_HOST_RESPONSE_ENCODE_RESYNC",
+                "runtime result could not be encoded after mutation; reconnect for a fresh readout instead of replaying",
+                [("cause", error.code().to_owned())],
+            );
+            return HttpResponse::error(500, error.code(), error.detail());
+        }
+    };
     let output_through = match push_outputs(&state.outputs, outputs) {
         Ok(output_through) => output_through,
-        Err(error) => return HttpResponse::error(503, error.code(), error.detail()),
+        Err(error) => {
+            // The typed route result names the exact consumed binding, input
+            // sequence/readout, or timeline ticket. Preserve it with the
+            // closed resync disposition so callers never blindly replay a
+            // request after the runtime has already mutated.
+            publish_host_diagnostic(
+                &state.diagnostics,
+                ProductDevLogSeverity::Warning,
+                ProductDevLogDisposition::ResyncRequired,
+                "DEV_HOST_OUTPUT_COMMIT_RESYNC",
+                "retained output publication failed after an authoritative runtime receipt; reconnect for a fresh readout instead of replaying",
+                [("cause", error.code().to_owned())],
+            );
+            return HttpResponse::bytes(200, "application/json", encoded_result)
+                .with_resync_required();
+        }
     };
     drop(runtime);
-    match serde_json::to_vec(&result) {
-        Ok(bytes) if bytes.len() <= MAX_REQUEST_BODY_BYTES => {
-            HttpResponse::bytes(200, "application/json", bytes).with_output_through(output_through)
-        }
-        Ok(_) => HttpResponse::error(
-            500,
+    HttpResponse::bytes(200, "application/json", encoded_result).with_output_through(output_through)
+}
+
+fn encode_runtime_result<T: Serialize>(value: &T) -> Result<Vec<u8>, ProductDevHostError> {
+    match serde_json::to_vec(value) {
+        Ok(bytes) if bytes.len() <= MAX_REQUEST_BODY_BYTES => Ok(bytes),
+        Ok(_) => Err(ProductDevHostError::new(
             "DEV_HOST_RESPONSE_BOUNDS",
             "runtime result exceeds response bound",
-        ),
-        Err(_) => HttpResponse::error(
-            500,
+        )),
+        Err(_) => Err(ProductDevHostError::new(
             "DEV_HOST_RESPONSE_ENCODE",
             "runtime result could not be encoded",
-        ),
+        )),
     }
 }
 
@@ -1097,7 +1258,7 @@ fn peer_disconnected(stream: &TcpStream) -> bool {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct OutputBus {
     next_id: u64,
     next_transfer_id: u64,
@@ -1107,11 +1268,13 @@ struct OutputBus {
     pending_baseline: Option<PendingBaseline>,
 }
 
+#[derive(Clone)]
 struct PendingBaseline {
     binding: crate::ProductDevRuntimeBinding,
     outputs: Vec<ProductDevRuntimeOutput>,
 }
 
+#[derive(Clone)]
 struct OutputEvent {
     id: u64,
     event: Option<&'static str>,
@@ -1148,6 +1311,28 @@ fn push_outputs(
     let mut bus = bus.lock().map_err(|_| {
         ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
     })?;
+    // Encode, fragment, order-check, and baseline-check a clone first. A
+    // receipt arrives only after its product mutation, so partial retained
+    // publication would leave a browser with an ambiguous prefix. A failed
+    // preflight instead fences the old binding and requires a fresh baseline.
+    let mut staged = bus.clone();
+    match push_outputs_staged(&mut staged, outputs) {
+        Ok(output_through) => {
+            *bus = staged;
+            Ok(output_through)
+        }
+        Err(error) => {
+            bus.active_binding = None;
+            bus.pending_baseline = None;
+            Err(error)
+        }
+    }
+}
+
+fn push_outputs_staged(
+    mut bus: &mut OutputBus,
+    outputs: Vec<ProductDevRuntimeOutput>,
+) -> Result<u64, ProductDevHostError> {
     for output in outputs {
         if let Some(binding) = output.binding_marker() {
             if bus.pending_baseline.is_some() {
@@ -1710,6 +1895,26 @@ struct HttpResponse {
     content_type: &'static str,
     body: Vec<u8>,
     output_through: Option<u64>,
+    commit_disposition: Option<CommitDisposition>,
+}
+
+/// The host makes only two delivery claims for a typed runtime receipt.
+/// `ResyncRequired` means the runtime result was committed, but the caller
+/// must use its existing binding/readout identity and `/outputs/fresh` rather
+/// than replaying the route request.
+#[derive(Clone, Copy)]
+enum CommitDisposition {
+    Committed,
+    ResyncRequired,
+}
+
+impl CommitDisposition {
+    const fn as_header(self) -> &'static str {
+        match self {
+            Self::Committed => "committed",
+            Self::ResyncRequired => "resync-required",
+        }
+    }
 }
 
 impl HttpResponse {
@@ -1719,11 +1924,18 @@ impl HttpResponse {
             content_type,
             body,
             output_through: None,
+            commit_disposition: None,
         }
     }
 
     fn with_output_through(mut self, output_through: u64) -> Self {
         self.output_through = Some(output_through);
+        self.commit_disposition = Some(CommitDisposition::Committed);
+        self
+    }
+
+    fn with_resync_required(mut self) -> Self {
+        self.commit_disposition = Some(CommitDisposition::ResyncRequired);
         self
     }
 
@@ -1773,6 +1985,16 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
     write!(stream, "Content-Length: {}\r\n", response.body.len())?;
     if let Some(output_through) = response.output_through {
         write!(stream, "X-Rusty-Output-Through: {output_through}\r\n")?;
+    }
+    if let Some(disposition) = response.commit_disposition {
+        write!(
+            stream,
+            "X-Rusty-Commit-Disposition: {}\r\n",
+            disposition.as_header()
+        )?;
+        if matches!(disposition, CommitDisposition::ResyncRequired) {
+            stream.write_all(b"X-Rusty-Resync-Outputs: fresh\r\n")?;
+        }
     }
     stream.write_all(
         b"Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",

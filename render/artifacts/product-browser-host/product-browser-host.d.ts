@@ -282,6 +282,11 @@ export interface ProductBrowserDiagnosticsReport {
         readonly code: string;
         readonly message: string;
     };
+    /** One bounded, typed operation observation that was deliberately dropped. */
+    readonly recoverableEvent?: {
+        readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION';
+        readonly message: string;
+    };
     readonly pageEvents: readonly {
         readonly kind: 'error' | 'unhandled-rejection';
         readonly code: string;
@@ -431,6 +436,12 @@ interface ProductBrowserRendererDiagnosticsReporter {
     readonly bindRuntime: (runtime: RustyApplicationRuntimeIdentity) => void;
     readonly flush: () => Promise<void>;
 }
+/** This is the sole browser cadence observation that can be safely dropped. */
+export declare function isDroppedClockRegression(result: ProductBrowserRuntimeOperationResult): boolean;
+/** @internal Closed policy for atomic frame, view, and cue outputs. */
+export declare function productBrowserAtomicReceiptMayContinue(outcome: 'applied' | 'rejected_atomic' | 'terminal'): boolean;
+/** @internal Presentation can be partial because later domains already ran. */
+export declare function productBrowserPresentationReceiptMayContinue(outcome: 'applied' | 'partial' | 'rejected_atomic' | 'terminal'): boolean;
 /** @internal Closed coordinator used by the host; exported from this module for focused proof only. */
 export declare function createProductBrowserAudioFeedbackReporter(options: {
     readonly renderer: Pick<RustyApplicationHost['renderer'], 'audioRealizedFacts' | 'acknowledgeAudioRealizedFacts' | 'resetAudioRealizationOwner'>;

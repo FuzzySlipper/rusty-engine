@@ -11,14 +11,17 @@ import type {
 } from '@rusty-engine/render-contracts';
 import {
   RenderProjection,
+  RenderProjectionError,
   type RenderProjectionInstruction,
   type RenderProjectionSnapshot,
 } from '@rusty-engine/render-projection';
 import {
   createRendererBrowserSurfaceFrame,
   mountRendererBrowserSurface,
+  RendererDisposedError,
   RendererThreeParticleSink,
   RendererLightingPolicyError,
+  RenderApplyError,
   RendererTerminalError,
   type AnimatedMeshAssetSource,
   type RendererBrowserSurface,
@@ -31,6 +34,7 @@ import type { RendererParticleSceneSink } from './particle-host.js';
 import {
   animationPlaybackReadout,
   loadRendererAnimatedMeshSource,
+  RendererAnimationProjectionRejectedError,
   type RendererAnimatedMeshFrameReceipt,
   type RendererAnimatedMeshPlaybackReadout,
   type RendererAnimatedMeshProjection,
@@ -1015,31 +1019,50 @@ function mountPreparedRendererSurface(
     return failures[0] ?? null;
   };
   const applyFrame = (nextFrame: RenderFrameDiff): RendererAnimatedMeshFrameReceipt => {
+    if (disposed || cadenceState !== 'ready') {
+      return terminalFrameReceipt(
+        'renderer_surface_unavailable',
+        disposed
+          ? 'renderer surface is disposed'
+          : 'renderer surface is terminal after an earlier backend failure',
+      );
+    }
     try {
       // Phase one is renderer-neutral and non-committing. ThreeRenderer performs
       // its own complete backend/resource preflight, so neither store advances
       // until both agree that the whole frame is applicable.
       projection.validateFrame(nextFrame);
+    } catch (cause) {
+      if (cause instanceof RenderProjectionError) return atomicFrameRejection(cause);
+      terminalizeBackend(cause);
+      return terminalFrameReceipt('renderer_backend_failure', errorMessage(cause));
+    }
+    try {
       backendSurface.applyFrame(nextFrame);
-      projection.applyFrame(nextFrame);
-      requestAutomaticSubmission();
-      return { applied: true, diagnostics: [] };
     } catch (cause) {
       if (cause instanceof RendererTerminalError) {
         terminalizeBackend(cause);
-        throw cause;
+        return terminalFrameReceipt('renderer_terminal', errorMessage(cause));
       }
-      return {
-        applied: false,
-        diagnostics: [{
-          code: cause instanceof RendererLightingPolicyError
-            ? 'renderer_lighting_policy_rejected'
-            : 'animated_mesh_frame_rejected',
-          message: cause instanceof Error ? cause.message : String(cause),
-          asset: null,
-          handle: null,
-        }],
-      };
+      if (cause instanceof RendererDisposedError) {
+        terminalizeBackend(cause);
+        return terminalFrameReceipt('renderer_surface_unavailable', errorMessage(cause));
+      }
+      if (cause instanceof RendererLightingPolicyError || cause instanceof RenderApplyError) {
+        return atomicFrameRejection(cause);
+      }
+      // An unclassified backend exception may have escaped after it changed a
+      // renderer owner. Do not turn it into a retryable frame rejection.
+      terminalizeBackend(cause);
+      return terminalFrameReceipt('renderer_backend_failure', errorMessage(cause));
+    }
+    try {
+      projection.applyFrame(nextFrame);
+      requestAutomaticSubmission();
+      return { applied: true, outcome: 'applied', diagnostics: [] };
+    } catch (cause) {
+      terminalizeBackend(cause);
+      return terminalFrameReceipt('renderer_backend_failure', errorMessage(cause));
     }
   };
 
@@ -1236,6 +1259,36 @@ function surfaceTimingNow(): number {
   return globalThis.performance?.now() ?? 0;
 }
 
+function atomicFrameRejection(cause: unknown): RendererAnimatedMeshFrameReceipt {
+  return {
+    applied: false,
+    outcome: 'rejected_atomic',
+    diagnostics: [{
+      code: cause instanceof RendererLightingPolicyError
+        ? 'renderer_lighting_policy_rejected'
+        : 'renderer_frame_rejected',
+      message: errorMessage(cause),
+      asset: null,
+      handle: null,
+    }],
+  };
+}
+
+function terminalFrameReceipt(
+  code: 'renderer_backend_failure' | 'renderer_surface_unavailable' | 'renderer_terminal',
+  message: string,
+): RendererAnimatedMeshFrameReceipt {
+  return {
+    applied: false,
+    outcome: 'terminal',
+    diagnostics: [{ code, message, asset: null, handle: null }],
+  };
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 function callbackPhases(
   input: {
     readonly callbackStartedAtMs: number;
@@ -1272,14 +1325,20 @@ function surfaceAnimationProjection(
     applyFrame: (frame) => {
       try {
         surface.applyFrame(frame);
-        return { applied: true, diagnostics: [] };
+        return { applied: true, outcome: 'applied', diagnostics: [] };
       } catch (cause) {
-        if (cause instanceof RendererTerminalError) throw cause;
+        if (cause instanceof RendererTerminalError || cause instanceof RendererDisposedError) {
+          return terminalFrameReceipt('renderer_terminal', errorMessage(cause));
+        }
+        if (cause instanceof RenderApplyError || cause instanceof RendererLightingPolicyError) {
+          return atomicFrameRejection(cause);
+        }
         return {
           applied: false,
+          outcome: 'terminal',
           diagnostics: [{
-            code: 'animated_mesh_frame_rejected',
-            message: cause instanceof Error ? cause.message : String(cause),
+            code: 'renderer_backend_failure',
+            message: errorMessage(cause),
             asset: null,
             handle: null,
           }],
@@ -1287,7 +1346,7 @@ function surfaceAnimationProjection(
       }
     },
     // The mounted browser surface advances its mixer exactly once in renderOnce.
-    advance: () => ({ applied: true, diagnostics: [] }),
+    advance: () => ({ applied: true, outcome: 'applied', diagnostics: [] }),
     playback: (handle) => {
       const playback = surface.animatedMeshPlayback(handle);
       return animationPlaybackReadout(
@@ -1299,7 +1358,16 @@ function surfaceAnimationProjection(
     snapshot: surface.snapshot,
     hasAnimationTarget: (handle) => surface.renderer.has(handle),
     setAnimationControllerWeights: (handle, clips) => {
-      surface.renderer.setAnimationControllerWeights(handle, clips);
+      try {
+        surface.renderer.setAnimationControllerWeights(handle, clips);
+      } catch (cause) {
+        if (cause instanceof RenderApplyError
+          && !(cause instanceof RendererTerminalError)
+          && !(cause instanceof RendererDisposedError)) {
+          throw new RendererAnimationProjectionRejectedError(errorMessage(cause), { cause });
+        }
+        throw cause;
+      }
     },
     hasAnimationClips: (handle, clipIds) =>
       surface.renderer.hasAnimationControllerClips(handle, clipIds),

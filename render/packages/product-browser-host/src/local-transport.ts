@@ -267,6 +267,31 @@ export class ProductBrowserLocalTransportError extends Error {
   }
 }
 
+type ProductBrowserCommitDisposition = 'committed' | 'resync-required';
+
+function decodeCommitDisposition(
+  headers: Headers,
+  route: string,
+): ProductBrowserCommitDisposition {
+  const disposition = headers.get('x-rusty-commit-disposition');
+  const resync = headers.get('x-rusty-resync-outputs');
+  if (disposition === null) {
+    if (resync === null) return 'committed';
+    throw new ProductBrowserLocalTransportError(
+      'response_decode_failed',
+      `Product Browser local runtime response for ${route} named a resync without a commit disposition`,
+      { route },
+    );
+  }
+  if (disposition === 'committed' && resync === null) return disposition;
+  if (disposition === 'resync-required' && resync === 'fresh') return disposition;
+  throw new ProductBrowserLocalTransportError(
+    'response_decode_failed',
+    `Product Browser local runtime response for ${route} has an unknown or incoherent commit disposition`,
+    { route },
+  );
+}
+
 /**
  * Creates the Engine-owned local transport used by generated Product Bundles.
  * Rust serves the fixed operation routes and one bounded SSE output stream on
@@ -437,6 +462,52 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
+  const reconnectFreshOutputs = async (): Promise<void> => {
+    if (stream === null || listeners.size === 0 || !connectionBaselineComplete) {
+      throw new ProductBrowserLocalTransportError(
+        'stream_failed',
+        'Product Browser local runtime cannot resync a committed response without an established output subscription',
+        { route: ROUTES.freshOutputs },
+      );
+    }
+    if (streamLagListener !== null) stream.removeEventListener?.('rusty-output-lag', streamLagListener);
+    if (streamFragmentListener !== null) stream.removeEventListener?.('rusty-output-fragment', streamFragmentListener);
+    if (streamBaselineListener !== null) stream.removeEventListener?.('rusty-output-baseline', streamBaselineListener);
+    stream.close();
+    stream = null;
+    streamLagListener = null;
+    streamFragmentListener = null;
+    streamBaselineListener = null;
+    pendingFragment = null;
+    pendingConnectionOutputs = [];
+    currentOutputBinding = null;
+    connectionBaselineComplete = false;
+    reattachingFreshBaseline = false;
+    observedOutputSequence = 0n;
+    wakeOutputSequenceWaiters();
+    outputSubscriptionReady = null;
+    resolveOutputSubscriptionReady = null;
+    connectionReady = null;
+    resolveConnectionReady = null;
+    rejectConnectionReady = null;
+
+    // Reuse the one existing fresh-baseline path. The temporary listener only
+    // starts the shared subscription; existing consumers remain registered,
+    // and no operation request is retried.
+    const unsubscribe = subscribeOutputs(() => undefined);
+    const freshReady = connectionReady;
+    unsubscribe();
+    if (freshReady === null) {
+      throw new ProductBrowserLocalTransportError(
+        'stream_failed',
+        'Product Browser local runtime did not establish a fresh output baseline',
+        { route: ROUTES.freshOutputs },
+      );
+    }
+    await freshReady;
+    ensureOpen();
+  };
+
   const post = async <T>(
     route: string,
     body: unknown,
@@ -503,8 +574,36 @@ export function createProductBrowserLocalHttpAdapter(
         { cause, route },
       );
     }
+    let commitDisposition: ProductBrowserCommitDisposition;
+    try {
+      commitDisposition = decodeCommitDisposition(response.headers, route);
+    } catch (cause) {
+      const error = cause instanceof ProductBrowserLocalTransportError
+        ? cause
+        : new ProductBrowserLocalTransportError(
+          'response_decode_failed',
+          `Product Browser local runtime returned an invalid commit disposition for ${route}`,
+          { cause, route },
+        );
+      reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
+      throw error;
+    }
     const outputThroughHeader = response.headers.get('x-rusty-output-through');
-    if (outputThroughHeader !== null) {
+    if (commitDisposition === 'resync-required') {
+      try {
+        await reconnectFreshOutputs();
+      } catch (cause) {
+        const error = cause instanceof ProductBrowserLocalTransportError
+          ? cause
+          : new ProductBrowserLocalTransportError(
+            'stream_failed',
+            `Product Browser local runtime fresh output resync failed for ${route}: ${cause instanceof Error ? cause.message : String(cause)}`,
+            { cause, route: ROUTES.freshOutputs },
+          );
+        reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
+        throw error;
+      }
+    } else if (outputThroughHeader !== null) {
       const outputThrough = decodeOutputSequence(
         outputThroughHeader,
         'X-Rusty-Output-Through response header',
@@ -1448,13 +1547,19 @@ function snapshotBrowserDiagnosticsReport(
   const record = requireRecord(value, 'browser diagnostics report');
   requireKnownFields(record, [
     'hostState', 'runtimeProgress', 'transportState', 'outputState',
-    'lastRendererSequence', 'rendererObservationAgeMs', 'firstTerminal', 'pageEvents',
+    'lastRendererSequence', 'rendererObservationAgeMs', 'firstTerminal', 'recoverableEvent', 'pageEvents',
   ], 'browser diagnostics report');
   const pageEvents = requirePlainArray(record.pageEvents, 'browser diagnostics page events');
   if (pageEvents.length > 8) throw new TypeError('browser diagnostics exceeds 8 page events');
   const terminal = record.firstTerminal === undefined
     ? undefined
     : snapshotBrowserDiagnostic(record.firstTerminal, 'browser terminal diagnostic');
+  const recoverable = record['recoverableEvent'] === undefined
+    ? undefined
+    : snapshotBrowserDiagnostic(record['recoverableEvent'], 'browser recoverable diagnostic');
+  if (recoverable !== undefined && recoverable.code !== 'CSHARP_LIFECYCLE_CLOCK_REGRESSION') {
+    throw new TypeError('browser recoverable diagnostic code is not supported');
+  }
   return Object.freeze({
     hostState: requireCatalogValue(record.hostState, 'browser host state', new Set(['loading', 'ready', 'failed', 'disposed'])),
     runtimeProgress: requireU64Text(record.runtimeProgress, 'browser runtime progress'),
@@ -1463,6 +1568,7 @@ function snapshotBrowserDiagnosticsReport(
     ...(record.lastRendererSequence === undefined ? {} : { lastRendererSequence: requireU64Text(record.lastRendererSequence, 'browser renderer sequence') }),
     ...(record.rendererObservationAgeMs === undefined ? {} : { rendererObservationAgeMs: requireU64Text(record.rendererObservationAgeMs, 'browser renderer observation age') }),
     ...(terminal === undefined ? {} : { firstTerminal: terminal }),
+    ...(recoverable === undefined ? {} : { recoverableEvent: recoverable }),
     pageEvents: Object.freeze(pageEvents.map((event) => {
       const eventRecord = requireRecord(event, 'browser page diagnostic');
       requireKnownFields(eventRecord, ['kind', 'code', 'message'], 'browser page diagnostic');

@@ -861,6 +861,7 @@ pub struct ProductDevBrowserDiagnosticsReport {
     pub last_renderer_sequence: Option<CanonicalU64>,
     pub renderer_observation_age_ms: Option<CanonicalU64>,
     pub first_terminal: Option<ProductDevBrowserTerminalDiagnostic>,
+    pub recoverable_event: Option<ProductDevBrowserTerminalDiagnostic>,
     pub page_events: Vec<ProductDevBrowserPageDiagnostic>,
 }
 
@@ -914,6 +915,15 @@ impl ProductDevBrowserDiagnosticsReport {
         }
         if let Some(diagnostic) = &self.first_terminal {
             validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
+        }
+        if let Some(diagnostic) = &self.recoverable_event {
+            validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
+            if diagnostic.code != "CSHARP_LIFECYCLE_CLOCK_REGRESSION" {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
+                    "browser recoverable diagnostic must identify a dropped lifecycle clock regression",
+                ));
+            }
         }
         for diagnostic in &self.page_events {
             validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;

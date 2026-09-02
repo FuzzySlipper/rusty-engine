@@ -85,13 +85,24 @@ export class RenderApplyError extends Error {
   }
 }
 
+/** A lifetime boundary was crossed; the current renderer cannot be reused. */
+export class RendererDisposedError extends RenderApplyError {
+  constructor() {
+    super('renderer is disposed');
+    this.name = 'RendererDisposedError';
+  }
+}
+
 /**
  * A backend realization failed after the logical projection was committed.
  * The renderer intentionally becomes terminal: callers must replace the
  * surface rather than treating the rejected receipt as fail-atomic.
  */
 export class RendererTerminalError extends RenderApplyError {
-  constructor(message: string, readonly phase: 'static_instance_batch' | 'shadow_realization') {
+  constructor(
+    message: string,
+    readonly phase: 'frame_mutation' | 'static_instance_batch' | 'shadow_realization',
+  ) {
     super(message);
     this.name = 'RendererTerminalError';
   }
@@ -438,7 +449,7 @@ export class ThreeRenderer {
    */
   applyFrame(frame: RenderFrameDiff): void {
     if (this.#disposed) {
-      throw new RenderApplyError('renderer is disposed');
+      throw new RendererDisposedError();
     }
     if (this.#terminalError !== null) {
       throw this.#terminalError;
@@ -458,7 +469,18 @@ export class ThreeRenderer {
       this.#preflightSkyBackground(frame, prepared);
     } catch (cause) {
       disposePreparedFrame(prepared);
-      throw cause;
+      // Sprite/sky admission is deliberately before the first retained Three
+      // mutation. Its named validation failures preserve the prior frame.
+      if (
+        (cause instanceof RenderApplyError || cause instanceof RendererLightingPolicyError)
+        && !(cause instanceof RendererDisposedError)
+        && !(cause instanceof RendererTerminalError)
+      ) {
+        throw cause;
+      }
+      // A non-contract exception from preparation has no trusted atomicity
+      // proof, even though it arrived before the ordinary operation loop.
+      throw this.#enterTerminal('frame_mutation', cause);
     }
     const staticInstanceBatchesChanged = this.#frameChangesStaticInstanceBatches(frame);
     const recursivelyDestroyed = new Set<RenderHandle>();
@@ -504,7 +526,8 @@ export class ThreeRenderer {
       }
     } catch (cause) {
       disposePreparedFrame(prepared);
-      throw cause;
+      // From here on the frame may already have changed live Three owners.
+      throw this.#enterTerminal('frame_mutation', cause);
     }
     disposePreparedFrame(prepared);
     this.#projection.applyFrame(frame);

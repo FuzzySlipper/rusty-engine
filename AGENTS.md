@@ -106,6 +106,22 @@ full guide.
 - Preserve unrelated work and follow the task's branch and promotion
   instructions.
 
+### Playtest warning deltas
+
+- Use `scripts/capture-playtest-warning-delta.mjs` for report-only warning
+  capture on required browser exercises when its Engine host is available. A
+  new warning must be understood and fixed, or linked to the exact owning
+  Engine or product task before making a clean claim. A linked, recoverable,
+  nonfatal warning may coexist with completion when acceptance remains valid.
+- Do not demand absolute zero historical warnings. Terminal, safety-critical,
+  or unknown-provenance diagnostics, and missing, lagged, dropped, or failed
+  capture, block a clean claim. An explicitly compatible baseline is required
+  for a delta; no baseline is report-only and comparison remains unavailable.
+- Any allowlist is narrowly scoped, owned, reasoned, linked, and expiring; it
+  is never a blanket permission to ignore errors. Clippy's warnings-as-errors
+  policy is separate and must not be weakened incidentally. Do not blanket
+  continue past compiler errors, ABI failures, or explicit Error/Fatal findings.
+
 ## Documentation
 
 The intentionally small documentation set is rooted in current source, not in

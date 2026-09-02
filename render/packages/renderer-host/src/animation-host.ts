@@ -10,6 +10,7 @@ import type {
   AnimationProjectionDiagnostic,
   AnimationProjectionReadout,
 } from './host-types.js';
+import { RendererAnimationProjectionRejectedError } from './animated-mesh-host.js';
 import type {
   RendererAnimatedMeshProjection,
   RendererAnimationControllerClip,
@@ -46,6 +47,14 @@ export interface RendererAnimationSampledCue {
 
 export interface RendererAnimationHostOptions {
   readonly cues?: readonly RendererAnimationClipCueDefinition[];
+}
+
+/** Cue definition admission fails before the host replaces its retained snapshot. */
+export class RendererAnimationCueDefinitionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RendererAnimationCueDefinitionError';
+  }
 }
 
 export interface RendererAnimationFrameReceipt {
@@ -524,11 +533,13 @@ function validateCueDefinitions(
       || !Number.isFinite(definition.atSeconds)
       || definition.atSeconds < 0
     ) {
-      throw new Error('animation cue definitions require non-empty identifiers and a finite non-negative marker');
+      throw new RendererAnimationCueDefinitionError(
+        'animation cue definitions require non-empty identifiers and a finite non-negative marker',
+      );
     }
     const key = animationCueKey(definition);
     if (keys.has(key)) {
-      throw new Error(`duplicate animation cue definition ${key}`);
+      throw new RendererAnimationCueDefinitionError(`duplicate animation cue definition ${key}`);
     }
     keys.add(key);
     return definition;
@@ -712,9 +723,10 @@ function hostDiagnostic(
   handle: AnimationProjectionHandle,
   target: RenderHandle,
 ): AnimationProjectionDiagnostic {
-  const message = errorMessage(cause);
-  const code = message.includes('missing clip') ? 'clipMissing' : message.includes('handle') ? 'unknownTarget' : 'hostFailure';
-  return animationDiagnostic(code, sequence, handle, target, message);
+  const code = cause instanceof RendererAnimationProjectionRejectedError
+    ? 'invalidTransition'
+    : 'hostFailure';
+  return animationDiagnostic(code, sequence, handle, target, errorMessage(cause));
 }
 
 function animationDiagnostic(

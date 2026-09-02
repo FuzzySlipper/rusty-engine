@@ -1,7 +1,10 @@
 import type { RenderFrameDiff, RenderHandle } from '@rusty-engine/render-contracts';
 import {
   MapAnimatedMeshAssetSource,
+  RenderApplyError,
   loadAnimationClipPackGlbResource,
+  RendererDisposedError,
+  RendererTerminalError,
   ThreeRenderer,
   loadAnimatedMeshGlbResource,
   type AnimatedMeshAssetSource,
@@ -20,6 +23,10 @@ export type RendererHostDiagnosticCode =
   | 'animated_mesh_unsupported_root_policy'
   | 'animated_mesh_clip_pack_budget_exceeded'
   | 'renderer_lighting_policy_rejected'
+  | 'renderer_frame_rejected'
+  | 'renderer_terminal'
+  | 'renderer_backend_failure'
+  | 'renderer_surface_unavailable'
   | 'animated_mesh_handle_unavailable'
   | 'animation_not_started'
   | 'animation_paused'
@@ -81,7 +88,25 @@ export type RendererAnimatedMeshResourceResolver = (
 
 export interface RendererAnimatedMeshFrameReceipt {
   readonly applied: boolean;
+  /** Whether a later operation may reuse this renderer owner. */
+  readonly outcome: RendererOperationOutcome;
   readonly diagnostics: readonly RendererHostDiagnostic[];
+}
+
+/**
+ * The result of one renderer operation, independent from human diagnostic
+ * text. Only `rejected_atomic` is safe for a caller to recover in-place.
+ */
+export type RendererOperationOutcome = 'applied' | 'rejected_atomic' | 'terminal';
+
+/** A controller update was rejected before its renderer-side weights changed. */
+export class RendererAnimationProjectionRejectedError extends Error {
+  readonly outcome = 'rejected_atomic' as const;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RendererAnimationProjectionRejectedError';
+  }
 }
 
 export interface RendererAnimatedMeshPoseSample {
@@ -337,7 +362,16 @@ function createProjectionController(
     snapshot: () => renderer.snapshot(),
     hasAnimationTarget: (handle) => renderer.has(handle),
     setAnimationControllerWeights: (handle, clips) => {
-      renderer.setAnimationControllerWeights(handle, clips);
+      try {
+        renderer.setAnimationControllerWeights(handle, clips);
+      } catch (cause) {
+        if (cause instanceof RenderApplyError
+          && !(cause instanceof RendererTerminalError)
+          && !(cause instanceof RendererDisposedError)) {
+          throw new RendererAnimationProjectionRejectedError(errorMessage(cause), { cause });
+        }
+        throw cause;
+      }
     },
     hasAnimationClips: (handle, clipIds) => renderer.hasAnimationControllerClips(handle, clipIds),
     clearAnimationControllerWeights: (handle) => renderer.clearAnimationControllerWeights(handle),
@@ -356,22 +390,23 @@ function contentHashesByAsset(
 function applyRendererOperation(operation: () => void): RendererAnimatedMeshFrameReceipt {
   try {
     operation();
-    return { applied: true, diagnostics: [] };
+    return { applied: true, outcome: 'applied', diagnostics: [] };
   } catch (cause) {
+    const atomic = cause instanceof RenderApplyError
+      && !(cause instanceof RendererTerminalError)
+      && !(cause instanceof RendererDisposedError);
     const message = errorMessage(cause);
     return {
       applied: false,
-      diagnostics: [diagnostic(animationResourceDiagnosticCode(message), null, null, message)],
+      outcome: atomic ? 'rejected_atomic' : 'terminal',
+      diagnostics: [diagnostic(
+        atomic ? 'animated_mesh_frame_rejected' : 'renderer_backend_failure',
+        null,
+        null,
+        message,
+      )],
     };
   }
-}
-
-function animationResourceDiagnosticCode(message: string): RendererHostDiagnosticCode {
-  if (message.includes('missing target joint') || message.includes('missing source joint')) return 'animated_mesh_missing_joint';
-  if (message.includes('malformed or unsupported channels')) return 'animated_mesh_malformed_channels';
-  if (message.includes('unsupported root-motion declaration')) return 'animated_mesh_unsupported_root_policy';
-  if (message.includes('incompatible rig signature') || message.includes('inverse bind')) return 'animated_mesh_incompatible_rig';
-  return 'animated_mesh_frame_rejected';
 }
 
 function validateManifest(manifest: RendererAnimatedMeshResourceManifest): void {

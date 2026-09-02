@@ -81,6 +81,7 @@ void test('composition publication is immutable and target revisions cannot be r
   const submitted = composition();
   assert.deepEqual(manager.configure(submitted), {
     applied: true,
+    outcome: 'applied',
     diagnostics: [],
     revision: 1,
   });
@@ -184,6 +185,7 @@ void test('changed target facts require a higher revision and publish exactly on
 
   const sameRevisionResize = manager.configure(composition(1, 128));
   assert.equal(sameRevisionResize.applied, false);
+  assert.equal(sameRevisionResize.outcome, 'rejected_atomic');
   assert.equal(sameRevisionResize.diagnostics[0]?.code, 'stale_target_revision');
   assert.equal(manager.readout().revision, 1);
   assert.equal(manager.readout().targets[0]?.width, 64);
@@ -209,6 +211,8 @@ void test('target allocation failure leaves the prior composition unchanged', ()
   failAllocation = true;
   const rejected = manager.configure(composition(2, 128));
   assert.equal(rejected.applied, false);
+  assert.equal(rejected.outcome, 'terminal');
   assert.equal(rejected.diagnostics[0]?.code, 'target_allocation_failed');
   assert.deepEqual(manager.readout(), before);
+  assert.equal(manager.configure(composition(3, 128)).outcome, 'terminal');
 });

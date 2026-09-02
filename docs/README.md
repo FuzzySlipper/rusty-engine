@@ -13,6 +13,8 @@ promise that every proposal or Rust API is already exposed to C#.
   organization that does not require a hidden Engine framework.
 - [C# capability map](csharp-capabilities.md) inventories the current generated
   service families, managed helpers, and retained native runtime mechanisms.
+- [Verification notes](verification.md) describe the report-only Playwright
+  warning-delta capture and compatible-baseline comparison.
 
 The root [README](../README.md) is the repository landing page and
 [AGENTS.md](../AGENTS.md) is the compact task-time guidance. Historical

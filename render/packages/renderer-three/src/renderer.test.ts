@@ -2674,6 +2674,12 @@ void test('sky background rejects missing, metadata-only, non-sRGB, repeated, an
     assert.equal(renderer.textureDescriptor(texture.id), undefined);
     assert.equal(renderer.scene.background, null);
   }
+  const validSky = { ...textureDescriptor(bytes, 2, 'inline', 'texture/sky-valid'), wrap: 'clamp' as const };
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: validSky },
+    { op: 'setSkyBackground', background: { texture: validSky.id } },
+  ] });
+  assert.notEqual(renderer.scene.background, null, 'a later valid sky remains admissible');
   renderer.dispose();
 });
 
@@ -3304,6 +3310,8 @@ void test('invalid sprite lighting texture rejects a complete frame before retai
   assert.equal(renderer.handleCount, 0);
   assert.equal(renderer.textureDescriptor(invalidNormal.id), undefined);
   assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
+  renderer.applyFrame({ schemaVersion: 1, ops: [createDiff(46, cubeNode('valid-after-rejection'))] });
+  assert.equal(renderer.handleCount, 1, 'a later valid sprite-adjacent frame remains admissible');
 });
 
 void test('instance of an undefined asset, and redefine while in use, are classified errors', () => {

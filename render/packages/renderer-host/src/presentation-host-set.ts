@@ -3,7 +3,7 @@ import type {
   PresentationHostDiagnostic,
   PresentationOp,
 } from '@rusty-engine/render-contracts';
-import { decodePresentationFrameDiff } from '@rusty-engine/render-contracts';
+import { ContractDecodeError, decodePresentationFrameDiff } from '@rusty-engine/render-contracts';
 import type {
   RendererAudioListenerPose,
   RendererAudioRealizedFactsReadout,
@@ -82,12 +82,16 @@ export interface RendererPresentationDomainReceipt {
   readonly configured: boolean;
   readonly requested: number;
   readonly applied: number;
+  /** `rejected_atomic` describes only this domain's rejected operations. */
+  readonly outcome: 'applied' | 'partial' | 'rejected_atomic' | 'terminal';
   readonly diagnostics: readonly PresentationHostDiagnostic[];
 }
 
 export interface RendererPresentationFrameReceipt {
   readonly schemaVersion: 1;
   readonly applied: number;
+  /** A mixed frame may have applied other independent presentation domains. */
+  readonly outcome: 'applied' | 'partial' | 'rejected_atomic' | 'terminal';
   readonly domains: readonly RendererPresentationDomainReceipt[];
   readonly diagnostics: readonly PresentationHostDiagnostic[];
 }
@@ -133,7 +137,14 @@ export class RendererPresentationHostSet {
   }
 
   async apply(frame: PresentationFrameDiff): Promise<RendererPresentationFrameReceipt> {
-    decodePresentationFrameDiff(frame);
+    try {
+      decodePresentationFrameDiff(frame);
+    } catch (cause) {
+      if (cause instanceof ContractDecodeError) {
+        throw new RendererPresentationFrameValidationError(cause);
+      }
+      throw cause;
+    }
 
     const domains: RendererPresentationDomainReceipt[] = [];
     for (const domain of PRESENTATION_DOMAIN_ORDER) {
@@ -146,12 +157,15 @@ export class RendererPresentationHostSet {
           configured: false,
           requested: operations.length,
           applied: 0,
+          outcome: operations.length === 0 ? 'applied' : 'rejected_atomic',
           diagnostics,
         });
         continue;
       }
       if (operations.length === 0) {
-        domains.push({ domain, configured: true, requested: 0, applied: 0, diagnostics: [] });
+        domains.push({
+          domain, configured: true, requested: 0, applied: 0, outcome: 'applied', diagnostics: [],
+        });
         continue;
       }
       if (this.#degradedDomains.has(domain)) {
@@ -174,6 +188,7 @@ export class RendererPresentationHostSet {
         configured: true,
         requested: operations.length,
         applied: receipt.applied,
+        outcome: presentationDomainOutcome(receipt),
         diagnostics: receipt.diagnostics.map((diagnostic) => ({ domain, ...diagnostic })),
       });
     }
@@ -333,6 +348,14 @@ export class RendererPresentationHostSet {
   }
 }
 
+/** A malformed frame was rejected before any optional presentation host ran. */
+export class RendererPresentationFrameValidationError extends Error {
+  constructor(override readonly cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'RendererPresentationFrameValidationError';
+  }
+}
+
 function hasListenerSynchronization(
   host: RendererAudioListenerPresentationHost,
 ): host is RendererAudioListenerPresentationHost & Required<Pick<
@@ -380,6 +403,7 @@ function degradedReceipt(
     configured: true,
     requested: operations.length,
     applied: 0,
+    outcome: 'terminal',
     diagnostics: operation === undefined ? [] : [{
       domain,
       code: 'hostFailure',
@@ -409,7 +433,28 @@ function frameReceipt(
   return {
     schemaVersion: 1,
     applied: domains.reduce((total, domain) => total + domain.applied, 0),
+    outcome: presentationFrameOutcome(domains),
     domains,
     diagnostics: domains.flatMap((domain) => domain.diagnostics),
   };
+}
+
+function presentationDomainOutcome(
+  receipt: PresentationDomainReceipt,
+): RendererPresentationDomainReceipt['outcome'] {
+  if (receipt.diagnostics.some((diagnostic) => diagnostic.code === 'hostFailure')) return 'terminal';
+  if (receipt.diagnostics.length === 0) return 'applied';
+  return receipt.applied === 0 ? 'rejected_atomic' : 'partial';
+}
+
+function presentationFrameOutcome(
+  domains: readonly RendererPresentationDomainReceipt[],
+): RendererPresentationFrameReceipt['outcome'] {
+  if (domains.some((domain) => domain.outcome === 'terminal')) return 'terminal';
+  if (domains.some((domain) => domain.outcome === 'partial')) return 'partial';
+  const hasRejection = domains.some((domain) => domain.outcome === 'rejected_atomic');
+  if (!hasRejection) return 'applied';
+  return domains.some((domain) => domain.outcome === 'applied' && domain.applied > 0)
+    ? 'partial'
+    : 'rejected_atomic';
 }

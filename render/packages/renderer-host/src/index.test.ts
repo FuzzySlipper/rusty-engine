@@ -454,7 +454,7 @@ void test('renderer-host realizes a checked zero-clip unlit GLB through the esta
         },
       ],
     });
-    assert.deepEqual(receipt, { applied: true, diagnostics: [] });
+  assert.deepEqual(receipt, { applied: true, outcome: 'applied', diagnostics: [] });
     assert.deepEqual(projection.playback(renderHandle(4999)).effectiveClips, []);
   } finally {
     restore();
