@@ -301,17 +301,19 @@ fn stage_product(options: &DevOptions) -> Result<PathBuf, String> {
             project.display()
         ));
     }
-    run_dotnet(&[
-        "build",
-        project
-            .to_str()
-            .ok_or("RUSTY_DEV_PROJECT: project path must be UTF-8")?,
-    ])?;
+    let project_argument = project
+        .to_str()
+        .ok_or("RUSTY_DEV_PROJECT: project path must be UTF-8")?
+        .to_owned();
+    let properties = stage_properties(options)?;
+    let mut build_arguments = vec!["build".to_owned(), project_argument];
+    build_arguments.extend(properties.iter().cloned());
+    run_dotnet(&build_arguments)?;
     let staged = query_msbuild_property(
         &project,
         Some(STAGE_TARGET),
         STAGED_PRODUCT_PROPERTY,
-        &stage_properties(options),
+        &properties,
     )?;
     let staged = PathBuf::from(staged);
     absolute(&staged)
@@ -377,8 +379,18 @@ fn query_msbuild_property(
         .ok_or_else(|| format!("RUSTY_DEV_MSBUILD: property {property} produced no value"))
 }
 
-fn stage_properties(options: &DevOptions) -> Vec<String> {
+fn stage_properties(options: &DevOptions) -> Result<Vec<String>, String> {
     let mut properties = Vec::new();
+    if let Some(engine_source) = &options.engine_source {
+        let engine_source = absolute(engine_source)?;
+        let engine_source = engine_source
+            .to_str()
+            .ok_or("RUSTY_DEV_ENGINE_SOURCE: Engine source path must be UTF-8")?;
+        properties.push("-p:RustyEngineUseSourceDevelopment=true".to_owned());
+        properties.push(format!(
+            "-p:RustyEngineSourceDevelopmentPath={engine_source}"
+        ));
+    }
     if let Some(bind_host) = &options.bind_host {
         properties.push(format!("-p:RustyEngineProductBindHost={bind_host}"));
     }
@@ -388,10 +400,10 @@ fn stage_properties(options: &DevOptions) -> Vec<String> {
     if options.live_debug {
         properties.push("-p:RustyEngineProductLiveDebug=true".to_owned());
     }
-    properties
+    Ok(properties)
 }
 
-fn run_dotnet(arguments: &[&str]) -> Result<(), String> {
+fn run_dotnet(arguments: &[String]) -> Result<(), String> {
     let status = Command::new("dotnet")
         .args(arguments)
         .status()
@@ -609,5 +621,23 @@ mod tests {
         ])
         .expect_err("ambiguous runtime source is rejected");
         assert!(error.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn engine_source_is_forwarded_to_sdk_build_and_staging() {
+        let options = DevOptions {
+            project: PathBuf::from("Product.csproj"),
+            runtime: None,
+            engine_source: Some(PathBuf::from("/engine-source")),
+            bind_host: None,
+            port: None,
+            live_debug: false,
+        };
+
+        let properties = stage_properties(&options).expect("source properties");
+        assert!(properties.contains(&"-p:RustyEngineUseSourceDevelopment=true".to_owned()));
+        assert!(
+            properties.contains(&"-p:RustyEngineSourceDevelopmentPath=/engine-source".to_owned())
+        );
     }
 }
