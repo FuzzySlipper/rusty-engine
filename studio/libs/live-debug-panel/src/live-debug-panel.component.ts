@@ -138,8 +138,8 @@ let nextLiveDebugPanelInstance = 1;
     .rusty-live-debug-panel__transcript { max-height: 18rem; overflow: auto; margin: 0.5rem 0 0; padding-left: 1.5rem; }
     .rusty-live-debug-panel__transcript pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0.25rem 0 0.75rem; }
     .rusty-live-debug-panel__response--failure pre { color: #ffb4ab; }
-    .rusty-live-debug-panel__diagnostics { display: grid; gap: 0.35rem; margin-top: 0.75rem; }
-    .rusty-live-debug-panel__diagnostic-log { max-height: 12rem; overflow: auto; margin: 0; padding-left: 1.5rem; }
+    .rusty-live-debug-panel__diagnostics { display: grid; gap: 0.35rem; margin-top: 0.75rem; cursor: text; user-select: text; }
+    .rusty-live-debug-panel__diagnostic-log { max-height: 12rem; overflow: auto; margin: 0; padding-left: 1.5rem; cursor: text; user-select: text; }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })

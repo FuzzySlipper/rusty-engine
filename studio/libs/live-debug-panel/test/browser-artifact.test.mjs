@@ -94,10 +94,15 @@ test('browser artifact mounts independently and routes through an injected trans
     await new Promise((resolve) => setTimeout(resolve, 20));
     const ids = [...document.querySelectorAll('input')].map((element) => element.id);
     const logs = [...document.querySelectorAll('#ready [role="log"]')].map((element) => element.textContent).join('\n');
+    const diagnosticStyles = getComputedStyle(document.querySelector('#ready .rusty-live-debug-panel__diagnostics'));
+    const diagnosticSelection = {
+      cursor: diagnosticStyles.cursor,
+      userSelect: diagnosticStyles.userSelect,
+    };
     ready.dispose();
     inert.dispose();
     hanging.dispose();
-    return { catalogCalls, commands, hangingAborted: hangingSignal?.aborted, ids, logs };
+    return { catalogCalls, commands, hangingAborted: hangingSignal?.aborted, ids, logs, diagnosticSelection };
   });
 
   assert.equal(result.catalogCalls, 2, 'the disabled panel must stay inert');
@@ -106,6 +111,7 @@ test('browser artifact mounts independently and routes through an injected trans
   assert.equal(new Set(result.ids).size, result.ids.length, 'mounted panels must not reuse DOM IDs');
   assert.match(result.logs ?? '', /ran inspect/);
   assert.match(result.logs ?? '', /renderer-age-ms=1100/);
+  assert.deepEqual(result.diagnosticSelection, { cursor: 'text', userSelect: 'text' });
 });
 
 test('browser artifact can remount after disposal into the same caller-owned host', async (context) => {
