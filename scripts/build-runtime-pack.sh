@@ -54,11 +54,13 @@ pnpm --dir render --filter @rusty-engine/live-debug-client run build
 pnpm --dir studio run build:live-debug-panel-artifact
 cargo build --locked --release -p csharp-product-runtime \
   --bin rusty-product-host --bin rusty-live-debug
+cargo build --locked --release -p rusty-cli --bin rusty
 
 install -d "$STAGE/bin" "$STAGE/share/browser/engine" \
   "$STAGE/share/live-debug-client" "$STAGE/share/live-debug-panel" "$STAGE/symbols"
 install -m 755 target/release/rusty-product-host "$STAGE/bin/rusty-product-host"
 install -m 755 target/release/rusty-live-debug "$STAGE/bin/rusty-live-debug"
+install -m 755 target/release/rusty "$STAGE/bin/rusty"
 install -m 644 render/artifacts/product-browser-host/product-browser-host.js \
   "$STAGE/share/browser/engine/product-browser-host.js"
 install -m 644 render/packages/product-browser-host/runtime-pack-shell/index.html \
@@ -75,6 +77,8 @@ if command -v objcopy >/dev/null 2>&1; then
     "$STAGE/symbols/rusty-product-host.debug"
   objcopy --only-keep-debug "$STAGE/bin/rusty-live-debug" \
     "$STAGE/symbols/rusty-live-debug.debug"
+  objcopy --only-keep-debug "$STAGE/bin/rusty" \
+    "$STAGE/symbols/rusty.debug"
 fi
 
 IDENTITY="$($STAGE/bin/rusty-product-host --identity)"

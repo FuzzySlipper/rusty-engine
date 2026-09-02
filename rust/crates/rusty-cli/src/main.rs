@@ -1,0 +1,613 @@
+//! The intentionally thin Product iteration entry point.
+//!
+//! This binary does not contain Product configuration. The SDK evaluates and
+//! stages that truth, while a runtime pack supplies the exact host it starts.
+
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    path::{Path, PathBuf},
+    process::{Child, ChildStdin, Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, SystemTime},
+};
+
+use serde::Deserialize;
+use serde_json::Value;
+
+const STAGE_TARGET: &str = "StageRustyEngineCoreClrProduct";
+const STAGED_PRODUCT_PROPERTY: &str = "RustyEngineStagedProductDirectory";
+const WATCH_PATHS_PROPERTY: &str = "RustyEngineWatchPaths";
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const CLEAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn main() -> Result<(), String> {
+    let arguments = Arguments::parse(env::args().skip(1))?;
+    match arguments.command {
+        CommandName::Dev(options) => dev(options),
+    }
+}
+
+fn dev(options: DevOptions) -> Result<(), String> {
+    let runtime = RuntimePack::resolve(&options)?;
+    runtime.verify()?;
+
+    let staged = stage_product(&options)?;
+    verify_staged_product(&staged)?;
+    let mut watches = query_watch_paths(&options.project)?;
+    let mut snapshot = FileSnapshot::capture(&watches)?;
+    let mut child = SupervisedHost::start(&runtime.host, &staged)?;
+
+    diagnostic(
+        "started",
+        serde_json::json!({
+            "project": options.project,
+            "productDirectory": staged,
+            "runtimePack": runtime.root,
+            "loader": "coreclr",
+            "watchPaths": watches,
+            "pid": child.child.id(),
+        }),
+    );
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Err(format!(
+                "RUSTY_DEV_CHILD_EXIT: CoreCLR product host exited unexpectedly with {status}"
+            ));
+        }
+        thread::sleep(POLL_INTERVAL);
+        let next = FileSnapshot::capture(&watches)?;
+        if next == snapshot {
+            continue;
+        }
+
+        diagnostic(
+            "change-detected",
+            serde_json::json!({ "watchPaths": watches }),
+        );
+        child.stop_cleanly()?;
+        let staged = stage_product(&options)?;
+        verify_staged_product(&staged)?;
+        let refreshed_watches = query_watch_paths(&options.project)?;
+        snapshot = FileSnapshot::capture(&refreshed_watches)?;
+        watches = refreshed_watches;
+        child = SupervisedHost::start(&runtime.host, &staged)?;
+        diagnostic(
+            "restarted",
+            serde_json::json!({
+                "productDirectory": staged,
+                "loader": "coreclr",
+                "watchPaths": watches,
+                "pid": child.child.id(),
+            }),
+        );
+    }
+}
+
+#[derive(Debug)]
+struct Arguments {
+    command: CommandName,
+}
+
+#[derive(Debug)]
+enum CommandName {
+    Dev(DevOptions),
+}
+
+#[derive(Debug)]
+struct DevOptions {
+    project: PathBuf,
+    runtime: Option<PathBuf>,
+    engine_source: Option<PathBuf>,
+    bind_host: Option<String>,
+    port: Option<u16>,
+    live_debug: bool,
+}
+
+impl Arguments {
+    fn parse(values: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut values = values.into_iter();
+        let command = values.next().ok_or_else(usage)?;
+        if command != "dev" {
+            return Err(usage());
+        }
+        let mut project = None;
+        let mut runtime = None;
+        let mut engine_source = None;
+        let mut bind_host = None;
+        let mut port = None;
+        let mut live_debug = false;
+        while let Some(value) = values.next() {
+            match value.as_str() {
+                "--project" => {
+                    project = Some(PathBuf::from(required_value(&mut values, "--project")?))
+                }
+                "--runtime" => {
+                    runtime = Some(PathBuf::from(required_value(&mut values, "--runtime")?))
+                }
+                "--engine-source" => {
+                    engine_source = Some(PathBuf::from(required_value(
+                        &mut values,
+                        "--engine-source",
+                    )?))
+                }
+                "--bind-host" => {
+                    let value = required_value(&mut values, "--bind-host")?;
+                    value
+                        .parse::<std::net::Ipv4Addr>()
+                        .map_err(|_| "RUSTY_DEV_ARGUMENT: --bind-host must be an IPv4 address")?;
+                    bind_host = Some(value);
+                }
+                "--port" => {
+                    port = Some(
+                        required_value(&mut values, "--port")?
+                            .parse()
+                            .map_err(|_| "RUSTY_DEV_ARGUMENT: --port must be a u16")?,
+                    )
+                }
+                "--live-debug" => live_debug = true,
+                "--help" => return Err(usage()),
+                _ => {
+                    return Err(format!(
+                        "RUSTY_DEV_ARGUMENT: unknown argument `{value}`\n{}",
+                        usage()
+                    ))
+                }
+            }
+        }
+        if runtime.is_some() && engine_source.is_some() {
+            return Err(
+                "RUSTY_DEV_ARGUMENT: --runtime and --engine-source are mutually exclusive"
+                    .to_owned(),
+            );
+        }
+        let project = project.ok_or_else(|| {
+            "RUSTY_DEV_ARGUMENT: --project <ordinary-product.csproj> is required".to_owned()
+        })?;
+        Ok(Self {
+            command: CommandName::Dev(DevOptions {
+                project,
+                runtime,
+                engine_source,
+                bind_host,
+                port,
+                live_debug,
+            }),
+        })
+    }
+}
+
+fn required_value(values: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
+    values
+        .next()
+        .ok_or_else(|| format!("RUSTY_DEV_ARGUMENT: {flag} requires a value"))
+}
+
+fn usage() -> String {
+    "usage: rusty dev --project <ordinary-product.csproj> [--runtime <runtime-pack>] [--engine-source <rusty-engine-source>] [--bind-host <IPv4>] [--port <u16>] [--live-debug]\n\nCoreCLR is the only normal loader. The SDK stages Product truth; this command never invokes Cargo or auto-discovers an adjacent Engine checkout. Use an explicit override only for Engine contributor runtime packs.".to_owned()
+}
+
+#[derive(Debug)]
+struct RuntimePack {
+    root: PathBuf,
+    host: PathBuf,
+    manifest: RuntimeManifest,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeManifest {
+    artifact: String,
+    schema_version: u32,
+    target: String,
+    runtime: Value,
+}
+
+impl RuntimePack {
+    fn resolve(options: &DevOptions) -> Result<Self, String> {
+        let root = if let Some(path) = &options.runtime {
+            absolute(path)?
+        } else if let Some(source) = &options.engine_source {
+            absolute(source)?.join("target/runtime-pack/linux-x64")
+        } else {
+            runtime_beside_current_executable()?
+        };
+        let manifest_path = root.join("runtime-manifest.json");
+        let manifest = fs::read(&manifest_path)
+            .map_err(|error| {
+                format!(
+                    "RUSTY_DEV_RUNTIME_MANIFEST: could not read `{}`: {error}",
+                    manifest_path.display()
+                )
+            })
+            .and_then(|bytes| {
+                serde_json::from_slice(&bytes).map_err(|error| {
+                    format!(
+                        "RUSTY_DEV_RUNTIME_MANIFEST: `{}` is invalid JSON: {error}",
+                        manifest_path.display()
+                    )
+                })
+            })?;
+        let host = root.join("bin/rusty-product-host");
+        Ok(Self {
+            root,
+            host,
+            manifest,
+        })
+    }
+
+    fn verify(&self) -> Result<(), String> {
+        if self.manifest.artifact != "rusty.product.runtime-pack"
+            || self.manifest.schema_version != 1
+        {
+            return Err("RUSTY_DEV_RUNTIME_IDENTITY: runtime manifest must be rusty.product.runtime-pack schemaVersion 1".to_owned());
+        }
+        if self.manifest.target != "linux-x64" {
+            return Err(format!(
+                "RUSTY_DEV_RUNTIME_TARGET: runtime pack target `{}` is not supported by this host",
+                self.manifest.target
+            ));
+        }
+        if !self.host.is_file() {
+            return Err(format!("RUSTY_DEV_RUNTIME_HOST: matched host `{}` is missing; rebuild or select the exact runtime pack", self.host.display()));
+        }
+        let output = Command::new(&self.host)
+            .arg("--identity")
+            .output()
+            .map_err(|error| {
+                format!(
+                    "RUSTY_DEV_RUNTIME_HOST: could not execute `{}`: {error}",
+                    self.host.display()
+                )
+            })?;
+        if !output.status.success() {
+            return Err(format!(
+                "RUSTY_DEV_RUNTIME_HOST: `{}` --identity failed with {}",
+                self.host.display(),
+                output.status
+            ));
+        }
+        let actual: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+            format!("RUSTY_DEV_RUNTIME_IDENTITY: host identity is not valid JSON: {error}")
+        })?;
+        if actual != self.manifest.runtime {
+            return Err("RUSTY_DEV_RUNTIME_IDENTITY: runtime-manifest.json does not match bin/rusty-product-host --identity; select one complete runtime pack or rebuild it".to_owned());
+        }
+        Ok(())
+    }
+}
+
+fn runtime_beside_current_executable() -> Result<PathBuf, String> {
+    let executable = env::current_exe().map_err(|error| {
+        format!("RUSTY_DEV_RUNTIME_LOCATE: cannot resolve rusty executable: {error}")
+    })?;
+    let bin = executable.parent().ok_or_else(|| {
+        "RUSTY_DEV_RUNTIME_LOCATE: rusty executable has no parent directory".to_owned()
+    })?;
+    let root = bin.parent().ok_or_else(|| "RUSTY_DEV_RUNTIME_LOCATE: rusty executable must reside in a runtime-pack bin directory; use --runtime or --engine-source for contributor work".to_owned())?;
+    if root.join("runtime-manifest.json").is_file() {
+        Ok(root.to_owned())
+    } else {
+        Err("RUSTY_DEV_RUNTIME_LOCATE: no runtime-manifest.json beside rusty; use --runtime <runtime-pack> or --engine-source <rusty-engine-source>. Normal operation never searches for an adjacent checkout.".to_owned())
+    }
+}
+
+fn stage_product(options: &DevOptions) -> Result<PathBuf, String> {
+    let project = absolute(&options.project)?;
+    if !project.is_file() {
+        return Err(format!(
+            "RUSTY_DEV_PROJECT: ordinary product project `{}` does not exist",
+            project.display()
+        ));
+    }
+    run_dotnet(&[
+        "build",
+        project
+            .to_str()
+            .ok_or("RUSTY_DEV_PROJECT: project path must be UTF-8")?,
+    ])?;
+    let staged = query_msbuild_property(
+        &project,
+        Some(STAGE_TARGET),
+        STAGED_PRODUCT_PROPERTY,
+        &stage_properties(options),
+    )?;
+    let staged = PathBuf::from(staged);
+    absolute(&staged)
+}
+
+fn query_watch_paths(project: &Path) -> Result<Vec<PathBuf>, String> {
+    let value = query_msbuild_property(project, None, WATCH_PATHS_PROPERTY, &[])?;
+    let paths = value
+        .split(';')
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| absolute(Path::new(value.trim())))
+        .collect::<Result<Vec<_>, _>>()?;
+    if paths.is_empty() {
+        return Err(format!("RUSTY_DEV_WATCH_DECLARATION: SDK property {WATCH_PATHS_PROPERTY} was empty; declare the C#/UI/content inputs in the product project"));
+    }
+    for path in &paths {
+        if !path.exists() {
+            return Err(format!(
+                "RUSTY_DEV_WATCH_DECLARATION: declared watch path `{}` does not exist",
+                path.display()
+            ));
+        }
+    }
+    Ok(paths)
+}
+
+fn query_msbuild_property(
+    project: &Path,
+    target: Option<&str>,
+    property: &str,
+    properties: &[String],
+) -> Result<String, String> {
+    let project = project
+        .to_str()
+        .ok_or("RUSTY_DEV_PROJECT: project path must be UTF-8")?;
+    let mut arguments = vec![
+        "msbuild".to_owned(),
+        project.to_owned(),
+        "-nologo".to_owned(),
+        "-verbosity:quiet".to_owned(),
+    ];
+    if let Some(target) = target {
+        arguments.push(format!("-t:{target}"));
+    }
+    arguments.extend(properties.iter().cloned());
+    arguments.push(format!("-getProperty:{property}"));
+    let output = Command::new("dotnet")
+        .args(&arguments)
+        .output()
+        .map_err(|error| format!("RUSTY_DEV_DOTNET: could not start dotnet msbuild: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "RUSTY_DEV_MSBUILD: property {property} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|_| format!("RUSTY_DEV_MSBUILD: property {property} output was not UTF-8"))?
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("RUSTY_DEV_MSBUILD: property {property} produced no value"))
+}
+
+fn stage_properties(options: &DevOptions) -> Vec<String> {
+    let mut properties = Vec::new();
+    if let Some(bind_host) = &options.bind_host {
+        properties.push(format!("-p:RustyEngineProductBindHost={bind_host}"));
+    }
+    if let Some(port) = options.port {
+        properties.push(format!("-p:RustyEngineProductPort={port}"));
+    }
+    if options.live_debug {
+        properties.push("-p:RustyEngineProductLiveDebug=true".to_owned());
+    }
+    properties
+}
+
+fn run_dotnet(arguments: &[&str]) -> Result<(), String> {
+    let status = Command::new("dotnet")
+        .args(arguments)
+        .status()
+        .map_err(|error| format!("RUSTY_DEV_DOTNET: could not start dotnet: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "RUSTY_DEV_BUILD: dotnet {} failed with {status}",
+            arguments.join(" ")
+        ))
+    }
+}
+
+fn verify_staged_product(staged: &Path) -> Result<(), String> {
+    let manifest = staged.join("product.json");
+    if manifest.is_file() {
+        Ok(())
+    } else {
+        Err(format!("RUSTY_DEV_STAGE: SDK target {STAGE_TARGET} reported `{}`, but its atomically staged product.json is missing", staged.display()))
+    }
+}
+
+struct SupervisedHost {
+    child: Child,
+    stdin: Option<ChildStdin>,
+}
+
+impl SupervisedHost {
+    fn start(host: &Path, product: &Path) -> Result<Self, String> {
+        let mut child = Command::new(host)
+            .args([
+                "--product",
+                product
+                    .to_str()
+                    .ok_or("RUSTY_DEV_STAGE: staged product path must be UTF-8")?,
+                "--loader",
+                "coreclr",
+                "--supervised",
+            ])
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                format!(
+                    "RUSTY_DEV_CHILD_START: could not launch `{}`: {error}",
+                    host.display()
+                )
+            })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or("RUSTY_DEV_CHILD_START: supervised child stdin was unavailable")?;
+        Ok(Self {
+            child,
+            stdin: Some(stdin),
+        })
+    }
+
+    fn try_wait(&mut self) -> Result<Option<ExitStatus>, String> {
+        self.child
+            .try_wait()
+            .map_err(|error| format!("RUSTY_DEV_CHILD_WAIT: {error}"))
+    }
+
+    fn stop_cleanly(&mut self) -> Result<(), String> {
+        let old_pid = self.child.id();
+        self.stdin.take();
+        let deadline = SystemTime::now() + CLEAN_SHUTDOWN_TIMEOUT;
+        loop {
+            if let Some(status) = self.try_wait()? {
+                if status.success() {
+                    diagnostic(
+                        "child-stopped",
+                        serde_json::json!({ "pid": old_pid, "status": status.code() }),
+                    );
+                    return Ok(());
+                }
+                return Err(format!(
+                    "RUSTY_DEV_CHILD_SHUTDOWN: old host pid {old_pid} exited with {status}"
+                ));
+            }
+            if SystemTime::now() >= deadline {
+                self.child.kill().map_err(|error| format!("RUSTY_DEV_CHILD_SHUTDOWN_TIMEOUT: old host pid {old_pid} ignored clean shutdown and could not be terminated: {error}"))?;
+                let status = self.child.wait().map_err(|error| format!("RUSTY_DEV_CHILD_SHUTDOWN_TIMEOUT: old host pid {old_pid} was terminated but could not be reaped: {error}"))?;
+                diagnostic(
+                    "child-killed-after-timeout",
+                    serde_json::json!({ "pid": old_pid, "status": status.code() }),
+                );
+                return Err(format!("RUSTY_DEV_CHILD_SHUTDOWN_TIMEOUT: old host pid {old_pid} ignored clean shutdown; it was terminated and reaped after {} seconds", CLEAN_SHUTDOWN_TIMEOUT.as_secs()));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileSnapshot(BTreeMap<PathBuf, FileStamp>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileStamp {
+    modified: Option<SystemTime>,
+    bytes: u64,
+}
+
+impl FileSnapshot {
+    fn capture(paths: &[PathBuf]) -> Result<Self, String> {
+        let mut files = BTreeMap::new();
+        for path in paths {
+            capture_path(path, &mut files)?;
+        }
+        Ok(Self(files))
+    }
+}
+
+fn capture_path(path: &Path, files: &mut BTreeMap<PathBuf, FileStamp>) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "RUSTY_DEV_WATCH: could not inspect `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.is_file() {
+        files.insert(
+            path.to_owned(),
+            FileStamp {
+                modified: metadata.modified().ok(),
+                bytes: metadata.len(),
+            },
+        );
+    } else if metadata.is_dir() {
+        for entry in fs::read_dir(path).map_err(|error| {
+            format!(
+                "RUSTY_DEV_WATCH: could not read `{}`: {error}",
+                path.display()
+            )
+        })? {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "RUSTY_DEV_WATCH: could not enumerate `{}`: {error}",
+                    path.display()
+                )
+            })?;
+            let child = entry.path();
+            if matches!(
+                child.file_name().and_then(|name| name.to_str()),
+                Some("bin" | "obj" | ".git")
+            ) {
+                continue;
+            }
+            capture_path(&child, files)?;
+        }
+    }
+    Ok(())
+}
+
+fn absolute(path: &Path) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        Ok(path.to_owned())
+    } else {
+        env::current_dir()
+            .map(|root| root.join(path))
+            .map_err(|error| {
+                format!(
+                    "RUSTY_DEV_PATH: could not resolve `{}`: {error}",
+                    path.display()
+                )
+            })
+    }
+}
+
+fn diagnostic(event: &str, detail: Value) {
+    println!(
+        "RUSTY_DEV {}",
+        serde_json::json!({ "schemaVersion": 1, "event": event, "detail": detail })
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_options_are_explicit_and_coreclr_scoped() {
+        let arguments = Arguments::parse([
+            "dev".to_owned(),
+            "--project".to_owned(),
+            "Product.csproj".to_owned(),
+            "--runtime".to_owned(),
+            "/runtime-pack".to_owned(),
+            "--bind-host".to_owned(),
+            "127.0.0.1".to_owned(),
+            "--port".to_owned(),
+            "9348".to_owned(),
+            "--live-debug".to_owned(),
+        ])
+        .expect("dev options parse");
+        let CommandName::Dev(options) = arguments.command;
+        assert_eq!(options.project, PathBuf::from("Product.csproj"));
+        assert_eq!(options.runtime, Some(PathBuf::from("/runtime-pack")));
+        assert_eq!(options.bind_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(options.port, Some(9348));
+        assert!(options.live_debug);
+    }
+
+    #[test]
+    fn runtime_and_source_overrides_cannot_be_combined() {
+        let error = Arguments::parse([
+            "dev".to_owned(),
+            "--project".to_owned(),
+            "Product.csproj".to_owned(),
+            "--runtime".to_owned(),
+            "/runtime-pack".to_owned(),
+            "--engine-source".to_owned(),
+            "/engine".to_owned(),
+        ])
+        .expect_err("ambiguous runtime source is rejected");
+        assert!(error.contains("mutually exclusive"));
+    }
+}

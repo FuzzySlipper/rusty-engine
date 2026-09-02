@@ -3,6 +3,10 @@ use std::{
     io::{Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Instant,
 };
 
@@ -142,7 +146,7 @@ fn main() -> Result<(), String> {
             host.origin()
         );
         println!("Press Ctrl+C to stop.");
-        wait_for_process_termination();
+        wait_for_process_termination(args.supervised);
     }
     Ok(())
 }
@@ -204,11 +208,48 @@ fn print_runtime_identity(machine_readable: bool) {
 
 /// The standard host is owned by its foreground process supervisor. In
 /// particular, service launchers commonly provide a closed stdin, so EOF must
-/// not be interpreted as a request to shut the host down.
-fn wait_for_process_termination() -> ! {
-    loop {
-        std::thread::park();
+/// not be interpreted as a request to shut the host down. The `rusty dev`
+/// supervisor opts in explicitly and retains the pipe while the child is live;
+/// closing it is its cross-platform clean-replacement signal. Returning here
+/// lets `RunningProductDevHost` and then `CsharpProductRuntime` execute their
+/// normal shutdown/drop ordering before the process exits.
+fn wait_for_process_termination(supervised: bool) {
+    let termination = install_termination_signal_hook();
+    if supervised {
+        let mut input = std::io::stdin();
+        let mut byte = [0_u8; 1];
+        while !termination.load(Ordering::Relaxed)
+            && input.read(&mut byte).is_ok_and(|count| count != 0)
+        {}
+        let reason = if termination.load(Ordering::Relaxed) {
+            "termination-signal"
+        } else {
+            "supervisor-stdin-closed"
+        };
+        println!("RUSTY_HOST shutdown={{\"reason\":\"{reason}\"}}");
+    } else {
+        while !termination.load(Ordering::Relaxed) {
+            std::thread::park_timeout(std::time::Duration::from_millis(100));
+        }
+        println!("RUSTY_HOST shutdown={{\"reason\":\"termination-signal\"}}");
     }
+}
+
+#[cfg(unix)]
+fn install_termination_signal_hook() -> Arc<AtomicBool> {
+    use signal_hook::consts::signal::{SIGINT, SIGTERM};
+
+    let requested = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(SIGINT, Arc::clone(&requested))
+        .expect("fixed SIGINT shutdown hook registration");
+    signal_hook::flag::register(SIGTERM, Arc::clone(&requested))
+        .expect("fixed SIGTERM shutdown hook registration");
+    requested
+}
+
+#[cfg(not(unix))]
+fn install_termination_signal_hook() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(false))
 }
 
 fn open_fresh_output_stream(address: SocketAddr) -> Result<TcpStream, String> {
@@ -308,6 +349,7 @@ struct Arguments {
     content_store_root: Option<PathBuf>,
     exercise: bool,
     performance_probe: Option<u32>,
+    supervised: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -504,6 +546,7 @@ impl Arguments {
         let mut live_debug = false;
         let mut exercise = false;
         let mut performance_probe = None;
+        let mut supervised = false;
         let mut values = values.into_iter();
         while let Some(arg) = values.next() {
             match arg.as_str() {
@@ -585,9 +628,10 @@ impl Arguments {
                     }
                     performance_probe = Some(iterations);
                 }
+                "--supervised" => supervised = true,
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -643,6 +687,7 @@ impl Arguments {
             legacy_live_debug: live_debug,
             exercise,
             performance_probe,
+            supervised,
         };
         if arguments.exercise && arguments.performance_probe.is_some() {
             return Err("--exercise and --performance-probe are mutually exclusive".to_owned());
@@ -1310,5 +1355,12 @@ mod tests {
                 machine_readable: false
             })
         ));
+    }
+
+    #[test]
+    fn parser_admits_the_explicit_supervised_shutdown_hook() {
+        let args = parse_test_args(&["--supervised"])
+            .expect("supervised shutdown hook parses for a foreground host");
+        assert!(args.supervised);
     }
 }

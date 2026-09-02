@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "rust/crates/rusty-cli",
     "rust/crates/render-host-contracts",
     "rust/crates/renderer-webview-host",
     "rust/crates/product-dev-host",

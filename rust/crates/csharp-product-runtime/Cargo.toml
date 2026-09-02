@@ -22,3 +22,6 @@ runtime-input.workspace = true
 runtime-lifecycle.workspace = true
 runtime-timeline.workspace = true
 runtime-ui.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"

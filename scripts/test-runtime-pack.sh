@@ -50,6 +50,12 @@ unset CARGO CARGO_HOME RUSTUP_HOME
 cd "$WORK"
 "$PACK/bin/rusty-product-host" --identity | grep -F 'rusty.product.runtime-identity' >/dev/null
 "$PACK/bin/rusty-product-host" --version | grep -F 'rusty-product-host' >/dev/null
+test -x "$PACK/bin/rusty"
+if "$PACK/bin/rusty" dev --help >"$WORK/rusty-dev-help.log" 2>&1; then
+  echo 'rusty dev --help unexpectedly started a development session' >&2
+  exit 1
+fi
+grep -F 'usage: rusty dev --project' "$WORK/rusty-dev-help.log" >/dev/null
 
 RUNTIME_HASH_BEFORE="$(find "$PACK" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
 
