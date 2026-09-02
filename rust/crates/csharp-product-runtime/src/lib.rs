@@ -93,6 +93,37 @@ type CoreclrProductBindV1 = unsafe extern "system" fn(
     *mut NativeProductAbiHandshakeV1,
 ) -> i32;
 
+/// Exact ABI/runtime identity published by the generic packaged product host.
+///
+/// This is diagnostic provenance for a matched runtime pack, not a negotiated
+/// compatibility surface. Product construction still requires the V1 handshake
+/// to match exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProductHostRuntimeIdentity {
+    pub protocol_version: u32,
+    pub engine_api_bytes: usize,
+    pub product_api_bytes: usize,
+    pub fingerprint: NativeProductAbiFingerprint,
+    pub build_identity: &'static str,
+}
+
+impl ProductHostRuntimeIdentity {
+    pub fn fingerprint_hex(self) -> String {
+        abi_fingerprint_text(self.fingerprint)
+    }
+}
+
+pub fn product_host_runtime_identity() -> ProductHostRuntimeIdentity {
+    ProductHostRuntimeIdentity {
+        protocol_version: PRODUCT_ABI_PROTOCOL_VERSION,
+        engine_api_bytes: std::mem::size_of::<NativeEngineApi>(),
+        product_api_bytes: std::mem::size_of::<NativeProductApi>(),
+        fingerprint: PRODUCT_ABI_FINGERPRINT,
+        build_identity: std::str::from_utf8(HOST_ABI_BUILD_IDENTITY)
+            .expect("fixed UTF-8 Engine host identity"),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RendererDebugCommand {
     Read,

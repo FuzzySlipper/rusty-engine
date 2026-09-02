@@ -7,7 +7,8 @@ use std::{
 };
 
 use csharp_product_runtime::{
-    CsharpProductContent, CsharpProductRuntime, CsharpProductRuntimeConfig,
+    product_host_runtime_identity, CsharpProductContent, CsharpProductRuntime,
+    CsharpProductRuntimeConfig,
 };
 use product_dev_host::{
     product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry, ProductDevHost,
@@ -34,7 +35,13 @@ keyboard controls: key-a..key-z, digit-0..digit-9, space, enter, escape, shift-l
   shift-right, control-left, control-right, alt-left, alt-right";
 
 fn main() -> Result<(), String> {
-    let args = Arguments::parse()?;
+    let args = match Invocation::parse()? {
+        Invocation::Identity { machine_readable } => {
+            print_runtime_identity(machine_readable);
+            return Ok(());
+        }
+        Invocation::Launch(args) => args,
+    };
     let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
     let content =
         CsharpProductContent::admit(&args.content_dir).map_err(|error| error.to_string())?;
@@ -127,6 +134,61 @@ fn main() -> Result<(), String> {
         wait_for_process_termination();
     }
     Ok(())
+}
+
+enum Invocation {
+    Identity { machine_readable: bool },
+    Launch(Arguments),
+}
+
+impl Invocation {
+    fn parse() -> Result<Self, String> {
+        Self::parse_from(env::args().skip(1))
+    }
+
+    fn parse_from(values: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let values = values.into_iter().collect::<Vec<_>>();
+        match values.as_slice() {
+            [flag] if flag == "--identity" => Ok(Self::Identity {
+                machine_readable: true,
+            }),
+            [flag] if flag == "--version" => Ok(Self::Identity {
+                machine_readable: false,
+            }),
+            _ => Arguments::parse_from(values).map(Self::Launch),
+        }
+    }
+}
+
+fn print_runtime_identity(machine_readable: bool) {
+    let identity = product_host_runtime_identity();
+    let fingerprint = identity.fingerprint_hex();
+    if machine_readable {
+        println!(
+            "{}",
+            serde_json::json!({
+                "artifact": "rusty.product.runtime-identity",
+                "schemaVersion": 1,
+                "host": "rusty-product-host",
+                "hostVersion": env!("CARGO_PKG_VERSION"),
+                "target": "linux-x64",
+                "abi": {
+                    "protocolVersion": identity.protocol_version,
+                    "engineApiBytes": identity.engine_api_bytes,
+                    "productApiBytes": identity.product_api_bytes,
+                    "fingerprint": fingerprint,
+                    "buildIdentity": identity.build_identity,
+                },
+            })
+        );
+    } else {
+        println!(
+            "rusty-product-host {} (linux-x64; ABI v{}; {})",
+            env!("CARGO_PKG_VERSION"),
+            identity.protocol_version,
+            fingerprint,
+        );
+    }
 }
 
 /// The standard host is owned by its foreground process supervisor. In
@@ -236,6 +298,42 @@ struct Arguments {
     performance_probe: Option<u32>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StagedLaunchInput {
+    artifact: String,
+    schema_version: u32,
+    loader: String,
+}
+
+impl StagedLaunchInput {
+    const ARTIFACT: &'static str = "rusty.product.runtime-launch";
+
+    fn read(path: &Path) -> Result<ProductLoader, String> {
+        let bytes = fs::read(path).map_err(|error| {
+            format!(
+                "could not read --staged-launch `{}`: {error}",
+                path.display()
+            )
+        })?;
+        let input: Self = serde_json::from_slice(&bytes).map_err(|error| {
+            format!(
+                "--staged-launch `{}` is not a valid runtime launch input: {error}",
+                path.display()
+            )
+        })?;
+        if input.artifact != Self::ARTIFACT || input.schema_version != 1 {
+            return Err(format!(
+                "--staged-launch `{}` must declare artifact `{}` with schemaVersion 1",
+                path.display(),
+                Self::ARTIFACT
+            ));
+        }
+        ProductLoader::parse(&input.loader)
+            .map_err(|_| "--staged-launch loader must be nativeaot or coreclr".to_owned())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ProductLoader {
     NativeAot,
@@ -340,13 +438,10 @@ impl Arguments {
             .map_err(|error| format!("--physical-mapping configuration is invalid: {error}"))
     }
 
-    fn parse() -> Result<Self, String> {
-        Self::parse_from(env::args().skip(1))
-    }
-
     fn parse_from(values: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut library = None;
         let mut loader = None;
+        let mut staged_launch = None;
         let mut runtime_config_path = None;
         let mut bundle_dir = None;
         let mut content_dir = None;
@@ -367,6 +462,11 @@ impl Arguments {
                     loader = Some(ProductLoader::parse(
                         &values.next().ok_or("--loader requires a value")?,
                     )?)
+                }
+                "--staged-launch" => {
+                    staged_launch = Some(PathBuf::from(
+                        values.next().ok_or("--staged-launch requires a value")?,
+                    ))
                 }
                 "--library" => library = values.next().map(PathBuf::from),
                 "--runtimeconfig" => runtime_config_path = values.next().map(PathBuf::from),
@@ -435,14 +535,21 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: csharp-product-runtime [--loader <nativeaot|coreclr>] --library <product.so|product.dll> [--runtimeconfig <product.runtimeconfig.json>] --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--live-debug] [--exercise] [--performance-probe <1..=256>]\n\n`--live-debug` explicitly admits the trusted product live-debug HTTP routes; they are absent by default. `--performance-probe` runs bounded demand-update crossover and local HTTP timing, prints RUSTY_PERF JSON, and exits. The default loader is `nativeaot`, preserving the V1-only generated `rusty_product_bind_v1` symbol. Select `coreclr` explicitly for development-only managed loading; it requires --runtimeconfig and resolves the same generated ProductExports.BindV1 entry point through nethost/hostfxr.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host [--loader <nativeaot|coreclr> | --staged-launch <runtime-launch.json>] --library <product.so|product.dll> [--runtimeconfig <product.runtimeconfig.json>] --bundle-dir <browser-bundle> --content-dir <content> --mode <realtime|demand|external> [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--direct-intent <id=digital|axis|payload:contract>] [--physical-mapping <declaration>] [--bind-host <ipv4>] [--port <u16>] [--live-debug] [--exercise] [--performance-probe <1..=256>]\n\n`--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity. `--staged-launch` is the deliberately narrow V1 runtime input: it selects only `nativeaot` or `coreclr` and leaves product bundle layout to the later product-bundle owner. `--live-debug` explicitly admits the trusted product live-debug HTTP routes; they are absent by default. `--performance-probe` runs bounded demand-update crossover and local HTTP timing, prints RUSTY_PERF JSON, and exits. The default loader is `nativeaot`, preserving the V1-only generated `rusty_product_bind_v1` symbol. Select `coreclr` explicitly for development-only managed loading; it requires --runtimeconfig and resolves the same generated ProductExports.BindV1 entry point through nethost/hostfxr.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
             }
         }
+        let staged_loader = staged_launch
+            .as_deref()
+            .map(StagedLaunchInput::read)
+            .transpose()?;
+        if loader.is_some() && staged_loader.is_some() {
+            return Err("--loader and --staged-launch are mutually exclusive".to_owned());
+        }
         let arguments = Self {
-            loader: loader.unwrap_or(ProductLoader::NativeAot),
+            loader: loader.or(staged_loader).unwrap_or(ProductLoader::NativeAot),
             library: library.ok_or("--library is required")?,
             runtime_config_path,
             bundle_dir: bundle_dir.ok_or("--bundle-dir is required")?,
@@ -1040,5 +1147,39 @@ mod tests {
         let native_with_runtimeconfig =
             parse_test_error(&["--runtimeconfig", "product.runtimeconfig.json"]);
         assert!(native_with_runtimeconfig.contains("only valid with --loader coreclr"));
+    }
+
+    #[test]
+    fn staged_launch_input_selects_the_loader_without_defining_a_product_bundle() {
+        let coreclr = serde_json::json!({
+            "artifact": "rusty.product.runtime-launch",
+            "schemaVersion": 1,
+            "loader": "coreclr",
+            "futureProductBundleField": { "ownedBy": 7699 },
+        });
+        let input: StagedLaunchInput =
+            serde_json::from_value(coreclr).expect("forward-compatible launch input deserializes");
+        assert_eq!(input.artifact, StagedLaunchInput::ARTIFACT);
+        assert_eq!(input.schema_version, 1);
+        assert!(matches!(
+            ProductLoader::parse(&input.loader),
+            Ok(ProductLoader::CoreClr)
+        ));
+    }
+
+    #[test]
+    fn identity_commands_are_exclusive_and_require_no_product_arguments() {
+        assert!(matches!(
+            Invocation::parse_from(["--identity".to_owned()]),
+            Ok(Invocation::Identity {
+                machine_readable: true
+            })
+        ));
+        assert!(matches!(
+            Invocation::parse_from(["--version".to_owned()]),
+            Ok(Invocation::Identity {
+                machine_readable: false
+            })
+        ));
     }
 }

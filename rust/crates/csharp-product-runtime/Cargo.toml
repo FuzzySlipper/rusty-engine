@@ -3,6 +3,12 @@ name = "csharp-product-runtime"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+# The historic Cargo target remains available for source-tree development.
+# Runtime packs use this deliberately generic host identity instead.
+name = "rusty-product-host"
+path = "src/main.rs"
+
 [dependencies]
 libloading = "0.8.9"
 netcorehost = { version = "=0.22.0", default-features = false, features = ["nethost-download", "net10_0"] }
