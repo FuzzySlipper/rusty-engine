@@ -24,6 +24,14 @@ if (typeof bootstrap?.product?.title === 'string') document.title = bootstrap.pr
 if (typeof bootstrap?.ui?.entry !== 'string' || !bootstrap.ui.entry.startsWith('product-ui/')) {
   throw new Error('Product bootstrap has no admitted product UI entry');
 }
+const uiProjection = bootstrap.uiProjection;
+if (uiProjection !== undefined
+  && (uiProjection === null
+    || typeof uiProjection !== 'object'
+    || typeof uiProjection.expectedStream !== 'string'
+    || typeof uiProjection.expectedContract !== 'string')) {
+  throw new Error('Product bootstrap has an invalid UI projection declaration');
+}
 const productUi = await import(`./${bootstrap.ui.entry}`);
 if (typeof productUi.mountProductUi !== 'function') {
   throw new Error('Product UI entry must export mountProductUi(root)');
@@ -35,9 +43,12 @@ void mountProductBrowserHost({
   transport,
   lifecycleMode: bootstrap.lifecycle.mode,
   realtimeAdvanceOwner: 'rust-host',
-  mountUi: (uiRoot) => {
+  initialInteractionMode: 'gameplay',
+  runtimeInput: {},
+  ...(uiProjection === undefined ? {} : { uiProjection }),
+  mountUi: (uiRoot, context) => {
     mountDefaultUi(uiRoot);
-    productUi.mountProductUi(uiRoot);
+    return productUi.mountProductUi(uiRoot, context);
   },
 }).catch((error) => {
   const detail = document.createElement('pre');

@@ -56,13 +56,15 @@ cargo build --locked --release -p csharp-product-runtime \
   --bin rusty-product-host --bin rusty-live-debug
 cargo build --locked --release -p rusty-cli --bin rusty
 
-install -d "$STAGE/bin" "$STAGE/share/browser/engine" \
+install -d "$STAGE/bin" "$STAGE/share/browser/engine/live-debug-panel" \
   "$STAGE/share/live-debug-client" "$STAGE/share/live-debug-panel" "$STAGE/symbols"
 install -m 755 target/release/rusty-product-host "$STAGE/bin/rusty-product-host"
 install -m 755 target/release/rusty-live-debug "$STAGE/bin/rusty-live-debug"
 install -m 755 target/release/rusty "$STAGE/bin/rusty"
 install -m 644 render/artifacts/product-browser-host/product-browser-host.js \
   "$STAGE/share/browser/engine/product-browser-host.js"
+install -m 644 studio/artifacts/live-debug-panel/index.js \
+  "$STAGE/share/browser/engine/live-debug-panel/index.js"
 install -m 644 render/packages/product-browser-host/runtime-pack-shell/index.html \
   "$STAGE/share/browser/index.html"
 install -m 644 render/packages/product-browser-host/runtime-pack-shell/main.js \

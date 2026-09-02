@@ -71,7 +71,9 @@ start_and_assert() {
     if grep -q "product host listening at http://" "$log"; then
       local origin
       origin="$(sed -n 's/.*listening at \(http:\/\/[^ ]*\).*/\1/p' "$log" | head -n 1)"
-      if curl --fail --silent --show-error "$origin/product-bootstrap.json" | grep -F 'product-ui/main.js' >/dev/null \
+      if curl --fail --silent --show-error "$origin/" | grep -F '"@rusty-engine/live-debug"' >/dev/null \
+        && curl --fail --silent --show-error "$origin/engine/live-debug-panel/index.js" | grep -F 'mountLiveDebugPanel' >/dev/null \
+        && curl --fail --silent --show-error "$origin/product-bootstrap.json" | grep -F 'product-ui/main.js' >/dev/null \
         && curl --fail --silent --show-error "$origin/product-ui/main.js" | grep -F 'fixture-product-ui-marker' >/dev/null \
         && [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' "$origin/content/trial.txt")" == 404 ]]; then
         ready=true

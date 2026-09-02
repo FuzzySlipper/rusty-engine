@@ -12,6 +12,14 @@
   </head>
   <body>
     <div id="application"></div>
+    <!--
+      The runtime pack owns this optional UI-only diagnostics module. Products
+      can import the stable name without staging Engine browser artifacts or
+      discovering an Engine checkout. Mounting remains product opt-in.
+    -->
+    <script type="importmap">
+      { "imports": { "@rusty-engine/live-debug": "./engine/live-debug-panel/index.js" } }
+    </script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

@@ -22,6 +22,10 @@
     <RustyEngineProductLiveDebug Condition="'$(RustyEngineProductLiveDebug)' == ''">false</RustyEngineProductLiveDebug>
     <RustyEngineProductUiEntry Condition="'$(RustyEngineProductUiEntry)' == ''">main.js</RustyEngineProductUiEntry>
     <RustyEngineProductUiAssets Condition="'$(RustyEngineProductUiAssets)' == ''">assets</RustyEngineProductUiAssets>
+    <!-- Optional paired declaration for the Engine-owned browser UI projection
+         port. Product code names its projection; the shell never guesses it. -->
+    <RustyEngineProductUiProjectionStream Condition="'$(RustyEngineProductUiProjectionStream)' == ''"></RustyEngineProductUiProjectionStream>
+    <RustyEngineProductUiProjectionContract Condition="'$(RustyEngineProductUiProjectionContract)' == ''"></RustyEngineProductUiProjectionContract>
     <RustyEngineProductLifecycleMode Condition="'$(RustyEngineProductLifecycleMode)' == ''">demand</RustyEngineProductLifecycleMode>
     <RustyEngineProductFixedStepHz Condition="'$(RustyEngineProductFixedStepHz)' == ''"></RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps Condition="'$(RustyEngineProductFixedStepMaxCatchUpSteps)' == ''"></RustyEngineProductFixedStepMaxCatchUpSteps>

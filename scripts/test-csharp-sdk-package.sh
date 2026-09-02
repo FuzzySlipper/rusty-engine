@@ -68,7 +68,6 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Library</OutputType>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
-    <NoWarn>0649</NoWarn>
     <RustyEngineProductEntryType>SdkPackageConsumer.Product</RustyEngineProductEntryType>
     <RustyEngineProductId>fixture.sdk-package</RustyEngineProductId>
     <RustyEngineProductTitle>SDK package fixture</RustyEngineProductTitle>
@@ -157,7 +156,8 @@ mkdir -p "$consumer_home" "$consumer_packages"
         dotnet msbuild Consumer.csproj -t:StageRustyEngineCoreClrProduct \
             -p:RustyEngineProductBindHost=127.0.0.1 \
             -p:RustyEngineProductPort=40821 \
-            -p:RustyEngineProductLiveDebug=true
+            -p:RustyEngineProductLiveDebug=true \
+            > "$work_dir/coreclr-staging.log" 2>&1
 )
 (
     cd "$source_override_dir"
@@ -220,8 +220,14 @@ jq -e '.lifecycle == {"mode":"realtime","fixedStep":{"hz":60,"maxCatchUpSteps":4
         dotnet msbuild Consumer.csproj -t:VerifyRustyEngineAot \
             -p:RustyEngineProductBindHost=127.0.0.1 \
             -p:RustyEngineProductPort=40821 \
-            -p:RustyEngineProductLiveDebug=true
+            -p:RustyEngineProductLiveDebug=true \
+            > "$work_dir/nativeaot-staging.log" 2>&1
 )
+if grep -Eiq 'warning (CS|RS)[0-9]+:' "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log"; then
+    echo "test-csharp-sdk-package: generated CoreCLR/NativeAOT composition emitted compiler or analyzer warnings." >&2
+    cat "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log" >&2
+    exit 1
+fi
 [[ -f "$staged_product_directory/native/Rusty.Engine.Product.so" ]] || {
     echo "test-csharp-sdk-package: explicit linux-x64 NativeAOT verification did not stage its module." >&2
     exit 1
@@ -239,5 +245,44 @@ if rg -F -q "$repo_root" "$consumer_dir/obj" "$consumer_packages"; then
     echo "test-csharp-sdk-package: package-only consumer leaked an Engine source path." >&2
     exit 1
 fi
+
+# The generated composition owns its interop warning baseline. It must not
+# become a package-wide NoWarn that hides an ordinary product warning.
+warning_dir="$work_dir/warning-consumer"
+mkdir -p "$warning_dir"
+cat > "$warning_dir/WarningConsumer.csproj" <<EOF
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="Rusty.Engine" Version="$package_version" /></ItemGroup>
+</Project>
+EOF
+cat > "$warning_dir/Warning.cs" <<'EOF'
+namespace SdkPackageWarningConsumer;
+
+public static class WarningSurface
+{
+    private static int Unassigned;
+
+    public static int Read() => Unassigned;
+}
+EOF
+cat > "$warning_dir/NuGet.Config" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources><clear /><add key="local" value="$feed_dir" /></packageSources>
+</configuration>
+EOF
+(
+    cd "$warning_dir"
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet restore WarningConsumer.csproj --configfile NuGet.Config --ignore-failed-sources >/dev/null
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet build WarningConsumer.csproj --no-restore > "$work_dir/product-warning.log" 2>&1
+)
+grep -Eiq 'warning CS0649:' "$work_dir/product-warning.log" || {
+    echo "test-csharp-sdk-package: package-wide warning suppression hid the ordinary product CS0649 warning." >&2
+    cat "$work_dir/product-warning.log" >&2
+    exit 1
+}
 
 echo "csharp SDK package consumer proof passed"

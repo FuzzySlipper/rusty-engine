@@ -34,6 +34,7 @@ pub(super) struct ProductBundle {
     pub(super) content_root: PathBuf,
     ui_root: PathBuf,
     ui_entry: String,
+    ui_projection: Option<ProductUiProjection>,
     pub(super) lifecycle: RuntimeLifecycleConfig,
     pub(super) lifecycle_mode: &'static str,
     pub(super) direct_intents: Vec<DirectInputIntentDescriptor>,
@@ -104,6 +105,10 @@ impl ProductBundle {
         // vocabulary, while this retains an explicit assets declaration.
         let _ = assets;
         let content_root = resolve_directory(&root, &manifest.content.root, "content.root")?;
+        let ui_projection = manifest
+            .ui_projection
+            .map(ProductUiProjection::from_manifest)
+            .transpose()?;
 
         let (lifecycle, lifecycle_mode) = lifecycle(&manifest.lifecycle)?;
         let (direct_intents, physical_mappings) = input(&manifest.input)?;
@@ -122,6 +127,7 @@ impl ProductBundle {
             content_root,
             ui_root,
             ui_entry,
+            ui_projection,
             lifecycle,
             lifecycle_mode,
             direct_intents,
@@ -176,6 +182,7 @@ impl ProductBundle {
             lifecycle: ProductBootstrapLifecycle {
                 mode: self.lifecycle_mode,
             },
+            ui_projection: self.ui_projection.as_ref(),
         };
         entries.push(
             ProductDevBundleEntry::new(
@@ -392,6 +399,7 @@ struct Manifest {
     coreclr: Option<ManifestCoreClr>,
     ui: ManifestUi,
     content: ManifestContent,
+    ui_projection: Option<ManifestUiProjection>,
     lifecycle: ManifestLifecycle,
     input: ManifestInput,
     #[serde(default)]
@@ -417,6 +425,37 @@ struct ManifestUi {
     root: String,
     entry: String,
     assets: String,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestUiProjection {
+    expected_stream: String,
+    expected_contract: String,
+}
+#[derive(Debug)]
+struct ProductUiProjection {
+    expected_stream: String,
+    expected_contract: String,
+}
+impl ProductUiProjection {
+    fn from_manifest(value: ManifestUiProjection) -> Result<Self, String> {
+        validate_runtime_identity(&value.expected_stream).map_err(|_| {
+            field_error(
+                "uiProjection.expectedStream",
+                "must be a bounded lowercase runtime identity",
+            )
+        })?;
+        validate_runtime_identity(&value.expected_contract).map_err(|_| {
+            field_error(
+                "uiProjection.expectedContract",
+                "must be a bounded lowercase runtime identity",
+            )
+        })?;
+        Ok(Self {
+            expected_stream: value.expected_stream,
+            expected_contract: value.expected_contract,
+        })
+    }
 }
 #[derive(Debug, Deserialize)]
 struct ManifestContent {
@@ -483,6 +522,8 @@ struct ProductBootstrap<'a> {
     product: ProductBootstrapIdentity<'a>,
     ui: ProductBootstrapUi<'a>,
     lifecycle: ProductBootstrapLifecycle,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ui_projection: Option<&'a ProductUiProjection>,
 }
 #[derive(Serialize)]
 struct ProductBootstrapIdentity<'a> {
@@ -496,6 +537,25 @@ struct ProductBootstrapUi<'a> {
 #[derive(Serialize)]
 struct ProductBootstrapLifecycle {
     mode: &'static str,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductBootstrapUiProjection<'a> {
+    expected_stream: &'a str,
+    expected_contract: &'a str,
+}
+
+impl Serialize for ProductUiProjection {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        ProductBootstrapUiProjection {
+            expected_stream: &self.expected_stream,
+            expected_contract: &self.expected_contract,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[cfg(test)]
@@ -541,6 +601,7 @@ mod tests {
           "coreclr":{{"assembly":"coreclr/product.dll","runtimeconfig":"coreclr/product.runtimeconfig.json"}},
           "ui":{{"root":"ui","entry":"main.js","assets":"assets"}},
           "content":{{"root":"content"}},
+          "uiProjection":{{"expectedStream":"fixture.terrain","expectedContract":"fixture.terrain.v1"}},
           "lifecycle":{{"mode":"realtime","fixedStep":{{"hz":60,"maxCatchUpSteps":2}}}},
           "input":{{"intents":[{{"id":"move.forward","value":"digital"}}],"mappings":[{{"id":"move.forward.w","intent":"move.forward","trigger":"key:key-w:held"}}]}},
           "server":{{"bindHost":"127.0.0.1","port":0,"liveDebug":true}},
@@ -574,6 +635,20 @@ mod tests {
         assert!(entries
             .iter()
             .any(|entry| entry.path() == "product-bootstrap.json"));
+        let bootstrap = entries
+            .iter()
+            .find(|entry| entry.path() == "product-bootstrap.json")
+            .expect("bootstrap is staged");
+        let bootstrap: serde_json::Value =
+            serde_json::from_slice(bootstrap.bytes()).expect("bootstrap is JSON");
+        assert_eq!(
+            bootstrap["uiProjection"]["expectedStream"],
+            "fixture.terrain"
+        );
+        assert_eq!(
+            bootstrap["uiProjection"]["expectedContract"],
+            "fixture.terrain.v1"
+        );
         assert!(!entries
             .iter()
             .any(|entry| entry.path().contains("trial.txt")));
