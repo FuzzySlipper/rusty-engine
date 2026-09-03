@@ -48,6 +48,10 @@ cleanup() { rm -rf -- "$STAGE"; }
 trap cleanup EXIT
 
 cd "$REPO_ROOT"
+# The bundle publishers copy generated declarations from package dist outputs.
+# Build those outputs explicitly so a clean checkout does not depend on stale
+# local TypeScript artifacts.
+pnpm --dir render run build:packages
 pnpm --dir render run bundle:application-host-artifact
 pnpm --dir render run bundle:product-browser-host-artifact
 pnpm --dir render --filter @rusty-engine/live-debug-client run build
