@@ -393,6 +393,12 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.skyBackgroundPixels.initial[3]).toBe(255);
   expect(proof.skyBackgroundPixels.rotated.slice(0, 3))
     .not.toEqual(proof.skyBackgroundPixels.initial.slice(0, 3));
+  // The asymmetric equirectangular fixture puts opaque green authored content
+  // on its upper row and transparent black on its lower row. Looking up must
+  // sample the authored upper content; looking down must preserve the lower
+  // transparent edge instead of vertically inverting the sky texture.
+  expect(proof.skyBackgroundPixels.lookingUp).toEqual([0, 255, 0, 255]);
+  expect(proof.skyBackgroundPixels.lookingDown).toEqual([0, 0, 0, 0]);
   expect(proof.skyBackgroundPixels.cleared).toEqual([18, 52, 86, 255]);
   expect(proof.spriteBillboardPixels.initialSpherical)
     .toEqual(proof.spriteBillboardPixels.initialCylindrical);

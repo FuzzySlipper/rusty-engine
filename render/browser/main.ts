@@ -125,6 +125,8 @@ interface BrowserProof {
     readonly initial: readonly [number, number, number, number];
     readonly translated: readonly [number, number, number, number];
     readonly rotated: readonly [number, number, number, number];
+    readonly lookingUp: readonly [number, number, number, number];
+    readonly lookingDown: readonly [number, number, number, number];
     readonly cleared: readonly [number, number, number, number];
   };
   readonly staticDemandApplied: boolean;
@@ -783,9 +785,33 @@ async function main(): Promise<void> {
   skyCanvas.height = 128;
   skyCanvas.style.cssText = 'position:fixed;left:-10000px;top:0;width:128px;height:128px';
   document.body.appendChild(skyCanvas);
+  // This 4x2 fixture has authored opaque color only in its top row. Its
+  // bottom row is transparent black, so a real framebuffer sample can prove
+  // that equirectangular vertical orientation preserves both the visible top
+  // and the transparent lower edge.
   const skyTexture = {
-    ...staticMeshTextureDefinition.texture,
     id: 'texture/sky-background-proof',
+    width: 4,
+    height: 2,
+    filter: 'nearest' as const,
+    wrap: 'clamp' as const,
+    contentHash: 'sha256:c24a06c7166ffb6c73fd96e5c681d639581cd6cb4ee76ed41becc29b6a39e211',
+    version: 1,
+    payload: {
+      encoding: 'pngRgba8' as const,
+      colorSpace: 'srgb' as const,
+      contentHash: 'sha256:c24a06c7166ffb6c73fd96e5c681d639581cd6cb4ee76ed41becc29b6a39e211',
+      byteLength: 78,
+      source: {
+        kind: 'inline' as const,
+        encodedBytes: [
+          137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,4,0,0,0,2,
+          8,6,0,0,0,127,168,125,99,0,0,0,21,73,68,65,84,120,156,99,248,207,
+          192,240,31,12,25,254,3,1,136,70,3,0,220,69,8,248,159,150,34,30,0,
+          0,0,0,73,69,78,68,174,66,96,130,
+        ],
+      },
+    },
   };
   const skySurface = mountRendererSurface(skyCanvas, {
     autoStart: false,
@@ -829,16 +855,24 @@ async function main(): Promise<void> {
   skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: 0, yawDegrees: 180 });
   skySurface.renderOnce(3);
   const skyRotated = readSkyPixel();
+  skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: 70, yawDegrees: 0 });
+  skySurface.renderOnce(4);
+  const skyLookingUp = readSkyPixel();
+  skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: -70, yawDegrees: 0 });
+  skySurface.renderOnce(5);
+  const skyLookingDown = readSkyPixel();
   skySurface.applyFrame({
     schemaVersion: 1,
     ops: [{ op: 'setSkyBackground', background: null }],
   });
-  skySurface.renderOnce(4);
+  skySurface.renderOnce(6);
   const skyCleared = readSkyPixel();
   const skyBackgroundPixels = {
     initial: skyInitial,
     translated: skyTranslated,
     rotated: skyRotated,
+    lookingUp: skyLookingUp,
+    lookingDown: skyLookingDown,
     cleared: skyCleared,
   };
 
