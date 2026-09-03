@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use core_space::{WorldPos, WorldVec};
 use parry3d_f64::math::{Pose, Vector};
 use parry3d_f64::query::{cast_shapes, intersection_test, Ray as ParryRay, ShapeCastOptions};
-use parry3d_f64::shape::{Cuboid, SharedShape};
+use parry3d_f64::shape::{Cuboid, Shape, SharedShape};
 
-use crate::{identity, world_to_point, Ray};
+use crate::{identity, world_to_point, Ray, WorldAabb};
 
 pub const MAX_STATIC_MESH_ASSETS: usize = 256;
 pub const MAX_STATIC_MESH_INSTANCES: usize = 4_096;
@@ -147,6 +147,9 @@ struct PreparedInstance {
     geometry_hash: u64,
     transform: StaticMeshTransform,
     shape: SharedShape,
+    /// Cached at atomic projection replacement so character queries never
+    /// rebuild geometry bounds. `None` is an intentional fail-open sentinel.
+    bounds: Option<WorldAabb>,
 }
 
 /// Query-optimized projection of immutable static-mesh assets and caller-owned
@@ -162,10 +165,24 @@ pub struct StaticMeshCollisionProjection {
 impl StaticMeshCollisionProjection {
     pub(crate) fn character_shapes(
         &self,
-    ) -> impl Iterator<Item = (StaticMeshInstanceId, StaticMeshAssetId, u64, &SharedShape)> {
-        self.instances
-            .iter()
-            .map(|(id, instance)| (*id, instance.asset, instance.geometry_hash, &instance.shape))
+    ) -> impl Iterator<
+        Item = (
+            StaticMeshInstanceId,
+            StaticMeshAssetId,
+            u64,
+            &SharedShape,
+            Option<WorldAabb>,
+        ),
+    > {
+        self.instances.iter().map(|(id, instance)| {
+            (
+                *id,
+                instance.asset,
+                instance.geometry_hash,
+                &instance.shape,
+                instance.bounds,
+            )
+        })
     }
 
     pub(crate) fn dynamics_shapes(&self) -> impl Iterator<Item = SharedShape> + '_ {
@@ -345,6 +362,7 @@ impl StaticMeshCollisionProjection {
                 .collect();
             let shape = SharedShape::trimesh(vertices, asset.triangles.clone())
                 .map_err(|_| StaticMeshCollisionError::InvalidTriangleMesh)?;
+            let bounds = shape_world_aabb(shape.as_ref());
             let id = instance.id;
             next_instances.insert(
                 id,
@@ -353,6 +371,7 @@ impl StaticMeshCollisionProjection {
                     geometry_hash: asset.geometry_hash,
                     transform: instance.transform,
                     shape,
+                    bounds,
                 },
             );
         }
@@ -448,6 +467,23 @@ impl StaticMeshCollisionProjection {
             )
             .map_or(true, |hit| hit.is_some())
         })
+    }
+}
+
+fn shape_world_aabb(shape: &dyn Shape) -> Option<WorldAabb> {
+    let bounds = shape.compute_aabb(&identity());
+    let min = WorldPos::new(bounds.mins.x, bounds.mins.y, bounds.mins.z);
+    let max = WorldPos::new(bounds.maxs.x, bounds.maxs.y, bounds.maxs.z);
+    if [min.x, min.y, min.z, max.x, max.y, max.z]
+        .into_iter()
+        .all(f64::is_finite)
+        && min.x <= max.x
+        && min.y <= max.y
+        && min.z <= max.z
+    {
+        Some(WorldAabb { min, max })
+    } else {
+        None
     }
 }
 

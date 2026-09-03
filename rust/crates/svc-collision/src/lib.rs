@@ -67,7 +67,7 @@ use parry3d_f64::query::{
     cast_shapes, contact, intersection_test, Contact, Ray as ParryRay, RayCast, ShapeCastHit,
     ShapeCastOptions, ShapeCastStatus,
 };
-use parry3d_f64::shape::{Capsule, Compound, Cuboid, SharedShape};
+use parry3d_f64::shape::{Capsule, Compound, Cuboid, Shape, SharedShape};
 
 /// How a voxel value participates in collision. Derived from the value/material;
 /// per-material collision kinds (decision 1) are deferred behind this enum.
@@ -214,6 +214,27 @@ struct ChunkCollider {
     source_hash: u64,
     /// World-positioned solid cuboids. A chunk with no solids has no collider entry.
     shape: Compound,
+    /// Conservatively cached world-space bounds for outer character-query
+    /// pruning. `None` deliberately means "unknown": queries fail open to
+    /// the established full scan instead of risking a false negative.
+    bounds: Option<WorldAabb>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct WorldAabb {
+    min: WorldPos,
+    max: WorldPos,
+}
+
+impl WorldAabb {
+    fn intersects(self, other: Self) -> bool {
+        self.min.x <= other.max.x
+            && self.max.x >= other.min.x
+            && self.min.y <= other.max.y
+            && self.max.y >= other.min.y
+            && self.min.z <= other.max.z
+            && self.max.z >= other.min.z
+    }
 }
 
 /// A `parry3d`-backed collision world derived from a [`VoxelWorld`].
@@ -279,6 +300,54 @@ pub struct CharacterCapsuleOverlap {
     pub penetration_depth: f64,
 }
 
+/// Per logical capsule query fan-out. Candidate counts are projection entries
+/// whose cached conservative bounds intersected the capsule query bounds;
+/// narrow-phase counts are the Parry calls actually made. Active obstacles are
+/// call-local and currently have no cached projection bounds, so each valid
+/// obstacle is both a candidate and a narrow-phase call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CharacterCollisionQueryStats {
+    pub voxel_candidates: u64,
+    pub voxel_narrow_phase_queries: u64,
+    pub static_mesh_candidates: u64,
+    pub static_mesh_narrow_phase_queries: u64,
+    pub active_obstacle_candidates: u64,
+    pub active_obstacle_narrow_phase_queries: u64,
+}
+
+impl CharacterCollisionQueryStats {
+    pub fn candidate_count(self) -> u64 {
+        self.voxel_candidates
+            .saturating_add(self.static_mesh_candidates)
+            .saturating_add(self.active_obstacle_candidates)
+    }
+
+    pub fn narrow_phase_count(self) -> u64 {
+        self.voxel_narrow_phase_queries
+            .saturating_add(self.static_mesh_narrow_phase_queries)
+            .saturating_add(self.active_obstacle_narrow_phase_queries)
+    }
+
+    pub fn saturating_add_assign(&mut self, other: Self) {
+        self.voxel_candidates = self.voxel_candidates.saturating_add(other.voxel_candidates);
+        self.voxel_narrow_phase_queries = self
+            .voxel_narrow_phase_queries
+            .saturating_add(other.voxel_narrow_phase_queries);
+        self.static_mesh_candidates = self
+            .static_mesh_candidates
+            .saturating_add(other.static_mesh_candidates);
+        self.static_mesh_narrow_phase_queries = self
+            .static_mesh_narrow_phase_queries
+            .saturating_add(other.static_mesh_narrow_phase_queries);
+        self.active_obstacle_candidates = self
+            .active_obstacle_candidates
+            .saturating_add(other.active_obstacle_candidates);
+        self.active_obstacle_narrow_phase_queries = self
+            .active_obstacle_narrow_phase_queries
+            .saturating_add(other.active_obstacle_narrow_phase_queries);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CharacterCollisionQueryError {
     InvalidCapsule,
@@ -301,6 +370,27 @@ pub fn cast_character_capsule_against_obstacles(
     contact_skin: f64,
     obstacles: &[CharacterObstacle],
 ) -> Result<Option<CharacterCapsuleCastHit>, CharacterCollisionQueryError> {
+    cast_character_capsule_against_obstacles_with_stats(
+        capsule,
+        translation,
+        contact_skin,
+        obstacles,
+    )
+    .map(|(hit, _)| hit)
+}
+
+pub fn cast_character_capsule_against_obstacles_with_stats(
+    capsule: CharacterCapsule,
+    translation: WorldVec,
+    contact_skin: f64,
+    obstacles: &[CharacterObstacle],
+) -> Result<
+    (
+        Option<CharacterCapsuleCastHit>,
+        CharacterCollisionQueryStats,
+    ),
+    CharacterCollisionQueryError,
+> {
     validate_character_query(capsule, translation, contact_skin)?;
     let moving_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
     let moving_shape = Capsule::new_y(capsule.half_height, capsule.radius);
@@ -312,8 +402,12 @@ pub fn cast_character_capsule_against_obstacles(
         compute_impact_geometry_on_penetration: true,
     };
     let mut best = None;
+    let mut stats = CharacterCollisionQueryStats::default();
     for obstacle in obstacles {
         validate_obstacle(*obstacle)?;
+        stats.active_obstacle_candidates = stats.active_obstacle_candidates.saturating_add(1);
+        stats.active_obstacle_narrow_phase_queries =
+            stats.active_obstacle_narrow_phase_queries.saturating_add(1);
         let obstacle_pose =
             Pose::translation(obstacle.center.x, obstacle.center.y, obstacle.center.z);
         let obstacle_shape = Cuboid::new(Vector::new(
@@ -341,19 +435,36 @@ pub fn cast_character_capsule_against_obstacles(
             hit,
         );
     }
-    Ok(best)
+    Ok((best, stats))
 }
 
 pub fn character_capsule_overlap_obstacles(
     capsule: CharacterCapsule,
     obstacles: &[CharacterObstacle],
 ) -> Result<Option<CharacterCapsuleOverlap>, CharacterCollisionQueryError> {
+    character_capsule_overlap_obstacles_with_stats(capsule, obstacles).map(|(overlap, _)| overlap)
+}
+
+pub fn character_capsule_overlap_obstacles_with_stats(
+    capsule: CharacterCapsule,
+    obstacles: &[CharacterObstacle],
+) -> Result<
+    (
+        Option<CharacterCapsuleOverlap>,
+        CharacterCollisionQueryStats,
+    ),
+    CharacterCollisionQueryError,
+> {
     validate_character_query(capsule, WorldVec::ZERO, 0.0)?;
     let capsule_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
     let capsule_shape = Capsule::new_y(capsule.half_height, capsule.radius);
     let mut best = None;
+    let mut stats = CharacterCollisionQueryStats::default();
     for obstacle in obstacles {
         validate_obstacle(*obstacle)?;
+        stats.active_obstacle_candidates = stats.active_obstacle_candidates.saturating_add(1);
+        stats.active_obstacle_narrow_phase_queries =
+            stats.active_obstacle_narrow_phase_queries.saturating_add(1);
         let obstacle_pose =
             Pose::translation(obstacle.center.x, obstacle.center.y, obstacle.center.z);
         let obstacle_shape = Cuboid::new(Vector::new(
@@ -379,7 +490,7 @@ pub fn character_capsule_overlap_obstacles(
             result,
         );
     }
-    Ok(best)
+    Ok((best, stats))
 }
 
 /// Stable identity for a collision projection and the voxel authority it was
@@ -471,6 +582,25 @@ impl CollisionProjection {
         translation: WorldVec,
         contact_skin: f64,
     ) -> Result<Option<CharacterCapsuleCastHit>, CharacterCollisionQueryError> {
+        self.cast_character_capsule_with_stats(capsule, translation, contact_skin)
+            .map(|(hit, _)| hit)
+    }
+
+    /// The existing cast result together with internal fan-out facts. This
+    /// preserves the source-compatible query while diagnostics can distinguish
+    /// logical casts from actual Parry work.
+    pub fn cast_character_capsule_with_stats(
+        &self,
+        capsule: CharacterCapsule,
+        translation: WorldVec,
+        contact_skin: f64,
+    ) -> Result<
+        (
+            Option<CharacterCapsuleCastHit>,
+            CharacterCollisionQueryStats,
+        ),
+        CharacterCollisionQueryError,
+    > {
         validate_character_query(capsule, translation, contact_skin)?;
         let moving_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
         let moving_shape = Capsule::new_y(capsule.half_height, capsule.radius);
@@ -483,7 +613,14 @@ impl CollisionProjection {
             compute_impact_geometry_on_penetration: true,
         };
         let mut best = None;
+        let query_bounds = swept_capsule_bounds(capsule, translation, contact_skin);
+        let mut stats = CharacterCollisionQueryStats::default();
         for (coord, collider) in &self.chunks {
+            if !character_query_may_intersect(query_bounds, collider.bounds) {
+                continue;
+            }
+            stats.voxel_candidates = stats.voxel_candidates.saturating_add(1);
+            stats.voxel_narrow_phase_queries = stats.voxel_narrow_phase_queries.saturating_add(1);
             let hit = cast_shapes(
                 &moving_pose,
                 velocity,
@@ -500,7 +637,14 @@ impl CollisionProjection {
                 hit,
             );
         }
-        for (instance, asset, geometry_hash, shape) in self.static_meshes.character_shapes() {
+        for (instance, asset, geometry_hash, shape, bounds) in self.static_meshes.character_shapes()
+        {
+            if !character_query_may_intersect(query_bounds, bounds) {
+                continue;
+            }
+            stats.static_mesh_candidates = stats.static_mesh_candidates.saturating_add(1);
+            stats.static_mesh_narrow_phase_queries =
+                stats.static_mesh_narrow_phase_queries.saturating_add(1);
             let hit = cast_shapes(
                 &moving_pose,
                 velocity,
@@ -521,7 +665,7 @@ impl CollisionProjection {
                 hit,
             );
         }
-        Ok(best)
+        Ok((best, stats))
     }
 
     /// Return the deepest current capsule overlap, with deterministic source
@@ -531,12 +675,33 @@ impl CollisionProjection {
         &self,
         capsule: CharacterCapsule,
     ) -> Result<Option<CharacterCapsuleOverlap>, CharacterCollisionQueryError> {
+        self.character_capsule_overlap_with_stats(capsule)
+            .map(|(overlap, _)| overlap)
+    }
+
+    pub fn character_capsule_overlap_with_stats(
+        &self,
+        capsule: CharacterCapsule,
+    ) -> Result<
+        (
+            Option<CharacterCapsuleOverlap>,
+            CharacterCollisionQueryStats,
+        ),
+        CharacterCollisionQueryError,
+    > {
         validate_character_query(capsule, WorldVec::ZERO, 0.0)?;
         let capsule_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
         let capsule_shape = Capsule::new_y(capsule.half_height, capsule.radius);
         let obstacle_pose = identity();
         let mut best = None;
+        let query_bounds = swept_capsule_bounds(capsule, WorldVec::ZERO, 0.0);
+        let mut stats = CharacterCollisionQueryStats::default();
         for (coord, collider) in &self.chunks {
+            if !character_query_may_intersect(query_bounds, collider.bounds) {
+                continue;
+            }
+            stats.voxel_candidates = stats.voxel_candidates.saturating_add(1);
+            stats.voxel_narrow_phase_queries = stats.voxel_narrow_phase_queries.saturating_add(1);
             let result = contact(
                 &capsule_pose,
                 &capsule_shape,
@@ -551,7 +716,14 @@ impl CollisionProjection {
                 result,
             );
         }
-        for (instance, asset, geometry_hash, shape) in self.static_meshes.character_shapes() {
+        for (instance, asset, geometry_hash, shape, bounds) in self.static_meshes.character_shapes()
+        {
+            if !character_query_may_intersect(query_bounds, bounds) {
+                continue;
+            }
+            stats.static_mesh_candidates = stats.static_mesh_candidates.saturating_add(1);
+            stats.static_mesh_narrow_phase_queries =
+                stats.static_mesh_narrow_phase_queries.saturating_add(1);
             let result = contact(
                 &capsule_pose,
                 &capsule_shape,
@@ -568,6 +740,66 @@ impl CollisionProjection {
                     geometry_hash,
                 },
                 result,
+            );
+        }
+        Ok((best, stats))
+    }
+
+    #[cfg(test)]
+    fn cast_character_capsule_full_scan_for_test(
+        &self,
+        capsule: CharacterCapsule,
+        translation: WorldVec,
+        contact_skin: f64,
+    ) -> Result<Option<CharacterCapsuleCastHit>, CharacterCollisionQueryError> {
+        validate_character_query(capsule, translation, contact_skin)?;
+        let moving_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
+        let moving_shape = Capsule::new_y(capsule.half_height, capsule.radius);
+        let velocity = Vector::new(translation.x, translation.y, translation.z);
+        let options = ShapeCastOptions {
+            max_time_of_impact: 1.0,
+            target_distance: contact_skin,
+            stop_at_penetration: true,
+            compute_impact_geometry_on_penetration: true,
+        };
+        let obstacle_pose = identity();
+        let mut best = None;
+        for (coord, collider) in &self.chunks {
+            let hit = cast_shapes(
+                &moving_pose,
+                velocity,
+                &moving_shape,
+                &obstacle_pose,
+                Vector::ZERO,
+                &collider.shape,
+                options,
+            )
+            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+            keep_nearest_character_hit(
+                &mut best,
+                CharacterCollisionSource::VoxelChunk(*coord),
+                hit,
+            );
+        }
+        for (instance, asset, geometry_hash, shape, _) in self.static_meshes.character_shapes() {
+            let hit = cast_shapes(
+                &moving_pose,
+                velocity,
+                &moving_shape,
+                &obstacle_pose,
+                Vector::ZERO,
+                shape.as_ref(),
+                options,
+            )
+            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+            keep_nearest_character_hit(
+                &mut best,
+                CharacterCollisionSource::StaticMesh {
+                    instance,
+                    asset,
+                    geometry_hash,
+                },
+                hit,
             );
         }
         Ok(best)
@@ -669,11 +901,13 @@ impl CollisionProjection {
     fn set_chunk(&mut self, coord: ChunkCoord, chunk: &VoxelChunk) {
         match build_chunk_shape(&self.grid, self.world_offset, coord, chunk) {
             Some(shape) => {
+                let bounds = shape_world_aabb(&shape);
                 self.chunks.insert(
                     coord,
                     ChunkCollider {
                         source_hash: chunk.content_hash().0,
                         shape,
+                        bounds,
                     },
                 );
             }
@@ -958,6 +1192,68 @@ fn build_chunk_shape(
     }
 }
 
+fn shape_world_aabb(shape: &dyn Shape) -> Option<WorldAabb> {
+    let bounds = shape.compute_aabb(&identity());
+    let min = WorldPos::new(bounds.mins.x, bounds.mins.y, bounds.mins.z);
+    let max = WorldPos::new(bounds.maxs.x, bounds.maxs.y, bounds.maxs.z);
+    if [min.x, min.y, min.z, max.x, max.y, max.z]
+        .into_iter()
+        .all(f64::is_finite)
+        && min.x <= max.x
+        && min.y <= max.y
+        && min.z <= max.z
+    {
+        Some(WorldAabb { min, max })
+    } else {
+        None
+    }
+}
+
+/// A conservative swept bound for the local +Y capsule. Every arithmetic
+/// result is checked: a nonfinite/overflowed result intentionally disables
+/// pruning for that query rather than excluding a potential collider.
+fn swept_capsule_bounds(
+    capsule: CharacterCapsule,
+    translation: WorldVec,
+    contact_skin: f64,
+) -> Option<WorldAabb> {
+    let end = WorldPos::new(
+        capsule.center.x + translation.x,
+        capsule.center.y + translation.y,
+        capsule.center.z + translation.z,
+    );
+    let horizontal = capsule.radius + contact_skin;
+    let vertical = capsule.half_height + capsule.radius + contact_skin;
+    let min = WorldPos::new(
+        capsule.center.x.min(end.x) - horizontal,
+        capsule.center.y.min(end.y) - vertical,
+        capsule.center.z.min(end.z) - horizontal,
+    );
+    let max = WorldPos::new(
+        capsule.center.x.max(end.x) + horizontal,
+        capsule.center.y.max(end.y) + vertical,
+        capsule.center.z.max(end.z) + horizontal,
+    );
+    if [
+        end.x, end.y, end.z, horizontal, vertical, min.x, min.y, min.z, max.x, max.y, max.z,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    {
+        Some(WorldAabb { min, max })
+    } else {
+        None
+    }
+}
+
+fn character_query_may_intersect(query: Option<WorldAabb>, collider: Option<WorldAabb>) -> bool {
+    match (query, collider) {
+        (Some(query), Some(collider)) => query.intersects(collider),
+        // Unknown derived bounds are never allowed to turn into a prune.
+        _ => true,
+    }
+}
+
 fn validate_character_query(
     capsule: CharacterCapsule,
     translation: WorldVec,
@@ -1083,6 +1379,19 @@ mod tests {
         w
     }
 
+    fn world_with_chunks(chunks: &[(ChunkCoord, &[LocalVoxelCoord])]) -> VoxelWorld {
+        let mut world = VoxelWorld::new(spec());
+        for (coord, solids) in chunks {
+            let mut chunk = VoxelChunk::from_spec(&spec());
+            for local in *solids {
+                chunk.set(*local, VoxelValue::solid_raw(1)).unwrap();
+            }
+            world.insert(*coord, chunk);
+        }
+        world.drain_dirty();
+        world
+    }
+
     #[test]
     fn collision_class_maps_solid_and_empty() {
         assert_eq!(collision_class(VoxelValue::EMPTY), CollisionClass::None);
@@ -1115,6 +1424,113 @@ mod tests {
         assert!((hit.time_of_impact - (1.1 / 3.0)).abs() < 1.0e-6);
         assert!(hit.normal.x < -0.99);
         assert!(!hit.start_solid);
+    }
+
+    #[test]
+    fn character_capsule_pruning_matches_full_scan_for_ground_wall_no_hit_and_zero_motion() {
+        let world = world_with_chunks(&[
+            (ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(2, 0, 2)]),
+            (ChunkCoord::new(5, 0, 0), &[LocalVoxelCoord::new(0, 0, 0)]),
+            (ChunkCoord::new(-5, 0, 0), &[LocalVoxelCoord::new(0, 0, 0)]),
+        ]);
+        let projection = CollisionProjection::build(&world);
+        let cases = [
+            // Ground probe.
+            (
+                CharacterCapsule {
+                    center: WorldPos::new(2.5, 3.0, 2.5),
+                    half_height: 0.5,
+                    radius: 0.4,
+                },
+                WorldVec::new(0.0, -3.0, 0.0),
+                0.02,
+            ),
+            // Wall sweep.
+            (
+                CharacterCapsule {
+                    center: WorldPos::new(0.5, 1.0, 2.5),
+                    half_height: 0.5,
+                    radius: 0.4,
+                },
+                WorldVec::new(3.0, 0.0, 0.0),
+                0.02,
+            ),
+            // No hit through the gap between resident chunk bounds.
+            (
+                CharacterCapsule {
+                    center: WorldPos::new(20.5, 1.0, 20.5),
+                    half_height: 0.5,
+                    radius: 0.4,
+                },
+                WorldVec::new(1.0, 0.0, 0.0),
+                0.02,
+            ),
+            // Zero motion retains inclusive current-capsule candidates.
+            (
+                CharacterCapsule {
+                    center: WorldPos::new(2.5, 1.0, 2.5),
+                    half_height: 0.5,
+                    radius: 0.4,
+                },
+                WorldVec::ZERO,
+                0.0,
+            ),
+        ];
+        for (capsule, translation, skin) in cases {
+            let (pruned, stats) = projection
+                .cast_character_capsule_with_stats(capsule, translation, skin)
+                .unwrap();
+            let full = projection
+                .cast_character_capsule_full_scan_for_test(capsule, translation, skin)
+                .unwrap();
+            assert_eq!(pruned, full);
+            assert!(stats.voxel_candidates <= 3);
+            assert_eq!(stats.voxel_candidates, stats.voxel_narrow_phase_queries);
+        }
+    }
+
+    #[test]
+    fn capsule_pruning_keeps_coincident_voxel_static_order_and_inclusive_touching_candidates() {
+        let world = world_with_chunks(&[
+            (ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(0, 0, 2)]),
+            (ChunkCoord::new(6, 0, 0), &[LocalVoxelCoord::new(0, 0, 0)]),
+        ]);
+        let mut projection = CollisionProjection::build(&world);
+        let asset = StaticMeshColliderAsset::new(
+            StaticMeshAssetId(41),
+            vec![[-1.0, -1.0, 2.0], [2.0, -1.0, 2.0], [0.5, 2.0, 2.0]],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        let hash = asset.geometry_hash;
+        projection
+            .replace_static_meshes(
+                0,
+                [asset],
+                [StaticMeshColliderInstance {
+                    id: StaticMeshInstanceId(41),
+                    asset: StaticMeshAssetId(41),
+                    expected_geometry_hash: hash,
+                    transform: StaticMeshTransform::IDENTITY,
+                }],
+            )
+            .unwrap();
+        let capsule = CharacterCapsule {
+            center: WorldPos::new(0.5, 0.5, 0.0),
+            half_height: 0.0,
+            radius: 0.25,
+        };
+        let (pruned, stats) = projection
+            .cast_character_capsule_with_stats(capsule, WorldVec::new(0.0, 0.0, 3.0), 0.0)
+            .unwrap();
+        let full = projection
+            .cast_character_capsule_full_scan_for_test(capsule, WorldVec::new(0.0, 0.0, 3.0), 0.0)
+            .unwrap();
+        assert_eq!(pruned, full);
+        assert!(pruned.is_some());
+        assert_eq!(stats.voxel_candidates, 1);
+        assert_eq!(stats.static_mesh_candidates, 1);
+        assert_eq!(stats.narrow_phase_count(), 2);
     }
 
     #[test]
@@ -1159,6 +1575,28 @@ mod tests {
             assert_eq!(hit.source, CharacterCollisionSource::ActiveEntity(3));
             assert!((hit.point.x - 1.5).abs() < 1.0e-6);
         }
+    }
+
+    #[test]
+    fn character_query_stats_saturate_without_wrapping() {
+        let mut stats = CharacterCollisionQueryStats {
+            voxel_candidates: u64::MAX,
+            voxel_narrow_phase_queries: u64::MAX,
+            static_mesh_candidates: u64::MAX,
+            static_mesh_narrow_phase_queries: u64::MAX,
+            active_obstacle_candidates: u64::MAX,
+            active_obstacle_narrow_phase_queries: u64::MAX,
+        };
+        stats.saturating_add_assign(CharacterCollisionQueryStats {
+            voxel_candidates: 1,
+            voxel_narrow_phase_queries: 1,
+            static_mesh_candidates: 1,
+            static_mesh_narrow_phase_queries: 1,
+            active_obstacle_candidates: 1,
+            active_obstacle_narrow_phase_queries: 1,
+        });
+        assert_eq!(stats.candidate_count(), u64::MAX);
+        assert_eq!(stats.narrow_phase_count(), u64::MAX);
     }
 
     #[test]

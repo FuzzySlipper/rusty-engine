@@ -81,9 +81,10 @@ pub use trigger_codec::{decode_trigger_snapshot, encode_trigger_snapshot, Trigge
 pub use svc_collision::{
     cast_character_capsule_against_obstacles, character_capsule_overlap_obstacles,
     CharacterCapsule, CharacterCapsuleCastHit, CharacterCapsuleOverlap,
-    CharacterCollisionQueryError, CharacterCollisionSource, CharacterObstacle, StaticMeshAssetId,
-    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshCollisionError,
-    StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform,
+    CharacterCollisionQueryError, CharacterCollisionQueryStats, CharacterCollisionSource,
+    CharacterObstacle, StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
+    StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
+    StaticMeshTransform,
 };
 pub use svc_mesh::{SurfaceMeshLimits, SurfaceMeshOptions, SurfaceMode};
 pub use voxel_edit::{

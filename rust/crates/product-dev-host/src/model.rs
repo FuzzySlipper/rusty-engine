@@ -1008,6 +1008,12 @@ pub struct ProductDevUpdateAttribution {
     /// Controller casts reported by character-step receipts; this is not a
     /// low-level narrow-phase counter.
     pub character_step_cast_count: CanonicalU64,
+    /// Projection entries admitted by conservative character-query bounds,
+    /// plus active obstacles that have no cached projection bound.
+    pub character_step_candidate_count: CanonicalU64,
+    /// Actual Parry character cast/contact calls, nested within the logical
+    /// controller cast count and candidate count.
+    pub character_step_narrow_phase_count: CanonicalU64,
     pub voxel_residency_calls: CanonicalU64,
     pub voxel_residency_duration_us: CanonicalU64,
     pub voxel_scene_presentation_calls: CanonicalU64,
@@ -1021,6 +1027,8 @@ impl Default for ProductDevUpdateAttribution {
             character_step_calls: CanonicalU64::new(0),
             character_step_duration_us: CanonicalU64::new(0),
             character_step_cast_count: CanonicalU64::new(0),
+            character_step_candidate_count: CanonicalU64::new(0),
+            character_step_narrow_phase_count: CanonicalU64::new(0),
             voxel_residency_calls: CanonicalU64::new(0),
             voxel_residency_duration_us: CanonicalU64::new(0),
             voxel_scene_presentation_calls: CanonicalU64::new(0),

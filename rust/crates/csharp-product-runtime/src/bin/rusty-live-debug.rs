@@ -427,6 +427,8 @@ struct DiagnosticsUpdateAttributionSampleWire {
     character_step_calls: String,
     character_step_duration_us: String,
     character_step_cast_count: String,
+    character_step_candidate_count: String,
+    character_step_narrow_phase_count: String,
     voxel_residency_calls: String,
     voxel_residency_duration_us: String,
     voxel_scene_presentation_calls: String,

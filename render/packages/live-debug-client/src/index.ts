@@ -102,6 +102,10 @@ export interface LiveDebugUpdateAttribution {
   readonly characterStepDurationUs: string;
   /** Logical character-controller casts, not narrow-phase work. */
   readonly characterStepCastCount: string;
+  /** Eligible world projection entries and call-local active obstacles. */
+  readonly characterStepCandidateCount: string;
+  /** Actual Parry character cast/contact calls. */
+  readonly characterStepNarrowPhaseCount: string;
   readonly voxelResidencyCalls: string;
   readonly voxelResidencyDurationUs: string;
   readonly voxelScenePresentationCalls: string;
@@ -338,6 +342,7 @@ function decodeUpdateAttributionSnapshot(value: Record<string, unknown>): LiveDe
 function decodeUpdateAttribution(value: Record<string, unknown>): LiveDebugUpdateAttribution {
   const fields = [
     'callbackDurationUs', 'characterStepCalls', 'characterStepDurationUs', 'characterStepCastCount',
+    'characterStepCandidateCount', 'characterStepNarrowPhaseCount',
     'voxelResidencyCalls', 'voxelResidencyDurationUs', 'voxelScenePresentationCalls', 'voxelScenePresentationDurationUs',
   ];
   if (Object.keys(value).some((key) => !fields.includes(key))
@@ -349,6 +354,8 @@ function decodeUpdateAttribution(value: Record<string, unknown>): LiveDebugUpdat
     characterStepCalls: value.characterStepCalls as string,
     characterStepDurationUs: value.characterStepDurationUs as string,
     characterStepCastCount: value.characterStepCastCount as string,
+    characterStepCandidateCount: value.characterStepCandidateCount as string,
+    characterStepNarrowPhaseCount: value.characterStepNarrowPhaseCount as string,
     voxelResidencyCalls: value.voxelResidencyCalls as string,
     voxelResidencyDurationUs: value.voxelResidencyDurationUs as string,
     voxelScenePresentationCalls: value.voxelScenePresentationCalls as string,

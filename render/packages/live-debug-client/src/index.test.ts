@@ -49,9 +49,9 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
         outputQueueFloor: '7', outputBindingActive: true,
         updateAttribution: {
           sampleCount: '2048', callbackDurationUsP50: '80', callbackDurationUsP95: '120', callbackDurationUsMax: '140', rollingSlowestAgeMs: '20', slowestAgeMs: '2000',
-          latest: { callbackDurationUs: '90', characterStepCalls: '1', characterStepDurationUs: '30', characterStepCastCount: '4', voxelResidencyCalls: '0', voxelResidencyDurationUs: '0', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '10' },
-          rollingSlowest: { callbackDurationUs: '140', characterStepCalls: '1', characterStepDurationUs: '60', characterStepCastCount: '8', voxelResidencyCalls: '1', voxelResidencyDurationUs: '30', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '20' },
-          slowest: { callbackDurationUs: '140', characterStepCalls: '1', characterStepDurationUs: '60', characterStepCastCount: '8', voxelResidencyCalls: '1', voxelResidencyDurationUs: '30', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '20' },
+          latest: { callbackDurationUs: '90', characterStepCalls: '1', characterStepDurationUs: '30', characterStepCastCount: '4', characterStepCandidateCount: '16', characterStepNarrowPhaseCount: '16', voxelResidencyCalls: '0', voxelResidencyDurationUs: '0', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '10' },
+          rollingSlowest: { callbackDurationUs: '140', characterStepCalls: '1', characterStepDurationUs: '60', characterStepCastCount: '8', characterStepCandidateCount: '32', characterStepNarrowPhaseCount: '32', voxelResidencyCalls: '1', voxelResidencyDurationUs: '30', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '20' },
+          slowest: { callbackDurationUs: '140', characterStepCalls: '1', characterStepDurationUs: '60', characterStepCastCount: '8', characterStepCandidateCount: '32', characterStepNarrowPhaseCount: '32', voxelResidencyCalls: '1', voxelResidencyDurationUs: '30', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '20' },
         },
       },
     }), { status: 200 })) as typeof fetch,
@@ -62,6 +62,7 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
   assert.equal(diagnosticEventAgeMilliseconds(batch, batch.events[0]!), 750);
   assert.equal(batch.telemetry?.queuedInputEvents, 4);
   assert.equal(batch.telemetry?.updateAttribution?.slowest.characterStepCastCount, '8');
+  assert.equal(batch.telemetry?.updateAttribution?.slowest.characterStepNarrowPhaseCount, '32');
   assert.equal(batch.telemetry?.updateAttribution?.rollingSlowestAgeMs, '20');
 });
 

@@ -12,14 +12,15 @@ use core_math::{Vec2, Vec3};
 use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec};
 use csharp_engine_abi::*;
 use engine_spatial::{
-    CharacterCapsule, CharacterCollisionSource, CharacterContactFact, CharacterContactKind,
-    CharacterControllerCommand, CharacterControllerConfig, CharacterControllerError,
-    CharacterControllerReceipt, CharacterControllerService, CharacterGroundFact, CharacterObstacle,
-    MaterialVoxel, SpatialOcclusionHitboxOverride, SpatialOcclusionQuery, SpatialOcclusionService,
-    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
-    StaticMeshTransform, SurfaceMeshOptions, SurfaceMode, TriggerGeometrySource,
-    TriggerOverlapFact, TriggerOverlapFactKind, TriggerReconcileCause, TriggerVolumeError,
-    TriggerVolumeSystem, VoxelCollisionScene, VoxelPickHint, VoxelPickService,
+    CharacterCapsule, CharacterCollisionQueryStats, CharacterCollisionSource, CharacterContactFact,
+    CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
+    CharacterControllerError, CharacterControllerReceipt, CharacterControllerService,
+    CharacterGroundFact, CharacterObstacle, MaterialVoxel, SpatialOcclusionHitboxOverride,
+    SpatialOcclusionQuery, SpatialOcclusionService, StaticMeshAssetId, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, SurfaceMeshOptions,
+    SurfaceMode, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,
+    TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem, VoxelCollisionScene,
+    VoxelPickHint, VoxelPickService,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityAuthoringService, EntityDefinition,
@@ -150,6 +151,7 @@ pub(crate) struct RuntimeSpatialBridge {
         BTreeMap<u64, crate::kinematic::KinematicMotionLeaseBacking>,
     pub(crate) next_kinematic_motion_lease: u64,
     update_attribution: ProductDevUpdateAttribution,
+    last_character_query_stats: CharacterCollisionQueryStats,
 }
 
 pub(crate) struct SpatialSession {
@@ -419,6 +421,7 @@ impl RuntimeSpatialBridge {
             kinematic_motion_leases: BTreeMap::new(),
             next_kinematic_motion_lease: 1,
             update_attribution: ProductDevUpdateAttribution::default(),
+            last_character_query_stats: CharacterCollisionQueryStats::default(),
         }
     }
 
@@ -434,7 +437,12 @@ impl RuntimeSpatialBridge {
         self.update_attribution
     }
 
-    fn record_character_step_attribution(&mut self, duration_us: u64, cast_count: u64) {
+    fn record_character_step_attribution(
+        &mut self,
+        duration_us: u64,
+        cast_count: u64,
+        query_stats: CharacterCollisionQueryStats,
+    ) {
         self.update_attribution.character_step_calls = CanonicalU64::new(
             self.update_attribution
                 .character_step_calls
@@ -452,6 +460,18 @@ impl RuntimeSpatialBridge {
                 .character_step_cast_count
                 .get()
                 .saturating_add(cast_count),
+        );
+        self.update_attribution.character_step_candidate_count = CanonicalU64::new(
+            self.update_attribution
+                .character_step_candidate_count
+                .get()
+                .saturating_add(query_stats.candidate_count()),
+        );
+        self.update_attribution.character_step_narrow_phase_count = CanonicalU64::new(
+            self.update_attribution
+                .character_step_narrow_phase_count
+                .get()
+                .saturating_add(query_stats.narrow_phase_count()),
         );
     }
 
@@ -1613,6 +1633,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeCharacterStepRequest,
     ) -> Result<NativeCharacterStepReceipt, CsharpEngineServicesError> {
+        self.last_character_query_stats = CharacterCollisionQueryStats::default();
         let obstacle_values = unsafe {
             borrowed_slice(
                 request.obstacles,
@@ -1661,7 +1682,14 @@ impl RuntimeSpatialBridge {
         session.last_character_receipt = Some(receipt.clone());
         session.last_character_config = Some(request.config);
         session.last_character_content_authority_hash = Some(session.scene.authority_hash());
-        Ok(native_character_receipt(&receipt))
+        let query_stats = receipt.collision_query_stats;
+        let native_receipt = native_character_receipt(&receipt);
+        self.last_character_query_stats = query_stats;
+        Ok(native_receipt)
+    }
+
+    fn take_character_query_stats(&mut self) -> CharacterCollisionQueryStats {
+        std::mem::take(&mut self.last_character_query_stats)
     }
 
     fn capture_character_continuation(
@@ -3636,7 +3664,8 @@ unsafe extern "C" fn propose_character_step(
     let cast_count = result
         .as_ref()
         .map_or(0, |receipt| u64::from(receipt.cast_count));
-    bridge.record_character_step_attribution(duration_us, cast_count);
+    let query_stats = bridge.take_character_query_stats();
+    bridge.record_character_step_attribution(duration_us, cast_count, query_stats);
     match result {
         Ok(value) => {
             unsafe { *receipt = value };

@@ -8,9 +8,10 @@ use entity_state::{
 };
 use serde::{Deserialize, Serialize};
 use svc_collision::{
-    cast_character_capsule_against_obstacles, character_capsule_overlap_obstacles,
-    CharacterCapsule, CharacterCapsuleCastHit, CharacterCapsuleOverlap,
-    CharacterCollisionQueryError, CharacterCollisionSource, CharacterObstacle,
+    cast_character_capsule_against_obstacles_with_stats,
+    character_capsule_overlap_obstacles_with_stats, CharacterCapsule, CharacterCapsuleCastHit,
+    CharacterCapsuleOverlap, CharacterCollisionQueryError, CharacterCollisionQueryStats,
+    CharacterCollisionSource, CharacterObstacle,
 };
 
 use crate::VoxelCollisionScene;
@@ -451,6 +452,9 @@ pub struct CharacterControllerReceipt {
     pub platform: Option<CharacterPlatformFact>,
     pub dynamic_impulses: Vec<DynamicImpulseProposal>,
     pub cast_count: u16,
+    /// Internal collision fan-out facts for host diagnostics. They are not
+    /// copied into the generated product receipt/ABI.
+    pub collision_query_stats: CharacterCollisionQueryStats,
     pub recovery_passes: u8,
     pub recovery_distance: f32,
 }
@@ -559,6 +563,7 @@ pub struct PreparedCharacterControllerStep {
     platform: Option<CharacterPlatformFact>,
     dynamic_impulses: Vec<DynamicImpulseProposal>,
     cast_count: u16,
+    collision_query_stats: CharacterCollisionQueryStats,
     recovery_passes: u8,
     recovery_distance: f32,
     environment: CharacterEnvironmentIdentity,
@@ -695,6 +700,7 @@ impl CharacterControllerService {
         };
         let mut center = vec3_f64(transform_before.translation);
         let mut platform = apply_platform_carry(entities, &mut motion, &mut center, dt, config)?;
+        let mut query_stats = CharacterCollisionQueryStats::default();
         let mut stance_blocked = false;
         let old_height = stance_height(config, motion.stance);
         if requested_stance != motion.stance {
@@ -706,7 +712,8 @@ impl CharacterControllerService {
             );
             let candidate = capsule_at(candidate_center, new_height, config.shape.radius);
             if requested_stance == CharacterStance::Standing
-                && overlap_world(&scene.projection, &obstacles, candidate)?.is_some()
+                && overlap_world(&scene.projection, &obstacles, candidate, &mut query_stats)?
+                    .is_some()
             {
                 stance_blocked = true;
             } else {
@@ -722,7 +729,12 @@ impl CharacterControllerService {
         let capsule = |center| capsule_at(center, height, config.shape.radius);
         let mut blocks = Vec::new();
         for _ in 0..config.solver.maximum_recovery_passes {
-            let Some(overlap) = overlap_world(&scene.projection, &obstacles, capsule(center))?
+            let Some(overlap) = overlap_world(
+                &scene.projection,
+                &obstacles,
+                capsule(center),
+                &mut query_stats,
+            )?
             else {
                 break;
             };
@@ -740,7 +752,12 @@ impl CharacterControllerService {
             center = add_world(center, scale_world(overlap.normal, f64::from(correction)));
             recovery_distance += correction;
         }
-        if let Some(overlap) = overlap_world(&scene.projection, &obstacles, capsule(center))? {
+        if let Some(overlap) = overlap_world(
+            &scene.projection,
+            &obstacles,
+            capsule(center),
+            &mut query_stats,
+        )? {
             let depth = finite_f32(overlap.penetration_depth)?;
             if depth > config.recovery.unresolved_tolerance {
                 if platform.is_some() && depth > config.platform.crush_tolerance {
@@ -820,6 +837,7 @@ impl CharacterControllerService {
             velocity: total_velocity,
             may_step: motion.grounded,
             config,
+            query_stats: &mut query_stats,
         })?;
         cast_count = cast_count.saturating_add(solve.casts);
         center = solve.center;
@@ -868,6 +886,7 @@ impl CharacterControllerService {
                 capsule(center),
                 WorldVec::new(0.0, -f64::from(config.surface.floor_snap_distance), 0.0),
                 f64::from(config.shape.contact_skin),
+                &mut query_stats,
             )?;
             let mut rejected_hit = None;
             let mut accepted_support = None;
@@ -897,6 +916,7 @@ impl CharacterControllerService {
                             bounded_support_probe(capsule(center), config),
                             WorldVec::new(0.0, -f64::from(config.surface.floor_snap_distance), 0.0),
                             0.0,
+                            &mut query_stats,
                         )? {
                             let support_normal = vec3_from_world(support.normal)?;
                             if standable(support_normal, config) {
@@ -978,6 +998,7 @@ impl CharacterControllerService {
             platform,
             dynamic_impulses,
             cast_count,
+            collision_query_stats: query_stats,
             recovery_passes,
             recovery_distance,
             environment,
@@ -1050,6 +1071,7 @@ impl CharacterControllerService {
             platform: prepared.platform,
             dynamic_impulses: prepared.dynamic_impulses,
             cast_count: prepared.cast_count,
+            collision_query_stats: prepared.collision_query_stats,
             recovery_passes: prepared.recovery_passes,
             recovery_distance: prepared.recovery_distance,
         })
@@ -1065,6 +1087,7 @@ struct MoveSolveInput<'a, F> {
     velocity: Vec3,
     may_step: bool,
     config: &'a CharacterControllerConfig,
+    query_stats: &'a mut CharacterCollisionQueryStats,
 }
 
 struct MoveSolveOutput {
@@ -1091,6 +1114,7 @@ where
         mut velocity,
         may_step,
         config,
+        query_stats,
     } = input;
     let mut remaining = requested;
     let mut contacts: Vec<CharacterContactFact> = Vec::new();
@@ -1121,6 +1145,7 @@ where
             capsule(add_world(center, vec3_world(query_offset))),
             vec3_world(remaining),
             f64::from(config.shape.contact_skin),
+            query_stats,
         )?
         else {
             center = add_world(center, vec3_world(remaining));
@@ -1173,6 +1198,7 @@ where
                 &capsule,
                 requested_start,
                 config,
+                query_stats,
             )? {
                 casts = casts.saturating_add(step_casts);
                 return Ok(MoveSolveOutput {
@@ -1239,6 +1265,7 @@ fn try_step(
     capsule: &impl Fn(WorldPos) -> CharacterCapsule,
     requested: Vec3,
     config: &CharacterControllerConfig,
+    query_stats: &mut CharacterCollisionQueryStats,
 ) -> Result<Option<(WorldPos, f32, u16)>, CharacterControllerError> {
     let rise = config.surface.maximum_step_height;
     if rise <= 0.0 || requested.x * requested.x + requested.z * requested.z <= 1.0e-8 {
@@ -1256,6 +1283,7 @@ fn try_step(
         capsule(upward_start),
         upward,
         f64::from(config.shape.contact_skin),
+        query_stats,
     )?
     .is_some()
     {
@@ -1269,6 +1297,7 @@ fn try_step(
         capsule(raised),
         vec3_world(horizontal),
         f64::from(config.shape.contact_skin),
+        query_stats,
     )?
     .is_some()
     {
@@ -1282,6 +1311,7 @@ fn try_step(
         capsule(forward),
         WorldVec::new(0.0, -f64::from(downward_distance), 0.0),
         f64::from(config.shape.contact_skin),
+        query_stats,
     )?
     else {
         return Ok(None);
@@ -1296,6 +1326,7 @@ fn try_step(
         support_probe,
         WorldVec::new(0.0, -f64::from(downward_distance), 0.0),
         0.0,
+        query_stats,
     )?
     else {
         return Ok(None);
@@ -1673,9 +1704,14 @@ fn cast_world(
     capsule: CharacterCapsule,
     translation: WorldVec,
     skin: f64,
+    stats: &mut CharacterCollisionQueryStats,
 ) -> Result<Option<CharacterCapsuleCastHit>, CharacterControllerError> {
-    let world = projection.cast_character_capsule(capsule, translation, skin)?;
-    let entities = cast_character_capsule_against_obstacles(capsule, translation, skin, obstacles)?;
+    let (world, world_stats) =
+        projection.cast_character_capsule_with_stats(capsule, translation, skin)?;
+    let (entities, obstacle_stats) =
+        cast_character_capsule_against_obstacles_with_stats(capsule, translation, skin, obstacles)?;
+    stats.saturating_add_assign(world_stats);
+    stats.saturating_add_assign(obstacle_stats);
     Ok(match (world, entities) {
         (Some(world), Some(entity)) if entity.time_of_impact < world.time_of_impact => Some(entity),
         (Some(world), Some(_)) => Some(world),
@@ -1688,9 +1724,13 @@ fn overlap_world(
     projection: &svc_collision::CollisionProjection,
     obstacles: &[CharacterObstacle],
     capsule: CharacterCapsule,
+    stats: &mut CharacterCollisionQueryStats,
 ) -> Result<Option<CharacterCapsuleOverlap>, CharacterControllerError> {
-    let world = projection.character_capsule_overlap(capsule)?;
-    let entities = character_capsule_overlap_obstacles(capsule, obstacles)?;
+    let (world, world_stats) = projection.character_capsule_overlap_with_stats(capsule)?;
+    let (entities, obstacle_stats) =
+        character_capsule_overlap_obstacles_with_stats(capsule, obstacles)?;
+    stats.saturating_add_assign(world_stats);
+    stats.saturating_add_assign(obstacle_stats);
     Ok(match (world, entities) {
         (Some(world), Some(entity)) if entity.penetration_depth > world.penetration_depth => {
             Some(entity)

@@ -77,6 +77,10 @@ export interface LiveDebugUpdateAttribution {
     readonly characterStepDurationUs: string;
     /** Logical character-controller casts, not narrow-phase work. */
     readonly characterStepCastCount: string;
+    /** Eligible world projection entries and call-local active obstacles. */
+    readonly characterStepCandidateCount: string;
+    /** Actual Parry character cast/contact calls. */
+    readonly characterStepNarrowPhaseCount: string;
     readonly voxelResidencyCalls: string;
     readonly voxelResidencyDurationUs: string;
     readonly voxelScenePresentationCalls: string;

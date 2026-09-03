@@ -408,6 +408,8 @@ impl EngineServiceSet {
             character_step_calls: spatial.character_step_calls,
             character_step_duration_us: spatial.character_step_duration_us,
             character_step_cast_count: spatial.character_step_cast_count,
+            character_step_candidate_count: spatial.character_step_candidate_count,
+            character_step_narrow_phase_count: spatial.character_step_narrow_phase_count,
             voxel_residency_calls: spatial.voxel_residency_calls,
             voxel_residency_duration_us: spatial.voxel_residency_duration_us,
             voxel_scene_presentation_calls: presentation.voxel_scene_presentation_calls,
