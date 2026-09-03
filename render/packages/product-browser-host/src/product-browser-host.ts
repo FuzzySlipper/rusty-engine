@@ -1527,7 +1527,7 @@ export async function mountProductBrowserHost(
                 'renderer frame reported a terminal outcome',
               );
             }
-            productFrameObservation.applied(receivedAtMs);
+            if (receipt.outcome === 'applied') productFrameObservation.applied(receivedAtMs);
           });
           return;
         }

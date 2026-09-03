@@ -103,6 +103,19 @@ test('product frame observation retains receipt apply rate and latency without s
   });
 });
 
+test('rejected atomic frame receipt continues without recording an application', () => {
+  let timeMs = 10;
+  const observation = createProductBrowserProductFrameObservation(() => timeMs);
+  const receivedAtMs = observation.received();
+  timeMs = 12;
+  const receipt = { outcome: 'rejected_atomic' as 'applied' | 'rejected_atomic' };
+  assert.equal(productBrowserAtomicReceiptMayContinue(receipt.outcome), true);
+  if (receipt.outcome === 'applied') observation.applied(receivedAtMs);
+  assert.equal(observation.sample().receivedCount, 1);
+  assert.equal(observation.sample().appliedCount, 0);
+  assert.deepEqual(observation.sample().recentApplyLatencyMs, []);
+});
+
 test('adjacent readout and progress request one batch-level host wake', () => {
   assert.equal(productBrowserOutputBatchNeedsRustHostPulse([
     {
