@@ -907,13 +907,17 @@ fn interrupted_baseline_completion_has_no_cursor_and_reattaches_without_reset() 
 #[test]
 fn idle_sse_disconnects_release_subscriber_slots() {
     let host = start();
-    for _ in 0..(product_dev_host::MAX_SSE_SUBSCRIBERS + 4) {
+    for _ in 0..product_dev_host::MAX_SSE_SUBSCRIBERS {
         let mut stream = open_sse(host.address(), "/__rusty/product/runtime/outputs");
         let response = read_until(&mut stream, "\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         drop(stream);
-        thread::sleep(Duration::from_millis(60));
     }
+    // With output-driven delivery an idle subscriber is intentionally observed
+    // through failed heartbeat writes instead of a 25 ms socket poll. A TCP
+    // stack may accept the first write after the peer closes, so allow two
+    // heartbeat intervals for bounded reclamation.
+    thread::sleep(Duration::from_millis(2_200));
     let mut final_stream = open_sse(host.address(), "/__rusty/product/runtime/outputs");
     let response = read_until(&mut final_stream, "\r\n\r\n");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");

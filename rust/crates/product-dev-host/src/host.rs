@@ -30,7 +30,6 @@ use crate::{
 use crate::session::ProductDevOperationOwner;
 
 const SOCKET_TIMEOUT: Duration = Duration::from_millis(750);
-const SSE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY_INITIAL_BACKOFF: Duration = Duration::from_millis(5);
 const ACCEPT_RETRY_MAX_BACKOFF: Duration = Duration::from_millis(200);
@@ -124,6 +123,7 @@ impl ProductDevHost {
         );
         let shutdown = Arc::new(AtomicBool::new(false));
         let scheduler_wake = Arc::new(SchedulerWake::default());
+        let output_wake = Arc::new(OutputWake::default());
         let state = Arc::new(HostState {
             bundle: config.bundle,
             runtime: Arc::new(ProductDevOperationOwner::new(runtime)),
@@ -131,6 +131,7 @@ impl ProductDevHost {
             telemetry: Mutex::new(HostTelemetry::default()),
             realtime_scheduler_enabled,
             outputs: Mutex::new(OutputBus::default()),
+            output_wake: Arc::clone(&output_wake),
             shutdown: Arc::clone(&shutdown),
             scheduler_wake: Arc::clone(&scheduler_wake),
             bind_host: config.bind_host,
@@ -168,6 +169,7 @@ impl ProductDevHost {
                 // before returning so a half-started host cannot survive.
                 shutdown.store(true, Ordering::SeqCst);
                 scheduler_wake.notify();
+                output_wake.notify();
                 let _ = TcpStream::connect_timeout(&address, SOCKET_TIMEOUT);
                 let _ = listener_thread.join();
                 if let Ok(mut handlers) = handler_threads.lock() {
@@ -182,6 +184,7 @@ impl ProductDevHost {
             address,
             shutdown,
             scheduler_wake,
+            output_wake,
             scheduler_thread: Some(scheduler_thread),
             listener_thread: Some(listener_thread),
             handler_threads,
@@ -196,6 +199,7 @@ pub struct RunningProductDevHost {
     address: SocketAddr,
     shutdown: Arc<AtomicBool>,
     scheduler_wake: Arc<SchedulerWake>,
+    output_wake: Arc<OutputWake>,
     scheduler_thread: Option<JoinHandle<()>>,
     listener_thread: Option<JoinHandle<()>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -223,6 +227,7 @@ impl RunningProductDevHost {
         // callback, so joining it before connection handlers/runtime drop
         // preserves one clear teardown order and prevents post-shutdown work.
         self.scheduler_wake.notify();
+        self.output_wake.notify();
         if let Some(thread) = self.scheduler_thread.take() {
             thread.join().map_err(|_| {
                 ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "scheduler thread panicked")
@@ -262,6 +267,7 @@ struct HostState<R> {
     telemetry: Mutex<HostTelemetry>,
     realtime_scheduler_enabled: bool,
     outputs: Mutex<OutputBus>,
+    output_wake: Arc<OutputWake>,
     shutdown: Arc<AtomicBool>,
     scheduler_wake: Arc<SchedulerWake>,
     bind_host: Ipv4Addr,
@@ -397,6 +403,45 @@ struct TransportTelemetry {
 struct SchedulerWake {
     state: Mutex<bool>,
     signal: Condvar,
+}
+
+/// Generation-based output notification shared by every SSE subscriber.
+///
+/// A generation, rather than a consumed boolean, lets `notify_all` release all
+/// current subscribers without one waiter stealing another waiter's signal.
+/// Each subscriber samples the generation before reading the retained bus, so
+/// publication cannot race between that read and the following sleep.
+#[derive(Default)]
+struct OutputWake {
+    generation: Mutex<u64>,
+    signal: Condvar,
+}
+
+impl OutputWake {
+    fn generation(&self) -> u64 {
+        self.generation
+            .lock()
+            .map(|generation| *generation)
+            .unwrap_or(0)
+    }
+
+    fn notify(&self) {
+        if let Ok(mut generation) = self.generation.lock() {
+            *generation = generation.wrapping_add(1);
+            self.signal.notify_all();
+        }
+    }
+
+    fn wait_timeout(&self, observed_generation: u64, timeout: Duration) {
+        let Ok(generation) = self.generation.lock() else {
+            return;
+        };
+        let _ = self
+            .signal
+            .wait_timeout_while(generation, timeout, |generation| {
+                *generation == observed_generation
+            });
+    }
 }
 
 impl SchedulerWake {
@@ -680,7 +725,7 @@ fn publish_scheduled_input_receipt<R: ProductDevRuntime>(
     if !active {
         return;
     }
-    if let Err(error) = push_outputs(&state.outputs, outputs) {
+    if let Err(error) = push_host_outputs(state, outputs) {
         publish_host_diagnostic(
             &state.diagnostics,
             ProductDevLogSeverity::Warning,
@@ -718,7 +763,7 @@ fn publish_scheduled_receipt<R: ProductDevRuntime>(
     if !active {
         return;
     }
-    if let Err(error) = push_outputs(&state.outputs, outputs) {
+    if let Err(error) = push_host_outputs(state, outputs) {
         publish_host_diagnostic(
             &state.diagnostics,
             ProductDevLogSeverity::Warning,
@@ -1015,7 +1060,7 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
                 }
             };
             let (catalog, outputs) = receipt.into_parts();
-            let output_through = match push_outputs(&state.outputs, outputs) {
+            let output_through = match push_host_outputs(state, outputs) {
                 Ok(output_through) => output_through,
                 Err(error) => return Ok(HttpResponse::error(503, error.code(), error.detail())),
             };
@@ -1049,7 +1094,7 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                 }
             };
             let (result, outputs) = receipt.into_parts();
-            let output_through = match push_outputs(&state.outputs, outputs) {
+            let output_through = match push_host_outputs(state, outputs) {
                 Ok(output_through) => output_through,
                 Err(error) => {
                     return Ok(debug_text_error(
@@ -1610,7 +1655,7 @@ where
                 return Ok(HttpResponse::error(500, error.code(), error.detail()));
             }
         };
-        let output_through = match push_outputs(&state.outputs, outputs) {
+        let output_through = match push_host_outputs(state, outputs) {
             Ok(output_through) => output_through,
             Err(error) => {
                 // The typed route result names the exact consumed binding,
@@ -1783,9 +1828,6 @@ fn handle_sse<R: ProductDevRuntime>(
     if write_sse_headers(&mut stream).is_err() {
         return;
     }
-    if stream.set_read_timeout(Some(SSE_POLL_INTERVAL)).is_err() {
-        return;
-    }
     for event in private_events {
         if write_sse_private_event(&mut stream, &event).is_err() {
             return;
@@ -1805,6 +1847,7 @@ fn handle_sse<R: ProductDevRuntime>(
         if state.shutdown.load(Ordering::Acquire) {
             break;
         }
+        let observed_generation = state.output_wake.generation();
         let snapshot = match state.outputs.lock() {
             Ok(outputs) => outputs.after(cursor),
             Err(_) => break,
@@ -1818,6 +1861,7 @@ fn handle_sse<R: ProductDevRuntime>(
             let _ = stream.flush();
             break;
         }
+        let had_events = !snapshot.events.is_empty();
         for event in snapshot.events {
             if write_sse_event(&mut stream, &event).is_err() {
                 return;
@@ -1825,15 +1869,20 @@ fn handle_sse<R: ProductDevRuntime>(
             cursor = event.id;
             last_write = Instant::now();
         }
-        if peer_disconnected(&stream) {
-            return;
+        if had_events {
+            continue;
         }
-        if last_write.elapsed() >= SSE_HEARTBEAT_INTERVAL {
+        let heartbeat_wait = SSE_HEARTBEAT_INTERVAL.saturating_sub(last_write.elapsed());
+        if heartbeat_wait.is_zero() {
             if stream.write_all(b": rusty-keep-alive\n\n").is_err() || stream.flush().is_err() {
                 return;
             }
             last_write = Instant::now();
+            continue;
         }
+        state
+            .output_wake
+            .wait_timeout(observed_generation, heartbeat_wait);
     }
 }
 
@@ -1856,23 +1905,6 @@ fn write_sse_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()
     };
     stream.write_all(payload.as_bytes())?;
     stream.flush()
-}
-
-fn peer_disconnected(stream: &TcpStream) -> bool {
-    let mut byte = [0_u8; 1];
-    match stream.peek(&mut byte) {
-        Ok(0) => true,
-        Ok(_) => false,
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) =>
-        {
-            false
-        }
-        Err(_) => true,
-    }
 }
 
 #[derive(Default, Clone)]
@@ -1944,6 +1976,18 @@ fn push_outputs(
             Err(error)
         }
     }
+}
+
+fn push_host_outputs<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    outputs: Vec<ProductDevRuntimeOutput>,
+) -> Result<u64, ProductDevHostError> {
+    let changed = !outputs.is_empty();
+    let output_through = push_outputs(&state.outputs, outputs)?;
+    if changed {
+        state.output_wake.notify();
+    }
+    Ok(output_through)
 }
 
 fn push_outputs_staged(
@@ -2153,6 +2197,41 @@ fn try_acquire(counter: &AtomicUsize, maximum: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_wake_releases_every_current_subscriber() {
+        const SUBSCRIBERS: usize = 3;
+        let wake = Arc::new(OutputWake::default());
+        let ready = Arc::new(std::sync::Barrier::new(SUBSCRIBERS + 1));
+        let (elapsed, observations) = std::sync::mpsc::channel();
+        let mut waiters = Vec::new();
+        for _ in 0..SUBSCRIBERS {
+            let wake = Arc::clone(&wake);
+            let ready = Arc::clone(&ready);
+            let elapsed = elapsed.clone();
+            waiters.push(thread::spawn(move || {
+                let generation = wake.generation();
+                ready.wait();
+                let started = Instant::now();
+                wake.wait_timeout(generation, Duration::from_secs(2));
+                elapsed.send(started.elapsed()).unwrap();
+            }));
+        }
+
+        ready.wait();
+        wake.notify();
+        for _ in 0..SUBSCRIBERS {
+            assert!(
+                observations
+                    .recv_timeout(Duration::from_millis(500))
+                    .is_ok(),
+                "output publication did not wake every current subscriber"
+            );
+        }
+        for waiter in waiters {
+            waiter.join().unwrap();
+        }
+    }
 
     struct BlockingRealtimeRuntime;
 
@@ -2376,6 +2455,7 @@ mod tests {
             telemetry: Mutex::new(HostTelemetry::default()),
             realtime_scheduler_enabled: true,
             outputs: Mutex::new(OutputBus::default()),
+            output_wake: Arc::new(OutputWake::default()),
             shutdown: Arc::new(AtomicBool::new(false)),
             scheduler_wake: Arc::new(SchedulerWake::default()),
             bind_host: Ipv4Addr::LOCALHOST,
