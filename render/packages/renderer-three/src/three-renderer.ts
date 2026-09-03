@@ -2183,6 +2183,7 @@ export class ThreeRenderer {
     const next = retained?.texture.clone() ?? null;
     if (next !== null) {
       next.mapping = THREE.EquirectangularReflectionMapping;
+      next.flipY = true;
       next.needsUpdate = true;
       this.#trackTextureResource(next);
     }

@@ -19497,7 +19497,7 @@ var M_ = 31, N_ = 4096, P_ = 2, F_ = class {
 	}
 	#ve() {
 		let e = this.#k, t = (this.#O === null ? void 0 : this.#D.get(this.#O))?.texture.clone() ?? null;
-		t !== null && (t.mapping = 303, t.needsUpdate = !0, this.#K(t)), this.#k = t, this.scene.background = t, e?.dispose();
+		t !== null && (t.mapping = 303, t.flipY = !0, t.needsUpdate = !0, this.#K(t)), this.#k = t, this.scene.background = t, e?.dispose();
 	}
 	#ye(e) {
 		let t = /* @__PURE__ */ new Set();

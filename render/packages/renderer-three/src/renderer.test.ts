@@ -2638,26 +2638,55 @@ void test('texture redefine is stale-safe and disposes replaced and final GPU re
   assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
-void test('sky background is retained, replaced with its source texture, cleared, and disposed', () => {
-  const before = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
-  const after = rgbaPng(2, 1, [0, 0, 255, 255, 255, 255, 0, 255]);
+void test('sky background flips asymmetric equirectangular content without changing its retained source', () => {
+  const beforePixels = [
+    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+    16, 32, 48, 0, 64, 80, 96, 0, 112, 128, 144, 0, 160, 176, 192, 0,
+  ];
+  const afterPixels = [
+    0, 0, 255, 255, 255, 255, 0, 255, 255, 0, 255, 255, 0, 255, 255, 255,
+    192, 176, 160, 0, 144, 128, 112, 0, 96, 80, 64, 0, 48, 32, 16, 0,
+  ];
+  const before = rgbaPng(4, 2, beforePixels);
+  const after = rgbaPng(4, 2, afterPixels);
   const renderer = new ThreeRenderer();
-  const beforeTexture = { ...textureDescriptor(before), wrap: 'clamp' as const };
+  const beforeTexture = {
+    ...textureDescriptor(before), width: 4, height: 2, wrap: 'clamp' as const,
+  };
   renderer.applyFrame({ schemaVersion: 1, ops: [
     { op: 'defineTexture', texture: beforeTexture },
     { op: 'setSkyBackground', background: { texture: beforeTexture.id } },
   ] });
+  const retainedBefore = renderer.textureObjectFor(beforeTexture.id);
   const firstBackground = renderer.scene.background;
+  assert.ok(retainedBefore instanceof THREE.DataTexture);
   assert.ok(firstBackground instanceof THREE.Texture);
+  assert.notEqual(firstBackground, retainedBefore, 'the sky owns a clone of the retained source');
   assert.equal(firstBackground.mapping, THREE.EquirectangularReflectionMapping);
+  assert.equal(retainedBefore.flipY, false, 'ordinary retained texture sampling keeps decoded PNG row order');
+  assert.equal(firstBackground.flipY, true, 'equirectangular sampling maps the authored opaque upper row above its transparent edge');
+  assert.deepEqual(
+    [...((retainedBefore.image as { data: Uint8Array }).data)],
+    beforePixels,
+    'the retained source stays vertically unmodified',
+  );
+  assert.deepEqual(
+    [...((firstBackground.image as { data: Uint8Array }).data)],
+    beforePixels,
+    'the cloned sky preserves distinct opaque upper and transparent lower rows',
+  );
   assert.equal(renderer.resourceStatistics().textureResourceCount, 2);
 
-  const afterTexture = { ...textureDescriptor(after, 2), wrap: 'clamp' as const };
+  const afterTexture = {
+    ...textureDescriptor(after, 2), width: 4, height: 2, wrap: 'clamp' as const,
+  };
   let firstDisposals = 0;
   firstBackground.addEventListener('dispose', () => { firstDisposals += 1; });
   renderer.applyDiff({ op: 'defineTexture', texture: afterTexture });
   assert.ok(renderer.scene.background instanceof THREE.Texture);
   assert.notEqual(renderer.scene.background, firstBackground);
+  assert.equal(renderer.textureObjectFor(afterTexture.id)?.flipY, false, 'replacement leaves its retained source unchanged');
+  assert.equal(renderer.scene.background.flipY, true, 'replacement corrects equirectangular orientation too');
   assert.equal(firstDisposals, 1);
 
   const finalBackground = renderer.scene.background as THREE.Texture;
