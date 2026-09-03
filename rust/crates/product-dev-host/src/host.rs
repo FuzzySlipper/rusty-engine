@@ -1988,7 +1988,7 @@ fn write_sse_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()
     stream.flush()
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 struct OutputBus {
     next_id: u64,
     next_transfer_id: u64,
@@ -2004,7 +2004,6 @@ struct PendingBaseline {
     outputs: Vec<ProductDevRuntimeOutput>,
 }
 
-#[derive(Clone)]
 struct OutputEvent {
     id: u64,
     event: Option<&'static str>,
@@ -2041,16 +2040,14 @@ fn push_outputs(
     let mut bus = bus.lock().map_err(|_| {
         ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
     })?;
-    // Encode, fragment, order-check, and baseline-check a clone first. A
-    // receipt arrives only after its product mutation, so partial retained
-    // publication would leave a browser with an ambiguous prefix. A failed
-    // preflight instead fences the old binding and requires a fresh baseline.
-    let mut staged = bus.clone();
-    match push_outputs_staged(&mut staged, outputs) {
-        Ok(output_through) => {
-            *bus = staged;
-            Ok(output_through)
-        }
+    // Encode, fragment, order-check, and baseline-check against a bounded
+    // transaction first. A receipt arrives only after its product mutation,
+    // so partial retained publication would leave a browser with an ambiguous
+    // prefix. Existing retained JSON stays in place until the transaction is
+    // known-good; a failed preflight instead fences the old binding and
+    // requires a fresh baseline.
+    match push_outputs_staged(&mut bus, outputs) {
+        Ok(output_through) => Ok(output_through),
         Err(error) => {
             bus.active_binding = None;
             bus.pending_baseline = None;
@@ -2072,26 +2069,28 @@ fn push_host_outputs<R: ProductDevRuntime>(
 }
 
 fn push_outputs_staged(
-    mut bus: &mut OutputBus,
+    bus: &mut OutputBus,
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<u64, ProductDevHostError> {
+    let mut staged = OutputPushStage::new(bus);
     let mut incremental_outputs = Vec::new();
     for output in outputs {
         if let Some(binding) = output.binding_marker() {
             if !incremental_outputs.is_empty() {
-                let active_binding = bus.active_binding.ok_or_else(|| {
+                let active_binding = staged.active_binding.ok_or_else(|| {
                     ProductDevHostError::new(
                         "DEV_HOST_OUTPUT_BASELINE",
                         "incremental output arrived before a complete binding baseline",
                     )
                 })?;
-                append_output_events(
-                    &mut bus,
+                append_staged_output_events(
+                    bus,
+                    &mut staged,
                     active_binding,
                     std::mem::take(&mut incremental_outputs),
                 )?;
             }
-            if bus.pending_baseline.is_some() {
+            if staged.pending_baseline.is_some() {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_OUTPUT_BASELINE",
                     "a new binding arrived before the previous baseline completed",
@@ -2101,16 +2100,16 @@ fn push_outputs_staged(
             // publication. Fence the previous binding immediately so a
             // rejected replacement cannot label later incrementals with the
             // stale runtime identity.
-            bus.active_binding = None;
-            bus.pending_baseline = Some(PendingBaseline {
+            staged.active_binding = None;
+            staged.pending_baseline = Some(PendingBaseline {
                 binding,
                 outputs: vec![output],
             });
             continue;
         }
         if let Some(binding) = output.complete_baseline_marker() {
-            let (pending_binding, pending_outputs) = {
-                let Some(pending) = bus.pending_baseline.as_ref() else {
+            let pending = {
+                let Some(pending) = staged.pending_baseline.take() else {
                     return Err(ProductDevHostError::new(
                         "DEV_HOST_OUTPUT_BASELINE",
                         "a baseline completion arrived without its binding",
@@ -2122,24 +2121,20 @@ fn push_outputs_staged(
                         "a baseline completion does not match its binding",
                     ));
                 }
-                (pending.binding, pending.outputs.clone())
+                pending
             };
             // Admission is fail-atomic. Once a complete baseline is rejected,
             // discard its staging buffer so the producer can replay the same
             // full binding-to-completion sequence without a phantom baseline.
-            if let Err(error) = append_output_events(&mut bus, pending_binding, pending_outputs) {
-                bus.pending_baseline = None;
-                return Err(error);
-            }
-            bus.pending_baseline = None;
-            bus.active_binding = Some(binding);
+            append_staged_output_events(bus, &mut staged, pending.binding, pending.outputs)?;
+            staged.active_binding = Some(binding);
             continue;
         }
-        if let Some(pending) = &mut bus.pending_baseline {
+        if let Some(pending) = &mut staged.pending_baseline {
             pending.outputs.push(output);
             continue;
         }
-        if bus.active_binding.is_none() {
+        if staged.active_binding.is_none() {
             return Err(ProductDevHostError::new(
                 "DEV_HOST_OUTPUT_BASELINE",
                 "incremental output arrived before a complete binding baseline",
@@ -2148,19 +2143,81 @@ fn push_outputs_staged(
         incremental_outputs.push(output);
     }
     if !incremental_outputs.is_empty() {
-        let binding = bus.active_binding.expect("active binding was checked");
-        append_output_events(&mut bus, binding, incremental_outputs)?;
+        let binding = staged.active_binding.expect("active binding was checked");
+        append_staged_output_events(bus, &mut staged, binding, incremental_outputs)?;
     }
-    Ok(bus.next_id)
+    let output_through = staged.next_id;
+    staged.commit(bus);
+    Ok(output_through)
 }
 
+#[cfg(test)]
 fn append_output_events(
     bus: &mut OutputBus,
     binding: crate::ProductDevRuntimeBinding,
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<(), ProductDevHostError> {
+    let mut staged = OutputPushStage::new(bus);
+    append_staged_output_events(bus, &mut staged, binding, outputs)?;
+    staged.commit(bus);
+    Ok(())
+}
+
+struct OutputPushStage {
+    next_id: u64,
+    next_transfer_id: u64,
+    active_binding: Option<crate::ProductDevRuntimeBinding>,
+    pending_baseline: Option<PendingBaseline>,
+    retained_start: usize,
+    floor_cursor: u64,
+    new_events: VecDeque<OutputEvent>,
+}
+
+impl OutputPushStage {
+    fn new(bus: &OutputBus) -> Self {
+        Self {
+            next_id: bus.next_id,
+            next_transfer_id: bus.next_transfer_id,
+            active_binding: bus.active_binding,
+            pending_baseline: bus.pending_baseline.clone(),
+            retained_start: 0,
+            floor_cursor: bus.floor_cursor,
+            new_events: VecDeque::new(),
+        }
+    }
+
+    fn push_event(&mut self, bus: &OutputBus, event: OutputEvent) {
+        let retained_existing = bus.events.len().saturating_sub(self.retained_start);
+        if retained_existing + self.new_events.len() == MAX_OUTPUT_QUEUE_ITEMS {
+            if self.retained_start < bus.events.len() {
+                self.floor_cursor = bus.events[self.retained_start].id;
+                self.retained_start += 1;
+            } else if let Some(evicted) = self.new_events.pop_front() {
+                self.floor_cursor = evicted.id;
+            }
+        }
+        self.new_events.push_back(event);
+    }
+
+    fn commit(self, bus: &mut OutputBus) {
+        bus.events.drain(..self.retained_start);
+        bus.events.extend(self.new_events);
+        bus.next_id = self.next_id;
+        bus.next_transfer_id = self.next_transfer_id;
+        bus.floor_cursor = self.floor_cursor;
+        bus.active_binding = self.active_binding;
+        bus.pending_baseline = self.pending_baseline;
+    }
+}
+
+fn append_staged_output_events(
+    bus: &OutputBus,
+    staged: &mut OutputPushStage,
+    binding: crate::ProductDevRuntimeBinding,
+    outputs: Vec<ProductDevRuntimeOutput>,
+) -> Result<(), ProductDevHostError> {
     let mut encoded_events = Vec::new();
-    let mut next_transfer_id = bus.next_transfer_id;
+    let mut next_transfer_id = staged.next_transfer_id;
     let encoded = serde_json::to_string(&serde_json::json!({
         "kind": "runtime-output-batch",
         "outputs": outputs,
@@ -2213,27 +2270,25 @@ fn append_output_events(
             "encoded output batch exceeds the retained event count",
         ));
     }
-    let final_id = bus
+    let final_id = staged
         .next_id
         .checked_add(encoded_events.len() as u64)
         .ok_or_else(|| {
             ProductDevHostError::new("DEV_HOST_OUTPUT_ID", "output sequence exhausted")
         })?;
     for encoded in encoded_events {
-        bus.next_id += 1;
-        if bus.events.len() == MAX_OUTPUT_QUEUE_ITEMS {
-            if let Some(evicted) = bus.events.pop_front() {
-                bus.floor_cursor = evicted.id;
-            }
-        }
-        bus.events.push_back(OutputEvent {
-            id: bus.next_id,
-            event: encoded.event,
-            json: encoded.json,
-        });
+        staged.next_id += 1;
+        staged.push_event(
+            bus,
+            OutputEvent {
+                id: staged.next_id,
+                event: encoded.event,
+                json: encoded.json,
+            },
+        );
     }
-    debug_assert_eq!(bus.next_id, final_id);
-    bus.next_transfer_id = next_transfer_id;
+    debug_assert_eq!(staged.next_id, final_id);
+    staged.next_transfer_id = next_transfer_id;
     Ok(())
 }
 
@@ -2752,11 +2807,8 @@ mod tests {
             ..OutputBus::default()
         };
         for tick in 0..RECEIPTS {
-            push_outputs_staged(
-                &mut bus,
-                representative_realtime_receipt(tick as u64),
-            )
-            .expect("representative realtime receipt publishes");
+            push_outputs_staged(&mut bus, representative_realtime_receipt(tick as u64))
+                .expect("representative realtime receipt publishes");
         }
 
         let mut sse_delivery_callbacks = 0;
@@ -2772,16 +2824,12 @@ mod tests {
                 .as_array()
                 .expect("retained event contains typed outputs");
             assert_eq!(outputs.len(), OUTPUTS_PER_RECEIPT);
-            dispatched_kinds.extend(
-                outputs
-                    .iter()
-                    .map(|output| {
-                        output["kind"]
-                            .as_str()
-                            .expect("typed output kind")
-                            .to_owned()
-                    }),
-            );
+            dispatched_kinds.extend(outputs.iter().map(|output| {
+                output["kind"]
+                    .as_str()
+                    .expect("typed output kind")
+                    .to_owned()
+            }));
         }
 
         assert_eq!(sse_delivery_callbacks, RECEIPTS);
@@ -2805,6 +2853,176 @@ mod tests {
             sse_delivery_callbacks < RECEIPTS * OUTPUTS_PER_RECEIPT,
             "one SSE delivery per receipt is materially below one per contained output",
         );
+    }
+
+    #[test]
+    fn full_queue_publication_shares_retained_payloads_and_reports_throughput() {
+        const MEASURED_PUBLISHES: usize = 120;
+        let runtime = binding();
+        let large_payload = "x".repeat(MAX_OUTPUT_EVENT_BYTES + 1);
+        let mut large_probe = OutputBus::default();
+        append_output_events(
+            &mut large_probe,
+            runtime,
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"payload": large_payload}),
+            )],
+        )
+        .expect("representative large output fragments");
+        let large_event_count = large_probe.events.len();
+        assert!(large_event_count > 1);
+
+        let mut bus = OutputBus {
+            active_binding: Some(runtime),
+            ..OutputBus::default()
+        };
+        for sequence in 0..MAX_OUTPUT_QUEUE_ITEMS - large_event_count {
+            push_outputs_staged(
+                &mut bus,
+                vec![ProductDevRuntimeOutput::test_frame_value(
+                    serde_json::json!({"sequence": sequence}),
+                )],
+            )
+            .expect("representative small output publishes");
+        }
+        let large_ids = large_probe
+            .events
+            .iter()
+            .map(|event| event.id + bus.next_id)
+            .collect::<Vec<_>>();
+        append_output_events(
+            &mut bus,
+            runtime,
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_EVENT_BYTES + 1)}),
+            )],
+        )
+        .expect("large fragmented output fills retained queue");
+        assert_eq!(bus.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(
+            bus.events
+                .iter()
+                .filter(|event| event.event == Some("rusty-output-fragment"))
+                .count(),
+            large_event_count
+        );
+        let retained_bytes = bus
+            .events
+            .iter()
+            .map(|event| event.json.len())
+            .sum::<usize>();
+        let retained_payloads = large_ids
+            .iter()
+            .map(|id| {
+                let event = bus
+                    .events
+                    .iter()
+                    .find(|event| event.id == *id)
+                    .expect("large event is retained");
+                (*id, event.json.as_ptr(), event.json.len())
+            })
+            .collect::<Vec<_>>();
+        let initial_floor = bus.floor_cursor;
+        let initial_next_id = bus.next_id;
+
+        let started = Instant::now();
+        for sequence in 0..MEASURED_PUBLISHES {
+            push_outputs_staged(
+                &mut bus,
+                vec![ProductDevRuntimeOutput::test_frame_value(
+                    serde_json::json!({"measuredSequence": sequence}),
+                )],
+            )
+            .expect("measured output publishes");
+        }
+        let elapsed = started.elapsed();
+
+        assert_eq!(bus.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(bus.floor_cursor, initial_floor + MEASURED_PUBLISHES as u64);
+        assert_eq!(bus.next_id, initial_next_id + MEASURED_PUBLISHES as u64);
+        let reconnect = bus.after(bus.floor_cursor);
+        assert_eq!(reconnect.floor_cursor, bus.floor_cursor);
+        assert_eq!(reconnect.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(reconnect.events.first().map(|event| event.id), Some(121));
+        assert_eq!(
+            reconnect.events.last().map(|event| event.id),
+            Some(bus.next_id)
+        );
+        for (id, pointer, length) in retained_payloads {
+            let event = bus
+                .events
+                .iter()
+                .find(|event| event.id == id)
+                .expect("large fragmented payload survives the measurement window");
+            assert_eq!(
+                event.json.as_ptr(),
+                pointer,
+                "retained JSON was reallocated"
+            );
+            assert_eq!(event.json.len(), length);
+        }
+        eprintln!(
+            "output-bus full_queue={} retained_bytes={} large_fragments={} publishes={} elapsed_us={} ns_per_publish={}",
+            bus.events.len(),
+            retained_bytes,
+            large_event_count,
+            MEASURED_PUBLISHES,
+            elapsed.as_micros(),
+            elapsed.as_nanos() / MEASURED_PUBLISHES as u128,
+        );
+    }
+
+    #[test]
+    fn failed_multi_segment_receipt_preserves_history_and_fences_binding() {
+        let active_runtime = binding();
+        let replacement_runtime = crate::ProductDevRuntimeBinding {
+            generation: CanonicalU64::new(2),
+            ..active_runtime
+        };
+        let bus = Mutex::new(OutputBus {
+            active_binding: Some(active_runtime),
+            ..OutputBus::default()
+        });
+        push_outputs(
+            &bus,
+            vec![ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"retained": true}),
+            )],
+        )
+        .expect("initial incremental output publishes");
+        let (retained_id, retained_pointer, retained_length, next_id, floor_cursor) = {
+            let locked = bus.lock().expect("test bus lock");
+            let retained = locked.events.front().expect("retained event");
+            (
+                retained.id,
+                retained.json.as_ptr(),
+                retained.json.len(),
+                locked.next_id,
+                locked.floor_cursor,
+            )
+        };
+
+        let error = push_outputs(
+            &bus,
+            vec![
+                ProductDevRuntimeOutput::runtime_progress(),
+                ProductDevRuntimeOutput::binding(replacement_runtime, CanonicalU64::new(0)),
+                ProductDevRuntimeOutput::binding(replacement_runtime, CanonicalU64::new(0)),
+            ],
+        )
+        .expect_err("second binding rejects the complete receipt");
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
+
+        let locked = bus.lock().expect("test bus lock");
+        assert_eq!(locked.events.len(), 1);
+        let retained = locked.events.front().expect("retained event survives");
+        assert_eq!(retained.id, retained_id);
+        assert_eq!(retained.json.as_ptr(), retained_pointer);
+        assert_eq!(retained.json.len(), retained_length);
+        assert_eq!(locked.next_id, next_id);
+        assert_eq!(locked.floor_cursor, floor_cursor);
+        assert!(locked.active_binding.is_none());
+        assert!(locked.pending_baseline.is_none());
     }
 
     #[test]
