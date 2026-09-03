@@ -19585,6 +19585,14 @@ var M_ = 31, N_ = 4096, P_ = 2, F_ = class {
 	textureResourceReadout() {
 		return Object.freeze([...this.#D.values()].map((e) => Object.freeze({ ...e.readout })).sort((e, t) => e.id.localeCompare(t.id)));
 	}
+	skyBackgroundReadout() {
+		let e = this.#O, t = e === null ? void 0 : this.#D.get(e);
+		return Object.freeze({
+			textureId: e,
+			contentHash: t?.readout.contentHash ?? null,
+			resource: t?.readout.resource ?? null
+		});
+	}
 	voxelSurfaceMaterialReadout() {
 		return Object.freeze([...this.#w].map((e) => e.userData.rustyVoxelSurface).filter((e) => e !== void 0).map((e) => Object.freeze(structuredClone(e))).sort((e, t) => e.material.localeCompare(t.material)));
 	}
@@ -23860,6 +23868,7 @@ function bS(e, t, n = {}) {
 				pacing: l,
 				resources: Object.freeze({
 					definedTextureCount: t.textures.length,
+					skyBackground: s.renderer.skyBackgroundReadout(),
 					realizedTextures: Object.freeze(s.renderer.textureResourceReadout().map((e) => Object.freeze({
 						id: e.id,
 						resource: e.resource,

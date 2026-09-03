@@ -208,6 +208,7 @@ fn renderer_diagnostics_summary(snapshot: Option<&str>, widget_visible: bool) ->
         "statistics": value(&["submission", "statistics"]),
         "resources": {
             "definedTextureCount": value(&["resources", "definedTextureCount"]),
+            "skyBackground": value(&["resources", "skyBackground"]),
             "spriteAtlasCount": value(&["resources", "spriteAtlasCount"]),
             "spriteFallbackCount": value(&["resources", "spriteFallbackCount"]),
             "materialFallbackCount": value(&["resources", "materialFallbackCount"]),
@@ -5491,6 +5492,11 @@ mod tests {
             },
             "resources": {
                 "definedTextureCount": 1000,
+                "skyBackground": {
+                    "textureId": "texture/sky",
+                    "contentHash": "sha256:sky",
+                    "resource": "texture-resource/sky"
+                },
                 "realizedTextures": realized_textures,
                 "spriteAtlasCount": 1,
                 "spriteFallbackCount": 0,
@@ -5508,6 +5514,14 @@ mod tests {
         );
         assert_eq!(summary["widget"]["visible"], true);
         assert_eq!(summary["frame"]["submissionRateHz"], 50.0);
+        assert_eq!(
+            summary["resources"]["skyBackground"]["textureId"],
+            "texture/sky"
+        );
+        assert_eq!(
+            summary["resources"]["skyBackground"]["resource"],
+            "texture-resource/sky"
+        );
         assert!(summary["resources"].get("realizedTextures").is_none());
 
         let detail = renderer_diagnostics_detail(Some(&encoded), true, Some(9));
