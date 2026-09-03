@@ -48,10 +48,4 @@
           Condition="'$(RustyEngineUseSourceDevelopment)' == 'true' and '$(RustyEngineSourceDevelopmentPath)' == ''">
     <Error Text="RustyEngineUseSourceDevelopment=true requires an explicit RustyEngineSourceDevelopmentPath; source checkouts are never discovered automatically." />
   </Target>
-  <ItemGroup Condition="'$(RustyEngineUseSourceDevelopment)' == 'true' and '$(RustyEngineSourceDevelopmentPath)' != ''">
-    <ProjectReference Include="$(RustyEngineSourceDevelopmentPath)/csharp/Rusty.Engine/Rusty.Engine.csproj" />
-    <ProjectReference Include="$(RustyEngineSourceDevelopmentPath)/csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
-                      OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false" />
-  </ItemGroup>
 </Project>

@@ -2,9 +2,11 @@
 set -euo pipefail
 
 # Focused external-consumer proof for a published C# SDK/runtime pair.  The
-# fixture lives entirely outside the checkout and restores only from the pair's
-# embedded feed, so Cargo, generator inputs, and Engine browser files cannot be
-# accidental product dependencies.
+# fixture lives entirely outside the checkout and restores Rusty.Engine only
+# from the pair's embedded feed, so Cargo, generator inputs, and Engine browser
+# files cannot be accidental product dependencies. Standard .NET platform
+# reference packs may still resolve from NuGet on machines that do not bundle
+# them with the installed SDK.
 
 if [[ $# -ne 1 ]]; then
     echo "usage: scripts/test-csharp-release-pair.sh <pair.tar.gz>" >&2
@@ -43,7 +45,7 @@ mkdir -p "$consumer/product-ui/assets" "$consumer/content"
 
 cat > "$consumer/NuGet.Config" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
-<configuration><packageSources><clear /><add key="rusty-engine-pair" value="$feed" /></packageSources></configuration>
+<configuration><packageSources><clear /><add key="rusty-engine-pair" value="$feed" /><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>
 EOF
 cat > "$consumer/PairConsumer.csproj" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
@@ -87,7 +89,7 @@ mkdir -p "$consumer_home" "$consumer_packages"
 (
     cd "$consumer"
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-        dotnet restore PairConsumer.csproj --configfile NuGet.Config --ignore-failed-sources
+        dotnet restore PairConsumer.csproj --configfile NuGet.Config
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
         dotnet build PairConsumer.csproj --no-restore
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
