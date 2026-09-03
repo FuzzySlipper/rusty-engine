@@ -6,7 +6,7 @@ use std::{
         Arc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use product_dev_host::{
@@ -817,6 +817,62 @@ fn sse_receives_runtime_receipt_outputs_without_blocking_post() {
     assert!(output.contains("Content-Type: text/event-stream\r\n"));
     assert!(output.contains("data: {\"kind\":\"binding\""));
     assert!(output.contains("\"nextInputSequence\":\"0\""));
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn sse_delivers_realtime_progress_at_publication_cadence() {
+    let host = start_reconnect(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let mut stream = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let baseline = read_until(&mut stream, "\"operation\":\"start\"");
+    assert!(baseline.contains("HTTP/1.1 200 OK\r\n"), "{baseline}");
+
+    stream
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .unwrap();
+    let origin = host.origin();
+    let publisher = thread::spawn(move || {
+        for observed_time in 1..=7 {
+            thread::sleep(Duration::from_micros(16_667));
+            let body = format!("{{\"observedTimeNs\":\"{observed_time}\"}}");
+            let response = request(
+                &origin,
+                &format!(
+                    "POST /__rusty/product/runtime/advance-realtime HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            );
+            assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        }
+    });
+    let mut pending = String::new();
+    let mut arrivals = Vec::new();
+    while arrivals.len() < 7 {
+        let mut bytes = [0_u8; 2_048];
+        let count = stream.read(&mut bytes).unwrap();
+        assert_ne!(count, 0, "SSE stream closed during cadence observation");
+        pending.push_str(std::str::from_utf8(&bytes[..count]).unwrap());
+        while let Some(end) = pending.find("\n\n") {
+            let record = pending[..end].to_owned();
+            pending.drain(..end + 2);
+            if record.contains("\"kind\":\"runtime-readout\"") {
+                arrivals.push(Instant::now());
+            }
+        }
+    }
+    publisher.join().unwrap();
+
+    let mut intervals = arrivals
+        .windows(2)
+        .map(|pair| pair[1].duration_since(pair[0]))
+        .collect::<Vec<_>>();
+    intervals.sort_unstable();
+    let median = intervals[intervals.len() / 2];
+    assert!(
+        median < Duration::from_millis(22),
+        "60 Hz publications were still delivered in poll-sized bursts: {intervals:?}"
+    );
+    drop(stream);
     host.shutdown().unwrap();
 }
 
