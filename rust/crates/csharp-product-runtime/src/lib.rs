@@ -43,6 +43,7 @@ use product_dev_host::{
     ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeOutput,
     ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    ProductDevUpdateAttribution,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -987,6 +988,7 @@ pub struct CsharpProductRuntime {
     renderer_diagnostics_received_at: Option<Instant>,
     shutdown_called: bool,
     diagnostics: ProductDevLog,
+    pending_update_attribution: Option<ProductDevUpdateAttribution>,
 }
 
 // The development host serializes every call with one mutex. The native handle
@@ -1229,6 +1231,7 @@ impl CsharpProductRuntime {
             renderer_diagnostics_received_at: None,
             shutdown_called: false,
             diagnostics: config.diagnostics,
+            pending_update_attribution: None,
         })
     }
 
@@ -2048,7 +2051,8 @@ impl CsharpProductRuntime {
             .collect();
         self.services
             .begin_update_call(ui_binding(&self.lifecycle), facts);
-        let result = match call_update(
+        let callback_started = Instant::now();
+        let callback_result = call_update(
             &self.api,
             self.handle,
             NativeProductUpdateArgs {
@@ -2056,7 +2060,16 @@ impl CsharpProductRuntime {
                 events: events.as_ptr(),
                 event_count: events.len(),
             },
-        ) {
+        );
+        let callback_duration_us = callback_started
+            .elapsed()
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
+        self.pending_update_attribution = Some(
+            self.services
+                .complete_update_attribution(callback_duration_us),
+        );
+        let result = match callback_result {
             Ok(result) => result,
             Err(error) => {
                 let error = prefer_engine_call_error(&mut self.services, error);
@@ -2621,6 +2634,10 @@ impl CsharpProductRuntime {
 }
 
 impl ProductDevRuntime for CsharpProductRuntime {
+    fn take_update_attribution(&mut self) -> Option<ProductDevUpdateAttribution> {
+        self.pending_update_attribution.take()
+    }
+
     fn realtime_schedule_state(&self) -> ProductDevRuntimeScheduleState {
         if !matches!(self.lifecycle.mode(), RuntimeMode::Realtime) {
             return ProductDevRuntimeScheduleState::Unsupported;

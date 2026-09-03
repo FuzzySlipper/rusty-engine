@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use core_math::Vec3;
 use csharp_engine_abi::*;
 use entity_state::Quat;
+use product_dev_host::{CanonicalU64, ProductDevUpdateAttribution};
 
 use crate::{
     audio::{AudioRealizationFact, RuntimeAudioBridge, RuntimeAudioCall},
@@ -387,8 +388,31 @@ impl EngineServiceSet {
         ui_binding: RuntimeUiRuntimeBinding,
         facts: NativeProductUpdateFacts,
     ) {
+        self.spatial.reset_update_attribution();
+        self.voxel_scene_presentation.reset_update_attribution();
         self.appearance.begin_update_call(facts);
         self.begin_other_services(ui_binding);
+    }
+
+    /// Returns one completed update sample after the C# callback has returned.
+    /// Service durations are nested within `callback_duration_us`, not additive
+    /// frame stages.
+    pub fn complete_update_attribution(
+        &self,
+        callback_duration_us: u64,
+    ) -> ProductDevUpdateAttribution {
+        let spatial = self.spatial.update_attribution();
+        let presentation = self.voxel_scene_presentation.update_attribution();
+        ProductDevUpdateAttribution {
+            callback_duration_us: CanonicalU64::new(callback_duration_us),
+            character_step_calls: spatial.character_step_calls,
+            character_step_duration_us: spatial.character_step_duration_us,
+            character_step_cast_count: spatial.character_step_cast_count,
+            voxel_residency_calls: spatial.voxel_residency_calls,
+            voxel_residency_duration_us: spatial.voxel_residency_duration_us,
+            voxel_scene_presentation_calls: presentation.voxel_scene_presentation_calls,
+            voxel_scene_presentation_duration_us: presentation.voxel_scene_presentation_duration_us,
+        }
     }
 
     fn begin_other_services(&mut self, ui_binding: RuntimeUiRuntimeBinding) {

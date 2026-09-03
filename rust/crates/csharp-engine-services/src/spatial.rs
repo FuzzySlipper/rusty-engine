@@ -4,6 +4,7 @@ use std::{
     ffi::c_void,
     rc::Rc,
     sync::Arc,
+    time::Instant,
 };
 
 use core_ids::EntityId;
@@ -24,6 +25,7 @@ use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityAuthoringService, EntityDefinition,
     EntityState, EntityTransform, Quat,
 };
+use product_dev_host::{CanonicalU64, ProductDevUpdateAttribution};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use svc_pathfinding::{
@@ -147,6 +149,7 @@ pub(crate) struct RuntimeSpatialBridge {
     pub(crate) kinematic_motion_leases:
         BTreeMap<u64, crate::kinematic::KinematicMotionLeaseBacking>,
     pub(crate) next_kinematic_motion_lease: u64,
+    update_attribution: ProductDevUpdateAttribution,
 }
 
 pub(crate) struct SpatialSession {
@@ -415,11 +418,56 @@ impl RuntimeSpatialBridge {
             next_world_origin_prepared: 1,
             kinematic_motion_leases: BTreeMap::new(),
             next_kinematic_motion_lease: 1,
+            update_attribution: ProductDevUpdateAttribution::default(),
         }
     }
 
     pub(crate) fn collision_source(&self) -> SpatialCollisionSource {
         self.collision_source.clone()
+    }
+
+    pub(crate) fn reset_update_attribution(&mut self) {
+        self.update_attribution = ProductDevUpdateAttribution::default();
+    }
+
+    pub(crate) fn update_attribution(&self) -> ProductDevUpdateAttribution {
+        self.update_attribution
+    }
+
+    fn record_character_step_attribution(&mut self, duration_us: u64, cast_count: u64) {
+        self.update_attribution.character_step_calls = CanonicalU64::new(
+            self.update_attribution
+                .character_step_calls
+                .get()
+                .saturating_add(1),
+        );
+        self.update_attribution.character_step_duration_us = CanonicalU64::new(
+            self.update_attribution
+                .character_step_duration_us
+                .get()
+                .saturating_add(duration_us),
+        );
+        self.update_attribution.character_step_cast_count = CanonicalU64::new(
+            self.update_attribution
+                .character_step_cast_count
+                .get()
+                .saturating_add(cast_count),
+        );
+    }
+
+    pub(crate) fn record_voxel_residency_attribution(&mut self, duration_us: u64) {
+        self.update_attribution.voxel_residency_calls = CanonicalU64::new(
+            self.update_attribution
+                .voxel_residency_calls
+                .get()
+                .saturating_add(1),
+        );
+        self.update_attribution.voxel_residency_duration_us = CanonicalU64::new(
+            self.update_attribution
+                .voxel_residency_duration_us
+                .get()
+                .saturating_add(duration_us),
+        );
     }
 
     pub(crate) fn bind_content(&mut self, content: &crate::content::RuntimeContentBridge) {
@@ -3582,7 +3630,14 @@ unsafe extern "C" fn propose_character_step(
     }
     let request = unsafe { *request };
     let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
-    match bridge.propose_character(request) {
+    let started = Instant::now();
+    let result = bridge.propose_character(request);
+    let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    let cast_count = result
+        .as_ref()
+        .map_or(0, |receipt| u64::from(receipt.cast_count));
+    bridge.record_character_step_attribution(duration_us, cast_count);
+    match result {
         Ok(value) => {
             unsafe { *receipt = value };
             ABI_OK

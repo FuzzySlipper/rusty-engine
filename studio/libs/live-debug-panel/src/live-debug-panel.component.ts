@@ -123,6 +123,11 @@ let nextLiveDebugPanelInstance = 1;
           <strong>Product/runtime lane</strong>
           <span>In flight: {{ telemetry.inFlightOperation || 'none' }} · age {{ milliseconds(telemetry.inFlightAgeMs) }}</span>
           <span>Admission: product {{ milliseconds(telemetry.lastProductAdmissionLatencyMs) }} · input {{ milliseconds(telemetry.lastInputAdmissionLatencyMs) }}</span>
+          <ng-container *ngIf="telemetry.updateAttribution as attribution">
+            <span>C# update callback ({{ attribution.sampleCount }} retained): p50 {{ microseconds(attribution.callbackDurationUsP50) }} · p95 {{ microseconds(attribution.callbackDurationUsP95) }} · rolling max {{ microseconds(attribution.callbackDurationUsMax) }}</span>
+            <span>Rolling slowest callback {{ microseconds(attribution.rollingSlowest.callbackDurationUs) }} · {{ milliseconds(attribution.rollingSlowestAgeMs) }} ago. Nested service totals: character {{ attribution.rollingSlowest.characterStepCalls }} call(s), {{ microseconds(attribution.rollingSlowest.characterStepDurationUs) }}, {{ attribution.rollingSlowest.characterStepCastCount }} controller cast(s); residency {{ attribution.rollingSlowest.voxelResidencyCalls }} call(s), {{ microseconds(attribution.rollingSlowest.voxelResidencyDurationUs) }}; scene presentation {{ attribution.rollingSlowest.voxelScenePresentationCalls }} call(s), {{ microseconds(attribution.rollingSlowest.voxelScenePresentationDurationUs) }}.</span>
+            <span>Lifetime slowest callback {{ microseconds(attribution.slowest.callbackDurationUs) }} · {{ milliseconds(attribution.slowestAgeMs) }} ago.</span>
+          </ng-container>
           <span>Input queue: {{ telemetry.queuedInputBatches }}/{{ telemetry.inputBatchCapacity }} batches · {{ telemetry.queuedInputEvents }} events · oldest {{ milliseconds(telemetry.oldestInputAgeMs) }}<ng-container *ngIf="telemetry.inputOverflowPending"> · overflow pending</ng-container></span>
           <span>Runtime progress: {{ millihertz(telemetry.runtimeProgressRateMillihertz) }} · last {{ milliseconds(telemetry.runtimeProgressAgeMs) }}</span>
           <span>Transport: {{ telemetry.connections }} connection(s) · {{ telemetry.subscribers }} subscriber(s) · retained output history {{ telemetry.outputQueueItems }}/{{ telemetry.outputQueueCapacity }} · advancing floor {{ telemetry.outputQueueFloor }} · binding {{ telemetry.outputBindingActive ? 'active' : 'inactive' }}</span>
@@ -308,6 +313,10 @@ export class LiveDebugPanelComponent implements OnDestroy {
 
   milliseconds(value: string | null): string {
     return value === null || !/^\d+$/u.test(value) ? 'unavailable' : `${value} ms`;
+  }
+
+  microseconds(value: string): string {
+    return /^\d+$/u.test(value) ? `${value} us` : 'unavailable';
   }
 
   clearTranscript(): void {

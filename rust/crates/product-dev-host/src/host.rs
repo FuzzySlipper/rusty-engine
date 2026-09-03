@@ -22,9 +22,10 @@ use crate::{
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
     ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
     ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevTelemetrySnapshot,
-    ProductDevTimelineCompletion, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
-    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
-    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevTimelineCompletion, ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot,
+    MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES,
+    MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES,
+    MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -288,11 +289,14 @@ struct HostTelemetry {
     last_product_admission_latency_ms: Option<u64>,
     last_input_admission_latency_ms: Option<u64>,
     progress_samples_ns: VecDeque<u64>,
+    update_attribution_samples: VecDeque<(u64, ProductDevUpdateAttribution)>,
+    slowest_update_attribution: Option<(u64, ProductDevUpdateAttribution)>,
 }
 
 impl HostTelemetry {
     const MAX_PROGRESS_SAMPLES: usize = 32;
     const PROGRESS_WINDOW_NS: u64 = 5_000_000_000;
+    const MAX_UPDATE_ATTRIBUTION_SAMPLES: usize = 2_048;
 
     fn begin(&mut self, operation: ProductDevOperationKind, started_ns: u64) {
         self.in_flight_operation = Some(operation);
@@ -328,6 +332,63 @@ impl HostTelemetry {
         {
             self.progress_samples_ns.pop_front();
         }
+    }
+
+    fn record_update_attribution(
+        &mut self,
+        completed_ns: u64,
+        sample: ProductDevUpdateAttribution,
+    ) {
+        self.update_attribution_samples
+            .push_back((completed_ns, sample));
+        while self.update_attribution_samples.len() > Self::MAX_UPDATE_ATTRIBUTION_SAMPLES {
+            self.update_attribution_samples.pop_front();
+        }
+        if self.slowest_update_attribution.is_none_or(|(_, slowest)| {
+            sample.callback_duration_us.get() > slowest.callback_duration_us.get()
+        }) {
+            self.slowest_update_attribution = Some((completed_ns, sample));
+        }
+    }
+
+    fn update_attribution_snapshot(
+        &self,
+        now_ns: u64,
+    ) -> Option<ProductDevUpdateAttributionSnapshot> {
+        let (_, latest) = *self.update_attribution_samples.back()?;
+        let mut durations = self
+            .update_attribution_samples
+            .iter()
+            .map(|(_, sample)| sample.callback_duration_us.get())
+            .collect::<Vec<_>>();
+        durations.sort_unstable();
+        let percentile = |numerator: usize, denominator: usize| {
+            durations[(durations.len().saturating_sub(1)).saturating_mul(numerator) / denominator]
+        };
+        let (rolling_slowest_ns, rolling_slowest) = self
+            .update_attribution_samples
+            .iter()
+            .copied()
+            .max_by_key(|(_, sample)| sample.callback_duration_us.get())
+            .expect("a non-empty attribution window has a slowest sample");
+        let (slowest_ns, slowest) = self.slowest_update_attribution.unwrap_or((now_ns, latest));
+        Some(ProductDevUpdateAttributionSnapshot {
+            sample_count: CanonicalU64::new(self.update_attribution_samples.len() as u64),
+            callback_duration_us_p50: CanonicalU64::new(percentile(50, 100)),
+            callback_duration_us_p95: CanonicalU64::new(percentile(95, 100)),
+            callback_duration_us_max: CanonicalU64::new(*durations.last().unwrap_or(&0)),
+            latest,
+            rolling_slowest,
+            rolling_slowest_age_ms: CanonicalU64::new(
+                now_ns
+                    .saturating_sub(rolling_slowest_ns)
+                    .saturating_div(1_000_000),
+            ),
+            slowest,
+            slowest_age_ms: CanonicalU64::new(
+                now_ns.saturating_sub(slowest_ns).saturating_div(1_000_000),
+            ),
+        })
     }
 
     fn snapshot(
@@ -378,6 +439,7 @@ impl HostTelemetry {
             output_queue_capacity: MAX_OUTPUT_QUEUE_ITEMS,
             output_queue_floor: CanonicalU64::new(transport.output_queue_floor),
             output_binding_active: transport.output_binding_active,
+            update_attribution: self.update_attribution_snapshot(now_ns),
         }
     }
 }
@@ -659,7 +721,8 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             },
         );
         match input_errors {
-            Ok(errors) => {
+            Ok((errors, attribution)) => {
+                record_update_attribution(&state, attribution);
                 for error in errors {
                     publish_host_diagnostic(
                         &state.diagnostics,
@@ -1597,6 +1660,21 @@ fn finish_telemetry<R: ProductDevRuntime>(
     }
 }
 
+fn record_update_attribution<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    attribution: Option<ProductDevUpdateAttribution>,
+) {
+    let Some(attribution) = attribution else {
+        return;
+    };
+    let Some(completed_ns) = state.diagnostics.now_monotonic_nanoseconds() else {
+        return;
+    };
+    if let Ok(mut telemetry) = state.telemetry.lock() {
+        telemetry.record_update_attribution(completed_ns, attribution);
+    }
+}
+
 fn call_runtime<R, T, F, E>(
     state: &HostState<R>,
     operation: ProductDevOperationKind,
@@ -1630,12 +1708,12 @@ where
                     )
                     .expect("runtime diagnostics are bounded"),
                 );
-                return Ok(match error_result(error) {
+                return Ok((match error_result(error) {
                     Ok(result) => json_response(200, &result),
                     Err(host_error) => {
                         HttpResponse::error(500, host_error.code(), host_error.detail())
                     }
-                });
+                }, runtime.take_update_attribution()));
             }
         };
         let (result, outputs) = receipt.into_parts();
@@ -1652,7 +1730,7 @@ where
                     "runtime result could not be encoded after mutation; reconnect for a fresh readout instead of replaying",
                     [("cause", error.code().to_owned())],
                 );
-                return Ok(HttpResponse::error(500, error.code(), error.detail()));
+                return Ok((HttpResponse::error(500, error.code(), error.detail()), runtime.take_update_attribution()));
             }
         };
         let output_through = match push_host_outputs(state, outputs) {
@@ -1670,17 +1748,20 @@ where
                     "retained output publication failed after an authoritative runtime receipt; reconnect for a fresh readout instead of replaying",
                     [("cause", error.code().to_owned())],
                 );
-                return Ok(HttpResponse::bytes(200, "application/json", encoded_result)
-                    .with_resync_required());
+                return Ok((HttpResponse::bytes(200, "application/json", encoded_result)
+                    .with_resync_required(), runtime.take_update_attribution()));
             }
         };
-        Ok(HttpResponse::bytes(200, "application/json", encoded_result)
-            .with_output_through(output_through))
+        Ok((HttpResponse::bytes(200, "application/json", encoded_result)
+            .with_output_through(output_through), runtime.take_update_attribution()))
         },
         || finish_telemetry(state, operation),
     );
     match response {
-        Ok(response) => response,
+        Ok((response, attribution)) => {
+            record_update_attribution(state, attribution);
+            response
+        }
         Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
     }
 }
@@ -2400,6 +2481,35 @@ mod tests {
         assert_eq!(wire["outputQueueItems"], MAX_OUTPUT_QUEUE_ITEMS);
         assert_eq!(wire["runtimeProgressRateMillihertz"], "500");
         assert!(serde_json::to_vec(&snapshot).unwrap().len() < 4 * 1024);
+    }
+
+    #[test]
+    fn update_attribution_retains_a_long_window_and_lifetime_slowest_sample() {
+        let mut telemetry = HostTelemetry::default();
+        let sample = |duration_us| ProductDevUpdateAttribution {
+            callback_duration_us: CanonicalU64::new(duration_us),
+            ..ProductDevUpdateAttribution::default()
+        };
+        telemetry.record_update_attribution(1, sample(9_000));
+        for duration_us in 1_u64..=2_049 {
+            telemetry.record_update_attribution(duration_us * 1_000_000, sample(duration_us));
+        }
+
+        let snapshot = telemetry
+            .update_attribution_snapshot(3_000_000_000)
+            .expect("completed update samples are retained");
+        assert_eq!(snapshot.sample_count, CanonicalU64::new(2_048));
+        assert_eq!(snapshot.callback_duration_us_max, CanonicalU64::new(2_049));
+        assert_eq!(
+            snapshot.rolling_slowest.callback_duration_us,
+            CanonicalU64::new(2_049)
+        );
+        assert_eq!(snapshot.rolling_slowest_age_ms, CanonicalU64::new(951));
+        assert_eq!(
+            snapshot.slowest.callback_duration_us,
+            CanonicalU64::new(9_000)
+        );
+        assert_eq!(snapshot.slowest_age_ms, CanonicalU64::new(2_999));
     }
 
     #[test]

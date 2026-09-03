@@ -68,6 +68,30 @@ export interface LiveDebugTelemetrySnapshot {
     readonly outputQueueCapacity: number;
     readonly outputQueueFloor: string;
     readonly outputBindingActive: boolean;
+    /** Completed C# update samples. Service time is nested in callback time. */
+    readonly updateAttribution: LiveDebugUpdateAttributionSnapshot | null;
+}
+export interface LiveDebugUpdateAttribution {
+    readonly callbackDurationUs: string;
+    readonly characterStepCalls: string;
+    readonly characterStepDurationUs: string;
+    /** Logical character-controller casts, not narrow-phase work. */
+    readonly characterStepCastCount: string;
+    readonly voxelResidencyCalls: string;
+    readonly voxelResidencyDurationUs: string;
+    readonly voxelScenePresentationCalls: string;
+    readonly voxelScenePresentationDurationUs: string;
+}
+export interface LiveDebugUpdateAttributionSnapshot {
+    readonly sampleCount: string;
+    readonly callbackDurationUsP50: string;
+    readonly callbackDurationUsP95: string;
+    readonly callbackDurationUsMax: string;
+    readonly latest: LiveDebugUpdateAttribution;
+    readonly rollingSlowest: LiveDebugUpdateAttribution;
+    readonly rollingSlowestAgeMs: string;
+    readonly slowest: LiveDebugUpdateAttribution;
+    readonly slowestAgeMs: string;
 }
 export interface LiveDebugTransport {
     catalog(signal?: AbortSignal): Promise<LiveDebugCatalog>;

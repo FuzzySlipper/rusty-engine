@@ -992,6 +992,58 @@ pub struct ProductDevTelemetrySnapshot {
     pub output_queue_capacity: usize,
     pub output_queue_floor: CanonicalU64,
     pub output_binding_active: bool,
+    /// Bounded attribution for completed C# update callbacks. Service totals
+    /// are nested within the callback duration, not additional frame time.
+    pub update_attribution: Option<ProductDevUpdateAttributionSnapshot>,
+}
+
+/// One complete C# update callback observation. Durations are integer
+/// microseconds so the diagnostics wire remains canonical and float-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevUpdateAttribution {
+    pub callback_duration_us: CanonicalU64,
+    pub character_step_calls: CanonicalU64,
+    pub character_step_duration_us: CanonicalU64,
+    /// Controller casts reported by character-step receipts; this is not a
+    /// low-level narrow-phase counter.
+    pub character_step_cast_count: CanonicalU64,
+    pub voxel_residency_calls: CanonicalU64,
+    pub voxel_residency_duration_us: CanonicalU64,
+    pub voxel_scene_presentation_calls: CanonicalU64,
+    pub voxel_scene_presentation_duration_us: CanonicalU64,
+}
+
+impl Default for ProductDevUpdateAttribution {
+    fn default() -> Self {
+        Self {
+            callback_duration_us: CanonicalU64::new(0),
+            character_step_calls: CanonicalU64::new(0),
+            character_step_duration_us: CanonicalU64::new(0),
+            character_step_cast_count: CanonicalU64::new(0),
+            voxel_residency_calls: CanonicalU64::new(0),
+            voxel_residency_duration_us: CanonicalU64::new(0),
+            voxel_scene_presentation_calls: CanonicalU64::new(0),
+            voxel_scene_presentation_duration_us: CanonicalU64::new(0),
+        }
+    }
+}
+
+/// Host-owned rolling distribution and long-lived slowest complete update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevUpdateAttributionSnapshot {
+    pub sample_count: CanonicalU64,
+    pub callback_duration_us_p50: CanonicalU64,
+    pub callback_duration_us_p95: CanonicalU64,
+    pub callback_duration_us_max: CanonicalU64,
+    pub latest: ProductDevUpdateAttribution,
+    /// Slowest complete callback retained in the current rolling window.
+    pub rolling_slowest: ProductDevUpdateAttribution,
+    pub rolling_slowest_age_ms: CanonicalU64,
+    /// Slowest complete callback observed for this host lifetime.
+    pub slowest: ProductDevUpdateAttribution,
+    pub slowest_age_ms: CanonicalU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2349,6 +2401,12 @@ impl<T> ProductDevRuntimeReceipt<T> {
 /// input, schedule, timeline, mutation, and projection authority. They return
 /// exact output receipts, so this trait has no subscription/callback method.
 pub trait ProductDevRuntime: Send + 'static {
+    /// Takes the one completed update-callback attribution sample, if this
+    /// runtime exposes it. The host copies it after the callback, outside its
+    /// diagnostics read path; older runtimes remain source-compatible.
+    fn take_update_attribution(&mut self) -> Option<ProductDevUpdateAttribution> {
+        None
+    }
     /// Reports whether the runtime participates in the standard Rust-host
     /// realtime scheduler. Older/demand/external runtimes remain caller
     /// driven and return `Unsupported` by default.

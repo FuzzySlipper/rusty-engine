@@ -5,9 +5,11 @@
 //! normal incremental voxel projector, and stages renderer work.  No mesh or
 //! renderer object is ever admitted from C#.
 
+use product_dev_host::{CanonicalU64, ProductDevUpdateAttribution};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
+    time::Instant,
 };
 
 use core_space::Direction6;
@@ -62,6 +64,7 @@ pub(crate) struct RuntimeVoxelScenePresentationBridge {
     state: VoxelScenePresentationState,
     staged: Option<RuntimeVoxelScenePresentationCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
+    update_attribution: ProductDevUpdateAttribution,
 }
 
 impl RuntimeVoxelScenePresentationBridge {
@@ -77,6 +80,7 @@ impl RuntimeVoxelScenePresentationBridge {
             },
             staged: None,
             appearance: None,
+            update_attribution: ProductDevUpdateAttribution::default(),
         }
     }
 
@@ -85,6 +89,29 @@ impl RuntimeVoxelScenePresentationBridge {
         // refreshed while assembling the call table and used only during the
         // synchronous generated callback.
         self.appearance = Some(appearance as *mut RuntimeAppearanceBridge);
+    }
+
+    pub(crate) fn reset_update_attribution(&mut self) {
+        self.update_attribution = ProductDevUpdateAttribution::default();
+    }
+
+    pub(crate) fn update_attribution(&self) -> ProductDevUpdateAttribution {
+        self.update_attribution
+    }
+
+    fn record_presentation_attribution(&mut self, duration_us: u64) {
+        self.update_attribution.voxel_scene_presentation_calls = CanonicalU64::new(
+            self.update_attribution
+                .voxel_scene_presentation_calls
+                .get()
+                .saturating_add(1),
+        );
+        self.update_attribution.voxel_scene_presentation_duration_us = CanonicalU64::new(
+            self.update_attribution
+                .voxel_scene_presentation_duration_us
+                .get()
+                .saturating_add(duration_us),
+        );
     }
 
     pub(crate) fn begin_call(&mut self) {
@@ -899,7 +926,12 @@ unsafe extern "C" fn project_scene(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
-    match bridge.project_scene(unsafe { *request }) {
+    let started = Instant::now();
+    let result = bridge.project_scene(unsafe { *request });
+    bridge.record_presentation_attribution(
+        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    );
+    match result {
         Ok(handle) => {
             unsafe { *output = handle };
             ABI_OK
@@ -917,7 +949,12 @@ unsafe extern "C" fn project_scene_directional(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
-    match bridge.project_scene_directional(unsafe { *request }) {
+    let started = Instant::now();
+    let result = bridge.project_scene_directional(unsafe { *request });
+    bridge.record_presentation_attribution(
+        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    );
+    match result {
         Ok(handle) => {
             unsafe { *output = handle };
             ABI_OK
@@ -935,7 +972,11 @@ unsafe extern "C" fn refresh_scene(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
-    match bridge.refresh(handle) {
+    let started = Instant::now();
+    let result = bridge.refresh(handle);
+    let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    bridge.record_presentation_attribution(duration_us);
+    match result {
         Ok(readout) => {
             unsafe { *output = readout };
             ABI_OK
@@ -953,7 +994,12 @@ unsafe extern "C" fn update_scene(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
-    match bridge.update(unsafe { *request }) {
+    let started = Instant::now();
+    let result = bridge.update(unsafe { *request });
+    bridge.record_presentation_attribution(
+        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    );
+    match result {
         Ok(readout) => {
             unsafe { *output = readout };
             ABI_OK
@@ -971,7 +1017,12 @@ unsafe extern "C" fn update_scene_directional(
         return 0;
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelScenePresentationBridge>() };
-    match bridge.update_directional(unsafe { *request }) {
+    let started = Instant::now();
+    let result = bridge.update_directional(unsafe { *request });
+    bridge.record_presentation_attribution(
+        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    );
+    match result {
         Ok(readout) => {
             unsafe { *output = readout };
             ABI_OK
@@ -1170,6 +1221,11 @@ mod tests {
                 )
             },
             ABI_OK
+        );
+        let attribution = bridge.update_attribution();
+        assert_eq!(
+            attribution.voxel_scene_presentation_calls,
+            CanonicalU64::new(1)
         );
         let staged = bridge
             .take_staged_call()

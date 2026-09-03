@@ -401,6 +401,36 @@ struct DiagnosticsTelemetryWire {
     output_queue_capacity: usize,
     output_queue_floor: String,
     output_binding_active: bool,
+    update_attribution: Option<DiagnosticsUpdateAttributionWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct DiagnosticsUpdateAttributionWire {
+    sample_count: String,
+    callback_duration_us_p50: String,
+    callback_duration_us_p95: String,
+    callback_duration_us_max: String,
+    latest: DiagnosticsUpdateAttributionSampleWire,
+    rolling_slowest: DiagnosticsUpdateAttributionSampleWire,
+    rolling_slowest_age_ms: String,
+    slowest: DiagnosticsUpdateAttributionSampleWire,
+    slowest_age_ms: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct DiagnosticsUpdateAttributionSampleWire {
+    callback_duration_us: String,
+    character_step_calls: String,
+    character_step_duration_us: String,
+    character_step_cast_count: String,
+    voxel_residency_calls: String,
+    voxel_residency_duration_us: String,
+    voxel_scene_presentation_calls: String,
+    voxel_scene_presentation_duration_us: String,
 }
 
 #[derive(Deserialize)]

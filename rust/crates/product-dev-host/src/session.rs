@@ -8,7 +8,7 @@ use crate::{
     ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationResult,
     ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeReceipt,
     ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
-    ProductDevTimelineCompletionResult,
+    ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
 };
 
 /// One serialized, transport-neutral session over a generated Product
@@ -109,7 +109,13 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         mut publish: P,
         begin: B,
         finish: E,
-    ) -> Result<Vec<ProductDevRuntimeError>, ProductDevRuntimeError>
+    ) -> Result<
+        (
+            Vec<ProductDevRuntimeError>,
+            Option<ProductDevUpdateAttribution>,
+        ),
+        ProductDevRuntimeError,
+    >
     where
         F: FnOnce() -> (Vec<ProductDevInputBatch>, bool),
         I: FnMut(ProductDevRuntimeReceipt<ProductDevInputResult>),
@@ -134,10 +140,11 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
             }
         }
         let result = runtime.advance_realtime(observed_time_ns);
+        let attribution = runtime.take_update_attribution();
         let result = match result {
             Ok(receipt) => {
                 publish(receipt);
-                Ok(input_errors)
+                Ok((input_errors, attribution))
             }
             Err(error) => Err(error),
         };

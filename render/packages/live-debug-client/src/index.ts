@@ -92,6 +92,32 @@ export interface LiveDebugTelemetrySnapshot {
   readonly outputQueueCapacity: number;
   readonly outputQueueFloor: string;
   readonly outputBindingActive: boolean;
+  /** Completed C# update samples. Service time is nested in callback time. */
+  readonly updateAttribution: LiveDebugUpdateAttributionSnapshot | null;
+}
+
+export interface LiveDebugUpdateAttribution {
+  readonly callbackDurationUs: string;
+  readonly characterStepCalls: string;
+  readonly characterStepDurationUs: string;
+  /** Logical character-controller casts, not narrow-phase work. */
+  readonly characterStepCastCount: string;
+  readonly voxelResidencyCalls: string;
+  readonly voxelResidencyDurationUs: string;
+  readonly voxelScenePresentationCalls: string;
+  readonly voxelScenePresentationDurationUs: string;
+}
+
+export interface LiveDebugUpdateAttributionSnapshot {
+  readonly sampleCount: string;
+  readonly callbackDurationUsP50: string;
+  readonly callbackDurationUsP95: string;
+  readonly callbackDurationUsMax: string;
+  readonly latest: LiveDebugUpdateAttribution;
+  readonly rollingSlowest: LiveDebugUpdateAttribution;
+  readonly rollingSlowestAgeMs: string;
+  readonly slowest: LiveDebugUpdateAttribution;
+  readonly slowestAgeMs: string;
 }
 
 export interface LiveDebugTransport {
@@ -219,6 +245,7 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
     'runtimeProgressRateMillihertz', 'runtimeProgressAgeMs', 'connections',
     'subscribers', 'outputQueueItems', 'outputQueueCapacity', 'outputQueueFloor',
     'outputBindingActive',
+    'updateAttribution',
   ];
   if (Object.keys(candidate).some((key) => !fields.includes(key))) {
     throw new Error('Live-debug telemetry snapshot contains unknown fields.');
@@ -250,7 +277,8 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
   }
   if (typeof candidate.inputOverflowPending !== 'boolean'
     || typeof candidate.outputBindingActive !== 'boolean'
-    || !canonicalU64(candidate.outputQueueFloor)) {
+    || !canonicalU64(candidate.outputQueueFloor)
+    || (candidate.updateAttribution !== null && !isObject(candidate.updateAttribution))) {
     throw new Error('Live-debug telemetry snapshot is invalid.');
   }
   return Object.freeze({
@@ -271,6 +299,60 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
     outputQueueCapacity: candidate.outputQueueCapacity as number,
     outputQueueFloor: candidate.outputQueueFloor,
     outputBindingActive: candidate.outputBindingActive,
+    updateAttribution: candidate.updateAttribution === null
+      ? null
+      : decodeUpdateAttributionSnapshot(candidate.updateAttribution),
+  });
+}
+
+function decodeUpdateAttributionSnapshot(value: Record<string, unknown>): LiveDebugUpdateAttributionSnapshot {
+  const fields = [
+    'sampleCount', 'callbackDurationUsP50', 'callbackDurationUsP95', 'callbackDurationUsMax',
+    'latest', 'rollingSlowest', 'rollingSlowestAgeMs', 'slowest', 'slowestAgeMs',
+  ];
+  if (Object.keys(value).some((key) => !fields.includes(key))
+    || !canonicalU64(value.sampleCount)
+    || !canonicalU64(value.callbackDurationUsP50)
+    || !canonicalU64(value.callbackDurationUsP95)
+    || !canonicalU64(value.callbackDurationUsMax)
+    || !canonicalU64(value.rollingSlowestAgeMs)
+    || !canonicalU64(value.slowestAgeMs)
+    || !isObject(value.latest)
+    || !isObject(value.rollingSlowest)
+    || !isObject(value.slowest)) {
+    throw new Error('Live-debug update attribution is invalid.');
+  }
+  return Object.freeze({
+    sampleCount: value.sampleCount,
+    callbackDurationUsP50: value.callbackDurationUsP50,
+    callbackDurationUsP95: value.callbackDurationUsP95,
+    callbackDurationUsMax: value.callbackDurationUsMax,
+    latest: decodeUpdateAttribution(value.latest),
+    rollingSlowest: decodeUpdateAttribution(value.rollingSlowest),
+    rollingSlowestAgeMs: value.rollingSlowestAgeMs,
+    slowest: decodeUpdateAttribution(value.slowest),
+    slowestAgeMs: value.slowestAgeMs,
+  });
+}
+
+function decodeUpdateAttribution(value: Record<string, unknown>): LiveDebugUpdateAttribution {
+  const fields = [
+    'callbackDurationUs', 'characterStepCalls', 'characterStepDurationUs', 'characterStepCastCount',
+    'voxelResidencyCalls', 'voxelResidencyDurationUs', 'voxelScenePresentationCalls', 'voxelScenePresentationDurationUs',
+  ];
+  if (Object.keys(value).some((key) => !fields.includes(key))
+    || fields.some((field) => !canonicalU64(value[field]))) {
+    throw new Error('Live-debug update attribution sample is invalid.');
+  }
+  return Object.freeze({
+    callbackDurationUs: value.callbackDurationUs as string,
+    characterStepCalls: value.characterStepCalls as string,
+    characterStepDurationUs: value.characterStepDurationUs as string,
+    characterStepCastCount: value.characterStepCastCount as string,
+    voxelResidencyCalls: value.voxelResidencyCalls as string,
+    voxelResidencyDurationUs: value.voxelResidencyDurationUs as string,
+    voxelScenePresentationCalls: value.voxelScenePresentationCalls as string,
+    voxelScenePresentationDurationUs: value.voxelScenePresentationDurationUs as string,
   });
 }
 
@@ -349,4 +431,8 @@ function canonicalU64(value: unknown): value is string {
 function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Live-debug response is invalid.');
   return value as Record<string, unknown>;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

@@ -4,7 +4,7 @@
 //! second voxel store. Every accepted edit or residency publication swaps the
 //! same scene Arc used by collision, character motion, and Dynamics bindings.
 
-use std::{ffi::c_void, sync::Arc};
+use std::{ffi::c_void, sync::Arc, time::Instant};
 
 use csharp_engine_abi::*;
 use engine_spatial::{
@@ -824,9 +824,12 @@ unsafe extern "C" fn apply_residency(
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-        .apply_voxel_residency(unsafe { &*request })
-    {
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    let started = Instant::now();
+    let result = bridge.apply_voxel_residency(unsafe { &*request });
+    let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    bridge.record_voxel_residency_attribution(duration_us);
+    match result {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
