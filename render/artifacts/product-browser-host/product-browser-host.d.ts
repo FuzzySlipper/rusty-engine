@@ -288,6 +288,15 @@ export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
     readonly kind: 'runtime-readout';
     readonly readout: ProductBrowserRuntimeReadout;
 };
+/**
+ * Buffers semantic runtime outputs while the renderer is mounting. Realtime
+ * progress is only a liveness pulse and has no state to replay once the host
+ * becomes ready; runtime readouts are snapshots, so only the newest one is
+ * useful. Retained presentation outputs preserve their original ordering.
+ *
+ * @internal
+ */
+export declare function bufferProductBrowserPreMountOutput(pendingOutputs: ProductBrowserRuntimeOutput[], output: ProductBrowserRuntimeOutput, maximumPendingOutputs: number): boolean;
 export type ProductBrowserRuntimeOutputListener = (output: ProductBrowserRuntimeOutput) => void;
 export type ProductBrowserRuntimeOutputBatchListener = (outputs: readonly ProductBrowserRuntimeOutput[]) => void;
 /**

@@ -15,6 +15,7 @@ export {
   ProductBrowserLocalTransportError,
   createProductBrowserLocalHttpAdapter,
 } from './local-transport.js';
+export { loadProductBrowserRendererInitialContent } from './renderer-preload.js';
 export function rendererResourceContentHash(
   data: ArrayBuffer,
   expected: string,

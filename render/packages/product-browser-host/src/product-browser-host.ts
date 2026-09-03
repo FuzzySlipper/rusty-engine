@@ -2,6 +2,7 @@ import {
   mountRustyApplication,
   type RustyApplicationFrame,
   type RustyApplicationAnimationCueDefinition,
+  type RustyApplicationContent,
   type RustyApplicationHost,
   type RustyApplicationHostReadout,
   type RustyApplicationPresentationFrame,
@@ -293,6 +294,44 @@ export type ProductBrowserRuntimeOutput =
       readonly envelope: RustyApplicationUiProjectionEnvelope;
     }
   | { readonly kind: 'runtime-readout'; readonly readout: ProductBrowserRuntimeReadout };
+
+/**
+ * Buffers semantic runtime outputs while the renderer is mounting. Realtime
+ * progress is only a liveness pulse and has no state to replay once the host
+ * becomes ready; runtime readouts are snapshots, so only the newest one is
+ * useful. Retained presentation outputs preserve their original ordering.
+ *
+ * @internal
+ */
+export function bufferProductBrowserPreMountOutput(
+  pendingOutputs: ProductBrowserRuntimeOutput[],
+  output: ProductBrowserRuntimeOutput,
+  maximumPendingOutputs: number,
+): boolean {
+  if (output.kind === 'runtime-progress') return true;
+  if (output.kind === 'runtime-readout'
+    || output.kind === 'view-composition'
+    || output.kind === 'animation-cue-definitions') {
+    const previousSnapshot = pendingOutputs.findIndex((pending) => pending.kind === output.kind);
+    if (previousSnapshot >= 0) {
+      pendingOutputs[previousSnapshot] = output;
+      return true;
+    }
+  }
+  if (output.kind === 'ui-projection') {
+    const previousProjection = pendingOutputs.findIndex((pending) =>
+      pending.kind === 'ui-projection'
+      && pending.envelope.stream === output.envelope.stream
+      && pending.envelope.contract === output.envelope.contract);
+    if (previousProjection >= 0) {
+      pendingOutputs[previousProjection] = output;
+      return true;
+    }
+  }
+  if (pendingOutputs.length >= maximumPendingOutputs) return false;
+  pendingOutputs.push(output);
+  return true;
+}
 
 export type ProductBrowserRuntimeOutputListener = (
   output: ProductBrowserRuntimeOutput,
@@ -1425,7 +1464,7 @@ export async function mountProductBrowserHost(
 
   const applyOutput = (output: ProductBrowserRuntimeOutput): void => {
     if (application === null) {
-      if (pendingOutputs.length >= maximumPendingOutputs) {
+      if (!bufferProductBrowserPreMountOutput(pendingOutputs, output, maximumPendingOutputs)) {
         failAndClose(
           new ProductBrowserHostError(
             'output_failed',
@@ -1435,7 +1474,6 @@ export async function mountProductBrowserHost(
         );
         return;
       }
-      pendingOutputs.push(output);
       if (output.kind === 'frame' && settleInitialRendererFrame !== null) {
         if (initialRendererFrameTimeout !== null) clearTimeout(initialRendererFrameTimeout);
         initialRendererFrameTimeout = null;
@@ -1729,6 +1767,13 @@ export async function mountProductBrowserHost(
       );
       runtimeStartedBeforeMount = true;
     }
+    let stagedRendererContent: RustyApplicationContent | undefined;
+    let rendererForMount = renderer;
+    if (renderer?.initialContent !== undefined) {
+      const { initialContent, ...remainingRendererOptions } = renderer;
+      stagedRendererContent = initialContent;
+      rendererForMount = remainingRendererOptions;
+    }
     application = await mountRustyApplication({
       root: options.root,
       mountUi: options.mountUi,
@@ -1742,7 +1787,7 @@ export async function mountProductBrowserHost(
       ...(options.failureLabel === undefined ? {} : { failureLabel: options.failureLabel }),
       ...(runtimeInput === undefined ? {} : { runtimeInput }),
       ...(projection === undefined ? {} : { uiProjection: projection }),
-      ...(renderer === undefined
+      ...(rendererForMount === undefined
         ? {
             renderer: {
               onCadence: observeRendererCadence,
@@ -1750,7 +1795,7 @@ export async function mountProductBrowserHost(
           }
         : {
             renderer: {
-              ...renderer,
+              ...rendererForMount,
               onCadence: observeRendererCadence,
             },
           }),
@@ -1803,6 +1848,21 @@ export async function mountProductBrowserHost(
           );
           publishHealth();
         },
+      });
+    }
+    if (stagedRendererContent !== undefined) {
+      const content = stagedRendererContent;
+      const mountedApplication = application;
+      enqueueRendererOutput(async () => {
+        const receipt = await mountedApplication.renderer.replaceContent(content);
+        if (!receipt.applied) {
+          throw new ProductBrowserHostError(
+            'output_failed',
+            `initial renderer content was rejected: ${receipt.diagnostics
+              .map((diagnostic) => diagnostic.message)
+              .join('; ')}`,
+          );
+        }
       });
     }
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
@@ -2261,24 +2321,14 @@ export function productBrowserBundleAssets(
     Object.freeze({
       name: 'main.js' as const,
       content: [
-        `import { mountProductBrowserHost, rendererResourceContentHash } from './${PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE}';`,
+        `import { loadProductBrowserRendererInitialContent, mountProductBrowserHost } from './${PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE}';`,
         "import { createProductBridge } from './bridge.js';",
         `import { mountProductUi } from '${options.uiModule}';`,
-        '',
-        'const PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_COUNT = 256;',
-        'const PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_TOTAL_BYTES = 128 * 1024 * 1024;',
-        'const PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_BYTES = 16 * 1024 * 1024;',
-        'const PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_COUNT = 64;',
-        'const PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_TOTAL_BYTES = 32 * 1024 * 1024;',
-        'const PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_BYTES = 8 * 1024 * 1024;',
-        'const PRODUCT_RENDERER_PRELOAD_MESH_MAX_COUNT = 1024;',
-        'const PRODUCT_RENDERER_PRELOAD_MESH_MAX_TOTAL_BYTES = 64 * 1024 * 1024;',
-        'const PRODUCT_RENDERER_PRELOAD_MESH_MAX_BYTES = 16 * 1024 * 1024;',
         '',
         "const root = document.querySelector('#application');",
         "if (root === null) throw new Error('generated Product Browser Host root is missing');",
         'const bridge = createProductBridge();',
-        'const rendererInitialContent = await loadProductRendererInitialContent();',
+        'const rendererInitialContent = await loadProductBrowserRendererInitialContent(import.meta.url);',
         'const host = await mountProductBrowserHost({',
         '  root,',
         '  transport: bridge.transport,',
@@ -2291,82 +2341,6 @@ export function productBrowserBundleAssets(
         '  renderer: { initialContent: rendererInitialContent },',
         '});',
         'void host;',
-        '',
-        'async function loadProductRendererInitialContent() {',
-        "  const descriptorUrl = new URL('./renderer-preload.json', import.meta.url);",
-        "  const descriptorResponse = await fetch(descriptorUrl, { cache: 'no-store' });",
-        "  if (!descriptorResponse.ok) throw new Error('generated renderer preload descriptor is unavailable');",
-        '  const descriptor = decodeProductRendererPreload(await descriptorResponse.json());',
-        '  const resources = await Promise.all(descriptor.resources.map(loadProductRendererResource));',
-        '  return Object.freeze({',
-        "    frame: Object.freeze({ schemaVersion: 1, ops: Object.freeze([]) }),",
-        '    resources: Object.freeze(resources),',
-        '  });',
-        '}',
-        '',
-        'function decodeProductRendererPreload(value) {',
-        "  if (value === null || typeof value !== 'object' || value.artifact !== 'rusty.product.renderer-preload.v1' || !Array.isArray(value.resources)) {",
-        "    throw new Error('generated renderer preload descriptor is invalid');",
-        '  }',
-        '  let textureCount = 0; let textureBytes = 0; let audioCount = 0; let audioBytes = 0; let meshCount = 0; let meshBytes = 0;',
-        '  const identities = new Set(); const paths = new Set();',
-        '  return Object.freeze({ resources: Object.freeze(value.resources.map((resource, index) => {',
-        "    if (resource === null || typeof resource !== 'object' || typeof resource.identity !== 'string' || typeof resource.contentHash !== 'string' || typeof resource.mediaType !== 'string' || typeof resource.path !== 'string' || !Number.isSafeInteger(resource.byteLength)) {",
-        "      throw new Error(`generated renderer preload resource ${String(index)} is invalid`);",
-        '    }',
-        "    const match = /^(animated-mesh|clip-pack|texture|audio|mesh)-resource\\/([0-9a-f]{64})$/u.exec(resource.identity);",
-        "    if (match === null || resource.contentHash !== `sha256:${match[2]}` || !isSafeProductRendererPath(resource.path) || resource.byteLength < 0 || identities.has(resource.identity) || paths.has(resource.path)) {",
-        "      throw new Error(`generated renderer preload resource ${String(index)} is inadmissible`);",
-        '    }',
-        '    identities.add(resource.identity); paths.add(resource.path);',
-        "    if ((match[1] === 'texture' && (resource.mediaType !== 'image/png' || !resource.path.endsWith('.png'))) || (match[1] === 'audio' && (resource.mediaType !== 'audio/wav' || !resource.path.endsWith('.wav'))) || (match[1] === 'mesh' && (resource.mediaType !== 'application/octet-stream' || !resource.path.endsWith('.rmesh'))) || ((match[1] === 'animated-mesh' || match[1] === 'clip-pack') && (resource.mediaType !== 'model/gltf-binary' || !resource.path.endsWith('.glb')))) {",
-        "      throw new Error(`generated renderer preload resource ${String(index)} media is invalid`);",
-        '    }',
-        "    if (match[1] === 'texture') { textureCount += 1; textureBytes += resource.byteLength; if (textureCount > PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_COUNT || resource.byteLength === 0 || resource.byteLength > PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_BYTES || textureBytes > PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_TOTAL_BYTES) throw new Error(`generated renderer preload texture ${String(index)} exceeds application-host bounds`); }",
-        "    else if (match[1] === 'audio') { audioCount += 1; audioBytes += resource.byteLength; if (audioCount > PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_COUNT || resource.byteLength < 44 || resource.byteLength > PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_BYTES || audioBytes > PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_TOTAL_BYTES) throw new Error(`generated renderer preload audio ${String(index)} exceeds application-host bounds`); }",
-        "    else { meshCount += 1; meshBytes += resource.byteLength; if (meshCount > PRODUCT_RENDERER_PRELOAD_MESH_MAX_COUNT || resource.byteLength < ((match[1] === 'animated-mesh' || match[1] === 'clip-pack') ? 20 : 16) || resource.byteLength > PRODUCT_RENDERER_PRELOAD_MESH_MAX_BYTES || meshBytes > PRODUCT_RENDERER_PRELOAD_MESH_MAX_TOTAL_BYTES) throw new Error(`generated renderer preload mesh ${String(index)} exceeds application-host bounds`); }",
-        '    return Object.freeze({ identity: resource.identity, contentHash: resource.contentHash, mediaType: resource.mediaType, path: resource.path, byteLength: resource.byteLength });',
-        '  })) });',
-        '}',
-        '',
-        'function isSafeProductRendererPath(path) {',
-        "  return typeof path === 'string' && path.startsWith('content/') && new TextEncoder().encode(path).byteLength <= 512 && !path.startsWith('/') && !path.startsWith('//') && !path.includes('\\\\') && !path.includes('%') && !path.includes(':') && !/[\\u0000-\\u001f\\u007f]/u.test(path) && !/\\s/u.test(path) && path.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');",
-        '}',
-        '',
-        'async function loadProductRendererResource(resource) {',
-        '  const url = new URL(`./${resource.path}`, import.meta.url);',
-        '  if (url.origin !== new URL(import.meta.url).origin) throw new Error(\'generated renderer resource must remain same-origin\');',
-        "  const response = await fetch(url, { cache: 'no-store' });",
-        "  if (!response.ok) throw new Error(`generated renderer resource ${resource.identity} is unavailable`);",
-        '  const data = await response.arrayBuffer();',
-        '  const bytes = new Uint8Array(data);',
-        "  if (bytes.byteLength !== resource.byteLength) throw new Error(`generated renderer resource ${resource.identity} length mismatch`);",
-        "  if (bytes.byteLength === 0 || (resource.mediaType === 'image/png' && !hasPngSignature(bytes)) || (resource.mediaType === 'audio/wav' && !hasWavSignature(bytes)) || (resource.mediaType === 'application/octet-stream' && !hasMeshResourceHeader(bytes)) || (resource.mediaType === 'model/gltf-binary' && !hasGlbHeader(bytes))) throw new Error(`generated renderer resource ${resource.identity} media mismatch`);",
-        '  const digest = await rendererResourceContentHash(data, resource.contentHash);',
-        "  if (resource.contentHash !== digest) throw new Error(`generated renderer resource ${resource.identity} hash mismatch`);",
-        '  return Object.freeze({ identity: resource.identity, contentHash: resource.contentHash, mediaType: resource.mediaType, bytes });',
-        '}',
-        '',
-        'function hasPngSignature(bytes) {',
-        '  return bytes.byteLength >= 8 && bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71 && bytes[4] === 13 && bytes[5] === 10 && bytes[6] === 26 && bytes[7] === 10;',
-        '}',
-        '',
-        'function hasWavSignature(bytes) {',
-        '  return bytes.byteLength >= 44 && bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70 && bytes[8] === 87 && bytes[9] === 65 && bytes[10] === 86 && bytes[11] === 69;',
-        '}',
-        '',
-        'function hasMeshResourceHeader(bytes) {',
-        '  if (bytes.byteLength < 16) return false;',
-        '  const magic = [82, 77, 83, 72, 76, 69, 48];',
-        '  const version = bytes[7];',
-        '  if ((version !== 49 && version !== 50 && version !== 51) || magic.some((byte, index) => bytes[index] !== byte)) return false;',
-        '  const header = new DataView(bytes.buffer, bytes.byteOffset, 16);',
-        '  return header.getUint32(8, true) === bytes.byteLength && header.getUint32(12, true) !== 0;',
-        '}',
-        '',
-        'function hasGlbHeader(bytes) {',
-        '  return bytes.byteLength >= 20 && bytes[0] === 103 && bytes[1] === 108 && bytes[2] === 84 && bytes[3] === 70;',
-        '}',
         '',
       ].join('\n'),
     }),

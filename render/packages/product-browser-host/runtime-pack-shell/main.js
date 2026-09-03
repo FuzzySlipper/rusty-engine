@@ -1,5 +1,6 @@
 import {
   createProductBrowserLocalHttpAdapter,
+  loadProductBrowserRendererInitialContent,
   mountProductBrowserHost,
 } from './engine/product-browser-host.js';
 
@@ -38,6 +39,7 @@ if (typeof productUi.mountProductUi !== 'function') {
 }
 
 const transport = createProductBrowserLocalHttpAdapter();
+const rendererInitialContent = await loadProductBrowserRendererInitialContent(import.meta.url);
 void mountProductBrowserHost({
   root,
   transport,
@@ -45,6 +47,7 @@ void mountProductBrowserHost({
   realtimeAdvanceOwner: 'rust-host',
   initialInteractionMode: 'gameplay',
   runtimeInput: {},
+  renderer: { initialContent: rendererInitialContent },
   ...(uiProjection === undefined ? {} : { uiProjection }),
   mountUi: (uiRoot, context) => {
     mountDefaultUi(uiRoot);

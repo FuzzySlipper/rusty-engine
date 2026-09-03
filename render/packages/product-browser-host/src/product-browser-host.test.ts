@@ -4,6 +4,7 @@ import {
   ProductBrowserHostError,
   PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE,
   bindProductBrowserInitialRendererFrame,
+  bufferProductBrowserPreMountOutput,
   createProductBrowserAudioFeedbackReporter,
   createProductBrowserGhostPlateFeedbackReporter,
   createProductBrowserRendererDiagnosticsCadenceSampler,
@@ -21,6 +22,61 @@ import {
   productBrowserBundleAssets,
   productBrowserBundleDescriptor,
 } from './product-browser-host.js';
+
+test('pre-mount buffering drops liveness pulses and keeps the latest runtime readout', () => {
+  const pending: import('./product-browser-host.js').ProductBrowserRuntimeOutput[] = [];
+  const readout = {
+    artifact: 'rusty.product.runtime-readout' as const,
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    mode: 'realtime' as const,
+    state: 'running' as const,
+    admittedSimulationSteps: '1',
+    admittedPresentations: '1',
+    droppedRealtimeSteps: '0',
+    clockRegressions: '0',
+    scaledRemainder: 0,
+    lastObservedTimeNs: '1',
+    fault: null,
+  };
+
+  assert.equal(bufferProductBrowserPreMountOutput(
+    pending,
+    { kind: 'runtime-progress', owner: 'rust-host' },
+    1,
+  ), true);
+  assert.equal(pending.length, 0);
+  assert.equal(bufferProductBrowserPreMountOutput(
+    pending,
+    { kind: 'runtime-readout', readout },
+    1,
+  ), true);
+  assert.equal(bufferProductBrowserPreMountOutput(
+    pending,
+    {
+      kind: 'runtime-readout',
+      readout: { ...readout, admittedSimulationSteps: '2' },
+    },
+    1,
+  ), true);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.kind, 'runtime-readout');
+  assert.equal(
+    pending[0]?.kind === 'runtime-readout'
+      ? pending[0].readout.admittedSimulationSteps
+      : null,
+    '2',
+  );
+  assert.equal(bufferProductBrowserPreMountOutput(
+    pending,
+    { kind: 'runtime-progress', owner: 'rust-host' },
+    1,
+  ), true);
+  assert.equal(bufferProductBrowserPreMountOutput(
+    pending,
+    { kind: 'frame', frame: { sequence: 1, ops: [] } },
+    1,
+  ), false);
+});
 
 test('product frame observation retains receipt apply rate and latency without scheduling', () => {
   let timeMs = 10;
@@ -958,20 +1014,9 @@ test('bundle assets are fixed JS composition roots and descriptor bytes are repr
   assert.match(first[0]!.content, /main\.js/u);
   assert.match(first[1]!.content, /\.\/engine\/product-browser-host\.js/u);
   assert.match(first[1]!.content, /initialInteractionMode: 'gameplay'/u);
-  assert.match(first[1]!.content, /renderer-preload\.json/u);
   assert.match(first[1]!.content, /renderer: \{ initialContent: rendererInitialContent \}/u);
-  assert.match(first[1]!.content, /mountProductBrowserHost, rendererResourceContentHash/u);
-  assert.match(first[1]!.content, /await rendererResourceContentHash\(data, resource\.contentHash\)/u);
-  assert.match(first[1]!.content, /resource\.contentHash !== digest/u);
-  assert.doesNotMatch(first[1]!.content, /crypto\.subtle/u);
-  assert.match(first[1]!.content, /PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_COUNT/u);
-  assert.match(first[1]!.content, /PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_TOTAL_BYTES/u);
-  assert.match(first[1]!.content, /PRODUCT_RENDERER_PRELOAD_MESH_MAX_TOTAL_BYTES/u);
-  assert.match(first[1]!.content, /application\/octet-stream/u);
-  assert.match(first[1]!.content, /hasMeshResourceHeader/u);
-  assert.match(first[1]!.content, /version !== 49 && version !== 50 && version !== 51/u);
-  assert.match(first[1]!.content, /new TextEncoder\(\)\.encode\(path\)\.byteLength <= 512/u);
-  assert.match(first[1]!.content, /!path\.includes\('%'\)/u);
+  assert.match(first[1]!.content, /loadProductBrowserRendererInitialContent, mountProductBrowserHost/u);
+  assert.match(first[1]!.content, /loadProductBrowserRendererInitialContent\(import\.meta\.url\)/u);
   assert.match(first[1]!.content, /realtimeAdvanceOwner: bridge\.realtimeAdvanceOwner/u);
   assert.match(first[2]!.content, /\.\/engine\/product-browser-host\.js/u);
   assert.equal(first[3]!.content, options.engineHostModule);
