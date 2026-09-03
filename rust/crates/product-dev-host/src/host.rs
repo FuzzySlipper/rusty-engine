@@ -2872,63 +2872,73 @@ mod tests {
         let large_event_count = large_probe.events.len();
         assert!(large_event_count > 1);
 
-        let mut bus = OutputBus {
+        let bus = Mutex::new(OutputBus {
             active_binding: Some(runtime),
             ..OutputBus::default()
-        };
+        });
         for sequence in 0..MAX_OUTPUT_QUEUE_ITEMS - large_event_count {
-            push_outputs_staged(
-                &mut bus,
+            push_outputs(
+                &bus,
                 vec![ProductDevRuntimeOutput::test_frame_value(
                     serde_json::json!({"sequence": sequence}),
                 )],
             )
             .expect("representative small output publishes");
         }
-        let large_ids = large_probe
-            .events
-            .iter()
-            .map(|event| event.id + bus.next_id)
-            .collect::<Vec<_>>();
-        append_output_events(
-            &mut bus,
-            runtime,
+        let large_ids = {
+            let locked = bus.lock().expect("test bus lock");
+            large_probe
+                .events
+                .iter()
+                .map(|event| event.id + locked.next_id)
+                .collect::<Vec<_>>()
+        };
+        push_outputs(
+            &bus,
             vec![ProductDevRuntimeOutput::test_frame_value(
                 serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_EVENT_BYTES + 1)}),
             )],
         )
         .expect("large fragmented output fills retained queue");
-        assert_eq!(bus.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(
-            bus.events
-                .iter()
-                .filter(|event| event.event == Some("rusty-output-fragment"))
-                .count(),
-            large_event_count
-        );
-        let retained_bytes = bus
-            .events
-            .iter()
-            .map(|event| event.json.len())
-            .sum::<usize>();
-        let retained_payloads = large_ids
-            .iter()
-            .map(|id| {
-                let event = bus
+        let (retained_bytes, retained_payloads, initial_floor, initial_next_id) = {
+            let locked = bus.lock().expect("test bus lock");
+            assert_eq!(locked.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
+            assert_eq!(
+                locked
                     .events
                     .iter()
-                    .find(|event| event.id == *id)
-                    .expect("large event is retained");
-                (*id, event.json.as_ptr(), event.json.len())
-            })
-            .collect::<Vec<_>>();
-        let initial_floor = bus.floor_cursor;
-        let initial_next_id = bus.next_id;
+                    .filter(|event| event.event == Some("rusty-output-fragment"))
+                    .count(),
+                large_event_count
+            );
+            let retained_bytes = locked
+                .events
+                .iter()
+                .map(|event| event.json.len())
+                .sum::<usize>();
+            let retained_payloads = large_ids
+                .iter()
+                .map(|id| {
+                    let event = locked
+                        .events
+                        .iter()
+                        .find(|event| event.id == *id)
+                        .expect("large event is retained");
+                    (*id, event.json.as_ptr(), event.json.len())
+                })
+                .collect::<Vec<_>>();
+            (
+                retained_bytes,
+                retained_payloads,
+                locked.floor_cursor,
+                locked.next_id,
+            )
+        };
 
         let started = Instant::now();
         for sequence in 0..MEASURED_PUBLISHES {
-            push_outputs_staged(
-                &mut bus,
+            push_outputs(
+                &bus,
                 vec![ProductDevRuntimeOutput::test_frame_value(
                     serde_json::json!({"measuredSequence": sequence}),
                 )],
@@ -2937,19 +2947,23 @@ mod tests {
         }
         let elapsed = started.elapsed();
 
-        assert_eq!(bus.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-        assert_eq!(bus.floor_cursor, initial_floor + MEASURED_PUBLISHES as u64);
-        assert_eq!(bus.next_id, initial_next_id + MEASURED_PUBLISHES as u64);
-        let reconnect = bus.after(bus.floor_cursor);
-        assert_eq!(reconnect.floor_cursor, bus.floor_cursor);
+        let locked = bus.lock().expect("test bus lock");
+        assert_eq!(locked.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(
+            locked.floor_cursor,
+            initial_floor + MEASURED_PUBLISHES as u64
+        );
+        assert_eq!(locked.next_id, initial_next_id + MEASURED_PUBLISHES as u64);
+        let reconnect = locked.after(locked.floor_cursor);
+        assert_eq!(reconnect.floor_cursor, locked.floor_cursor);
         assert_eq!(reconnect.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
         assert_eq!(reconnect.events.first().map(|event| event.id), Some(121));
         assert_eq!(
             reconnect.events.last().map(|event| event.id),
-            Some(bus.next_id)
+            Some(locked.next_id)
         );
         for (id, pointer, length) in retained_payloads {
-            let event = bus
+            let event = locked
                 .events
                 .iter()
                 .find(|event| event.id == id)
@@ -2963,7 +2977,7 @@ mod tests {
         }
         eprintln!(
             "output-bus full_queue={} retained_bytes={} large_fragments={} publishes={} elapsed_us={} ns_per_publish={}",
-            bus.events.len(),
+            locked.events.len(),
             retained_bytes,
             large_event_count,
             MEASURED_PUBLISHES,
