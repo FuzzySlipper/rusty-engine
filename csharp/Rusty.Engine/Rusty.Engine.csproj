@@ -14,11 +14,12 @@
     <Description>Generated Rusty Engine C# SDK and NativeAOT product bootstrap.</Description>
     <PackageTags>rusty-engine;csharp;nativeaot</PackageTags>
     <PackageReleaseNotes Condition="'$(RustyEnginePackageAbiIdentity)' != ''">Product ABI identity: $(RustyEnginePackageAbiIdentity).</PackageReleaseNotes>
-    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="$(RustyEngineGeneratedBindingsDir)/EngineContracts.g.cs" Visible="false" />
     <Compile Include="$(RustyEngineGeneratedBindingsDir)/EngineValues.g.cs" Visible="false" />
+    <None Include="PACKAGE_README.md" Pack="true" PackagePath="PACKAGE_README.md" />
     <None Include="$(RustyEngineProductGeneratorPath)" Pack="true" PackagePath="buildTransitive/analyzers" Visible="false" />
     <None Include="$(RustyEnginePackageMetadataDir)/Rusty.Engine.props" Pack="true" PackagePath="buildTransitive" />
     <None Include="buildTransitive/Rusty.Engine.targets" Pack="true" PackagePath="buildTransitive" />
