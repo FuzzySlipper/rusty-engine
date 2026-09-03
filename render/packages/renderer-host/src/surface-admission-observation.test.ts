@@ -91,6 +91,15 @@ void test('host admission observation separates demand backend blocks and admiss
       noDemandCount: 1,
     },
   );
+  assert.deepEqual(sample.demandCounts, {
+    requested: 0,
+    viewportChanged: 0,
+    controls: 2,
+    presentation: 0,
+    retainedAnimation: 0,
+  });
+  assert.deepEqual(sample.recentCallbackIntervalsMs, [16, 16]);
+  assert.deepEqual(sample.recentSubmissionIntervalsMs, []);
   assert.deepEqual(
     sample.recentAttempts.map((attempt) => [
       attempt.sequence,

@@ -316,6 +316,32 @@ test('local transport decodes Rust-host realtime progress output', () => {
   adapter.dispose();
 });
 
+test('one runtime output batch is decoded and delivered through one batch callback', () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const received: unknown[][] = [];
+  const unsubscribe = adapter.subscribeOutputBatches?.((outputs) => received.push([...outputs]));
+  const stream = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(stream);
+  stream.emit({
+    kind: 'runtime-output-batch',
+    outputs: [
+      { kind: 'runtime-readout', readout: READOUT },
+      { kind: 'runtime-progress', owner: 'rust-host' },
+    ],
+  }, '1');
+  assert.equal(received.length, 2);
+  assert.deepEqual(received[1]?.map((output) => (output as { kind: string }).kind), [
+    'runtime-readout',
+    'runtime-progress',
+  ]);
+  unsubscribe?.();
+  adapter.dispose();
+});
+
 test('local transport decodes scheduled input receipts with authoritative progress and recovery cursors', () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -526,11 +552,17 @@ test('large retained output fragments publish once after complete ordered reasse
     fetch: async () => response({}),
     eventSource: FakeEventSource,
   });
-  const outputs: unknown[] = [];
-  adapter.subscribeOutputs((output) => outputs.push(output));
+  const batches: unknown[][] = [];
+  adapter.subscribeOutputBatches?.((outputs) => batches.push([...outputs]));
   const stream = FakeEventSource.instances[0]!;
   completeConnectionBaseline(stream);
-  const encoded = JSON.stringify({ kind: 'frame', frame: { payload: 'x'.repeat(300_000) } });
+  const encoded = JSON.stringify({
+    kind: 'runtime-output-batch',
+    outputs: [
+      { kind: 'frame', frame: { payload: 'x'.repeat(300_000) } },
+      { kind: 'runtime-progress', owner: 'rust-host' },
+    ],
+  });
   const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
   chunks.forEach((data, fragmentIndex) => stream.emitFragment({
     schemaVersion: 1,
@@ -541,9 +573,9 @@ test('large retained output fragments publish once after complete ordered reasse
     aggregateBytes: new TextEncoder().encode(encoded).byteLength,
     data,
   }));
-  assert.equal(outputs.length, 2);
-  assert.equal((outputs[1] as { kind: string }).kind, 'frame');
-  assert.equal(((outputs[1] as { frame: { payload: string } }).frame.payload).length, 300_000);
+  assert.equal(batches.length, 2);
+  assert.deepEqual(batches[1]?.map((output) => (output as { kind: string }).kind), ['frame', 'runtime-progress']);
+  assert.equal(((batches[1]?.[0] as { frame: { payload: string } }).frame.payload).length, 300_000);
   adapter.dispose();
 });
 

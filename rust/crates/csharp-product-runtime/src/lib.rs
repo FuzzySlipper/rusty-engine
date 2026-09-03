@@ -171,11 +171,11 @@ fn renderer_diagnostics_summary(snapshot: Option<&str>, widget_visible: bool) ->
         current.cloned().unwrap_or(serde_json::Value::Null)
     };
     let interval_ms = value(&["submission", "frameIntervalMs"]);
-    let fps = interval_ms
-        .as_f64()
-        .filter(|interval| *interval > 0.0)
-        .map(|interval| 1_000.0 / interval)
-        .map_or(serde_json::Value::Null, |fps| serde_json::json!(fps));
+    let submission_rate_hz = renderer_interval_rate(&value(&[
+        "pacing",
+        "hostAdmission",
+        "recentSubmissionIntervalsMs",
+    ]));
     serde_json::json!({
         "schemaVersion": 1,
         "available": true,
@@ -190,7 +190,7 @@ fn renderer_diagnostics_summary(snapshot: Option<&str>, widget_visible: bool) ->
             "renderSequence": value(&["submission", "renderSequence"]),
             "intervalMs": interval_ms,
             "intervalStatus": value(&["submission", "frameIntervalStatus"]),
-            "fps": fps,
+            "submissionRateHz": submission_rate_hz,
             "syncSubmissionMs": value(&["submission", "backendSubmissionDurationMs"]),
             "syncSubmissionStatus": value(&["submission", "backendSubmissionDurationStatus"]),
         },
@@ -252,15 +252,32 @@ fn renderer_diagnostics_detail(
         .saturating_sub(RENDERER_DETAIL_RECENT_ATTEMPTS);
     let recent_attempts = derived[recent_start..].to_vec();
     let mut window_outcomes = serde_json::Map::new();
+    let callback_rate_hz = renderer_interval_rate(&value(&[
+        "pacing",
+        "hostAdmission",
+        "recentCallbackIntervalsMs",
+    ]));
+    let callback_rate = callback_rate_hz.as_f64();
     for outcome in ["admitted", "backendBlocked", "noDemand"] {
-        window_outcomes.insert(
-            outcome.to_owned(),
-            serde_json::json!(derived
-                .iter()
-                .filter(|attempt| attempt["outcome"] == outcome)
-                .count()),
-        );
+        let count = derived
+            .iter()
+            .filter(|attempt| attempt["outcome"] == outcome)
+            .count();
+        window_outcomes.insert(outcome.to_owned(), serde_json::json!(count));
     }
+    let outcome_rate = |outcome: &str| -> serde_json::Value {
+        let Some(callback_rate) = callback_rate else {
+            return serde_json::Value::Null;
+        };
+        if derived.is_empty() {
+            return serde_json::Value::Null;
+        }
+        let count = derived
+            .iter()
+            .filter(|attempt| attempt["outcome"] == outcome)
+            .count();
+        serde_json::json!(callback_rate * count as f64 / derived.len() as f64)
+    };
     let mut phase_aggregates = serde_json::Map::new();
     for phase in [
         "callbackTotalMs",
@@ -279,6 +296,19 @@ fn renderer_diagnostics_detail(
             .collect::<Vec<_>>();
         phase_aggregates.insert(phase.to_owned(), renderer_duration_aggregate(&samples));
     }
+    let callback_intervals = value(&["pacing", "hostAdmission", "recentCallbackIntervalsMs"]);
+    let submission_intervals = value(&["pacing", "hostAdmission", "recentSubmissionIntervalsMs"]);
+    let product_received_intervals = value(&["productFrames", "recentReceivedIntervalsMs"]);
+    let product_applied_intervals = value(&["productFrames", "recentAppliedIntervalsMs"]);
+    let product_apply_latency = value(&["productFrames", "recentApplyLatencyMs"]);
+    let product_observed_at = value(&["productFrames", "observedAtMs"]);
+    let product_age = |field: &str| -> serde_json::Value {
+        product_observed_at
+            .as_f64()
+            .zip(value(&["productFrames", field]).as_f64())
+            .and_then(|(observed, event)| renderer_duration_value(observed, event))
+            .map_or(serde_json::Value::Null, serde_json::Value::from)
+    };
 
     let realized_textures = value(&["resources", "realizedTextures"]);
     let realized_textures = realized_textures.as_array().cloned().unwrap_or_default();
@@ -304,14 +334,39 @@ fn renderer_diagnostics_detail(
                 "admitted": value(&["pacing", "hostAdmission", "admittedCount"]),
                 "backendBlocked": value(&["pacing", "hostAdmission", "backendBlockedCount"]),
                 "noDemand": value(&["pacing", "hostAdmission", "noDemandCount"]),
+                "demandReasons": value(&["pacing", "hostAdmission", "demandCounts"]),
             },
             "window": {
                 "attempts": derived.len(),
                 "outcomes": window_outcomes,
+                "callbackRateHz": callback_rate_hz,
+                "submissionRateHz": renderer_interval_rate(&submission_intervals),
+                "demandPositiveRateHz": match (outcome_rate("admitted").as_f64(), outcome_rate("backendBlocked").as_f64()) {
+                    (Some(admitted), Some(blocked)) => serde_json::json!(admitted + blocked),
+                    _ => serde_json::Value::Null,
+                },
+                "outcomeRatesHz": {
+                    "admitted": outcome_rate("admitted"),
+                    "backendBlocked": outcome_rate("backendBlocked"),
+                    "noDemand": outcome_rate("noDemand"),
+                },
+                "callbackIntervalsMs": renderer_json_duration_aggregate(&callback_intervals),
+                "submissionIntervalsMs": renderer_json_duration_aggregate(&submission_intervals),
                 "phaseAggregatesMs": phase_aggregates,
             },
             "recentAttemptLimit": RENDERER_DETAIL_RECENT_ATTEMPTS,
             "recentAttempts": recent_attempts,
+        },
+        "productFrames": {
+            "receivedCount": value(&["productFrames", "receivedCount"]),
+            "appliedCount": value(&["productFrames", "appliedCount"]),
+            "receivedRateHz": renderer_interval_rate(&product_received_intervals),
+            "appliedRateHz": renderer_interval_rate(&product_applied_intervals),
+            "receivedAgeMs": product_age("lastReceivedAtMs"),
+            "appliedAgeMs": product_age("lastAppliedAtMs"),
+            "receivedIntervalsMs": renderer_json_duration_aggregate(&product_received_intervals),
+            "appliedIntervalsMs": renderer_json_duration_aggregate(&product_applied_intervals),
+            "applyLatencyMs": renderer_json_duration_aggregate(&product_apply_latency),
         },
         "pacing": {
             "completionAllowanceMs": value(&["pacing", "completionAllowanceMs"]),
@@ -395,6 +450,32 @@ fn renderer_duration_aggregate(samples: &[f64]) -> serde_json::Value {
         "median": renderer_percentile(&sorted, 0.5),
         "p95": renderer_percentile(&sorted, 0.95),
     })
+}
+
+fn renderer_json_duration_aggregate(value: &serde_json::Value) -> serde_json::Value {
+    let samples = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_f64)
+        .filter(|sample| sample.is_finite() && *sample >= 0.0)
+        .collect::<Vec<_>>();
+    renderer_duration_aggregate(&samples)
+}
+
+fn renderer_interval_rate(value: &serde_json::Value) -> serde_json::Value {
+    let samples = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_f64)
+        .filter(|sample| sample.is_finite() && *sample > 0.0)
+        .collect::<Vec<_>>();
+    if samples.is_empty() {
+        return serde_json::Value::Null;
+    }
+    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+    serde_json::json!(1_000.0 / mean)
 }
 
 fn renderer_percentile(sorted: &[f64], percentile: f64) -> f64 {
@@ -5385,6 +5466,9 @@ mod tests {
                 "maximumPendingMeasurements": 8, "pendingSubmissionCount": 0, "pendingMeasurementCount": 0,
                 "hostAdmission": {
                     "attemptCount": 2, "admittedCount": 1, "backendBlockedCount": 1, "noDemandCount": 0,
+                    "demandCounts": { "requested": 0, "viewportChanged": 0, "controls": 1, "presentation": 0, "retainedAnimation": 0 },
+                    "recentCallbackIntervalsMs": [8.0, 8.0],
+                    "recentSubmissionIntervalsMs": [20.0, 20.0],
                     "recentAttempts": [admission_attempt]
                 }
             },
@@ -5406,7 +5490,7 @@ mod tests {
             "summary must not retain per-texture rows"
         );
         assert_eq!(summary["widget"]["visible"], true);
-        assert_eq!(summary["frame"]["fps"], 50.0);
+        assert_eq!(summary["frame"]["submissionRateHz"], 50.0);
         assert!(summary["resources"].get("realizedTextures").is_none());
 
         let detail = renderer_diagnostics_detail(Some(&encoded), true, Some(9));

@@ -242,7 +242,7 @@ test('renderer metrics widget establishes visibility once, refreshes admitted fa
       widget: { visible },
       renderer: { class: 'accelerated', name: 'Fixture GPU', vendor: null },
       canvas: { cssWidth: 800, cssHeight: 600, backingWidth: 1600, backingHeight: 1200, effectivePixelRatio: 2 },
-      frame: { fps: 60, intervalMs: 16.67, syncSubmissionMs: 2.5 },
+      frame: { submissionRateHz: 60, intervalMs: 16.67, syncSubmissionMs: 2.5 },
       pacing: { timerDurationMs: null, effectiveDurationMs: 3.2, state: 'ready', mode: 'timerQuery' },
       statistics: {
         drawCallCount: { value: 4 }, triangleCount: { value: 12 }, renderHandleCount: { value: 2 },
@@ -290,7 +290,7 @@ test('renderer metrics widget establishes visibility once, refreshes admitted fa
 
   assert.ok(result.commands.includes('engine.renderer.show'));
   assert.ok(result.commands.filter((command) => command === 'engine.renderer.status').length >= 2);
-  assert.match(result.firstText ?? '', /FPS: 60\.0/);
+  assert.match(result.firstText ?? '', /Submission rate: 60\.0 Hz/);
   assert.match(result.firstText ?? '', /GPU timer: unavailable/);
   assert.equal(result.secondVisible, true, 'separate mounts read the one shared runtime visibility state');
   assert.equal(result.hiddenAfterConsole, true, 'a console state update reaches every mounted widget');

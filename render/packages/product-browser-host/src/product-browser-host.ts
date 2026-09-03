@@ -197,7 +197,22 @@ export interface ProductBrowserGhostPlateFeedbackResult {
 
 export interface ProductBrowserRendererDiagnosticsFeedback {
   readonly runtime: RustyApplicationRuntimeIdentity;
-  readonly snapshot: ReturnType<RustyApplicationHost['renderer']['diagnosticsReadout']>;
+  readonly snapshot: ReturnType<RustyApplicationHost['renderer']['diagnosticsReadout']> & {
+    readonly productFrames?: ProductBrowserProductFrameObservationSample;
+  };
+}
+
+export interface ProductBrowserProductFrameObservationSample {
+  readonly schemaVersion: 1;
+  readonly observedAtMs: number;
+  readonly receivedCount: number;
+  readonly appliedCount: number;
+  readonly firstReceivedAtMs: number | null;
+  readonly lastReceivedAtMs: number | null;
+  readonly lastAppliedAtMs: number | null;
+  readonly recentReceivedIntervalsMs: readonly number[];
+  readonly recentAppliedIntervalsMs: readonly number[];
+  readonly recentApplyLatencyMs: readonly number[];
 }
 
 export interface ProductBrowserRendererDiagnosticsFeedbackResult {
@@ -281,6 +296,10 @@ export type ProductBrowserRuntimeOutput =
 
 export type ProductBrowserRuntimeOutputListener = (
   output: ProductBrowserRuntimeOutput,
+) => void;
+
+export type ProductBrowserRuntimeOutputBatchListener = (
+  outputs: readonly ProductBrowserRuntimeOutput[],
 ) => void;
 
 /**
@@ -371,6 +390,10 @@ export interface ProductBrowserRuntimeAdapter {
   readonly subscribeOutputs: (
     listener: ProductBrowserRuntimeOutputListener,
   ) => () => void;
+  /** One callback per ordered host receipt or complete connection baseline. */
+  readonly subscribeOutputBatches?: (
+    listener: ProductBrowserRuntimeOutputBatchListener,
+  ) => () => void;
   /** Resolves once an asynchronous output subscription can receive runtime publications. */
   readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
   readonly dispose: () => Promise<void> | void;
@@ -392,6 +415,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly completeTimeline?: NonNullable<ProductBrowserRuntimeAdapter['completeTimeline']>;
   readonly subscribeTerminalFailures?: NonNullable<ProductBrowserRuntimeAdapter['subscribeTerminalFailures']>;
   readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
+  readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
   readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
   readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
 }
@@ -430,6 +454,9 @@ export function createProductBrowserRuntimeTransport(
     requireFunction(adapter.subscribeTerminalFailures, 'subscribeTerminalFailures');
   }
   requireFunction(adapter.subscribeOutputs, 'subscribeOutputs');
+  if (adapter.subscribeOutputBatches !== undefined) {
+    requireFunction(adapter.subscribeOutputBatches, 'subscribeOutputBatches');
+  }
   if (adapter.waitUntilOutputSubscriptionReady !== undefined) {
     requireFunction(adapter.waitUntilOutputSubscriptionReady, 'waitUntilOutputSubscriptionReady');
   }
@@ -455,6 +482,9 @@ export function createProductBrowserRuntimeTransport(
       ? {}
       : { subscribeTerminalFailures: adapter.subscribeTerminalFailures }),
     subscribeOutputs: adapter.subscribeOutputs,
+    ...(adapter.subscribeOutputBatches === undefined
+      ? {}
+      : { subscribeOutputBatches: adapter.subscribeOutputBatches }),
     ...(adapter.waitUntilOutputSubscriptionReady === undefined
       ? {}
       : { waitUntilOutputSubscriptionReady: adapter.waitUntilOutputSubscriptionReady }),
@@ -905,6 +935,7 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
   readonly report: NonNullable<ProductBrowserRuntimeTransport['reportRendererDiagnostics']>;
   readonly initialRuntime?: RustyApplicationRuntimeIdentity;
   readonly onObservation?: (renderSequence: number) => void;
+  readonly productFrames?: () => ProductBrowserProductFrameObservationSample;
 }): ProductBrowserRendererDiagnosticsReporter {
   let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
   let lastRenderSequence: number | null = null;
@@ -917,8 +948,11 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
   const flush = async (): Promise<void> => {
     const binding = currentBinding;
     if (binding === null) return;
-    const snapshot = options.renderer.diagnosticsReadout();
-    if (snapshot.submission.renderSequence === lastRenderSequence) return;
+    const rendererSnapshot = options.renderer.diagnosticsReadout();
+    if (rendererSnapshot.submission.renderSequence === lastRenderSequence) return;
+    const snapshot = options.productFrames === undefined
+      ? rendererSnapshot
+      : Object.freeze({ ...rendererSnapshot, productFrames: options.productFrames() });
     const result = await options.report(Object.freeze({ runtime: binding, snapshot }));
     if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
       throw new ProductBrowserHostError('transport_failed', 'renderer diagnostics result did not match the current Product runtime binding');
@@ -931,6 +965,97 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
     options.onObservation?.(snapshot.submission.renderSequence);
   };
   return Object.freeze({ bindRuntime, flush });
+}
+
+const PRODUCT_BROWSER_FRAME_OBSERVATION_HISTORY_LIMIT = 256;
+
+/** @internal Passive receipt/apply timing attached to existing renderer snapshots. */
+export function createProductBrowserProductFrameObservation(
+  now: () => number = () => globalThis.performance?.now() ?? Date.now(),
+): {
+  readonly received: () => number;
+  readonly applied: (receivedAtMs: number) => void;
+  readonly sample: () => ProductBrowserProductFrameObservationSample;
+} {
+  let receivedCount = 0;
+  let appliedCount = 0;
+  let firstReceivedAtMs: number | null = null;
+  let lastReceivedAtMs: number | null = null;
+  let lastAppliedAtMs: number | null = null;
+  const receivedIntervals: number[] = [];
+  const appliedIntervals: number[] = [];
+  const applyLatency: number[] = [];
+  const retain = (values: number[], value: number): void => {
+    if (!Number.isFinite(value) || value < 0) return;
+    values.push(value);
+    if (values.length > PRODUCT_BROWSER_FRAME_OBSERVATION_HISTORY_LIMIT) values.shift();
+  };
+  const received = (): number => {
+    const observedAtMs = now();
+    receivedCount += 1;
+    if (firstReceivedAtMs === null) firstReceivedAtMs = observedAtMs;
+    if (lastReceivedAtMs !== null) retain(receivedIntervals, observedAtMs - lastReceivedAtMs);
+    lastReceivedAtMs = observedAtMs;
+    return observedAtMs;
+  };
+  const applied = (receivedAtMs: number): void => {
+    const observedAtMs = now();
+    appliedCount += 1;
+    if (lastAppliedAtMs !== null) retain(appliedIntervals, observedAtMs - lastAppliedAtMs);
+    retain(applyLatency, observedAtMs - receivedAtMs);
+    lastAppliedAtMs = observedAtMs;
+  };
+  const sample = (): ProductBrowserProductFrameObservationSample => Object.freeze({
+    schemaVersion: 1,
+    observedAtMs: now(),
+    receivedCount,
+    appliedCount,
+    firstReceivedAtMs,
+    lastReceivedAtMs,
+    lastAppliedAtMs,
+    recentReceivedIntervalsMs: Object.freeze([...receivedIntervals]),
+    recentAppliedIntervalsMs: Object.freeze([...appliedIntervals]),
+    recentApplyLatencyMs: Object.freeze([...applyLatency]),
+  });
+  return Object.freeze({ received, applied, sample });
+}
+
+/** @internal One batch boundary produces no more than one host-cadence wake. */
+export function productBrowserOutputBatchNeedsRustHostPulse(
+  outputs: readonly ProductBrowserRuntimeOutput[],
+): boolean {
+  return outputs.some((output) => output.kind === 'runtime-progress' || output.kind === 'runtime-readout');
+}
+
+/** @internal Applies stable browser health attributes without redundant writes. */
+export function syncProductBrowserHealthDatasets(
+  roots: readonly Pick<HTMLElement, 'dataset'>[],
+  values: {
+    readonly state: ProductBrowserHostReadout['state'];
+    readonly mode: ProductBrowserRuntimeMode;
+    readonly progress: string;
+    readonly failure: string | null;
+  },
+  writeProgress: boolean,
+): void {
+  for (const root of roots) {
+    if (root.dataset['rustyProductHostState'] !== values.state) {
+      root.dataset['rustyProductHostState'] = values.state;
+    }
+    if (root.dataset['rustyProductRuntimeMode'] !== values.mode) {
+      root.dataset['rustyProductRuntimeMode'] = values.mode;
+    }
+    if (writeProgress && root.dataset['rustyProductRuntimeProgress'] !== values.progress) {
+      root.dataset['rustyProductRuntimeProgress'] = values.progress;
+    }
+    if (values.failure === null) {
+      if (root.dataset['rustyProductRuntimeFailure'] !== undefined) {
+        delete root.dataset['rustyProductRuntimeFailure'];
+      }
+    } else if (root.dataset['rustyProductRuntimeFailure'] !== values.failure) {
+      root.dataset['rustyProductRuntimeFailure'] = values.failure;
+    }
+  }
 }
 
 /** @internal Coalesces diagnostics work from the existing renderer cadence without owning a loop. */
@@ -1048,11 +1173,14 @@ export async function mountProductBrowserHost(
   let recoverableClockDiagnosticReported = false;
   let rendererDiagnosticsFailure: string | null = null;
   let rendererDiagnosticsFailureReported = false;
+  let lastProgressDomWriteAtMs = Number.NEGATIVE_INFINITY;
+  const progressDomWriteIntervalMs = 250;
   let audioFeedbackReporter: ProductBrowserAudioFeedbackReporter | null = null;
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
   let rendererDiagnosticsReporter: ProductBrowserRendererDiagnosticsReporter | null = null;
   let rendererDiagnosticsCadenceSampler: ProductBrowserRendererDiagnosticsCadenceSampler | null = null;
+  const productFrameObservation = createProductBrowserProductFrameObservation();
   // Renderer calls can be asynchronous (notably presentation realization),
   // while the retained runtime output port is synchronous. Keep their typed
   // realization order private to this host so a later frame cannot overtake a
@@ -1110,20 +1238,20 @@ export async function mountProductBrowserHost(
   const publishHealth = (
     reportToTransport = true,
     pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[] = [],
+    forceProgress = true,
   ): void => {
     const document = options.root.ownerDocument;
     const roots = [options.root, document.body].filter((root): root is HTMLElement => root !== null);
-    for (const root of roots) {
-      root.dataset['rustyProductHostState'] = state;
-      root.dataset['rustyProductRuntimeMode'] = options.lifecycleMode;
-      root.dataset['rustyProductRuntimeProgress'] = String(runtimeProgress);
-      if (failure === null) {
-        delete root.dataset['rustyProductRuntimeFailure'];
-      } else {
-        root.dataset['rustyProductRuntimeFailure'] = boundedDiagnostic(failure.message);
-      }
-    }
     const now = Date.now();
+    const writeProgress = forceProgress || now - lastProgressDomWriteAtMs >= progressDomWriteIntervalMs;
+    syncProductBrowserHealthDatasets(roots, {
+      state,
+      mode: options.lifecycleMode,
+      progress: String(runtimeProgress),
+      failure: failure === null ? null : boundedDiagnostic(failure.message),
+    }, writeProgress);
+    if (writeProgress) lastProgressDomWriteAtMs = now;
+    if (!reportToTransport && pageEvents.length === 0) return;
     const terminal = failure === null
       ? undefined
       : Object.freeze({
@@ -1345,14 +1473,14 @@ export async function mountProductBrowserHost(
           }
           if (started && state === 'ready') {
             runtimeProgress += 1;
-            publishHealth();
+            publishHealth(false, [], false);
           }
-          cadence?.pulseRustHost();
           return;
         case 'runtime-input-result':
           applyInputResult(output.result);
           return;
         case 'frame': {
+          const receivedAtMs = productFrameObservation.received();
           enqueueRendererOutput(() => {
             const receipt = host.renderer.applyFrame(output.frame);
             if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
@@ -1361,6 +1489,7 @@ export async function mountProductBrowserHost(
                 'renderer frame reported a terminal outcome',
               );
             }
+            productFrameObservation.applied(receivedAtMs);
           });
           return;
         }
@@ -1420,13 +1549,21 @@ export async function mountProductBrowserHost(
           return;
         case 'runtime-readout':
           runtimeReadout = output.readout;
-          cadence?.pulseRustHost();
           return;
         default:
           assertNever(output);
       }
     } catch (cause) {
       failAndClose(cause, 'output_failed');
+    }
+  };
+
+  const applyOutputBatch = (outputs: readonly ProductBrowserRuntimeOutput[]): void => {
+    for (const output of outputs) {
+      applyOutput(output);
+    }
+    if (productBrowserOutputBatchNeedsRustHostPulse(outputs) && state !== 'failed' && state !== 'disposed') {
+      cadence?.pulseRustHost();
     }
   };
 
@@ -1448,14 +1585,16 @@ export async function mountProductBrowserHost(
       publishHealth();
       return false;
     }
+    const outputs: ProductBrowserRuntimeOutput[] = [];
     if (result.binding !== undefined && result.nextInputSequence !== undefined) {
-      applyOutput({
+      outputs.push({
         kind: 'binding',
         runtime: result.binding,
         nextInputSequence: result.nextInputSequence,
       });
     }
-    if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
+    if (result.readout !== undefined) outputs.push({ kind: 'runtime-readout', readout: result.readout });
+    applyOutputBatch(outputs);
     if (!result.accepted) {
       // A typed recoverable or resync receipt is a completed operation. The
       // runtime may already have consumed lifecycle work, so never replay it
@@ -1472,14 +1611,16 @@ export async function mountProductBrowserHost(
   };
 
   function applyInputResult(result: ProductBrowserRuntimeInputResult): void {
+    const outputs: ProductBrowserRuntimeOutput[] = [];
     if (result.binding !== undefined && result.nextInputSequence !== undefined) {
-      applyOutput({
+      outputs.push({
         kind: 'binding',
         runtime: result.binding,
         nextInputSequence: result.nextInputSequence,
       });
     }
-    if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
+    if (result.readout !== undefined) outputs.push({ kind: 'runtime-readout', readout: result.readout });
+    applyOutputBatch(outputs);
     if (!result.accepted) {
       if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') return;
       throw new ProductBrowserHostError(
@@ -1560,7 +1701,8 @@ export async function mountProductBrowserHost(
 
   try {
     unsubscribeTerminalFailures = transport.subscribeTerminalFailures?.(applyTerminalFailure) ?? null;
-    unsubscribeOutputs = transport.subscribeOutputs(applyOutput);
+    unsubscribeOutputs = transport.subscribeOutputBatches?.(applyOutputBatch)
+      ?? transport.subscribeOutputs((output) => applyOutputBatch([output]));
     let renderer = options.renderer;
     let runtimeStartedBeforeMount = false;
     if (requiresInitialRendererFrame) {
@@ -1638,6 +1780,7 @@ export async function mountProductBrowserHost(
       rendererDiagnosticsReporter = createProductBrowserRendererDiagnosticsReporter({
         renderer: application.renderer,
         report: transport.reportRendererDiagnostics,
+        productFrames: productFrameObservation.sample,
         onObservation: (renderSequence) => {
           lastRendererSequence = String(renderSequence);
           lastRendererObservationAtMs = Date.now();
@@ -1663,7 +1806,7 @@ export async function mountProductBrowserHost(
       });
     }
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
-    for (const output of bufferedOutputs) applyOutput(output);
+    applyOutputBatch(bufferedOutputs);
     await rendererOutputTail;
     if (failure !== null) throw failure;
     if (options.autoStart !== false && !runtimeStartedBeforeMount) {
@@ -1729,7 +1872,7 @@ export async function mountProductBrowserHost(
     }
     return queue.enqueue(async () => {
       const result = await transport.completeTimeline!(completion);
-      if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
+      if (result.readout !== undefined) applyOutputBatch([{ kind: 'runtime-readout', readout: result.readout }]);
       if (!result.accepted) {
         if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') {
           // Callback-entry failures carry the current ticket/binding/readout;

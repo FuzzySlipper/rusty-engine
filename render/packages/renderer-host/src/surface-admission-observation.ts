@@ -8,6 +8,7 @@ import type {
 } from './surface-submission-demand.js';
 
 export const RUSTY_RENDERER_SURFACE_ADMISSION_HISTORY_LIMIT = 64;
+export const RUSTY_RENDERER_SURFACE_INTERVAL_HISTORY_LIMIT = 256;
 
 export type RendererSurfaceAutomaticSubmissionAdmissionOutcome =
   | 'admitted'
@@ -67,6 +68,17 @@ export interface RendererSurfaceAutomaticSubmissionAdmissionSample {
   readonly admittedCount: number;
   readonly backendBlockedCount: number;
   readonly noDemandCount: number;
+  readonly firstAttemptAtMs: number | null;
+  readonly lastAttemptAtMs: number | null;
+  readonly demandCounts: {
+    readonly requested: number;
+    readonly viewportChanged: number;
+    readonly controls: number;
+    readonly presentation: number;
+    readonly retainedAnimation: number;
+  };
+  readonly recentCallbackIntervalsMs: readonly number[];
+  readonly recentSubmissionIntervalsMs: readonly number[];
   readonly recentAttempts: readonly RendererSurfaceAutomaticSubmissionAdmissionAttempt[];
 }
 
@@ -98,6 +110,18 @@ export class RendererSurfaceAutomaticSubmissionAdmissionObservation {
   #attemptCount = 0;
   #backendBlockedCount = 0;
   #noDemandCount = 0;
+  #firstAttemptAtMs: number | null = null;
+  #lastAttemptAtMs: number | null = null;
+  #lastSubmissionAtMs: number | null = null;
+  readonly #demandCounts = {
+    requested: 0,
+    viewportChanged: 0,
+    controls: 0,
+    presentation: 0,
+    retainedAnimation: 0,
+  };
+  readonly #recentCallbackIntervalsMs: number[] = [];
+  readonly #recentSubmissionIntervalsMs: number[] = [];
   readonly #recentAttempts: RendererSurfaceAutomaticSubmissionAdmissionAttempt[] = [];
 
   record(
@@ -107,10 +131,22 @@ export class RendererSurfaceAutomaticSubmissionAdmissionObservation {
     backend: RendererSurfaceAutomaticSubmissionBackendReadout,
     callback: RendererSurfaceAutomaticSubmissionCallbackPhases,
   ): void {
+    if (this.#firstAttemptAtMs === null) this.#firstAttemptAtMs = sourceTimeMs;
+    if (this.#lastAttemptAtMs !== null) {
+      retainInterval(this.#recentCallbackIntervalsMs, sourceTimeMs - this.#lastAttemptAtMs);
+    }
+    this.#lastAttemptAtMs = sourceTimeMs;
+    for (const reason of ['requested', 'viewportChanged', 'controls', 'presentation', 'retainedAnimation'] as const) {
+      if (demand[reason]) this.#demandCounts[reason] += 1;
+    }
     this.#attemptCount += 1;
     switch (outcome) {
       case 'admitted':
         this.#admittedCount += 1;
+        if (this.#lastSubmissionAtMs !== null) {
+          retainInterval(this.#recentSubmissionIntervalsMs, sourceTimeMs - this.#lastSubmissionAtMs);
+        }
+        this.#lastSubmissionAtMs = sourceTimeMs;
         break;
       case 'backendBlocked':
         this.#backendBlockedCount += 1;
@@ -155,7 +191,18 @@ export class RendererSurfaceAutomaticSubmissionAdmissionObservation {
       admittedCount: this.#admittedCount,
       backendBlockedCount: this.#backendBlockedCount,
       noDemandCount: this.#noDemandCount,
+      firstAttemptAtMs: this.#firstAttemptAtMs,
+      lastAttemptAtMs: this.#lastAttemptAtMs,
+      demandCounts: Object.freeze({ ...this.#demandCounts }),
+      recentCallbackIntervalsMs: Object.freeze([...this.#recentCallbackIntervalsMs]),
+      recentSubmissionIntervalsMs: Object.freeze([...this.#recentSubmissionIntervalsMs]),
       recentAttempts: Object.freeze([...this.#recentAttempts]),
     });
   }
+}
+
+function retainInterval(history: number[], intervalMs: number): void {
+  if (!Number.isFinite(intervalMs) || intervalMs < 0) return;
+  history.push(intervalMs);
+  if (history.length > RUSTY_RENDERER_SURFACE_INTERVAL_HISTORY_LIMIT) history.shift();
 }

@@ -336,6 +336,7 @@ export function createProductBrowserLocalHttpAdapter(
     readonly resolve: () => void;
   }>();
   const listeners = new Set<(output: ProductBrowserRuntimeOutput) => void>();
+  const batchListeners = new Set<(outputs: readonly ProductBrowserRuntimeOutput[]) => void>();
   const terminalFailureListeners = new Set<ProductBrowserRuntimeTerminalFailureListener>();
   const abortController = new AbortController();
 
@@ -704,35 +705,53 @@ export function createProductBrowserLocalHttpAdapter(
     );
   };
 
-  const publishOutput = (output: ProductBrowserRuntimeOutput): void => {
-    if (output.kind === 'binding') currentOutputBinding = output.runtime;
-    for (const candidate of [...listeners]) {
+  const publishOutputBatch = (outputs: readonly ProductBrowserRuntimeOutput[]): void => {
+    const batch = Object.freeze([...outputs]);
+    for (const output of batch) {
+      if (output.kind === 'binding') currentOutputBinding = output.runtime;
+    }
+    for (const candidate of [...batchListeners]) {
       try {
-        candidate(output);
+        candidate(batch);
       } catch (cause) {
         reportTransportError(new ProductBrowserLocalTransportError(
           'stream_failed',
-          `Product Browser local runtime output listener failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          `Product Browser local runtime output batch listener failed: ${cause instanceof Error ? cause.message : String(cause)}`,
           { cause, route: ROUTES.outputs },
         ));
       }
     }
+    for (const output of batch) {
+      for (const candidate of [...listeners]) {
+        try {
+          candidate(output);
+        } catch (cause) {
+          reportTransportError(new ProductBrowserLocalTransportError(
+            'stream_failed',
+            `Product Browser local runtime output listener failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            { cause, route: ROUTES.outputs },
+          ));
+        }
+      }
+    }
   };
 
-  const stageOrPublishOutput = (output: ProductBrowserRuntimeOutput): void => {
+  const stageOrPublishOutputBatch = (outputs: readonly ProductBrowserRuntimeOutput[]): void => {
     if (connectionBaselineComplete && !reattachingFreshBaseline) {
-      publishOutput(output);
+      publishOutputBatch(outputs);
       return;
     }
-    if (pendingConnectionOutputs.length >= MAXIMUM_CONNECTION_BASELINE_OUTPUTS) {
+    if (pendingConnectionOutputs.length + outputs.length > MAXIMUM_CONNECTION_BASELINE_OUTPUTS) {
       throw new ProductBrowserLocalTransportError(
         'output_decode_failed',
         `Product Browser local runtime connection baseline exceeds ${String(MAXIMUM_CONNECTION_BASELINE_OUTPUTS)} outputs`,
         { route: ROUTES.freshOutputs },
       );
     }
-    if (output.kind === 'binding') currentOutputBinding = output.runtime;
-    pendingConnectionOutputs.push(output);
+    for (const output of outputs) {
+      if (output.kind === 'binding') currentOutputBinding = output.runtime;
+      pendingConnectionOutputs.push(output);
+    }
   };
 
   const failFragmentStream = (cause: unknown): void => {
@@ -813,6 +832,9 @@ export function createProductBrowserLocalHttpAdapter(
               parseBoundedJson(event.data, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
               maximumOutputBytes,
             );
+            if (currentOutputBinding === null && !connectionBaselineComplete) {
+              currentOutputBinding = fragment.runtime;
+            }
             if (currentOutputBinding === null || !sameRuntimeIdentity(fragment.runtime, currentOutputBinding)) {
               throw new TypeError('output fragment runtime binding is stale or unavailable');
             }
@@ -841,7 +863,7 @@ export function createProductBrowserLocalHttpAdapter(
             pending.data.push(fragment.data);
             pending.byteLength += new TextEncoder().encode(fragment.data).byteLength;
             pending.nextIndex += 1;
-            let completedOutput: ProductBrowserRuntimeOutput | null = null;
+            let completedOutputs: readonly ProductBrowserRuntimeOutput[] | null = null;
             if (pending.byteLength > pending.aggregateBytes) {
               throw new TypeError('output fragments exceed their declared aggregate length');
             }
@@ -851,12 +873,12 @@ export function createProductBrowserLocalHttpAdapter(
               }
               const encoded = pending.data.join('');
               pendingFragment = null;
-              completedOutput = decodeRuntimeOutput(parseBoundedJson(encoded, maximumOutputBytes));
+              completedOutputs = decodeRuntimeOutputBatch(parseBoundedJson(encoded, maximumOutputBytes));
             }
             if (connectionBaselineComplete && !reattachingFreshBaseline) {
               observeOutputSequence(event.lastEventId);
             }
-            if (completedOutput !== null) stageOrPublishOutput(completedOutput);
+            if (completedOutputs !== null) stageOrPublishOutputBatch(completedOutputs);
           } catch (cause) {
             failFragmentStream(cause);
           }
@@ -898,7 +920,7 @@ export function createProductBrowserLocalHttpAdapter(
             reattachingFreshBaseline = false;
             const baselineOutputs = pendingConnectionOutputs;
             pendingConnectionOutputs = [];
-            for (const output of baselineOutputs) publishOutput(output);
+            publishOutputBatch(baselineOutputs);
             resolveConnectionReady?.(result);
             resolveConnectionReady = null;
             rejectConnectionReady = null;
@@ -927,14 +949,14 @@ export function createProductBrowserLocalHttpAdapter(
                 { route: ROUTES.outputs },
               );
             }
-            const output = decodeRuntimeOutput(parseBoundedJson(
+            const outputs = decodeRuntimeOutputBatch(parseBoundedJson(
               event.data,
               Math.min(maximumOutputBytes, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
             ));
             if (connectionBaselineComplete && !reattachingFreshBaseline) {
               observeOutputSequence(event.lastEventId);
             }
-            stageOrPublishOutput(output);
+            stageOrPublishOutputBatch(outputs);
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
               ? cause
@@ -1027,6 +1049,30 @@ export function createProductBrowserLocalHttpAdapter(
     };
   };
 
+  const subscribeOutputBatches = (
+    listener: (outputs: readonly ProductBrowserRuntimeOutput[]) => void,
+  ): (() => void) => {
+    ensureOpen();
+    if (typeof listener !== 'function') {
+      throw new ProductBrowserLocalTransportError(
+        'invalid_options',
+        'Product Browser local runtime output batch listener must be a function',
+      );
+    }
+    batchListeners.add(listener);
+    // The existing stream owner remains the single lifecycle authority. Its
+    // private no-op listener keeps that stream alive while delivery happens
+    // once through the ordered batch callback above.
+    const releaseStream = subscribeOutputs(() => undefined);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      batchListeners.delete(listener);
+      releaseStream();
+    };
+  };
+
   const waitUntilOutputSubscriptionReady = async (): Promise<void> => {
     ensureOpen();
     if (stream === null || outputSubscriptionReady === null) {
@@ -1113,6 +1159,7 @@ export function createProductBrowserLocalHttpAdapter(
     resolveConnectionReady = null;
     rejectConnectionReady = null;
     listeners.clear();
+    batchListeners.clear();
     terminalFailureListeners.clear();
   };
 
@@ -1131,6 +1178,7 @@ export function createProductBrowserLocalHttpAdapter(
     completeTimeline,
     subscribeTerminalFailures,
     subscribeOutputs,
+    subscribeOutputBatches,
     waitUntilOutputSubscriptionReady,
     dispose,
   });
@@ -2308,6 +2356,21 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
     default:
       throw new TypeError('runtime output kind is not admitted');
   }
+}
+
+function decodeRuntimeOutputBatch(value: unknown): readonly ProductBrowserRuntimeOutput[] {
+  const record = requireRecord(value, 'runtime output');
+  if (record.kind !== 'runtime-output-batch') {
+    return Object.freeze([decodeRuntimeOutput(value)]);
+  }
+  requireKnownFields(record, ['kind', 'outputs'], 'runtime output batch');
+  const outputs = requirePlainArray(record['outputs'], 'runtime output batch outputs');
+  if (outputs.length === 0 || outputs.length > MAXIMUM_CONNECTION_BASELINE_OUTPUTS) {
+    throw new TypeError(
+      `runtime output batch must contain 1 to ${String(MAXIMUM_CONNECTION_BASELINE_OUTPUTS)} outputs`,
+    );
+  }
+  return Object.freeze(outputs.map(decodeRuntimeOutput));
 }
 
 function decodeAnimationCueDefinitions(

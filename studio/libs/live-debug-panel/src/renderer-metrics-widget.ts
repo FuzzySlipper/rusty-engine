@@ -138,7 +138,7 @@ function renderSummary(root: HTMLElement, summary: RendererMetricsSummary): void
   const statistics = summary.statistics ?? {};
   root.textContent = [
     'Renderer metrics',
-    `FPS: ${fixed(frame['fps'])} | interval: ${milliseconds(frame['intervalMs'])} | sync submit: ${milliseconds(frame['syncSubmissionMs'])}`,
+    `Submission rate: ${fixed(frame['submissionRateHz'])} Hz | last interval: ${milliseconds(frame['intervalMs'])} | sync submit: ${milliseconds(frame['syncSubmissionMs'])}`,
     `GPU timer: ${milliseconds(pacing['timerDurationMs'])} | effective pacing: ${milliseconds(pacing['effectiveDurationMs'])} | ${text(pacing['state'])}/${text(pacing['mode'])}`,
     `Renderer: ${text(summary.renderer?.class)} | ${text(summary.renderer?.name)} | ${text(summary.renderer?.vendor)}`,
     `Canvas: ${text(canvas['backingWidth'])}×${text(canvas['backingHeight'])} px | CSS ${text(canvas['cssWidth'])}×${text(canvas['cssHeight'])} | DPR ${fixed(canvas['effectivePixelRatio'])}`,

@@ -1994,8 +1994,22 @@ fn push_outputs_staged(
     mut bus: &mut OutputBus,
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<u64, ProductDevHostError> {
+    let mut incremental_outputs = Vec::new();
     for output in outputs {
         if let Some(binding) = output.binding_marker() {
+            if !incremental_outputs.is_empty() {
+                let active_binding = bus.active_binding.ok_or_else(|| {
+                    ProductDevHostError::new(
+                        "DEV_HOST_OUTPUT_BASELINE",
+                        "incremental output arrived before a complete binding baseline",
+                    )
+                })?;
+                append_output_events(
+                    &mut bus,
+                    active_binding,
+                    std::mem::take(&mut incremental_outputs),
+                )?;
+            }
             if bus.pending_baseline.is_some() {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_OUTPUT_BASELINE",
@@ -2050,8 +2064,11 @@ fn push_outputs_staged(
                 "incremental output arrived before a complete binding baseline",
             ));
         }
+        incremental_outputs.push(output);
+    }
+    if !incremental_outputs.is_empty() {
         let binding = bus.active_binding.expect("active binding was checked");
-        append_output_events(&mut bus, binding, vec![output])?;
+        append_output_events(&mut bus, binding, incremental_outputs)?;
     }
     Ok(bus.next_id)
 }
@@ -2063,23 +2080,23 @@ fn append_output_events(
 ) -> Result<(), ProductDevHostError> {
     let mut encoded_events = Vec::new();
     let mut next_transfer_id = bus.next_transfer_id;
-    for output in outputs {
-        let encoded = serde_json::to_string(&output).map_err(|error| {
-            ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string())
-        })?;
-        if encoded.len() > MAX_OUTPUT_AGGREGATE_BYTES {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_OUTPUT_BOUNDS",
-                "output aggregate exceeds host bound",
-            ));
-        }
-        if encoded.len() <= MAX_OUTPUT_EVENT_BYTES {
-            encoded_events.push(EncodedOutputEvent {
-                event: None,
-                json: encoded,
-            });
-            continue;
-        }
+    let encoded = serde_json::to_string(&serde_json::json!({
+        "kind": "runtime-output-batch",
+        "outputs": outputs,
+    }))
+    .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))?;
+    if encoded.len() > MAX_OUTPUT_AGGREGATE_BYTES {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_OUTPUT_BOUNDS",
+            "output aggregate exceeds host bound",
+        ));
+    }
+    if encoded.len() <= MAX_OUTPUT_EVENT_BYTES {
+        encoded_events.push(EncodedOutputEvent {
+            event: None,
+            json: encoded,
+        });
+    } else {
         next_transfer_id = next_transfer_id.checked_add(1).ok_or_else(|| {
             ProductDevHostError::new("DEV_HOST_OUTPUT_ID", "output transfer sequence exhausted")
         })?;
@@ -2541,6 +2558,34 @@ mod tests {
     }
 
     #[test]
+    fn one_receipt_encodes_as_one_ordered_output_batch() {
+        let mut bus = OutputBus {
+            active_binding: Some(binding()),
+            ..OutputBus::default()
+        };
+        push_outputs_staged(
+            &mut bus,
+            vec![
+                crate::model::ProductDevRuntimeOutput::runtime_readout(
+                    crate::model::ProductDevRuntimeReadout::new(
+                        binding(),
+                        crate::model::ProductDevRuntimeMode::Realtime,
+                        crate::model::ProductDevRuntimeState::Running,
+                    ),
+                ),
+                crate::model::ProductDevRuntimeOutput::runtime_progress(),
+            ],
+        )
+        .expect("receipt batch publishes");
+        assert_eq!(bus.events.len(), 1);
+        let value: serde_json::Value = serde_json::from_str(&bus.events[0].json).unwrap();
+        assert_eq!(value["kind"], "runtime-output-batch");
+        assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
+        assert_eq!(value["outputs"][0]["kind"], "runtime-readout");
+        assert_eq!(value["outputs"][1]["kind"], "runtime-progress");
+    }
+
+    #[test]
     fn oversized_aggregate_is_rejected_without_publishing_partial_events() {
         let mut bus = OutputBus::default();
         let error = append_output_events(
@@ -2597,7 +2642,7 @@ mod tests {
             ],
         )
         .expect_err("oversized complete producer baseline is rejected");
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BATCH_BOUNDS");
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BOUNDS");
         assert!(bus
             .lock()
             .expect("test bus lock")

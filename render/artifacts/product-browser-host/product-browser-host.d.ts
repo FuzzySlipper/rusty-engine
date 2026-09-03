@@ -190,7 +190,21 @@ export interface ProductBrowserGhostPlateFeedbackResult {
 }
 export interface ProductBrowserRendererDiagnosticsFeedback {
     readonly runtime: RustyApplicationRuntimeIdentity;
-    readonly snapshot: ReturnType<RustyApplicationHost['renderer']['diagnosticsReadout']>;
+    readonly snapshot: ReturnType<RustyApplicationHost['renderer']['diagnosticsReadout']> & {
+        readonly productFrames?: ProductBrowserProductFrameObservationSample;
+    };
+}
+export interface ProductBrowserProductFrameObservationSample {
+    readonly schemaVersion: 1;
+    readonly observedAtMs: number;
+    readonly receivedCount: number;
+    readonly appliedCount: number;
+    readonly firstReceivedAtMs: number | null;
+    readonly lastReceivedAtMs: number | null;
+    readonly lastAppliedAtMs: number | null;
+    readonly recentReceivedIntervalsMs: readonly number[];
+    readonly recentAppliedIntervalsMs: readonly number[];
+    readonly recentApplyLatencyMs: readonly number[];
 }
 export interface ProductBrowserRendererDiagnosticsFeedbackResult {
     readonly accepted: boolean;
@@ -275,6 +289,7 @@ export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
     readonly readout: ProductBrowserRuntimeReadout;
 };
 export type ProductBrowserRuntimeOutputListener = (output: ProductBrowserRuntimeOutput) => void;
+export type ProductBrowserRuntimeOutputBatchListener = (outputs: readonly ProductBrowserRuntimeOutput[]) => void;
 /**
  * Terminal local-transport failures. A dropped retained-output diff cannot
  * be recovered by EventSource retry; the host must stop until a fresh runtime
@@ -338,6 +353,8 @@ export interface ProductBrowserRuntimeAdapter {
     readonly completeTimeline?: (completion: ProductBrowserTimelineCompletion) => Promise<ProductBrowserTimelineCompletionResult>;
     readonly subscribeTerminalFailures?: (listener: ProductBrowserRuntimeTerminalFailureListener) => () => void;
     readonly subscribeOutputs: (listener: ProductBrowserRuntimeOutputListener) => () => void;
+    /** One callback per ordered host receipt or complete connection baseline. */
+    readonly subscribeOutputBatches?: (listener: ProductBrowserRuntimeOutputBatchListener) => () => void;
     /** Resolves once an asynchronous output subscription can receive runtime publications. */
     readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
     readonly dispose: () => Promise<void> | void;
@@ -358,6 +375,7 @@ export interface ProductBrowserRuntimeTransport {
     readonly completeTimeline?: NonNullable<ProductBrowserRuntimeAdapter['completeTimeline']>;
     readonly subscribeTerminalFailures?: NonNullable<ProductBrowserRuntimeAdapter['subscribeTerminalFailures']>;
     readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
+    readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
     readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
     readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
 }
@@ -490,7 +508,23 @@ export declare function createProductBrowserRendererDiagnosticsReporter(options:
     readonly report: NonNullable<ProductBrowserRuntimeTransport['reportRendererDiagnostics']>;
     readonly initialRuntime?: RustyApplicationRuntimeIdentity;
     readonly onObservation?: (renderSequence: number) => void;
+    readonly productFrames?: () => ProductBrowserProductFrameObservationSample;
 }): ProductBrowserRendererDiagnosticsReporter;
+/** @internal Passive receipt/apply timing attached to existing renderer snapshots. */
+export declare function createProductBrowserProductFrameObservation(now?: () => number): {
+    readonly received: () => number;
+    readonly applied: (receivedAtMs: number) => void;
+    readonly sample: () => ProductBrowserProductFrameObservationSample;
+};
+/** @internal One batch boundary produces no more than one host-cadence wake. */
+export declare function productBrowserOutputBatchNeedsRustHostPulse(outputs: readonly ProductBrowserRuntimeOutput[]): boolean;
+/** @internal Applies stable browser health attributes without redundant writes. */
+export declare function syncProductBrowserHealthDatasets(roots: readonly Pick<HTMLElement, 'dataset'>[], values: {
+    readonly state: ProductBrowserHostReadout['state'];
+    readonly mode: ProductBrowserRuntimeMode;
+    readonly progress: string;
+    readonly failure: string | null;
+}, writeProgress: boolean): void;
 /** @internal Coalesces diagnostics work from the existing renderer cadence without owning a loop. */
 export declare function createProductBrowserRendererDiagnosticsCadenceSampler(options: {
     readonly enqueueOperation: ProductBrowserOperationQueue['enqueue'];

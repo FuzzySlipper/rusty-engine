@@ -8,6 +8,9 @@ import {
   createProductBrowserGhostPlateFeedbackReporter,
   createProductBrowserRendererDiagnosticsCadenceSampler,
   createProductBrowserRendererDiagnosticsReporter,
+  createProductBrowserProductFrameObservation,
+  productBrowserOutputBatchNeedsRustHostPulse,
+  syncProductBrowserHealthDatasets,
   isDroppedClockRegression,
   productBrowserAtomicReceiptMayContinue,
   productBrowserPresentationReceiptMayContinue,
@@ -18,6 +21,79 @@ import {
   productBrowserBundleAssets,
   productBrowserBundleDescriptor,
 } from './product-browser-host.js';
+
+test('product frame observation retains receipt apply rate and latency without scheduling', () => {
+  let timeMs = 10;
+  const observation = createProductBrowserProductFrameObservation(() => timeMs);
+  const first = observation.received();
+  timeMs = 12;
+  observation.applied(first);
+  timeMs = 26;
+  const second = observation.received();
+  timeMs = 31;
+  observation.applied(second);
+  timeMs = 40;
+  assert.deepEqual(observation.sample(), {
+    schemaVersion: 1,
+    observedAtMs: 40,
+    receivedCount: 2,
+    appliedCount: 2,
+    firstReceivedAtMs: 10,
+    lastReceivedAtMs: 26,
+    lastAppliedAtMs: 31,
+    recentReceivedIntervalsMs: [16],
+    recentAppliedIntervalsMs: [19],
+    recentApplyLatencyMs: [2, 5],
+  });
+});
+
+test('adjacent readout and progress request one batch-level host wake', () => {
+  assert.equal(productBrowserOutputBatchNeedsRustHostPulse([
+    {
+      kind: 'runtime-readout',
+      readout: {
+        artifact: 'rusty.product.runtime-readout',
+        runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+        mode: 'realtime',
+        state: 'running',
+        admittedSimulationSteps: '1',
+        admittedPresentations: '1',
+        droppedRealtimeSteps: '0',
+        clockRegressions: '0',
+        scaledRemainder: 0,
+        lastObservedTimeNs: '1',
+        fault: null,
+      },
+    },
+    { kind: 'runtime-progress', owner: 'rust-host' },
+  ]), true);
+  assert.equal(productBrowserOutputBatchNeedsRustHostPulse([]), false);
+});
+
+test('browser health datasets skip stable attributes and passive progress', () => {
+  const values: Record<string, string> = {};
+  let writes = 0;
+  const dataset = new Proxy(values, {
+    set(target, key, value) {
+      writes += 1;
+      return Reflect.set(target, key, value);
+    },
+    deleteProperty(target, key) {
+      writes += 1;
+      return Reflect.deleteProperty(target, key);
+    },
+  }) as DOMStringMap;
+  const roots = [{ dataset }];
+  const health = { state: 'ready' as const, mode: 'realtime' as const, progress: '1', failure: null };
+  syncProductBrowserHealthDatasets(roots, health, true);
+  assert.equal(writes, 3);
+  syncProductBrowserHealthDatasets(roots, health, true);
+  assert.equal(writes, 3);
+  syncProductBrowserHealthDatasets(roots, { ...health, progress: '2' }, false);
+  assert.equal(writes, 3);
+  syncProductBrowserHealthDatasets(roots, { ...health, progress: '2' }, true);
+  assert.equal(writes, 4);
+});
 import type {
   ProductBrowserRuntimeAdapter,
   ProductBrowserRuntimeOutput,
