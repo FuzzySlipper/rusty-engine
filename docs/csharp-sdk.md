@@ -79,10 +79,11 @@ dotnet msbuild /path/to/Example.Game.csproj -t:VerifyRustyEngineAot
 
 Engine contributors may run `rusty dev --engine-source
 /absolute/rusty-engine`. That explicit option selects the source checkout's
-runtime pack; the project must opt into `RustyEngineUseSourceDevelopment` with
-an absolute `RustyEngineSourceDevelopmentPath` and exclude the package's
-compile/runtime assets as the SDK directs. Never make this override, an
-adjacent checkout, or downstream binding generation the normal product setup.
+runtime pack and supplies `RustyEngineUseSourceDevelopment` plus the absolute
+`RustyEngineSourceDevelopmentPath` to MSBuild. The product project must
+conditionally exclude the package's compile/runtime assets when that flag is
+true, as the SDK directs. Never make this override, an adjacent checkout, or
+downstream binding generation the normal product setup.
 
 The fixtures in this repository remain broad provider proof scaffolding. They
 are useful when changing the ABI/generator/runtime, but they are not a template
