@@ -210,6 +210,12 @@ export interface RendererSurfaceDiagnosticsReadout {
   readonly pacing: RendererSurfaceAutomaticSubmissionPacingSample;
   readonly resources: {
     readonly definedTextureCount: number;
+    /** Selected retained sky descriptor; null fields mean no selected sky. */
+    readonly skyBackground: {
+      readonly textureId: string | null;
+      readonly contentHash: string | null;
+      readonly resource: string | null;
+    };
     readonly realizedTextures: readonly {
       readonly id: string;
       readonly resource: string | null;
@@ -1154,6 +1160,7 @@ function mountPreparedRendererSurface(
         pacing,
         resources: Object.freeze({
           definedTextureCount: projectionSnapshot.textures.length,
+          skyBackground: backendSurface.renderer.skyBackgroundReadout(),
           realizedTextures: Object.freeze(backendSurface.renderer.textureResourceReadout()
             .map((texture) => Object.freeze({
               id: texture.id,

@@ -129,6 +129,8 @@ interface BrowserProof {
     readonly lookingDown: readonly [number, number, number, number];
     readonly cleared: readonly [number, number, number, number];
   };
+  readonly skyBackgroundReadout: ReturnType<RendererSurface['diagnosticsReadout']>['resources']['skyBackground'];
+  readonly skyBackgroundViewComposition: ReturnType<RendererSurface['viewCompositionReadout']>;
   readonly staticDemandApplied: boolean;
   readonly staticDemandCameraPosition: readonly [number, number, number];
   readonly staticDemandCameraRenderCount: number;
@@ -831,6 +833,7 @@ async function main(): Promise<void> {
     },
     pixelRatio: 1,
     projection: { fovYDegrees: 90, near: 0.1, far: 10 },
+    viewComposition: skyBackgroundViewComposition(70),
   });
   const skyContext = skyCanvas.getContext('webgl2') ?? skyCanvas.getContext('webgl');
   if (skyContext === null) throw new Error('sky background WebGL context is unavailable');
@@ -849,18 +852,23 @@ async function main(): Promise<void> {
   };
   skySurface.renderOnce(1);
   const skyInitial = readSkyPixel();
+  const skyBackgroundReadout = skySurface.diagnosticsReadout().resources.skyBackground;
   skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: 0, yawDegrees: 0 });
   skySurface.renderOnce(2);
   const skyTranslated = readSkyPixel();
   skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: 0, yawDegrees: 180 });
+  skySurface.configureViews(skyBackgroundViewComposition(70, 180));
   skySurface.renderOnce(3);
   const skyRotated = readSkyPixel();
   skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: 70, yawDegrees: 0 });
+  skySurface.configureViews(skyBackgroundViewComposition(70));
   skySurface.renderOnce(4);
   const skyLookingUp = readSkyPixel();
   skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: -70, yawDegrees: 0 });
+  skySurface.configureViews(skyBackgroundViewComposition(-70));
   skySurface.renderOnce(5);
   const skyLookingDown = readSkyPixel();
+  const skyBackgroundViewCompositionReadout = skySurface.viewCompositionReadout();
   skySurface.applyFrame({
     schemaVersion: 1,
     ops: [{ op: 'setSkyBackground', background: null }],
@@ -1035,6 +1043,8 @@ async function main(): Promise<void> {
     staticMeshRecreateStatistics,
     staticMeshTexturePixels,
     skyBackgroundPixels,
+    skyBackgroundReadout,
+    skyBackgroundViewComposition: skyBackgroundViewCompositionReadout,
     staticDemandApplied: staticDemandApplied.applied,
     staticDemandCameraPosition,
     staticDemandCameraRenderCount: staticDemandCameraSequence - staticDemandDirtySequence,
@@ -2101,6 +2111,35 @@ function viewComposition(
         viewport: { x: 0.58, y: 0.52, width: 0.38, height: 0.42 },
       },
     }],
+  };
+}
+
+/**
+ * A primary-only full-canvas composition used to prove that a selected
+ * equirectangular background is sampled correctly by the same configured-view
+ * path that products use. There are no offscreen targets or presentation
+ * copies to obscure the framebuffer result.
+ */
+function skyBackgroundViewComposition(
+  pitchDegrees: number,
+  yawDegrees = 0,
+): RendererViewComposition {
+  return {
+    schemaVersion: 1,
+    cameras: [{
+      id: 'camera.sky-background-proof',
+      pose: { position: [0, 0, 0], pitchDegrees, yawDegrees },
+      projection: { kind: 'perspective', fovYDegrees: 90, near: 0.1, far: 10 },
+    }],
+    targets: [],
+    views: [{
+      id: 'view.sky-background-proof',
+      cameraId: 'camera.sky-background-proof',
+      order: 10,
+      target: { kind: 'primary' },
+      viewport: { x: 0, y: 0, width: 1, height: 1 },
+    }],
+    presentations: [],
   };
 }
 

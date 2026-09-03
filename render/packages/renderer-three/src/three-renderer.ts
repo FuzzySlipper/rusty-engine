@@ -256,6 +256,19 @@ export interface RendererTextureResourceReadout {
   readonly decodedBytes: number;
 }
 
+/**
+ * The retained texture currently selected as the scene's sky background.
+ *
+ * This is intentionally descriptor-level evidence only: it identifies the
+ * Engine-owned retained resource without leaking the mutable Three texture
+ * clone used by the equirectangular backend path.
+ */
+export interface RendererSkyBackgroundReadout {
+  readonly textureId: string | null;
+  readonly contentHash: string | null;
+  readonly resource: string | null;
+}
+
 export const RUSTY_RENDERER_TEXTURE_MAX_RETAINED = 256;
 export const RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES = 128 * 1024 * 1024;
 export const RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES = 256 * 1024 * 1024;
@@ -2410,6 +2423,17 @@ export class ThreeRenderer {
     return Object.freeze([...this.#textureResources.values()]
       .map((retained) => Object.freeze({ ...retained.readout }))
       .sort((left, right) => left.id.localeCompare(right.id)));
+  }
+
+  /** Immutable selected-sky identity for diagnostics and browser proof. */
+  skyBackgroundReadout(): RendererSkyBackgroundReadout {
+    const textureId = this.#skyBackgroundTextureId;
+    const retained = textureId === null ? undefined : this.#textureResources.get(textureId);
+    return Object.freeze({
+      textureId,
+      contentHash: retained?.readout.contentHash ?? null,
+      resource: retained?.readout.resource ?? null,
+    });
   }
 
   /** Immutable presentation-only specialization readout for diagnostics/tests. */

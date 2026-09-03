@@ -400,6 +400,21 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.skyBackgroundPixels.lookingUp).toEqual([0, 255, 0, 255]);
   expect(proof.skyBackgroundPixels.lookingDown).toEqual([0, 0, 0, 0]);
   expect(proof.skyBackgroundPixels.cleared).toEqual([18, 52, 86, 255]);
+  expect(proof.skyBackgroundReadout).toEqual({
+    textureId: 'texture/sky-background-proof',
+    contentHash: 'sha256:c24a06c7166ffb6c73fd96e5c681d639581cd6cb4ee76ed41becc29b6a39e211',
+    resource: null,
+  });
+  expect(proof.skyBackgroundViewComposition.views).toEqual([expect.objectContaining({
+    id: 'view.sky-background-proof',
+    cameraId: 'camera.sky-background-proof',
+    target: { kind: 'primary' },
+    viewport: { x: 0, y: 0, width: 1, height: 1 },
+  })]);
+  expect(proof.skyBackgroundViewComposition.resources).toEqual({
+    presentationCount: 0,
+    targetCount: 0,
+  });
   expect(proof.spriteBillboardPixels.initialSpherical)
     .toEqual(proof.spriteBillboardPixels.initialCylindrical);
   const initialBottomHalf = proof.spriteBillboardPixels.initialSpherical.slice(0, 16 * 32);

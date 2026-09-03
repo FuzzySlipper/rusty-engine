@@ -2649,14 +2649,23 @@ void test('sky background flips asymmetric equirectangular content without chang
   ];
   const before = rgbaPng(4, 2, beforePixels);
   const after = rgbaPng(4, 2, afterPixels);
-  const renderer = new ThreeRenderer();
+  const source = new TestTextureResourceSource(before);
+  const renderer = new ThreeRenderer({ textureResourceSource: source });
   const beforeTexture = {
-    ...textureDescriptor(before), width: 4, height: 2, wrap: 'clamp' as const,
+    ...textureDescriptor(before, 1, 'resource'), width: 4, height: 2, wrap: 'clamp' as const,
   };
+  const beforeResource = beforeTexture.payload?.source;
+  assert.equal(beforeResource?.kind, 'resource');
   renderer.applyFrame({ schemaVersion: 1, ops: [
     { op: 'defineTexture', texture: beforeTexture },
     { op: 'setSkyBackground', background: { texture: beforeTexture.id } },
   ] });
+  assert.deepEqual(renderer.skyBackgroundReadout(), {
+    textureId: beforeTexture.id,
+    contentHash: beforeTexture.contentHash,
+    resource: beforeResource.resource,
+  });
+  assert.ok(Object.isFrozen(renderer.skyBackgroundReadout()));
   const retainedBefore = renderer.textureObjectFor(beforeTexture.id);
   const firstBackground = renderer.scene.background;
   assert.ok(retainedBefore instanceof THREE.DataTexture);
@@ -2694,6 +2703,11 @@ void test('sky background flips asymmetric equirectangular content without chang
   finalBackground.addEventListener('dispose', () => { finalDisposals += 1; });
   renderer.applyDiff({ op: 'setSkyBackground', background: null });
   assert.equal(renderer.scene.background, null);
+  assert.deepEqual(renderer.skyBackgroundReadout(), {
+    textureId: null,
+    contentHash: null,
+    resource: null,
+  });
   assert.equal(finalDisposals, 1);
   assert.equal(renderer.resourceStatistics().textureResourceCount, 1);
   renderer.dispose();
