@@ -28067,8 +28067,9 @@ async function dD(e) {
 				case "frame": {
 					let e = O.received();
 					he(() => {
-						if (!$E(o.renderer.applyFrame(n.frame).outcome)) throw new Z("output_failed", "renderer frame reported a terminal outcome");
-						O.applied(e);
+						let t = o.renderer.applyFrame(n.frame);
+						if (!$E(t.outcome)) throw new Z("output_failed", "renderer frame reported a terminal outcome");
+						t.outcome === "applied" && O.applied(e);
 					});
 					return;
 				}
