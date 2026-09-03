@@ -47,7 +47,11 @@ jobs:
       - name: Install pair build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang jq unzip
+          sudo apt-get install --yes clang libclang-dev jq unzip
+          libclang_path="$(find /usr/lib/llvm-* -name libclang.so -print -quit)"
+          test -n "$libclang_path"
+          libclang_dir="$(dirname "$libclang_path")"
+          echo "LD_LIBRARY_PATH=$libclang_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
           pnpm --dir render install --frozen-lockfile --ignore-scripts
           pnpm --dir studio install --frozen-lockfile
           dotnet restore csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj
