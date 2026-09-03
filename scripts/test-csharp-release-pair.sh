@@ -91,8 +91,6 @@ mkdir -p "$consumer_home" "$consumer_packages"
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
         dotnet restore PairConsumer.csproj --configfile NuGet.Config
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-        dotnet build PairConsumer.csproj --no-restore
-    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
         dotnet msbuild PairConsumer.csproj -t:StageRustyEngineCoreClrProduct -p:RustyEngineProductPort=0
 )
 staged=$(cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \

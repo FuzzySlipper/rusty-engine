@@ -187,6 +187,10 @@ staged_product_directory=$(cd "$consumer_dir" && DOTNET_CLI_HOME="$consumer_home
     echo "test-csharp-sdk-package: CoreCLR staging did not emit the generated composition assembly." >&2
     exit 1
 }
+if ! find "$consumer_dir/obj/Rusty.Engine/Composition/coreclr/obj" -type f -name 'ProductExports.g.cs' -print -quit | grep -q .; then
+    echo "test-csharp-sdk-package: first CoreCLR staging did not generate ProductExports for the composition assembly." >&2
+    exit 1
+fi
 [[ -f "$staged_product_directory/coreclr/Rusty.Engine.Product.runtimeconfig.json" ]] || {
     echo "test-csharp-sdk-package: CoreCLR staging did not emit the generated runtimeconfig." >&2
     exit 1

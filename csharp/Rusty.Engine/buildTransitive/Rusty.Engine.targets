@@ -61,8 +61,11 @@
 
   <Target Name="BuildRustyEngineCoreClrProduct"
           DependsOnTargets="GenerateRustyEngineProductComposition">
-    <MSBuild Projects="$(_RustyEngineCoreClrCompositionProject)" Targets="Restore;Build"
-             Properties="Configuration=$(Configuration)" />
+    <!-- Restore writes NuGet's generated imports. Invoke Build in a new MSBuild
+         process after Restore so the package's composition-only analyzer import
+         is evaluated on the first staging attempt. -->
+    <Exec Command="dotnet restore &quot;$(_RustyEngineCoreClrCompositionProject)&quot; --nologo" />
+    <Exec Command="dotnet build &quot;$(_RustyEngineCoreClrCompositionProject)&quot; --no-restore --configuration &quot;$(Configuration)&quot; --nologo" />
   </Target>
 
   <!-- CoreCLR is the normal, explicit staging operation used by development. -->
