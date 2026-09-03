@@ -19539,7 +19539,7 @@ var k_ = 31, A_ = 4096, j_ = 2, M_ = class {
 		}
 		this.#y.replaceLiveMaterial(e, (e) => this.#xe(e));
 		for (let t of this.#i.values()) {
-			if (t.meshMaterialSlots?.some((t) => `voxel-material/${String(t)}` === e)) {
+			if (t.kind === "primitive" && t.meshProvenance !== void 0 && t.meshMaterialSlots?.some((t) => `voxel-material/${String(t)}` === e)) {
 				this.#Me(t, t.viewMaterial ?? Og);
 				continue;
 			}

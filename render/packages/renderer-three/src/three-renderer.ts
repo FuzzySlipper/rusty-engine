@@ -2220,7 +2220,17 @@ export class ThreeRenderer {
     this.#animatedMeshes.replaceLiveMaterial(id, (binding) => this.#materialFor(binding));
 
     for (const entry of this.#handles.values()) {
-      if (entry.meshMaterialSlots?.some(slot => `voxel-material/${String(slot)}` === id)) {
+      // Only primitive nodes whose geometry was replaced by an uploaded mesh
+      // consume the legacy `voxel-material/<slot>` family. Static and voxel-
+      // object entries also retain numeric mesh slots, but those slots resolve
+      // through their asset-local material table instead. Treating a matching
+      // number as sufficient corrupts an unrelated voxel object's palette when
+      // a voxel-scene material is defined later in the same frame.
+      if (
+        entry.kind === 'primitive'
+        && entry.meshProvenance !== undefined
+        && entry.meshMaterialSlots?.some(slot => `voxel-material/${String(slot)}` === id)
+      ) {
         this.#applyUploadedMeshMaterial(entry, entry.viewMaterial ?? MaterialFallback);
         continue;
       }

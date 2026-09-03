@@ -1578,6 +1578,47 @@ void test('voxel-object instances share frame meshes and swap frames without han
   assert.equal(replacementBatches[0]?.count, 2);
 });
 
+void test('voxel-scene material definitions do not replace voxel-object palette materials', () => {
+  const renderer = new ThreeRenderer();
+  const handle = renderHandle(83);
+  const iron = { ...woodMaterial(), id: 'material/iron', color: [0.4, 0.4, 0.45, 1] } as const;
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineMaterial', material: woodMaterial() },
+      { op: 'defineMaterial', material: iron },
+      { op: 'defineVoxelObject', asset: voxelObjectAsset() },
+      {
+        op: 'createVoxelObjectInstance',
+        handle,
+        parent: null,
+        instance: voxelObjectInstance(),
+      },
+    ],
+  });
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'defineMaterial',
+        material: { ...woodMaterial(), id: 'voxel-material/1', color: [0.1, 0.8, 0.2, 1] },
+      },
+      {
+        op: 'defineMaterial',
+        material: { ...woodMaterial(), id: 'voxel-material/2', color: [0.8, 0.1, 0.2, 1] },
+      },
+    ],
+  });
+
+  const materials = (renderer.objectFor(handle) as THREE.Mesh).material as THREE.MeshStandardMaterial[];
+  assert.equal(materials.length, 2, 'asset palette cardinality remains intact');
+  assert.ok(Math.abs(materials[0]!.color.r - 0.6) < 1e-6, 'slot 1 retains material/wood');
+  assert.ok(Math.abs(materials[0]!.color.b - 0.2) < 1e-6, 'slot 1 is not a debug hue');
+  assert.ok(Math.abs(materials[1]!.color.r - 0.4) < 1e-6, 'slot 2 retains material/iron');
+  assert.ok(Math.abs(materials[1]!.color.b - 0.45) < 1e-6, 'slot 2 is not a debug hue');
+  assert.equal(renderer.fallbackMaterialCount, 0);
+});
+
 void test('voxel-object definitions consume the content-addressed mesh resource path', () => {
   const source = new MapResourceSource();
   source.resources.set(RESOURCE_ID, quadResourceBytes());
