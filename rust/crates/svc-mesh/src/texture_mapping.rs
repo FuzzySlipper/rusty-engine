@@ -60,6 +60,8 @@ impl SignedTextureAxis {
 
 /// Deterministic face-local U/V basis. In every case `U × V` equals the
 /// outward face normal, so opposite faces do not acquire an implicit mirror.
+/// Vertical faces additionally keep world height on decreasing texture V so
+/// authored images remain upright around all four cardinal directions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VoxelSurfaceTextureBasis {
     pub u: SignedTextureAxis,
@@ -73,12 +75,12 @@ pub const fn voxel_surface_texture_basis(direction: Direction6) -> VoxelSurfaceT
 
     match direction {
         PosX => VoxelSurfaceTextureBasis {
-            u: SignedTextureAxis::positive(Y),
-            v: SignedTextureAxis::positive(Z),
+            u: SignedTextureAxis::positive(Z),
+            v: SignedTextureAxis::negative(Y),
         },
         NegX => VoxelSurfaceTextureBasis {
-            u: SignedTextureAxis::positive(Y),
-            v: SignedTextureAxis::negative(Z),
+            u: SignedTextureAxis::negative(Z),
+            v: SignedTextureAxis::negative(Y),
         },
         PosY => VoxelSurfaceTextureBasis {
             u: SignedTextureAxis::positive(Z),
@@ -89,8 +91,8 @@ pub const fn voxel_surface_texture_basis(direction: Direction6) -> VoxelSurfaceT
             v: SignedTextureAxis::negative(X),
         },
         PosZ => VoxelSurfaceTextureBasis {
-            u: SignedTextureAxis::positive(X),
-            v: SignedTextureAxis::positive(Y),
+            u: SignedTextureAxis::negative(X),
+            v: SignedTextureAxis::negative(Y),
         },
         NegZ => VoxelSurfaceTextureBasis {
             u: SignedTextureAxis::positive(X),
@@ -229,6 +231,54 @@ mod tests {
     }
 
     #[test]
+    fn vertical_faces_keep_world_height_on_texture_v() {
+        let lower = [3, 7, 11];
+        let upper = [3, 12, 11];
+        for direction in [
+            Direction6::PosX,
+            Direction6::NegX,
+            Direction6::PosZ,
+            Direction6::NegZ,
+        ] {
+            let lower_uv = project_voxel_surface_tile_point(direction, lower, [0, 0, 0]).unwrap();
+            let upper_uv = project_voxel_surface_tile_point(direction, upper, [0, 0, 0]).unwrap();
+            assert_eq!(lower_uv[1], -7.0, "{direction:?}");
+            assert_eq!(upper_uv[1], -12.0, "{direction:?}");
+            assert_eq!(upper_uv[0], lower_uv[0], "{direction:?}");
+        }
+    }
+
+    #[test]
+    fn large_vertical_greedy_faces_keep_upright_height_span() {
+        let faces = [
+            (
+                Direction6::PosX,
+                [[4, 2, 3], [4, 2, 10], [4, 8, 10], [4, 8, 3]],
+            ),
+            (
+                Direction6::NegX,
+                [[4, 2, 10], [4, 2, 3], [4, 8, 3], [4, 8, 10]],
+            ),
+            (
+                Direction6::PosZ,
+                [[9, 2, 3], [2, 2, 3], [2, 8, 3], [9, 8, 3]],
+            ),
+            (
+                Direction6::NegZ,
+                [[2, 2, 3], [9, 2, 3], [9, 8, 3], [2, 8, 3]],
+            ),
+        ];
+
+        for (direction, corners) in faces {
+            let uv = project_voxel_surface_tile_corners(direction, corners, [13, 17, 19]).unwrap();
+            assert_eq!(uv[0][1], -19.0, "{direction:?}");
+            assert_eq!(uv[1][1], -19.0, "{direction:?}");
+            assert_eq!(uv[2][1], -25.0, "{direction:?}");
+            assert_eq!(uv[3][1], -25.0, "{direction:?}");
+        }
+    }
+
+    #[test]
     fn negative_coordinates_repeat_with_euclidean_phase() {
         assert_eq!(
             repeat_voxel_tile_coordinate([-0.25, -2.0], [1.0, 3.0], [0.0, 0.0]),
@@ -244,7 +294,7 @@ mod tests {
     fn coordinate_projection_is_exact_at_limit_and_rejects_one_over() {
         assert_eq!(
             project_voxel_surface_tile_point(
-                Direction6::PosZ,
+                Direction6::NegZ,
                 [MAX_EXACT_TILE_COORDINATE, 0, 0],
                 [0, 0, 0],
             ),
