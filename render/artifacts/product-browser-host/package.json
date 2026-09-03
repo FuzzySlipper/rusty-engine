@@ -16,6 +16,7 @@
     "local-transport.d.ts",
     "product-browser-host.d.ts",
     "product-browser-host.js",
+    "renderer-preload.d.ts",
     "package.json"
   ]
 }
