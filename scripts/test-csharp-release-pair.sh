@@ -129,7 +129,7 @@ for _ in $(seq 1 40); do
     sleep 0.25
 done
 [[ -n "$origin" ]] || { cat "$host_log" >&2; echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not launch the CoreCLR product" >&2; exit 1; }
-curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "fixture.release-pair" and .product.ui.entry == "product-ui/main.js"' >/dev/null \
+curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "fixture.release-pair" and .ui.entry == "product-ui/main.js"' >/dev/null \
     || { echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime did not serve the staged Product" >&2; exit 1; }
 
 tampered="$work/tampered-pair"
