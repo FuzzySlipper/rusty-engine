@@ -1,8 +1,10 @@
 # Rusty Engine documentation
 
-This is the small, current documentation set for Rusty Engine's NativeAOT C#
-downstream lane. It describes demonstrated owners and source paths, not a
-promise that every proposal or Rust API is already exposed to C#.
+This is the small, current documentation set for Rusty Engine's packaged C#
+downstream lane. CoreCLR is the normal development loader and NativeAOT is an
+explicit fidelity/release path. The documentation describes demonstrated
+owners and source paths, not a promise that every proposal or Rust API is
+already exposed to C#.
 
 - [Architecture overview](architecture.md) explains the Rust, generated C#,
   C# product, and TypeScript lanes.

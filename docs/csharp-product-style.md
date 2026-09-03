@@ -1,6 +1,6 @@
 # C# product style
 
-This is a recommended product coding lane for NativeAOT C# products on Rusty
+This is a recommended product coding lane for C# products on Rusty
 Engine. It is not an Engine-enforced module framework and it does not claim
 that `IProductModule`, `ProductBuilder`, typed projection, typed content, or
 analyzer packages already exist. A product can use these practices with

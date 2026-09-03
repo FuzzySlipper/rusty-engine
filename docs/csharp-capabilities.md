@@ -141,7 +141,7 @@ host state rather than gameplay meaning:
 - [`runtime-ui`](../rust/crates/runtime-ui) transports bounded copied UI
   projections and owns no DOM or gameplay state.
 - [`product-dev-host`](../rust/crates/product-dev-host) supplies the local
-  browser development transport around a concrete NativeAOT product.
+  browser development transport around a staged CoreCLR or NativeAOT product.
 - [`csharp-product-runtime`](../rust/crates/csharp-product-runtime) loads the
   product library, binds generated tables, and integrates lifecycle with the
   host.
@@ -185,6 +185,6 @@ parallel native implementation in the product repository.
 
 After changing the ABI, regenerate bindings and compare the generated
 `IEngineContext` family list with this page. Verify only the changed boundary:
-focused Rust compilation, managed compilation, and a representative NativeAOT
-publish are normally sufficient. Generated files stay ignored and must never
-be edited or committed.
+focused Rust compilation, managed compilation, CoreCLR staging, and a
+representative NativeAOT publish are normally sufficient. Generated files stay
+ignored and must never be edited or committed.

@@ -4,30 +4,89 @@ This guide describes the C# surface that exists today. It distinguishes that
 surface from recommended product organization so an agent does not mistake a
 proposal for an API.
 
-## Build a product through the generated surface
+## Build a product through the packaged surface
 
-`Rusty.Engine` is the public C# dependency. Its project invokes
-[`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh)
-and compiles generated safe contracts and values from `obj/Generated`.
-`Rusty.Engine.ProductGenerator` is an analyzer/source-generator dependency of a
-NativeAOT composition project. It emits the internal native bootstrap and safe
-service implementations.
+`Rusty.Engine` is one immutable NuGet package containing the public C# service
+surface, managed helpers, generated contracts, and the product generator. An
+ordinary Product repository configures its package feed and references only the
+package:
 
-An ordinary product project should:
+```xml
+<ItemGroup>
+  <PackageReference Include="Rusty.Engine" Version="0.1.0-dev.EXACT" />
+</ItemGroup>
+```
 
-1. reference [`Rusty.Engine`](../csharp/Rusty.Engine),
-2. implement generated `IEngineProduct`,
-3. accept `ProductCreateContext` in its product constructor,
-4. keep an `IEngineContext` or only the named services it needs,
-5. select exactly one product with `[assembly: EngineProduct(typeof(...))]` in
-   the composition project, and
-6. let the generator supply exports and interop code.
+The ordinary product project also declares the concrete product and its bundle
+facts. A realtime product has a shape like:
 
-The fixture's [`Product.cs`](../fixtures/csharp-nativeaot-trial/Product.cs) and
-[`NativeProduct.cs`](../fixtures/csharp-nativeaot-trial/NativeProduct.cs) show
-the smallest current reference. The fixture's broad capability exercise is
-intentional proof scaffolding; a normal product should use only the service
-families it needs.
+```xml
+<PropertyGroup>
+  <RustyEngineProductEntryType>Example.Game.ExampleProduct</RustyEngineProductEntryType>
+  <RustyEngineProductId>example.game</RustyEngineProductId>
+  <RustyEngineProductTitle>Example Game</RustyEngineProductTitle>
+  <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/../../ui</RustyEngineProductUiRoot>
+  <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/../../content</RustyEngineProductContentRoot>
+  <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
+  <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+  <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+</PropertyGroup>
+```
+
+Input intents/mappings and optional UI-projection identity are declared with
+the corresponding `RustyEngineProduct*` MSBuild items/properties. The SDK owns
+the generated composition below `obj`; a Product must not check in a
+`NativeProduct` bridge, generated bindings, exports, or service-table code.
+
+Product code implements `IEngineProduct`, accepts `ProductCreateContext`, and
+keeps `IEngineContext` or the named services it needs. Exactly one concrete
+`RustyEngineProductEntryType` is declared. The generator supplies both CoreCLR
+and NativeAOT bind implementations without assembly scanning or product-side
+registration infrastructure.
+
+## Run and package
+
+The normal development command uses the `rusty` binary from the exact matching
+runtime pack:
+
+```bash
+/path/to/runtime-pack/bin/rusty dev \
+  --project /path/to/Example.Game.csproj \
+  --runtime /path/to/runtime-pack
+```
+
+It builds the ordinary project, asks the SDK to atomically stage a loose
+Product directory, launches the packaged host through CoreCLR, and restarts it
+when declared C#, UI, or content inputs change. `--bind-host`, `--port`, and
+`--live-debug` override the corresponding staging properties for a development
+session.
+
+The Product directory has `product.json`, managed output under `coreclr/`, and
+Product-owned `ui/` and `content/`. Engine JavaScript and host binaries stay in
+the runtime pack. Product UI is DOM UI and accessibility only; the Engine
+renderer remains the owner of non-UI presentation.
+
+The package and runtime pack carry exact generated ABI identities. A mismatch
+is rejected before product construction. Use a package and runtime pack built
+from the same Engine release; do not add version negotiation, copy a host into
+the Product, or repair the mismatch with handwritten interop.
+
+NativeAOT is an explicit fidelity/release check, not the edit-run loop:
+
+```bash
+dotnet msbuild /path/to/Example.Game.csproj -t:VerifyRustyEngineAot
+```
+
+Engine contributors may run `rusty dev --engine-source
+/absolute/rusty-engine`. That explicit option selects the source checkout's
+runtime pack; the project must opt into `RustyEngineUseSourceDevelopment` with
+an absolute `RustyEngineSourceDevelopmentPath` and exclude the package's
+compile/runtime assets as the SDK directs. Never make this override, an
+adjacent checkout, or downstream binding generation the normal product setup.
+
+The fixtures in this repository remain broad provider proof scaffolding. They
+are useful when changing the ABI/generator/runtime, but they are not a template
+for a downstream repository's launch topology.
 
 ## Current lifecycle
 

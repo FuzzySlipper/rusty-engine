@@ -1,6 +1,6 @@
 # Rusty Engine
 
-Rusty Engine is reusable Rust infrastructure for NativeAOT C# products. A
+Rusty Engine is reusable Rust infrastructure for ordinary C# products. A
 product owns its game and application meaning; the Engine supplies durable
 mechanisms and the host that makes that product run.
 
@@ -24,42 +24,46 @@ The paired proving product is `/home/dev/rusty-dagger`.
 | --- | --- | --- |
 | Rust ABI declaration | [`rust/crates/csharp-engine-abi`](rust/crates/csharp-engine-abi) | The single C ABI/function-table source. |
 | Rust Engine bridges | [`rust/crates/csharp-engine-services`](rust/crates/csharp-engine-services) | Concrete named Engine service bridges. |
-| Product runtime | [`rust/crates/csharp-product-runtime`](rust/crates/csharp-product-runtime) | Loads NativeAOT products and integrates their lifecycle with the host. |
+| Product runtime | [`rust/crates/csharp-product-runtime`](rust/crates/csharp-product-runtime) | Loads staged CoreCLR or NativeAOT products and integrates their lifecycle with the host. |
 | Binding generation | [`scripts/generate-csharp-native-bindings.sh`](scripts/generate-csharp-native-bindings.sh) and [`csharp/Rusty.Engine.BindingGenerator`](csharp/Rusty.Engine.BindingGenerator) | Generates native declarations, safe contracts/values, and generator inputs. |
 | Default managed C# assembly | [`csharp/Rusty.Engine`](csharp/Rusty.Engine) | The single runtime assembly containing generated contracts/values and handwritten managed helpers. |
-| Product bootstrap | [`csharp/Rusty.Engine.ProductGenerator`](csharp/Rusty.Engine.ProductGenerator) | Generates the internal NativeAOT exports and safe service implementations. |
+| Product bootstrap | [`csharp/Rusty.Engine.ProductGenerator`](csharp/Rusty.Engine.ProductGenerator) | Generates the internal CoreCLR/NativeAOT bind entrypoints and safe service implementations. |
 | Managed namespaces | [`Application`](csharp/Rusty.Engine/Application), [`Entities`](csharp/Rusty.Engine/Entities), [`Mechanics`](csharp/Rusty.Engine/Mechanics), [`Persistence`](csharp/Rusty.Engine/Persistence), [`Resolution`](csharp/Rusty.Engine/Resolution), [`StateMachine`](csharp/Rusty.Engine/StateMachine) | Optional reusable scheduling, entity, mechanics, persistence, resolution, and state-machine helpers inside `Rusty.Engine`; these are namespace boundaries, not separate runtime assemblies. |
 | Working fixture | [`fixtures/csharp-nativeaot-trial`](fixtures/csharp-nativeaot-trial) | Minimal buildable product and direct runtime exercise. |
 
-## NativeAOT quick start
+## Product quick start
 
-Generate bindings into a product-local ignored directory:
-
-```bash
-scripts/generate-csharp-native-bindings.sh /absolute/product/obj/Generated
-```
-
-The fixture is the smallest current end-to-end reference. Its game project
-references `Rusty.Engine`; its composition project references the source
-generator that supplies the internal native bootstrap.
+Ordinary product projects reference one immutable `Rusty.Engine` package and
+declare their product metadata in that project. With the matching runtime pack,
+the normal development command is:
 
 ```bash
-dotnet publish fixtures/csharp-nativeaot-trial/CsharpNativeAotTrial.csproj \
-  -c Release -r linux-x64 -o /tmp/rusty-nativeaot-trial
-
-cargo run -p csharp-product-runtime --locked -- \
-  --library /tmp/rusty-nativeaot-trial/CsharpNativeAotTrial.so \
-  --bundle-dir fixtures/csharp-nativeaot-trial/browser \
-  --content-dir fixtures/csharp-nativeaot-trial/content \
-  --mode demand --persistence-root /tmp/rusty-nativeaot-persistence \
-  --content-store-root /tmp/rusty-nativeaot-content-store \
-  --direct-intent runtime.exercise=payload:runtime.exercise.payload \
-  --port 0 --exercise
+/path/to/runtime-pack/bin/rusty dev \
+  --project /path/to/Product.Game.csproj \
+  --runtime /path/to/runtime-pack
 ```
 
-`obj/Generated` is build output: do not edit or commit it. Persistence and
-content-store roots are separate developer-host choices. The Engine never
-deletes a selected root on shutdown.
+`rusty dev` builds and atomically stages a loose Product bundle, starts it
+through CoreCLR, and restarts it when declared C#, UI, or content inputs change.
+The runtime pack supplies the Engine host and browser assets; a Product bundle
+contains only managed Product output, Product UI, Product content, and
+`product.json`.
+
+The SDK package and runtime pack must describe the same generated ABI identity.
+The bind rejects a mismatch with a rebuild/select-the-matching-pack diagnostic;
+there is no compatibility negotiation or adjacent-checkout discovery.
+
+NativeAOT is a separate fidelity/release operation:
+
+```bash
+dotnet msbuild /path/to/Product.Game.csproj -t:VerifyRustyEngineAot
+```
+
+Engine contributors may explicitly select source with `rusty dev
+--engine-source /home/dev/rusty-engine`; this is an exception, not a downstream
+setup requirement. Binding generation, Cargo hosting, and the fixtures in this
+repository are provider development and proof infrastructure. Products do not
+copy them or check in generated interop/composition code.
 
 ## Boundary in one page
 

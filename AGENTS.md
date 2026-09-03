@@ -2,7 +2,9 @@
 
 ## Direction and ownership
 
-Rusty Engine's current downstream lane is ordinary NativeAOT C#. The paired
+Rusty Engine's current downstream lane is ordinary C#. CoreCLR through the
+packaged SDK and `rusty dev` is the normal development path; NativeAOT is a
+separate fidelity/release path. The paired
 proving product is `/home/dev/rusty-dagger`.
 
 > The product decides. The Engine guarantees.
@@ -16,7 +18,7 @@ proving product is `/home/dev/rusty-dagger`.
 - This is not a language-authority contest. C# is expected to carry substantial
   application authority; Engine mechanisms stay upstream so products do not
   recreate fragile infrastructure.
-- NativeAOT product code is trusted first-party code. Do not add JSON protocols,
+- Product code is trusted first-party code. Do not add JSON protocols,
   generic dispatch, registries, compatibility negotiation, permission systems,
   or hostile-input ceremony to protect Engine from the product.
 
@@ -35,7 +37,7 @@ Read [the architecture overview](docs/architecture.md) and
   authorized, and stop. Do not recreate it in C#, TypeScript, or browser code
   merely to complete a task.
 
-## Generated NativeAOT boundary
+## Generated C# boundary
 
 - `rust/crates/csharp-engine-abi` is the sole ABI declaration source.
   `rust/crates/csharp-engine-services` implements named Engine bridges, and
@@ -45,10 +47,16 @@ Read [the architecture overview](docs/architecture.md) and
   ClangSharp, generating the header plus raw and safe C# inputs under ignored
   `obj/Generated` paths. Generated files are never edited or checked in.
 - `csharp/Rusty.Engine` is the public safe service/value surface;
-  `csharp/Rusty.Engine.ProductGenerator` generates the internal NativeAOT
-  bootstrap and service implementations. Ordinary product code references the
-  former and must not handwrite P/Invoke, exported entrypoints, unsafe native
-  calls, or parallel declarations.
+  `csharp/Rusty.Engine.ProductGenerator` generates the internal CoreCLR and
+  NativeAOT bind entrypoints and service implementations. Ordinary products
+  consume the immutable SDK package and must not handwrite P/Invoke, exported
+  entrypoints, unsafe native calls, parallel declarations, or checked
+  composition projects.
+- A matching runtime pack owns the Rust host and browser shell. `rusty dev`
+  stages the loose Product bundle and uses CoreCLR. Products do not copy Engine
+  browser assets or invoke Cargo to host themselves.
+- Engine source use must be an explicit contributor override. Never teach
+  adjacent-checkout discovery as ordinary downstream setup.
 - Add coherent named Engine capabilities to the Rust function table and the
   generator path. Do not create method-name dispatch, reflection, plugin
   registries, or a task-specific callback list.
@@ -99,7 +107,7 @@ full guide.
   necessary surfaces, proof scaffolding, drift/unsupported boundary, and any
   upstream request.
 - Tests are evidence, not the deliverable. Run generation, focused compilation,
-  NativeAOT publish, or a direct exercise only when it answers the task's
+  CoreCLR staging, NativeAOT publish, or a direct exercise only when it answers the task's
   actual question. Do not chase old documentation, provider-wide, browser,
   packaging, security, conformance, or downstream-Rust gates without a task
   requirement.
