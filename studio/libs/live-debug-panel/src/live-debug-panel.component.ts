@@ -125,7 +125,7 @@ let nextLiveDebugPanelInstance = 1;
           <span>Admission: product {{ milliseconds(telemetry.lastProductAdmissionLatencyMs) }} · input {{ milliseconds(telemetry.lastInputAdmissionLatencyMs) }}</span>
           <span>Input queue: {{ telemetry.queuedInputBatches }}/{{ telemetry.inputBatchCapacity }} batches · {{ telemetry.queuedInputEvents }} events · oldest {{ milliseconds(telemetry.oldestInputAgeMs) }}<ng-container *ngIf="telemetry.inputOverflowPending"> · overflow pending</ng-container></span>
           <span>Runtime progress: {{ millihertz(telemetry.runtimeProgressRateMillihertz) }} · last {{ milliseconds(telemetry.runtimeProgressAgeMs) }}</span>
-          <span>Transport: {{ telemetry.connections }} connection(s) · {{ telemetry.subscribers }} subscriber(s) · output {{ telemetry.outputQueueItems }}/{{ telemetry.outputQueueCapacity }} · floor {{ telemetry.outputQueueFloor }} · binding {{ telemetry.outputBindingActive ? 'active' : 'inactive' }}</span>
+          <span>Transport: {{ telemetry.connections }} connection(s) · {{ telemetry.subscribers }} subscriber(s) · retained output history {{ telemetry.outputQueueItems }}/{{ telemetry.outputQueueCapacity }} · advancing floor {{ telemetry.outputQueueFloor }} · binding {{ telemetry.outputBindingActive ? 'active' : 'inactive' }}</span>
         </section>
       </ng-container>
 

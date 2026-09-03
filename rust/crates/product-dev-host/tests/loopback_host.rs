@@ -693,6 +693,14 @@ fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
         "{read}"
     );
     assert!(
+        read.contains("\"message\":\"Product Browser Host transition snapshot\""),
+        "{read}"
+    );
+    assert!(
+        read.contains("\"scope\",\"value\":\"transition\""),
+        "{read}"
+    );
+    assert!(
         read.contains("\"renderer-sequence\",\"value\":\"60\""),
         "{read}"
     );

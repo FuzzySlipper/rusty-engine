@@ -1240,6 +1240,10 @@ impl ProductDevDebugCatalog {
                 "Show the latest compact browser renderer timing, pacing, canvas, and resource summary",
             ),
             (
+                "engine.renderer.detail",
+                "Show bounded renderer admission, callback phase, cadence, pacing, and texture details",
+            ),
+            (
                 "engine.renderer.show",
                 "Show every mounted Engine renderer metrics widget",
             ),

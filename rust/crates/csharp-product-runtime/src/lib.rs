@@ -127,6 +127,7 @@ pub fn product_host_runtime_identity() -> ProductHostRuntimeIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RendererDebugCommand {
     Read,
+    Detail,
     Show,
     Hide,
     Toggle,
@@ -138,6 +139,7 @@ enum RendererDebugCommand {
 fn renderer_debug_command(command: &str) -> Option<RendererDebugCommand> {
     match command.trim() {
         "engine.renderer" => Some(RendererDebugCommand::Read),
+        "engine.renderer.detail" => Some(RendererDebugCommand::Detail),
         "engine.renderer.show" => Some(RendererDebugCommand::Show),
         "engine.renderer.hide" => Some(RendererDebugCommand::Hide),
         "engine.renderer.toggle" => Some(RendererDebugCommand::Toggle),
@@ -211,6 +213,195 @@ fn renderer_diagnostics_summary(snapshot: Option<&str>, widget_visible: bool) ->
             "voxelSpecializedMaterialCount": value(&["resources", "voxelSpecializedMaterialCount"]),
         },
     })
+}
+
+const RENDERER_DETAIL_RECENT_ATTEMPTS: usize = 16;
+
+fn renderer_diagnostics_detail(
+    snapshot: Option<&str>,
+    widget_visible: bool,
+    snapshot_age_ms: Option<u64>,
+) -> serde_json::Value {
+    let mut summary = renderer_diagnostics_summary(snapshot, widget_visible);
+    if summary["available"] != serde_json::Value::Bool(true) {
+        return summary;
+    }
+    let Some(snapshot) =
+        snapshot.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+    else {
+        return summary;
+    };
+    let value = |path: &[&str]| -> serde_json::Value {
+        let mut current = Some(&snapshot);
+        for key in path {
+            current = current
+                .and_then(serde_json::Value::as_object)
+                .and_then(|object| object.get(*key));
+        }
+        current.cloned().unwrap_or(serde_json::Value::Null)
+    };
+
+    let attempts = value(&["pacing", "hostAdmission", "recentAttempts"]);
+    let attempts = attempts.as_array().cloned().unwrap_or_default();
+    let derived = attempts
+        .iter()
+        .filter_map(renderer_admission_attempt_detail)
+        .collect::<Vec<_>>();
+    let recent_start = derived
+        .len()
+        .saturating_sub(RENDERER_DETAIL_RECENT_ATTEMPTS);
+    let recent_attempts = derived[recent_start..].to_vec();
+    let mut window_outcomes = serde_json::Map::new();
+    for outcome in ["admitted", "backendBlocked", "noDemand"] {
+        window_outcomes.insert(
+            outcome.to_owned(),
+            serde_json::json!(derived
+                .iter()
+                .filter(|attempt| attempt["outcome"] == outcome)
+                .count()),
+        );
+    }
+    let mut phase_aggregates = serde_json::Map::new();
+    for phase in [
+        "callbackTotalMs",
+        "successorQueueMs",
+        "demandDecisionMs",
+        "backendReadinessMs",
+        "controlsMs",
+        "cameraMs",
+        "presentationMs",
+        "backendSubmissionMs",
+        "unaccountedTailMs",
+    ] {
+        let samples = derived
+            .iter()
+            .filter_map(|attempt| attempt["phasesMs"][phase].as_f64())
+            .collect::<Vec<_>>();
+        phase_aggregates.insert(phase.to_owned(), renderer_duration_aggregate(&samples));
+    }
+
+    let realized_textures = value(&["resources", "realizedTextures"]);
+    let realized_textures = realized_textures.as_array().cloned().unwrap_or_default();
+    let realized_texture_encoded_bytes = realized_textures
+        .iter()
+        .filter_map(|texture| texture["encodedBytes"].as_u64())
+        .fold(0_u64, u64::saturating_add);
+    let realized_texture_decoded_bytes = realized_textures
+        .iter()
+        .filter_map(|texture| texture["decodedBytes"].as_u64())
+        .fold(0_u64, u64::saturating_add);
+    let retained_texture_rows = realized_textures
+        .iter()
+        .take(32)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    summary["detail"] = serde_json::json!({
+        "snapshotAgeMs": snapshot_age_ms,
+        "admission": {
+            "totals": {
+                "attempts": value(&["pacing", "hostAdmission", "attemptCount"]),
+                "admitted": value(&["pacing", "hostAdmission", "admittedCount"]),
+                "backendBlocked": value(&["pacing", "hostAdmission", "backendBlockedCount"]),
+                "noDemand": value(&["pacing", "hostAdmission", "noDemandCount"]),
+            },
+            "window": {
+                "attempts": derived.len(),
+                "outcomes": window_outcomes,
+                "phaseAggregatesMs": phase_aggregates,
+            },
+            "recentAttemptLimit": RENDERER_DETAIL_RECENT_ATTEMPTS,
+            "recentAttempts": recent_attempts,
+        },
+        "pacing": {
+            "completionAllowanceMs": value(&["pacing", "completionAllowanceMs"]),
+            "targetDutyFraction": value(&["pacing", "targetDutyFraction"]),
+            "admittedAtMs": value(&["pacing", "admittedAtMs"]),
+            "admissionObservedAtMs": value(&["pacing", "admissionObservedAtMs"]),
+            "observedAtMs": value(&["pacing", "observedAtMs"]),
+            "automaticSubmissionCapacity": value(&["pacing", "automaticSubmissionCapacity"]),
+            "automaticSubmissionLimit": value(&["pacing", "automaticSubmissionLimit"]),
+            "maximumPendingSubmissions": value(&["pacing", "maximumPendingSubmissions"]),
+            "maximumPendingMeasurements": value(&["pacing", "maximumPendingMeasurements"]),
+        },
+        "cadence": value(&["cadence"]),
+        "realizedTextures": {
+            "count": realized_textures.len(),
+            "encodedBytes": realized_texture_encoded_bytes,
+            "decodedBytes": realized_texture_decoded_bytes,
+            "retainedRowLimit": 32,
+            "omittedRows": realized_textures.len().saturating_sub(retained_texture_rows.len()),
+            "rows": retained_texture_rows,
+        },
+    });
+    summary
+}
+
+fn renderer_admission_attempt_detail(attempt: &serde_json::Value) -> Option<serde_json::Value> {
+    let callback = attempt.get("callback")?;
+    let timestamp = |key: &str| callback.get(key).and_then(serde_json::Value::as_f64);
+    let started = timestamp("callbackStartedAtMs")?;
+    let queued = timestamp("successorQueuedAtMs")?;
+    let demand = timestamp("demandObservedAtMs")?;
+    let readiness = timestamp("backendReadinessObservedAtMs");
+    let controls = timestamp("controlsUpdatedAtMs");
+    let camera = timestamp("cameraUpdatedAtMs");
+    let presentation = timestamp("presentationAdvancedAtMs");
+    let backend = timestamp("backendSubmittedAtMs");
+    let ended = timestamp("callbackEndedAtMs")?;
+    let tail_start = backend
+        .or(presentation)
+        .or(camera)
+        .or(controls)
+        .or(readiness)
+        .unwrap_or(demand);
+    Some(serde_json::json!({
+        "sequence": attempt.get("sequence").cloned().unwrap_or(serde_json::Value::Null),
+        "sourceTimeMs": attempt.get("sourceTimeMs").cloned().unwrap_or(serde_json::Value::Null),
+        "outcome": attempt.get("outcome").cloned().unwrap_or(serde_json::Value::Null),
+        "demand": attempt.get("demand").cloned().unwrap_or(serde_json::Value::Null),
+        "backend": attempt.get("backend").cloned().unwrap_or(serde_json::Value::Null),
+        "phasesMs": {
+            "callbackTotalMs": renderer_duration(ended, started),
+            "successorQueueMs": renderer_duration(queued, started),
+            "demandDecisionMs": renderer_duration(demand, queued),
+            "backendReadinessMs": readiness.and_then(|end| renderer_duration_value(end, demand)),
+            "controlsMs": controls.zip(readiness).and_then(|(end, start)| renderer_duration_value(end, start)),
+            "cameraMs": camera.zip(controls).and_then(|(end, start)| renderer_duration_value(end, start)),
+            "presentationMs": presentation.zip(camera).and_then(|(end, start)| renderer_duration_value(end, start)),
+            "backendSubmissionMs": backend.zip(presentation).and_then(|(end, start)| renderer_duration_value(end, start)),
+            "unaccountedTailMs": renderer_duration(ended, tail_start),
+        },
+    }))
+}
+
+fn renderer_duration(end: f64, start: f64) -> serde_json::Value {
+    renderer_duration_value(end, start).map_or(serde_json::Value::Null, serde_json::Value::from)
+}
+
+fn renderer_duration_value(end: f64, start: f64) -> Option<f64> {
+    let duration = end - start;
+    (duration.is_finite() && duration >= 0.0).then_some(duration)
+}
+
+fn renderer_duration_aggregate(samples: &[f64]) -> serde_json::Value {
+    if samples.is_empty() {
+        return serde_json::json!({ "count": 0, "median": null, "p95": null });
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    serde_json::json!({
+        "count": sorted.len(),
+        "median": renderer_percentile(&sorted, 0.5),
+        "p95": renderer_percentile(&sorted, 0.95),
+    })
+}
+
+fn renderer_percentile(sorted: &[f64], percentile: f64) -> f64 {
+    let index = ((sorted.len() as f64 * percentile).ceil() as usize)
+        .saturating_sub(1)
+        .min(sorted.len() - 1);
+    sorted[index]
 }
 
 #[derive(Debug)]
@@ -712,6 +903,7 @@ pub struct CsharpProductRuntime {
     initial_output: Option<CsharpEngineCallOutput>,
     render_resources: Vec<ProductDevRendererResource>,
     renderer_metrics_visible: bool,
+    renderer_diagnostics_received_at: Option<Instant>,
     shutdown_called: bool,
     diagnostics: ProductDevLog,
 }
@@ -953,6 +1145,7 @@ impl CsharpProductRuntime {
             initial_output,
             render_resources,
             renderer_metrics_visible: false,
+            renderer_diagnostics_received_at: None,
             shutdown_called: false,
             diagnostics: config.diagnostics,
         })
@@ -2307,12 +2500,22 @@ impl CsharpProductRuntime {
             RendererDebugCommand::Toggle => {
                 self.renderer_metrics_visible = !self.renderer_metrics_visible
             }
-            RendererDebugCommand::Read | RendererDebugCommand::Status => {}
+            RendererDebugCommand::Read
+            | RendererDebugCommand::Detail
+            | RendererDebugCommand::Status => {}
         }
-        let summary = renderer_diagnostics_summary(
-            self.services.renderer_diagnostics_json(),
-            self.renderer_metrics_visible,
-        );
+        let snapshot = self.services.renderer_diagnostics_json();
+        let summary = if action == RendererDebugCommand::Detail {
+            renderer_diagnostics_detail(
+                snapshot,
+                self.renderer_metrics_visible,
+                self.renderer_diagnostics_received_at.map(|received| {
+                    received.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+                }),
+            )
+        } else {
+            renderer_diagnostics_summary(snapshot, self.renderer_metrics_visible)
+        };
         let message = serde_json::to_string_pretty(&summary).map_err(|error| {
             ProductDevRuntimeError::new(
                 "CSHARP_RENDERER_DIAGNOSTICS_ENCODE",
@@ -2324,7 +2527,9 @@ impl CsharpProductRuntime {
         // callers. Visibility operations are successful even before the first
         // frame so a mounted widget can accurately show its unavailable state.
         let succeeded = match action {
-            RendererDebugCommand::Read => summary["available"].as_bool().unwrap_or(false),
+            RendererDebugCommand::Read | RendererDebugCommand::Detail => {
+                summary["available"].as_bool().unwrap_or(false)
+            }
             RendererDebugCommand::Show
             | RendererDebugCommand::Hide
             | RendererDebugCommand::Toggle
@@ -2962,6 +3167,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         self.services
             .ingest_renderer_diagnostics(&feedback.snapshot)
             .map_err(|error| self.runtime_error(error.into()))?;
+        self.renderer_diagnostics_received_at = Some(Instant::now());
         let result = ProductDevRendererDiagnosticsFeedbackResult::accepted(self.binding());
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
@@ -5133,8 +5339,21 @@ mod tests {
             renderer_debug_command(" engine.renderer.toggle "),
             Some(RendererDebugCommand::Toggle)
         );
+        assert_eq!(
+            renderer_debug_command("engine.renderer.detail"),
+            Some(RendererDebugCommand::Detail)
+        );
         assert_eq!(renderer_debug_command("engine.renderer.product"), None);
 
+        let admission_attempt = serde_json::json!({
+            "sequence": 2, "sourceTimeMs": 120.0, "outcome": "admitted",
+            "demand": { "schemaVersion": 1, "requested": false, "viewportChanged": false, "controls": true, "presentation": false, "retainedAnimation": false, "shouldSubmit": true },
+            "backend": { "mode": "timerQuery", "state": "ready", "rendererClass": "accelerated", "timerDurationMs": 2.0, "effectiveDurationMs": 4.0, "admittedAtMs": 120.0, "admissionObservedAtMs": 120.1, "observedAtMs": 120.1, "automaticSubmissionLimit": 8, "pendingMeasurementCount": 0, "completionFenceMode": "active", "maximumPendingSubmissions": 8, "pendingSubmissionCount": 0 },
+            "callback": { "schemaVersion": 1, "callbackStartedAtMs": 100.0, "successorQueuedAtMs": 100.1, "demandObservedAtMs": 100.2, "backendReadinessObservedAtMs": 100.3, "controlsUpdatedAtMs": 100.4, "cameraUpdatedAtMs": 100.5, "presentationAdvancedAtMs": 100.7, "backendSubmittedAtMs": 103.7, "callbackEndedAtMs": 103.8 }
+        });
+        let realized_textures = (0..1000)
+            .map(|id| serde_json::json!({ "id": format!("texture-{id:04}-{}", "x".repeat(128)), "resource": null, "encodedBytes": 2, "decodedBytes": 4 }))
+            .collect::<Vec<_>>();
         let snapshot = serde_json::json!({
             "schemaVersion": 1,
             "renderer": "Fixture GPU",
@@ -5156,15 +5375,28 @@ mod tests {
                     "triangleCount": { "scope": "perSubmission", "status": "available", "value": 90 }
                 }
             },
-            "pacing": { "rendererClass": "accelerated", "mode": "timerQuery", "state": "ready", "timerDurationMs": 2.0, "effectiveDurationMs": 4.0, "completionAgeMs": 1.0, "completionFenceMode": "active", "pendingSubmissionCount": 0, "pendingMeasurementCount": 0 },
+            "pacing": {
+                "rendererClass": "accelerated", "mode": "timerQuery", "state": "ready",
+                "timerDurationMs": 2.0, "effectiveDurationMs": 4.0, "completionAgeMs": 1.0,
+                "completionAllowanceMs": 17.0, "targetDutyFraction": 0.5,
+                "admittedAtMs": 120.0, "admissionObservedAtMs": 121.0, "observedAtMs": 121.0,
+                "automaticSubmissionCapacity": 8, "automaticSubmissionLimit": 8,
+                "completionFenceMode": "active", "maximumPendingSubmissions": 8,
+                "maximumPendingMeasurements": 8, "pendingSubmissionCount": 0, "pendingMeasurementCount": 0,
+                "hostAdmission": {
+                    "attemptCount": 2, "admittedCount": 1, "backendBlockedCount": 1, "noDemandCount": 0,
+                    "recentAttempts": [admission_attempt]
+                }
+            },
             "resources": {
                 "definedTextureCount": 1000,
-                "realizedTextures": (0..1000).map(|id| serde_json::json!({ "id": format!("texture-{id:04}-{}", "x".repeat(128)) })).collect::<Vec<_>>(),
+                "realizedTextures": realized_textures,
                 "spriteAtlasCount": 1,
                 "spriteFallbackCount": 0,
                 "materialFallbackCount": 0,
                 "voxelSpecializedMaterialCount": 2
-            }
+            },
+            "cadence": { "state": "ready", "retainedFailureCount": 0, "evictedFailureCount": 0, "failures": [] }
         });
         let encoded = serde_json::to_string(&snapshot).expect("fixture snapshot encodes");
         let summary = renderer_diagnostics_summary(Some(&encoded), true);
@@ -5176,6 +5408,29 @@ mod tests {
         assert_eq!(summary["widget"]["visible"], true);
         assert_eq!(summary["frame"]["fps"], 50.0);
         assert!(summary["resources"].get("realizedTextures").is_none());
+
+        let detail = renderer_diagnostics_detail(Some(&encoded), true, Some(9));
+        let detail_encoded = serde_json::to_vec(&detail).expect("detail encodes");
+        assert!(detail_encoded.len() < ProductDevDebugResult::MAX_MESSAGE_BYTES);
+        assert_eq!(detail["detail"]["snapshotAgeMs"], 9);
+        assert_eq!(
+            detail["detail"]["admission"]["window"]["outcomes"]["admitted"],
+            1
+        );
+        assert_eq!(
+            detail["detail"]["admission"]["window"]["phaseAggregatesMs"]["backendSubmissionMs"]
+                ["median"],
+            3.0
+        );
+        assert_eq!(detail["detail"]["realizedTextures"]["count"], 1000);
+        assert_eq!(detail["detail"]["realizedTextures"]["encodedBytes"], 2000);
+        assert_eq!(
+            detail["detail"]["realizedTextures"]["rows"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32
+        );
 
         let unavailable = renderer_diagnostics_summary(None, false);
         assert_eq!(unavailable["available"], false);
@@ -5229,6 +5484,11 @@ mod tests {
             .expect("catalog commands")
             .iter()
             .any(|command| command["name"] == "engine.renderer.status"));
+        assert!(catalog["commands"]
+            .as_array()
+            .expect("catalog commands")
+            .iter()
+            .any(|command| command["name"] == "engine.renderer.detail"));
         drop(runtime);
         fs::remove_dir_all(root).expect("remove renderer debug fixture content");
     }

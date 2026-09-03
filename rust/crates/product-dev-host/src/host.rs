@@ -1401,12 +1401,13 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
         status_disposition,
         "browser-host",
         "BROWSER_HOST_STATUS",
-        "Product Browser Host diagnostic report",
+        "Product Browser Host transition snapshot",
     ) {
         Ok(event) => event,
         Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
     };
     for (key, value) in [
+        ("scope", "transition".to_owned()),
         (
             "host-state",
             browser_host_state(report.host_state).to_owned(),
