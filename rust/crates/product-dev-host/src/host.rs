@@ -2695,6 +2695,118 @@ mod tests {
         assert_eq!(value["outputs"][1]["kind"], "runtime-progress");
     }
 
+    fn representative_realtime_receipt(tick: u64) -> Vec<ProductDevRuntimeOutput> {
+        let runtime = binding();
+        let composition = render_host_contracts::RendererViewComposition {
+            schema_version: render_host_contracts::RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
+            cameras: Vec::new(),
+            targets: Vec::new(),
+            views: Vec::new(),
+            presentations: Vec::new(),
+        };
+        let ui_runtime = runtime_ui::RuntimeUiRuntimeBinding::new(
+            runtime_lifecycle::RuntimeInstanceId::new(runtime.instance_id.get()),
+            runtime_lifecycle::RuntimeGeneration::new(runtime.generation.get()),
+            runtime_lifecycle::RuntimeControlRevision::new(runtime.control_revision.get()),
+        );
+        let ui_projection = runtime_ui::RuntimeUiProjectionEnvelope::new(
+            ui_runtime,
+            tick,
+            "product.ui",
+            "runtime.tick.v1",
+            serde_json::json!({"tick": tick}),
+        )
+        .expect("representative UI projection");
+        vec![
+            ProductDevRuntimeOutput::test_frame_value(serde_json::json!({"tick": tick})),
+            ProductDevRuntimeOutput::view_composition(&composition)
+                .expect("representative view composition"),
+            ProductDevRuntimeOutput::ui_projection(&ui_projection)
+                .expect("representative UI projection output"),
+            ProductDevRuntimeOutput::runtime_readout(
+                crate::ProductDevRuntimeReadout::new(
+                    runtime,
+                    crate::ProductDevRuntimeMode::Realtime,
+                    crate::ProductDevRuntimeState::Running,
+                )
+                .with_counters(tick + 1, 0, 0, 0)
+                .with_clock(None, Some(tick + 1)),
+            ),
+            ProductDevRuntimeOutput::runtime_progress(),
+        ]
+    }
+
+    #[test]
+    fn sixty_hertz_receipts_retain_one_sse_event_and_json_parse_per_receipt() {
+        const RECEIPTS: usize = 60;
+        const OUTPUTS_PER_RECEIPT: usize = 5;
+        let expected_kinds = [
+            "frame",
+            "view-composition",
+            "ui-projection",
+            "runtime-readout",
+            "runtime-progress",
+        ];
+        let mut bus = OutputBus {
+            active_binding: Some(binding()),
+            ..OutputBus::default()
+        };
+        for tick in 0..RECEIPTS {
+            push_outputs_staged(
+                &mut bus,
+                representative_realtime_receipt(tick as u64),
+            )
+            .expect("representative realtime receipt publishes");
+        }
+
+        let mut sse_delivery_callbacks = 0;
+        let mut json_parse_calls = 0;
+        let mut dispatched_kinds = Vec::with_capacity(RECEIPTS * OUTPUTS_PER_RECEIPT);
+        for event in &bus.events {
+            sse_delivery_callbacks += 1;
+            json_parse_calls += 1;
+            let payload: Value =
+                serde_json::from_str(&event.json).expect("retained SSE event is valid JSON");
+            assert_eq!(payload["kind"], "runtime-output-batch");
+            let outputs = payload["outputs"]
+                .as_array()
+                .expect("retained event contains typed outputs");
+            assert_eq!(outputs.len(), OUTPUTS_PER_RECEIPT);
+            dispatched_kinds.extend(
+                outputs
+                    .iter()
+                    .map(|output| {
+                        output["kind"]
+                            .as_str()
+                            .expect("typed output kind")
+                            .to_owned()
+                    }),
+            );
+        }
+
+        assert_eq!(sse_delivery_callbacks, RECEIPTS);
+        assert_eq!(json_parse_calls, RECEIPTS);
+        assert_eq!(dispatched_kinds.len(), RECEIPTS * OUTPUTS_PER_RECEIPT);
+        assert_eq!(
+            dispatched_kinds,
+            expected_kinds
+                .iter()
+                .map(|kind| (*kind).to_owned())
+                .cycle()
+                .take(RECEIPTS * OUTPUTS_PER_RECEIPT)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            RECEIPTS * OUTPUTS_PER_RECEIPT,
+            300,
+            "the old one-callback-per-output stream would deliver about 300 outputs",
+        );
+        assert!(
+            sse_delivery_callbacks < RECEIPTS * OUTPUTS_PER_RECEIPT,
+            "one SSE delivery per receipt is materially below one per contained output",
+        );
+    }
+
     #[test]
     fn oversized_aggregate_is_rejected_without_publishing_partial_events() {
         let mut bus = OutputBus::default();
