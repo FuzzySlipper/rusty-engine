@@ -33,6 +33,7 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
   onerror: ((event: unknown) => void) | null = null;
   closed = false;
   nextEventId = 1;
+  messageDeliveryCallbacks = 0;
 
   constructor(url: string) {
     this.url = url;
@@ -52,7 +53,10 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
   }
 
   emit(output: unknown, lastEventId = String(this.nextEventId++)): void {
-    this.onmessage?.({ data: JSON.stringify(output), lastEventId });
+    const listener = this.onmessage;
+    if (listener === null) return;
+    this.messageDeliveryCallbacks += 1;
+    listener({ data: JSON.stringify(output), lastEventId });
   }
 
   open(): void {
@@ -339,6 +343,105 @@ test('one runtime output batch is decoded and delivered through one batch callba
     'runtime-progress',
   ]);
   unsubscribe?.();
+  adapter.dispose();
+});
+
+test('sixty hertz receipt stream parses once and preserves five-output order per receipt', () => {
+  const TICKS = 60;
+  const OUTPUTS_PER_RECEIPT = 5;
+  const expectedKinds = [
+    'frame',
+    'view-composition',
+    'ui-projection',
+    'runtime-readout',
+    'runtime-progress',
+  ];
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const batchKinds: string[][] = [];
+  const outputKinds: string[] = [];
+  const unsubscribeBatches = adapter.subscribeOutputBatches?.((outputs) => {
+    batchKinds.push(outputs.map((output) => output.kind));
+  });
+  const unsubscribeOutputs = adapter.subscribeOutputs((output) => {
+    outputKinds.push(output.kind);
+  });
+  const stream = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(stream);
+  // Exclude the unnumbered binding baseline from the steady-state receipt
+  // counters below. The actual stream begins at the first retained receipt.
+  batchKinds.length = 0;
+  outputKinds.length = 0;
+  stream.messageDeliveryCallbacks = 0;
+
+  const originalJsonParse = JSON.parse;
+  let jsonParseCalls = 0;
+  JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+    jsonParseCalls += 1;
+    return originalJsonParse(...args);
+  }) as typeof JSON.parse;
+  try {
+    for (let tick = 0; tick < TICKS; tick += 1) {
+      stream.emit({
+        kind: 'runtime-output-batch',
+        outputs: [
+          { kind: 'frame', frame: { tick } },
+          {
+            kind: 'view-composition',
+            composition: {
+              schemaVersion: 1,
+              cameras: [],
+              targets: [],
+              views: [],
+              presentations: [],
+            },
+          },
+          {
+            kind: 'ui-projection',
+            envelope: {
+              artifact: 'rusty.product.ui-projection',
+              runtime: RUNTIME,
+              sequence: String(tick),
+              stream: 'product.ui',
+              contract: 'runtime.tick.v1',
+              value: { tick },
+            },
+          },
+          {
+            kind: 'runtime-readout',
+            readout: {
+              ...READOUT,
+              admittedSimulationSteps: String(tick + 1),
+              lastObservedTimeNs: String(tick + 1),
+            },
+          },
+          { kind: 'runtime-progress', owner: 'rust-host' },
+        ],
+      });
+    }
+  } finally {
+    JSON.parse = originalJsonParse;
+  }
+
+  assert.equal(stream.messageDeliveryCallbacks, TICKS);
+  assert.equal(jsonParseCalls, TICKS);
+  assert.equal(batchKinds.length, TICKS);
+  assert.deepEqual(batchKinds, Array.from({ length: TICKS }, () => expectedKinds));
+  assert.equal(outputKinds.length, TICKS * OUTPUTS_PER_RECEIPT);
+  assert.deepEqual(
+    outputKinds,
+    Array.from({ length: TICKS }, () => expectedKinds).flat(),
+  );
+  assert.equal(
+    TICKS * OUTPUTS_PER_RECEIPT,
+    300,
+    'the old one-callback-per-output stream would deliver about 300 typed outputs',
+  );
+  unsubscribeBatches?.();
+  unsubscribeOutputs();
   adapter.dispose();
 });
 
