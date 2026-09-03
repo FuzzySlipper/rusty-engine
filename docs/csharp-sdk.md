@@ -46,6 +46,11 @@ registration infrastructure.
 
 ## Run and package
 
+For a clean downstream CI or developer setup, begin with one verified exact
+[SDK/runtime distribution pair](csharp-distribution.md). It supplies the local
+NuGet feed and the runtime pack together; ordinary consumption does not need
+an Engine checkout, Cargo, binding generation, or copied Engine browser files.
+
 The normal development command uses the `rusty` binary from the exact matching
 runtime pack:
 

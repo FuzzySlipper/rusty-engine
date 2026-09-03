@@ -14,6 +14,12 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 package_version=$1
 feed_dir=${2:-"$repo_root/artifacts/csharp-sdk-feed"}
+repository_commit=$(git -C "$repo_root" rev-parse HEAD)
+repository_url=$(git -C "$repo_root" remote get-url origin 2>/dev/null || true)
+if [[ -z "$repository_url" ]]; then
+    echo "pack-csharp-sdk: origin remote is required to embed immutable package repository metadata" >&2
+    exit 1
+fi
 
 if [[ "$feed_dir" != /* ]]; then
     feed_dir="$repo_root/$feed_dir"
@@ -59,6 +65,10 @@ dotnet pack "$repo_root/csharp/Rusty.Engine/Rusty.Engine.csproj" --no-restore --
     -p:RustyEngineGeneratedInputsDir="$generated_inputs_dir" \
     -p:RustyEnginePackageMetadataDir="$package_metadata_dir" \
     -p:RustyEnginePackageAbiIdentity="$sdk_identity" \
+    -p:RepositoryType=git \
+    -p:RepositoryUrl="$repository_url" \
+    -p:RepositoryCommit="$repository_commit" \
+    -p:PublishRepositoryUrl=true \
     -p:RustyEngineGenerateBindings=false
 
 if [[ ! -f "$package_path" ]]; then

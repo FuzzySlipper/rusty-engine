@@ -11,6 +11,8 @@ already exposed to C#.
 - [C# SDK guide](csharp-sdk.md) explains the current product bootstrap,
   lifecycle, services, generated output, leases, and optional managed helper
   packages.
+- [C# SDK/runtime distribution](csharp-distribution.md) explains the exact,
+  verified Linux-x64 release pair used by clean downstream CI.
 - [C# product style](csharp-product-style.md) gives a recommended, product-side
   organization that does not require a hidden Engine framework.
 - [C# capability map](csharp-capabilities.md) inventories the current generated

@@ -1,0 +1,75 @@
+name: publish csharp SDK/runtime pair
+
+on:
+  push:
+    tags:
+      - 'csharp-sdk-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Assert tag identifies this exact source revision
+        shell: bash
+        run: |
+          short_revision="$(git rev-parse --short=12 HEAD)"
+          expected="csharp-sdk-v0.1.0-dev.$short_revision"
+          test "$GITHUB_REF_NAME" = "$expected"
+          git diff --quiet
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install pair build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang jq unzip
+          pnpm --dir render install --frozen-lockfile --ignore-scripts
+          pnpm --dir studio install --frozen-lockfile
+          dotnet restore csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj
+          dotnet restore csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj
+          dotnet restore csharp/Rusty.Engine/Rusty.Engine.csproj
+
+      - name: Build and verify the exact pair
+        shell: bash
+        run: |
+          output="$RUNNER_TEMP/csharp-release-pair"
+          ./scripts/build-csharp-release-pair.sh --output "$output"
+          archive="$(find "$output" -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          ./scripts/test-csharp-release-pair.sh "$archive"
+
+      - name: Publish immutable pair assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          output="$RUNNER_TEMP/csharp-release-pair"
+          archive="$(find "$output" -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          test -n "$archive"
+          gh release create "$GITHUB_REF_NAME" "$archive" "$archive.sha256" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Exact Linux-x64 Rusty.Engine C# SDK/runtime pair for $(git rev-parse HEAD)."
