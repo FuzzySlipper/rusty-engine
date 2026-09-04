@@ -833,6 +833,35 @@ fn browser_diagnostics_accepts_auxiliary_renderer_failure_as_recoverable() {
 }
 
 #[test]
+fn browser_diagnostics_preserves_a_degraded_local_request_observation() {
+    let host = start_debug();
+    let origin = host.origin();
+    let report_body = r#"{"hostState":"degraded","runtimeProgress":"9","transportState":"open","outputState":"open","recoverableEvent":{"code":"BROWSER_LOCAL_REQUEST_UNAVAILABLE","message":"Product Browser local runtime request failed for input: Failed to fetch"},"pageEvents":[]}"#;
+    let reported = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/browser-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{report_body}",
+            report_body.len(),
+        ),
+    );
+    assert!(reported.starts_with("HTTP/1.1 200 OK\r\n"), "{reported}");
+    let read = request(
+        &origin,
+        "POST /__rusty/product/runtime/diagnostics/read HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+    );
+    assert!(
+        read.contains("\"host-state\",\"value\":\"degraded\""),
+        "{read}"
+    );
+    assert!(
+        read.contains("\"BROWSER_LOCAL_REQUEST_UNAVAILABLE\""),
+        "{read}"
+    );
+    assert!(read.contains("\"rejected-recoverable\""), "{read}");
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn rejects_nonclosed_routes_headers_bodies_and_canonical_integers() {
     let host = start();
     let origin = host.origin();

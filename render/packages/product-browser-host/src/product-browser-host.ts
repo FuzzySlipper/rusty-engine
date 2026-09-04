@@ -354,7 +354,7 @@ export interface ProductBrowserRuntimeTerminalFailure {
 
 /** Fixed health facts copied into the Engine diagnostic ring; never console data. */
 export interface ProductBrowserDiagnosticsReport {
-  readonly hostState: 'loading' | 'ready' | 'failed' | 'disposed';
+  readonly hostState: 'loading' | 'ready' | 'degraded' | 'failed' | 'disposed';
   readonly runtimeProgress: string;
   readonly transportState: 'open' | 'closed';
   readonly outputState: 'open' | 'closed';
@@ -365,7 +365,8 @@ export interface ProductBrowserDiagnosticsReport {
   readonly recoverableEvent?: {
     readonly code:
       | 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'
-      | 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE';
+      | 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE'
+      | 'BROWSER_LOCAL_REQUEST_UNAVAILABLE';
     readonly message: string;
   };
   readonly pageEvents: readonly { readonly kind: 'error' | 'unhandled-rejection'; readonly code: string; readonly message: string }[];
@@ -681,7 +682,7 @@ export interface ProductBrowserUiProjectionOptions {
 
 export interface ProductBrowserHostReadout {
   readonly artifact: typeof PRODUCT_BROWSER_HOST_ARTIFACT;
-  readonly state: 'starting' | 'ready' | 'failed' | 'disposed';
+  readonly state: 'starting' | 'ready' | 'degraded' | 'failed' | 'disposed';
   readonly mode: ProductBrowserRuntimeMode;
   readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
   readonly host: RustyApplicationHostReadout | null;
@@ -1202,6 +1203,10 @@ export async function mountProductBrowserHost(
   let disposal: Promise<void> | null = null;
   let started = false;
   let failure: ProductBrowserHostError | null = null;
+  // This remains separate from a terminal failure so a successful follow-up
+  // can restore ready while diagnostics retain the first uncertain request.
+  let recoveryFailure: ProductBrowserHostError | null = null;
+  let recoveryDiagnosticReported = false;
   let transportClosed = false;
   let runtimeProgress = 0;
   let lastRendererSequence: string | null = null;
@@ -1287,7 +1292,7 @@ export async function mountProductBrowserHost(
       state,
       mode: options.lifecycleMode,
       progress: String(runtimeProgress),
-      failure: failure === null ? null : boundedDiagnostic(failure.message),
+      failure: (failure ?? recoveryFailure) === null ? null : boundedDiagnostic((failure ?? recoveryFailure)!.message),
     }, writeProgress);
     if (writeProgress) lastProgressDomWriteAtMs = now;
     if (!reportToTransport && pageEvents.length === 0) return;
@@ -1310,6 +1315,11 @@ export async function mountProductBrowserHost(
             code: 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE' as const,
             message: rendererDiagnosticsFailure,
           })
+        : recoveryFailure !== null && !recoveryDiagnosticReported
+          ? Object.freeze({
+              code: 'BROWSER_LOCAL_REQUEST_UNAVAILABLE' as const,
+              message: boundedDiagnostic(recoveryFailure.message),
+            })
         : undefined;
     const shouldReport = reportToTransport && transport.reportBrowserDiagnostics !== undefined
       && (includeTerminal || recoverableEvent !== undefined || pageEvents.length > 0 || statusKey !== lastDiagnosticsStatusKey);
@@ -1321,6 +1331,8 @@ export async function mountProductBrowserHost(
         recoverableClockDiagnosticReported = true;
       } else if (recoverableEvent?.code === 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE') {
         rendererDiagnosticsFailureReported = true;
+      } else if (recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
+        recoveryDiagnosticReported = true;
       }
       const age = lastRendererObservationAtMs === null
         ? undefined
@@ -1350,7 +1362,7 @@ export async function mountProductBrowserHost(
   };
 
   const requireReady = (): void => {
-    if (state === 'ready') return;
+    if (state === 'ready' || state === 'degraded') return;
     throw new ProductBrowserHostError(
       state === 'disposed' ? 'disposed' : 'transport_failed',
       state === 'failed'
@@ -1368,13 +1380,13 @@ export async function mountProductBrowserHost(
         cause instanceof Error ? { cause } : undefined,
       );
     if (failure === null) {
-      failure = error;
+      failure = recoveryFailure ?? error;
       if (state !== 'disposed') state = 'failed';
       // The DOM remains current now; the typed terminal report waits until
       // closeTransport has recorded the durable closed/closed state.
       publishHealth(false);
     }
-    return error;
+    return failure;
   };
 
   let cadence: ProductBrowserCadence | null = null;
@@ -1406,6 +1418,42 @@ export async function mountProductBrowserHost(
     settleInitialRendererFrameFailure(error);
     closeTransport();
     return error;
+  };
+
+  const isRetryableLocalRequestFailure = (cause: unknown): cause is {
+    readonly name: 'ProductBrowserLocalTransportError';
+    readonly code: 'request_failed';
+    readonly retryable: true;
+  } => typeof cause === 'object'
+    && cause !== null
+    && (cause as { readonly name?: unknown }).name === 'ProductBrowserLocalTransportError'
+    && (cause as { readonly code?: unknown }).code === 'request_failed'
+    && (cause as { readonly retryable?: unknown }).retryable === true;
+
+  const recoverOrClose = (
+    cause: unknown,
+    code: ProductBrowserHostError['code'],
+  ): ProductBrowserHostError => {
+    if (isRetryableLocalRequestFailure(cause) && state === 'ready') {
+      const error = cause instanceof ProductBrowserHostError
+        ? cause
+        : new ProductBrowserHostError(
+          code,
+          cause instanceof Error ? cause.message : String(cause),
+          cause instanceof Error ? { cause } : undefined,
+      );
+      if (recoveryFailure === null) recoveryFailure = error;
+      state = 'degraded';
+      publishHealth();
+      return error;
+    }
+    return failAndClose(cause, code);
+  };
+
+  const restoreReadyAfterHealthyTransport = (): void => {
+    if (state !== 'degraded') return;
+    state = 'ready';
+    publishHealth();
   };
 
   const pageWindow = options.root.ownerDocument.defaultView;
@@ -1444,7 +1492,7 @@ export async function mountProductBrowserHost(
   const scheduleRendererFeedbackFlush = (): void => {
     if (state !== 'ready') return;
     void queue.enqueue(flushRendererFeedback).catch((cause: unknown) => {
-      failAndClose(cause, 'transport_failed');
+      recoverOrClose(cause, 'transport_failed');
     });
   };
 
@@ -1565,7 +1613,7 @@ export async function mountProductBrowserHost(
               try {
                 await queue.enqueue(flushRendererFeedback);
               } catch (cause) {
-                failAndClose(cause, 'transport_failed');
+                recoverOrClose(cause, 'transport_failed');
                 return;
               }
               throw new ProductBrowserHostError(
@@ -1603,6 +1651,9 @@ export async function mountProductBrowserHost(
     if (productBrowserOutputBatchNeedsRustHostPulse(outputs) && state !== 'failed' && state !== 'disposed') {
       cadence?.pulseRustHost();
     }
+    if (state !== 'failed' && state !== 'disposed' && outputs.length > 0) {
+      restoreReadyAfterHealthyTransport();
+    }
   };
 
   const applyTerminalFailure = (terminalFailure: ProductBrowserRuntimeTerminalFailure): void => {
@@ -1638,6 +1689,7 @@ export async function mountProductBrowserHost(
       // runtime may already have consumed lifecycle work, so never replay it
       // merely because its callback did not produce a normal output.
       if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') {
+        restoreReadyAfterHealthyTransport();
         return false;
       }
       throw new ProductBrowserHostError(
@@ -1645,6 +1697,7 @@ export async function mountProductBrowserHost(
         result.diagnostic ?? `${result.operation} was rejected by the runtime`,
       );
     }
+    restoreReadyAfterHealthyTransport();
     return true;
   };
 
@@ -1660,18 +1713,22 @@ export async function mountProductBrowserHost(
     if (result.readout !== undefined) outputs.push({ kind: 'runtime-readout', readout: result.readout });
     applyOutputBatch(outputs);
     if (!result.accepted) {
-      if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') return;
+      if (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required') {
+        restoreReadyAfterHealthyTransport();
+        return;
+      }
       throw new ProductBrowserHostError(
         'transport_failed',
         result.diagnostic ?? 'runtime input batch was rejected by the runtime',
       );
     }
+    restoreReadyAfterHealthyTransport();
   }
 
   cadence = createProductBrowserCadence({
     lifecycleMode: options.lifecycleMode,
     realtimeAdvanceOwner,
-    isReady: () => started && state === 'ready',
+    isReady: () => started && (state === 'ready' || state === 'degraded'),
     enqueueOperation: queue.enqueue,
     sampleInput: () => {
       const host = requireApplication();
@@ -1708,7 +1765,7 @@ export async function mountProductBrowserHost(
       ));
     },
     onFailure: (cause) => {
-      failAndClose(cause, 'transport_failed');
+      recoverOrClose(cause, 'transport_failed');
     },
   });
 
@@ -1917,7 +1974,7 @@ export async function mountProductBrowserHost(
     realtimeAdvanceOwner,
     host: application?.readout() ?? null,
     runtime: runtimeReadout,
-    lastFailure: failure?.message ?? null,
+    lastFailure: (failure ?? recoveryFailure)?.message ?? null,
   });
 
   const completeTimeline = (
@@ -1938,6 +1995,7 @@ export async function mountProductBrowserHost(
           // Callback-entry failures carry the current ticket/binding/readout;
           // they are completed receipts, never permission to replay the
           // product callback from the browser.
+          restoreReadyAfterHealthyTransport();
           return result;
         }
         throw new ProductBrowserHostError(
@@ -1945,9 +2003,10 @@ export async function mountProductBrowserHost(
           result.diagnostic ?? 'timeline completion was rejected by the runtime',
         );
       }
+      restoreReadyAfterHealthyTransport();
       return result;
     }).catch((cause: unknown) => {
-      throw failAndClose(cause, 'transport_failed');
+      throw recoverOrClose(cause, 'transport_failed');
     });
   };
 
@@ -1977,7 +2036,7 @@ export async function mountProductBrowserHost(
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
-      throw failAndClose(cause, 'transport_failed');
+      throw recoverOrClose(cause, 'transport_failed');
     });
   };
 
@@ -2007,7 +2066,7 @@ export async function mountProductBrowserHost(
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
-      throw failAndClose(cause, 'transport_failed');
+      throw recoverOrClose(cause, 'transport_failed');
     });
   };
 

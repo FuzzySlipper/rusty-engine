@@ -1524,12 +1524,18 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
         return HttpResponse::error(400, error.code(), error.detail());
     }
     let mut reported = 0_u8;
-    let status_disposition = if report.host_state == ProductDevBrowserHostState::Failed {
+    let status_disposition = if matches!(
+        report.host_state,
+        ProductDevBrowserHostState::Degraded | ProductDevBrowserHostState::Failed
+    ) {
         ProductDevLogDisposition::Degraded
     } else {
         ProductDevLogDisposition::Accepted
     };
-    let status_severity = if report.host_state == ProductDevBrowserHostState::Failed {
+    let status_severity = if matches!(
+        report.host_state,
+        ProductDevBrowserHostState::Degraded | ProductDevBrowserHostState::Failed
+    ) {
         ProductDevLogSeverity::Warning
     } else {
         ProductDevLogSeverity::Info
@@ -1648,6 +1654,7 @@ fn browser_host_state(state: ProductDevBrowserHostState) -> &'static str {
     match state {
         ProductDevBrowserHostState::Loading => "loading",
         ProductDevBrowserHostState::Ready => "ready",
+        ProductDevBrowserHostState::Degraded => "degraded",
         ProductDevBrowserHostState::Failed => "failed",
         ProductDevBrowserHostState::Disposed => "disposed",
     }

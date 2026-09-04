@@ -2,6 +2,8 @@
 
 import {
   mountProductBrowserHost,
+  ProductBrowserLocalTransportError,
+  type ProductBrowserDiagnosticsReport,
   type ProductBrowserRuntimeAdapter,
   type ProductBrowserHost,
   type ProductBrowserRuntimeOutput,
@@ -23,6 +25,8 @@ const RUNTIME: RustyApplicationRuntimeIdentity = {
 declare global {
   interface Window {
     __rustyProductBrowserInputBatches?: readonly (readonly RustyApplicationRuntimeInputEnvelope[])[];
+    __rustyProductBrowserInputAttempts?: readonly (readonly RustyApplicationRuntimeInputEnvelope[])[];
+    __rustyProductBrowserDiagnosticReports?: readonly ProductBrowserDiagnosticsReport[];
     __rustyProductBrowserRealtimeTicks?: readonly string[];
     __rustyProductBrowserOutputs?: readonly ProductBrowserRuntimeOutput[];
     __rustyProductBrowserRafCount?: number;
@@ -50,9 +54,14 @@ let terminalFailureListeners = new Set<(failure: ProductBrowserRuntimeTerminalFa
 let disposed = false;
 let scheduledInputResultIndex = 0;
 const inputBatches: (readonly RustyApplicationRuntimeInputEnvelope[])[] = [];
+const inputAttempts: (readonly RustyApplicationRuntimeInputEnvelope[])[] = [];
+let transientInputFailuresRemaining = new URLSearchParams(window.location.search).has('transientInputFailure') ? 1 : 0;
 const realtimeTicks: string[] = [];
 const outputs: ProductBrowserRuntimeOutput[] = [];
+const diagnosticReports: ProductBrowserDiagnosticsReport[] = [];
 window.__rustyProductBrowserInputBatches = inputBatches;
+window.__rustyProductBrowserInputAttempts = inputAttempts;
+window.__rustyProductBrowserDiagnosticReports = diagnosticReports;
 window.__rustyProductBrowserRealtimeTicks = realtimeTicks;
 window.__rustyProductBrowserOutputs = outputs;
 
@@ -92,6 +101,15 @@ const adapter: ProductBrowserRuntimeAdapter = {
     };
   },
   input: async (batch) => {
+    inputAttempts.push(batch);
+    if (transientInputFailuresRemaining > 0) {
+      transientInputFailuresRemaining -= 1;
+      throw new ProductBrowserLocalTransportError(
+        'request_failed',
+        'fixture same-origin input request was transiently unavailable',
+        { retryable: true, route: '/__rusty/product/runtime/input' },
+      );
+    }
     inputBatches.push(batch);
     return { accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', count: batch.length, binding: RUNTIME, readout: runtimeReadout('running') };
   },
@@ -114,6 +132,10 @@ const adapter: ProductBrowserRuntimeAdapter = {
       : { acceptedThroughFactId: feedback.facts.at(-1)!.factId }),
   }),
   reportGhostPlateFeedback: async (feedback) => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', runtime: feedback.runtime }),
+  reportBrowserDiagnostics: async (report) => {
+    diagnosticReports.push(report);
+    return { accepted: true, reported: 1 };
+  },
   advanceRealtime: async (observedTimeNs) => {
     realtimeTicks.push(observedTimeNs);
     emit({ kind: 'runtime-readout', readout: runtimeReadout('running') });

@@ -75,6 +75,29 @@ test('scheduled input receipts apply accepted and recovery cursors to later prod
   await expectClaimSequence('9');
 });
 
+test('a transient local input request degrades once, drops its uncertain batch, and accepts fresh input', async ({ page }) => {
+  await page.goto('/browser/product-browser-host.html?transientInputFailure=1');
+  const canvas = page.locator('canvas[data-rusty-application-renderer="engine-owned"]');
+  await canvas.focus();
+  await page.keyboard.down('KeyW');
+  await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserDiagnosticReports ?? []).some((report) =>
+    report.hostState === 'degraded' && report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
+  ))).toBe(true);
+  await page.keyboard.up('KeyW');
+  await expect.poll(() => page.evaluate(() => window.__rustyProductBrowserHost?.readout().state)).toBe('ready');
+  const evidence = await page.evaluate(() => ({
+    attempts: window.__rustyProductBrowserInputAttempts ?? [],
+    accepted: window.__rustyProductBrowserInputBatches ?? [],
+    failure: document.body.dataset['rustyProductRuntimeFailure'] ?? null,
+  }));
+  expect(evidence.attempts).toHaveLength(2);
+  expect(evidence.accepted).toHaveLength(1);
+  expect(evidence.accepted[0]?.map((input) => input.sequence)).not.toEqual(
+    evidence.attempts[0]?.map((input) => input.sequence),
+  );
+  expect(evidence.failure).toContain('transiently unavailable');
+});
+
 test('generated product browser host keeps UI controls out of gameplay pointer input and focuses canvas once', async ({ page }) => {
   await page.goto('/browser/product-browser-host.html');
   await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');

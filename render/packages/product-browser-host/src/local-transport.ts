@@ -254,16 +254,19 @@ export type ProductBrowserLocalTransportErrorCode =
 export class ProductBrowserLocalTransportError extends Error {
   readonly code: ProductBrowserLocalTransportErrorCode;
   readonly route: string | null;
+  /** True only when no response boundary established the operation outcome. */
+  readonly retryable: boolean;
 
   constructor(
     code: ProductBrowserLocalTransportErrorCode,
     message: string,
-    options?: ErrorOptions & { readonly route?: string },
+    options?: ErrorOptions & { readonly route?: string; readonly retryable?: boolean },
   ) {
     super(message, options);
     this.name = 'ProductBrowserLocalTransportError';
     this.code = code;
     this.route = options?.route ?? null;
+    this.retryable = options?.retryable ?? false;
   }
 }
 
@@ -534,7 +537,7 @@ export function createProductBrowserLocalHttpAdapter(
       throw new ProductBrowserLocalTransportError(
         'request_failed',
         `Product Browser local runtime request failed for ${route}: ${cause instanceof Error ? cause.message : String(cause)}`,
-        { cause, route },
+        { cause, route, retryable: true },
       );
     }
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
@@ -1349,7 +1352,7 @@ async function readResponseText(
       throw new ProductBrowserLocalTransportError(
         'request_failed',
         `Product Browser local runtime response could not be read for ${route}`,
-        { cause, route },
+        { cause, route, retryable: true },
       );
     }
     const bytes = new TextEncoder().encode(text).byteLength;
@@ -1386,7 +1389,7 @@ async function readResponseText(
     throw new ProductBrowserLocalTransportError(
       'request_failed',
       `Product Browser local runtime response could not be read for ${route}`,
-      { cause, route },
+      { cause, route, retryable: true },
     );
   }
   return text;
@@ -1605,11 +1608,13 @@ function snapshotBrowserDiagnosticsReport(
   const recoverable = record['recoverableEvent'] === undefined
     ? undefined
     : snapshotBrowserDiagnostic(record['recoverableEvent'], 'browser recoverable diagnostic');
-  if (recoverable !== undefined && recoverable.code !== 'CSHARP_LIFECYCLE_CLOCK_REGRESSION') {
+  if (recoverable !== undefined && recoverable.code !== 'CSHARP_LIFECYCLE_CLOCK_REGRESSION'
+    && recoverable.code !== 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE'
+    && recoverable.code !== 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
     throw new TypeError('browser recoverable diagnostic code is not supported');
   }
   return Object.freeze({
-    hostState: requireCatalogValue(record.hostState, 'browser host state', new Set(['loading', 'ready', 'failed', 'disposed'])),
+    hostState: requireCatalogValue(record.hostState, 'browser host state', new Set(['loading', 'ready', 'degraded', 'failed', 'disposed'])),
     runtimeProgress: requireU64Text(record.runtimeProgress, 'browser runtime progress'),
     transportState: requireCatalogValue(record.transportState, 'browser transport state', new Set(['open', 'closed'])),
     outputState: requireCatalogValue(record.outputState, 'browser output state', new Set(['open', 'closed'])),

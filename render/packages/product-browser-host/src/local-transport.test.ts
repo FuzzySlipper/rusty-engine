@@ -274,6 +274,31 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   );
 });
 
+test('local transport distinguishes an uncertain request from an HTTP rejection', async () => {
+  const unavailable = createProductBrowserLocalHttpAdapter({
+    fetch: async () => { throw new TypeError('Failed to fetch'); },
+    eventSource: FakeEventSource,
+  });
+  await assert.rejects(
+    unavailable.lifecycle({ kind: 'start' }),
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError
+      && error.code === 'request_failed'
+      && error.retryable === true
+      && error.route === 'lifecycle/start',
+  );
+
+  const rejected = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({ error: 'unavailable' }, 503),
+    eventSource: FakeEventSource,
+  });
+  await assert.rejects(
+    rejected.lifecycle({ kind: 'start' }),
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError
+      && error.code === 'request_failed'
+      && error.retryable === false,
+  );
+});
+
 test('completed unnumbered baseline discards a cursorless replacement attach after reconnect', async () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({

@@ -874,6 +874,7 @@ pub struct ProductDevBrowserDiagnosticsReport {
 pub enum ProductDevBrowserHostState {
     Loading,
     Ready,
+    Degraded,
     Failed,
     Disposed,
 }
@@ -924,7 +925,9 @@ impl ProductDevBrowserDiagnosticsReport {
             validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
             if !matches!(
                 diagnostic.code.as_str(),
-                "CSHARP_LIFECYCLE_CLOCK_REGRESSION" | "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE"
+                "CSHARP_LIFECYCLE_CLOCK_REGRESSION"
+                    | "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE"
+                    | "BROWSER_LOCAL_REQUEST_UNAVAILABLE"
             ) {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
