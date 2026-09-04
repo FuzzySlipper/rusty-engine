@@ -60,7 +60,6 @@ use runtime_lifecycle::{
 use runtime_ui::RuntimeUiRuntimeBinding;
 
 const ABI_OK: i32 = 1;
-const RUNTIME_INSTANCE_ID: u64 = 1;
 const STANDARD_REALTIME_HZ: u32 = 60;
 const STANDARD_MAX_CATCH_UP_STEPS: u32 = 4;
 const STANDARD_REALTIME_EXERCISE_ADMISSION_NS: u64 = 16_666_667;
@@ -498,6 +497,10 @@ pub struct CsharpProductRuntimeError {
 /// not product policy.
 #[derive(Clone)]
 pub struct CsharpProductRuntimeConfig {
+    /// The host/supervisor-owned identity for this loaded runtime incarnation.
+    /// It is deliberately separate from the lifecycle generation and control
+    /// revision, which both begin afresh inside each incarnation.
+    runtime_instance_id: RuntimeInstanceId,
     lifecycle: RuntimeLifecycleConfig,
     direct_intents: Vec<DirectInputIntentDescriptor>,
     physical_mappings: Vec<RuntimeInputMapping>,
@@ -512,10 +515,12 @@ pub struct CsharpProductRuntimeConfig {
 
 impl CsharpProductRuntimeConfig {
     pub fn new(
+        runtime_instance_id: RuntimeInstanceId,
         lifecycle: RuntimeLifecycleConfig,
         direct_intents: Vec<DirectInputIntentDescriptor>,
     ) -> Self {
         Self {
+            runtime_instance_id,
             lifecycle,
             direct_intents,
             physical_mappings: Vec::new(),
@@ -1064,10 +1069,7 @@ impl CsharpProductRuntime {
             config.physical_mappings.clone(),
         )
         .map_err(input_error)?;
-        let lifecycle = RuntimeLifecycle::new(
-            RuntimeInstanceId::new(RUNTIME_INSTANCE_ID),
-            config.lifecycle,
-        );
+        let lifecycle = RuntimeLifecycle::new(config.runtime_instance_id, config.lifecycle);
         let initial_binding = input_binding(&lifecycle);
         let input_context = standard_input_context().as_str().as_bytes().to_vec();
         let native_input_descriptors: Vec<NativeInputDescriptor> = config
@@ -2376,6 +2378,7 @@ impl CsharpProductRuntime {
         if self.pending_recovery_outputs.is_empty() {
             self.pending_inputs.clear();
         }
+        let recovery = error.recovery();
         self.publish_diagnostic_as(&error, ProductDevFaultDisposition::ResyncRequired);
         let result = ProductDevOperationResult::resync_required(
             operation,
@@ -2389,6 +2392,7 @@ impl CsharpProductRuntime {
                 .map(CanonicalU64::new),
             error.code().to_owned(),
             error.diagnostic().to_owned(),
+            recovery,
         )
         .map_err(host_runtime_error)?;
         ProductDevRuntimeReceipt::new(result, self.take_pending_recovery_outputs())
@@ -2406,12 +2410,14 @@ impl CsharpProductRuntime {
     ) -> Result<ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>, ProductDevRuntimeError>
     {
         let error = self.resync_runtime_error(error);
+        let recovery = error.recovery();
         let result = ProductDevTimelineCompletionResult::resync_required_with_current(
             ticket,
             self.binding(),
             self.readout(),
             error.code().to_owned(),
             error.diagnostic().to_owned(),
+            recovery,
         )
         .map_err(host_runtime_error)?;
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
@@ -2514,7 +2520,7 @@ impl CsharpProductRuntime {
         if binding == Some(self.binding()) {
             return Ok(());
         }
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "CSHARP_CONTROL_BINDING",
             "lifecycle control does not name the current runtime binding",
         )
@@ -2532,7 +2538,7 @@ impl CsharpProductRuntime {
         ) {
             return Ok(());
         }
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "CSHARP_LIFECYCLE_ADMISSION",
             format!(
                 "restart is not admitted from lifecycle state {:?}",
@@ -2671,14 +2677,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
             return self.lifecycle_with_binding(ProductDevLifecycleOperation::Start, None);
         }
         if self.lifecycle.state() == RuntimeState::Shutdown {
-            return Err(ProductDevRuntimeError::new(
+            return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_CONNECT_STATE",
                 "a shutdown runtime cannot accept a browser connection",
             )
             .expect("fixed connect-state diagnostic"));
         }
         let attach = self.api.attach.ok_or_else(|| {
-            ProductDevRuntimeError::new(
+            ProductDevRuntimeError::new_not_applied(
                 "CSHARP_ATTACH_UNSUPPORTED",
                 "this product predates generated browser attachment support",
             )
@@ -2838,7 +2844,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         batch: ProductDevInputBatch,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError> {
         if self.lifecycle.state() != RuntimeState::Running {
-            return Err(ProductDevRuntimeError::new(
+            return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_INPUT_STATE",
                 "input is admitted only while the standard runtime is running",
             )
@@ -2908,14 +2914,14 @@ impl ProductDevRuntime for CsharpProductRuntime {
             return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
         }
         if command.len() > MAX_DEBUG_COMMAND_BYTES {
-            return Err(ProductDevRuntimeError::new(
+            return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_DEBUG_INPUT_BOUNDS",
                 "debug command exceeds the generated callback input bound",
             )
             .expect("fixed debug input diagnostic"));
         }
         let Some((execute, release)) = self.api.debug else {
-            return Err(ProductDevRuntimeError::new(
+            return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_DEBUG_UNSUPPORTED",
                 "the loaded product does not expose generated live-debug callbacks",
             )
@@ -3878,7 +3884,7 @@ fn prepare_content_store_root(
 }
 
 fn input_runtime_error(error: runtime_input::RuntimeInputError) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new(input_error_code(&error), error.to_string())
+    ProductDevRuntimeError::new_not_applied(input_error_code(&error), error.to_string())
         .expect("bounded input admission diagnostic")
 }
 
@@ -3889,7 +3895,7 @@ fn lifecycle_error(error: runtime_lifecycle::RuntimeLifecycleError) -> CsharpPro
 fn lifecycle_runtime_error(
     error: runtime_lifecycle::RuntimeLifecycleError,
 ) -> ProductDevRuntimeError {
-    ProductDevRuntimeError::new(lifecycle_error_code(&error), error.to_string())
+    ProductDevRuntimeError::new_not_applied(lifecycle_error_code(&error), error.to_string())
         .expect("bounded lifecycle admission diagnostic")
 }
 
@@ -5828,7 +5834,11 @@ mod tests {
         let content = CsharpProductContent::admit(&root).expect("drop fixture content");
         let runtime = CsharpProductRuntime::load_admitted_with(
             content,
-            CsharpProductRuntimeConfig::new(lifecycle_config, Vec::new()),
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                lifecycle_config,
+                Vec::new(),
+            ),
             || Ok(drop_fixture_api()),
         )
         .expect("drop fixture runtime");
@@ -5846,11 +5856,39 @@ mod tests {
         .expect("direct-input descriptor");
         let runtime = CsharpProductRuntime::load_admitted_with(
             content,
-            CsharpProductRuntimeConfig::new(RuntimeLifecycleConfig::Demand, vec![descriptor]),
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::Demand,
+                vec![descriptor],
+            ),
             || Ok(direct_input_fixture_api()),
         )
         .expect("direct-input fixture runtime");
         (runtime, root)
+    }
+
+    #[test]
+    fn configured_runtime_incarnation_reaches_readout_and_binding() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        let root = content_fixture_root("configured-runtime-incarnation");
+        fs::create_dir_all(&root).expect("create fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("admit fixture content");
+        let runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(77),
+                RuntimeLifecycleConfig::Demand,
+                Vec::new(),
+            ),
+            || Ok(drop_fixture_api()),
+        )
+        .expect("load configured fixture runtime");
+
+        assert_eq!(runtime.readout().runtime().instance_id.get(), 77);
+        assert_eq!(runtime.binding().instance_id.get(), 77);
+
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove fixture content");
     }
 
     #[test]
@@ -5876,6 +5914,9 @@ mod tests {
         assert_eq!(encoded["nextInputSequence"], "1");
         assert_eq!(encoded["readout"]["admittedSimulationSteps"], "1");
         assert_eq!(encoded["disposition"], "resync-required");
+        assert_eq!(encoded["recovery"]["mutation"], "unknown");
+        assert_eq!(encoded["recovery"]["invalidatedScope"], "incarnation");
+        assert_eq!(encoded["recovery"]["nextAction"], "replace-incarnation");
         UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
         drop(runtime);
         fs::remove_dir_all(root).expect("remove post-admission fixture content");
@@ -5999,7 +6040,11 @@ mod tests {
         let content = CsharpProductContent::admit(&root).expect("product error fixture content");
         let error = match CsharpProductRuntime::load_admitted_with(
             content,
-            CsharpProductRuntimeConfig::new(RuntimeLifecycleConfig::Demand, Vec::new()),
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::Demand,
+                Vec::new(),
+            ),
             || Ok(product_error_fixture_api()),
         ) {
             Ok(_) => panic!("named Engine create failure must reject the product"),

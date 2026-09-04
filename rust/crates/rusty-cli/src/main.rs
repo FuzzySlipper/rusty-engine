@@ -8,6 +8,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, SystemTime},
 };
@@ -20,6 +21,7 @@ const STAGED_PRODUCT_PROPERTY: &str = "RustyEngineStagedProductDirectory";
 const WATCH_PATHS_PROPERTY: &str = "RustyEngineWatchPaths";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CLEAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+static NEXT_SUPERVISED_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 const IGNORED_WATCH_DIRECTORY_NAMES: &[&str] = &[
     ".git",
     ".idea",
@@ -69,6 +71,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
             "loader": "coreclr",
             "watchPaths": watches,
             "pid": child.child.id(),
+            "runtimeInstanceId": child.runtime_instance_id,
         }),
     );
 
@@ -109,6 +112,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 "loader": "coreclr",
                 "watchPaths": watches,
                 "pid": child.child.id(),
+                "runtimeInstanceId": child.runtime_instance_id,
             }),
         );
     }
@@ -487,6 +491,7 @@ fn development_runtime_root(project: &Path) -> Result<PathBuf, String> {
 struct SupervisedHost {
     child: Child,
     stdin: Option<ChildStdin>,
+    runtime_instance_id: u64,
 }
 
 impl SupervisedHost {
@@ -496,7 +501,13 @@ impl SupervisedHost {
         persistence_root: &Path,
         content_store_root: &Path,
     ) -> Result<Self, String> {
-        let arguments = supervised_host_arguments(product, persistence_root, content_store_root)?;
+        let runtime_instance_id = next_supervised_runtime_instance_id()?;
+        let arguments = supervised_host_arguments(
+            product,
+            persistence_root,
+            content_store_root,
+            runtime_instance_id,
+        )?;
         let mut child = Command::new(host)
             .args(&arguments)
             .stdin(Stdio::piped())
@@ -514,6 +525,7 @@ impl SupervisedHost {
         Ok(Self {
             child,
             stdin: Some(stdin),
+            runtime_instance_id,
         })
     }
 
@@ -558,7 +570,13 @@ fn supervised_host_arguments(
     product: &Path,
     persistence_root: &Path,
     content_store_root: &Path,
+    runtime_instance_id: u64,
 ) -> Result<Vec<String>, String> {
+    if runtime_instance_id == 0 {
+        return Err(
+            "RUSTY_DEV_RUNTIME_INSTANCE: runtime incarnation identity must be nonzero".to_owned(),
+        );
+    }
     Ok(vec![
         "--product".to_owned(),
         product
@@ -568,6 +586,8 @@ fn supervised_host_arguments(
         "--loader".to_owned(),
         "coreclr".to_owned(),
         "--supervised".to_owned(),
+        "--runtime-instance-id".to_owned(),
+        runtime_instance_id.to_string(),
         "--persistence-root".to_owned(),
         persistence_root
             .to_str()
@@ -579,6 +599,14 @@ fn supervised_host_arguments(
             .ok_or("RUSTY_DEV_CONTENT_STORE: content store root path must be UTF-8")?
             .to_owned(),
     ])
+}
+
+fn next_supervised_runtime_instance_id() -> Result<u64, String> {
+    let ordinal = NEXT_SUPERVISED_RUNTIME_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
+    let process_seed = u64::from(std::process::id()).max(1);
+    process_seed.checked_add(ordinal).ok_or_else(|| {
+        "RUSTY_DEV_RUNTIME_INSTANCE: supervisor incarnation identity space exhausted".to_owned()
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -785,6 +813,7 @@ mod tests {
             Path::new("/workspace/Product/obj/RustyEngineProduct"),
             Path::new("/workspace/Product/.runtime/persistence"),
             Path::new("/workspace/Product/.runtime/content-store"),
+            41,
         )
         .expect("supervised host arguments");
 
@@ -794,6 +823,8 @@ mod tests {
             "--loader",
             "coreclr",
             "--supervised",
+            "--runtime-instance-id",
+            "41",
             "--persistence-root",
             "/workspace/Product/.runtime/persistence",
             "--content-store-root",
@@ -803,6 +834,16 @@ mod tests {
         .map(str::to_owned)
         .collect::<Vec<_>>();
         assert_eq!(arguments, expected);
+    }
+
+    #[test]
+    fn supervisor_allocates_distinct_nonzero_runtime_incarnations() {
+        let first = next_supervised_runtime_instance_id().expect("first runtime incarnation");
+        let second = next_supervised_runtime_instance_id().expect("second runtime incarnation");
+
+        assert_ne!(first, 0);
+        assert_ne!(second, 0);
+        assert_ne!(first, second);
     }
 
     #[test]

@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    ProductDevHostError, ProductDevRuntimeError, MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    ProductDevHostError, ProductDevInvalidatedScope, ProductDevMutationCertainty,
+    ProductDevNextAction, ProductDevRuntimeError, ProductDevRuntimeRecovery,
+    MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
 };
 
 /// Fixed Engine-owned local-runtime route prefix consumed by product-browser-host.
@@ -186,48 +188,41 @@ impl ProductDevFaultDisposition {
 
 const ACCEPTED_FAULT_CODE: &str = "DEV_HOST_ACCEPTED";
 
-fn ordinary_runtime_rejection(code: &str) -> bool {
-    matches!(
-        code,
-        "CSHARP_ATTACH_UNSUPPORTED"
-            | "CSHARP_CONNECT_STATE"
-            | "CSHARP_CONTROL_BINDING"
-            | "CSHARP_INPUT_STATE"
-            // Clock regression records an observation counter but leaves the
-            // admitted simulation, binding, and product callback untouched;
-            // the caller can retry with a later host timestamp. Do not group
-            // this with counter exhaustion, which faults the runtime.
-            | "CSHARP_LIFECYCLE_CLOCK_REGRESSION"
-            | "DEV_HOST_AUDIO_FEEDBACK_UNSUPPORTED"
-            | "DEV_HOST_ANIMATION_FEEDBACK_UNSUPPORTED"
-            | "DEV_HOST_CONTROL_UNSUPPORTED"
-            | "DEV_HOST_DEBUG_UNSUPPORTED"
-            | "DEV_HOST_GHOST_PLATE_FEEDBACK_UNSUPPORTED"
-            | "DEV_HOST_RENDERER_DIAGNOSTICS_UNSUPPORTED"
-    )
-}
-
 pub fn runtime_fault_disposition(error: &ProductDevRuntimeError) -> ProductDevFaultDisposition {
-    // Runtime errors are terminal unless an explicitly mapped operation is
-    // known to reject before mutating authoritative state. This keeps new,
-    // ABI, ownership, stream, persistence, and partially-applied failures on
-    // the safe stop path by default.
-    if ordinary_runtime_rejection(error.code()) {
-        ProductDevFaultDisposition::RejectedRecoverable
-    } else {
-        ProductDevFaultDisposition::Terminal
+    match error.recovery() {
+        ProductDevRuntimeRecovery {
+            mutation: ProductDevMutationCertainty::NotApplied,
+            invalidated_scope: ProductDevInvalidatedScope::None,
+            next_action: ProductDevNextAction::Continue,
+        } => ProductDevFaultDisposition::RejectedRecoverable,
+        ProductDevRuntimeRecovery {
+            invalidated_scope: ProductDevInvalidatedScope::Outputs,
+            next_action: ProductDevNextAction::Rebaseline,
+            ..
+        } => ProductDevFaultDisposition::ResyncRequired,
+        // New failures do not need a central code registration. Unless their
+        // source marks a pre-admission rejection, treat the current runtime
+        // incarnation as tainted and preserve the existing terminal wire
+        // disposition until the supervisor consumes replacement semantics.
+        _ => ProductDevFaultDisposition::Terminal,
     }
 }
 
 fn runtime_fault_fields(
     error: ProductDevRuntimeError,
-) -> (String, ProductDevFaultDisposition, String) {
+) -> (
+    String,
+    ProductDevFaultDisposition,
+    String,
+    ProductDevRuntimeRecovery,
+) {
     let disposition = runtime_fault_disposition(&error);
     (
         error.code().to_owned(),
         disposition,
         bounded_diagnostic(error.diagnostic().to_owned())
             .expect("runtime error diagnostics are bounded at construction"),
+        error.recovery(),
     )
 }
 
@@ -401,6 +396,8 @@ pub struct ProductDevAudioFeedbackResult {
     pub accepted: bool,
     pub code: String,
     pub disposition: ProductDevFaultDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<ProductDevRuntimeRecovery>,
     pub runtime: ProductDevRuntimeBinding,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accepted_through_fact_id: Option<CanonicalU64>,
@@ -417,6 +414,7 @@ impl ProductDevAudioFeedbackResult {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
+            recovery: None,
             runtime,
             accepted_through_fact_id,
             diagnostic: None,
@@ -431,6 +429,7 @@ impl ProductDevAudioFeedbackResult {
             accepted: false,
             code: "DEV_HOST_AUDIO_FEEDBACK_REJECTED".to_owned(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            recovery: None,
             runtime,
             accepted_through_fact_id: None,
             diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
@@ -441,11 +440,12 @@ impl ProductDevAudioFeedbackResult {
         runtime: ProductDevRuntimeBinding,
         error: ProductDevRuntimeError,
     ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
+        let (code, disposition, diagnostic, recovery) = runtime_fault_fields(error);
         Ok(Self {
             accepted: false,
             code,
             disposition,
+            recovery: Some(recovery),
             runtime,
             accepted_through_fact_id: None,
             diagnostic: Some(diagnostic),
@@ -635,6 +635,8 @@ pub struct ProductDevAnimationFeedbackResult {
     pub accepted: bool,
     pub code: String,
     pub disposition: ProductDevFaultDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<ProductDevRuntimeRecovery>,
     pub runtime: ProductDevRuntimeBinding,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accepted_through_fact_id: Option<CanonicalU64>,
@@ -651,6 +653,7 @@ impl ProductDevAnimationFeedbackResult {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
+            recovery: None,
             runtime,
             accepted_through_fact_id,
             diagnostic: None,
@@ -664,6 +667,7 @@ impl ProductDevAnimationFeedbackResult {
             accepted: false,
             code: "DEV_HOST_ANIMATION_FEEDBACK_REJECTED".to_owned(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            recovery: None,
             runtime,
             accepted_through_fact_id: None,
             diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
@@ -674,11 +678,12 @@ impl ProductDevAnimationFeedbackResult {
         runtime: ProductDevRuntimeBinding,
         error: ProductDevRuntimeError,
     ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
+        let (code, disposition, diagnostic, recovery) = runtime_fault_fields(error);
         Ok(Self {
             accepted: false,
             code,
             disposition,
+            recovery: Some(recovery),
             runtime,
             accepted_through_fact_id: None,
             diagnostic: Some(diagnostic),
@@ -774,6 +779,8 @@ pub struct ProductDevGhostPlateFeedbackResult {
     pub accepted: bool,
     pub code: String,
     pub disposition: ProductDevFaultDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<ProductDevRuntimeRecovery>,
     pub runtime: ProductDevRuntimeBinding,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnostic: Option<String>,
@@ -785,6 +792,7 @@ impl ProductDevGhostPlateFeedbackResult {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
+            recovery: None,
             runtime,
             diagnostic: None,
         }
@@ -798,6 +806,7 @@ impl ProductDevGhostPlateFeedbackResult {
             accepted: false,
             code: "DEV_HOST_GHOST_PLATE_FEEDBACK_REJECTED".to_owned(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            recovery: None,
             runtime,
             diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
         })
@@ -807,11 +816,12 @@ impl ProductDevGhostPlateFeedbackResult {
         runtime: ProductDevRuntimeBinding,
         error: ProductDevRuntimeError,
     ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
+        let (code, disposition, diagnostic, recovery) = runtime_fault_fields(error);
         Ok(Self {
             accepted: false,
             code,
             disposition,
+            recovery: Some(recovery),
             runtime,
             diagnostic: Some(diagnostic),
         })
@@ -1063,6 +1073,8 @@ pub struct ProductDevRendererDiagnosticsFeedbackResult {
     pub accepted: bool,
     pub code: String,
     pub disposition: ProductDevFaultDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<ProductDevRuntimeRecovery>,
     pub runtime: ProductDevRuntimeBinding,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnostic: Option<String>,
@@ -1074,6 +1086,7 @@ impl ProductDevRendererDiagnosticsFeedbackResult {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
+            recovery: None,
             runtime,
             diagnostic: None,
         }
@@ -1087,6 +1100,7 @@ impl ProductDevRendererDiagnosticsFeedbackResult {
             accepted: false,
             code: "DEV_HOST_RENDERER_DIAGNOSTICS_REJECTED".to_owned(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            recovery: None,
             runtime,
             diagnostic: Some(bounded_diagnostic(diagnostic.into())?),
         })
@@ -1096,11 +1110,12 @@ impl ProductDevRendererDiagnosticsFeedbackResult {
         runtime: ProductDevRuntimeBinding,
         error: ProductDevRuntimeError,
     ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
+        let (code, disposition, diagnostic, recovery) = runtime_fault_fields(error);
         Ok(Self {
             accepted: false,
             code,
             disposition,
+            recovery: Some(recovery),
             runtime,
             diagnostic: Some(diagnostic),
         })
@@ -1232,6 +1247,8 @@ pub struct ProductDevOperationResult {
     accepted: bool,
     code: String,
     disposition: ProductDevFaultDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<ProductDevRuntimeRecovery>,
     operation: ProductDevOperationKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     binding: Option<ProductDevRuntimeBinding>,
@@ -1444,6 +1461,7 @@ impl ProductDevOperationResult {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
+            recovery: None,
             operation,
             binding: Some(binding),
             next_input_sequence: Some(next_input_sequence),
@@ -1462,6 +1480,7 @@ impl ProductDevOperationResult {
             accepted: false,
             code: "DEV_HOST_OPERATION_REJECTED".to_owned(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            recovery: None,
             operation,
             binding: None,
             next_input_sequence: None,
@@ -1475,11 +1494,12 @@ impl ProductDevOperationResult {
         operation: ProductDevOperationKind,
         error: ProductDevRuntimeError,
     ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
+        let (code, disposition, diagnostic, recovery) = runtime_fault_fields(error);
         Ok(Self {
             accepted: false,
             code,
             disposition,
+            recovery: Some(recovery),
             operation,
             binding: None,
             next_input_sequence: None,
@@ -1501,6 +1521,7 @@ impl ProductDevOperationResult {
         admitted_through: Option<CanonicalU64>,
         code: impl Into<String>,
         diagnostic: impl Into<String>,
+        recovery: ProductDevRuntimeRecovery,
     ) -> Result<Self, ProductDevHostError> {
         if readout.runtime() != binding {
             return Err(ProductDevHostError::new(
@@ -1512,6 +1533,7 @@ impl ProductDevOperationResult {
             accepted: false,
             code: code.into(),
             disposition: ProductDevFaultDisposition::ResyncRequired,
+            recovery: Some(recovery),
             operation,
             binding: Some(binding),
             next_input_sequence: Some(next_input_sequence),
@@ -1565,6 +1587,8 @@ pub struct ProductDevInputResult {
     accepted: bool,
     code: String,
     disposition: ProductDevFaultDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<ProductDevRuntimeRecovery>,
     /// Number of submitted events in this batch. Kept as `count` for
     /// compatibility with existing host adapters. A strict-decode rejection
     /// preserves the host-bounded submitted count even when it is above the
@@ -1614,6 +1638,7 @@ impl ProductDevInputResult {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
+            recovery: None,
             count,
             accepted_count: count,
             dropped_count: 0,
@@ -1640,6 +1665,7 @@ impl ProductDevInputResult {
             accepted: true,
             code: "DEV_HOST_INPUT_QUEUED".to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
+            recovery: None,
             count,
             accepted_count: count,
             dropped_count: 0,
@@ -1668,6 +1694,7 @@ impl ProductDevInputResult {
             accepted: false,
             code: "DEV_HOST_INPUT_MAILBOX_FULL".to_owned(),
             disposition: ProductDevFaultDisposition::ResyncRequired,
+            recovery: None,
             count,
             accepted_count: 0,
             dropped_count: count,
@@ -1694,6 +1721,7 @@ impl ProductDevInputResult {
             accepted: false,
             code: "DEV_HOST_INPUT_DECODE".to_owned(),
             disposition: ProductDevFaultDisposition::ResyncRequired,
+            recovery: None,
             count,
             accepted_count: 0,
             dropped_count: count,
@@ -1713,6 +1741,7 @@ impl ProductDevInputResult {
             accepted: false,
             code: "DEV_HOST_INPUT_REJECTED".to_owned(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            recovery: None,
             count: 0,
             accepted_count: 0,
             dropped_count: 0,
@@ -1726,11 +1755,12 @@ impl ProductDevInputResult {
     }
 
     pub fn rejected_runtime(error: ProductDevRuntimeError) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
+        let (code, disposition, diagnostic, recovery) = runtime_fault_fields(error);
         Ok(Self {
             accepted: false,
             code,
             disposition,
+            recovery: Some(recovery),
             count: 0,
             accepted_count: 0,
             dropped_count: 0,
@@ -1791,6 +1821,7 @@ impl ProductDevInputResult {
             } else {
                 ProductDevFaultDisposition::RejectedRecoverable
             },
+            recovery: None,
             count,
             accepted_count,
             dropped_count,
@@ -1944,6 +1975,8 @@ pub struct ProductDevTimelineCompletionResult {
     accepted: bool,
     code: String,
     disposition: ProductDevFaultDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<ProductDevRuntimeRecovery>,
     ticket: CanonicalU64,
     #[serde(skip_serializing_if = "Option::is_none")]
     binding: Option<ProductDevRuntimeBinding>,
@@ -1977,6 +2010,7 @@ impl ProductDevTimelineCompletionResult {
             accepted: true,
             code: ACCEPTED_FAULT_CODE.to_owned(),
             disposition: ProductDevFaultDisposition::Accepted,
+            recovery: None,
             ticket,
             binding: Some(binding),
             readout: Some(readout),
@@ -1991,6 +2025,7 @@ impl ProductDevTimelineCompletionResult {
             accepted: false,
             code: "DEV_HOST_TIMELINE_REJECTED".to_owned(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            recovery: None,
             ticket,
             binding: None,
             readout: None,
@@ -2018,6 +2053,7 @@ impl ProductDevTimelineCompletionResult {
             accepted: false,
             code: code.into(),
             disposition: ProductDevFaultDisposition::RejectedRecoverable,
+            recovery: None,
             ticket,
             binding: Some(binding),
             readout: Some(readout),
@@ -2034,6 +2070,7 @@ impl ProductDevTimelineCompletionResult {
         readout: ProductDevRuntimeReadout,
         code: impl Into<String>,
         diagnostic: impl Into<String>,
+        recovery: ProductDevRuntimeRecovery,
     ) -> Result<Self, ProductDevHostError> {
         if readout.runtime() != binding {
             return Err(ProductDevHostError::new(
@@ -2045,6 +2082,7 @@ impl ProductDevTimelineCompletionResult {
             accepted: false,
             code: code.into(),
             disposition: ProductDevFaultDisposition::ResyncRequired,
+            recovery: Some(recovery),
             ticket,
             binding: Some(binding),
             readout: Some(readout),
@@ -2056,11 +2094,12 @@ impl ProductDevTimelineCompletionResult {
         ticket: CanonicalU64,
         error: ProductDevRuntimeError,
     ) -> Result<Self, ProductDevHostError> {
-        let (code, disposition, diagnostic) = runtime_fault_fields(error);
+        let (code, disposition, diagnostic, recovery) = runtime_fault_fields(error);
         Ok(Self {
             accepted: false,
             code,
             disposition,
+            recovery: Some(recovery),
             ticket,
             binding: None,
             readout: None,
@@ -2494,7 +2533,7 @@ pub trait ProductDevRuntime: Send + 'static {
         operation: ProductDevControlOperation,
         _binding: ProductDevRuntimeBinding,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_CONTROL_UNSUPPORTED",
             format!(
                 "{} control is not supported by this runtime",
@@ -2516,7 +2555,7 @@ pub trait ProductDevRuntime: Send + 'static {
     fn recover_input_overflow(
         &mut self,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_INPUT_RESYNC_UNSUPPORTED",
             "runtime does not expose host input-overflow recovery",
         )
@@ -2530,7 +2569,7 @@ pub trait ProductDevRuntime: Send + 'static {
         &mut self,
         _command: &str,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_DEBUG_UNSUPPORTED",
             "live debug commands are not supported by this runtime",
         )
@@ -2577,7 +2616,7 @@ pub trait ProductDevRuntime: Send + 'static {
         _feedback: ProductDevAudioFeedback,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
     {
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_AUDIO_FEEDBACK_UNSUPPORTED",
             "audio feedback is not supported by this runtime",
         )
@@ -2589,7 +2628,7 @@ pub trait ProductDevRuntime: Send + 'static {
         _feedback: ProductDevAnimationFeedback,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevAnimationFeedbackResult>, ProductDevRuntimeError>
     {
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_ANIMATION_FEEDBACK_UNSUPPORTED",
             "animation feedback is not supported by this runtime",
         )
@@ -2603,7 +2642,7 @@ pub trait ProductDevRuntime: Send + 'static {
         _feedback: ProductDevGhostPlateFeedback,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevGhostPlateFeedbackResult>, ProductDevRuntimeError>
     {
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_GHOST_PLATE_FEEDBACK_UNSUPPORTED",
             "ghost plate feedback is not supported by this runtime",
         )
@@ -2617,7 +2656,7 @@ pub trait ProductDevRuntime: Send + 'static {
         ProductDevRuntimeReceipt<ProductDevRendererDiagnosticsFeedbackResult>,
         ProductDevRuntimeError,
     > {
-        Err(ProductDevRuntimeError::new(
+        Err(ProductDevRuntimeError::new_not_applied(
             "DEV_HOST_RENDERER_DIAGNOSTICS_UNSUPPORTED",
             "renderer diagnostics are not supported by this runtime",
         )
@@ -2682,19 +2721,22 @@ mod tests {
     }
 
     #[test]
-    fn runtime_faults_preserve_code_and_default_unknown_failures_to_terminal() {
+    fn runtime_faults_use_source_owned_recovery_and_taint_unknown_failures() {
         let ordinary = ProductDevOperationResult::rejected_runtime(
             ProductDevOperationKind::Start,
-            ProductDevRuntimeError::new(
-                "CSHARP_LIFECYCLE_CLOCK_REGRESSION",
-                "observed time predates the last host observation",
+            ProductDevRuntimeError::new_not_applied(
+                "CSHARP_NEW_SOURCE_REJECTION",
+                "source rejected this operation before admission",
             )
             .unwrap(),
         )
         .unwrap();
         let ordinary = serde_json::to_value(ordinary).unwrap();
-        assert_eq!(ordinary["code"], "CSHARP_LIFECYCLE_CLOCK_REGRESSION");
+        assert_eq!(ordinary["code"], "CSHARP_NEW_SOURCE_REJECTION");
         assert_eq!(ordinary["disposition"], "rejected-recoverable");
+        assert_eq!(ordinary["recovery"]["mutation"], "not-applied");
+        assert_eq!(ordinary["recovery"]["invalidatedScope"], "none");
+        assert_eq!(ordinary["recovery"]["nextAction"], "continue");
 
         let exhausted = ProductDevOperationResult::rejected_runtime(
             ProductDevOperationKind::AdvanceRealtime,
@@ -2708,14 +2750,45 @@ mod tests {
         let exhausted = serde_json::to_value(exhausted).unwrap();
         assert_eq!(exhausted["disposition"], "terminal");
 
+        let unknown_error =
+            ProductDevRuntimeError::new("CSHARP_NEW_FAILURE", "unmapped runtime failure").unwrap();
+        assert_eq!(
+            unknown_error.recovery().mutation(),
+            ProductDevMutationCertainty::Unknown
+        );
+        assert_eq!(
+            unknown_error.recovery().invalidated_scope(),
+            ProductDevInvalidatedScope::Incarnation
+        );
+        assert_eq!(
+            unknown_error.recovery().next_action(),
+            ProductDevNextAction::ReplaceIncarnation
+        );
         let unknown = ProductDevOperationResult::rejected_runtime(
             ProductDevOperationKind::Start,
-            ProductDevRuntimeError::new("CSHARP_NEW_FAILURE", "unmapped runtime failure").unwrap(),
+            unknown_error,
         )
         .unwrap();
         let unknown = serde_json::to_value(unknown).unwrap();
         assert_eq!(unknown["code"], "CSHARP_NEW_FAILURE");
         assert_eq!(unknown["disposition"], "terminal");
+        assert_eq!(unknown["recovery"]["mutation"], "unknown");
+        assert_eq!(unknown["recovery"]["invalidatedScope"], "incarnation");
+        assert_eq!(unknown["recovery"]["nextAction"], "replace-incarnation");
+
+        let projection_only = ProductDevOperationResult::rejected_runtime(
+            ProductDevOperationKind::Start,
+            ProductDevRuntimeError::new_output_rebaseline(
+                "DEV_HOST_PROJECTION_ONLY",
+                "retained output needs a fresh baseline",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let projection_only = serde_json::to_value(projection_only).unwrap();
+        assert_eq!(projection_only["disposition"], "resync-required");
+        assert_eq!(projection_only["recovery"]["invalidatedScope"], "outputs");
+        assert_eq!(projection_only["recovery"]["nextAction"], "rebaseline");
     }
 
     #[test]

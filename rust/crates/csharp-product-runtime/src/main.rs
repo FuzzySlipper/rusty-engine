@@ -4,7 +4,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     time::Instant,
@@ -23,12 +23,14 @@ use runtime_input::{
     InputAxis, InputContext, InputEdge, IntentValueKind, KeyboardControl, PointerButton,
     RuntimeInputMapping, RuntimeInputTrigger,
 };
+use runtime_lifecycle::RuntimeInstanceId;
 
 mod product_bundle;
 use product_bundle::ProductBundle;
 
 const MAX_PHYSICAL_MAPPINGS: usize = 256;
 const MAX_MAPPING_CHORD_CONTROLS: usize = 8;
+static NEXT_DIRECT_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 
 const PHYSICAL_MAPPING_USAGE: &str = "--physical-mapping <mapping-id>=<intent-id>:<trigger>\n\
   key:<keyboard-control>:<held|pressed|released>[:context=<identity>][:chord=<keyboard-control>+...]\n\
@@ -350,6 +352,7 @@ struct Arguments {
     exercise: bool,
     performance_probe: Option<u32>,
     supervised: bool,
+    runtime_instance_id: Option<RuntimeInstanceId>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -442,8 +445,13 @@ impl Arguments {
                 .expect("legacy mode is required")
                 .lifecycle_config(),
         };
-        let mut config = CsharpProductRuntimeConfig::new(lifecycle, direct_intents)
-            .with_physical_mappings(physical_mappings);
+        let mut config = CsharpProductRuntimeConfig::new(
+            self.runtime_instance_id
+                .unwrap_or_else(next_direct_runtime_instance_id),
+            lifecycle,
+            direct_intents,
+        )
+        .with_physical_mappings(physical_mappings);
         if let Some(root) = &self.persistence_root {
             config = config.with_persistence_root(root.clone());
         }
@@ -547,6 +555,7 @@ impl Arguments {
         let mut exercise = false;
         let mut performance_probe = None;
         let mut supervised = false;
+        let mut runtime_instance_id = None;
         let mut values = values.into_iter();
         while let Some(arg) = values.next() {
             match arg.as_str() {
@@ -629,9 +638,20 @@ impl Arguments {
                     performance_probe = Some(iterations);
                 }
                 "--supervised" => supervised = true,
+                "--runtime-instance-id" => {
+                    let value = values
+                        .next()
+                        .ok_or("--runtime-instance-id requires a nonzero u64")?
+                        .parse::<u64>()
+                        .map_err(|_| "--runtime-instance-id must be a nonzero u64")?;
+                    if value == 0 {
+                        return Err("--runtime-instance-id must be a nonzero u64".to_owned());
+                    }
+                    runtime_instance_id = Some(RuntimeInstanceId::new(value));
+                }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -688,6 +708,7 @@ impl Arguments {
             exercise,
             performance_probe,
             supervised,
+            runtime_instance_id,
         };
         if arguments.exercise && arguments.performance_probe.is_some() {
             return Err("--exercise and --performance-probe are mutually exclusive".to_owned());
@@ -732,6 +753,15 @@ impl Arguments {
         }
         Ok(arguments)
     }
+}
+
+fn next_direct_runtime_instance_id() -> RuntimeInstanceId {
+    // Direct host invocation does not have a long-lived `rusty dev`
+    // supervisor. Give each in-process launch a nonzero, process-local
+    // incarnation instead of reviving the old fixed identity.
+    let ordinal = NEXT_DIRECT_RUNTIME_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
+    let process_seed = u64::from(std::process::id()).max(1);
+    RuntimeInstanceId::new(process_seed.saturating_add(ordinal).max(1))
 }
 
 fn parse_direct_intent(value: &str) -> Result<DirectInputIntentDescriptor, String> {
@@ -1362,5 +1392,18 @@ mod tests {
         let args = parse_test_args(&["--supervised"])
             .expect("supervised shutdown hook parses for a foreground host");
         assert!(args.supervised);
+    }
+
+    #[test]
+    fn parser_carries_a_supervisor_runtime_incarnation() {
+        let args =
+            parse_test_args(&["--runtime-instance-id", "77"]).expect("runtime incarnation parses");
+        assert_eq!(
+            args.runtime_instance_id
+                .expect("configured runtime incarnation"),
+            RuntimeInstanceId::new(77)
+        );
+        assert!(parse_test_error(&["--runtime-instance-id", "0"])
+            .contains("--runtime-instance-id must be a nonzero u64"));
     }
 }
