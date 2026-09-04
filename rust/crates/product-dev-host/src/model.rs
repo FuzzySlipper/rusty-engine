@@ -1677,6 +1677,36 @@ impl ProductDevInputResult {
         })
     }
 
+    /// Reports that the browser submitted a structurally invalid wire batch
+    /// and the runtime replaced its input control fence before continuing.
+    /// The rejected batch is deliberately not replayable: the replacement
+    /// binding and its sequence-zero clear arrive through the accompanying
+    /// runtime output receipt.
+    pub fn wire_decode_resynchronized(count: usize) -> Result<Self, ProductDevHostError> {
+        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_INPUT_RESULT_BOUNDS",
+                "wire-decode rejection count exceeds admitted batch bound",
+            ));
+        }
+        Ok(Self {
+            accepted: false,
+            code: "DEV_HOST_INPUT_DECODE".to_owned(),
+            disposition: ProductDevFaultDisposition::ResyncRequired,
+            count,
+            accepted_count: 0,
+            dropped_count: count,
+            accepted_through: None,
+            consumed_through: None,
+            next_input_sequence: None,
+            binding: None,
+            readout: None,
+            diagnostic: Some(bounded_diagnostic(
+                "input batch was not a strict runtime-input wire batch; the runtime input binding was resynchronized".to_owned(),
+            )?),
+        })
+    }
+
     pub fn rejected(diagnostic: impl Into<String>) -> Result<Self, ProductDevHostError> {
         Ok(Self {
             accepted: false,

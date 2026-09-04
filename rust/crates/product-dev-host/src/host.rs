@@ -21,11 +21,11 @@ use crate::{
     ProductDevControlOperation, ProductDevHostError, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
     ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
-    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevTelemetrySnapshot,
-    ProductDevTimelineCompletion, ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot,
-    MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES,
-    MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES,
-    MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevRuntimeReceipt,
+    ProductDevTelemetrySnapshot, ProductDevTimelineCompletion, ProductDevUpdateAttribution,
+    ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
+    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -1241,11 +1241,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
     let events = match decode_runtime_input_wire_events_json(&batch_json) {
         Ok(events) => events,
         Err(_) => {
-            return HttpResponse::error(
-                400,
-                "DEV_HOST_INPUT_DECODE",
-                "input batch is not a strict runtime-input wire batch",
-            );
+            return recover_rejected_input_batch(state, request.batch.len());
         }
     };
     let batch = ProductDevInputBatch::new(events);
@@ -1279,6 +1275,40 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
         |runtime| runtime.input(batch),
         |error| crate::ProductDevInputResult::rejected_runtime(error),
     )
+}
+
+fn recover_rejected_input_batch<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    count: usize,
+) -> HttpResponse {
+    state.input_mailbox.clear();
+    publish_host_diagnostic(
+        &state.diagnostics,
+        ProductDevLogSeverity::Warning,
+        ProductDevLogDisposition::ResyncRequired,
+        "DEV_HOST_INPUT_DECODE",
+        "input batch was not a strict runtime-input wire batch; replacing the runtime input binding before continuing",
+        [("submitted-count", count.to_string())],
+    );
+    let response = call_runtime(
+        state,
+        ProductDevOperationKind::Input,
+        |runtime| {
+            let recovery = runtime.recover_input_overflow()?;
+            let (_operation, outputs) = recovery.into_parts();
+            let result = ProductDevInputResult::wire_decode_resynchronized(count)
+                .map_err(host_error_to_runtime)?;
+            ProductDevRuntimeReceipt::new(result, outputs).map_err(host_error_to_runtime)
+        },
+        ProductDevInputResult::rejected_runtime,
+    );
+    state.scheduler_wake.notify();
+    response
+}
+
+fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {
+    ProductDevRuntimeError::new(error.code(), error.detail())
+        .expect("bounded host error has a valid runtime diagnostic")
 }
 
 fn invoke_realtime<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {

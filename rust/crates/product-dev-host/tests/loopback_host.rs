@@ -223,6 +223,15 @@ impl ProductDevRuntime for FixtureRuntime {
         .unwrap())
     }
 
+    fn recover_input_overflow(
+        &mut self,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(Self::operation(ProductDevOperationKind::ReplaceControl))
+    }
+
     fn describe_debug(
         &mut self,
     ) -> Result<
@@ -661,6 +670,47 @@ fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
         "GET /not-admitted.js HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
     );
     assert!(missing.starts_with("HTTP/1.1 404 Not Found\r\n"));
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
+    let host = start_debug();
+    let origin = host.origin();
+    let malformed_body = r#"{"batch":[{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"sequence":"0","context":"gameplay.default","fact":{"kind":"pointer-button","button":"primary","edge":"held"}}]}"#;
+    let malformed = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/input HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{malformed_body}",
+            malformed_body.len(),
+        ),
+    );
+    assert!(malformed.starts_with("HTTP/1.1 200 OK\r\n"), "{malformed}");
+    assert!(malformed.contains("\"code\":\"DEV_HOST_INPUT_DECODE\""));
+    assert!(malformed.contains("\"disposition\":\"resync-required\""));
+    assert!(malformed.contains("\"droppedCount\":1"));
+
+    let pointer_body = r#"{"batch":[{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"sequence":"0","context":"gameplay.default","fact":{"kind":"pointer-button","button":"primary","edge":"pressed"}},{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"sequence":"1","context":"gameplay.default","fact":{"kind":"pointer-button","button":"secondary","edge":"pressed"}}]}"#;
+    let pointer = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/input HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pointer_body}",
+            pointer_body.len(),
+        ),
+    );
+    assert!(pointer.starts_with("HTTP/1.1 200 OK\r\n"), "{pointer}");
+    assert!(pointer.contains("\"accepted\":true"));
+    assert!(pointer.contains("\"count\":2"));
+
+    let diagnostics = request(
+        &origin,
+        "POST /__rusty/product/runtime/diagnostics/read HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+    );
+    assert!(
+        diagnostics.contains("\"DEV_HOST_INPUT_DECODE\""),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("\"resync-required\""), "{diagnostics}");
     host.shutdown().unwrap();
 }
 

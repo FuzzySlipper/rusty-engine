@@ -986,6 +986,30 @@ test('local transport carries immutable bounded product payload intents', async 
   adapter.dispose();
 });
 
+test('local transport preserves primary and secondary pointer button edges', async () => {
+  const requestBodies: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as unknown);
+      return response({ accepted: true, ...ACCEPTED_FAULT, count: 4 });
+    },
+    eventSource: FakeEventSource,
+  });
+  await adapter.input([
+    { runtime: RUNTIME, sequence: '4', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'primary', edge: 'pressed' } },
+    { runtime: RUNTIME, sequence: '5', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'primary', edge: 'released' } },
+    { runtime: RUNTIME, sequence: '6', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'secondary', edge: 'pressed' } },
+    { runtime: RUNTIME, sequence: '7', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'secondary', edge: 'released' } },
+  ]);
+  assert.deepEqual(requestBodies, [{ batch: [
+    { runtime: RUNTIME, sequence: '4', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'primary', edge: 'pressed' } },
+    { runtime: RUNTIME, sequence: '5', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'primary', edge: 'released' } },
+    { runtime: RUNTIME, sequence: '6', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'secondary', edge: 'pressed' } },
+    { runtime: RUNTIME, sequence: '7', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'secondary', edge: 'released' } },
+  ] }]);
+  adapter.dispose();
+});
+
 test('renderer diagnostics use their own 256 KiB snapshot budget', async () => {
   const requestBodies: unknown[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
