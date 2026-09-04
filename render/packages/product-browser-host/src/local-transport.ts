@@ -35,6 +35,7 @@ import type {
   ProductBrowserRuntimeInputResult,
   ProductBrowserRuntimeOperationKind,
   ProductBrowserRuntimeOperationResult,
+  ProductBrowserRuntimeRecovery,
   ProductBrowserRuntimeOutput,
   ProductBrowserRuntimeOutputBatchListener,
   ProductBrowserRuntimeOutputBatchMetadata,
@@ -134,6 +135,13 @@ const AUDIO_DIAGNOSTIC_CODES = new Set<string>([
 ]);
 const HOST_FAULT_DISPOSITIONS = new Set<string>([
   'accepted', 'rejected-recoverable', 'degraded', 'resync-required', 'terminal',
+]);
+const RUNTIME_RECOVERY_MUTATIONS = new Set<string>(['not-applied', 'committed', 'unknown']);
+const RUNTIME_RECOVERY_INVALIDATED_SCOPES = new Set<string>([
+  'none', 'input', 'outputs', 'incarnation',
+]);
+const RUNTIME_RECOVERY_NEXT_ACTIONS = new Set<string>([
+  'continue', 'rebaseline', 'replace-incarnation',
 ]);
 
 interface ProductBrowserWireRecord {
@@ -2268,12 +2276,34 @@ function decodeFault(
   return { code, disposition };
 }
 
+function decodeRuntimeRecovery(value: unknown): ProductBrowserRuntimeRecovery {
+  const record = requireRecord(value, 'runtime recovery');
+  requireKnownFields(record, ['mutation', 'invalidatedScope', 'nextAction'], 'runtime recovery');
+  return Object.freeze({
+    mutation: requireCatalogValue<ProductBrowserRuntimeRecovery['mutation']>(
+      record['mutation'],
+      'runtime recovery mutation',
+      RUNTIME_RECOVERY_MUTATIONS,
+    ),
+    invalidatedScope: requireCatalogValue<ProductBrowserRuntimeRecovery['invalidatedScope']>(
+      record['invalidatedScope'],
+      'runtime recovery invalidatedScope',
+      RUNTIME_RECOVERY_INVALIDATED_SCOPES,
+    ),
+    nextAction: requireCatalogValue<ProductBrowserRuntimeRecovery['nextAction']>(
+      record['nextAction'],
+      'runtime recovery nextAction',
+      RUNTIME_RECOVERY_NEXT_ACTIONS,
+    ),
+  });
+}
+
 function decodeOperationResult(
   value: unknown,
   expectedOperation: ProductBrowserRuntimeOperationKind,
 ): ProductBrowserRuntimeOperationResult {
   const record = requireRecord(value, 'operation result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'operation', 'binding', 'nextInputSequence', 'admittedThrough', 'readout', 'diagnostic'], 'operation result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'recovery', 'operation', 'binding', 'nextInputSequence', 'admittedThrough', 'readout', 'diagnostic'], 'operation result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
@@ -2281,6 +2311,7 @@ function decodeOperationResult(
     throw new TypeError(`operation must be ${expectedOperation}`);
   }
   const fault = decodeFault(record, 'operation result');
+  const recovery = record['recovery'] === undefined ? undefined : decodeRuntimeRecovery(record['recovery']);
   if ((record.binding === undefined) !== (record['nextInputSequence'] === undefined)) {
     throw new TypeError('operation binding and nextInputSequence must be present together');
   }
@@ -2291,6 +2322,9 @@ function decodeOperationResult(
   }
   if (record.accepted === true && record.diagnostic !== undefined) {
     throw new TypeError('accepted operation result cannot include diagnostic');
+  }
+  if (record.accepted === true && recovery !== undefined) {
+    throw new TypeError('accepted operation result cannot include recovery');
   }
   return {
     accepted: record.accepted,
@@ -2304,6 +2338,7 @@ function decodeOperationResult(
       ? {}
       : { admittedThrough: requireU64Text(record['admittedThrough'], 'operation admittedThrough') }),
     ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
+    ...(recovery === undefined ? {} : { recovery }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   };
 }
@@ -2318,7 +2353,7 @@ function decodeConnectionResult(value: unknown): ProductBrowserRuntimeOperationR
 
 function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
   const record = requireRecord(value, 'input result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'count', 'acceptedCount', 'droppedCount', 'acceptedThrough', 'consumedThrough', 'nextInputSequence', 'binding', 'readout', 'diagnostic'], 'input result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'recovery', 'count', 'acceptedCount', 'droppedCount', 'acceptedThrough', 'consumedThrough', 'nextInputSequence', 'binding', 'readout', 'diagnostic'], 'input result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
@@ -2326,6 +2361,7 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
     throw new TypeError(`count must be a non-negative integer no greater than ${String(MAXIMUM_INPUT_BATCH_LENGTH)}`);
   }
   const fault = decodeFault(record, 'input result');
+  const recovery = record['recovery'] === undefined ? undefined : decodeRuntimeRecovery(record['recovery']);
   // The Rust host rejects strict-decode failures before wire admission. That
   // response preserves the host-bounded submitted count diagnostically, so it
   // can exceed the smaller outgoing/admitted batch limit without widening it.
@@ -2384,6 +2420,9 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
   if (record.accepted === true && record.diagnostic !== undefined) {
     throw new TypeError('accepted input result cannot include diagnostic');
   }
+  if (record.accepted === true && recovery !== undefined) {
+    throw new TypeError('accepted input result cannot include recovery');
+  }
   return {
     accepted: record.accepted,
     ...fault,
@@ -2397,6 +2436,7 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
       : { nextInputSequence: requireU64Text(record['nextInputSequence'], 'input nextInputSequence') }),
     ...(record.binding === undefined ? {} : { binding: decodeRuntimeIdentity(record.binding) }),
     ...(record.readout === undefined ? {} : { readout: decodeRuntimeReadout(record.readout) }),
+    ...(recovery === undefined ? {} : { recovery }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   };
 }
@@ -2407,12 +2447,13 @@ function decodeAudioFeedbackResult(
   submittedFacts: readonly ProductBrowserAudioFeedbackFact[],
 ): ProductBrowserAudioFeedbackResult {
   const record = requireRecord(value, 'audio feedback result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'audio feedback result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'recovery', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'audio feedback result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('audio feedback accepted must be boolean');
   }
   const runtime = decodeRuntimeIdentity(record.runtime);
   const fault = decodeFault(record, 'audio feedback result');
+  const recovery = record['recovery'] === undefined ? undefined : decodeRuntimeRecovery(record['recovery']);
   if (!sameRuntimeIdentity(runtime, expectedRuntime)) {
     throw new TypeError('audio feedback result runtime does not match request runtime');
   }
@@ -2427,10 +2468,12 @@ function decodeAudioFeedbackResult(
       accepted: false,
       ...fault,
       runtime,
+      ...(recovery === undefined ? {} : { recovery }),
       ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
     });
   }
   if (record.diagnostic !== undefined) throw new TypeError('accepted audio feedback cannot include diagnostic');
+  if (recovery !== undefined) throw new TypeError('accepted audio feedback cannot include recovery');
   if (expectedThroughFactId === undefined) {
     if (record.acceptedThroughFactId !== undefined) {
       throw new TypeError('empty audio feedback cannot include acceptedThroughFactId');
@@ -2452,19 +2495,22 @@ function decodeGhostPlateFeedbackResult(
   expectedRuntime: RustyApplicationRuntimeIdentity,
 ): ProductBrowserGhostPlateFeedbackResult {
   const record = requireRecord(value, 'ghost plate feedback result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'diagnostic'], 'ghost plate feedback result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'recovery', 'runtime', 'diagnostic'], 'ghost plate feedback result');
   if (record.accepted !== true && record.accepted !== false) throw new TypeError('ghost plate feedback accepted must be boolean');
   const runtime = decodeRuntimeIdentity(record.runtime);
   const fault = decodeFault(record, 'ghost plate feedback result');
+  const recovery = record['recovery'] === undefined ? undefined : decodeRuntimeRecovery(record['recovery']);
   if (!sameRuntimeIdentity(runtime, expectedRuntime)) throw new TypeError('ghost plate feedback result runtime does not match request runtime');
   if (record.accepted) {
     if (record.diagnostic !== undefined) throw new TypeError('accepted ghost plate feedback cannot include diagnostic');
+    if (recovery !== undefined) throw new TypeError('accepted ghost plate feedback cannot include recovery');
     return Object.freeze({ accepted: true, ...fault, runtime });
   }
   return Object.freeze({
     accepted: false,
     ...fault,
     runtime,
+    ...(recovery === undefined ? {} : { recovery }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   });
 }
@@ -2474,12 +2520,13 @@ function decodeRendererDiagnosticsResult(
   expectedRuntime: RustyApplicationRuntimeIdentity,
 ): ProductBrowserRendererDiagnosticsFeedbackResult {
   const record = requireRecord(value, 'renderer diagnostics result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'diagnostic'], 'renderer diagnostics result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'recovery', 'runtime', 'diagnostic'], 'renderer diagnostics result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('renderer diagnostics accepted must be boolean');
   }
   const runtime = decodeRuntimeIdentity(record.runtime);
   const fault = decodeFault(record, 'renderer diagnostics result');
+  const recovery = record['recovery'] === undefined ? undefined : decodeRuntimeRecovery(record['recovery']);
   if (!sameRuntimeIdentity(runtime, expectedRuntime)) {
     throw new TypeError('renderer diagnostics result runtime does not match request runtime');
   }
@@ -2489,7 +2536,16 @@ function decodeRendererDiagnosticsResult(
   if (record.accepted && diagnostic !== undefined) {
     throw new TypeError('accepted renderer diagnostics cannot include diagnostic');
   }
-  return Object.freeze({ accepted: record.accepted, ...fault, runtime, ...(diagnostic === undefined ? {} : { diagnostic }) });
+  if (record.accepted && recovery !== undefined) {
+    throw new TypeError('accepted renderer diagnostics cannot include recovery');
+  }
+  return Object.freeze({
+    accepted: record.accepted,
+    ...fault,
+    runtime,
+    ...(recovery === undefined ? {} : { recovery }),
+    ...(diagnostic === undefined ? {} : { diagnostic }),
+  });
 }
 
 function decodeBrowserDiagnosticsResult(value: unknown): ProductBrowserDiagnosticsResult {
@@ -2507,17 +2563,25 @@ function decodeAnimationFeedbackResult(
   submittedFacts: readonly ProductBrowserAnimationFeedbackFact[],
 ): ProductBrowserAnimationFeedbackResult {
   const record = requireRecord(value, 'animation feedback result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'animation feedback result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'recovery', 'runtime', 'acceptedThroughFactId', 'diagnostic'], 'animation feedback result');
   if (record.accepted !== true && record.accepted !== false) throw new TypeError('animation feedback accepted must be boolean');
   const runtime = decodeRuntimeIdentity(record.runtime);
   const fault = decodeFault(record, 'animation feedback result');
+  const recovery = record['recovery'] === undefined ? undefined : decodeRuntimeRecovery(record['recovery']);
   if (!sameRuntimeIdentity(runtime, expectedRuntime)) throw new TypeError('animation feedback result runtime does not match request runtime');
   const expectedThroughFactId = submittedFacts.length === 0 ? undefined : submittedFacts[submittedFacts.length - 1]!.factId;
   if (!record.accepted) {
     if (record.acceptedThroughFactId !== undefined) throw new TypeError('rejected animation feedback cannot include acceptedThroughFactId');
-    return Object.freeze({ accepted: false, ...fault, runtime, ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }) });
+    return Object.freeze({
+      accepted: false,
+      ...fault,
+      runtime,
+      ...(recovery === undefined ? {} : { recovery }),
+      ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
+    });
   }
   if (record.diagnostic !== undefined) throw new TypeError('accepted animation feedback cannot include diagnostic');
+  if (recovery !== undefined) throw new TypeError('accepted animation feedback cannot include recovery');
   if (expectedThroughFactId === undefined) {
     if (record.acceptedThroughFactId !== undefined) throw new TypeError('empty animation feedback cannot include acceptedThroughFactId');
     return Object.freeze({ accepted: true, ...fault, runtime });
@@ -2532,18 +2596,22 @@ function decodeTimelineCompletionResult(
   expectedTicket: string,
 ): ProductBrowserTimelineCompletionResult {
   const record = requireRecord(value, 'timeline completion result');
-  requireKnownFields(record, ['accepted', 'code', 'disposition', 'ticket', 'binding', 'readout', 'diagnostic'], 'timeline completion result');
+  requireKnownFields(record, ['accepted', 'code', 'disposition', 'recovery', 'ticket', 'binding', 'readout', 'diagnostic'], 'timeline completion result');
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
   const ticket = requireU64Text(record.ticket, 'timeline result ticket');
   const fault = decodeFault(record, 'timeline completion result');
+  const recovery = record['recovery'] === undefined ? undefined : decodeRuntimeRecovery(record['recovery']);
   if (ticket !== expectedTicket) throw new TypeError('ticket does not match completion request');
   if ((record.binding === undefined) !== (record.readout === undefined)) {
     throw new TypeError('timeline binding and readout must be present together');
   }
   if (record.accepted === true && record.diagnostic !== undefined) {
     throw new TypeError('accepted timeline result cannot include diagnostic');
+  }
+  if (record.accepted === true && recovery !== undefined) {
+    throw new TypeError('accepted timeline result cannot include recovery');
   }
   const binding = record.binding === undefined ? undefined : decodeRuntimeIdentity(record.binding);
   const readout = record.readout === undefined ? undefined : decodeRuntimeReadout(record.readout);
@@ -2556,6 +2624,7 @@ function decodeTimelineCompletionResult(
     ticket,
     ...(binding === undefined ? {} : { binding }),
     ...(readout === undefined ? {} : { readout }),
+    ...(recovery === undefined ? {} : { recovery }),
     ...(record.diagnostic === undefined ? {} : { diagnostic: requireDiagnostic(record.diagnostic) }),
   };
 }

@@ -305,6 +305,62 @@ test('local transport distinguishes an unknown mutation outcome from an HTTP rej
   );
 });
 
+test('rejected runtime recovery facts remain decoded result facts rather than transport failures', async () => {
+  const recovery = {
+    mutation: 'not-applied',
+    invalidatedScope: 'none',
+    nextAction: 'continue',
+  } as const;
+  const rejected = {
+    accepted: false,
+    code: 'CSHARP_NEW_SOURCE_REJECTION',
+    disposition: 'rejected-recoverable',
+    recovery,
+    diagnostic: 'runtime rejected before admission',
+  } as const;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (input) => {
+      const pathname = new URL(String(input), 'http://product.local/').pathname;
+      switch (pathname) {
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}advance-realtime`:
+          return response({ ...rejected, operation: 'advance-realtime' });
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}input`:
+          return response({ ...rejected, count: 0, acceptedCount: 0, droppedCount: 0 });
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}audio-feedback`:
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}animation-feedback`:
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}ghost-plate-feedback`:
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}renderer-diagnostics`:
+          return response({ ...rejected, runtime: RUNTIME });
+        case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`:
+          return response({ ...rejected, ticket: '1' });
+        default:
+          throw new Error(`unexpected route ${pathname}`);
+      }
+    },
+    eventSource: FakeEventSource,
+  });
+
+  assert.deepEqual((await adapter.advanceRealtime('1')).recovery, recovery);
+  assert.deepEqual((await adapter.input([])).recovery, recovery);
+  assert.deepEqual((await adapter.reportAudioFeedback({
+    runtime: RUNTIME, replaceOwner: false, evictedFactCount: '0', facts: [],
+  })).recovery, recovery);
+  assert.deepEqual((await adapter.reportAnimationFeedback({
+    runtime: RUNTIME, replaceOwner: false, evictedFactCount: '0', facts: [],
+  })).recovery, recovery);
+  assert.deepEqual((await adapter.reportGhostPlateFeedback({
+    runtime: RUNTIME, replaceOwner: false, facts: [],
+  })).recovery, recovery);
+  assert.deepEqual((await adapter.reportRendererDiagnostics?.({
+    runtime: RUNTIME, snapshot: { schemaVersion: 1 },
+  } as never))?.recovery, recovery);
+  assert.deepEqual((await adapter.completeTimeline?.({
+    ticket: '1', runtime: RUNTIME, correlation: 'request-1', outcome: { kind: 'success' },
+    provenance: { correlation: 'request-1' },
+  }))?.recovery, recovery);
+  adapter.dispose();
+});
+
 test('local transport exposes only the fixed control-replace recovery fence', async () => {
   const requests: Array<{ readonly url: string; readonly body: string | null }> = [];
   const adapter = createProductBrowserLocalHttpAdapter({
