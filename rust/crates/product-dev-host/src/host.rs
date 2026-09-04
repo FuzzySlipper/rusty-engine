@@ -3,7 +3,7 @@ use std::{
     io::{self, Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc, Arc, Condvar, Mutex, RwLock,
     },
     thread::{self, JoinHandle},
@@ -185,6 +185,7 @@ impl ProductDevHost {
         push_outputs_staged(&mut initial_output_bus, config.initial_worker_outputs)?;
         let outputs = Arc::new(Mutex::new(initial_output_bus));
         let projection_gate = Arc::new(RwLock::new(()));
+        let projection_epoch = Arc::new(AtomicU64::new(0));
         let state = Arc::new(HostState {
             bundle: Arc::clone(&bundle),
             runtime: Arc::new(ProductDevOperationOwner::new(runtime)),
@@ -201,6 +202,7 @@ impl ProductDevHost {
             live_debug_enabled: config.live_debug_enabled,
             diagnostics: config.diagnostics.clone(),
             projection_gate: Arc::clone(&projection_gate),
+            projection_epoch: Arc::clone(&projection_epoch),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
         });
@@ -343,6 +345,7 @@ impl ProductDevHost {
             bundle,
             outputs,
             projection_gate,
+            projection_epoch,
             worker_generation,
             worker_output_thread,
             worker_diagnostic_thread,
@@ -364,6 +367,7 @@ pub struct RunningProductDevHost {
     bundle: Arc<RwLock<ProductDevBundle>>,
     outputs: Arc<Mutex<OutputBus>>,
     projection_gate: Arc<RwLock<()>>,
+    projection_epoch: Arc<AtomicU64>,
     worker_generation: Option<Arc<AtomicUsize>>,
     worker_output_thread: Option<JoinHandle<()>>,
     worker_diagnostic_thread: Option<JoinHandle<()>>,
@@ -432,6 +436,7 @@ impl RunningProductDevHost {
             if let Some(generation) = &self.worker_generation {
                 generation.store(worker_generation as usize, Ordering::Release);
             }
+            self.projection_epoch.fetch_add(1, Ordering::AcqRel);
             self.output_wake.notify();
             return Ok(through);
         }
@@ -500,6 +505,7 @@ struct HostState<R> {
     live_debug_enabled: bool,
     diagnostics: ProductDevLog,
     projection_gate: Arc<RwLock<()>>,
+    projection_epoch: Arc<AtomicU64>,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
 }
@@ -2103,6 +2109,11 @@ fn handle_sse<R: ProductDevRuntime>(
     let fresh_connection = fresh && !request.headers.contains_key("last-event-id");
     let mut private_events = Vec::new();
     let mut connection_result = None;
+    let connection_projection = match state.projection_gate.read() {
+        Ok(projection) => projection,
+        Err(_) => return,
+    };
+    let connection_projection_epoch = state.projection_epoch.load(Ordering::Acquire);
     let mut cursor = match request.headers.get("last-event-id") {
         Some(value) => match parse_last_event_id(value) {
             Some(value) => value,
@@ -2197,15 +2208,30 @@ fn handle_sse<R: ProductDevRuntime>(
         }
         None => 0,
     };
+    drop(connection_projection);
     if write_sse_headers(&mut stream).is_err() {
         return;
     }
     for event in private_events {
+        let _projection = match state.projection_gate.read() {
+            Ok(projection) => projection,
+            Err(_) => return,
+        };
+        if state.projection_epoch.load(Ordering::Acquire) != connection_projection_epoch {
+            return;
+        }
         if write_sse_private_event(&mut stream, &event).is_err() {
             return;
         }
     }
     if let Some(result) = connection_result {
+        let _projection = match state.projection_gate.read() {
+            Ok(projection) => projection,
+            Err(_) => return,
+        };
+        if state.projection_epoch.load(Ordering::Acquire) != connection_projection_epoch {
+            return;
+        }
         // Subscriber-private baselines deliberately carry no SSE cursor. An
         // id parsed before this record's terminating blank line could survive
         // a disconnect even though JavaScript never received the completion.
@@ -2215,20 +2241,31 @@ fn handle_sse<R: ProductDevRuntime>(
         }
     }
     let mut last_write = Instant::now();
-    loop {
+    'stream: loop {
         if state.shutdown.load(Ordering::Acquire) {
             break;
         }
-        let (observed_generation, snapshot) = {
-            let _projection = state.projection_gate.read().ok();
+        let (observed_generation, observed_projection_epoch, snapshot) = {
+            let _projection = match state.projection_gate.read() {
+                Ok(projection) => projection,
+                Err(_) => return,
+            };
             let observed_generation = state.output_wake.generation();
+            let observed_projection_epoch = state.projection_epoch.load(Ordering::Acquire);
             let snapshot = match state.outputs.lock() {
                 Ok(outputs) => outputs.after(cursor),
                 Err(_) => break,
             };
-            (observed_generation, snapshot)
+            (observed_generation, observed_projection_epoch, snapshot)
         };
         if cursor < snapshot.floor_cursor {
+            let _projection = match state.projection_gate.read() {
+                Ok(projection) => projection,
+                Err(_) => return,
+            };
+            if state.projection_epoch.load(Ordering::Acquire) != observed_projection_epoch {
+                continue 'stream;
+            }
             let payload = format!(
                 "id: {}\nevent: rusty-output-lag\ndata: {{\"code\":\"DEV_HOST_OUTPUT_LAG\"}}\n\n",
                 snapshot.floor_cursor
@@ -2239,6 +2276,13 @@ fn handle_sse<R: ProductDevRuntime>(
         }
         let had_events = !snapshot.events.is_empty();
         for event in snapshot.events {
+            let _projection = match state.projection_gate.read() {
+                Ok(projection) => projection,
+                Err(_) => return,
+            };
+            if state.projection_epoch.load(Ordering::Acquire) != observed_projection_epoch {
+                continue 'stream;
+            }
             if write_sse_event(&mut stream, &event).is_err() {
                 return;
             }
@@ -2943,6 +2987,7 @@ mod tests {
             live_debug_enabled: false,
             diagnostics: ProductDevLog::new(Default::default()).unwrap(),
             projection_gate: Arc::new(RwLock::new(())),
+            projection_epoch: Arc::new(AtomicU64::new(0)),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
         });
