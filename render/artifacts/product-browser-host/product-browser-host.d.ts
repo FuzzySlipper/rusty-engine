@@ -311,7 +311,7 @@ export interface ProductBrowserRuntimeTerminalFailure {
 }
 /** Fixed health facts copied into the Engine diagnostic ring; never console data. */
 export interface ProductBrowserDiagnosticsReport {
-    readonly hostState: 'loading' | 'ready' | 'failed' | 'disposed';
+    readonly hostState: 'loading' | 'ready' | 'degraded' | 'failed' | 'disposed';
     readonly runtimeProgress: string;
     readonly transportState: 'open' | 'closed';
     readonly outputState: 'open' | 'closed';
@@ -323,7 +323,7 @@ export interface ProductBrowserDiagnosticsReport {
     };
     /** One bounded, typed operation observation that was deliberately dropped. */
     readonly recoverableEvent?: {
-        readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' | 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE';
+        readonly code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' | 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE' | 'BROWSER_LOCAL_REQUEST_UNAVAILABLE';
         readonly message: string;
     };
     readonly pageEvents: readonly {
@@ -438,7 +438,7 @@ export interface ProductBrowserUiProjectionOptions {
 }
 export interface ProductBrowserHostReadout {
     readonly artifact: typeof PRODUCT_BROWSER_HOST_ARTIFACT;
-    readonly state: 'starting' | 'ready' | 'failed' | 'disposed';
+    readonly state: 'starting' | 'ready' | 'degraded' | 'failed' | 'disposed';
     readonly mode: ProductBrowserRuntimeMode;
     readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
     readonly host: RustyApplicationHostReadout | null;

@@ -45,8 +45,11 @@ export type ProductBrowserLocalTransportErrorCode = 'invalid_options' | 'dispose
 export declare class ProductBrowserLocalTransportError extends Error {
     readonly code: ProductBrowserLocalTransportErrorCode;
     readonly route: string | null;
+    /** True only when no response boundary established the operation outcome. */
+    readonly retryable: boolean;
     constructor(code: ProductBrowserLocalTransportErrorCode, message: string, options?: ErrorOptions & {
         readonly route?: string;
+        readonly retryable?: boolean;
     });
 }
 /**

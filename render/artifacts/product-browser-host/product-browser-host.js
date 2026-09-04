@@ -27938,79 +27938,90 @@ async function uD(e, t) {
 }
 async function dD(e) {
 	bD(e);
-	let t = e.realtimeAdvanceOwner ?? "browser", n = e.transport, r = CD(), i = "starting", a = null, o = null, s = null, c = null, l = null, u = !1, d = null, f = !1, p = 0, m = null, h = null, g = null, _ = !1, v = !1, y = !1, b = null, x = !1, S = -Infinity, C = null, w = null, T = null, E = null, D = null, O = oD(), k = Promise.resolve(), A = [], ee = qE(e.renderer), te = null, j = null, ne = null;
-	if (ee) {
+	let t = e.realtimeAdvanceOwner ?? "browser", n = e.transport, r = CD(), i = "starting", a = null, o = null, s = null, c = null, l = null, u = !1, d = null, f = null, p = !1, m = !1, h = 0, g = null, _ = null, v = null, y = !1, b = !1, x = !1, S = null, C = !1, w = -Infinity, T = null, E = null, D = null, O = null, k = null, A = oD(), ee = Promise.resolve(), te = [], j = qE(e.renderer), ne = null, re = null, ie = null;
+	if (j) {
 		if (e.autoStart === !1) throw new Z("invalid_options", "animation preloads without initial definitions require automatic runtime start");
-		te = new Promise((e) => {
-			j = e;
-		}), ne = setTimeout(() => {
-			let e = j;
-			j = null, ne = null, e?.({
+		ne = new Promise((e) => {
+			re = e;
+		}), ie = setTimeout(() => {
+			let e = re;
+			re = null, ie = null, e?.({
 				accepted: !1,
 				error: new Z("startup_failed", "runtime did not publish an initial retained frame for admitted animation resources")
 			});
 		}, GE);
 	}
-	let re = (e) => {
-		if (j === null) return;
-		ne !== null && clearTimeout(ne), ne = null;
-		let t = j;
-		j = null, t({
+	let ae = (e) => {
+		if (re === null) return;
+		ie !== null && clearTimeout(ie), ie = null;
+		let t = re;
+		re = null, t({
 			accepted: !1,
 			error: e
 		});
-	}, ie = (t = !0, r = [], a = !0) => {
-		let o = e.root.ownerDocument, s = [e.root, o.body].filter((e) => e !== null), c = Date.now(), l = a || c - S >= 250;
+	}, oe = (t = !0, r = [], a = !0) => {
+		let o = e.root.ownerDocument, s = [e.root, o.body].filter((e) => e !== null), c = Date.now(), l = a || c - w >= 250;
 		if (cD(s, {
 			state: i,
 			mode: e.lifecycleMode,
-			progress: String(p),
-			failure: d === null ? null : vD(d.message)
-		}, l), l && (S = c), !t && r.length === 0) return;
+			progress: String(h),
+			failure: (d ?? f) === null ? null : vD((d ?? f).message)
+		}, l), l && (w = c), !t && r.length === 0) return;
 		let u = d === null ? void 0 : Object.freeze({
 			code: `BROWSER_HOST_${d.code.toUpperCase()}`,
 			message: vD(d.message)
-		}), C = u !== void 0 && !_, w = i === "starting" ? "loading" : i, T = `${w}/${f ? "closed" : "open"}/${f ? "closed" : "open"}`, E = v && !y ? Object.freeze({
+		}), T = u !== void 0 && !y, E = i === "starting" ? "loading" : i, D = `${E}/${m ? "closed" : "open"}/${m ? "closed" : "open"}`, O = b && !x ? Object.freeze({
 			code: "CSHARP_LIFECYCLE_CLOCK_REGRESSION",
 			message: "dropped a regressing browser realtime observation; awaiting a later monotonic observation"
-		}) : b !== null && !x ? Object.freeze({
+		}) : S !== null && !C ? Object.freeze({
 			code: "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE",
-			message: b
+			message: S
+		}) : f !== null && !p ? Object.freeze({
+			code: "BROWSER_LOCAL_REQUEST_UNAVAILABLE",
+			message: vD(f.message)
 		}) : void 0;
-		if (t && n.reportBrowserDiagnostics !== void 0 && (C || E !== void 0 || r.length > 0 || T !== g)) {
-			g = T, C && (_ = !0), E?.code === "CSHARP_LIFECYCLE_CLOCK_REGRESSION" ? (v = !1, y = !0) : E?.code === "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE" && (x = !0);
-			let e = h === null ? void 0 : String(Math.max(0, c - h));
+		if (t && n.reportBrowserDiagnostics !== void 0 && (T || O !== void 0 || r.length > 0 || D !== v)) {
+			v = D, T && (y = !0), O?.code === "CSHARP_LIFECYCLE_CLOCK_REGRESSION" ? (b = !1, x = !0) : O?.code === "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE" ? C = !0 : O?.code === "BROWSER_LOCAL_REQUEST_UNAVAILABLE" && (p = !0);
+			let e = _ === null ? void 0 : String(Math.max(0, c - _));
 			n.reportBrowserDiagnostics(Object.freeze({
-				hostState: w,
-				runtimeProgress: String(p),
-				transportState: f ? "closed" : "open",
-				outputState: f ? "closed" : "open",
-				...m === null ? {} : { lastRendererSequence: m },
+				hostState: E,
+				runtimeProgress: String(h),
+				transportState: m ? "closed" : "open",
+				outputState: m ? "closed" : "open",
+				...g === null ? {} : { lastRendererSequence: g },
 				...e === void 0 ? {} : { rendererObservationAgeMs: e },
-				...C ? { firstTerminal: u } : {},
-				...E === void 0 ? {} : { recoverableEvent: E },
+				...T ? { firstTerminal: u } : {},
+				...O === void 0 ? {} : { recoverableEvent: O },
 				pageEvents: Object.freeze([...r])
 			})).catch(() => void 0);
 		}
-	}, ae = () => {
+	}, se = () => {
 		if (o === null || i === "disposed") throw new Z("disposed", "Product Browser Host is disposed or has not mounted");
 		return o;
-	}, oe = () => {
-		if (i !== "ready") throw new Z(i === "disposed" ? "disposed" : "transport_failed", i === "failed" ? "Product Browser Host has failed and its runtime transport is closed" : "Product Browser Host is not ready");
-	}, se = (e, t) => {
+	}, ce = () => {
+		if (!(i === "ready" || i === "degraded")) throw new Z(i === "disposed" ? "disposed" : "transport_failed", i === "failed" ? "Product Browser Host has failed and its runtime transport is closed" : "Product Browser Host is not ready");
+	}, le = (e, t) => {
 		let n = e instanceof Z ? e : new Z(t, e instanceof Error ? e.message : String(e), e instanceof Error ? { cause: e } : void 0);
-		return d === null && (d = n, i !== "disposed" && (i = "failed"), ie(!1)), n;
-	}, ce = null, le = null, ue = () => {
-		f || (f = !0, u = !1, ce?.dispose(), D?.dispose(), c?.(), c = null, s?.(), s = null, le?.(), le = null, ie(), Promise.resolve(n.dispose()).catch((e) => {
-			se(e, "transport_failed");
+		return d === null && (d = f ?? n, i !== "disposed" && (i = "failed"), oe(!1)), d;
+	}, ue = null, de = null, fe = () => {
+		m || (m = !0, u = !1, ue?.dispose(), k?.dispose(), c?.(), c = null, s?.(), s = null, de?.(), de = null, oe(), Promise.resolve(n.dispose()).catch((e) => {
+			le(e, "transport_failed");
 		}));
-	}, de = (e, t) => {
-		let n = se(e, t);
-		return re(n), ue(), n;
-	}, fe = e.root.ownerDocument.defaultView;
-	if (fe !== null) {
+	}, pe = (e, t) => {
+		let n = le(e, t);
+		return ae(n), fe(), n;
+	}, me = (e) => typeof e == "object" && !!e && e.name === "ProductBrowserLocalTransportError" && e.code === "request_failed" && e.retryable === !0, he = (e, t) => {
+		if (me(e) && i === "ready") {
+			let n = e instanceof Z ? e : new Z(t, e instanceof Error ? e.message : String(e), e instanceof Error ? { cause: e } : void 0);
+			return f === null && (f = n), i = "degraded", oe(), n;
+		}
+		return pe(e, t);
+	}, ge = () => {
+		i === "degraded" && (i = "ready", oe());
+	}, _e = e.root.ownerDocument.defaultView;
+	if (_e !== null) {
 		let e = (e, t, n) => {
-			ie(!0, [Object.freeze({
+			oe(!0, [Object.freeze({
 				kind: e,
 				code: t,
 				message: vD(n)
@@ -28021,34 +28032,34 @@ async function dD(e) {
 			let n = t.reason, r = n instanceof Error ? n.message : typeof n == "string" ? n : "unhandled promise rejection";
 			e("unhandled-rejection", "BROWSER_PAGE_UNHANDLED_REJECTION", r);
 		};
-		fe.addEventListener("error", t), fe.addEventListener("unhandledrejection", n), le = () => {
-			fe.removeEventListener("error", t), fe.removeEventListener("unhandledrejection", n);
+		_e.addEventListener("error", t), _e.addEventListener("unhandledrejection", n), de = () => {
+			_e.removeEventListener("error", t), _e.removeEventListener("unhandledrejection", n);
 		};
 	}
-	let pe = async () => {
-		await C?.flush(), await w?.flush(), await T?.flush();
-	}, me = () => {
-		i === "ready" && r.enqueue(pe).catch((e) => {
-			de(e, "transport_failed");
+	let ve = async () => {
+		await T?.flush(), await E?.flush(), await D?.flush();
+	}, ye = () => {
+		i === "ready" && r.enqueue(ve).catch((e) => {
+			he(e, "transport_failed");
 		});
-	}, he = (e) => {
-		k = k.then(async () => {
+	}, be = (e) => {
+		ee = ee.then(async () => {
 			if (i !== "failed") try {
 				await e();
 			} catch (e) {
-				de(e, "output_failed");
+				pe(e, "output_failed");
 			}
 		});
-	}, ge = (n) => {
+	}, xe = (n) => {
 		if (o === null) {
-			if (!UE(A, n, 64)) {
-				de(new Z("output_failed", "runtime output buffer exceeded 64 entries before host mount"), "output_failed");
+			if (!UE(te, n, 64)) {
+				pe(new Z("output_failed", "runtime output buffer exceeded 64 entries before host mount"), "output_failed");
 				return;
 			}
-			if (n.kind === "frame" && j !== null) {
-				ne !== null && clearTimeout(ne), ne = null;
-				let e = j;
-				j = null, e({
+			if (n.kind === "frame" && re !== null) {
+				ie !== null && clearTimeout(ie), ie = null;
+				let e = re;
+				re = null, e({
 					accepted: !0,
 					frame: n.frame
 				});
@@ -28056,10 +28067,10 @@ async function dD(e) {
 			return;
 		}
 		if (!(i === "failed" || i === "disposed")) try {
-			let o = ae();
+			let o = se();
 			switch (n.kind) {
 				case "binding":
-					C?.bindRuntime(n.runtime), w?.bindRuntime(n.runtime), T?.bindRuntime(n.runtime), E?.bindRuntime(n.runtime), o.input?.bindRuntime({
+					T?.bindRuntime(n.runtime), E?.bindRuntime(n.runtime), D?.bindRuntime(n.runtime), O?.bindRuntime(n.runtime), o.input?.bindRuntime({
 						runtime: n.runtime,
 						context: e.inputContext ?? "gameplay.default",
 						nextSequence: n.nextInputSequence
@@ -28068,42 +28079,42 @@ async function dD(e) {
 				case "runtime-progress":
 					if (e.lifecycleMode !== "realtime" || t !== "rust-host") throw new Z("output_failed", "Rust-host realtime progress is unavailable for this Product Browser Host mode");
 					if (n.owner !== "rust-host") throw new Z("output_failed", "runtime progress owner was invalid");
-					u && i === "ready" && (p += 1, ie(!1, [], !1));
+					u && i === "ready" && (h += 1, oe(!1, [], !1));
 					return;
 				case "runtime-input-result":
-					be(n.result);
+					we(n.result);
 					return;
 				case "frame": {
-					let e = O.received();
-					he(() => {
+					let e = A.received();
+					be(() => {
 						let t = o.renderer.applyFrame(n.frame);
 						if (!$E(t.outcome)) throw new Z("output_failed", "renderer frame reported a terminal outcome");
-						t.outcome === "applied" && O.applied(e);
+						t.outcome === "applied" && A.applied(e);
 					});
 					return;
 				}
 				case "view-composition":
-					he(() => {
+					be(() => {
 						if (!$E(o.renderer.configureViews(n.composition).outcome)) throw new Z("output_failed", "renderer view composition reported a terminal outcome");
 					});
 					return;
 				case "animation-cue-definitions":
-					he(() => {
+					be(() => {
 						if (!$E(o.renderer.replaceAnimationCueDefinitions(n.definitions).outcome)) throw new Z("output_failed", "renderer animation cue definitions reported a terminal outcome");
 					});
 					return;
 				case "presentation":
-					he(async () => {
+					be(async () => {
 						if (!eD((await o.renderer.applyPresentation(n.frame)).outcome)) {
 							try {
-								await r.enqueue(pe);
+								await r.enqueue(ve);
 							} catch (e) {
-								de(e, "transport_failed");
+								he(e, "transport_failed");
 								return;
 							}
 							throw new Z("output_failed", "renderer presentation reported a terminal outcome");
 						}
-						me();
+						ye();
 					});
 					return;
 				case "ui-projection":
@@ -28116,16 +28127,16 @@ async function dD(e) {
 				default: SD(n);
 			}
 		} catch (e) {
-			de(e, "output_failed");
+			pe(e, "output_failed");
 		}
-	}, _e = (e) => {
-		for (let t of e) ge(t);
-		sD(e) && i !== "failed" && i !== "disposed" && ce?.pulseRustHost();
-	}, ve = (e) => {
+	}, Se = (e) => {
+		for (let t of e) xe(t);
+		sD(e) && i !== "failed" && i !== "disposed" && ue?.pulseRustHost(), i !== "failed" && i !== "disposed" && e.length > 0 && ge();
+	}, M = (e) => {
 		let t = yD(e);
-		de(new Z("transport_failed", t.diagnostic), "transport_failed");
-	}, ye = (e, t = "transport_failed", n = !1) => {
-		if (n && QE(e)) return v = !0, ie(), !1;
+		pe(new Z("transport_failed", t.diagnostic), "transport_failed");
+	}, Ce = (e, t = "transport_failed", n = !1) => {
+		if (n && QE(e)) return b = !0, oe(), !1;
 		let r = [];
 		if (e.binding !== void 0 && e.nextInputSequence !== void 0 && r.push({
 			kind: "binding",
@@ -28134,13 +28145,13 @@ async function dD(e) {
 		}), e.readout !== void 0 && r.push({
 			kind: "runtime-readout",
 			readout: e.readout
-		}), _e(r), !e.accepted) {
-			if (e.disposition === "rejected-recoverable" || e.disposition === "resync-required") return !1;
+		}), Se(r), !e.accepted) {
+			if (e.disposition === "rejected-recoverable" || e.disposition === "resync-required") return ge(), !1;
 			throw new Z(t, e.diagnostic ?? `${e.operation} was rejected by the runtime`);
 		}
-		return !0;
+		return ge(), !0;
 	};
-	function be(e) {
+	function we(e) {
 		let t = [];
 		if (e.binding !== void 0 && e.nextInputSequence !== void 0 && t.push({
 			kind: "binding",
@@ -28149,61 +28160,65 @@ async function dD(e) {
 		}), e.readout !== void 0 && t.push({
 			kind: "runtime-readout",
 			readout: e.readout
-		}), _e(t), !e.accepted) {
-			if (e.disposition === "rejected-recoverable" || e.disposition === "resync-required") return;
+		}), Se(t), !e.accepted) {
+			if (e.disposition === "rejected-recoverable" || e.disposition === "resync-required") {
+				ge();
+				return;
+			}
 			throw new Z("transport_failed", e.diagnostic ?? "runtime input batch was rejected by the runtime");
 		}
+		ge();
 	}
-	ce = zE({
+	ue = zE({
 		lifecycleMode: e.lifecycleMode,
 		realtimeAdvanceOwner: t,
-		isReady: () => u && i === "ready",
+		isReady: () => u && (i === "ready" || i === "degraded"),
 		enqueueOperation: r.enqueue,
 		sampleInput: () => {
-			let e = ae();
+			let e = se();
 			return e.input?.sampleController(), e.input?.drain() ?? [];
 		},
 		sendInput: async (e) => {
-			be(await n.input(e));
+			we(await n.input(e));
 		},
 		advanceRealtime: async (r) => {
-			let i = ye(await uD(pe, () => n.advanceRealtime(r)), "transport_failed", !0);
-			i && (v = !1, y = !1), i && e.lifecycleMode === "realtime" && t === "browser" && (p += 1, ie());
+			let i = Ce(await uD(ve, () => n.advanceRealtime(r)), "transport_failed", !0);
+			i && (b = !1, x = !1), i && e.lifecycleMode === "realtime" && t === "browser" && (h += 1, oe());
 		},
 		admitDemandStep: async () => {
 			if (n.admitDemandStep === void 0) throw new Z("transport_failed", "this native product did not provide a demand-step transport lane");
-			ye(await uD(pe, () => n.admitDemandStep()));
+			Ce(await uD(ve, () => n.admitDemandStep()));
 		},
 		onFailure: (e) => {
-			de(e, "transport_failed");
+			he(e, "transport_failed");
 		}
 	});
-	let xe = (e) => {
-		ce?.enqueue(e), u && i === "ready" && D?.sample(e);
-	}, Se;
+	let Te = (e) => {
+		ue?.enqueue(e), u && i === "ready" && k?.sample(e);
+	}, N;
 	if (e.runtimeInput !== void 0) {
 		let { binding: t, ...n } = e.runtimeInput;
-		Se = {
+		N = {
 			...n,
-			onAvailable: () => ce?.pulseInput(globalThis.performance?.now() ?? Date.now()),
+			onAvailable: () => ue?.pulseInput(globalThis.performance?.now() ?? Date.now()),
 			...t === void 0 ? {} : { binding: {
 				runtime: t,
 				context: e.inputContext ?? "gameplay.default"
 			} }
 		};
 	}
-	let M = e.uiProjection === void 0 ? void 0 : { ...e.uiProjection };
+	let Ee = e.uiProjection === void 0 ? void 0 : { ...e.uiProjection };
 	try {
-		c = n.subscribeTerminalFailures?.(ve) ?? null, s = n.subscribeOutputBatches?.(_e) ?? n.subscribeOutputs((e) => _e([e]));
+		c = n.subscribeTerminalFailures?.(M) ?? null, s = n.subscribeOutputBatches?.(Se) ?? n.subscribeOutputs((e) => Se([e]));
 		let t = e.renderer, a = !1;
-		if (ee) {
-			if (await n.waitUntilOutputSubscriptionReady?.(), d !== null || (ye(await r.enqueue(() => n.connect?.() ?? n.lifecycle({ kind: "start" })), "startup_failed"), d !== null)) throw d;
-			let i = te;
+		if (j) {
+			if (await n.waitUntilOutputSubscriptionReady?.(), d !== null || (Ce(await r.enqueue(() => n.connect?.() ?? n.lifecycle({ kind: "start" })), "startup_failed"), d !== null)) throw d;
+			let i = ne;
 			if (i === null) throw new Z("startup_failed", "initial renderer frame gate was unavailable");
 			let o = await i;
 			if (o.accepted === !1) throw o.error;
-			let s = YE(A, o.frame);
-			A.splice(0, A.length, ...s.remainingOutputs), t = JE(e.renderer, s.frame), a = !0;
+			let s = YE(te, o.frame);
+			te.splice(0, te.length, ...s.remainingOutputs), t = JE(e.renderer, s.frame), a = !0;
 		}
 		let l, f = t;
 		if (t?.initialContent !== void 0) {
@@ -28217,50 +28232,50 @@ async function dD(e) {
 			...e.initialInteractionMode === void 0 ? {} : { initialInteractionMode: e.initialInteractionMode },
 			...e.loadingLabel === void 0 ? {} : { loadingLabel: e.loadingLabel },
 			...e.failureLabel === void 0 ? {} : { failureLabel: e.failureLabel },
-			...Se === void 0 ? {} : { runtimeInput: Se },
-			...M === void 0 ? {} : { uiProjection: M },
-			...f === void 0 ? { renderer: { onCadence: xe } } : { renderer: {
+			...N === void 0 ? {} : { runtimeInput: N },
+			...Ee === void 0 ? {} : { uiProjection: Ee },
+			...f === void 0 ? { renderer: { onCadence: Te } } : { renderer: {
 				...f,
-				onCadence: xe
+				onCadence: Te
 			} }
-		}), C = tD({
+		}), T = tD({
 			renderer: o.renderer,
 			report: n.reportAudioFeedback,
 			...e.runtimeInput?.binding === void 0 ? {} : { initialRuntime: e.runtimeInput.binding }
-		}), w = nD({
+		}), E = nD({
 			renderer: o.renderer,
 			report: n.reportAnimationFeedback,
 			...e.runtimeInput?.binding === void 0 ? {} : { initialRuntime: e.runtimeInput.binding }
-		}), T = rD({
+		}), D = rD({
 			renderer: o.renderer,
 			report: n.reportGhostPlateFeedback,
 			...e.runtimeInput?.binding === void 0 ? {} : { initialRuntime: e.runtimeInput.binding }
-		}), n.reportRendererDiagnostics !== void 0 && (E = iD({
+		}), n.reportRendererDiagnostics !== void 0 && (O = iD({
 			renderer: o.renderer,
 			report: n.reportRendererDiagnostics,
-			productFrames: O.sample,
+			productFrames: A.sample,
 			onObservation: (e) => {
-				m = String(e), h = Date.now();
+				g = String(e), _ = Date.now();
 			},
 			...e.runtimeInput?.binding === void 0 ? {} : { initialRuntime: e.runtimeInput.binding }
-		}), D = lD({
+		}), k = lD({
 			enqueueOperation: r.enqueue,
-			flush: E.flush,
+			flush: O.flush,
 			onFailure: (e) => {
-				x || b !== null || (b = vD(`renderer diagnostics reporting was temporarily unavailable: ${e instanceof Error ? e.message : String(e)}`), ie());
+				C || S !== null || (S = vD(`renderer diagnostics reporting was temporarily unavailable: ${e instanceof Error ? e.message : String(e)}`), oe());
 			}
 		})), l !== void 0) {
 			let e = l, t = o;
-			he(async () => {
+			be(async () => {
 				let n = await t.renderer.replaceContent(e);
 				if (!n.applied) throw new Z("output_failed", `initial renderer content was rejected: ${n.diagnostics.map((e) => e.message).join("; ")}`);
 			});
 		}
-		if (_e(A.splice(0, A.length)), await k, d !== null || e.autoStart !== !1 && !a && (await n.waitUntilOutputSubscriptionReady?.(), d !== null || (ye(await r.enqueue(() => n.connect?.() ?? n.lifecycle({ kind: "start" })), "startup_failed"), d !== null))) throw d;
-		u = !0, i = "ready", ie(), me();
+		if (Se(te.splice(0, te.length)), await ee, d !== null || e.autoStart !== !1 && !a && (await n.waitUntilOutputSubscriptionReady?.(), d !== null || (Ce(await r.enqueue(() => n.connect?.() ?? n.lifecycle({ kind: "start" })), "startup_failed"), d !== null))) throw d;
+		u = !0, i = "ready", oe(), ye();
 	} catch (e) {
-		let t = d ?? se(e, "startup_failed");
-		re(t), c?.(), c = null, s?.(), s = null;
+		let t = d ?? le(e, "startup_failed");
+		ae(t), c?.(), c = null, s?.(), s = null;
 		try {
 			await n.dispose();
 		} catch {}
@@ -28269,11 +28284,11 @@ async function dD(e) {
 		} catch {}
 		throw o = null, t;
 	}
-	let Ce = o;
-	if (Ce === null) throw new Z("startup_failed", "application host did not mount");
+	let P = o;
+	if (P === null) throw new Z("startup_failed", "application host did not mount");
 	return Object.freeze({
 		kind: "rusty.product.browser-host",
-		application: Ce,
+		application: P,
 		transport: n,
 		readout: () => Object.freeze({
 			artifact: HE,
@@ -28282,65 +28297,65 @@ async function dD(e) {
 			realtimeAdvanceOwner: t,
 			host: o?.readout() ?? null,
 			runtime: a,
-			lastFailure: d?.message ?? null
+			lastFailure: (d ?? f)?.message ?? null
 		}),
 		completeTimeline: (e) => {
 			try {
-				oe();
+				ce();
 			} catch (e) {
 				return Promise.reject(e);
 			}
 			return n.completeTimeline === void 0 ? Promise.reject(new Z("timeline_unavailable", "this native product did not provide a timeline completion lane")) : r.enqueue(async () => {
 				let t = await n.completeTimeline(e);
-				if (t.readout !== void 0 && _e([{
+				if (t.readout !== void 0 && Se([{
 					kind: "runtime-readout",
 					readout: t.readout
 				}]), !t.accepted) {
-					if (t.disposition === "rejected-recoverable" || t.disposition === "resync-required") return t;
+					if (t.disposition === "rejected-recoverable" || t.disposition === "resync-required") return ge(), t;
 					throw new Z("transport_failed", t.diagnostic ?? "timeline completion was rejected by the runtime");
 				}
-				return t;
+				return ge(), t;
 			}).catch((e) => {
-				throw de(e, "transport_failed");
+				throw he(e, "transport_failed");
 			});
 		},
 		admitDemandStep: () => {
 			try {
-				oe();
+				ce();
 			} catch (e) {
 				return Promise.reject(e);
 			}
 			return e.lifecycleMode === "demand" ? n.admitDemandStep === void 0 ? Promise.reject(new Z("transport_failed", "this native product did not provide a demand-step transport lane")) : r.enqueue(async () => {
-				let e = ae();
+				let e = se();
 				e.input?.sampleController();
 				let t = e.input?.drain() ?? [];
-				t.length > 0 && be(await n.input(t));
-				let r = await uD(pe, () => n.admitDemandStep());
-				return ye(r), r;
+				t.length > 0 && we(await n.input(t));
+				let r = await uD(ve, () => n.admitDemandStep());
+				return Ce(r), r;
 			}).catch((e) => {
-				throw de(e, "transport_failed");
+				throw he(e, "transport_failed");
 			}) : Promise.reject(new Z("invalid_options", "admitDemandStep is only available for demand lifecycle products"));
 		},
 		admitExternalStep: (t) => {
 			try {
-				oe();
+				ce();
 			} catch (e) {
 				return Promise.reject(e);
 			}
 			return e.lifecycleMode === "external" ? n.admitExternalStep === void 0 ? Promise.reject(new Z("transport_failed", "this native product did not provide an external-step transport lane")) : r.enqueue(async () => {
-				let e = ae();
+				let e = se();
 				e.input?.sampleController();
 				let r = e.input?.drain() ?? [];
-				r.length > 0 && be(await n.input(r));
-				let i = await uD(pe, () => n.admitExternalStep(t));
-				return ye(i), i;
+				r.length > 0 && we(await n.input(r));
+				let i = await uD(ve, () => n.admitExternalStep(t));
+				return Ce(i), i;
 			}).catch((e) => {
-				throw de(e, "transport_failed");
+				throw he(e, "transport_failed");
 			}) : Promise.reject(new Z("invalid_options", "admitExternalStep is only available for external lifecycle products"));
 		},
 		dispose: () => (l === null && (l = (async () => {
 			if (i === "disposed") return;
-			i = "disposed", u = !1, f = !0, ie(), ce?.dispose(), D?.dispose(), c?.(), c = null, s?.(), s = null, le?.(), le = null, await r.settle(), await k;
+			i = "disposed", u = !1, m = !0, oe(), ue?.dispose(), k?.dispose(), c?.(), c = null, s?.(), s = null, de?.(), de = null, await r.settle(), await ee;
 			let e = [];
 			try {
 				await n.dispose();
@@ -28348,7 +28363,7 @@ async function dD(e) {
 				e.push(t);
 			}
 			try {
-				await Ce.dispose();
+				await P.dispose();
 			} catch (t) {
 				e.push(t);
 			}
@@ -28716,8 +28731,9 @@ var GD = "/__rusty/product/runtime/", KD = "rusty.product.local-runtime-transpor
 ]), Q = class extends Error {
 	code;
 	route;
+	retryable;
 	constructor(e, t, n) {
-		super(t, n), this.name = "ProductBrowserLocalTransportError", this.code = e, this.route = n?.route ?? null;
+		super(t, n), this.name = "ProductBrowserLocalTransportError", this.code = e, this.route = n?.route ?? null, this.retryable = n?.retryable ?? !1;
 	}
 };
 function DO(e, t) {
@@ -28790,7 +28806,8 @@ function OO(e = {}) {
 		} catch (t) {
 			throw new Q("request_failed", `Product Browser local runtime request failed for ${e}: ${t instanceof Error ? t.message : String(t)}`, {
 				cause: t,
-				route: e
+				route: e,
+				retryable: !0
 			});
 		}
 		if (!(l.headers.get("content-type")?.toLowerCase() ?? "").startsWith("application/json")) throw new Q("response_decode_failed", `Product Browser local runtime response for ${e} must use application/json`, { route: e });
@@ -29126,7 +29143,8 @@ async function WO(e, t, n) {
 		} catch (e) {
 			throw new Q("request_failed", `Product Browser local runtime response could not be read for ${n}`, {
 				cause: e,
-				route: n
+				route: n,
+				retryable: !0
 			});
 		}
 		if (new TextEncoder().encode(r).byteLength > t) throw new Q("response_decode_failed", `Product Browser local runtime response for ${n} exceeds ${String(t)} bytes`, { route: n });
@@ -29144,7 +29162,8 @@ async function WO(e, t, n) {
 	} catch (e) {
 		throw e instanceof Q ? e : new Q("request_failed", `Product Browser local runtime response could not be read for ${n}`, {
 			cause: e,
-			route: n
+			route: n,
+			retryable: !0
 		});
 	}
 	return o;
@@ -29330,11 +29349,12 @@ function $O(e) {
 	let n = Nk(t.pageEvents, "browser diagnostics page events");
 	if (n.length > 8) throw TypeError("browser diagnostics exceeds 8 page events");
 	let r = t.firstTerminal === void 0 ? void 0 : ek(t.firstTerminal, "browser terminal diagnostic"), i = t.recoverableEvent === void 0 ? void 0 : ek(t.recoverableEvent, "browser recoverable diagnostic");
-	if (i !== void 0 && i.code !== "CSHARP_LIFECYCLE_CLOCK_REGRESSION") throw TypeError("browser recoverable diagnostic code is not supported");
+	if (i !== void 0 && i.code !== "CSHARP_LIFECYCLE_CLOCK_REGRESSION" && i.code !== "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE" && i.code !== "BROWSER_LOCAL_REQUEST_UNAVAILABLE") throw TypeError("browser recoverable diagnostic code is not supported");
 	return Object.freeze({
 		hostState: HO(t.hostState, "browser host state", /* @__PURE__ */ new Set([
 			"loading",
 			"ready",
+			"degraded",
 			"failed",
 			"disposed"
 		])),
@@ -29783,8 +29803,9 @@ function gk(e) {
 		"readout",
 		"diagnostic"
 	], "input result"), t.accepted !== !0 && t.accepted !== !1) throw TypeError("accepted must be boolean");
-	if (!Number.isSafeInteger(t.count) || t.count < 0 || t.count > aO) throw TypeError(`count must be a non-negative integer no greater than ${String(aO)}`);
+	if (!Number.isSafeInteger(t.count) || t.count < 0) throw TypeError(`count must be a non-negative integer no greater than ${String(aO)}`);
 	let n = pk(t, "input result");
+	if (t.count > aO && (t.accepted !== !1 || n.disposition !== "resync-required")) throw TypeError(`count must be a non-negative integer no greater than ${String(aO)}`);
 	if (t.acceptedCount !== void 0 && (!Number.isSafeInteger(t.acceptedCount) || t.acceptedCount < 0 || t.acceptedCount > t.count)) throw TypeError("acceptedCount must be a non-negative integer no greater than count");
 	if (t.droppedCount !== void 0 && (!Number.isSafeInteger(t.droppedCount) || t.droppedCount < 0 || t.droppedCount > t.count)) throw TypeError("droppedCount must be a non-negative integer no greater than count");
 	let r = t.acceptedCount === void 0 ? t.accepted ? t.count : 0 : t.acceptedCount, i = t.droppedCount === void 0 ? 0 : t.droppedCount;
