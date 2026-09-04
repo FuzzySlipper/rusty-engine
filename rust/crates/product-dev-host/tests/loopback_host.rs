@@ -20,7 +20,9 @@ use product_dev_host::{
 };
 
 #[derive(Default)]
-struct FixtureRuntime;
+struct FixtureRuntime {
+    recovery_calls: Arc<AtomicUsize>,
+}
 
 struct ReconnectRuntime {
     started: bool,
@@ -229,6 +231,7 @@ impl ProductDevRuntime for FixtureRuntime {
         ProductDevRuntimeReceipt<ProductDevOperationResult>,
         product_dev_host::ProductDevRuntimeError,
     > {
+        self.recovery_calls.fetch_add(1, Ordering::SeqCst);
         Ok(Self::operation(ProductDevOperationKind::ReplaceControl))
     }
 
@@ -460,10 +463,19 @@ fn start() -> product_dev_host::RunningProductDevHost {
         .unwrap(),
     ])
     .unwrap();
-    ProductDevHost::start(FixtureRuntime, ProductDevHostConfig::new(0, bundle)).unwrap()
+    ProductDevHost::start(
+        FixtureRuntime::default(),
+        ProductDevHostConfig::new(0, bundle),
+    )
+    .unwrap()
 }
 
 fn start_debug() -> product_dev_host::RunningProductDevHost {
+    start_debug_with_recovery_calls().0
+}
+
+fn start_debug_with_recovery_calls() -> (product_dev_host::RunningProductDevHost, Arc<AtomicUsize>)
+{
     let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
@@ -471,11 +483,15 @@ fn start_debug() -> product_dev_host::RunningProductDevHost {
     )
     .unwrap()])
     .unwrap();
-    ProductDevHost::start(
-        FixtureRuntime,
+    let recovery_calls = Arc::new(AtomicUsize::new(0));
+    let host = ProductDevHost::start(
+        FixtureRuntime {
+            recovery_calls: Arc::clone(&recovery_calls),
+        },
         ProductDevHostConfig::new(0, bundle).with_live_debug(true),
     )
-    .unwrap()
+    .unwrap();
+    (host, recovery_calls)
 }
 
 fn start_reconnect(
@@ -575,7 +591,7 @@ fn retries_one_injected_listener_accept_error_then_serves_the_next_connection() 
     .unwrap()])
     .unwrap();
     let host = ProductDevHost::start(
-        FixtureRuntime,
+        FixtureRuntime::default(),
         ProductDevHostConfig::new(0, bundle)
             .with_diagnostics(diagnostics.clone())
             .with_test_accept_decision_hook(move || {
@@ -675,7 +691,7 @@ fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
 
 #[test]
 fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
-    let host = start_debug();
+    let (host, recovery_calls) = start_debug_with_recovery_calls();
     let origin = host.origin();
     let malformed_body = r#"{"batch":[{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"sequence":"0","context":"gameplay.default","fact":{"kind":"pointer-button","button":"primary","edge":"held"}}]}"#;
     let malformed = request(
@@ -689,6 +705,7 @@ fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
     assert!(malformed.contains("\"code\":\"DEV_HOST_INPUT_DECODE\""));
     assert!(malformed.contains("\"disposition\":\"resync-required\""));
     assert!(malformed.contains("\"droppedCount\":1"));
+    assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
 
     let pointer_body = r#"{"batch":[{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"sequence":"0","context":"gameplay.default","fact":{"kind":"pointer-button","button":"primary","edge":"pressed"}},{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"sequence":"1","context":"gameplay.default","fact":{"kind":"pointer-button","button":"secondary","edge":"pressed"}}]}"#;
     let pointer = request(
@@ -711,6 +728,30 @@ fn malformed_pointer_batch_resynchronizes_without_closing_the_host() {
         "{diagnostics}"
     );
     assert!(diagnostics.contains("\"resync-required\""), "{diagnostics}");
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn over_limit_malformed_batch_resynchronizes_once_without_becoming_terminal() {
+    let (host, recovery_calls) = start_debug_with_recovery_calls();
+    let origin = host.origin();
+    let batch = vec!["{}"; 1_025].join(",");
+    let malformed_body = format!(r#"{{"batch":[{batch}]}}"#);
+    let malformed = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/input HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{malformed_body}",
+            malformed_body.len(),
+        ),
+    );
+
+    assert!(malformed.starts_with("HTTP/1.1 200 OK\r\n"), "{malformed}");
+    assert!(malformed.contains("\"code\":\"DEV_HOST_INPUT_DECODE\""));
+    assert!(malformed.contains("\"disposition\":\"resync-required\""));
+    assert!(malformed.contains("\"count\":1025"));
+    assert!(malformed.contains("\"droppedCount\":1025"));
+    assert!(!malformed.contains("\"disposition\":\"terminal\""));
+    assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
     host.shutdown().unwrap();
 }
 

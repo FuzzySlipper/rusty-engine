@@ -1563,7 +1563,9 @@ pub struct ProductDevInputResult {
     code: String,
     disposition: ProductDevFaultDisposition,
     /// Number of submitted events in this batch. Kept as `count` for
-    /// compatibility with existing host adapters.
+    /// compatibility with existing host adapters. A strict-decode rejection
+    /// preserves the host-bounded submitted count even when it is above the
+    /// smaller admitted-wire-event limit.
     count: usize,
     /// Number of events admitted into the input lane. A safe stale/duplicate
     /// drop makes this less than `count` while retaining the current cursor.
@@ -1681,14 +1683,10 @@ impl ProductDevInputResult {
     /// and the runtime replaced its input control fence before continuing.
     /// The rejected batch is deliberately not replayable: the replacement
     /// binding and its sequence-zero clear arrive through the accompanying
-    /// runtime output receipt.
+    /// runtime output receipt. `count` is diagnostic-only here: the host
+    /// already bounded the JSON request, while the admitted-wire-event bound
+    /// does not apply to a batch rejected before admission.
     pub fn wire_decode_resynchronized(count: usize) -> Result<Self, ProductDevHostError> {
-        if count > runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_INPUT_RESULT_BOUNDS",
-                "wire-decode rejection count exceeds admitted batch bound",
-            ));
-        }
         Ok(Self {
             accepted: false,
             code: "DEV_HOST_INPUT_DECODE".to_owned(),
@@ -2715,5 +2713,31 @@ mod tests {
         let unknown = serde_json::to_value(unknown).unwrap();
         assert_eq!(unknown["code"], "CSHARP_NEW_FAILURE");
         assert_eq!(unknown["disposition"], "terminal");
+    }
+
+    #[test]
+    fn wire_decode_resync_receipt_preserves_host_bounded_rejected_counts() {
+        for count in [
+            0,
+            1,
+            runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS,
+            runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS + 1,
+        ] {
+            let result = ProductDevInputResult::wire_decode_resynchronized(count).unwrap();
+            assert!(!result.accepted);
+            assert_eq!(result.code, "DEV_HOST_INPUT_DECODE");
+            assert_eq!(
+                result.disposition,
+                ProductDevFaultDisposition::ResyncRequired
+            );
+            assert_eq!(result.count, count);
+            assert_eq!(result.accepted_count, 0);
+            assert_eq!(result.dropped_count, count);
+        }
+
+        assert!(
+            ProductDevInputResult::queued(runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS + 1)
+                .is_err()
+        );
     }
 }
