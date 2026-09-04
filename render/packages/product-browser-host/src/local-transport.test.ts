@@ -423,32 +423,57 @@ test('local transport marks a successful response with no commit boundary outcom
   adapter.dispose();
 });
 
-test('completed unnumbered baseline discards a cursorless replacement attach after reconnect', async () => {
+test('cursorless disconnect replaces the baseline in a new output epoch', async () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async () => response(result('advance-realtime')),
     eventSource: FakeEventSource,
   });
   const outputs: unknown[] = [];
+  const batches: { readonly outputs: readonly unknown[]; readonly metadata: unknown }[] = [];
   const unsubscribe = adapter.subscribeOutputs((output) => outputs.push(output));
+  const unsubscribeBatches = adapter.subscribeOutputBatches?.((output, metadata) => {
+    batches.push({ outputs: [...output], metadata });
+  });
   const stream = FakeEventSource.instances[0]!;
   stream.open();
   const connection = adapter.connect?.();
-  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
+  stream.emit({
+    kind: 'binding', runtime: RUNTIME, nextInputSequence: '1',
+    publicationFrontiers: [{ stream: 'voxel:active', revision: 1 }],
+  }, '');
   stream.emit({ kind: 'runtime-readout', readout: READOUT }, '');
   stream.emitBaseline(result('connect'), '');
   await connection;
   assert.equal(outputs.length, 2);
 
   stream.onerror?.(new Error('cursorless reconnect'));
-  stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
-  stream.emit({ kind: 'runtime-readout', readout: READOUT }, '');
-  assert.equal(outputs.length, 2);
-  stream.emitBaseline(result('connect'), '');
-  assert.equal(outputs.length, 2);
+  assert.equal(stream.closed, true);
+  assert.equal(FakeEventSource.instances.length, 2);
+  const replacement = FakeEventSource.instances[1]!;
+  replacement.emit({
+    kind: 'binding', runtime: RUNTIME, nextInputSequence: '1',
+    publicationFrontiers: [{ stream: 'voxel:active', revision: 2 }],
+  }, '');
+  replacement.emit({ kind: 'runtime-readout', readout: READOUT }, '');
+  replacement.emitBaseline(result('connect'), '');
+  assert.equal(outputs.length, 4);
+  assert.deepEqual(batches.map((batch) => batch.metadata), [
+    { epoch: 1, baseline: true, recovery: 'none' },
+    { epoch: 1, baseline: false, recovery: 'fresh-baseline-required' },
+    { epoch: 2, baseline: true, recovery: 'none' },
+  ]);
 
-  stream.emit({ kind: 'runtime-readout', readout: READOUT }, '1');
-  assert.equal(outputs.length, 3);
+  replacement.emit({
+    kind: 'frame',
+    frame: {
+      schemaVersion: 1,
+      publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
+      ops: [],
+    },
+  }, '1');
+  assert.equal(outputs.length, 5);
+  unsubscribeBatches?.();
   unsubscribe();
   adapter.dispose();
 });

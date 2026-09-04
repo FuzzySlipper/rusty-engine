@@ -391,6 +391,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
     let resolveReplacement: ((value: { readonly applied: true; readonly outcome: 'applied'; readonly diagnostics: readonly [] }) => void) | null = null;
     let demandCalls = 0;
     let freshOutputRecoveries = 0;
+    let activePublicationRevision = 0;
     const transport = {
       lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
         accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
@@ -424,11 +425,24 @@ test('host swaps a recovered output projection before applying current-epoch tra
         replaceFrame: async (frame: unknown, frontiers: unknown) => {
           replacedFrames.push(frame);
           replacementFrontiers.push(frontiers);
-          return new Promise((resolve) => { resolveReplacement = resolve; });
+          return new Promise((resolve) => {
+            resolveReplacement = (receipt) => {
+              const frontier = (frontiers as readonly { readonly revision: number }[])[0];
+              if (frontier !== undefined) activePublicationRevision = frontier.revision;
+              resolve(receipt);
+            };
+          });
         },
         applyFrame: (frame: unknown) => {
           appliedFrames.push(frame);
-          if ((frame as { readonly publication?: unknown }).publication !== undefined) {
+          const publication = (frame as {
+            readonly publication?: { readonly baseRevision: number; readonly revision: number };
+          }).publication;
+          if (publication !== undefined && publication.baseRevision === activePublicationRevision) {
+            activePublicationRevision = publication.revision;
+            return { outcome: 'applied' as const, diagnostics: [] };
+          }
+          if (publication !== undefined) {
             return {
               outcome: 'rejected_atomic' as const,
               diagnostics: [{ code: 'publication_gap', message: 'active voxel frontier was rejected' }],
@@ -470,7 +484,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
       kind: 'frame',
       frame: {
         schemaVersion: 1,
-        publication: { stream: 'voxel:active', baseRevision: 4, revision: 5, operationCount: 0 },
+        publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
         ops: [],
       },
     }], { epoch: 1, baseline: false, recovery: 'none' });
@@ -492,7 +506,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
         kind: 'binding',
         runtime,
         nextInputSequence: '1',
-        publicationFrontiers: [{ stream: 'voxel:active', revision: 4 }],
+        publicationFrontiers: [{ stream: 'voxel:active', revision: 2 }],
       },
       { kind: 'frame', frame: { schemaVersion: 1, ops: [] } },
     ], { epoch: 2, baseline: true, recovery: 'none' });
@@ -504,7 +518,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
     assert.equal(host.readout().state, 'degraded');
     assert.equal(replacedFrames.length, 1);
     assert.deepEqual((replacedFrames[0] as { readonly ops: readonly unknown[] }).ops, []);
-    assert.deepEqual(replacementFrontiers, [[{ stream: 'voxel:active', revision: 4 }]]);
+    assert.deepEqual(replacementFrontiers, [[{ stream: 'voxel:active', revision: 2 }]]);
     assert.deepEqual(boundRuntimes, [], 'trailing binding stays gated until the replacement applies');
     assert.equal(appliedFrames.length, 2, 'only pre-recovery frames reached the old renderer');
     (resolveReplacement as unknown as (value: { readonly applied: true; readonly outcome: 'applied'; readonly diagnostics: readonly [] }) => void)({
@@ -512,6 +526,15 @@ test('host swaps a recovered output projection before applying current-epoch tra
       outcome: 'applied',
       diagnostics: [],
     });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    publish([{
+      kind: 'frame',
+      frame: {
+        schemaVersion: 1,
+        publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
+        ops: [],
+      },
+    }], { epoch: 2, baseline: false, recovery: 'none' });
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(host.readout().state, 'ready');
     assert.deepEqual(boundRuntimes, [
@@ -522,10 +545,15 @@ test('host swaps a recovered output projection before applying current-epoch tra
       { schemaVersion: 1, ops: [{ op: 'unversioned-rejected' }] },
       {
         schemaVersion: 1,
-        publication: { stream: 'voxel:active', baseRevision: 4, revision: 5, operationCount: 0 },
+        publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
         ops: [],
       },
       { schemaVersion: 1, ops: [{ op: 'current-epoch-trailing' }] },
+      {
+        schemaVersion: 1,
+        publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
+        ops: [],
+      },
     ]);
     await host.dispose();
   } finally {
