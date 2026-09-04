@@ -169,7 +169,7 @@ function boundedInteger(value, name, minimum, maximum) {
 }
 
 async function loadExercise(value) {
-  if (value === undefined) return async ({ page, url }) => page.goto(url, { waitUntil: 'networkidle' });
+  if (value === undefined) return async ({ page, url }) => page.goto(url, { waitUntil: 'domcontentloaded' });
   const module = await import(pathToFileURL(resolve(value)).href);
   const exercise = module.exercise ?? module.default;
   if (typeof exercise !== 'function') throw new Error('--exercise must export an async exercise(context) function');
