@@ -27,7 +27,8 @@
   <Target Name="GenerateEngineContracts" BeforeTargets="CoreCompile" Condition="'$(RustyEngineGenerateBindings)' == 'true'">
     <Exec Command="&quot;$(MSBuildThisFileDirectory)../../scripts/generate-csharp-native-bindings.sh&quot; &quot;$(RustyEngineGeneratedBindingsDir)&quot; &quot;$(RustyEngineGeneratedInputsDir)&quot;" />
   </Target>
-  <Target Name="BuildRustyEngineProductGeneratorForPackage" BeforeTargets="GenerateNuspec">
+  <Target Name="BuildRustyEngineProductGeneratorForPackage" BeforeTargets="GenerateNuspec"
+          Condition="'$(RustyEngineBuildProductGeneratorForPackage)' != 'false'">
     <Error Condition="!Exists('$(RustyEnginePackageMetadataDir)/Rusty.Engine.props')" Text="Rusty.Engine package metadata must be staged by scripts/pack-csharp-sdk.sh." />
     <MSBuild Projects="$(MSBuildThisFileDirectory)../Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
              Targets="Build"

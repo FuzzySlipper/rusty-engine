@@ -36,9 +36,30 @@ trap 'rm -rf -- "$work_dir"' EXIT
 generated_dir="$work_dir/generated"
 generated_inputs_dir="$generated_dir/GeneratedInputs"
 package_metadata_dir="$work_dir/package-metadata"
+product_generator_build_dir="$work_dir/product-generator"
+product_generator_output_dir="$product_generator_build_dir/bin"
+product_generator_intermediate_dir="$product_generator_build_dir/obj"
+product_generator_path="$product_generator_output_dir/Rusty.Engine.ProductGenerator.dll"
 
 dotnet build "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj" --no-restore
 "$repo_root/scripts/generate-csharp-native-bindings.sh" "$generated_dir" "$generated_inputs_dir"
+
+# The generator embeds the generated ABI inputs. Build it into this package's
+# private output and intermediate directories so MSBuild cannot reuse an
+# analyzer compiled for an earlier function-table shape.
+dotnet build "$repo_root/csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj" \
+    --no-restore \
+    --configuration Release \
+    --target Rebuild \
+    -p:OutputPath="$product_generator_output_dir/" \
+    -p:IntermediateOutputPath="$product_generator_intermediate_dir/" \
+    -p:RustyEngineGeneratedBindingsDir="$generated_dir" \
+    -p:RustyEngineGeneratedInputsDir="$generated_inputs_dir" \
+    -p:RustyEngineGenerateBindings=false
+if [[ ! -f "$product_generator_path" ]]; then
+    echo "pack-csharp-sdk: product generator build did not produce $product_generator_path" >&2
+    exit 1
+fi
 
 identity_input="$generated_inputs_dir/AbiIdentity.g.cs"
 sdk_identity=$(sed -n 's/.*SdkBuildIdentity = "\([^"]*\)";.*/\1/p' "$identity_input")
@@ -65,6 +86,8 @@ dotnet pack "$repo_root/csharp/Rusty.Engine/Rusty.Engine.csproj" --no-restore --
     -p:RustyEngineGeneratedInputsDir="$generated_inputs_dir" \
     -p:RustyEnginePackageMetadataDir="$package_metadata_dir" \
     -p:RustyEnginePackageAbiIdentity="$sdk_identity" \
+    -p:RustyEngineProductGeneratorPath="$product_generator_path" \
+    -p:RustyEngineBuildProductGeneratorForPackage=false \
     -p:RepositoryType=git \
     -p:RepositoryUrl="$repository_url" \
     -p:RepositoryCommit="$repository_commit" \
