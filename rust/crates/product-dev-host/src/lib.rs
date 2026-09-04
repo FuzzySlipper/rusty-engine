@@ -21,6 +21,7 @@ mod host;
 mod log;
 mod model;
 mod session;
+mod worker;
 
 pub use bundle::{
     product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry,
@@ -59,6 +60,13 @@ pub use model::{
     ProductDevUpdateAttributionSnapshot, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use session::ProductDevOperationOwner;
+pub use worker::{
+    read_worker_frame, write_worker_frame, ProductDevWorkerBundle, ProductDevWorkerBundleEntry,
+    ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic, ProductDevWorkerDiagnosticField,
+    ProductDevWorkerEvent, ProductDevWorkerFault, ProductDevWorkerFeedbackOperation,
+    ProductDevWorkerLifecycleOperation, ProductDevWorkerOutputBatch, ProductDevWorkerRequest,
+    ProductDevWorkerResponse, ProductDevWorkerUpdateOperation, MAX_WORKER_FRAME_BYTES,
+};
 
 /// Upper bound for one HTTP request header block, including its terminator.
 pub const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024;

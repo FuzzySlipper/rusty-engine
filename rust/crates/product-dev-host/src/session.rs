@@ -6,7 +6,7 @@ use std::sync::MutexGuard;
 use crate::{
     CanonicalU64, ProductDevDebugResult, ProductDevHostError, ProductDevInputBatch,
     ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationResult,
-    ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeReceipt,
+    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeReceipt,
     ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
     ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
 };
@@ -55,6 +55,28 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.with_runtime(|runtime| runtime.lifecycle(operation))
     }
 
+    pub fn connect(
+        &self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.with_runtime(|runtime| runtime.connect())
+    }
+
+    pub fn lifecycle_with_binding(
+        &self,
+        operation: ProductDevLifecycleOperation,
+        binding: Option<ProductDevRuntimeBinding>,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.with_runtime(|runtime| runtime.lifecycle_with_binding(operation, binding))
+    }
+
+    pub fn control(
+        &self,
+        operation: crate::ProductDevControlOperation,
+        binding: ProductDevRuntimeBinding,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.with_runtime(|runtime| runtime.control(operation, binding))
+    }
+
     /// Admits one already validated input batch through the runtime owner.
     pub fn input(
         &self,
@@ -72,6 +94,53 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         command: &str,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
         self.with_runtime(|runtime| runtime.execute_debug(command))
+    }
+
+    pub fn describe_debug(
+        &self,
+    ) -> Result<ProductDevRuntimeReceipt<crate::ProductDevDebugCatalog>, ProductDevRuntimeError>
+    {
+        self.with_runtime(|runtime| runtime.describe_debug())
+    }
+
+    pub fn report_audio_feedback(
+        &self,
+        feedback: crate::ProductDevAudioFeedback,
+    ) -> Result<
+        ProductDevRuntimeReceipt<crate::ProductDevAudioFeedbackResult>,
+        ProductDevRuntimeError,
+    > {
+        self.with_runtime(|runtime| runtime.report_audio_feedback(feedback))
+    }
+
+    pub fn report_animation_feedback(
+        &self,
+        feedback: crate::ProductDevAnimationFeedback,
+    ) -> Result<
+        ProductDevRuntimeReceipt<crate::ProductDevAnimationFeedbackResult>,
+        ProductDevRuntimeError,
+    > {
+        self.with_runtime(|runtime| runtime.report_animation_feedback(feedback))
+    }
+
+    pub fn report_ghost_plate_feedback(
+        &self,
+        feedback: crate::ProductDevGhostPlateFeedback,
+    ) -> Result<
+        ProductDevRuntimeReceipt<crate::ProductDevGhostPlateFeedbackResult>,
+        ProductDevRuntimeError,
+    > {
+        self.with_runtime(|runtime| runtime.report_ghost_plate_feedback(feedback))
+    }
+
+    pub fn report_renderer_diagnostics(
+        &self,
+        feedback: crate::ProductDevRendererDiagnosticsFeedback,
+    ) -> Result<
+        ProductDevRuntimeReceipt<crate::ProductDevRendererDiagnosticsFeedbackResult>,
+        ProductDevRuntimeError,
+    > {
+        self.with_runtime(|runtime| runtime.report_renderer_diagnostics(feedback))
     }
 
     /// Strictly admits an input wire array, then forwards the validated batch

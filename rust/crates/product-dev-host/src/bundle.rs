@@ -347,18 +347,19 @@ fn renderer_path(path: String, extension: &str) -> Result<String, ProductDevHost
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductDevBundleEntry {
     path: String,
-    content_type: &'static str,
+    content_type: String,
     bytes: Vec<u8>,
 }
 
 impl ProductDevBundleEntry {
     pub fn new(
         path: impl Into<String>,
-        content_type: &'static str,
+        content_type: impl Into<String>,
         bytes: Vec<u8>,
     ) -> Result<Self, ProductDevHostError> {
         let path = normalize_path(&path.into())?;
-        if !is_allowed_content_type(content_type) {
+        let content_type = content_type.into();
+        if !is_allowed_content_type(&content_type) {
             return Err(ProductDevHostError::new(
                 "DEV_HOST_BUNDLE_CONTENT_TYPE",
                 "bundle resource content type is not admitted",
@@ -381,8 +382,8 @@ impl ProductDevBundleEntry {
         &self.path
     }
 
-    pub const fn content_type(&self) -> &'static str {
-        self.content_type
+    pub fn content_type(&self) -> &str {
+        &self.content_type
     }
 
     pub fn bytes(&self) -> &[u8] {

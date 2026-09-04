@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::{ProductDevHostError, ProductDevRuntimeBinding};
 
@@ -26,7 +26,7 @@ const MAX_RETENTION_FILES: u8 = 4;
 const MAX_RECOVERABLE_CODES: usize = 64;
 
 /// Severity deliberately remains smaller than a general logging framework.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevLogSeverity {
     Debug,
@@ -36,7 +36,7 @@ pub enum ProductDevLogSeverity {
 }
 
 /// Recovery posture supplied by the Engine owner, never inferred from text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevLogDisposition {
     Accepted,
@@ -51,6 +51,16 @@ pub enum ProductDevLogDisposition {
 pub struct ProductDevLogField {
     key: String,
     value: String,
+}
+
+impl ProductDevLogField {
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -76,6 +86,34 @@ pub struct ProductDevLogEvent {
 impl ProductDevLogEvent {
     pub fn code(&self) -> &str {
         &self.code
+    }
+
+    pub const fn severity(&self) -> ProductDevLogSeverity {
+        self.severity
+    }
+
+    pub const fn disposition(&self) -> ProductDevLogDisposition {
+        self.disposition
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn runtime(&self) -> Option<ProductDevRuntimeBinding> {
+        self.runtime.clone()
+    }
+
+    pub fn correlation(&self) -> Option<&str> {
+        self.correlation.as_deref()
+    }
+
+    pub fn fields(&self) -> &[ProductDevLogField] {
+        &self.fields
     }
 
     pub fn new(

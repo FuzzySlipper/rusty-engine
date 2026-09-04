@@ -4,13 +4,12 @@ use std::{
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Condvar, Mutex,
+        mpsc, Arc, Condvar, Mutex, RwLock,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
-use runtime_input::decode_runtime_input_wire_events_json;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -23,9 +22,10 @@ use crate::{
     ProductDevLogSeverity, ProductDevNextAction, ProductDevOperationKind,
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
-    ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS,
-    MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES,
-    MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, ProductDevWorkerDiagnostic,
+    ProductDevWorkerOutputBatch, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
+    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -43,6 +43,8 @@ pub const MAX_HOST_INPUT_BATCHES: usize = 256;
 /// A deliberately narrow test seam for one listener accept decision. It is
 /// not a transport abstraction: production always invokes `TcpListener`.
 type AcceptDecisionHook = Arc<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>;
+type WorkerOutputReceiver = Arc<Mutex<mpsc::Receiver<ProductDevWorkerOutputBatch>>>;
+type WorkerDiagnosticReceiver = Arc<Mutex<mpsc::Receiver<ProductDevWorkerDiagnostic>>>;
 
 /// Configuration for the fixed development host.
 #[derive(Clone)]
@@ -54,6 +56,14 @@ pub struct ProductDevHostConfig {
     live_debug_enabled: bool,
     diagnostics: ProductDevLog,
     accept_decision_hook: Option<AcceptDecisionHook>,
+    worker_outputs: Option<WorkerOutputReceiver>,
+    worker_generation: Option<Arc<AtomicUsize>>,
+    initial_worker_outputs: Vec<ProductDevRuntimeOutput>,
+    initial_worker_generation: u64,
+    worker_failures: Option<mpsc::SyncSender<u64>>,
+    worker_diagnostics: Option<WorkerDiagnosticReceiver>,
+    worker_owns_scheduler: bool,
+    disposable_worker_runtime: bool,
 }
 
 impl ProductDevHostConfig {
@@ -65,6 +75,14 @@ impl ProductDevHostConfig {
             live_debug_enabled: false,
             diagnostics: ProductDevLog::new(Default::default()).expect("fixed diagnostic defaults"),
             accept_decision_hook: None,
+            worker_outputs: None,
+            worker_generation: None,
+            initial_worker_outputs: Vec::new(),
+            initial_worker_generation: 0,
+            worker_failures: None,
+            worker_diagnostics: None,
+            worker_owns_scheduler: false,
+            disposable_worker_runtime: false,
         }
     }
 
@@ -86,6 +104,43 @@ impl ProductDevHostConfig {
 
     pub fn with_diagnostics(mut self, diagnostics: ProductDevLog) -> Self {
         self.diagnostics = diagnostics;
+        self
+    }
+
+    /// Supplies retained output from one disposable local worker. The reader
+    /// is intentionally one-way: requests remain on the typed runtime owner.
+    pub fn with_worker_outputs(
+        mut self,
+        receiver: mpsc::Receiver<ProductDevWorkerOutputBatch>,
+        generation: Arc<AtomicUsize>,
+        failures: mpsc::SyncSender<u64>,
+        initial_outputs: Vec<ProductDevRuntimeOutput>,
+        initial_generation: u64,
+    ) -> Self {
+        self.worker_outputs = Some(Arc::new(Mutex::new(receiver)));
+        self.worker_generation = Some(generation);
+        self.initial_worker_outputs = initial_outputs;
+        self.initial_worker_generation = initial_generation;
+        self.worker_failures = Some(failures);
+        self
+    }
+
+    /// Supplies bounded diagnostic facts from one disposable local worker.
+    /// The stable shell owns their retained/log-file projection just as it
+    /// owns HTTP and SSE; worker stderr remains human output only.
+    pub fn with_worker_diagnostics(
+        mut self,
+        receiver: mpsc::Receiver<ProductDevWorkerDiagnostic>,
+    ) -> Self {
+        self.worker_diagnostics = Some(Arc::new(Mutex::new(receiver)));
+        self
+    }
+
+    /// Marks the runtime scheduler as worker-owned. The stable HTTP shell
+    /// then does not create even an idle local scheduler thread.
+    pub fn with_worker_scheduler(mut self) -> Self {
+        self.worker_owns_scheduler = true;
+        self.disposable_worker_runtime = true;
         self
     }
 
@@ -125,13 +180,19 @@ impl ProductDevHost {
         let shutdown = Arc::new(AtomicBool::new(false));
         let scheduler_wake = Arc::new(SchedulerWake::default());
         let output_wake = Arc::new(OutputWake::default());
+        let bundle = Arc::new(RwLock::new(config.bundle));
+        let mut initial_output_bus = OutputBus::default();
+        push_outputs_staged(&mut initial_output_bus, config.initial_worker_outputs)?;
+        let outputs = Arc::new(Mutex::new(initial_output_bus));
+        let projection_gate = Arc::new(RwLock::new(()));
         let state = Arc::new(HostState {
-            bundle: config.bundle,
+            bundle: Arc::clone(&bundle),
             runtime: Arc::new(ProductDevOperationOwner::new(runtime)),
             input_mailbox: Arc::new(HostInputMailbox::default()),
             telemetry: Mutex::new(HostTelemetry::default()),
             realtime_scheduler_enabled,
-            outputs: Mutex::new(OutputBus::default()),
+            disposable_worker_runtime: config.disposable_worker_runtime,
+            outputs: Arc::clone(&outputs),
             output_wake: Arc::clone(&output_wake),
             shutdown: Arc::clone(&shutdown),
             scheduler_wake: Arc::clone(&scheduler_wake),
@@ -139,10 +200,19 @@ impl ProductDevHost {
             expected_port: address.port(),
             live_debug_enabled: config.live_debug_enabled,
             diagnostics: config.diagnostics.clone(),
+            projection_gate: Arc::clone(&projection_gate),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
         });
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
+        let worker_outputs = config.worker_outputs;
+        let worker_generation = config.worker_generation;
+        if let Some(generation) = &worker_generation {
+            generation.store(config.initial_worker_generation as usize, Ordering::Release);
+        }
+        let worker_output_generation = worker_generation.clone();
+        let worker_failures = config.worker_failures;
+        let worker_diagnostics = config.worker_diagnostics;
         let listener_state = Arc::clone(&state);
         let listener_threads = Arc::clone(&handler_threads);
         let accept_decision_hook = config.accept_decision_hook;
@@ -159,37 +229,123 @@ impl ProductDevHost {
             .map_err(|error| ProductDevHostError::io("DEV_HOST_THREAD", error))?;
         let scheduler_state = Arc::clone(&state);
         let scheduler_wake_thread = Arc::clone(&scheduler_wake);
-        let scheduler_thread = match thread::Builder::new()
-            .name("rusty-product-realtime-scheduler".to_owned())
-            .spawn(move || scheduler_loop(scheduler_state, scheduler_wake_thread))
-        {
-            Ok(thread) => thread,
-            Err(error) => {
-                // The listener already owns a live socket at this point. If
-                // scheduler creation fails, close that ownership explicitly
-                // before returning so a half-started host cannot survive.
-                shutdown.store(true, Ordering::SeqCst);
-                scheduler_wake.notify();
-                output_wake.notify();
-                let _ = TcpStream::connect_timeout(&address, SOCKET_TIMEOUT);
-                let _ = listener_thread.join();
-                if let Ok(mut handlers) = handler_threads.lock() {
-                    for handler in std::mem::take(&mut *handlers) {
-                        let _ = handler.join();
+        let scheduler_thread = if config.worker_owns_scheduler {
+            None
+        } else {
+            match thread::Builder::new()
+                .name("rusty-product-realtime-scheduler".to_owned())
+                .spawn(move || scheduler_loop(scheduler_state, scheduler_wake_thread))
+            {
+                Ok(thread) => Some(thread),
+                Err(error) => {
+                    // The listener already owns a live socket at this point. If
+                    // scheduler creation fails, close that ownership explicitly
+                    // before returning so a half-started host cannot survive.
+                    shutdown.store(true, Ordering::SeqCst);
+                    scheduler_wake.notify();
+                    output_wake.notify();
+                    let _ = TcpStream::connect_timeout(&address, SOCKET_TIMEOUT);
+                    let _ = listener_thread.join();
+                    if let Ok(mut handlers) = handler_threads.lock() {
+                        for handler in std::mem::take(&mut *handlers) {
+                            let _ = handler.join();
+                        }
                     }
+                    return Err(ProductDevHostError::io("DEV_HOST_THREAD", error));
                 }
-                return Err(ProductDevHostError::io("DEV_HOST_THREAD", error));
             }
         };
+        let worker_output_thread = worker_outputs.map(|receiver| {
+            let outputs = Arc::clone(&outputs);
+            let wake = Arc::clone(&output_wake);
+            let shutdown = Arc::clone(&shutdown);
+            let projection_gate = Arc::clone(&projection_gate);
+            let generation =
+                worker_output_generation.expect("worker output generation accompanies receiver");
+            let failures = worker_failures.expect("worker output failures accompany receiver");
+            let diagnostics = config.diagnostics.clone();
+            thread::Builder::new()
+                .name("rusty-product-worker-output".to_owned())
+                .spawn(move || {
+                    while !shutdown.load(Ordering::Acquire) {
+                        let batch = match receiver.lock() {
+                            Ok(receiver) => receiver.recv_timeout(Duration::from_millis(50)),
+                            Err(_) => return,
+                        };
+                        match batch {
+                            Ok(outputs_from_worker) => {
+                                let _projection = match projection_gate.read() {
+                                    Ok(gate) => gate,
+                                    Err(_) => return,
+                                };
+                                if outputs_from_worker.generation
+                                    != generation.load(Ordering::Acquire) as u64
+                                {
+                                    continue;
+                                }
+                                let worker_generation = outputs_from_worker.generation;
+                                match push_outputs(&outputs, outputs_from_worker.outputs) {
+                                    Ok(_) => wake.notify(),
+                                    Err(error) => {
+                                        generation.store(0, Ordering::Release);
+                                        publish_host_diagnostic(
+                                            &diagnostics,
+                                            ProductDevLogSeverity::Error,
+                                            ProductDevLogDisposition::Degraded,
+                                            error.code(),
+                                            error.detail(),
+                                            [("worker-generation", worker_generation.to_string())],
+                                        );
+                                        let _ = failures.try_send(worker_generation);
+                                    }
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                        }
+                    }
+                })
+                .expect("worker output thread creation")
+        });
+        let worker_diagnostic_thread = worker_diagnostics.map(|receiver| {
+            let diagnostics = config.diagnostics.clone();
+            let shutdown = Arc::clone(&shutdown);
+            thread::Builder::new()
+                .name("rusty-product-worker-diagnostic".to_owned())
+                .spawn(move || {
+                    while !shutdown.load(Ordering::Acquire) {
+                        let error = match receiver.lock() {
+                            Ok(receiver) => receiver.recv_timeout(Duration::from_millis(50)),
+                            Err(_) => return,
+                        };
+                        match error {
+                            Ok(diagnostic) => {
+                                if let Ok(event) = diagnostic.into_log_event() {
+                                    let _ = diagnostics.publish(event);
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                        }
+                    }
+                })
+                .expect("worker diagnostic thread creation")
+        });
         Ok(RunningProductDevHost {
             address,
             shutdown,
             scheduler_wake,
             output_wake,
-            scheduler_thread: Some(scheduler_thread),
+            scheduler_thread,
             listener_thread: Some(listener_thread),
             handler_threads,
             diagnostics: config.diagnostics,
+            bundle,
+            outputs,
+            projection_gate,
+            worker_generation,
+            worker_output_thread,
+            worker_diagnostic_thread,
         })
     }
 }
@@ -205,6 +361,12 @@ pub struct RunningProductDevHost {
     listener_thread: Option<JoinHandle<()>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
     diagnostics: ProductDevLog,
+    bundle: Arc<RwLock<ProductDevBundle>>,
+    outputs: Arc<Mutex<OutputBus>>,
+    projection_gate: Arc<RwLock<()>>,
+    worker_generation: Option<Arc<AtomicUsize>>,
+    worker_output_thread: Option<JoinHandle<()>>,
+    worker_diagnostic_thread: Option<JoinHandle<()>>,
 }
 
 impl RunningProductDevHost {
@@ -227,6 +389,54 @@ impl RunningProductDevHost {
         self.stop()
     }
 
+    /// Atomically makes a freshly loaded worker visible to the stable browser
+    /// shell. A changed binding fences old retained output before the new
+    /// complete baseline is committed, so neither live SSE clients nor an old
+    /// Last-Event-ID reconnect can consume facts from the retired incarnation.
+    pub fn replace_worker_projection(
+        &self,
+        bundle: ProductDevBundle,
+        outputs: Vec<ProductDevRuntimeOutput>,
+        worker_generation: u64,
+    ) -> Result<u64, ProductDevHostError> {
+        let _gate = self.projection_gate.write().map_err(|_| {
+            ProductDevHostError::new(
+                "DEV_HOST_WORKER_REPLACE",
+                "projection replacement lock is poisoned",
+            )
+        })?;
+        let new_binding = outputs
+            .iter()
+            .find_map(ProductDevRuntimeOutput::binding_marker);
+        {
+            let mut bus = self.outputs.lock().map_err(|_| {
+                ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_POISONED",
+                    "output queue lock is poisoned",
+                )
+            })?;
+            let mut current = self.bundle.write().map_err(|_| {
+                ProductDevHostError::new(
+                    "DEV_HOST_BUNDLE_REPLACE",
+                    "bundle replacement lock is poisoned",
+                )
+            })?;
+            if new_binding.is_some_and(|binding| Some(binding) != bus.active_binding) {
+                bus.events.clear();
+                bus.floor_cursor = bus.next_id;
+                bus.active_binding = None;
+                bus.pending_baseline = None;
+            }
+            let through = push_outputs_staged(&mut bus, outputs)?;
+            *current = bundle;
+            if let Some(generation) = &self.worker_generation {
+                generation.store(worker_generation as usize, Ordering::Release);
+            }
+            self.output_wake.notify();
+            return Ok(through);
+        }
+    }
+
     fn stop(&mut self) -> Result<(), ProductDevHostError> {
         let was_shutdown = self.shutdown.swap(true, Ordering::SeqCst);
         // Stop the host-owned realtime loop first. It may be in a product
@@ -238,6 +448,12 @@ impl RunningProductDevHost {
             thread.join().map_err(|_| {
                 ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "scheduler thread panicked")
             })?;
+        }
+        if let Some(thread) = self.worker_output_thread.take() {
+            let _ = thread.join();
+        }
+        if let Some(thread) = self.worker_diagnostic_thread.take() {
+            let _ = thread.join();
         }
         // Wake a nonblocking accept loop promptly. The connection is accepted
         // and observes the same shutdown flag before it parses a request.
@@ -269,12 +485,13 @@ impl Drop for RunningProductDevHost {
 }
 
 struct HostState<R> {
-    bundle: ProductDevBundle,
+    bundle: Arc<RwLock<ProductDevBundle>>,
     runtime: Arc<ProductDevOperationOwner<R>>,
     input_mailbox: Arc<HostInputMailbox>,
     telemetry: Mutex<HostTelemetry>,
     realtime_scheduler_enabled: bool,
-    outputs: Mutex<OutputBus>,
+    disposable_worker_runtime: bool,
+    outputs: Arc<Mutex<OutputBus>>,
     output_wake: Arc<OutputWake>,
     shutdown: Arc<AtomicBool>,
     scheduler_wake: Arc<SchedulerWake>,
@@ -282,6 +499,7 @@ struct HostState<R> {
     expected_port: u16,
     live_debug_enabled: bool,
     diagnostics: ProductDevLog,
+    projection_gate: Arc<RwLock<()>>,
     connections: AtomicUsize,
     subscribers: AtomicUsize,
 }
@@ -769,6 +987,9 @@ fn request_incarnation_replacement<R: ProductDevRuntime>(
     if error.recovery().next_action() != ProductDevNextAction::ReplaceIncarnation {
         return;
     }
+    if state.disposable_worker_runtime {
+        return;
+    }
     if state.shutdown.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -1040,6 +1261,7 @@ fn dispatch_request<R: ProductDevRuntime>(
     state: &HostState<R>,
     request: HttpRequest,
 ) -> HttpResponse {
+    let _projection = state.projection_gate.read().ok();
     if request.method == "GET" {
         if request.path == "/__rusty/product/runtime/debug/catalog" {
             if !state.live_debug_enabled {
@@ -1059,8 +1281,10 @@ fn dispatch_request<R: ProductDevRuntime>(
             return invoke_debug_catalog(state);
         }
         if request.body.is_empty() {
-            if let Some(entry) = state.bundle.get(&request.path) {
-                return HttpResponse::bytes(200, entry.content_type(), entry.bytes().to_vec());
+            if let Ok(bundle) = state.bundle.read() {
+                if let Some(entry) = bundle.get(&request.path) {
+                    return HttpResponse::bytes(200, entry.content_type(), entry.bytes().to_vec());
+                }
             }
             return HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted");
         }
@@ -1269,13 +1493,10 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
             );
         }
     };
-    let events = match decode_runtime_input_wire_events_json(&batch_json) {
-        Ok(events) => events,
-        Err(_) => {
-            return recover_rejected_input_batch(state, request.batch.len());
-        }
+    let batch = match ProductDevInputBatch::decode_json(&batch_json) {
+        Ok(batch) => batch,
+        Err(_) => return recover_rejected_input_batch(state, request.batch.len()),
     };
-    let batch = ProductDevInputBatch::new(events);
     // Realtime products enqueue at the host edge so a product callback cannot
     // hold up browser input transport. The cached capability covers
     // Created/Paused states as well; demand/external runtimes retain their
@@ -1400,11 +1621,7 @@ fn invoke_external<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> H
 }
 
 fn invoke_timeline<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> HttpResponse {
-    let request: crate::model::ProductDevTimelineCompletionWire = match decode_json(body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    let request = match ProductDevTimelineCompletion::from_wire(request) {
+    let request = match ProductDevTimelineCompletion::decode_json(body) {
         Ok(value) => value,
         Err(error) => return HttpResponse::error(400, error.code(), error.detail()),
     };
@@ -2002,10 +2219,14 @@ fn handle_sse<R: ProductDevRuntime>(
         if state.shutdown.load(Ordering::Acquire) {
             break;
         }
-        let observed_generation = state.output_wake.generation();
-        let snapshot = match state.outputs.lock() {
-            Ok(outputs) => outputs.after(cursor),
-            Err(_) => break,
+        let (observed_generation, snapshot) = {
+            let _projection = state.projection_gate.read().ok();
+            let observed_generation = state.output_wake.generation();
+            let snapshot = match state.outputs.lock() {
+                Ok(outputs) => outputs.after(cursor),
+                Err(_) => break,
+            };
+            (observed_generation, snapshot)
         };
         if cursor < snapshot.floor_cursor {
             let payload = format!(
@@ -2699,18 +2920,21 @@ mod tests {
     fn realtime_input_admission_does_not_wait_for_runtime_owner() {
         let runtime = Arc::new(ProductDevOperationOwner::new(BlockingRealtimeRuntime));
         let state = Arc::new(HostState {
-            bundle: ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
-                "index.html",
-                "text/html; charset=utf-8",
-                Vec::new(),
-            )
-            .unwrap()])
-            .unwrap(),
+            bundle: Arc::new(RwLock::new(
+                ProductDevBundle::new(vec![crate::ProductDevBundleEntry::new(
+                    "index.html",
+                    "text/html; charset=utf-8",
+                    Vec::new(),
+                )
+                .unwrap()])
+                .unwrap(),
+            )),
             runtime: Arc::clone(&runtime),
             input_mailbox: Arc::new(HostInputMailbox::default()),
             telemetry: Mutex::new(HostTelemetry::default()),
             realtime_scheduler_enabled: true,
-            outputs: Mutex::new(OutputBus::default()),
+            disposable_worker_runtime: false,
+            outputs: Arc::new(Mutex::new(OutputBus::default())),
             output_wake: Arc::new(OutputWake::default()),
             shutdown: Arc::new(AtomicBool::new(false)),
             scheduler_wake: Arc::new(SchedulerWake::default()),
@@ -2718,6 +2942,7 @@ mod tests {
             expected_port: 0,
             live_debug_enabled: false,
             diagnostics: ProductDevLog::new(Default::default()).unwrap(),
+            projection_gate: Arc::new(RwLock::new(())),
             connections: AtomicUsize::new(0),
             subscribers: AtomicUsize::new(0),
         });
@@ -3421,7 +3646,7 @@ fn has_admitted_origin(request: &HttpRequest, bind_host: Ipv4Addr, expected_port
 
 struct HttpResponse {
     status: u16,
-    content_type: &'static str,
+    content_type: String,
     body: Vec<u8>,
     output_through: Option<u64>,
     commit_disposition: Option<CommitDisposition>,
@@ -3447,10 +3672,10 @@ impl CommitDisposition {
 }
 
 impl HttpResponse {
-    fn bytes(status: u16, content_type: &'static str, body: Vec<u8>) -> Self {
+    fn bytes(status: u16, content_type: impl Into<String>, body: Vec<u8>) -> Self {
         Self {
             status,
-            content_type,
+            content_type: content_type.into(),
             body,
             output_through: None,
             commit_disposition: None,

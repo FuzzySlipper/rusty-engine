@@ -143,7 +143,7 @@ impl ProductDevLifecycleOperation {
 }
 
 /// Closed operation identities returned by direct runtime calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevOperationKind {
     Connect,
@@ -170,7 +170,7 @@ pub enum ProductDevOperationKind {
 /// Closed recovery posture for one host operation result. The code identifies
 /// the precise failure while this value tells a host what it may safely do
 /// next without interpreting the diagnostic text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevFaultDisposition {
     Accepted,
@@ -390,7 +390,7 @@ impl ProductDevAudioFeedback {
 }
 
 /// Fixed response for the browser host's audio feedback route.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevAudioFeedbackResult {
     pub accepted: bool,
@@ -629,7 +629,7 @@ fn animation_feedback_text_fits(value: &str) -> bool {
     !value.is_empty() && value.len() <= ProductDevAnimationFeedback::MAX_INLINE_TEXT_BYTES
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevAnimationFeedbackResult {
     pub accepted: bool,
@@ -773,7 +773,7 @@ impl ProductDevGhostPlateFeedback {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevGhostPlateFeedbackResult {
     pub accepted: bool,
@@ -1067,7 +1067,7 @@ pub struct ProductDevUpdateAttributionSnapshot {
     pub slowest_age_ms: CanonicalU64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevRendererDiagnosticsFeedbackResult {
     pub accepted: bool,
@@ -1123,10 +1123,10 @@ impl ProductDevRendererDiagnosticsFeedbackResult {
 }
 
 /// Minimal local readout passed through from the generated runtime owner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevRuntimeReadout {
-    artifact: &'static str,
+    artifact: String,
     runtime: ProductDevRuntimeBinding,
     mode: ProductDevRuntimeMode,
     state: ProductDevRuntimeState,
@@ -1146,7 +1146,7 @@ impl ProductDevRuntimeReadout {
         state: ProductDevRuntimeState,
     ) -> Self {
         Self {
-            artifact: "rusty.product.runtime-readout",
+            artifact: "rusty.product.runtime-readout".to_owned(),
             runtime,
             mode,
             state,
@@ -1199,7 +1199,7 @@ impl ProductDevRuntimeReadout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevRuntimeMode {
     Realtime,
@@ -1207,7 +1207,7 @@ pub enum ProductDevRuntimeMode {
     External,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevRuntimeState {
     Created,
@@ -1221,7 +1221,7 @@ pub enum ProductDevRuntimeState {
 /// small state seam to decide when its monotonic realtime loop may run; it
 /// does not infer product lifecycle from browser cadence or duplicate the
 /// lifecycle state machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProductDevRuntimeScheduleState {
     /// This runtime is demand/external driven or otherwise does not opt into
     /// the standard Rust-host realtime scheduler.
@@ -1233,7 +1233,7 @@ pub enum ProductDevRuntimeScheduleState {
     Shutdown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProductDevRuntimeFault {
     OwnerReported,
@@ -1241,7 +1241,7 @@ pub enum ProductDevRuntimeFault {
 }
 
 /// Direct operation result supplied by the generated runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevOperationResult {
     accepted: bool,
@@ -1267,7 +1267,7 @@ pub struct ProductDevOperationResult {
 
 /// One bounded result returned by a product-owned generated debug catalog.
 /// A failed command is a completed product operation, not a host/ABI failure.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevDebugResult {
     succeeded: bool,
@@ -1548,15 +1548,27 @@ impl ProductDevOperationResult {
 #[derive(Debug, Clone)]
 pub struct ProductDevInputBatch {
     events: Vec<RuntimeInputEvent>,
+    wire_json: Option<Vec<u8>>,
 }
 
 impl ProductDevInputBatch {
     pub fn new(events: Vec<RuntimeInputEvent>) -> Self {
-        Self { events }
+        Self {
+            events,
+            wire_json: None,
+        }
     }
 
     pub fn events(&self) -> &[RuntimeInputEvent] {
         &self.events
+    }
+
+    /// Preserves the one already-admitted host wire encoding when a
+    /// disposable worker must receive the same input batch.  Programmatic
+    /// callers retain the typed in-process route and need not manufacture a
+    /// second wire form.
+    pub fn encoded_json(&self) -> Option<&[u8]> {
+        self.wire_json.as_deref()
     }
 
     /// Strictly decodes the ordered runtime-input wire array used by host
@@ -1576,12 +1588,15 @@ impl ProductDevInputBatch {
                 "input batch is not a strict runtime-input wire batch",
             )
         })?;
-        Ok(Self::new(events))
+        Ok(Self {
+            events,
+            wire_json: Some(bytes.to_vec()),
+        })
     }
 }
 
 /// Typed input result supplied by the generated runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevInputResult {
     accepted: bool,
@@ -1845,6 +1860,7 @@ impl ProductDevInputResult {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductDevTimelineCompletion {
     envelope: TimelineCompletionEnvelope,
+    wire_json: Option<Vec<u8>>,
 }
 
 impl ProductDevTimelineCompletion {
@@ -1857,7 +1873,9 @@ impl ProductDevTimelineCompletion {
             "DEV_HOST_TIMELINE_DECODE",
             "timeline completion JSON is malformed or has unknown fields",
         )?;
-        Self::from_wire(value)
+        let mut completion = Self::from_wire(value)?;
+        completion.wire_json = Some(bytes.to_vec());
+        Ok(completion)
     }
 
     pub(crate) fn from_wire(
@@ -1925,7 +1943,10 @@ impl ProductDevTimelineCompletion {
                 "timeline completion violates runtime-timeline bounds",
             )
         })?;
-        Ok(Self { envelope })
+        Ok(Self {
+            envelope,
+            wire_json: None,
+        })
     }
 
     pub fn envelope(&self) -> &TimelineCompletionEnvelope {
@@ -1934,6 +1955,10 @@ impl ProductDevTimelineCompletion {
 
     pub fn into_envelope(self) -> TimelineCompletionEnvelope {
         self.envelope
+    }
+
+    pub fn encoded_json(&self) -> Option<&[u8]> {
+        self.wire_json.as_deref()
     }
 }
 
@@ -1969,7 +1994,7 @@ pub(crate) struct ProductDevTimelineProvenanceWire {
 }
 
 /// Completion result supplied by the generated runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevTimelineCompletionResult {
     accepted: bool,
@@ -2109,12 +2134,12 @@ impl ProductDevTimelineCompletionResult {
 }
 
 /// One Rust-authoritative output pushed to the local browser projection.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ProductDevRuntimeOutput {
     wire: ProductDevRuntimeOutputWire,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ProductDevRuntimeOutputWire {
     Binding {
@@ -2154,12 +2179,12 @@ enum ProductDevRuntimeOutputWire {
     /// pulse, not a simulation step count; the accompanying readout carries
     /// authoritative counters when the runtime supplies one.
     RuntimeProgress {
-        owner: &'static str,
+        owner: String,
     },
 }
 
 /// Closed renderer realization families for a sampled animation marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProductDevAnimationCueSignalDomain {
     Audio,
@@ -2169,7 +2194,7 @@ pub enum ProductDevAnimationCueSignalDomain {
 /// A copied animation cue declaration sent through the fixed renderer output
 /// stream. `at_seconds` is derived from an Engine-admitted millisecond marker,
 /// so it cannot borrow product memory or become non-finite in transit.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevAnimationCueDefinition {
     pub cue_id: String,
@@ -2219,6 +2244,25 @@ impl ProductDevAnimationCueDefinition {
 }
 
 impl ProductDevRuntimeOutput {
+    /// Decodes one worker-retained output through the same bounded JSON
+    /// representation used by the browser projection.  The local worker is
+    /// trusted, but a shell still refuses malformed or oversized output
+    /// rather than letting it poison its retained SSE history.
+    pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
+        if bytes.len() > MAX_OUTPUT_AGGREGATE_BYTES {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_WORKER_OUTPUT_DECODE",
+                "worker output exceeds the complete output bound",
+            ));
+        }
+        serde_json::from_slice(bytes).map_err(|_| {
+            ProductDevHostError::new(
+                "DEV_HOST_WORKER_OUTPUT_DECODE",
+                "worker output is not a valid runtime output",
+            )
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn test_frame_value(frame: Value) -> Self {
         Self {
@@ -2357,7 +2401,9 @@ impl ProductDevRuntimeOutput {
     /// Browser hosts use this to update progress without becoming the clock.
     pub fn runtime_progress() -> Self {
         Self {
-            wire: ProductDevRuntimeOutputWire::RuntimeProgress { owner: "rust-host" },
+            wire: ProductDevRuntimeOutputWire::RuntimeProgress {
+                owner: "rust-host".to_owned(),
+            },
         }
     }
     /// Marks the end of one complete current-binding projection. The host

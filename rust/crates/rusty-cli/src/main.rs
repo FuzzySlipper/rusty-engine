@@ -6,6 +6,7 @@
 use std::{
     collections::BTreeMap,
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::atomic::{AtomicU64, Ordering},
@@ -20,9 +21,9 @@ const STAGE_TARGET: &str = "StageRustyEngineCoreClrProduct";
 const STAGED_PRODUCT_PROPERTY: &str = "RustyEngineStagedProductDirectory";
 const WATCH_PATHS_PROPERTY: &str = "RustyEngineWatchPaths";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-const CLEAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const UNEXPECTED_EXIT_RESTART_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_UNEXPECTED_EXITS_PER_ARTIFACT: u8 = 2;
+const MAX_SUPERVISOR_COMMAND_BYTES: usize = 16 * 1024;
 static NEXT_SUPERVISED_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 const IGNORED_WATCH_DIRECTORY_NAMES: &[&str] = &[
     ".git",
@@ -51,7 +52,7 @@ fn dev(options: DevOptions) -> Result<(), String> {
 
     let persistence_root = development_persistence_root(&options.project)?;
     let content_store_root = development_content_store_root(&options.project)?;
-    let staged = stage_product(&options)?;
+    let mut staged = stage_product(&options)?;
     verify_staged_product(&staged)?;
     let mut watches = query_watch_paths(&options.project)?;
     let mut snapshot = FileSnapshot::capture(&watches)?;
@@ -140,34 +141,91 @@ fn dev(options: DevOptions) -> Result<(), String> {
             "change-detected",
             serde_json::json!({ "watchPaths": watches }),
         );
-        if let Some(mut active_child) = child.take() {
-            active_child.stop_cleanly()?;
-        }
-        let staged = stage_product(&options)?;
-        verify_staged_product(&staged)?;
+        let next_staged = stage_product(&options)?;
+        verify_staged_product(&next_staged)?;
         let refreshed_watches = query_watch_paths(&options.project)?;
         snapshot = FileSnapshot::capture(&refreshed_watches)?;
         watches = refreshed_watches;
         crash_budget.reset_after_successful_restage();
-        child = Some(SupervisedHost::start(
-            &runtime.host,
-            &staged,
-            &persistence_root,
-            &content_store_root,
-        )?);
-        diagnostic(
-            "restarted",
-            serde_json::json!({
-                "productDirectory": staged,
-                "persistenceRoot": persistence_root,
-                "contentStoreRoot": content_store_root,
-                "loader": "coreclr",
-                "watchPaths": watches,
-                "pid": child.as_ref().expect("restarted child is present").child.id(),
-                "runtimeInstanceId": child.as_ref().expect("restarted child is present").runtime_instance_id,
-                "crashBudgetReset": true,
-            }),
-        );
+        let started_after_restage = if let Some(active_child) = child.as_mut() {
+            if let Some(status) = active_child.try_wait()? {
+                diagnostic(
+                    "child-exited-during-restage",
+                    serde_json::json!({
+                        "pid": active_child.child.id(),
+                        "status": status.code(),
+                        "runtimeInstanceId": active_child.runtime_instance_id,
+                    }),
+                );
+                child.take();
+                true
+            } else {
+                match active_child.replace_runtime(&next_staged) {
+                    Ok(()) => false,
+                    Err(error) => {
+                        if let Some(status) = active_child.try_wait()? {
+                            diagnostic(
+                                "child-exited-during-restage",
+                                serde_json::json!({
+                                    "pid": active_child.child.id(),
+                                    "status": status.code(),
+                                    "runtimeInstanceId": active_child.runtime_instance_id,
+                                }),
+                            );
+                            child.take();
+                            true
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+        } else {
+            child = Some(SupervisedHost::start(
+                &runtime.host,
+                &next_staged,
+                &persistence_root,
+                &content_store_root,
+            )?);
+            true
+        };
+        if started_after_restage && child.is_none() {
+            child = Some(SupervisedHost::start(
+                &runtime.host,
+                &next_staged,
+                &persistence_root,
+                &content_store_root,
+            )?);
+        }
+        if started_after_restage {
+            diagnostic(
+                "started-after-restage",
+                serde_json::json!({
+                    "productDirectory": next_staged,
+                    "persistenceRoot": persistence_root,
+                    "contentStoreRoot": content_store_root,
+                    "loader": "coreclr",
+                    "watchPaths": watches,
+                    "pid": child.as_ref().expect("restaged child is present").child.id(),
+                    "shellRuntimeSeedInstanceId": child.as_ref().expect("restaged child is present").runtime_instance_id,
+                    "crashBudgetReset": true,
+                }),
+            );
+        } else {
+            diagnostic(
+                "runtime-replaced",
+                serde_json::json!({
+                    "productDirectory": next_staged,
+                    "persistenceRoot": persistence_root,
+                    "contentStoreRoot": content_store_root,
+                    "loader": "coreclr",
+                    "watchPaths": watches,
+                    "pid": child.as_ref().expect("restaged child is present").child.id(),
+                    "crashBudgetReset": true,
+                }),
+            );
+        }
+        staged = next_staged;
     }
 }
 
@@ -635,35 +693,62 @@ impl SupervisedHost {
             .map_err(|error| format!("RUSTY_DEV_CHILD_WAIT: {error}"))
     }
 
-    fn stop_cleanly(&mut self) -> Result<(), String> {
-        let old_pid = self.child.id();
-        self.stdin.take();
-        let deadline = SystemTime::now() + CLEAN_SHUTDOWN_TIMEOUT;
-        loop {
-            if let Some(status) = self.try_wait()? {
-                if status.success() {
-                    diagnostic(
-                        "child-stopped",
-                        serde_json::json!({ "pid": old_pid, "status": status.code() }),
-                    );
-                    return Ok(());
-                }
-                return Err(format!(
-                    "RUSTY_DEV_CHILD_SHUTDOWN: old host pid {old_pid} exited with {status}"
-                ));
-            }
-            if SystemTime::now() >= deadline {
-                self.child.kill().map_err(|error| format!("RUSTY_DEV_CHILD_SHUTDOWN_TIMEOUT: old host pid {old_pid} ignored clean shutdown and could not be terminated: {error}"))?;
-                let status = self.child.wait().map_err(|error| format!("RUSTY_DEV_CHILD_SHUTDOWN_TIMEOUT: old host pid {old_pid} was terminated but could not be reaped: {error}"))?;
-                diagnostic(
-                    "child-killed-after-timeout",
-                    serde_json::json!({ "pid": old_pid, "status": status.code() }),
-                );
-                return Err(format!("RUSTY_DEV_CHILD_SHUTDOWN_TIMEOUT: old host pid {old_pid} ignored clean shutdown; it was terminated and reaped after {} seconds", CLEAN_SHUTDOWN_TIMEOUT.as_secs()));
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
+    /// Replaces only the disposable runtime inside a live supervised shell.
+    /// The browser listener, diagnostics, and persistent Engine roots remain
+    /// fixed process configuration for the duration of `rusty dev`.
+    fn replace_runtime(&mut self, product: &Path) -> Result<(), String> {
+        let command = encode_runtime_replacement_command(product)?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or("RUSTY_DEV_CHILD_REPLACE: supervised child stdin was unavailable")?;
+        stdin
+            .write_all(&command)
+            .and_then(|_| stdin.flush())
+            .map_err(|error| {
+                format!(
+                    "RUSTY_DEV_CHILD_REPLACE: could not send replacement configuration: {error}"
+                )
+            })?;
+        Ok(())
     }
+}
+
+/// The only command the long-lived `rusty dev` shell accepts after startup.
+/// It intentionally carries no generic method name, options bag, or
+/// compatibility negotiation: successful staging can replace exactly one C#
+/// runtime incarnation with the next staged Product directory.
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum SupervisedHostCommand {
+    #[serde(rename_all = "camelCase")]
+    ReplaceRuntime { product_directory: String },
+}
+
+fn encode_runtime_replacement_command(product: &Path) -> Result<Vec<u8>, String> {
+    let product_directory = product
+        .to_str()
+        .ok_or("RUSTY_DEV_STAGE: staged product path must be UTF-8")?
+        .to_owned();
+    let payload = serde_json::to_vec(&SupervisedHostCommand::ReplaceRuntime { product_directory })
+        .map_err(|error| {
+            format!(
+                "RUSTY_DEV_CHILD_REPLACE: replacement configuration could not be encoded: {error}"
+            )
+        })?;
+    if payload.len() > MAX_SUPERVISOR_COMMAND_BYTES {
+        return Err(
+            "RUSTY_DEV_CHILD_REPLACE: replacement configuration exceeds its bounded command length"
+                .to_owned(),
+        );
+    }
+    let length = u32::try_from(payload.len()).map_err(|_| {
+        "RUSTY_DEV_CHILD_REPLACE: replacement configuration length cannot be represented".to_owned()
+    })?;
+    let mut frame = Vec::with_capacity(4 + payload.len());
+    frame.extend_from_slice(&length.to_le_bytes());
+    frame.extend_from_slice(&payload);
+    Ok(frame)
 }
 
 fn supervised_host_arguments(
@@ -966,6 +1051,37 @@ mod tests {
         .map(str::to_owned)
         .collect::<Vec<_>>();
         assert_eq!(arguments, expected);
+    }
+
+    #[test]
+    fn restage_encodes_the_one_bounded_runtime_replacement_command() {
+        let frame = encode_runtime_replacement_command(Path::new(
+            "/workspace/Product/obj/RustyEngineProduct",
+        ))
+        .expect("replacement frame");
+
+        let length = u32::from_le_bytes(frame[..4].try_into().expect("frame prefix")) as usize;
+        assert_eq!(length, frame.len() - 4);
+        let payload: Value = serde_json::from_slice(&frame[4..]).expect("replacement payload");
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "kind": "replace-runtime",
+                "productDirectory": "/workspace/Product/obj/RustyEngineProduct",
+            })
+        );
+    }
+
+    #[test]
+    fn initial_supervised_shell_rejects_a_zero_runtime_seed() {
+        let error = supervised_host_arguments(
+            Path::new("/workspace/Product"),
+            Path::new("/workspace/Product/.runtime/persistence"),
+            Path::new("/workspace/Product/.runtime/content-store"),
+            0,
+        )
+        .expect_err("zero runtime incarnation is not a valid shell seed");
+        assert!(error.contains("must be nonzero"));
     }
 
     #[test]

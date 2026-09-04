@@ -1,13 +1,16 @@
 use std::{
+    collections::VecDeque,
     env, fs,
     io::{Read, Write},
-    net::{Ipv4Addr, SocketAddr, TcpStream},
+    net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc, Arc, Mutex,
     },
-    time::Instant,
+    thread,
+    time::{Duration, Instant},
 };
 
 use csharp_product_runtime::{
@@ -15,8 +18,21 @@ use csharp_product_runtime::{
     CsharpProductRuntimeConfig,
 };
 use product_dev_host::{
-    ProductDevBundle, ProductDevBundleEntry, ProductDevHost, ProductDevHostConfig, ProductDevLog,
-    ProductDevRendererResource, RunningProductDevHost,
+    read_worker_frame, write_worker_frame, CanonicalU64, ProductDevAnimationFeedback,
+    ProductDevAnimationFeedbackResult, ProductDevAudioFeedback, ProductDevAudioFeedbackResult,
+    ProductDevBundle, ProductDevBundleEntry, ProductDevControlOperation, ProductDevDebugCatalog,
+    ProductDevDebugResult, ProductDevGhostPlateFeedback, ProductDevGhostPlateFeedbackResult,
+    ProductDevHost, ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
+    ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationOwner,
+    ProductDevOperationResult, ProductDevRendererDiagnosticsFeedback,
+    ProductDevRendererDiagnosticsFeedbackResult, ProductDevRendererResource, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeOutput,
+    ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
+    ProductDevTimelineCompletionResult, ProductDevWorkerBundle, ProductDevWorkerBundleEntry,
+    ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic, ProductDevWorkerEvent,
+    ProductDevWorkerFault, ProductDevWorkerFeedbackOperation, ProductDevWorkerLifecycleOperation,
+    ProductDevWorkerOutputBatch, ProductDevWorkerRequest, ProductDevWorkerResponse,
+    ProductDevWorkerUpdateOperation, RunningProductDevHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -50,6 +66,12 @@ fn main() -> Result<(), String> {
         }
         Invocation::Launch(args) => args,
     };
+    if args.worker {
+        return run_worker(args);
+    }
+    if args.supervised {
+        return run_supervised_shell(args);
+    }
     let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
     let content =
         CsharpProductContent::admit(args.content_root()).map_err(|error| error.to_string())?;
@@ -95,7 +117,7 @@ fn main() -> Result<(), String> {
         .transpose()?;
     let host = ProductDevHost::start(
         runtime,
-        ProductDevHostConfig::new(args.port(), bundle)
+        ProductDevHostConfig::new(args.port(), bundle.clone())
             .with_bind_host(args.bind_host())
             .with_live_debug(args.live_debug())
             .with_diagnostics(diagnostics),
@@ -151,6 +173,1565 @@ fn main() -> Result<(), String> {
         wait_for_process_termination(args.supervised, &host);
     }
     Ok(())
+}
+
+const WORKER_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_WORKER_INPUT_BATCHES: usize = 256;
+
+#[derive(Default)]
+struct WorkerInputMailbox {
+    batches: Mutex<VecDeque<ProductDevInputBatch>>,
+    overflowed: AtomicBool,
+}
+
+impl WorkerInputMailbox {
+    fn enqueue(&self, batch: ProductDevInputBatch) -> bool {
+        let Ok(mut batches) = self.batches.lock() else {
+            return false;
+        };
+        if batches.len() == MAX_WORKER_INPUT_BATCHES {
+            batches.clear();
+            self.overflowed.store(true, Ordering::Release);
+            return false;
+        }
+        batches.push_back(batch);
+        true
+    }
+
+    fn drain(&self) -> (Vec<ProductDevInputBatch>, bool) {
+        let mut batches = self.batches.lock().expect("worker mailbox lock");
+        let overflowed = self.overflowed.swap(false, Ordering::AcqRel);
+        (batches.drain(..).collect(), overflowed)
+    }
+
+    fn clear(&self) {
+        if let Ok(mut batches) = self.batches.lock() {
+            batches.clear();
+        }
+        self.overflowed.store(false, Ordering::Release);
+    }
+}
+
+/// Foreground `rusty dev` shell.  It owns the one browser listener and its
+/// retained projection; the C# runtime itself lives only in the worker below.
+fn run_supervised_shell(args: Arguments) -> Result<(), String> {
+    let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
+    let (runtime, bundle, initial_outputs, worker_outputs, worker_diagnostics, worker_failures) =
+        WorkerRuntime::start(&args)?;
+    let host = ProductDevHost::start(
+        runtime.clone(),
+        ProductDevHostConfig::new(args.port(), bundle.clone())
+            .with_bind_host(args.bind_host())
+            .with_live_debug(args.live_debug())
+            .with_diagnostics(diagnostics.clone())
+            .with_worker_outputs(
+                worker_outputs,
+                Arc::clone(&runtime.output_generation),
+                runtime.failures.clone(),
+                initial_outputs,
+                1,
+            )
+            .with_worker_diagnostics(worker_diagnostics)
+            .with_worker_scheduler(),
+    )
+    .map_err(|error| error.to_string())?;
+    println!(
+        "C# {} product host listening at {}",
+        args.loader.label(),
+        host.origin()
+    );
+    println!("Press Ctrl+C to stop.");
+    supervise_worker_replacements(&args, &runtime, &host, &diagnostics, worker_failures)?;
+    Ok(())
+}
+
+/// The foreground shell accepts exactly one supervisor command family over
+/// stdin.  `rusty dev` writes it after staging a new Product directory; EOF
+/// remains a clean shell stop.  This is deliberately separate from the
+/// worker's typed operation channel and cannot be reached by browser input.
+#[derive(Debug, serde::Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum SupervisorCommand {
+    ReplaceRuntime { product_directory: PathBuf },
+}
+
+fn supervise_worker_replacements(
+    shell_args: &Arguments,
+    runtime: &WorkerRuntime,
+    host: &RunningProductDevHost,
+    diagnostics: &ProductDevLog,
+    failures: mpsc::Receiver<u64>,
+) -> Result<(), String> {
+    let termination = install_termination_signal_hook();
+    let mut current_product_directory = shell_args.product_path.clone().ok_or(
+        "DEV_HOST_SUPERVISOR_REPLACE: supervised shell requires a staged Product directory",
+    )?;
+    let mut next_runtime_instance_id = shell_args
+        .runtime_instance_id
+        .map(RuntimeInstanceId::value)
+        .unwrap_or(1)
+        .saturating_add(1)
+        .max(1);
+    // One automatic recovery attempt is intentionally small. A repeated
+    // worker failure pauses at the stable shell until source restaging gives
+    // it a new product to load; no request is replayed in either case.
+    let mut automatic_restart_used = false;
+    let mut paused_generation = None;
+    let (commands_tx, commands_rx) = mpsc::sync_channel(4);
+    thread::Builder::new()
+        .name("rusty-product-supervisor-control".to_owned())
+        .spawn(move || {
+            let stdin = std::io::stdin();
+            let mut input = stdin.lock();
+            loop {
+                match read_worker_frame::<SupervisorCommand>(&mut input) {
+                    Ok(command) => {
+                        if commands_tx.send(Ok(command)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(error) if error.code() == "DEV_HOST_WORKER_EOF" => {
+                        let _ = commands_tx.send(Err(
+                            "DEV_HOST_SUPERVISOR_EOF: supervisor stdin closed".to_owned(),
+                        ));
+                        return;
+                    }
+                    Err(error) => {
+                        let _ =
+                            commands_tx.send(Err(format!("{}: {}", error.code(), error.detail())));
+                        return;
+                    }
+                }
+            }
+        })
+        .map_err(|error| format!("DEV_HOST_SUPERVISOR_CONTROL: {error}"))?;
+    loop {
+        if termination.load(Ordering::Relaxed) || host.termination_requested() {
+            break;
+        }
+        while let Ok(generation) = failures.try_recv() {
+            if generation != runtime.active_generation() {
+                continue;
+            }
+            if automatic_restart_used {
+                if paused_generation != Some(generation) {
+                    paused_generation = Some(generation);
+                    publish_shell_diagnostic(
+                        diagnostics,
+                        "DEV_HOST_WORKER_PAUSED",
+                        &format!(
+                            "worker generation {generation} exhausted its one automatic recovery; waiting for source restage"
+                        ),
+                    );
+                }
+                continue;
+            }
+            automatic_restart_used = true;
+            let replacement = replace_worker_projection(
+                shell_args,
+                runtime,
+                host,
+                current_product_directory.clone(),
+                &mut next_runtime_instance_id,
+            );
+            if let Err(error) = replacement {
+                publish_shell_diagnostic(diagnostics, "DEV_HOST_WORKER_RECOVERY", &error);
+                paused_generation = Some(runtime.active_generation());
+                publish_shell_diagnostic(
+                    diagnostics,
+                    "DEV_HOST_WORKER_PAUSED",
+                    "worker recovery failed; waiting for source restage",
+                );
+            }
+        }
+        match commands_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(Ok(command)) => match command {
+                SupervisorCommand::ReplaceRuntime { product_directory } => {
+                    current_product_directory = product_directory;
+                    automatic_restart_used = false;
+                    paused_generation = None;
+                    let replacement = replace_worker_projection(
+                        shell_args,
+                        runtime,
+                        host,
+                        current_product_directory.clone(),
+                        &mut next_runtime_instance_id,
+                    );
+                    if let Err(error) = replacement {
+                        automatic_restart_used = true;
+                        publish_shell_diagnostic(
+                            diagnostics,
+                            "DEV_HOST_SUPERVISOR_REPLACE",
+                            &error,
+                        );
+                        paused_generation = Some(runtime.active_generation());
+                        publish_shell_diagnostic(
+                            diagnostics,
+                            "DEV_HOST_WORKER_PAUSED",
+                            "staged worker could not load; waiting for a later source restage",
+                        );
+                    }
+                }
+            },
+            Ok(Err(error)) if error == "DEV_HOST_SUPERVISOR_EOF: supervisor stdin closed" => break,
+            Ok(Err(error)) => {
+                publish_shell_diagnostic(diagnostics, "DEV_HOST_SUPERVISOR_CONTROL", &error);
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let reason = if host.termination_requested() {
+        "replace-incarnation"
+    } else if termination.load(Ordering::Relaxed) {
+        "termination-signal"
+    } else {
+        "supervisor-stdin-closed"
+    };
+    println!("RUSTY_HOST shutdown={{\"reason\":\"{reason}\"}}");
+    Ok(())
+}
+
+fn replace_worker_projection(
+    shell_args: &Arguments,
+    runtime: &WorkerRuntime,
+    host: &RunningProductDevHost,
+    product_directory: PathBuf,
+    next_runtime_instance_id: &mut u64,
+) -> Result<(), String> {
+    let runtime_instance_id = *next_runtime_instance_id;
+    *next_runtime_instance_id = next_runtime_instance_id.saturating_add(1).max(1);
+    let replacement = replacement_arguments(shell_args, product_directory, runtime_instance_id)?;
+    let (bundle, baseline, generation) = runtime.replace(&replacement)?;
+    host.replace_worker_projection(bundle, baseline, generation)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn publish_shell_diagnostic(diagnostics: &ProductDevLog, code: &str, message: &str) {
+    let event = product_dev_host::ProductDevLogEvent::new(
+        product_dev_host::ProductDevLogSeverity::Error,
+        product_dev_host::ProductDevLogDisposition::Degraded,
+        "supervisor",
+        code,
+        message,
+    );
+    if let Ok(event) = event {
+        let _ = diagnostics.publish(event);
+    }
+}
+
+fn replacement_arguments(
+    shell_args: &Arguments,
+    product_directory: PathBuf,
+    runtime_instance_id: u64,
+) -> Result<Arguments, String> {
+    if !product_directory.is_absolute() {
+        return Err("DEV_HOST_SUPERVISOR_REPLACE: productDirectory must be absolute".to_owned());
+    }
+    if runtime_instance_id == 0 {
+        return Err("DEV_HOST_SUPERVISOR_REPLACE: runtimeInstanceId must be nonzero".to_owned());
+    }
+    if !matches!(shell_args.loader, ProductLoader::CoreClr) {
+        return Err(
+            "DEV_HOST_SUPERVISOR_REPLACE: supervised replacement requires CoreCLR".to_owned(),
+        );
+    }
+    let product = ProductBundle::read(&product_directory)?;
+    Ok(Arguments {
+        loader: ProductLoader::CoreClr,
+        product: Some(product),
+        product_path: Some(product_directory),
+        library: None,
+        runtime_config_path: None,
+        bundle_dir: None,
+        content_dir: None,
+        // Listener configuration was admitted once when the stable shell
+        // started; replacement Product metadata never moves that listener.
+        port: shell_args.port,
+        bind_host: shell_args.bind_host,
+        mode: None,
+        direct_intents: Vec::new(),
+        physical_mappings: Vec::new(),
+        legacy_live_debug: false,
+        persistence_root: shell_args.persistence_root.clone(),
+        content_store_root: shell_args.content_store_root.clone(),
+        exercise: false,
+        performance_probe: None,
+        supervised: false,
+        runtime_instance_id: Some(RuntimeInstanceId::new(runtime_instance_id)),
+        worker: false,
+        worker_channel: None,
+    })
+}
+
+#[derive(Clone)]
+struct WorkerRuntime {
+    connection: Arc<Mutex<WorkerConnection>>,
+    outputs: mpsc::SyncSender<ProductDevWorkerOutputBatch>,
+    output_generation: Arc<AtomicUsize>,
+    diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
+    failures: mpsc::SyncSender<u64>,
+}
+
+struct WorkerConnection {
+    child: Child,
+    writer: TcpStream,
+    responses: mpsc::Receiver<Result<ProductDevWorkerResponse, ProductDevRuntimeError>>,
+    next_request_id: u64,
+    reader: Option<thread::JoinHandle<()>>,
+    generation: u64,
+}
+
+impl Drop for WorkerConnection {
+    fn drop(&mut self) {
+        stop_worker(self);
+    }
+}
+
+impl WorkerRuntime {
+    fn active_generation(&self) -> u64 {
+        self.connection
+            .lock()
+            .map(|connection| connection.generation)
+            .unwrap_or_default()
+    }
+
+    fn start(
+        args: &Arguments,
+    ) -> Result<
+        (
+            Self,
+            ProductDevBundle,
+            Vec<ProductDevRuntimeOutput>,
+            mpsc::Receiver<ProductDevWorkerOutputBatch>,
+            mpsc::Receiver<ProductDevWorkerDiagnostic>,
+            mpsc::Receiver<u64>,
+        ),
+        String,
+    > {
+        let (output_tx, output_rx) = mpsc::sync_channel(16);
+        // Output remains fenced until the stable shell atomically publishes
+        // the worker's ready bundle and complete baseline.
+        let output_generation = Arc::new(AtomicUsize::new(0));
+        let (diagnostic_tx, diagnostic_rx) = mpsc::sync_channel(16);
+        let (failure_tx, failure_rx) = mpsc::sync_channel(4);
+        let (connection, bundle, initial_outputs) = Self::spawn_connection(
+            args,
+            output_tx.clone(),
+            diagnostic_tx.clone(),
+            failure_tx.clone(),
+            1,
+        )?;
+        Ok((
+            Self {
+                connection: Arc::new(Mutex::new(connection)),
+                outputs: output_tx,
+                output_generation,
+                diagnostics: diagnostic_tx,
+                failures: failure_tx,
+            },
+            bundle,
+            initial_outputs,
+            output_rx,
+            diagnostic_rx,
+            failure_rx,
+        ))
+    }
+
+    /// Stops the retiring worker before loading the replacement and leaves
+    /// the shell's listener, history owner, and local output/diagnostic
+    /// consumers untouched.  No request is reissued across this boundary.
+    fn replace(
+        &self,
+        args: &Arguments,
+    ) -> Result<(ProductDevBundle, Vec<ProductDevRuntimeOutput>, u64), String> {
+        let mut current = self
+            .connection
+            .lock()
+            .map_err(|_| "DEV_HOST_WORKER_LOCK: worker connection lock is poisoned".to_owned())?;
+        stop_worker(&mut current);
+        let generation = current.generation.saturating_add(1).max(1);
+        let (replacement, bundle, initial_outputs) = Self::spawn_connection(
+            args,
+            self.outputs.clone(),
+            self.diagnostics.clone(),
+            self.failures.clone(),
+            generation,
+        )?;
+        *current = replacement;
+        Ok((bundle, initial_outputs, generation))
+    }
+
+    fn spawn_connection(
+        args: &Arguments,
+        output_tx: mpsc::SyncSender<ProductDevWorkerOutputBatch>,
+        diagnostic_tx: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
+        failure_tx: mpsc::SyncSender<u64>,
+        generation: u64,
+    ) -> Result<
+        (
+            WorkerConnection,
+            ProductDevBundle,
+            Vec<ProductDevRuntimeOutput>,
+        ),
+        String,
+    > {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .map_err(|error| format!("DEV_HOST_WORKER_BIND: {error}"))?;
+        listener
+            .set_nonblocking(false)
+            .map_err(|error| format!("DEV_HOST_WORKER_BIND: {error}"))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| format!("DEV_HOST_WORKER_BIND: {error}"))?;
+        let executable = env::current_exe().map_err(|error| {
+            format!("DEV_HOST_WORKER_START: cannot resolve host executable: {error}")
+        })?;
+        let mut child = Command::new(executable)
+            .args(worker_arguments(args, address)?)
+            // Worker protocol uses its dedicated loopback channel.  Product
+            // Console output remains ordinary human stdout/stderr and cannot
+            // corrupt a framed response.
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|error| format!("DEV_HOST_WORKER_START: {error}"))?;
+        if let Err(error) = listener.set_nonblocking(true) {
+            return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_BIND: {error}"));
+        }
+        let deadline = Instant::now() + WORKER_OPERATION_TIMEOUT;
+        let channel = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err("DEV_HOST_WORKER_READY: worker did not connect before the startup deadline".to_owned());
+                    }
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            return worker_start_failed(
+                                &mut child,
+                                format!(
+                                    "DEV_HOST_WORKER_READY: worker exited before connecting: {status}"
+                                ),
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            return worker_start_failed(
+                                &mut child,
+                                format!("DEV_HOST_WORKER_READY: {error}"),
+                            );
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => {
+                    return worker_start_failed(
+                        &mut child,
+                        format!("DEV_HOST_WORKER_ACCEPT: {error}"),
+                    );
+                }
+            }
+        };
+        let mut channel = channel;
+        if let Err(error) = channel.set_read_timeout(Some(WORKER_OPERATION_TIMEOUT)) {
+            return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_CHANNEL: {error}"));
+        }
+        let ready = match read_worker_frame::<ProductDevWorkerEvent>(&mut channel) {
+            Ok(ready) => ready,
+            Err(error) => {
+                return worker_start_failed(
+                    &mut child,
+                    format!("{}: {}", error.code(), error.detail()),
+                );
+            }
+        };
+        let ProductDevWorkerEvent::Ready {
+            bundle,
+            outputs,
+            diagnostics,
+        } = ready
+        else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("DEV_HOST_WORKER_READY: worker did not send a readiness bundle".to_owned());
+        };
+        let bundle = match worker_bundle(bundle) {
+            Ok(bundle) => bundle,
+            Err(error) => return worker_start_failed(&mut child, error),
+        };
+        let initial_outputs = match outputs
+            .into_iter()
+            .map(worker_output)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                return worker_start_failed(
+                    &mut child,
+                    format!("{}: {}", error.code(), error.diagnostic()),
+                );
+            }
+        };
+        for diagnostic in diagnostics {
+            let _ = diagnostic_tx.try_send(diagnostic);
+        }
+        if let Err(error) = channel.set_read_timeout(None) {
+            return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_CHANNEL: {error}"));
+        }
+        let writer = match channel.try_clone() {
+            Ok(writer) => writer,
+            Err(error) => {
+                return worker_start_failed(
+                    &mut child,
+                    format!("DEV_HOST_WORKER_CHANNEL: {error}"),
+                );
+            }
+        };
+        if let Err(error) = writer.set_write_timeout(Some(WORKER_OPERATION_TIMEOUT)) {
+            return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_CHANNEL: {error}"));
+        }
+        let (response_tx, response_rx) = mpsc::channel();
+        let reader = match thread::Builder::new()
+            .name("rusty-product-worker-reader".to_owned())
+            .spawn(move || {
+                worker_reader(
+                    channel,
+                    response_tx,
+                    output_tx,
+                    diagnostic_tx,
+                    failure_tx,
+                    generation,
+                )
+            }) {
+            Ok(reader) => reader,
+            Err(error) => {
+                return worker_start_failed(
+                    &mut child,
+                    format!("DEV_HOST_WORKER_CHANNEL: {error}"),
+                );
+            }
+        };
+        Ok((
+            WorkerConnection {
+                child,
+                writer,
+                responses: response_rx,
+                next_request_id: 1,
+                reader: Some(reader),
+                generation,
+            },
+            bundle,
+            initial_outputs,
+        ))
+    }
+
+    fn invoke<T: serde::de::DeserializeOwned>(
+        &self,
+        request: impl FnOnce(u64) -> ProductDevWorkerRequest,
+    ) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError> {
+        let mut connection = self.connection.lock().map_err(|_| {
+            worker_runtime_error("DEV_HOST_WORKER_LOCK", "worker connection lock is poisoned")
+        })?;
+        let request_id = connection.next_request_id;
+        connection.next_request_id = connection.next_request_id.saturating_add(1).max(1);
+        if let Err(error) = write_worker_frame(&mut connection.writer, &request(request_id)) {
+            let error = worker_host_error(error);
+            let _ = self.failures.try_send(connection.generation);
+            stop_worker(&mut connection);
+            return Err(error);
+        }
+        let response = match connection.responses.recv_timeout(WORKER_OPERATION_TIMEOUT) {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                stop_worker(&mut connection);
+                let _ = self.failures.try_send(connection.generation);
+                return Err(error);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                stop_worker(&mut connection);
+                let _ = self.failures.try_send(connection.generation);
+                return Err(worker_runtime_error(
+                    "DEV_HOST_WORKER_TIMEOUT",
+                    "worker did not complete the active operation before the deadline",
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                stop_worker(&mut connection);
+                let _ = self.failures.try_send(connection.generation);
+                return Err(worker_runtime_error(
+                    "DEV_HOST_WORKER_EOF",
+                    "worker response reader ended before the active operation completed",
+                ));
+            }
+        };
+        if response.request_id != request_id {
+            stop_worker(&mut connection);
+            let _ = self.failures.try_send(connection.generation);
+            return Err(worker_runtime_error(
+                "DEV_HOST_WORKER_ORDER",
+                "worker response did not match the active operation",
+            ));
+        }
+        if let Some(error) = response.error {
+            let error = worker_fault_error(error);
+            if error.recovery().next_action()
+                == product_dev_host::ProductDevNextAction::ReplaceIncarnation
+            {
+                stop_worker(&mut connection);
+                let _ = self.failures.try_send(connection.generation);
+            }
+            return Err(error);
+        }
+        let result = response.result.ok_or_else(|| {
+            worker_runtime_error(
+                "DEV_HOST_WORKER_RESPONSE",
+                "worker response omitted its concrete result",
+            )
+        })?;
+        let result = serde_json::from_value(result).map_err(|_| {
+            worker_runtime_error(
+                "DEV_HOST_WORKER_RESPONSE",
+                "worker response did not match the requested result family",
+            )
+        })?;
+        let outputs = match response
+            .outputs
+            .into_iter()
+            .map(worker_output)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                stop_worker(&mut connection);
+                let _ = self.failures.try_send(connection.generation);
+                return Err(error);
+            }
+        };
+        ProductDevRuntimeReceipt::new(result, outputs).map_err(worker_host_error)
+    }
+}
+
+fn worker_reader(
+    mut channel: TcpStream,
+    responses: mpsc::Sender<Result<ProductDevWorkerResponse, ProductDevRuntimeError>>,
+    outputs: mpsc::SyncSender<ProductDevWorkerOutputBatch>,
+    diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
+    failures: mpsc::SyncSender<u64>,
+    generation: u64,
+) {
+    loop {
+        match read_worker_frame::<ProductDevWorkerEvent>(&mut channel) {
+            Ok(ProductDevWorkerEvent::Response(response)) => {
+                if responses.send(Ok(response)).is_err() {
+                    return;
+                }
+            }
+            Ok(ProductDevWorkerEvent::Outputs { outputs: values }) => {
+                let decoded = values
+                    .into_iter()
+                    .map(worker_output)
+                    .collect::<Result<Vec<_>, _>>();
+                match decoded {
+                    Ok(decoded) => match outputs.try_send(ProductDevWorkerOutputBatch {
+                        generation,
+                        outputs: decoded,
+                    }) {
+                        Ok(()) => {}
+                        Err(mpsc::TrySendError::Disconnected(_)) => return,
+                        Err(mpsc::TrySendError::Full(_)) => {
+                            let error = worker_runtime_error(
+                                "DEV_HOST_WORKER_OUTPUT_BACKPRESSURE",
+                                "shell output receiver did not drain the bounded worker output queue",
+                            );
+                            let _ = diagnostics.try_send(
+                                ProductDevWorkerDiagnostic::from_runtime_error(error.clone()),
+                            );
+                            let _ = responses.send(Err(error));
+                            let _ = failures.try_send(generation);
+                            return;
+                        }
+                    },
+                    Err(error) => {
+                        let _ = diagnostics.try_send(
+                            ProductDevWorkerDiagnostic::from_runtime_error(error.clone()),
+                        );
+                        let _ = responses.send(Err(error));
+                        let _ = failures.try_send(generation);
+                        return;
+                    }
+                }
+            }
+            Ok(ProductDevWorkerEvent::Diagnostics {
+                diagnostics: values,
+            }) => {
+                for diagnostic in values {
+                    let _ = diagnostics.try_send(diagnostic);
+                }
+            }
+            Ok(ProductDevWorkerEvent::Health {
+                code,
+                detail,
+                recovery,
+            }) => {
+                let error = ProductDevRuntimeError::with_recovery(code, detail, recovery)
+                    .unwrap_or_else(|_| {
+                        worker_runtime_error(
+                            "DEV_HOST_WORKER_HEALTH",
+                            "worker emitted an invalid bounded health fact",
+                        )
+                    });
+                let _ = diagnostics.try_send(ProductDevWorkerDiagnostic::from_runtime_error(
+                    error.clone(),
+                ));
+                let _ = responses.send(Err(error));
+                let _ = failures.try_send(generation);
+            }
+            Ok(ProductDevWorkerEvent::Ready { .. }) => {}
+            Err(error) => {
+                let error = worker_host_error(error);
+                let _ = diagnostics.try_send(ProductDevWorkerDiagnostic::from_runtime_error(
+                    error.clone(),
+                ));
+                let _ = responses.send(Err(error));
+                let _ = failures.try_send(generation);
+                return;
+            }
+        }
+    }
+}
+
+fn reap_worker(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+fn worker_start_failed<T>(child: &mut Child, error: String) -> Result<T, String> {
+    reap_worker(child);
+    Err(error)
+}
+
+fn stop_worker(connection: &mut WorkerConnection) {
+    reap_worker(&mut connection.child);
+    if let Some(reader) = connection.reader.take() {
+        let _ = reader.join();
+    }
+}
+
+fn worker_bundle(bundle: ProductDevWorkerBundle) -> Result<ProductDevBundle, String> {
+    let entries = bundle
+        .entries
+        .into_iter()
+        .map(|entry| ProductDevBundleEntry::new(entry.path, entry.content_type, entry.bytes))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    ProductDevBundle::new(entries).map_err(|error| error.to_string())
+}
+
+fn worker_output(
+    value: serde_json::Value,
+) -> Result<ProductDevRuntimeOutput, ProductDevRuntimeError> {
+    let bytes = serde_json::to_vec(&value).map_err(|_| {
+        worker_runtime_error(
+            "DEV_HOST_WORKER_OUTPUT_DECODE",
+            "worker output could not be encoded for bounded decoding",
+        )
+    })?;
+    ProductDevRuntimeOutput::decode_json(&bytes).map_err(worker_host_error)
+}
+
+fn worker_host_error(error: product_dev_host::ProductDevHostError) -> ProductDevRuntimeError {
+    worker_runtime_error(error.code(), error.detail())
+}
+
+fn worker_runtime_error(
+    code: impl Into<String>,
+    detail: impl Into<String>,
+) -> ProductDevRuntimeError {
+    ProductDevRuntimeError::new(code, detail).expect("fixed worker diagnostic is bounded")
+}
+
+fn worker_fault_error(fault: ProductDevWorkerFault) -> ProductDevRuntimeError {
+    ProductDevRuntimeError::with_recovery(fault.code, fault.diagnostic, fault.recovery)
+        .expect("worker fault was admitted before crossing the local channel")
+}
+
+impl ProductDevRuntime for WorkerRuntime {
+    fn realtime_schedule_state(&self) -> ProductDevRuntimeScheduleState {
+        // The child owns realtime scheduling.  The shell must never create a
+        // second tick loop merely because a product is realtime-configured.
+        ProductDevRuntimeScheduleState::Unsupported
+    }
+
+    fn connect(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::Lifecycle {
+            request_id,
+            operation: ProductDevWorkerLifecycleOperation::Connect,
+            binding: None,
+        })
+    }
+
+    fn lifecycle(
+        &mut self,
+        operation: ProductDevLifecycleOperation,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.lifecycle_with_binding(operation, None)
+    }
+
+    fn lifecycle_with_binding(
+        &mut self,
+        operation: ProductDevLifecycleOperation,
+        binding: Option<ProductDevRuntimeBinding>,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::Lifecycle {
+            request_id,
+            operation: worker_lifecycle_operation(operation),
+            binding,
+        })
+    }
+
+    fn input(
+        &mut self,
+        batch: ProductDevInputBatch,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError> {
+        let payload = serde_json::from_slice(batch.encoded_json().ok_or_else(|| worker_runtime_error(
+            "DEV_HOST_WORKER_INPUT",
+            "typed input without an admitted host wire form cannot cross the disposable worker boundary",
+        ))?).map_err(|_| worker_runtime_error("DEV_HOST_WORKER_INPUT", "input batch could not be decoded"))?;
+        self.invoke(|request_id| ProductDevWorkerRequest::Input {
+            request_id,
+            payload,
+        })
+    }
+
+    fn execute_debug(
+        &mut self,
+        command: &str,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::Debug {
+            request_id,
+            command: Some(command.to_owned()),
+        })
+    }
+
+    fn describe_debug(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugCatalog>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::Debug {
+            request_id,
+            command: None,
+        })
+    }
+
+    fn report_audio_feedback(
+        &mut self,
+        feedback: ProductDevAudioFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAudioFeedbackResult>, ProductDevRuntimeError>
+    {
+        self.feedback(ProductDevWorkerFeedbackOperation::Audio, feedback)
+    }
+
+    fn report_animation_feedback(
+        &mut self,
+        feedback: ProductDevAnimationFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevAnimationFeedbackResult>, ProductDevRuntimeError>
+    {
+        self.feedback(ProductDevWorkerFeedbackOperation::Animation, feedback)
+    }
+
+    fn report_ghost_plate_feedback(
+        &mut self,
+        feedback: ProductDevGhostPlateFeedback,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevGhostPlateFeedbackResult>, ProductDevRuntimeError>
+    {
+        self.feedback(ProductDevWorkerFeedbackOperation::GhostPlate, feedback)
+    }
+
+    fn report_renderer_diagnostics(
+        &mut self,
+        feedback: ProductDevRendererDiagnosticsFeedback,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevRendererDiagnosticsFeedbackResult>,
+        ProductDevRuntimeError,
+    > {
+        self.feedback(
+            ProductDevWorkerFeedbackOperation::RendererDiagnostics,
+            feedback,
+        )
+    }
+
+    fn advance_realtime(
+        &mut self,
+        observed_time_ns: CanonicalU64,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::Update {
+            request_id,
+            operation: ProductDevWorkerUpdateOperation::AdvanceRealtime,
+            payload: serde_json::to_value(observed_time_ns)
+                .expect("canonical realtime observation encodes"),
+        })
+    }
+
+    fn admit_demand_step(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::Update {
+            request_id,
+            operation: ProductDevWorkerUpdateOperation::AdmitDemandStep,
+            payload: serde_json::Value::Null,
+        })
+    }
+
+    fn admit_external_step(
+        &mut self,
+        step: CanonicalU64,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::Update {
+            request_id,
+            operation: ProductDevWorkerUpdateOperation::AdmitExternalStep,
+            payload: serde_json::to_value(step).expect("canonical external step encodes"),
+        })
+    }
+
+    fn complete_timeline(
+        &mut self,
+        completion: ProductDevTimelineCompletion,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>, ProductDevRuntimeError>
+    {
+        let payload = serde_json::from_slice(completion.encoded_json().ok_or_else(|| worker_runtime_error(
+            "DEV_HOST_WORKER_TIMELINE",
+            "typed timeline completion without an admitted host wire form cannot cross the disposable worker boundary",
+        ))?).map_err(|_| worker_runtime_error("DEV_HOST_WORKER_TIMELINE", "timeline completion could not be decoded"))?;
+        self.invoke(|request_id| ProductDevWorkerRequest::Update {
+            request_id,
+            operation: ProductDevWorkerUpdateOperation::CompleteTimeline,
+            payload,
+        })
+    }
+}
+
+impl WorkerRuntime {
+    fn feedback<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        operation: ProductDevWorkerFeedbackOperation,
+        feedback: T,
+    ) -> Result<ProductDevRuntimeReceipt<R>, ProductDevRuntimeError> {
+        let payload = serde_json::to_value(feedback).map_err(|_| {
+            worker_runtime_error(
+                "DEV_HOST_WORKER_FEEDBACK",
+                "feedback could not be encoded for the local worker",
+            )
+        })?;
+        self.invoke(|request_id| ProductDevWorkerRequest::Feedback {
+            request_id,
+            operation,
+            payload,
+        })
+    }
+}
+
+fn worker_lifecycle_operation(
+    operation: ProductDevLifecycleOperation,
+) -> ProductDevWorkerLifecycleOperation {
+    match operation {
+        ProductDevLifecycleOperation::Start => ProductDevWorkerLifecycleOperation::Start,
+        ProductDevLifecycleOperation::Pause => ProductDevWorkerLifecycleOperation::Pause,
+        ProductDevLifecycleOperation::Resume => ProductDevWorkerLifecycleOperation::Resume,
+        ProductDevLifecycleOperation::Restart => ProductDevWorkerLifecycleOperation::Restart,
+        ProductDevLifecycleOperation::Shutdown => ProductDevWorkerLifecycleOperation::Shutdown,
+        ProductDevLifecycleOperation::ReportFault => {
+            ProductDevWorkerLifecycleOperation::ReportFault
+        }
+    }
+}
+
+fn worker_arguments(args: &Arguments, channel: SocketAddr) -> Result<Vec<String>, String> {
+    let product = args.product_path.as_ref().ok_or(
+        "DEV_HOST_WORKER_START: supervised worker launch requires a staged Product directory",
+    )?;
+    let loader = match args.loader {
+        ProductLoader::NativeAot => "nativeaot",
+        ProductLoader::CoreClr => "coreclr",
+    };
+    let instance = args.runtime_instance_id.ok_or(
+        "DEV_HOST_WORKER_START: supervised worker launch requires a runtime incarnation id",
+    )?;
+    let mut values = vec![
+        "--product".to_owned(),
+        product.to_string_lossy().into_owned(),
+        "--loader".to_owned(),
+        loader.to_owned(),
+        "--runtime-instance-id".to_owned(),
+        instance.value().to_string(),
+        "--worker".to_owned(),
+        "--worker-channel".to_owned(),
+        channel.to_string(),
+    ];
+    if let Some(root) = &args.persistence_root {
+        values.extend([
+            "--persistence-root".to_owned(),
+            root.to_string_lossy().into_owned(),
+        ]);
+    }
+    if let Some(root) = &args.content_store_root {
+        values.extend([
+            "--content-store-root".to_owned(),
+            root.to_string_lossy().into_owned(),
+        ]);
+    }
+    Ok(values)
+}
+
+fn run_worker(args: Arguments) -> Result<(), String> {
+    let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
+    let content =
+        CsharpProductContent::admit(args.content_root()).map_err(|error| error.to_string())?;
+    let (library, runtimeconfig) = args.selected_artifacts()?;
+    let runtime = match args.loader {
+        ProductLoader::NativeAot => CsharpProductRuntime::load_admitted(
+            library,
+            content,
+            args.runtime_config().with_diagnostics(diagnostics.clone()),
+        ),
+        ProductLoader::CoreClr => CsharpProductRuntime::load_coreclr_admitted(
+            library,
+            runtimeconfig.expect("CoreCLR Product manifest declares runtimeconfig"),
+            content,
+            args.runtime_config().with_diagnostics(diagnostics.clone()),
+        ),
+    }
+    .map_err(|error| error.to_string())?;
+    let bundle = match &args.product {
+        Some(product) => load_bundle(
+            &runtime_browser_root()?,
+            product,
+            runtime.render_resources(),
+        )?,
+        None => load_legacy_bundle(
+            args.bundle_dir.as_deref().expect("legacy bundle path"),
+            runtime.render_resources(),
+        )?,
+    };
+    let address = args
+        .worker_channel
+        .expect("worker mode requires its local channel");
+    if !address.ip().is_loopback() {
+        return Err("DEV_HOST_WORKER_CHANNEL: worker channel must be loopback".to_owned());
+    }
+    let mut channel = TcpStream::connect_timeout(&address, WORKER_OPERATION_TIMEOUT)
+        .map_err(|error| format!("DEV_HOST_WORKER_CONNECT: {error}"))?;
+    let owner = Arc::new(ProductDevOperationOwner::new(runtime));
+    let mailbox = Arc::new(WorkerInputMailbox::default());
+    let diagnostic_cursor = Arc::new(Mutex::new(None));
+    let initial = owner.connect();
+    let (outputs, fault) = match initial {
+        Ok(receipt) => {
+            let (_, outputs) = receipt.into_parts();
+            (outputs, None)
+        }
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    if let Some(error) = fault {
+        return Err(format!("{}: {}", error.code(), error.diagnostic()));
+    }
+    let ready_diagnostics = drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
+    let bundle = ProductDevWorkerBundle {
+        entries: bundle
+            .entries()
+            .map(|entry| ProductDevWorkerBundleEntry {
+                path: entry.path().to_owned(),
+                content_type: entry.content_type().to_owned(),
+                bytes: entry.bytes().to_vec(),
+            })
+            .collect(),
+    };
+    let outputs = worker_output_values(outputs)?;
+    write_worker_frame(
+        &mut channel,
+        &ProductDevWorkerEvent::Ready {
+            bundle,
+            outputs,
+            diagnostics: ready_diagnostics,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let writer = Arc::new(Mutex::new(
+        channel
+            .try_clone()
+            .map_err(|error| format!("DEV_HOST_WORKER_CHANNEL: {error}"))?,
+    ));
+    let scheduler_shutdown = Arc::new(AtomicBool::new(false));
+    let scheduler = {
+        let owner = Arc::clone(&owner);
+        let mailbox = Arc::clone(&mailbox);
+        let writer = Arc::clone(&writer);
+        let shutdown = Arc::clone(&scheduler_shutdown);
+        let diagnostics = diagnostics.clone();
+        let diagnostic_cursor = Arc::clone(&diagnostic_cursor);
+        thread::Builder::new()
+            .name("rusty-product-worker-scheduler".to_owned())
+            .spawn(move || {
+                worker_scheduler(
+                    owner,
+                    mailbox,
+                    writer,
+                    shutdown,
+                    diagnostics,
+                    diagnostic_cursor,
+                )
+            })
+            .map_err(|error| format!("DEV_HOST_WORKER_SCHEDULER: {error}"))?
+    };
+    loop {
+        let request = match read_worker_frame::<ProductDevWorkerRequest>(&mut channel) {
+            Ok(request) => request,
+            Err(error) if error.code() == "DEV_HOST_WORKER_EOF" => break,
+            Err(error) => {
+                scheduler_shutdown.store(true, Ordering::Release);
+                let _ = scheduler.join();
+                return Err(error.to_string());
+            }
+        };
+        let result = worker_request(&owner, &mailbox, request);
+        let worker_diagnostics = drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
+        let write = writer
+            .lock()
+            .map_err(|_| "DEV_HOST_WORKER_CHANNEL: writer lock is poisoned".to_owned())
+            .and_then(|mut writer| {
+                write_worker_frame(&mut *writer, &ProductDevWorkerEvent::Response(result))
+                    .and_then(|_| {
+                        if worker_diagnostics.is_empty() {
+                            Ok(())
+                        } else {
+                            write_worker_frame(
+                                &mut *writer,
+                                &ProductDevWorkerEvent::Diagnostics {
+                                    diagnostics: worker_diagnostics,
+                                },
+                            )
+                        }
+                    })
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = write {
+            scheduler_shutdown.store(true, Ordering::Release);
+            let _ = scheduler.join();
+            return Err(error);
+        }
+    }
+    scheduler_shutdown.store(true, Ordering::Release);
+    let _ = scheduler.join();
+    Ok(())
+}
+
+fn worker_scheduler(
+    owner: Arc<ProductDevOperationOwner<CsharpProductRuntime>>,
+    mailbox: Arc<WorkerInputMailbox>,
+    writer: Arc<Mutex<TcpStream>>,
+    shutdown: Arc<AtomicBool>,
+    diagnostics: ProductDevLog,
+    diagnostic_cursor: Arc<Mutex<Option<u64>>>,
+) {
+    let started = Instant::now();
+    while !shutdown.load(Ordering::Acquire) {
+        let interval = match owner.realtime_schedule_interval() {
+            Ok(Some(interval)) => interval,
+            _ => {
+                thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+        };
+        if !matches!(
+            owner.realtime_schedule_state(),
+            Ok(ProductDevRuntimeScheduleState::Running)
+        ) {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        let observed =
+            CanonicalU64::new(started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+        let mut input_outputs = Vec::new();
+        let mut update_outputs = Vec::new();
+        let scheduled = owner.advance_realtime_with_input_and_publish(
+            || mailbox.drain(),
+            observed,
+            |receipt| {
+                let (result, receipt_outputs) = receipt.into_parts();
+                input_outputs.push(ProductDevRuntimeOutput::runtime_input_result(result));
+                input_outputs.extend(receipt_outputs);
+            },
+            |receipt| {
+                let (_, receipt_outputs) = receipt.into_parts();
+                update_outputs.extend(receipt_outputs);
+            },
+            || {},
+            || {},
+        );
+        match scheduled {
+            Ok(_) => {
+                let mut outputs = input_outputs;
+                outputs.extend(update_outputs);
+                outputs.push(ProductDevRuntimeOutput::runtime_progress());
+                let worker_diagnostics =
+                    drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
+                if let Ok(outputs) = worker_output_values(outputs) {
+                    if let Ok(mut writer) = writer.lock() {
+                        let _ = write_worker_frame(
+                            &mut *writer,
+                            &ProductDevWorkerEvent::Outputs { outputs },
+                        );
+                        if !worker_diagnostics.is_empty() {
+                            let _ = write_worker_frame(
+                                &mut *writer,
+                                &ProductDevWorkerEvent::Diagnostics {
+                                    diagnostics: worker_diagnostics,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let mut worker_diagnostics =
+                    drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
+                worker_diagnostics.push(ProductDevWorkerDiagnostic::from_runtime_error(
+                    error.clone(),
+                ));
+                if let Ok(mut writer) = writer.lock() {
+                    let _ = write_worker_frame(
+                        &mut *writer,
+                        &ProductDevWorkerEvent::Diagnostics {
+                            diagnostics: worker_diagnostics,
+                        },
+                    );
+                    let _ = write_worker_frame(
+                        &mut *writer,
+                        &ProductDevWorkerEvent::Health {
+                            code: error.code().to_owned(),
+                            detail: error.diagnostic().to_owned(),
+                            recovery: error.recovery(),
+                        },
+                    );
+                    let _ = writer.shutdown(Shutdown::Both);
+                }
+                shutdown.store(true, Ordering::Release);
+                return;
+            }
+        }
+        thread::sleep(interval);
+    }
+}
+
+fn drain_worker_diagnostics(
+    diagnostics: &ProductDevLog,
+    cursor: &mut Option<u64>,
+) -> Vec<ProductDevWorkerDiagnostic> {
+    let batch = diagnostics.read_after(*cursor);
+    *cursor = Some(batch.next_cursor);
+    batch
+        .events
+        .into_iter()
+        .map(ProductDevWorkerDiagnostic::from_log_event)
+        .collect()
+}
+
+fn drain_worker_diagnostics_shared(
+    diagnostics: &ProductDevLog,
+    cursor: &Mutex<Option<u64>>,
+) -> Vec<ProductDevWorkerDiagnostic> {
+    let Ok(mut cursor) = cursor.lock() else {
+        return Vec::new();
+    };
+    drain_worker_diagnostics(diagnostics, &mut cursor)
+}
+
+fn worker_output_values(
+    outputs: Vec<ProductDevRuntimeOutput>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut aggregate_bytes = 0_usize;
+    let mut values = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        let bytes = serde_json::to_vec(&output).map_err(|error| error.to_string())?;
+        aggregate_bytes = aggregate_bytes.saturating_add(bytes.len());
+        if aggregate_bytes > product_dev_host::MAX_OUTPUT_AGGREGATE_BYTES {
+            return Err("worker outputs exceed the admitted output aggregate bound".to_owned());
+        }
+        values.push(serde_json::from_slice(&bytes).map_err(|error| error.to_string())?);
+    }
+    Ok(values)
+}
+
+fn bounded_worker_payload(
+    payload: &serde_json::Value,
+    code: &str,
+) -> Result<Vec<u8>, ProductDevRuntimeError> {
+    let bytes = serde_json::to_vec(payload)
+        .map_err(|_| worker_runtime_error(code, "worker payload could not be encoded"))?;
+    if bytes.len() > product_dev_host::MAX_REQUEST_BODY_BYTES {
+        return Err(worker_runtime_error(
+            code,
+            "worker payload exceeds the normal host request bound",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn worker_request(
+    owner: &ProductDevOperationOwner<CsharpProductRuntime>,
+    mailbox: &WorkerInputMailbox,
+    request: ProductDevWorkerRequest,
+) -> ProductDevWorkerResponse {
+    let request_id = match &request {
+        ProductDevWorkerRequest::Lifecycle { request_id, .. }
+        | ProductDevWorkerRequest::Control { request_id, .. }
+        | ProductDevWorkerRequest::Input { request_id, .. }
+        | ProductDevWorkerRequest::Update { request_id, .. }
+        | ProductDevWorkerRequest::Debug { request_id, .. }
+        | ProductDevWorkerRequest::Feedback { request_id, .. }
+        | ProductDevWorkerRequest::Health { request_id }
+        | ProductDevWorkerRequest::Shutdown { request_id } => *request_id,
+    };
+    match request {
+        ProductDevWorkerRequest::Lifecycle {
+            operation, binding, ..
+        } => match operation {
+            ProductDevWorkerLifecycleOperation::Connect => {
+                worker_receipt(request_id, owner.connect())
+            }
+            _ => {
+                mailbox.clear();
+                worker_receipt(
+                    request_id,
+                    owner.lifecycle_with_binding(worker_lifecycle(operation), binding),
+                )
+            }
+        },
+        ProductDevWorkerRequest::Control {
+            operation, binding, ..
+        } => {
+            mailbox.clear();
+            worker_receipt(
+                request_id,
+                owner.control(worker_control(operation), binding),
+            )
+        }
+        ProductDevWorkerRequest::Input { payload, .. } => {
+            let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_INPUT")
+                .and_then(|bytes| {
+                    ProductDevInputBatch::decode_json(&bytes).map_err(worker_host_error)
+                })
+                .and_then(|batch| {
+                    if matches!(
+                        owner.realtime_schedule_state(),
+                        Ok(ProductDevRuntimeScheduleState::Unsupported)
+                    ) {
+                        return owner.input(batch);
+                    }
+                    let count = batch.events().len();
+                    if mailbox.enqueue(batch) {
+                        ProductDevInputResult::queued(count)
+                            .map_err(worker_host_error)
+                            .and_then(|result| {
+                                ProductDevRuntimeReceipt::new(result, Vec::new())
+                                    .map_err(worker_host_error)
+                            })
+                    } else {
+                        ProductDevInputResult::mailbox_full(count)
+                            .map_err(worker_host_error)
+                            .and_then(|result| {
+                                ProductDevRuntimeReceipt::new(result, Vec::new())
+                                    .map_err(worker_host_error)
+                            })
+                    }
+                });
+            worker_receipt(request_id, result)
+        }
+        ProductDevWorkerRequest::Update {
+            operation, payload, ..
+        } => match operation {
+            ProductDevWorkerUpdateOperation::AdvanceRealtime => {
+                let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_UPDATE")
+                    .and_then(|bytes| CanonicalU64::decode_json(&bytes).map_err(worker_host_error))
+                    .and_then(|time| owner.advance_realtime(time));
+                worker_receipt(request_id, result)
+            }
+            ProductDevWorkerUpdateOperation::AdmitDemandStep => {
+                worker_receipt(request_id, owner.admit_demand_step())
+            }
+            ProductDevWorkerUpdateOperation::AdmitExternalStep => {
+                let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_UPDATE")
+                    .and_then(|bytes| CanonicalU64::decode_json(&bytes).map_err(worker_host_error))
+                    .and_then(|step| owner.admit_external_step(step));
+                worker_receipt(request_id, result)
+            }
+            ProductDevWorkerUpdateOperation::CompleteTimeline => {
+                let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_UPDATE")
+                    .and_then(|bytes| {
+                        ProductDevTimelineCompletion::decode_json(&bytes).map_err(worker_host_error)
+                    })
+                    .and_then(|completion| owner.complete_timeline(completion));
+                worker_receipt(request_id, result)
+            }
+        },
+        ProductDevWorkerRequest::Debug { command, .. } => match command {
+            Some(command) if command.len() <= product_dev_host::MAX_REQUEST_BODY_BYTES => {
+                worker_receipt(request_id, owner.execute_debug(&command))
+            }
+            Some(_) => worker_fault_response(
+                request_id,
+                worker_runtime_error(
+                    "DEV_HOST_WORKER_DEBUG",
+                    "debug command exceeds the host request bound",
+                ),
+            ),
+            None => worker_receipt(request_id, owner.describe_debug()),
+        },
+        ProductDevWorkerRequest::Health { .. } => ProductDevWorkerResponse {
+            request_id,
+            result: Some(serde_json::json!({ "ready": true })),
+            outputs: Vec::new(),
+            error: None,
+        },
+        ProductDevWorkerRequest::Shutdown { .. } => worker_receipt(
+            request_id,
+            owner.lifecycle(ProductDevLifecycleOperation::Shutdown),
+        ),
+        ProductDevWorkerRequest::Feedback {
+            operation, payload, ..
+        } => match bounded_worker_payload(&payload, "DEV_HOST_WORKER_FEEDBACK") {
+            Err(error) => worker_fault_response(request_id, error),
+            Ok(_) => match operation {
+                ProductDevWorkerFeedbackOperation::Audio => worker_feedback(
+                    request_id,
+                    payload,
+                    ProductDevAudioFeedback::validate,
+                    |feedback| owner.report_audio_feedback(feedback),
+                ),
+                ProductDevWorkerFeedbackOperation::Animation => worker_feedback(
+                    request_id,
+                    payload,
+                    ProductDevAnimationFeedback::validate,
+                    |feedback| owner.report_animation_feedback(feedback),
+                ),
+                ProductDevWorkerFeedbackOperation::GhostPlate => worker_feedback(
+                    request_id,
+                    payload,
+                    ProductDevGhostPlateFeedback::validate,
+                    |feedback| owner.report_ghost_plate_feedback(feedback),
+                ),
+                ProductDevWorkerFeedbackOperation::RendererDiagnostics => worker_feedback(
+                    request_id,
+                    payload,
+                    ProductDevRendererDiagnosticsFeedback::validate,
+                    |feedback| owner.report_renderer_diagnostics(feedback),
+                ),
+            },
+        },
+    }
+}
+
+fn worker_lifecycle(operation: ProductDevWorkerLifecycleOperation) -> ProductDevLifecycleOperation {
+    match operation {
+        ProductDevWorkerLifecycleOperation::Connect => ProductDevLifecycleOperation::Start,
+        ProductDevWorkerLifecycleOperation::Start => ProductDevLifecycleOperation::Start,
+        ProductDevWorkerLifecycleOperation::Pause => ProductDevLifecycleOperation::Pause,
+        ProductDevWorkerLifecycleOperation::Resume => ProductDevLifecycleOperation::Resume,
+        ProductDevWorkerLifecycleOperation::Restart => ProductDevLifecycleOperation::Restart,
+        ProductDevWorkerLifecycleOperation::Shutdown => ProductDevLifecycleOperation::Shutdown,
+        ProductDevWorkerLifecycleOperation::ReportFault => {
+            ProductDevLifecycleOperation::ReportFault
+        }
+    }
+}
+
+fn worker_control(operation: ProductDevWorkerControlOperation) -> ProductDevControlOperation {
+    match operation {
+        ProductDevWorkerControlOperation::Replace => ProductDevControlOperation::Replace,
+        ProductDevWorkerControlOperation::Release => ProductDevControlOperation::Release,
+    }
+}
+
+fn worker_receipt<T: serde::Serialize>(
+    request_id: u64,
+    result: Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
+) -> ProductDevWorkerResponse {
+    match result {
+        Ok(receipt) => {
+            let (result, outputs) = receipt.into_parts();
+            let response = serde_json::to_value(result)
+                .map_err(|error| error.to_string())
+                .and_then(|result| worker_output_values(outputs).map(|outputs| (result, outputs)));
+            match response {
+                Ok((result, outputs)) => ProductDevWorkerResponse {
+                    request_id,
+                    result: Some(result),
+                    outputs,
+                    error: None,
+                },
+                Err(error) => worker_fault_response(
+                    request_id,
+                    worker_runtime_error("DEV_HOST_WORKER_ENCODE", error.to_string()),
+                ),
+            }
+        }
+        Err(error) => worker_fault_response(request_id, error),
+    }
+}
+
+fn worker_fault_response(
+    request_id: u64,
+    error: ProductDevRuntimeError,
+) -> ProductDevWorkerResponse {
+    ProductDevWorkerResponse {
+        request_id,
+        result: None,
+        outputs: Vec::new(),
+        error: Some(ProductDevWorkerFault {
+            code: error.code().to_owned(),
+            diagnostic: error.diagnostic().to_owned(),
+            recovery: error.recovery(),
+        }),
+    }
+}
+
+fn worker_feedback<T, R, V, F>(
+    request_id: u64,
+    payload: serde_json::Value,
+    validate: V,
+    apply: F,
+) -> ProductDevWorkerResponse
+where
+    T: serde::de::DeserializeOwned,
+    R: serde::Serialize,
+    V: FnOnce(&T) -> Result<(), product_dev_host::ProductDevHostError>,
+    F: FnOnce(T) -> Result<ProductDevRuntimeReceipt<R>, ProductDevRuntimeError>,
+{
+    let result = serde_json::from_value(payload)
+        .map_err(|_| {
+            worker_runtime_error("DEV_HOST_WORKER_FEEDBACK", "feedback payload is invalid")
+        })
+        .and_then(|feedback: T| {
+            validate(&feedback)
+                .map_err(worker_host_error)
+                .map(|_| feedback)
+        })
+        .and_then(apply);
+    worker_receipt(request_id, result)
 }
 
 enum Invocation {
@@ -356,6 +1937,7 @@ fn performance_summary(lane: &str, iterations: u32, durations: &[u128]) -> serde
 struct Arguments {
     loader: ProductLoader,
     product: Option<ProductBundle>,
+    product_path: Option<PathBuf>,
     library: Option<PathBuf>,
     runtime_config_path: Option<PathBuf>,
     bundle_dir: Option<PathBuf>,
@@ -372,6 +1954,8 @@ struct Arguments {
     performance_probe: Option<u32>,
     supervised: bool,
     runtime_instance_id: Option<RuntimeInstanceId>,
+    worker: bool,
+    worker_channel: Option<SocketAddr>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -575,6 +2159,8 @@ impl Arguments {
         let mut performance_probe = None;
         let mut supervised = false;
         let mut runtime_instance_id = None;
+        let mut worker = false;
+        let mut worker_channel = None;
         let mut values = values.into_iter();
         while let Some(arg) = values.next() {
             match arg.as_str() {
@@ -657,6 +2243,16 @@ impl Arguments {
                     performance_probe = Some(iterations);
                 }
                 "--supervised" => supervised = true,
+                "--worker" => worker = true,
+                "--worker-channel" => {
+                    worker_channel = Some(
+                        values
+                            .next()
+                            .ok_or("--worker-channel requires a loopback socket address")?
+                            .parse()
+                            .map_err(|_| "--worker-channel must be a socket address")?,
+                    )
+                }
                 "--runtime-instance-id" => {
                     let value = values
                         .next()
@@ -683,6 +2279,7 @@ impl Arguments {
         if loader.is_some() && staged_loader.is_some() {
             return Err("--loader and --staged-launch are mutually exclusive".to_owned());
         }
+        let product_path = product.clone();
         let product = product.map(|root| ProductBundle::read(&root)).transpose()?;
         if product.is_some()
             && (library.is_some()
@@ -712,6 +2309,7 @@ impl Arguments {
         let arguments = Self {
             loader,
             product,
+            product_path,
             library,
             runtime_config_path,
             bundle_dir,
@@ -728,7 +2326,12 @@ impl Arguments {
             performance_probe,
             supervised,
             runtime_instance_id,
+            worker,
+            worker_channel,
         };
+        if arguments.worker != arguments.worker_channel.is_some() {
+            return Err("--worker and --worker-channel must be supplied together".to_owned());
+        }
         if arguments.exercise && arguments.performance_probe.is_some() {
             return Err("--exercise and --performance-probe are mutually exclusive".to_owned());
         }
