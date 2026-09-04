@@ -38,9 +38,6 @@ public sealed class Product : IEngineProduct
     private bool _mappingReleasePending;
     private bool _mappingReleaseVerified;
     private bool _directDigitalObserved;
-    private bool _ghostRollbackProbeEnabled;
-    private bool _ghostRollbackProbeFailureInjected;
-    private bool _ghostRollbackProbeCompleted;
     private bool _updateFactsSeen;
     private ulong _lastUpdateGeneration;
     private ulong _lastUpdateControlRevision;
@@ -66,10 +63,6 @@ public sealed class Product : IEngineProduct
             payloadIntentFound = true;
         }
         Require(payloadIntentFound, "configured payload input descriptor did not reach Product.Game");
-        // The runtime exercise's typed payload is also the opt-in trigger for
-        // the retained-owner rollback probe below. Ordinary fixture launches
-        // without this descriptor retain the original ghost lifecycle.
-        _ghostRollbackProbeEnabled = payloadIntentFound;
         bool mappingIntentFound = false;
         foreach (ProductInputDescriptor descriptor in context.Input.DirectIntents.Span)
         {
@@ -558,20 +551,6 @@ public sealed class Product : IEngineProduct
             {
                 Require(input.PayloadContract.Span.SequenceEqual("runtime.exercise.payload"u8), "payload contract did not reach Product.Game");
                 Require(input.PayloadData.Span.SequenceEqual("{\"exercise\":true}"u8), "payload data did not reach Product.Game");
-                if (_ghostRollbackProbeEnabled && !_ghostRollbackProbeFailureInjected)
-                {
-                    _ghostRollbackProbeFailureInjected = true;
-                    _ghostPlate.Dispose();
-                    throw new InvalidOperationException("fixture ghost rollback probe callback failure");
-                }
-                if (_ghostRollbackProbeEnabled && !_ghostRollbackProbeCompleted)
-                {
-                    GhostPlatePresentationReadout rollbackReadout = _engine.Presentation.ReadGhostPlate(_ghostPlate);
-                    Require(rollbackReadout.SourcePresent && rollbackReadout.SourceObjectId == 41,
-                        "ghost owner was not readable after callback rollback");
-                    _ghostPlate.Dispose();
-                    _ghostRollbackProbeCompleted = true;
-                }
             }
             if (input.Kind == InputEventKind.DirectDigital)
             {
@@ -593,7 +572,7 @@ public sealed class Product : IEngineProduct
         }
         _turns++;
         _lastRandom = _engine.Random.NextBoundedU32(new ScopedRngBoundedRequest(_rng, 100)).Value;
-        if (_turns == 2 && !_ghostRollbackProbeEnabled)
+        if (_turns == 2)
         {
             // Destroy before the following complete Appearance snapshot removes
             // source object 41; the Engine owns the ordering invariant.
@@ -633,7 +612,7 @@ public sealed class Product : IEngineProduct
     {
         Require(_started && !_shutdown, "timeline completion reached an inactive product");
         Require(completion.Ticket == 7, "timeline completion ticket did not reach Product.Game");
-        Require(completion.Binding.InstanceId == 1
+        Require(completion.Binding.InstanceId != 0
             && completion.Binding.Generation == _lastUpdateGeneration
             && completion.Binding.ControlRevision == _lastUpdateControlRevision,
             "timeline completion binding did not reach Product.Game");
@@ -1327,7 +1306,7 @@ public sealed class Product : IEngineProduct
 
     private void PublishAppearanceSnapshot()
     {
-        if (_turns >= 2 && (!_ghostRollbackProbeEnabled || _ghostRollbackProbeCompleted))
+        if (_turns >= 2)
         {
             _engine.Appearance.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
             return;

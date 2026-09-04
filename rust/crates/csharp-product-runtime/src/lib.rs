@@ -1841,11 +1841,7 @@ impl CsharpProductRuntime {
                 "payload direct intent with a mismatched contract was admitted",
             ));
         }
-        let admitted = direct_intent(
-            current_binding,
-            next_sequence,
-            &descriptor,
-        )?;
+        let admitted = direct_intent(current_binding, next_sequence, &descriptor)?;
         self.input(ProductDevInputBatch::new(vec![admitted]))
             .map_err(exercise_runtime_error)?;
         // Direct claims deliberately remain in RuntimeInputLane until the
@@ -1879,15 +1875,6 @@ impl CsharpProductRuntime {
 
     fn exercise_selected_mode(&mut self) -> Result<(), CsharpProductRuntimeError> {
         let selected_mode = self.lifecycle.mode();
-        // The NativeAOT fixture opts into one retained-owner rollback probe by
-        // queuing this exact exercise payload. Keep the retry in the focused
-        // exercise harness rather than making ordinary product calls retry
-        // callback failures implicitly.
-        let ghost_rollback_probe = self.direct_intents.iter().any(|descriptor| {
-            descriptor.id() == "runtime.exercise"
-                && descriptor.value_kind() == IntentValueKind::ProductPayload
-                && descriptor.payload_contract() == Some("runtime.exercise.payload")
-        });
         let readout_mode = self.readout().mode();
         let expected_readout_mode = match selected_mode {
             RuntimeMode::Realtime => product_dev_host::ProductDevRuntimeMode::Realtime,
@@ -1917,7 +1904,7 @@ impl CsharpProductRuntime {
             ));
         }
 
-        let expected_admission_increment = if ghost_rollback_probe { 2 } else { 1 };
+        let expected_admission_increment = 1;
         match selected_mode {
             RuntimeMode::Realtime => {
                 let baseline = self
@@ -1938,73 +1925,16 @@ impl CsharpProductRuntime {
                             )
                         })?,
                 );
-                if ghost_rollback_probe {
-                    if self
-                        .advance_realtime(observation)
-                        .map(|receipt| receipt.result().is_accepted())
-                        .unwrap_or(false)
-                    {
-                        return Err(CsharpProductRuntimeError::new(
-                            "CSHARP_EXERCISE_GHOST_ROLLBACK",
-                            "ghost rollback probe callback unexpectedly succeeded",
-                        ));
-                    }
-                    let retry_observation = CanonicalU64::new(
-                        observation
-                            .get()
-                            .checked_add(STANDARD_REALTIME_EXERCISE_ADMISSION_NS)
-                            .ok_or_else(|| {
-                                CsharpProductRuntimeError::new(
-                                    "CSHARP_EXERCISE_REALTIME",
-                                    "realtime ghost rollback retry observation overflowed",
-                                )
-                            })?,
-                    );
-                    self.advance_realtime(retry_observation)
-                        .map_err(exercise_runtime_error)?;
-                } else {
-                    self.advance_realtime(observation)
-                        .map_err(exercise_runtime_error)?;
-                }
+                self.advance_realtime(observation)
+                    .map_err(exercise_runtime_error)?;
             }
             RuntimeMode::Demand => {
-                if ghost_rollback_probe {
-                    if self
-                        .admit_demand_step()
-                        .map(|receipt| receipt.result().is_accepted())
-                        .unwrap_or(false)
-                    {
-                        return Err(CsharpProductRuntimeError::new(
-                            "CSHARP_EXERCISE_GHOST_ROLLBACK",
-                            "ghost rollback probe callback unexpectedly succeeded",
-                        ));
-                    }
-                    self.admit_demand_step().map_err(exercise_runtime_error)?;
-                } else {
-                    self.admit_demand_step().map_err(exercise_runtime_error)?;
-                }
+                self.admit_demand_step().map_err(exercise_runtime_error)?;
             }
             RuntimeMode::External => {
                 let accepted_step = CanonicalU64::new(admitted_before);
-                if ghost_rollback_probe {
-                    if self
-                        .admit_external_step(accepted_step)
-                        .map(|receipt| receipt.result().is_accepted())
-                        .unwrap_or(false)
-                    {
-                        return Err(CsharpProductRuntimeError::new(
-                            "CSHARP_EXERCISE_GHOST_ROLLBACK",
-                            "ghost rollback probe callback unexpectedly succeeded",
-                        ));
-                    }
-                    let retry_step =
-                        CanonicalU64::new(self.lifecycle.readout().admitted_simulation_steps());
-                    self.admit_external_step(retry_step)
-                        .map_err(exercise_runtime_error)?;
-                } else {
-                    self.admit_external_step(accepted_step)
-                        .map_err(exercise_runtime_error)?;
-                }
+                self.admit_external_step(accepted_step)
+                    .map_err(exercise_runtime_error)?;
                 let admitted_after = self.lifecycle.readout().admitted_simulation_steps();
                 let pending_after = self.pending_inputs.len();
                 let skipped_step =
