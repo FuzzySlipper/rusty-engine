@@ -76,7 +76,7 @@ test('scheduled input receipts apply accepted and recovery cursors to later prod
 });
 
 test('a transient local input request degrades once, drops its uncertain batch, and accepts fresh input', async ({ page }) => {
-  await page.goto('/browser/product-browser-host.html?transientInputFailure=1');
+  await page.goto('/browser/product-browser-host.html?transientInputFailure=1&rejectRecoveryDiagnostic=1');
   const canvas = page.locator('canvas[data-rusty-application-renderer="engine-owned"]');
   await canvas.focus();
   await page.keyboard.down('KeyW');
@@ -85,9 +85,14 @@ test('a transient local input request degrades once, drops its uncertain batch, 
   ))).toBe(true);
   await page.keyboard.up('KeyW');
   await expect.poll(() => page.evaluate(() => window.__rustyProductBrowserHost?.readout().state)).toBe('ready');
+  await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserAcceptedDiagnosticReports ?? []).some((report) =>
+    report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
+  ))).toBe(true);
   const evidence = await page.evaluate(() => ({
     attempts: window.__rustyProductBrowserInputAttempts ?? [],
     accepted: window.__rustyProductBrowserInputBatches ?? [],
+    diagnostics: window.__rustyProductBrowserDiagnosticReports ?? [],
+    maximumActiveDiagnostics: window.__rustyProductBrowserMaximumActiveDiagnostics ?? 0,
     failure: document.body.dataset['rustyProductRuntimeFailure'] ?? null,
   }));
   expect(evidence.attempts).toHaveLength(2);
@@ -96,6 +101,10 @@ test('a transient local input request degrades once, drops its uncertain batch, 
     evidence.attempts[0]?.map((input) => input.sequence),
   );
   expect(evidence.failure).toContain('transiently unavailable');
+  expect(evidence.diagnostics.filter((report) =>
+    report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
+  )).toHaveLength(2);
+  expect(evidence.maximumActiveDiagnostics).toBe(1);
 });
 
 test('generated product browser host keeps UI controls out of gameplay pointer input and focuses canvas once', async ({ page }) => {

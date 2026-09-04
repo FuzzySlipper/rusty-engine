@@ -27,6 +27,8 @@ declare global {
     __rustyProductBrowserInputBatches?: readonly (readonly RustyApplicationRuntimeInputEnvelope[])[];
     __rustyProductBrowserInputAttempts?: readonly (readonly RustyApplicationRuntimeInputEnvelope[])[];
     __rustyProductBrowserDiagnosticReports?: readonly ProductBrowserDiagnosticsReport[];
+    __rustyProductBrowserAcceptedDiagnosticReports?: readonly ProductBrowserDiagnosticsReport[];
+    __rustyProductBrowserMaximumActiveDiagnostics?: number;
     __rustyProductBrowserRealtimeTicks?: readonly string[];
     __rustyProductBrowserOutputs?: readonly ProductBrowserRuntimeOutput[];
     __rustyProductBrowserRafCount?: number;
@@ -59,9 +61,14 @@ let transientInputFailuresRemaining = new URLSearchParams(window.location.search
 const realtimeTicks: string[] = [];
 const outputs: ProductBrowserRuntimeOutput[] = [];
 const diagnosticReports: ProductBrowserDiagnosticsReport[] = [];
+const acceptedDiagnosticReports: ProductBrowserDiagnosticsReport[] = [];
+let rejectedRecoveryDiagnosticsRemaining = new URLSearchParams(window.location.search).has('rejectRecoveryDiagnostic') ? 1 : 0;
+let activeDiagnostics = 0;
+window.__rustyProductBrowserMaximumActiveDiagnostics = 0;
 window.__rustyProductBrowserInputBatches = inputBatches;
 window.__rustyProductBrowserInputAttempts = inputAttempts;
 window.__rustyProductBrowserDiagnosticReports = diagnosticReports;
+window.__rustyProductBrowserAcceptedDiagnosticReports = acceptedDiagnosticReports;
 window.__rustyProductBrowserRealtimeTicks = realtimeTicks;
 window.__rustyProductBrowserOutputs = outputs;
 
@@ -133,8 +140,23 @@ const adapter: ProductBrowserRuntimeAdapter = {
   }),
   reportGhostPlateFeedback: async (feedback) => ({ accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', runtime: feedback.runtime }),
   reportBrowserDiagnostics: async (report) => {
+    activeDiagnostics += 1;
+    window.__rustyProductBrowserMaximumActiveDiagnostics = Math.max(
+      window.__rustyProductBrowserMaximumActiveDiagnostics ?? 0,
+      activeDiagnostics,
+    );
     diagnosticReports.push(report);
-    return { accepted: true, reported: 1 };
+    try {
+      if (rejectedRecoveryDiagnosticsRemaining > 0
+        && report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
+        rejectedRecoveryDiagnosticsRemaining -= 1;
+        throw new Error('fixture rejected the first recovery diagnostic');
+      }
+      acceptedDiagnosticReports.push(report);
+      return { accepted: true, reported: 1 };
+    } finally {
+      activeDiagnostics -= 1;
+    }
   },
   advanceRealtime: async (observedTimeNs) => {
     realtimeTicks.push(observedTimeNs);

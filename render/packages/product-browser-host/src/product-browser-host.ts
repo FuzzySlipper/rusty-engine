@@ -1207,6 +1207,8 @@ export async function mountProductBrowserHost(
   // can restore ready while diagnostics retain the first uncertain request.
   let recoveryFailure: ProductBrowserHostError | null = null;
   let recoveryDiagnosticReported = false;
+  let browserDiagnosticsReportInFlight = false;
+  let retryRecoveryDiagnosticAfterInFlight = false;
   let transportClosed = false;
   let runtimeProgress = 0;
   let lastRendererSequence: string | null = null;
@@ -1323,7 +1325,7 @@ export async function mountProductBrowserHost(
         : undefined;
     const shouldReport = reportToTransport && transport.reportBrowserDiagnostics !== undefined
       && (includeTerminal || recoverableEvent !== undefined || pageEvents.length > 0 || statusKey !== lastDiagnosticsStatusKey);
-    if (shouldReport) {
+    if (shouldReport && !browserDiagnosticsReportInFlight) {
       lastDiagnosticsStatusKey = statusKey;
       if (includeTerminal) terminalDiagnosticsReported = true;
       if (recoverableEvent?.code === 'CSHARP_LIFECYCLE_CLOCK_REGRESSION') {
@@ -1331,13 +1333,11 @@ export async function mountProductBrowserHost(
         recoverableClockDiagnosticReported = true;
       } else if (recoverableEvent?.code === 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE') {
         rendererDiagnosticsFailureReported = true;
-      } else if (recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
-        recoveryDiagnosticReported = true;
       }
       const age = lastRendererObservationAtMs === null
         ? undefined
         : String(Math.max(0, now - lastRendererObservationAtMs));
-      void transport.reportBrowserDiagnostics(Object.freeze({
+      const report = Object.freeze({
         hostState,
         runtimeProgress: String(runtimeProgress),
         transportState: transportClosed ? 'closed' : 'open',
@@ -1347,7 +1347,33 @@ export async function mountProductBrowserHost(
         ...(includeTerminal ? { firstTerminal: terminal } : {}),
         ...(recoverableEvent === undefined ? {} : { recoverableEvent }),
         pageEvents: Object.freeze([...pageEvents]),
-      })).catch(() => undefined);
+      });
+      browserDiagnosticsReportInFlight = true;
+      void transport.reportBrowserDiagnostics(report).then(
+        () => {
+          browserDiagnosticsReportInFlight = false;
+          if (recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
+            recoveryDiagnosticReported = true;
+          }
+          const retryRecoveryDiagnostic = retryRecoveryDiagnosticAfterInFlight
+            && recoveryFailure !== null
+            && !recoveryDiagnosticReported;
+          retryRecoveryDiagnosticAfterInFlight = false;
+          if (retryRecoveryDiagnostic) publishHealth();
+        },
+        () => {
+          browserDiagnosticsReportInFlight = false;
+          const retryRecoveryDiagnostic = retryRecoveryDiagnosticAfterInFlight
+            && recoveryFailure !== null
+            && !recoveryDiagnosticReported;
+          if (!retryRecoveryDiagnostic) return;
+          // A ready transition occurred while the first warning was in
+          // flight. Retry once from that healthy traffic; never loop on a
+          // diagnostics endpoint that remains unavailable.
+          retryRecoveryDiagnosticAfterInFlight = false;
+          publishHealth();
+        },
+      );
     }
   };
 
@@ -1453,6 +1479,9 @@ export async function mountProductBrowserHost(
   const restoreReadyAfterHealthyTransport = (): void => {
     if (state !== 'degraded') return;
     state = 'ready';
+    if (browserDiagnosticsReportInFlight && recoveryFailure !== null && !recoveryDiagnosticReported) {
+      retryRecoveryDiagnosticAfterInFlight = true;
+    }
     publishHealth();
   };
 
