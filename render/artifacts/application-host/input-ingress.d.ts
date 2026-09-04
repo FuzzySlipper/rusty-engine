@@ -123,6 +123,13 @@ export interface RustyApplicationInputPort {
     readonly bindRuntime: (binding: RustyApplicationRuntimeInputBinding) => void;
     /** Alias for a lifecycle owner synchronizing a possibly changed runtime epoch. */
     readonly synchronizeRuntime: (binding: RustyApplicationRuntimeInputBinding) => void;
+    /**
+     * Replaces an uncertain ingress epoch with the current physical held-state
+     * baseline. It deliberately discards queued DOM facts and UI claims: only
+     * keyboard, pointer-button, and selected-controller state can be observed
+     * again without replaying a possibly admitted mutation.
+     */
+    readonly rebaselineRuntime: (binding: RustyApplicationRuntimeInputBinding) => void;
     /** Change the product input context after clearing the old context's pending facts. */
     readonly setContext: (context: string) => void;
     /** Explicitly clear local held state and queue an ordered lifecycle clear fact. */
@@ -147,6 +154,8 @@ interface RustyApplicationInputIngressEnvironment {
 }
 export interface RustyApplicationInputQueue {
     readonly bindRuntime: (binding: RustyApplicationRuntimeInputBinding) => boolean;
+    /** Adopts a binding whose Engine lane already performed its mandatory clear. */
+    readonly rebaseRuntime: (binding: RustyApplicationRuntimeInputBinding) => boolean;
     readonly setContext: (context: string) => boolean;
     readonly clear: (reason: RustyApplicationInputClearReason) => void;
     /** True means the bounded queue overflowed and now contains only a clear fact. */

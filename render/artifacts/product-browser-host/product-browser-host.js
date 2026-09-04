@@ -26251,7 +26251,75 @@ function lT(e, t) {
 		t.eventTarget.addEventListener("pointerdown", g), t.document.addEventListener("pointerup", _), t.document.addEventListener("pointercancel", v), t.document.addEventListener("wheel", b, { passive: !0 });
 	}, O = () => {
 		t.eventTarget.removeEventListener("pointerdown", g), t.document.removeEventListener("pointerup", _), t.document.removeEventListener("pointercancel", v), t.document.removeEventListener("wheel", b);
+	}, k = () => {
+		if (l || n.selectedController === null) return 0;
+		if (!t.active() || t.interactionMode() !== "gameplay" || !d()) return p("interaction-mode-loss"), 0;
+		let e = t.gamepads()[n.selectedController];
+		if (e == null || !e.connected) return (s.size > 0 || o.size > 0) && p("interaction-mode-loss"), 0;
+		let r = 0;
+		for (let t = 0; t < 4; t += 1) {
+			let n = LT(t), i = RT(e.axes[t] ?? 0, 1);
+			if (i !== (o.get(n) ?? 0)) {
+				if (o.set(n, i), m(Object.freeze({
+					kind: "controller-axis",
+					axis: n,
+					value: i
+				}))) return r;
+				r += 1;
+			}
+		}
+		for (let t = 0; t < 16; t += 1) {
+			let n = IT(t), i = e.buttons[t]?.pressed === !0;
+			if (i !== s.has(n)) {
+				if (i ? s.add(n) : s.delete(n), m(Object.freeze({
+					kind: "controller-button",
+					button: n,
+					edge: i ? "pressed" : "released"
+				}))) return r;
+				r += 1;
+			}
+		}
+		return r;
+	}, A = (e) => {
+		if (!(l || !r.rebaseRuntime(e))) {
+			j();
+			for (let e of [...i].sort()) m(Object.freeze({
+				kind: "key",
+				code: e,
+				edge: "pressed"
+			}));
+			for (let e of [...a].sort()) m(Object.freeze({
+				kind: "pointer-button",
+				button: e,
+				edge: "pressed"
+			}));
+			for (let e of [...o.keys()].sort()) {
+				let t = o.get(e);
+				t !== 0 && m(Object.freeze({
+					kind: "controller-axis",
+					axis: e,
+					value: t
+				}));
+			}
+			for (let e of [...s].sort()) m(Object.freeze({
+				kind: "controller-button",
+				button: e,
+				edge: "pressed"
+			}));
+			n.onAvailable?.();
+		}
 	};
+	function j() {
+		if (n.selectedController === null) return;
+		let e = t.gamepads()[n.selectedController];
+		if (s.clear(), o.clear(), !(e == null || !e.connected)) {
+			for (let t = 0; t < 4; t += 1) {
+				let n = RT(e.axes[t] ?? 0, 1);
+				n !== 0 && o.set(LT(t), n);
+			}
+			for (let t = 0; t < 16; t += 1) e.buttons[t]?.pressed === !0 && s.add(IT(t));
+		}
+	}
 	return D(), t.document.addEventListener("pointermove", y), t.document.addEventListener("keydown", x), t.document.addEventListener("keyup", S), t.document.addEventListener("pointerlockchange", C), t.document.defaultView?.addEventListener("blur", w), t.document.defaultView?.addEventListener("gamepadconnected", T), t.document.defaultView?.addEventListener("gamepaddisconnected", E), n.initialBinding !== null && r.bindRuntime(n.initialBinding), Object.freeze({
 		bindRuntime: (e) => {
 			l || r.bindRuntime(e) && f();
@@ -26259,6 +26327,7 @@ function lT(e, t) {
 		synchronizeRuntime: (e) => {
 			l || r.bindRuntime(e) && f();
 		},
+		rebaselineRuntime: A,
 		setContext: (e) => {
 			l || r.setContext(e) && f();
 		},
@@ -26269,36 +26338,7 @@ function lT(e, t) {
 		claim: (e, t) => {
 			l || (r.claim(e, t) && f(), n.onAvailable?.());
 		},
-		sampleController: () => {
-			if (l || n.selectedController === null) return 0;
-			if (!t.active() || t.interactionMode() !== "gameplay" || !d()) return p("interaction-mode-loss"), 0;
-			let e = t.gamepads()[n.selectedController];
-			if (e == null || !e.connected) return (s.size > 0 || o.size > 0) && p("interaction-mode-loss"), 0;
-			let r = 0;
-			for (let t = 0; t < 4; t += 1) {
-				let n = LT(t), i = RT(e.axes[t] ?? 0, 1);
-				if (i !== (o.get(n) ?? 0)) {
-					if (o.set(n, i), m(Object.freeze({
-						kind: "controller-axis",
-						axis: n,
-						value: i
-					}))) return r;
-					r += 1;
-				}
-			}
-			for (let t = 0; t < 16; t += 1) {
-				let n = IT(t), i = e.buttons[t]?.pressed === !0;
-				if (i !== s.has(n)) {
-					if (i ? s.add(n) : s.delete(n), m(Object.freeze({
-						kind: "controller-button",
-						button: n,
-						edge: i ? "pressed" : "released"
-					}))) return r;
-					r += 1;
-				}
-			}
-			return r;
-		},
+		sampleController: k,
 		rebindCanvas: (e) => {
 			l || e === c || (c = e, p("pointer-lock-loss"));
 		},
@@ -26366,6 +26406,17 @@ function dT(e, t = 0n) {
 			if (AT(c.runtime, s.runtime)) return c.context === s.context ? !1 : (n = s, l("interaction-mode-loss"), !0);
 			let u = c.runtime.instanceId !== s.runtime.instanceId || c.runtime.generation !== s.runtime.generation ? "restart" : "control-revision-change";
 			return n = s, r = s.nextSequence === void 0 ? 0n : BigInt(s.nextSequence), a = !1, o = [], l(u), !0;
+		},
+		rebaseRuntime: (e) => {
+			let t = gT(e), s = n;
+			if (s !== null && kT(s, t)) return !1;
+			if (s !== null && s.runtime.instanceId === t.runtime.instanceId) {
+				let e = BigInt(s.runtime.generation), n = BigInt(t.runtime.generation);
+				if (n < e) throw RangeError("runtime generation cannot move backward within one instance");
+				if (n > e && BigInt(t.runtime.controlRevision) <= BigInt(s.runtime.controlRevision)) throw RangeError("runtime control revision must advance with generation");
+				if (n === e && BigInt(t.runtime.controlRevision) <= BigInt(s.runtime.controlRevision)) throw RangeError("runtime control revision must advance for a rebaseline");
+			}
+			return n = t, r = t.nextSequence === void 0 ? 0n : BigInt(t.nextSequence), i = !1, a = !1, o = [], !0;
 		},
 		setContext: (e) => {
 			let t = vT(e);
