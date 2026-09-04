@@ -2134,7 +2134,7 @@ impl ProductDevTimelineCompletionResult {
 }
 
 /// One Rust-authoritative output pushed to the local browser projection.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProductDevRuntimeOutput {
     wire: ProductDevRuntimeOutputWire,
 }
@@ -2433,6 +2433,12 @@ impl ProductDevRuntimeOutput {
 impl Serialize for ProductDevRuntimeOutput {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        ProductDevRuntimeOutputWire::deserialize(deserializer).map(|wire| Self { wire })
     }
 }
 
@@ -2860,6 +2866,24 @@ mod tests {
         assert!(
             ProductDevInputResult::queued(runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS + 1)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn runtime_output_wire_round_trips_without_a_wrapper() {
+        let output = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({
+            "sequence": "7",
+            "changed": true,
+        }));
+        let encoded = serde_json::to_vec(&output).unwrap();
+
+        assert_eq!(
+            serde_json::from_slice::<Value>(&encoded).unwrap()["kind"],
+            "frame"
+        );
+        assert_eq!(
+            ProductDevRuntimeOutput::decode_json(&encoded).unwrap(),
+            output
         );
     }
 }
