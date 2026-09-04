@@ -1209,3 +1209,29 @@ test('terminal browser diagnostics remain postable after the output transport cl
     pageEvents: [],
   }]);
 });
+
+test('browser diagnostics accepts the production committed response without recovery or duplicate report', async () => {
+  let requests = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => {
+      requests += 1;
+      // Do not use response(): this is the production route's committed
+      // mutation boundary, which deliberately has no output-through cursor.
+      return new Response(JSON.stringify({ accepted: true, reported: 1 }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-rusty-commit-disposition': 'committed',
+        },
+      });
+    },
+    eventSource: FakeEventSource,
+  });
+  const result = await adapter.reportBrowserDiagnostics?.({
+    hostState: 'ready', runtimeProgress: '1', transportState: 'open', outputState: 'open',
+    pageEvents: [],
+  });
+  assert.deepEqual(result, { accepted: true, reported: 1 });
+  assert.equal(requests, 1, 'an accepted committed report is neither retried nor recovered');
+  adapter.dispose();
+});

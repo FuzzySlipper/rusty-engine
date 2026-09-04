@@ -1648,6 +1648,10 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
             reported,
         },
     )
+    // Browser diagnostics append to the host-owned diagnostic log. It has no
+    // retained runtime output cursor, but the accepted mutation is still
+    // definitive and must use the same browser transport commit boundary.
+    .with_committed()
 }
 
 fn browser_host_state(state: ProductDevBrowserHostState) -> &'static str {
@@ -3422,6 +3426,11 @@ impl HttpResponse {
 
     fn with_output_through(mut self, output_through: u64) -> Self {
         self.output_through = Some(output_through);
+        self.commit_disposition = Some(CommitDisposition::Committed);
+        self
+    }
+
+    fn with_committed(mut self) -> Self {
         self.commit_disposition = Some(CommitDisposition::Committed);
         self
     }
