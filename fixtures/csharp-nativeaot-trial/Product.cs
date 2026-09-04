@@ -218,6 +218,7 @@ public sealed class Product : IEngineProduct
         _forkedRng = _engine.Random.ForkScoped(new ScopedRngForkRequest(_rng, "child"));
         _lastRandom = _engine.Random.NextU64(_forkedRng).Value;
         _uiStream = _engine.Ui.OpenStream(new UiStreamRequest("nativeaot-trial", "nativeaot.trial.hud"));
+        ExerciseGeneratedVoxelPickCoherence();
         _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
         VoxelSceneReadout initialVoxelScene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(_spatial));
         Require(initialVoxelScene.Present && initialVoxelScene.ChunkSize == 16 && initialVoxelScene.SourceRevision == 0,
@@ -647,6 +648,88 @@ public sealed class Product : IEngineProduct
     }
 
     private static LookConfig LookConfig() => new(0.01f, 0.01f, -1.4f, 1.4f, 1.0f, false, false, true);
+
+    private void ExerciseGeneratedVoxelPickCoherence()
+    {
+        using SpatialSession session = _engine.Spatial.CreateSession(
+            new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
+        VoxelSceneReadout initial = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(session));
+        VoxelAddress address = new(8, 3, 7);
+        VoxelEditReceipt admitted = _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+            session,
+            initial.SourceRevision,
+            new[] { new VoxelEdit(VoxelEditKind.Set, address, 1) }));
+        Require(admitted.Status == VoxelEditStatus.Accepted
+            && admitted.CurrentRevision == admitted.AcceptedRevision
+            && admitted.AcceptedRevision == initial.SourceRevision + 1,
+            "generated voxel admission did not advance the canonical revision");
+
+        SpatialProjectionReadout admittedProjection = _engine.Spatial.ReadProjection(
+            new SpatialProjectionReadRequest(session));
+        Require(admittedProjection.SourceRevision == admitted.AcceptedRevision
+            && admittedProjection.AuthorityHash == admitted.AuthorityHash,
+            "generated spatial projection did not expose the admitted voxel authority");
+
+        Vector3 origin = new(12.5f, 3.5f, 7.5f);
+        Vector3 direction = new(-1.0f, 0.0f, 0.0f);
+        SpatialHit cast = _engine.Spatial.CastRay(new SpatialRaycastRequest(
+            session,
+            origin,
+            direction,
+            10.0,
+            new SpatialQueryFilter(0, 0),
+            ReadOnlyMemory<SpatialEntityCollider>.Empty,
+            ReadOnlyMemory<ulong>.Empty,
+            ReadOnlyMemory<SpatialEntityCollider>.Empty));
+        Require(cast.Present && cast.Kind == SpatialHitKind.Voxel
+            && cast.VoxelX == address.X && cast.VoxelY == address.Y && cast.VoxelZ == address.Z
+            && cast.Face == SpatialFace.PosX,
+            "generated Spatial.CastRay did not identify the known solid voxel cell");
+
+        SpatialHit picked = _engine.Spatial.PickVoxel(new SpatialPickRequest(
+            session,
+            origin,
+            direction,
+            10.0,
+            cast.VoxelX,
+            cast.VoxelY,
+            cast.VoxelZ,
+            cast.Face));
+        Require(picked.Present && picked.Kind == SpatialHitKind.Voxel
+            && picked.VoxelX == address.X && picked.VoxelY == address.Y && picked.VoxelZ == address.Z
+            && picked.Face == SpatialFace.PosX,
+            "generated Spatial.PickVoxel did not preserve the solid hit cell");
+
+        VoxelReadout beforeClear = _engine.Voxel.Read(new VoxelReadRequest(
+            session,
+            new VoxelAddress(picked.VoxelX, picked.VoxelY, picked.VoxelZ)));
+        Require(beforeClear.Present && beforeClear.Address == address && beforeClear.MaterialSlot == 1,
+            "generated Voxel.Read did not resolve the picked solid cell");
+        VoxelSceneReadout beforeClearScene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(session));
+        Require(beforeClearScene.SourceRevision == admitted.AcceptedRevision
+            && beforeClearScene.AuthorityHash == admitted.AuthorityHash,
+            "generated Voxel.ReadScene did not retain the pick revision and authority");
+
+        VoxelEditReceipt cleared = _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+            session,
+            beforeClearScene.SourceRevision,
+            new[] { new VoxelEdit(VoxelEditKind.Clear, beforeClear.Address, 0) }));
+        Require(cleared.Status == VoxelEditStatus.Accepted
+            && cleared.RevisionBefore == beforeClearScene.SourceRevision
+            && cleared.AcceptedRevision == beforeClearScene.SourceRevision + 1
+            && cleared.CurrentRevision == cleared.AcceptedRevision,
+            "generated Voxel.ApplyEdits did not clear the picked cell at its exact revision");
+        Require(!_engine.Voxel.Read(new VoxelReadRequest(session, beforeClear.Address)).Present,
+            "generated voxel clear changed a different cell");
+        VoxelSceneReadout afterClearScene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(session));
+        SpatialProjectionReadout afterClearProjection = _engine.Spatial.ReadProjection(
+            new SpatialProjectionReadRequest(session));
+        Require(afterClearScene.SourceRevision == cleared.AcceptedRevision
+            && afterClearScene.AuthorityHash == cleared.AuthorityHash
+            && afterClearProjection.SourceRevision == cleared.AcceptedRevision
+            && afterClearProjection.AuthorityHash == cleared.AuthorityHash,
+            "generated Spatial and Voxel authority facts diverged after clearing the picked cell");
+    }
 
     private static void ExerciseManagedMechanics()
     {

@@ -2100,6 +2100,17 @@ impl CsharpProductRuntime {
         self.pending_inputs.clear();
         self.pending_recovery_outputs.clear();
         self.discard_staged_call();
+        // Spatial/Voxel mutations are immediate by contract, whereas their
+        // renderer projection is staged with the callback. Rebase only the
+        // retained voxel projector from canonical Spatial now that failed
+        // staging is gone. The returned frame is deliberately not tagged as a
+        // complete product baseline: this incarnation stays tainted and must
+        // still be replaced before normal interaction can resume.
+        if let Ok(recovery) = self.services.recover_voxel_presentation_outputs() {
+            if let Ok(outputs) = service_outputs(recovery) {
+                self.pending_recovery_outputs = outputs;
+            }
+        }
         error
     }
 
@@ -2299,6 +2310,14 @@ impl CsharpProductRuntime {
         let error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
             .expect("fixed bounded NativeAOT error");
         if self.tainted {
+            // A canonical voxel repair has a normal receipt/output route even
+            // though the callback itself is terminal. Deliver it once, then
+            // the next operation observes the existing taint guard and asks
+            // the supervisor for the ordinary replacement. With no actual
+            // voxel diff there is nothing to publish through this route.
+            if !self.pending_recovery_outputs.is_empty() {
+                return self.resync_operation_runtime_error(operation, error);
+            }
             self.publish_diagnostic(&error);
             return Err(error);
         }
@@ -5411,6 +5430,15 @@ mod tests {
     static UPDATE_CALLBACK_CALLS: AtomicUsize = AtomicUsize::new(0);
     static UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC: AtomicBool = AtomicBool::new(false);
     static UPDATE_CALLBACK_DIAGNOSTIC_STATUS: AtomicI32 = AtomicI32::new(0);
+    static VOXEL_FAILURE_ENABLED: AtomicBool = AtomicBool::new(false);
+    static VOXEL_FAILURE_SESSION: AtomicU64 = AtomicU64::new(0);
+    static VOXEL_FAILURE_PRESENTATION: AtomicU64 = AtomicU64::new(0);
+    static VOXEL_FAILURE_VOXEL_CONTEXT: AtomicUsize = AtomicUsize::new(0);
+    static VOXEL_FAILURE_APPLY_EDITS: AtomicUsize = AtomicUsize::new(0);
+    static VOXEL_FAILURE_PRESENTATION_CONTEXT: AtomicUsize = AtomicUsize::new(0);
+    static VOXEL_FAILURE_REFRESH_SCENE: AtomicUsize = AtomicUsize::new(0);
+    static VOXEL_FAILURE_APPLY_STATUS: AtomicI32 = AtomicI32::new(0);
+    static VOXEL_FAILURE_REFRESH_STATUS: AtomicI32 = AtomicI32::new(0);
     static FIXTURE_DIAGNOSTICS_CONTEXT: AtomicUsize = AtomicUsize::new(0);
     static FIXTURE_DIAGNOSTICS_PUBLISH: AtomicUsize = AtomicUsize::new(0);
     static DROP_EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
@@ -5724,6 +5752,88 @@ mod tests {
         UPDATE_CALLBACK_STATUS.load(Ordering::SeqCst)
     }
 
+    unsafe extern "C" fn voxel_failure_fixture_create(
+        args: *const NativeProductCreateArgs,
+        handle: *mut *mut c_void,
+    ) -> i32 {
+        let status = unsafe { drop_fixture_create(args, handle) };
+        if status == ABI_OK {
+            // SAFETY: product creation receives the live Engine service table.
+            // The focused fixture uses these function pointers only during one
+            // synchronous update callback in this same runtime incarnation.
+            let engine = unsafe { (*args).engine };
+            VOXEL_FAILURE_VOXEL_CONTEXT.store(engine.voxel.context as usize, Ordering::SeqCst);
+            VOXEL_FAILURE_APPLY_EDITS.store(engine.voxel.apply_edits as usize, Ordering::SeqCst);
+            VOXEL_FAILURE_PRESENTATION_CONTEXT.store(
+                engine.voxel_scene_presentation.context as usize,
+                Ordering::SeqCst,
+            );
+            VOXEL_FAILURE_REFRESH_SCENE.store(
+                engine.voxel_scene_presentation.refresh_scene as usize,
+                Ordering::SeqCst,
+            );
+        }
+        status
+    }
+
+    unsafe extern "C" fn voxel_failure_fixture_update(
+        _handle: *mut c_void,
+        _args: *const NativeProductUpdateArgs,
+        result: *mut NativeProductUpdateResult,
+    ) -> i32 {
+        UPDATE_CALLBACK_CALLS.fetch_add(1, Ordering::SeqCst);
+        if VOXEL_FAILURE_ENABLED.swap(false, Ordering::SeqCst) {
+            // SAFETY: the fixture stores exact function pointers from its own
+            // live Engine table in create, and invokes them synchronously in
+            // this generated product callback.
+            let apply: NativeApplyVoxelEdits =
+                unsafe { std::mem::transmute(VOXEL_FAILURE_APPLY_EDITS.load(Ordering::SeqCst)) };
+            let refresh: NativeRefreshVoxelScenePresentation =
+                unsafe { std::mem::transmute(VOXEL_FAILURE_REFRESH_SCENE.load(Ordering::SeqCst)) };
+            let clear = [NativeVoxelEdit {
+                kind: NativeVoxelEditKind::Clear,
+                address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
+                material_slot: 0,
+            }];
+            let mut receipt = NativeVoxelEditReceipt::default();
+            let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            let apply_status = unsafe {
+                apply(
+                    VOXEL_FAILURE_VOXEL_CONTEXT.load(Ordering::SeqCst) as *mut c_void,
+                    &NativeVoxelEditTransaction {
+                        session: NativeSpatialSessionHandle {
+                            value: VOXEL_FAILURE_SESSION.load(Ordering::SeqCst),
+                        },
+                        expected_revision: 1,
+                        edits: clear.as_ptr(),
+                        edits_len: clear.len(),
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            };
+            VOXEL_FAILURE_APPLY_STATUS.store(apply_status, Ordering::SeqCst);
+            let mut readout = NativeVoxelScenePresentationReadout::default();
+            let refresh_status = unsafe {
+                refresh(
+                    VOXEL_FAILURE_PRESENTATION_CONTEXT.load(Ordering::SeqCst) as *mut c_void,
+                    NativeVoxelScenePresentationHandle {
+                        value: VOXEL_FAILURE_PRESENTATION.load(Ordering::SeqCst),
+                    },
+                    &mut readout,
+                )
+            };
+            VOXEL_FAILURE_REFRESH_STATUS.store(refresh_status, Ordering::SeqCst);
+            if apply_status != ABI_OK || refresh_status != ABI_OK || receipt.accepted_revision != 2
+            {
+                return 0;
+            }
+        }
+        // SAFETY: the fixture owns the provided writable result pointer.
+        unsafe { *result = NativeProductUpdateResult::None };
+        UPDATE_CALLBACK_STATUS.load(Ordering::SeqCst)
+    }
+
     unsafe extern "C" fn drop_fixture_timeline(
         _handle: *mut c_void,
         _completion: *const NativeProductTimelineCompletion,
@@ -5833,6 +5943,13 @@ mod tests {
         api
     }
 
+    fn voxel_failure_fixture_api() -> LoadedProductApi {
+        let mut api = drop_fixture_api();
+        api.create = voxel_failure_fixture_create;
+        api.update = voxel_failure_fixture_update;
+        api
+    }
+
     fn drop_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
         drop_fixture_runtime_with_config(label, RuntimeLifecycleConfig::Demand)
     }
@@ -5903,6 +6020,132 @@ mod tests {
         )
         .expect("direct-input fixture runtime");
         (runtime, root)
+    }
+
+    fn voxel_failure_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+        let root = content_fixture_root(label);
+        fs::create_dir_all(&root).expect("voxel failure fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("voxel failure fixture content");
+        let runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::Demand,
+                Vec::new(),
+            ),
+            || Ok(voxel_failure_fixture_api()),
+        )
+        .expect("voxel failure fixture runtime");
+        (runtime, root)
+    }
+
+    fn commit_voxel_presentation_for_recovery(
+        runtime: &mut CsharpProductRuntime,
+    ) -> (
+        NativeSpatialSessionHandle,
+        NativeVoxelScenePresentationHandle,
+    ) {
+        runtime.services.begin_call(ui_binding(&runtime.lifecycle));
+        let api = runtime.services.api();
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.spatial.create_session)(
+                    api.spatial.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                )
+            },
+            ABI_OK
+        );
+        let set = [NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Set,
+            address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
+            material_slot: 1,
+        }];
+        let mut voxel_receipt = NativeVoxelEditReceipt::default();
+        let mut voxel_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.voxel.apply_edits)(
+                    api.voxel.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: 0,
+                        edits: set.as_ptr(),
+                        edits_len: set.len(),
+                    },
+                    &mut voxel_receipt,
+                    &mut voxel_error,
+                )
+            },
+            ABI_OK
+        );
+        let mut material = NativeMaterialHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.appearance.create_material)(
+                    api.appearance.context,
+                    NativeMaterialRequest {
+                        color: NativeColor {
+                            r: 0.25,
+                            g: 0.5,
+                            b: 0.75,
+                            a: 1.0,
+                        },
+                        texture: NativeRenderResourceHandle::default(),
+                        roughness: 1.0,
+                        texture_tint: NativeColor {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                        emission_color: NativeVec3::default(),
+                        emission_intensity: 0.0,
+                        double_sided: false,
+                    },
+                    &mut material,
+                )
+            },
+            ABI_OK
+        );
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        let mut presentation = NativeVoxelScenePresentationHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.voxel_scene_presentation.project_scene)(
+                    api.voxel_scene_presentation.context,
+                    &NativeProjectVoxelSceneRequest {
+                        session,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                    &mut presentation,
+                )
+            },
+            ABI_OK
+        );
+        let staged = runtime
+            .services
+            .take_call()
+            .expect("initial voxel projection");
+        assert!(service_outputs(runtime.services.outputs(&staged))
+            .expect("initial output")
+            .iter()
+            .any(
+                |output| serde_json::to_value(output).expect("initial output encodes")["kind"]
+                    == "frame"
+            ));
+        runtime.services.commit_call(staged);
+        (session, presentation)
     }
 
     #[test]
@@ -5979,6 +6222,54 @@ mod tests {
         assert!(!events.contains(&"terminal"));
         assert!(!events.contains(&"destroy"));
         fs::remove_dir_all(root).expect("remove tainted fixture content");
+    }
+
+    #[test]
+    fn taint_delivers_only_the_canonical_voxel_repair_before_existing_replacement() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        UPDATE_CALLBACK_CALLS.store(0, Ordering::SeqCst);
+        UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
+        VOXEL_FAILURE_APPLY_STATUS.store(0, Ordering::SeqCst);
+        VOXEL_FAILURE_REFRESH_STATUS.store(0, Ordering::SeqCst);
+        let (mut runtime, root) = voxel_failure_fixture_runtime("tainted-voxel-recovery");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start voxel failure fixture");
+        let (session, presentation) = commit_voxel_presentation_for_recovery(&mut runtime);
+        VOXEL_FAILURE_SESSION.store(session.value, Ordering::SeqCst);
+        VOXEL_FAILURE_PRESENTATION.store(presentation.value, Ordering::SeqCst);
+        VOXEL_FAILURE_ENABLED.store(true, Ordering::SeqCst);
+        let (_, outputs) = runtime
+            .admit_demand_step()
+            .expect("the one canonical repair is delivered on the existing receipt route")
+            .into_parts();
+        assert_eq!(VOXEL_FAILURE_APPLY_STATUS.load(Ordering::SeqCst), ABI_OK);
+        assert_eq!(VOXEL_FAILURE_REFRESH_STATUS.load(Ordering::SeqCst), ABI_OK);
+        let encoded = outputs
+            .iter()
+            .map(|output| serde_json::to_value(output).expect("recovery output encodes"))
+            .collect::<Vec<_>>();
+        assert!(encoded.iter().any(|output| {
+            output["kind"] == "frame"
+                && output["frame"]["ops"]
+                    .as_array()
+                    .is_some_and(|ops| ops.iter().any(|operation| operation["op"] == "destroy"))
+        }));
+        assert!(encoded
+            .iter()
+            .all(|output| output["kind"] != "complete-baseline"));
+        assert_eq!(
+            runtime
+                .admit_demand_step()
+                .expect_err("the tainted product does not receive a callback replay")
+                .code(),
+            "CSHARP_RUNTIME_TAINTED"
+        );
+        assert_eq!(UPDATE_CALLBACK_CALLS.load(Ordering::SeqCst), 1);
+        UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove tainted voxel recovery fixture content");
     }
 
     unsafe extern "C" fn debug_semantic_failure(

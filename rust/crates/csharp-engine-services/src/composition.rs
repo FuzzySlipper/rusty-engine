@@ -572,6 +572,23 @@ impl EngineServiceSet {
             presentation: call.audio.frame.clone().into_iter().collect(),
         }
     }
+
+    /// Extracts only the renderer work needed to reconcile retained voxel
+    /// presentation after a failed callback. This deliberately has no UI,
+    /// lifecycle, or complete-baseline marker: the product incarnation remains
+    /// tainted and normal interaction still follows the existing replacement
+    /// policy.
+    pub fn recover_voxel_presentation_outputs(
+        &self,
+    ) -> Result<CsharpEngineCallOutput, CsharpEngineServicesError> {
+        Ok(CsharpEngineCallOutput {
+            appearance: Vec::new(),
+            frames: self.voxel_scene_presentation.recover_from_canonical()?,
+            view_composition: None,
+            ui: Vec::new(),
+            presentation: Vec::new(),
+        })
+    }
 }
 
 impl CsharpEngineCall {

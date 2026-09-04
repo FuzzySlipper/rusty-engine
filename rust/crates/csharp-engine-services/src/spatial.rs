@@ -5664,6 +5664,181 @@ mod tests {
     }
 
     #[test]
+    fn native_voxel_pick_returns_the_editable_hit_cell_from_the_same_session_revision() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let spatial_api = api(&mut bridge);
+        let session = create_session(&spatial_api);
+        let voxel_api = crate::voxel::api(&mut bridge);
+        let address = NativeVoxelAddress { x: 8, y: 3, z: 7 };
+        let admitted = [NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Set,
+            address,
+            material_slot: 1,
+        }];
+        let mut admitted_receipt = NativeVoxelEditReceipt::default();
+        let mut admitted_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (voxel_api.apply_edits)(
+                    voxel_api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: 0,
+                        edits: admitted.as_ptr(),
+                        edits_len: admitted.len(),
+                    },
+                    &mut admitted_receipt,
+                    &mut admitted_error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(admitted_error.diagnostics.handle.value, 0);
+        assert_eq!(admitted_receipt.status, NativeVoxelEditStatus::Accepted);
+
+        let mut cast = NativeSpatialHit::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.cast_ray)(
+                    spatial_api.context,
+                    &NativeSpatialRaycastRequest {
+                        session,
+                        origin: NativeVec3 {
+                            x: 12.5,
+                            y: 3.5,
+                            z: 7.5,
+                        },
+                        direction: NativeVec3 {
+                            x: -1.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        max_distance: 10.0,
+                        filter: NativeSpatialQueryFilter::default(),
+                        entities: std::ptr::null(),
+                        entities_len: 0,
+                        ignored_entities: std::ptr::null(),
+                        ignored_entities_len: 0,
+                        hitbox_overrides: std::ptr::null(),
+                        hitbox_overrides_len: 0,
+                    },
+                    &mut cast,
+                )
+            },
+            ABI_OK
+        );
+        assert!(cast.present);
+        assert_eq!(cast.kind, NativeSpatialHitKind::Voxel);
+        assert_eq!([cast.voxel_x, cast.voxel_y, cast.voxel_z], [8, 3, 7]);
+        assert_eq!(cast.face, NativeSpatialFace::PosX);
+
+        let mut picked = NativeSpatialHit::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.pick_voxel)(
+                    spatial_api.context,
+                    NativeSpatialPickRequest {
+                        session,
+                        origin: NativeVec3 {
+                            x: 12.5,
+                            y: 3.5,
+                            z: 7.5,
+                        },
+                        direction: NativeVec3 {
+                            x: -1.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        max_distance: 10.0,
+                        claimed_voxel_x: cast.voxel_x,
+                        claimed_voxel_y: cast.voxel_y,
+                        claimed_voxel_z: cast.voxel_z,
+                        claimed_face: cast.face,
+                    },
+                    &mut picked,
+                )
+            },
+            ABI_OK
+        );
+        assert!(picked.present);
+        assert_eq!(picked.kind, NativeSpatialHitKind::Voxel);
+        assert_eq!([picked.voxel_x, picked.voxel_y, picked.voxel_z], [8, 3, 7]);
+        assert_eq!(picked.face, NativeSpatialFace::PosX);
+
+        let mut before_clear = NativeVoxelReadout::default();
+        assert_eq!(
+            unsafe {
+                (voxel_api.read)(
+                    voxel_api.context,
+                    NativeVoxelReadRequest {
+                        session,
+                        address: NativeVoxelAddress {
+                            x: picked.voxel_x,
+                            y: picked.voxel_y,
+                            z: picked.voxel_z,
+                        },
+                    },
+                    &mut before_clear,
+                )
+            },
+            ABI_OK
+        );
+        assert!(before_clear.present);
+        assert_eq!(before_clear.address, address);
+
+        let clear = [NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Clear,
+            address: before_clear.address,
+            material_slot: 0,
+        }];
+        let mut clear_receipt = NativeVoxelEditReceipt::default();
+        let mut clear_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (voxel_api.apply_edits)(
+                    voxel_api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: admitted_receipt.accepted_revision,
+                        edits: clear.as_ptr(),
+                        edits_len: clear.len(),
+                    },
+                    &mut clear_receipt,
+                    &mut clear_error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(clear_error.diagnostics.handle.value, 0);
+        assert_eq!(clear_receipt.status, NativeVoxelEditStatus::Accepted);
+        assert_eq!(
+            clear_receipt.revision_before,
+            admitted_receipt.accepted_revision
+        );
+        assert_eq!(
+            clear_receipt.accepted_revision,
+            admitted_receipt.accepted_revision + 1
+        );
+
+        let mut after_clear = NativeVoxelReadout::default();
+        assert_eq!(
+            unsafe {
+                (voxel_api.read)(
+                    voxel_api.context,
+                    NativeVoxelReadRequest {
+                        session,
+                        address: before_clear.address,
+                    },
+                    &mut after_clear,
+                )
+            },
+            ABI_OK
+        );
+        assert!(!after_clear.present);
+        assert_eq!(after_clear.address, address);
+    }
+
+    #[test]
     fn character_step_accepts_empty_borrowed_obstacle_span() {
         let mut bridge = RuntimeSpatialBridge::new();
         let session = bridge

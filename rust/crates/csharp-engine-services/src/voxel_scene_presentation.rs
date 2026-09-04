@@ -138,6 +138,26 @@ impl RuntimeVoxelScenePresentationBridge {
         self.staged = None;
     }
 
+    /// Reprojects the retained active presentation state from Spatial without
+    /// adopting any state staged by the failed product call. This is the one
+    /// narrow recovery path for an immediate voxel mutation that outlived a
+    /// later callback failure.
+    ///
+    /// The clone intentionally retains the active projector's publication
+    /// history so the frame can repair an already attached renderer. It is
+    /// never committed: recovery must not advance retained projector history
+    /// or make a later ordinary call observe a failed callback's staging.
+    pub(crate) fn recover_from_canonical(
+        &self,
+    ) -> Result<Vec<RenderFrameDiff>, CsharpEngineServicesError> {
+        let mut recovery = self.state.clone();
+        let frame = project_all_presentations(&mut recovery, &self.spatial)?;
+        Ok((!frame.ops.is_empty())
+            .then_some(frame)
+            .into_iter()
+            .collect())
+    }
+
     pub(crate) fn take_staged_call(
         &mut self,
     ) -> Result<RuntimeVoxelScenePresentationCall, CsharpEngineServicesError> {
@@ -1290,6 +1310,138 @@ mod tests {
                 .iter()
                 .any(|operation| matches!(operation, RenderDiff::Destroy { .. }))
         }));
+    }
+
+    #[test]
+    fn canonical_recovery_repairs_a_discarded_voxel_refresh_without_advancing_active_history() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = session_with_voxel(&mut spatial);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let material = material(&mut appearance);
+        let api = super::api(&mut bridge, &mut appearance);
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material,
+        }];
+        let mut presentation = NativeVoxelScenePresentationHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.project_scene)(
+                    api.context,
+                    &NativeProjectVoxelSceneRequest {
+                        session,
+                        materials: bindings.as_ptr(),
+                        materials_len: bindings.len(),
+                    },
+                    &mut presentation,
+                )
+            },
+            ABI_OK
+        );
+        let initial = bridge.take_staged_call().expect("initial projection");
+        bridge.commit_call(initial);
+        let initial_appearance = appearance.take_staged_call().expect("initial material");
+        appearance.commit(initial_appearance);
+        assert!(
+            bridge
+                .recover_from_canonical()
+                .expect("matching canonical scene")
+                .is_empty(),
+            "a recovery with no retained/canonical drift must not emit a frame"
+        );
+
+        // The accepted mutation changes canonical Spatial immediately. The
+        // following RefreshScene is deliberately left staged, as it would be
+        // when later C# work in the same callback fails.
+        let clear = [NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Clear,
+            address: NativeVoxelAddress { x: 0, y: 0, z: 0 },
+            material_slot: 0,
+        }];
+        let mut receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        let voxel_api = crate::voxel::api(&mut spatial);
+        assert_eq!(
+            unsafe {
+                (voxel_api.apply_edits)(
+                    voxel_api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: 1,
+                        edits: clear.as_ptr(),
+                        edits_len: clear.len(),
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(receipt.accepted_revision, 2);
+        assert_eq!(receipt.solid_voxel_count, 0);
+        let before_refresh_failure = bridge
+            .recover_from_canonical()
+            .expect("canonical recovery before RefreshScene");
+        assert!(before_refresh_failure[0]
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, RenderDiff::Destroy { .. })));
+
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        let mut readout = NativeVoxelScenePresentationReadout::default();
+        assert_eq!(
+            unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+            ABI_OK
+        );
+        assert_eq!(readout.source_revision, receipt.accepted_revision);
+        let failed_stage = bridge.take_staged_call().expect("staged refresh");
+        assert!(failed_stage.frames.iter().any(|frame| {
+            frame
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, RenderDiff::Destroy { .. }))
+        }));
+        bridge.discard_call();
+        appearance.discard_call();
+
+        let recovered = bridge
+            .recover_from_canonical()
+            .expect("canonical voxel recovery");
+        assert_eq!(recovered.len(), 1);
+        assert!(recovered[0]
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, RenderDiff::Destroy { .. })));
+        assert_eq!(
+            bridge
+                .recover_from_canonical()
+                .expect("repeated canonical recovery"),
+            before_refresh_failure,
+            "recovery is detached and must not advance the active projector"
+        );
+
+        // No second canonical change occurred, but the active projector still
+        // has the pre-failure history. An ordinary refresh therefore emits the
+        // same repair rather than silently adopting recovery's detached state.
+        appearance.begin_call();
+        bridge.begin_call();
+        let api = super::api(&mut bridge, &mut appearance);
+        assert_eq!(
+            unsafe { (api.refresh_scene)(api.context, presentation, &mut readout) },
+            ABI_OK
+        );
+        let ordinary = bridge.take_staged_call().expect("ordinary repair refresh");
+        assert!(ordinary.frames[0]
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, RenderDiff::Destroy { .. })));
     }
 
     #[test]
