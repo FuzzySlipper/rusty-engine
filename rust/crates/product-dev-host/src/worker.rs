@@ -114,6 +114,9 @@ pub enum ProductDevWorkerRequest {
     Health {
         request_id: u64,
     },
+    Activate {
+        request_id: u64,
+    },
     Shutdown {
         request_id: u64,
     },
@@ -257,6 +260,9 @@ pub enum ProductDevWorkerEvent {
         detail: String,
         recovery: ProductDevRuntimeRecovery,
     },
+    SchedulerActivity {
+        active: bool,
+    },
 }
 
 /// Writes one bounded, closed worker envelope.  The bound is enforced before
@@ -342,6 +348,24 @@ mod tests {
             recovery: crate::ProductDevRuntimeRecovery::not_applied(),
         };
         let mut bytes = Vec::new();
+        write_worker_frame(&mut bytes, &event).unwrap();
+        assert_eq!(
+            read_worker_frame::<ProductDevWorkerEvent>(&mut bytes.as_slice()).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn worker_frames_keep_activation_and_scheduler_liveness_closed() {
+        let request = ProductDevWorkerRequest::Activate { request_id: 7 };
+        let event = ProductDevWorkerEvent::SchedulerActivity { active: true };
+        let mut bytes = Vec::new();
+        write_worker_frame(&mut bytes, &request).unwrap();
+        assert_eq!(
+            read_worker_frame::<ProductDevWorkerRequest>(&mut bytes.as_slice()).unwrap(),
+            request
+        );
+        bytes.clear();
         write_worker_frame(&mut bytes, &event).unwrap();
         assert_eq!(
             read_worker_frame::<ProductDevWorkerEvent>(&mut bytes.as_slice()).unwrap(),

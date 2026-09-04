@@ -105,6 +105,12 @@ pub struct ProductDevHostError {
 }
 
 impl ProductDevHostError {
+    /// Converts the one closed worker-activation failure into a bounded host
+    /// transaction error without exposing a general worker error channel.
+    pub fn worker_activation(detail: impl Into<String>) -> Self {
+        Self::new("DEV_HOST_WORKER_ACTIVATE", detail)
+    }
+
     pub(crate) fn new(code: &'static str, detail: impl Into<String>) -> Self {
         let mut detail = detail.into();
         const MAX_DETAIL_BYTES: usize = 512;

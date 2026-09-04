@@ -397,12 +397,16 @@ impl RunningProductDevHost {
     /// shell. A changed binding fences old retained output before the new
     /// complete baseline is committed, so neither live SSE clients nor an old
     /// Last-Event-ID reconnect can consume facts from the retired incarnation.
-    pub fn replace_worker_projection(
+    pub fn replace_worker_projection<F>(
         &self,
         bundle: ProductDevBundle,
         outputs: Vec<ProductDevRuntimeOutput>,
         worker_generation: u64,
-    ) -> Result<u64, ProductDevHostError> {
+        activate: F,
+    ) -> Result<u64, ProductDevHostError>
+    where
+        F: FnOnce() -> Result<(), ProductDevRuntimeError>,
+    {
         let _gate = self.projection_gate.write().map_err(|_| {
             ProductDevHostError::new(
                 "DEV_HOST_WORKER_REPLACE",
@@ -412,34 +416,38 @@ impl RunningProductDevHost {
         let new_binding = outputs
             .iter()
             .find_map(ProductDevRuntimeOutput::binding_marker);
-        {
-            let mut bus = self.outputs.lock().map_err(|_| {
-                ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_POISONED",
-                    "output queue lock is poisoned",
-                )
-            })?;
-            let mut current = self.bundle.write().map_err(|_| {
-                ProductDevHostError::new(
-                    "DEV_HOST_BUNDLE_REPLACE",
-                    "bundle replacement lock is poisoned",
-                )
-            })?;
-            if new_binding.is_some_and(|binding| Some(binding) != bus.active_binding) {
-                bus.events.clear();
-                bus.floor_cursor = bus.next_id;
-                bus.active_binding = None;
-                bus.pending_baseline = None;
-            }
-            let through = push_outputs_staged(&mut bus, outputs)?;
-            *current = bundle;
-            if let Some(generation) = &self.worker_generation {
-                generation.store(worker_generation as usize, Ordering::Release);
-            }
-            self.projection_epoch.fetch_add(1, Ordering::AcqRel);
-            self.output_wake.notify();
-            return Ok(through);
+        let mut bus = self.outputs.lock().map_err(|_| {
+            ProductDevHostError::new("DEV_HOST_OUTPUT_POISONED", "output queue lock is poisoned")
+        })?;
+        let mut staged = bus.clone();
+        if new_binding.is_some_and(|binding| Some(binding) != staged.active_binding) {
+            staged.events.clear();
+            staged.floor_cursor = staged.next_id;
+            staged.active_binding = None;
+            staged.pending_baseline = None;
         }
+        let through = push_outputs_staged(&mut staged, outputs)?;
+        let mut current = self.bundle.write().map_err(|_| {
+            ProductDevHostError::new(
+                "DEV_HOST_BUNDLE_REPLACE",
+                "bundle replacement lock is poisoned",
+            )
+        })?;
+        activate().map_err(|error| {
+            ProductDevHostError::worker_activation(format!(
+                "{}: {}",
+                error.code(),
+                error.diagnostic()
+            ))
+        })?;
+        *bus = staged;
+        *current = bundle;
+        if let Some(generation) = &self.worker_generation {
+            generation.store(worker_generation as usize, Ordering::Release);
+        }
+        self.projection_epoch.fetch_add(1, Ordering::AcqRel);
+        self.output_wake.notify();
+        Ok(through)
     }
 
     fn stop(&mut self) -> Result<(), ProductDevHostError> {
@@ -2327,7 +2335,7 @@ fn write_sse_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()
     stream.flush()
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct OutputBus {
     next_id: u64,
     next_transfer_id: u64,
@@ -2343,6 +2351,7 @@ struct PendingBaseline {
     outputs: Vec<ProductDevRuntimeOutput>,
 }
 
+#[derive(Clone)]
 struct OutputEvent {
     id: u64,
     event: Option<&'static str>,

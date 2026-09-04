@@ -235,6 +235,9 @@ fn run_supervised_shell(args: Arguments) -> Result<(), String> {
             .with_worker_scheduler(),
     )
     .map_err(|error| error.to_string())?;
+    runtime
+        .activate_current()
+        .map_err(|error| format!("{}: {}", error.code(), error.diagnostic()))?;
     println!(
         "C# {} product host listening at {}",
         args.loader.label(),
@@ -349,6 +352,19 @@ fn supervise_worker_replacements(
                 );
             }
         }
+        // Drain exit/protocol failures first so a full bounded channel cannot
+        // consume the one scheduler-hang observation when it is taken.
+        if let Some(generation) = runtime.expired_scheduler_generation() {
+            publish_shell_diagnostic(
+                diagnostics,
+                "DEV_HOST_WORKER_SCHEDULER_TIMEOUT",
+                &format!(
+                    "worker generation {generation} did not finish its realtime callback before the operation deadline"
+                ),
+            );
+            let _ = runtime.failures.try_send(generation);
+            continue;
+        }
         match commands_rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Ok(command)) => match command {
                 SupervisorCommand::ReplaceRuntime { product_directory } => {
@@ -408,10 +424,13 @@ fn replace_worker_projection(
     let runtime_instance_id = *next_runtime_instance_id;
     *next_runtime_instance_id = next_runtime_instance_id.saturating_add(1).max(1);
     let replacement = replacement_arguments(shell_args, product_directory, runtime_instance_id)?;
-    let (bundle, baseline, generation) = runtime.replace(&replacement)?;
-    host.replace_worker_projection(bundle, baseline, generation)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    let (pending, bundle, baseline) = runtime.prepare_replace(&replacement)?;
+    let generation = pending.generation;
+    host.replace_worker_projection(bundle, baseline, generation, || {
+        runtime.activate_pending(pending)
+    })
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 fn publish_shell_diagnostic(diagnostics: &ProductDevLog, code: &str, message: &str) {
@@ -478,6 +497,12 @@ struct WorkerRuntime {
     output_generation: Arc<AtomicUsize>,
     diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
     failures: mpsc::SyncSender<u64>,
+    scheduler_inflight: Arc<Mutex<Option<(u64, Instant)>>>,
+}
+
+struct PendingWorker {
+    connection: WorkerConnection,
+    generation: u64,
 }
 
 struct WorkerConnection {
@@ -503,6 +528,16 @@ impl WorkerRuntime {
             .unwrap_or_default()
     }
 
+    fn expired_scheduler_generation(&self) -> Option<u64> {
+        let mut inflight = self.scheduler_inflight.lock().ok()?;
+        let (generation, started) = *inflight.as_ref()?;
+        if started.elapsed() <= WORKER_OPERATION_TIMEOUT {
+            return None;
+        }
+        *inflight = None;
+        Some(generation)
+    }
+
     fn start(
         args: &Arguments,
     ) -> Result<
@@ -522,11 +557,13 @@ impl WorkerRuntime {
         let output_generation = Arc::new(AtomicUsize::new(0));
         let (diagnostic_tx, diagnostic_rx) = mpsc::sync_channel(16);
         let (failure_tx, failure_rx) = mpsc::sync_channel(4);
+        let scheduler_inflight = Arc::new(Mutex::new(None));
         let (connection, bundle, initial_outputs) = Self::spawn_connection(
             args,
             output_tx.clone(),
             diagnostic_tx.clone(),
             failure_tx.clone(),
+            Arc::clone(&scheduler_inflight),
             1,
         )?;
         Ok((
@@ -536,6 +573,7 @@ impl WorkerRuntime {
                 output_generation,
                 diagnostics: diagnostic_tx,
                 failures: failure_tx,
+                scheduler_inflight,
             },
             bundle,
             initial_outputs,
@@ -548,25 +586,68 @@ impl WorkerRuntime {
     /// Stops the retiring worker before loading the replacement and leaves
     /// the shell's listener, history owner, and local output/diagnostic
     /// consumers untouched.  No request is reissued across this boundary.
-    fn replace(
+    fn prepare_replace(
         &self,
         args: &Arguments,
-    ) -> Result<(ProductDevBundle, Vec<ProductDevRuntimeOutput>, u64), String> {
+    ) -> Result<
+        (
+            PendingWorker,
+            ProductDevBundle,
+            Vec<ProductDevRuntimeOutput>,
+        ),
+        String,
+    > {
         let mut current = self
             .connection
             .lock()
             .map_err(|_| "DEV_HOST_WORKER_LOCK: worker connection lock is poisoned".to_owned())?;
+        let retired_generation = current.generation;
         stop_worker(&mut current);
+        if let Ok(mut inflight) = self.scheduler_inflight.lock() {
+            if inflight.is_some_and(|(generation, _)| generation == retired_generation) {
+                *inflight = None;
+            }
+        }
         let generation = current.generation.saturating_add(1).max(1);
         let (replacement, bundle, initial_outputs) = Self::spawn_connection(
             args,
             self.outputs.clone(),
             self.diagnostics.clone(),
             self.failures.clone(),
+            Arc::clone(&self.scheduler_inflight),
             generation,
         )?;
-        *current = replacement;
-        Ok((bundle, initial_outputs, generation))
+        Ok((
+            PendingWorker {
+                connection: replacement,
+                generation,
+            },
+            bundle,
+            initial_outputs,
+        ))
+    }
+
+    fn activate_pending(&self, mut pending: PendingWorker) -> Result<(), ProductDevRuntimeError> {
+        invoke_connection::<serde_json::Value>(
+            &self.failures,
+            &mut pending.connection,
+            |request_id| ProductDevWorkerRequest::Activate { request_id },
+        )?;
+        let mut current = self.connection.lock().map_err(|_| {
+            worker_runtime_error("DEV_HOST_WORKER_LOCK", "worker connection lock is poisoned")
+        })?;
+        *current = pending.connection;
+        Ok(())
+    }
+
+    fn activate_current(&self) -> Result<(), ProductDevRuntimeError> {
+        let mut current = self.connection.lock().map_err(|_| {
+            worker_runtime_error("DEV_HOST_WORKER_LOCK", "worker connection lock is poisoned")
+        })?;
+        invoke_connection::<serde_json::Value>(&self.failures, &mut current, |request_id| {
+            ProductDevWorkerRequest::Activate { request_id }
+        })
+        .map(|_| ())
     }
 
     fn spawn_connection(
@@ -574,6 +655,7 @@ impl WorkerRuntime {
         output_tx: mpsc::SyncSender<ProductDevWorkerOutputBatch>,
         diagnostic_tx: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
         failure_tx: mpsc::SyncSender<u64>,
+        scheduler_inflight: Arc<Mutex<Option<(u64, Instant)>>>,
         generation: u64,
     ) -> Result<
         (
@@ -712,6 +794,7 @@ impl WorkerRuntime {
                     output_tx,
                     diagnostic_tx,
                     failure_tx,
+                    scheduler_inflight,
                     generation,
                 )
             }) {
@@ -744,83 +827,91 @@ impl WorkerRuntime {
         let mut connection = self.connection.lock().map_err(|_| {
             worker_runtime_error("DEV_HOST_WORKER_LOCK", "worker connection lock is poisoned")
         })?;
-        let request_id = connection.next_request_id;
-        connection.next_request_id = connection.next_request_id.saturating_add(1).max(1);
-        if let Err(error) = write_worker_frame(&mut connection.writer, &request(request_id)) {
-            let error = worker_host_error(error);
-            let _ = self.failures.try_send(connection.generation);
-            stop_worker(&mut connection);
+        invoke_connection(&self.failures, &mut connection, request)
+    }
+}
+
+fn invoke_connection<T: serde::de::DeserializeOwned>(
+    failures: &mpsc::SyncSender<u64>,
+    connection: &mut WorkerConnection,
+    request: impl FnOnce(u64) -> ProductDevWorkerRequest,
+) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError> {
+    let request_id = connection.next_request_id;
+    connection.next_request_id = connection.next_request_id.saturating_add(1).max(1);
+    if let Err(error) = write_worker_frame(&mut connection.writer, &request(request_id)) {
+        let error = worker_host_error(error);
+        let _ = failures.try_send(connection.generation);
+        stop_worker(connection);
+        return Err(error);
+    }
+    let response = match connection.responses.recv_timeout(WORKER_OPERATION_TIMEOUT) {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => {
+            stop_worker(connection);
+            let _ = failures.try_send(connection.generation);
             return Err(error);
         }
-        let response = match connection.responses.recv_timeout(WORKER_OPERATION_TIMEOUT) {
-            Ok(Ok(response)) => response,
-            Ok(Err(error)) => {
-                stop_worker(&mut connection);
-                let _ = self.failures.try_send(connection.generation);
-                return Err(error);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                stop_worker(&mut connection);
-                let _ = self.failures.try_send(connection.generation);
-                return Err(worker_runtime_error(
-                    "DEV_HOST_WORKER_TIMEOUT",
-                    "worker did not complete the active operation before the deadline",
-                ));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                stop_worker(&mut connection);
-                let _ = self.failures.try_send(connection.generation);
-                return Err(worker_runtime_error(
-                    "DEV_HOST_WORKER_EOF",
-                    "worker response reader ended before the active operation completed",
-                ));
-            }
-        };
-        if response.request_id != request_id {
-            stop_worker(&mut connection);
-            let _ = self.failures.try_send(connection.generation);
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            stop_worker(connection);
+            let _ = failures.try_send(connection.generation);
             return Err(worker_runtime_error(
-                "DEV_HOST_WORKER_ORDER",
-                "worker response did not match the active operation",
+                "DEV_HOST_WORKER_TIMEOUT",
+                "worker did not complete the active operation before the deadline",
             ));
         }
-        if let Some(error) = response.error {
-            let error = worker_fault_error(error);
-            if error.recovery().next_action()
-                == product_dev_host::ProductDevNextAction::ReplaceIncarnation
-            {
-                stop_worker(&mut connection);
-                let _ = self.failures.try_send(connection.generation);
-            }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            stop_worker(connection);
+            let _ = failures.try_send(connection.generation);
+            return Err(worker_runtime_error(
+                "DEV_HOST_WORKER_EOF",
+                "worker response reader ended before the active operation completed",
+            ));
+        }
+    };
+    if response.request_id != request_id {
+        stop_worker(connection);
+        let _ = failures.try_send(connection.generation);
+        return Err(worker_runtime_error(
+            "DEV_HOST_WORKER_ORDER",
+            "worker response did not match the active operation",
+        ));
+    }
+    if let Some(error) = response.error {
+        let error = worker_fault_error(error);
+        if error.recovery().next_action()
+            == product_dev_host::ProductDevNextAction::ReplaceIncarnation
+        {
+            stop_worker(connection);
+            let _ = failures.try_send(connection.generation);
+        }
+        return Err(error);
+    }
+    let result = response.result.ok_or_else(|| {
+        worker_runtime_error(
+            "DEV_HOST_WORKER_RESPONSE",
+            "worker response omitted its concrete result",
+        )
+    })?;
+    let result = serde_json::from_value(result).map_err(|_| {
+        worker_runtime_error(
+            "DEV_HOST_WORKER_RESPONSE",
+            "worker response did not match the requested result family",
+        )
+    })?;
+    let outputs = match response
+        .outputs
+        .into_iter()
+        .map(worker_output)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(outputs) => outputs,
+        Err(error) => {
+            stop_worker(connection);
+            let _ = failures.try_send(connection.generation);
             return Err(error);
         }
-        let result = response.result.ok_or_else(|| {
-            worker_runtime_error(
-                "DEV_HOST_WORKER_RESPONSE",
-                "worker response omitted its concrete result",
-            )
-        })?;
-        let result = serde_json::from_value(result).map_err(|_| {
-            worker_runtime_error(
-                "DEV_HOST_WORKER_RESPONSE",
-                "worker response did not match the requested result family",
-            )
-        })?;
-        let outputs = match response
-            .outputs
-            .into_iter()
-            .map(worker_output)
-            .collect::<Result<Vec<_>, _>>()
-        {
-            Ok(outputs) => outputs,
-            Err(error) => {
-                stop_worker(&mut connection);
-                let _ = self.failures.try_send(connection.generation);
-                return Err(error);
-            }
-        };
-        ProductDevRuntimeReceipt::new(result, outputs).map_err(worker_host_error)
-    }
+    };
+    ProductDevRuntimeReceipt::new(result, outputs).map_err(worker_host_error)
 }
 
 fn worker_reader(
@@ -829,6 +920,7 @@ fn worker_reader(
     outputs: mpsc::SyncSender<ProductDevWorkerOutputBatch>,
     diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
     failures: mpsc::SyncSender<u64>,
+    scheduler_inflight: Arc<Mutex<Option<(u64, Instant)>>>,
     generation: u64,
 ) {
     loop {
@@ -897,6 +989,17 @@ fn worker_reader(
                 ));
                 let _ = responses.send(Err(error));
                 let _ = failures.try_send(generation);
+            }
+            Ok(ProductDevWorkerEvent::SchedulerActivity { active }) => {
+                if let Ok(mut inflight) = scheduler_inflight.lock() {
+                    if active {
+                        *inflight = Some((generation, Instant::now()));
+                    } else if inflight
+                        .is_some_and(|(active_generation, _)| active_generation == generation)
+                    {
+                        *inflight = None;
+                    }
+                }
             }
             Ok(ProductDevWorkerEvent::Ready { .. }) => {}
             Err(error) => {
@@ -1276,37 +1379,41 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             .map_err(|error| format!("DEV_HOST_WORKER_CHANNEL: {error}"))?,
     ));
     let scheduler_shutdown = Arc::new(AtomicBool::new(false));
-    let scheduler = {
-        let owner = Arc::clone(&owner);
-        let mailbox = Arc::clone(&mailbox);
-        let writer = Arc::clone(&writer);
-        let shutdown = Arc::clone(&scheduler_shutdown);
-        let diagnostics = diagnostics.clone();
-        let diagnostic_cursor = Arc::clone(&diagnostic_cursor);
-        thread::Builder::new()
-            .name("rusty-product-worker-scheduler".to_owned())
-            .spawn(move || {
-                worker_scheduler(
-                    owner,
-                    mailbox,
-                    writer,
-                    shutdown,
-                    diagnostics,
-                    diagnostic_cursor,
-                )
-            })
-            .map_err(|error| format!("DEV_HOST_WORKER_SCHEDULER: {error}"))?
-    };
+    let mut scheduler: Option<thread::JoinHandle<()>> = None;
     loop {
         let request = match read_worker_frame::<ProductDevWorkerRequest>(&mut channel) {
             Ok(request) => request,
             Err(error) if error.code() == "DEV_HOST_WORKER_EOF" => break,
             Err(error) => {
                 scheduler_shutdown.store(true, Ordering::Release);
-                let _ = scheduler.join();
+                if let Some(scheduler) = scheduler.take() {
+                    let _ = scheduler.join();
+                }
                 return Err(error.to_string());
             }
         };
+        let activate = matches!(request, ProductDevWorkerRequest::Activate { .. });
+        if scheduler.is_none() && !activate {
+            let result = worker_fault_response(
+                worker_request_id(&request),
+                ProductDevRuntimeError::new_not_applied(
+                    "DEV_HOST_WORKER_NOT_ACTIVE",
+                    "worker has not completed the shell projection activation",
+                )
+                .expect("fixed worker inactive diagnostic is bounded"),
+            );
+            let write = writer
+                .lock()
+                .map_err(|_| "DEV_HOST_WORKER_CHANNEL: writer lock is poisoned".to_owned())
+                .and_then(|mut writer| {
+                    write_worker_frame(&mut *writer, &ProductDevWorkerEvent::Response(result))
+                        .map_err(|error| error.to_string())
+                });
+            if let Err(error) = write {
+                return Err(error);
+            }
+            continue;
+        }
         let result = worker_request(&owner, &mailbox, request);
         let worker_diagnostics = drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
         let write = writer
@@ -1330,12 +1437,39 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             });
         if let Err(error) = write {
             scheduler_shutdown.store(true, Ordering::Release);
-            let _ = scheduler.join();
+            if let Some(scheduler) = scheduler.take() {
+                let _ = scheduler.join();
+            }
             return Err(error);
+        }
+        if activate && scheduler.is_none() {
+            let owner = Arc::clone(&owner);
+            let mailbox = Arc::clone(&mailbox);
+            let writer = Arc::clone(&writer);
+            let shutdown = Arc::clone(&scheduler_shutdown);
+            let diagnostics = diagnostics.clone();
+            let diagnostic_cursor = Arc::clone(&diagnostic_cursor);
+            scheduler = Some(
+                thread::Builder::new()
+                    .name("rusty-product-worker-scheduler".to_owned())
+                    .spawn(move || {
+                        worker_scheduler(
+                            owner,
+                            mailbox,
+                            writer,
+                            shutdown,
+                            diagnostics,
+                            diagnostic_cursor,
+                        )
+                    })
+                    .map_err(|error| format!("DEV_HOST_WORKER_SCHEDULER: {error}"))?,
+            );
         }
     }
     scheduler_shutdown.store(true, Ordering::Release);
-    let _ = scheduler.join();
+    if let Some(scheduler) = scheduler {
+        let _ = scheduler.join();
+    }
     Ok(())
 }
 
@@ -1367,6 +1501,9 @@ fn worker_scheduler(
             CanonicalU64::new(started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
         let mut input_outputs = Vec::new();
         let mut update_outputs = Vec::new();
+        if !publish_scheduler_activity(&writer, true) {
+            return;
+        }
         let scheduled = owner.advance_realtime_with_input_and_publish(
             || mailbox.drain(),
             observed,
@@ -1382,6 +1519,9 @@ fn worker_scheduler(
             || {},
             || {},
         );
+        if !publish_scheduler_activity(&writer, false) {
+            return;
+        }
         match scheduled {
             Ok(_) => {
                 let mut outputs = input_outputs;
@@ -1389,52 +1529,87 @@ fn worker_scheduler(
                 outputs.push(ProductDevRuntimeOutput::runtime_progress());
                 let worker_diagnostics =
                     drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
-                if let Ok(outputs) = worker_output_values(outputs) {
-                    if let Ok(mut writer) = writer.lock() {
-                        let _ = write_worker_frame(
-                            &mut *writer,
-                            &ProductDevWorkerEvent::Outputs { outputs },
-                        );
-                        if !worker_diagnostics.is_empty() {
-                            let _ = write_worker_frame(
-                                &mut *writer,
-                                &ProductDevWorkerEvent::Diagnostics {
-                                    diagnostics: worker_diagnostics,
-                                },
-                            );
-                        }
+                let outputs = match worker_output_values(outputs) {
+                    Ok(outputs) => outputs,
+                    Err(detail) => {
+                        let error = worker_runtime_error("DEV_HOST_WORKER_OUTPUT_ENCODE", detail);
+                        report_scheduler_failure(&writer, worker_diagnostics, error);
+                        shutdown.store(true, Ordering::Release);
+                        return;
                     }
+                };
+                let Ok(mut writer) = writer.lock() else {
+                    shutdown.store(true, Ordering::Release);
+                    return;
+                };
+                if write_worker_frame(&mut *writer, &ProductDevWorkerEvent::Outputs { outputs })
+                    .is_err()
+                {
+                    shutdown.store(true, Ordering::Release);
+                    return;
                 }
-            }
-            Err(error) => {
-                let mut worker_diagnostics =
-                    drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
-                worker_diagnostics.push(ProductDevWorkerDiagnostic::from_runtime_error(
-                    error.clone(),
-                ));
-                if let Ok(mut writer) = writer.lock() {
-                    let _ = write_worker_frame(
+                if !worker_diagnostics.is_empty()
+                    && write_worker_frame(
                         &mut *writer,
                         &ProductDevWorkerEvent::Diagnostics {
                             diagnostics: worker_diagnostics,
                         },
-                    );
-                    let _ = write_worker_frame(
-                        &mut *writer,
-                        &ProductDevWorkerEvent::Health {
-                            code: error.code().to_owned(),
-                            detail: error.diagnostic().to_owned(),
-                            recovery: error.recovery(),
-                        },
-                    );
-                    let _ = writer.shutdown(Shutdown::Both);
+                    )
+                    .is_err()
+                {
+                    shutdown.store(true, Ordering::Release);
+                    return;
                 }
+            }
+            Err(error) => {
+                let worker_diagnostics =
+                    drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
+                report_scheduler_failure(&writer, worker_diagnostics, error);
                 shutdown.store(true, Ordering::Release);
                 return;
             }
         }
         thread::sleep(interval);
     }
+}
+
+fn report_scheduler_failure(
+    writer: &Arc<Mutex<TcpStream>>,
+    mut diagnostics: Vec<ProductDevWorkerDiagnostic>,
+    error: ProductDevRuntimeError,
+) {
+    diagnostics.push(ProductDevWorkerDiagnostic::from_runtime_error(
+        error.clone(),
+    ));
+    if let Ok(mut writer) = writer.lock() {
+        let _ = write_worker_frame(
+            &mut *writer,
+            &ProductDevWorkerEvent::Diagnostics { diagnostics },
+        );
+        let _ = write_worker_frame(
+            &mut *writer,
+            &ProductDevWorkerEvent::Health {
+                code: error.code().to_owned(),
+                detail: error.diagnostic().to_owned(),
+                recovery: error.recovery(),
+            },
+        );
+        let _ = writer.shutdown(Shutdown::Both);
+    }
+}
+
+fn publish_scheduler_activity(writer: &Arc<Mutex<TcpStream>>, active: bool) -> bool {
+    writer
+        .lock()
+        .ok()
+        .and_then(|mut writer| {
+            write_worker_frame(
+                &mut *writer,
+                &ProductDevWorkerEvent::SchedulerActivity { active },
+            )
+            .ok()
+        })
+        .is_some()
 }
 
 fn drain_worker_diagnostics(
@@ -1496,16 +1671,7 @@ fn worker_request(
     mailbox: &WorkerInputMailbox,
     request: ProductDevWorkerRequest,
 ) -> ProductDevWorkerResponse {
-    let request_id = match &request {
-        ProductDevWorkerRequest::Lifecycle { request_id, .. }
-        | ProductDevWorkerRequest::Control { request_id, .. }
-        | ProductDevWorkerRequest::Input { request_id, .. }
-        | ProductDevWorkerRequest::Update { request_id, .. }
-        | ProductDevWorkerRequest::Debug { request_id, .. }
-        | ProductDevWorkerRequest::Feedback { request_id, .. }
-        | ProductDevWorkerRequest::Health { request_id }
-        | ProductDevWorkerRequest::Shutdown { request_id } => *request_id,
-    };
+    let request_id = worker_request_id(&request);
     match request {
         ProductDevWorkerRequest::Lifecycle {
             operation, binding, ..
@@ -1607,6 +1773,12 @@ fn worker_request(
             outputs: Vec::new(),
             error: None,
         },
+        ProductDevWorkerRequest::Activate { .. } => ProductDevWorkerResponse {
+            request_id,
+            result: Some(serde_json::json!({ "active": true })),
+            outputs: Vec::new(),
+            error: None,
+        },
         ProductDevWorkerRequest::Shutdown { .. } => worker_receipt(
             request_id,
             owner.lifecycle(ProductDevLifecycleOperation::Shutdown),
@@ -1642,6 +1814,20 @@ fn worker_request(
                 ),
             },
         },
+    }
+}
+
+fn worker_request_id(request: &ProductDevWorkerRequest) -> u64 {
+    match request {
+        ProductDevWorkerRequest::Lifecycle { request_id, .. }
+        | ProductDevWorkerRequest::Control { request_id, .. }
+        | ProductDevWorkerRequest::Input { request_id, .. }
+        | ProductDevWorkerRequest::Update { request_id, .. }
+        | ProductDevWorkerRequest::Debug { request_id, .. }
+        | ProductDevWorkerRequest::Feedback { request_id, .. }
+        | ProductDevWorkerRequest::Health { request_id }
+        | ProductDevWorkerRequest::Activate { request_id }
+        | ProductDevWorkerRequest::Shutdown { request_id } => *request_id,
     }
 }
 
