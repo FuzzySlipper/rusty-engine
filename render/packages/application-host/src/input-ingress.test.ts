@@ -163,6 +163,54 @@ void test('input ingress rebinding and context changes clear with the exact epoc
   }]);
 });
 
+void test('input ingress rebaselines held keyboard and pointer state without replaying an uncertain batch', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const windowTarget = createListenerTarget();
+  const canvas = {} as HTMLCanvasElement;
+  const document = {
+    ...documentTarget,
+    activeElement: canvas,
+    pointerLockElement: null,
+    defaultView: windowTarget,
+  } as unknown as Document;
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => true,
+    interactionMode: () => 'gameplay',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [],
+  });
+  documentTarget.emit('keydown', { code: 'KeyW' } as KeyboardEvent);
+  eventTarget.emit('pointerdown', { button: 0 } as PointerEvent);
+  // This is the batch whose result became ambiguous. It is intentionally not
+  // kept for a second send.
+  ingress.drain();
+  ingress.rebaselineRuntime({
+    runtime: { instanceId: '7', generation: '3', controlRevision: '12' },
+    context: INITIAL.context,
+    nextSequence: '1',
+  });
+  assert.deepEqual(ingress.drain(), [
+    {
+      runtime: { instanceId: '7', generation: '3', controlRevision: '12' },
+      sequence: '1',
+      context: INITIAL.context,
+      fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+    },
+    {
+      runtime: { instanceId: '7', generation: '3', controlRevision: '12' },
+      sequence: '2',
+      context: INITIAL.context,
+      fact: { kind: 'pointer-button', button: 'primary', edge: 'pressed' },
+    },
+  ]);
+  ingress.dispose();
+});
+
 void test('input ingress fails closed on bounded-queue overflow', () => {
   const queue = createRustyApplicationInputQueue(2);
   queue.bindRuntime(INITIAL);
@@ -333,6 +381,21 @@ function assertRecord(entry: unknown): asserts entry is Record<string, unknown> 
   assert.ok(typeof entry['value']['value'] === 'number'
     && Number.isFinite(entry['value']['value'])
     && entry['value']['value'] >= -1 && entry['value']['value'] <= 1);
+}
+
+function createListenerTarget(): {
+  readonly addEventListener: (type: string, listener: (event: Event) => void) => void;
+  readonly removeEventListener: (type: string, listener: (event: Event) => void) => void;
+  readonly emit: (type: string, event: Event) => void;
+} {
+  const listeners = new Map<string, (event: Event) => void>();
+  return {
+    addEventListener: (type, listener) => { listeners.set(type, listener); },
+    removeEventListener: (type, listener) => {
+      if (listeners.get(type) === listener) listeners.delete(type);
+    },
+    emit: (type, event) => { listeners.get(type)?.(event); },
+  };
 }
 
 function assertPlainProductPayload(value: unknown): void {

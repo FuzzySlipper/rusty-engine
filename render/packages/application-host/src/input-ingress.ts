@@ -160,6 +160,13 @@ export interface RustyApplicationInputPort {
   readonly bindRuntime: (binding: RustyApplicationRuntimeInputBinding) => void;
   /** Alias for a lifecycle owner synchronizing a possibly changed runtime epoch. */
   readonly synchronizeRuntime: (binding: RustyApplicationRuntimeInputBinding) => void;
+  /**
+   * Replaces an uncertain ingress epoch with the current physical held-state
+   * baseline. It deliberately discards queued DOM facts and UI claims: only
+   * keyboard, pointer-button, and selected-controller state can be observed
+   * again without replaying a possibly admitted mutation.
+   */
+  readonly rebaselineRuntime: (binding: RustyApplicationRuntimeInputBinding) => void;
   /** Change the product input context after clearing the old context's pending facts. */
   readonly setContext: (context: string) => void;
   /** Explicitly clear local held state and queue an ordered lifecycle clear fact. */
@@ -186,6 +193,8 @@ interface RustyApplicationInputIngressEnvironment {
 
 export interface RustyApplicationInputQueue {
   readonly bindRuntime: (binding: RustyApplicationRuntimeInputBinding) => boolean;
+  /** Adopts a binding whose Engine lane already performed its mandatory clear. */
+  readonly rebaseRuntime: (binding: RustyApplicationRuntimeInputBinding) => boolean;
   readonly setContext: (context: string) => boolean;
   readonly clear: (reason: RustyApplicationInputClearReason) => void;
   /** True means the bounded queue overflowed and now contains only a clear fact. */
@@ -376,6 +385,43 @@ export function createRustyApplicationInputIngress(
     return observed;
   };
 
+  const rebaselineRuntime = (binding: RustyApplicationRuntimeInputBinding): void => {
+    if (disposed || !queue.rebaseRuntime(binding)) return;
+    // Runtime control replacement already rebinds its lane with sequence-zero
+    // clear. Begin at its published cursor with only state that remains
+    // physically held; never mirror or resend the uncertain browser batch.
+    refreshControllerBaseline();
+    for (const code of [...heldKeys].sort()) {
+      enqueueFact(Object.freeze({ kind: 'key', code, edge: 'pressed' }));
+    }
+    for (const button of [...heldPointerButtons].sort()) {
+      enqueueFact(Object.freeze({ kind: 'pointer-button', button, edge: 'pressed' }));
+    }
+    for (const axis of [...controllerAxes.keys()].sort()) {
+      const value = controllerAxes.get(axis)!;
+      if (value !== 0) enqueueFact(Object.freeze({ kind: 'controller-axis', axis, value }));
+    }
+    for (const button of [...heldControllerButtons].sort()) {
+      enqueueFact(Object.freeze({ kind: 'controller-button', button, edge: 'pressed' }));
+    }
+    normalized.onAvailable?.();
+  };
+
+  function refreshControllerBaseline(): void {
+    if (normalized.selectedController === null) return;
+    const controller = environment.gamepads()[normalized.selectedController];
+    heldControllerButtons.clear();
+    controllerAxes.clear();
+    if (controller === null || controller === undefined || !controller.connected) return;
+    for (let index = 0; index < 4; index += 1) {
+      const value = boundedNumber(controller.axes[index] ?? 0, 1);
+      if (value !== 0) controllerAxes.set(controllerAxis(index), value);
+    }
+    for (let index = 0; index < 16; index += 1) {
+      if (controller.buttons[index]?.pressed === true) heldControllerButtons.add(controllerButton(index));
+    }
+  }
+
   attachEventTarget();
   environment.document.addEventListener('pointermove', onPointerMove);
   environment.document.addEventListener('keydown', onKeyDown);
@@ -395,6 +441,7 @@ export function createRustyApplicationInputIngress(
       if (disposed) return;
       if (queue.bindRuntime(binding)) clearLocal();
     },
+    rebaselineRuntime,
     setContext: (context: string) => {
       if (disposed) return;
       if (queue.setContext(context)) clearLocal();
@@ -579,6 +626,32 @@ export function createRustyApplicationInputQueue(
       terminal = false;
       entries = [];
       replaceQueuedWithClear(reason);
+      return true;
+    },
+    rebaseRuntime: (next) => {
+      const normalized = validateBinding(next);
+      const previous = binding;
+      if (previous !== null && sameBinding(previous, normalized)) return false;
+      if (previous !== null && previous.runtime.instanceId === normalized.runtime.instanceId) {
+        const priorGeneration = BigInt(previous.runtime.generation);
+        const nextGeneration = BigInt(normalized.runtime.generation);
+        if (nextGeneration < priorGeneration) {
+          throw new RangeError('runtime generation cannot move backward within one instance');
+        }
+        if (nextGeneration > priorGeneration
+          && BigInt(normalized.runtime.controlRevision) <= BigInt(previous.runtime.controlRevision)) {
+          throw new RangeError('runtime control revision must advance with generation');
+        }
+        if (nextGeneration === priorGeneration
+          && BigInt(normalized.runtime.controlRevision) <= BigInt(previous.runtime.controlRevision)) {
+          throw new RangeError('runtime control revision must advance for a rebaseline');
+        }
+      }
+      binding = normalized;
+      sequence = normalized.nextSequence === undefined ? 0n : BigInt(normalized.nextSequence);
+      initialBinding = false;
+      terminal = false;
+      entries = [];
       return true;
     },
     setContext: (context) => {

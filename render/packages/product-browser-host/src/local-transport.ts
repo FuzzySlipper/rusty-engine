@@ -64,6 +64,9 @@ const ROUTES = Object.freeze({
     shutdown: 'lifecycle/shutdown',
     'report-fault': 'lifecycle/report-fault',
   }),
+  control: Object.freeze({
+    replace: 'control/replace',
+  }),
   input: 'input',
   advanceRealtime: 'advance-realtime',
   admitDemandStep: 'admit-demand-step',
@@ -251,22 +254,53 @@ export type ProductBrowserLocalTransportErrorCode =
   | 'output_decode_failed'
   | 'stream_failed';
 
+/**
+ * What the browser can prove about a mutating request after an error.
+ *
+ * `outcome-unknown` is deliberately not retry advice: callers must fence and
+ * rebaseline state before sending another mutation. A committed response can
+ * still require an output resynchronization when its headers say so. Output
+ * projection consumes that resynchronization in #7761; this transport only
+ * preserves the proof when response-body delivery later fails.
+ */
+export interface ProductBrowserLocalTransportMutationState {
+  readonly certainty: 'outcome-unknown' | 'not-applied' | 'committed';
+  readonly outputRecovery: 'none' | 'fresh-baseline-required';
+  /** Canonical retained-output cursor observed with the response, if any. */
+  readonly outputThrough: string | null;
+}
+
+const UNKNOWN_MUTATION: ProductBrowserLocalTransportMutationState = Object.freeze({
+  certainty: 'outcome-unknown',
+  outputRecovery: 'none',
+  outputThrough: null,
+});
+
+const NOT_APPLIED_MUTATION: ProductBrowserLocalTransportMutationState = Object.freeze({
+  certainty: 'not-applied',
+  outputRecovery: 'none',
+  outputThrough: null,
+});
+
 export class ProductBrowserLocalTransportError extends Error {
   readonly code: ProductBrowserLocalTransportErrorCode;
   readonly route: string | null;
-  /** True only when no response boundary established the operation outcome. */
-  readonly retryable: boolean;
+  /** Explicit request-outcome and required output-recovery posture. */
+  readonly mutation: ProductBrowserLocalTransportMutationState;
 
   constructor(
     code: ProductBrowserLocalTransportErrorCode,
     message: string,
-    options?: ErrorOptions & { readonly route?: string; readonly retryable?: boolean },
+    options?: ErrorOptions & {
+      readonly route?: string;
+      readonly mutation?: ProductBrowserLocalTransportMutationState;
+    },
   ) {
     super(message, options);
     this.name = 'ProductBrowserLocalTransportError';
     this.code = code;
     this.route = options?.route ?? null;
-    this.retryable = options?.retryable ?? false;
+    this.mutation = options?.mutation ?? NOT_APPLIED_MUTATION;
   }
 }
 
@@ -278,20 +312,24 @@ function decodeCommitDisposition(
 ): ProductBrowserCommitDisposition {
   const disposition = headers.get('x-rusty-commit-disposition');
   const resync = headers.get('x-rusty-resync-outputs');
-  if (disposition === null) {
-    if (resync === null) return 'committed';
+  if (disposition === null && resync === null) {
     throw new ProductBrowserLocalTransportError(
       'response_decode_failed',
-      `Product Browser local runtime response for ${route} named a resync without a commit disposition`,
-      { route },
+      `Product Browser local runtime response for ${route} omitted its commit disposition`,
+      { route, mutation: UNKNOWN_MUTATION },
     );
   }
+  if (disposition === null) throw new ProductBrowserLocalTransportError(
+    'response_decode_failed',
+    `Product Browser local runtime response for ${route} named a resync without a commit disposition`,
+    { route, mutation: UNKNOWN_MUTATION },
+  );
   if (disposition === 'committed' && resync === null) return disposition;
   if (disposition === 'resync-required' && resync === 'fresh') return disposition;
   throw new ProductBrowserLocalTransportError(
     'response_decode_failed',
     `Product Browser local runtime response for ${route} has an unknown or incoherent commit disposition`,
-    { route },
+    { route, mutation: UNKNOWN_MUTATION },
   );
 }
 
@@ -537,23 +575,96 @@ export function createProductBrowserLocalHttpAdapter(
       throw new ProductBrowserLocalTransportError(
         'request_failed',
         `Product Browser local runtime request failed for ${route}: ${cause instanceof Error ? cause.message : String(cause)}`,
-        { cause, route, retryable: true },
+        { cause, route, mutation: UNKNOWN_MUTATION },
       );
     }
+    // A non-OK HTTP status is an explicit rejection, regardless of a missing
+    // or malformed optional commit header and regardless of later body I/O.
+    if (!response.ok) {
+      throw new ProductBrowserLocalTransportError(
+        'request_failed',
+        `Product Browser local runtime rejected ${route} with HTTP ${String(response.status)}`,
+        { route, mutation: NOT_APPLIED_MUTATION },
+      );
+    }
+    let commitDisposition: ProductBrowserCommitDisposition;
+    try {
+      // Headers arrive with the Response, before body delivery can truncate.
+      // Preserve this completed-operation fact if reading JSON later fails.
+      commitDisposition = decodeCommitDisposition(response.headers, route);
+    } catch (cause) {
+      const error = cause instanceof ProductBrowserLocalTransportError
+        ? cause
+        : new ProductBrowserLocalTransportError(
+          'response_decode_failed',
+          `Product Browser local runtime returned an invalid commit disposition for ${route}`,
+          { cause, route, mutation: UNKNOWN_MUTATION },
+        );
+      throw error;
+    }
+    const outputThroughHeader = response.headers.get('x-rusty-output-through');
+    let outputThrough: bigint | null = null;
+    if (outputThroughHeader !== null) {
+      try {
+        outputThrough = decodeOutputSequence(
+          outputThroughHeader,
+          'X-Rusty-Output-Through response header',
+          'response_decode_failed',
+          route,
+        );
+      } catch (cause) {
+        const source = cause instanceof ProductBrowserLocalTransportError
+          ? cause
+          : new ProductBrowserLocalTransportError(
+            'response_decode_failed',
+            `Product Browser local runtime returned an invalid output cursor for ${route}`,
+            { cause, route },
+          );
+        throw new ProductBrowserLocalTransportError(
+          source.code,
+          source.message,
+          {
+            cause: source,
+            route,
+            mutation: Object.freeze({
+              certainty: 'committed' as const,
+              outputRecovery: 'fresh-baseline-required' as const,
+              outputThrough: null,
+            }),
+          },
+        );
+      }
+    }
+    const mutation = Object.freeze({
+      certainty: 'committed' as const,
+      outputRecovery: commitDisposition === 'resync-required'
+        ? 'fresh-baseline-required' as const
+        : 'none' as const,
+      outputThrough: outputThrough?.toString(10) ?? null,
+    });
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
     if (!contentType.startsWith('application/json')) {
       throw new ProductBrowserLocalTransportError(
         'response_decode_failed',
         `Product Browser local runtime response for ${route} must use application/json`,
-        { route },
+        { route, mutation },
       );
     }
-    const text = await readResponseText(response, maximumResponseBytes, route);
-    if (!response.ok) {
+    let text: string;
+    try {
+      text = await readResponseText(response, maximumResponseBytes, route);
+    } catch (cause) {
+      const source = cause instanceof ProductBrowserLocalTransportError
+        ? cause
+        : new ProductBrowserLocalTransportError(
+          'request_failed',
+          `Product Browser local runtime response could not be read for ${route}`,
+          { cause, route, mutation },
+        );
       throw new ProductBrowserLocalTransportError(
-        'request_failed',
-        `Product Browser local runtime rejected ${route} with HTTP ${String(response.status)}`,
-        { route },
+        source.code,
+        source.message,
+        { cause: source, route, mutation },
       );
     }
     let value: unknown;
@@ -563,7 +674,7 @@ export function createProductBrowserLocalHttpAdapter(
       throw new ProductBrowserLocalTransportError(
         'response_decode_failed',
         `Product Browser local runtime returned invalid JSON for ${route}`,
-        { cause, route },
+        { cause, route, mutation },
       );
     }
     let decoded: T;
@@ -575,24 +686,9 @@ export function createProductBrowserLocalHttpAdapter(
       throw new ProductBrowserLocalTransportError(
         'response_decode_failed',
         `Product Browser local runtime returned an invalid response for ${route}: ${cause instanceof Error ? cause.message : String(cause)}`,
-        { cause, route },
+        { cause, route, mutation },
       );
     }
-    let commitDisposition: ProductBrowserCommitDisposition;
-    try {
-      commitDisposition = decodeCommitDisposition(response.headers, route);
-    } catch (cause) {
-      const error = cause instanceof ProductBrowserLocalTransportError
-        ? cause
-        : new ProductBrowserLocalTransportError(
-          'response_decode_failed',
-          `Product Browser local runtime returned an invalid commit disposition for ${route}`,
-          { cause, route },
-        );
-      reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
-      throw error;
-    }
-    const outputThroughHeader = response.headers.get('x-rusty-output-through');
     if (commitDisposition === 'resync-required') {
       try {
         await reconnectFreshOutputs();
@@ -607,13 +703,7 @@ export function createProductBrowserLocalHttpAdapter(
         reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
         throw error;
       }
-    } else if (outputThroughHeader !== null) {
-      const outputThrough = decodeOutputSequence(
-        outputThroughHeader,
-        'X-Rusty-Output-Through response header',
-        'response_decode_failed',
-        route,
-      );
+    } else if (outputThrough !== null) {
       await waitUntilOutputSequence(outputThrough);
     }
     return decoded;
@@ -621,6 +711,15 @@ export function createProductBrowserLocalHttpAdapter(
 
   const lifecycle = (operation: ProductBrowserLifecycleOperation): Promise<ProductBrowserRuntimeOperationResult> =>
     post(ROUTES.lifecycle[operation.kind], {}, (value) => decodeOperationResult(value, operation.kind));
+
+  const replaceControl = (
+    runtime: RustyApplicationRuntimeIdentity,
+  ): Promise<ProductBrowserRuntimeOperationResult> =>
+    post(
+      ROUTES.control.replace,
+      { runtime: snapshotRuntimeIdentity(runtime) },
+      (value) => decodeOperationResult(value, 'replace-control'),
+    );
 
   const input = (
     batch: readonly RustyApplicationRuntimeInputEnvelope[],
@@ -1169,6 +1268,7 @@ export function createProductBrowserLocalHttpAdapter(
   return Object.freeze({
     connect,
     lifecycle,
+    replaceControl,
     input,
     reportAudioFeedback,
     reportAnimationFeedback,
@@ -1352,7 +1452,7 @@ async function readResponseText(
       throw new ProductBrowserLocalTransportError(
         'request_failed',
         `Product Browser local runtime response could not be read for ${route}`,
-        { cause, route, retryable: true },
+        { cause, route },
       );
     }
     const bytes = new TextEncoder().encode(text).byteLength;
@@ -1389,7 +1489,7 @@ async function readResponseText(
     throw new ProductBrowserLocalTransportError(
       'request_failed',
       `Product Browser local runtime response could not be read for ${route}`,
-      { cause, route, retryable: true },
+      { cause, route },
     );
   }
   return text;
@@ -1454,6 +1554,10 @@ function snapshotInputBatch(
     entries.push(snapshotInputEnvelope(descriptor.value));
   }
   return Object.freeze(entries);
+}
+
+function snapshotRuntimeIdentity(value: unknown): RustyApplicationRuntimeIdentity {
+  return decodeRuntimeIdentity(requireRecord(value, 'runtime identity'));
 }
 
 function snapshotInputEnvelope(value: unknown): RustyApplicationRuntimeInputEnvelope {

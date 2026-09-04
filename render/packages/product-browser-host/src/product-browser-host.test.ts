@@ -21,7 +21,9 @@ import {
   prepareProductBrowserInitialRendererBaseline,
   productBrowserBundleAssets,
   productBrowserBundleDescriptor,
+  mountProductBrowserHostWithApplication,
 } from './product-browser-host.js';
+import { ProductBrowserLocalTransportError } from './local-transport.js';
 
 test('pre-mount buffering drops liveness pulses and keeps the latest runtime readout', () => {
   const pending: import('./product-browser-host.js').ProductBrowserRuntimeOutput[] = [];
@@ -166,6 +168,7 @@ test('browser health datasets skip stable attributes and passive progress', () =
 import type {
   ProductBrowserRuntimeAdapter,
   ProductBrowserRuntimeOutput,
+  ProductBrowserRuntimeTransport,
 } from './product-browser-host.js';
 import type {
   RustyApplicationFrame,
@@ -212,6 +215,147 @@ test('fixed runtime transport preserves only named operations', async () => {
   assert.equal((await transport.input([])).count, 0);
   assert.equal((await transport.advanceRealtime('1000000')).operation, 'advance-realtime');
   assert.equal('call' in transport, false);
+});
+
+test('host recovers an unknown input batch from a fresh binding after a lost control response', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const oldRuntime = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
+    const freshRuntime = { instanceId: '7', generation: '1', controlRevision: '3' } as const;
+    const inputBatch: RustyApplicationRuntimeInputEnvelope = {
+      runtime: oldRuntime,
+      sequence: '4',
+      context: 'gameplay.default',
+      fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+    };
+    let emitOutputs: ((outputs: readonly ProductBrowserRuntimeOutput[]) => void) | null = null;
+    const baselines: unknown[] = [];
+    const boundRuntimes: unknown[] = [];
+    let controlAttempts = 0;
+    let timelineCalls = 0;
+    let inputAvailable = true;
+    const unknown = (): ProductBrowserLocalTransportError => new ProductBrowserLocalTransportError(
+      'request_failed', 'no response', {
+        route: 'input', mutation: { certainty: 'outcome-unknown', outputRecovery: 'none', outputThrough: null },
+      },
+    );
+    const transport: ProductBrowserRuntimeTransport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      replaceControl: async () => {
+        controlAttempts += 1;
+        throw unknown();
+      },
+      input: async () => { throw unknown(); },
+      reportAudioFeedback: async (feedback) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime,
+      }),
+      reportAnimationFeedback: async (feedback) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime,
+      }),
+      reportGhostPlateFeedback: async (feedback) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime,
+      }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+      completeTimeline: async () => {
+        timelineCalls += 1;
+        return { accepted: true as const, ...ACCEPTED_FAULT, runtime: oldRuntime, ticket: '1' } as never;
+      },
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: (outputs: readonly ProductBrowserRuntimeOutput[]) => void) => {
+        emitOutputs = listener;
+        return () => { emitOutputs = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => undefined,
+        resetAnimationRealizationOwner: () => undefined,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => undefined,
+        acknowledgeAnimationRealizedFacts: () => undefined,
+      },
+      input: {
+        sampleController: () => 0,
+        drain: () => {
+          if (!inputAvailable) return [];
+          inputAvailable = false;
+          return [inputBatch];
+        },
+        bindRuntime: (binding: unknown) => { boundRuntimes.push(binding); },
+        rebaselineRuntime: (binding: unknown) => { baselines.push(binding); },
+      },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => fakeApplication as never);
+
+    const publishOutputs = emitOutputs as unknown as (outputs: readonly ProductBrowserRuntimeOutput[]) => void;
+    publishOutputs([{ kind: 'binding', runtime: oldRuntime, nextInputSequence: '4' }]);
+    assert.deepEqual(boundRuntimes, [{
+      runtime: oldRuntime,
+      context: 'gameplay.default',
+      nextSequence: '4',
+    }]);
+    const demand = host.admitDemandStep();
+    const queuedTimeline = host.completeTimeline({} as never);
+    await assert.rejects(demand);
+    await assert.rejects(queuedTimeline);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(host.readout().state, 'degraded');
+    assert.equal(controlAttempts, 1, 'the lost control response remains in the one recovery episode');
+    assert.equal(timelineCalls, 0, 'a queued mutation is cancelled at execution after recovery begins');
+    publishOutputs([{ kind: 'binding', runtime: freshRuntime, nextInputSequence: '1' }]);
+    assert.equal(host.readout().state, 'ready');
+    assert.deepEqual(baselines, [{
+      runtime: freshRuntime,
+      context: 'gameplay.default',
+      nextSequence: '1',
+    }]);
+    // A delayed admission receipt for the uncertain old epoch is ignored.
+    publishOutputs([{
+      kind: 'runtime-input-result',
+      result: {
+        accepted: true,
+        ...ACCEPTED_FAULT,
+        count: 1,
+        binding: oldRuntime,
+        nextInputSequence: '5',
+      },
+    }]);
+    assert.equal(baselines.length, 1);
+    assert.equal(boundRuntimes.length, 1, 'late old input result cannot rebind the fresh control revision');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
 });
 
 test('only the typed lifecycle clock regression is a dropped cadence observation', () => {

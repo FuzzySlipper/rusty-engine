@@ -49,6 +49,7 @@ export type ProductBrowserLifecycleOperation =
 
 export type ProductBrowserRuntimeOperationKind =
   | ProductBrowserLifecycleOperation['kind']
+  | 'replace-control'
   | 'connect'
   | 'advance-realtime'
   | 'admit-demand-step'
@@ -396,6 +397,10 @@ export interface ProductBrowserRuntimeAdapter {
   readonly lifecycle: (
     operation: ProductBrowserLifecycleOperation,
   ) => Promise<ProductBrowserRuntimeOperationResult>;
+  /** Advances only the current input control fence; it does not fault or restart the product. */
+  readonly replaceControl?: (
+    runtime: RustyApplicationRuntimeIdentity,
+  ) => Promise<ProductBrowserRuntimeOperationResult>;
   readonly input: (
     batch: readonly RustyApplicationRuntimeInputEnvelope[],
   ) => Promise<ProductBrowserRuntimeInputResult>;
@@ -443,6 +448,7 @@ export interface ProductBrowserRuntimeAdapter {
 export interface ProductBrowserRuntimeTransport {
   readonly connect?: NonNullable<ProductBrowserRuntimeAdapter['connect']>;
   readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
+  readonly replaceControl?: NonNullable<ProductBrowserRuntimeAdapter['replaceControl']>;
   readonly input: ProductBrowserRuntimeAdapter['input'];
   readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
   readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
@@ -469,6 +475,9 @@ export function createProductBrowserRuntimeTransport(
   requireFunction(adapter.lifecycle, 'lifecycle');
   if (adapter.connect !== undefined) {
     requireFunction(adapter.connect, 'connect');
+  }
+  if (adapter.replaceControl !== undefined) {
+    requireFunction(adapter.replaceControl, 'replaceControl');
   }
   requireFunction(adapter.input, 'input');
   requireFunction(adapter.reportAudioFeedback, 'reportAudioFeedback');
@@ -504,6 +513,7 @@ export function createProductBrowserRuntimeTransport(
   return Object.freeze({
     ...(adapter.connect === undefined ? {} : { connect: adapter.connect }),
     lifecycle: adapter.lifecycle,
+    ...(adapter.replaceControl === undefined ? {} : { replaceControl: adapter.replaceControl }),
     input: adapter.input,
     reportAudioFeedback: adapter.reportAudioFeedback,
     reportAnimationFeedback: adapter.reportAnimationFeedback,
@@ -1191,6 +1201,14 @@ export async function flushProductBrowserRendererFeedbackBeforeUpdate<T>(
 export async function mountProductBrowserHost(
   options: ProductBrowserHostOptions,
 ): Promise<ProductBrowserHost> {
+  return mountProductBrowserHostWithApplication(options, mountRustyApplication);
+}
+
+/** @internal Focused composition seam for host recovery tests. */
+export async function mountProductBrowserHostWithApplication(
+  options: ProductBrowserHostOptions,
+  mountApplication: typeof mountRustyApplication,
+): Promise<ProductBrowserHost> {
   validateOptions(options);
   const realtimeAdvanceOwner = options.realtimeAdvanceOwner ?? 'browser';
   const transport = options.transport;
@@ -1207,6 +1225,11 @@ export async function mountProductBrowserHost(
   // can restore ready while diagnostics retain the first uncertain request.
   let recoveryFailure: ProductBrowserHostError | null = null;
   let recoveryDiagnosticReported = false;
+  let currentInputBinding: RustyApplicationRuntimeIdentity | null = options.runtimeInput?.binding ?? null;
+  let inputRecovery: {
+    readonly uncertainBinding: RustyApplicationRuntimeIdentity;
+    inFlight: boolean;
+  } | null = null;
   let browserDiagnosticsReportInFlight = false;
   let pendingHealthTransition = false;
   let transportClosed = false;
@@ -1387,7 +1410,19 @@ export async function mountProductBrowserHost(
     return application;
   };
 
+  const INPUT_RECOVERY_GATE = Symbol('input-recovery-gate');
+  const inputRecoveryGateError = (): ProductBrowserHostError => new ProductBrowserHostError(
+    'transport_failed',
+    'Product Browser Host is reconciling an uncertain input mutation',
+    { cause: INPUT_RECOVERY_GATE },
+  );
+  const isInputRecoveryGateError = (cause: unknown): boolean => cause instanceof ProductBrowserHostError
+    && (cause as Error & { readonly cause?: unknown }).cause === INPUT_RECOVERY_GATE;
+
   const requireReady = (): void => {
+    if (inputRecovery !== null) {
+      throw inputRecoveryGateError();
+    }
     if (state === 'ready' || state === 'degraded') return;
     throw new ProductBrowserHostError(
       state === 'disposed' ? 'disposed' : 'transport_failed',
@@ -1446,21 +1481,19 @@ export async function mountProductBrowserHost(
     return error;
   };
 
-  const isRetryableLocalRequestFailure = (cause: unknown): cause is {
+  const isUnknownLocalMutationFailure = (cause: unknown): cause is {
     readonly name: 'ProductBrowserLocalTransportError';
-    readonly code: 'request_failed';
-    readonly retryable: true;
+    readonly mutation: { readonly certainty: 'outcome-unknown' };
   } => typeof cause === 'object'
     && cause !== null
     && (cause as { readonly name?: unknown }).name === 'ProductBrowserLocalTransportError'
-    && (cause as { readonly code?: unknown }).code === 'request_failed'
-    && (cause as { readonly retryable?: unknown }).retryable === true;
+    && (cause as { readonly mutation?: { readonly certainty?: unknown } }).mutation?.certainty === 'outcome-unknown';
 
   const recoverOrClose = (
     cause: unknown,
     code: ProductBrowserHostError['code'],
   ): ProductBrowserHostError => {
-    if (isRetryableLocalRequestFailure(cause) && state === 'ready') {
+    if (isUnknownLocalMutationFailure(cause) && (state === 'ready' || state === 'degraded')) {
       const error = cause instanceof ProductBrowserHostError
         ? cause
         : new ProductBrowserHostError(
@@ -1477,9 +1510,94 @@ export async function mountProductBrowserHost(
   };
 
   const restoreReadyAfterHealthyTransport = (): void => {
-    if (state !== 'degraded') return;
+    if (state !== 'degraded' || inputRecovery !== null) return;
     state = 'ready';
     publishHealth();
+  };
+
+  const hasFreshRecoveryBinding = (
+    candidate: RustyApplicationRuntimeIdentity,
+    uncertain: RustyApplicationRuntimeIdentity,
+  ): boolean => candidate.instanceId !== uncertain.instanceId
+    || BigInt(candidate.generation) > BigInt(uncertain.generation)
+    || (candidate.generation === uncertain.generation
+      && BigInt(candidate.controlRevision) > BigInt(uncertain.controlRevision));
+
+  const completeInputRecovery = (
+    runtime: RustyApplicationRuntimeIdentity,
+    nextInputSequence: string,
+  ): boolean => {
+    const pending = inputRecovery;
+    if (pending === null || !hasFreshRecoveryBinding(runtime, pending.uncertainBinding)) return false;
+    const host = requireApplication();
+    audioFeedbackReporter?.bindRuntime(runtime);
+    animationFeedbackReporter?.bindRuntime(runtime);
+    ghostPlateFeedbackReporter?.bindRuntime(runtime);
+    rendererDiagnosticsReporter?.bindRuntime(runtime);
+    currentInputBinding = runtime;
+    host.input?.rebaselineRuntime({
+      runtime,
+      context: options.inputContext ?? 'gameplay.default',
+      nextSequence: nextInputSequence,
+    });
+    host.uiProjection?.bindRuntime(runtime);
+    inputRecovery = null;
+    restoreReadyAfterHealthyTransport();
+    cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
+    return true;
+  };
+
+  const requestInputRecovery = (): void => {
+    const pending = inputRecovery;
+    if (pending === null || pending.inFlight || state === 'failed' || state === 'disposed') return;
+    if (transport.replaceControl === undefined) {
+      failAndClose(new ProductBrowserHostError(
+        'transport_failed',
+        'runtime transport did not provide the required control-replace recovery fence',
+      ), 'transport_failed');
+      return;
+    }
+    pending.inFlight = true;
+    void queue.enqueue(async () => {
+      const current = inputRecovery;
+      if (current === null) return;
+      try {
+        const result = await transport.replaceControl!(current.uncertainBinding);
+        if (result.binding !== undefined && result.nextInputSequence !== undefined
+          && completeInputRecovery(result.binding, result.nextInputSequence)) {
+          if (result.readout !== undefined) runtimeReadout = result.readout;
+          return;
+        }
+        if (!result.accepted
+          && (result.disposition === 'rejected-recoverable' || result.disposition === 'resync-required')) {
+          // Keep this single episode gated. A later physical observation can
+          // request another fence, but the uncertain input is never resent.
+          return;
+        }
+        throw new ProductBrowserHostError(
+          'transport_failed',
+          result.diagnostic ?? 'runtime control replacement did not provide a fresh input binding',
+        );
+      } finally {
+        const active = inputRecovery;
+        if (active !== null) active.inFlight = false;
+      }
+    }).catch((cause: unknown) => {
+      // A no-response fence attempt remains inside this recovery episode. It
+      // does not recursively retry, close the host, or enable new mutation.
+      recoverOrClose(cause, 'transport_failed');
+    });
+  };
+
+  const beginInputRecovery = (batch: readonly RustyApplicationRuntimeInputEnvelope[]): void => {
+    const first = batch[0];
+    if (first === undefined || inputRecovery !== null) return;
+    inputRecovery = { uncertainBinding: first.runtime, inFlight: false };
+    if (state !== 'disposed') {
+      state = 'degraded';
+      publishHealth();
+    }
+    requestInputRecovery();
   };
 
   const pageWindow = options.root.ownerDocument.defaultView;
@@ -1510,6 +1628,7 @@ export async function mountProductBrowserHost(
   }
 
   const flushRendererFeedback = async (): Promise<void> => {
+    requireReady();
     await audioFeedbackReporter?.flush();
     await animationFeedbackReporter?.flush();
     await ghostPlateFeedbackReporter?.flush();
@@ -1518,6 +1637,7 @@ export async function mountProductBrowserHost(
   const scheduleRendererFeedbackFlush = (): void => {
     if (state !== 'ready') return;
     void queue.enqueue(flushRendererFeedback).catch((cause: unknown) => {
+      if (isInputRecoveryGateError(cause)) return;
       recoverOrClose(cause, 'transport_failed');
     });
   };
@@ -1562,10 +1682,20 @@ export async function mountProductBrowserHost(
       const host = requireApplication();
       switch (output.kind) {
         case 'binding':
+          if (inputRecovery !== null) {
+            // An old binding cannot release the gate, but the runtime's fresh
+            // binding publication is authoritative even if the corresponding
+            // control-replace HTTP response was lost after commit.
+            if (hasFreshRecoveryBinding(output.runtime, inputRecovery.uncertainBinding)) {
+              completeInputRecovery(output.runtime, output.nextInputSequence);
+            }
+            return;
+          }
           audioFeedbackReporter?.bindRuntime(output.runtime);
           animationFeedbackReporter?.bindRuntime(output.runtime);
           ghostPlateFeedbackReporter?.bindRuntime(output.runtime);
           rendererDiagnosticsReporter?.bindRuntime(output.runtime);
+          currentInputBinding = output.runtime;
           host.input?.bindRuntime({
             runtime: output.runtime,
             context: options.inputContext ?? 'gameplay.default',
@@ -1728,6 +1858,21 @@ export async function mountProductBrowserHost(
   };
 
   function applyInputResult(result: ProductBrowserRuntimeInputResult): void {
+    if (inputRecovery !== null) {
+      // An asynchronous mailbox result for the ambiguous batch is stale by
+      // construction. Do not let it synchronize an old cursor or revive a
+      // drained batch while the control fence is unresolved. Only the
+      // acknowledged control-replace response is allowed to establish the
+      // replacement cursor and trigger a physical-state baseline.
+      return;
+    }
+    if (result.binding !== undefined && currentInputBinding !== null
+      && !sameRuntimeBinding(result.binding, currentInputBinding)
+      && !hasFreshRecoveryBinding(result.binding, currentInputBinding)) {
+      // Delayed results from a superseded epoch are observations only; they
+      // cannot rewind the browser input cursor after a later control fence.
+      return;
+    }
     const outputs: ProductBrowserRuntimeOutput[] = [];
     if (result.binding !== undefined && result.nextInputSequence !== undefined) {
       outputs.push({
@@ -1751,20 +1896,29 @@ export async function mountProductBrowserHost(
     restoreReadyAfterHealthyTransport();
   }
 
+  const sendInput = async (batch: readonly RustyApplicationRuntimeInputEnvelope[]): Promise<void> => {
+    try {
+      applyInputResult(await transport.input(batch));
+    } catch (cause) {
+      if (isUnknownLocalMutationFailure(cause)) beginInputRecovery(batch);
+      throw cause;
+    }
+  };
+
   cadence = createProductBrowserCadence({
     lifecycleMode: options.lifecycleMode,
     realtimeAdvanceOwner,
-    isReady: () => started && (state === 'ready' || state === 'degraded'),
+    isReady: () => inputRecovery === null && started && (state === 'ready' || state === 'degraded'),
     enqueueOperation: queue.enqueue,
     sampleInput: () => {
+      if (inputRecovery !== null) return [];
       const host = requireApplication();
       host.input?.sampleController();
       return host.input?.drain() ?? [];
     },
-    sendInput: async (batch) => {
-      applyInputResult(await transport.input(batch));
-    },
+    sendInput,
     advanceRealtime: async (observedTimeNs) => {
+      requireReady();
       const accepted = applyOperationResult(await flushProductBrowserRendererFeedbackBeforeUpdate(
         flushRendererFeedback,
         () => transport.advanceRealtime(observedTimeNs),
@@ -1779,6 +1933,7 @@ export async function mountProductBrowserHost(
       }
     },
     admitDemandStep: async () => {
+      requireReady();
       if (transport.admitDemandStep === undefined) {
         throw new ProductBrowserHostError(
           'transport_failed',
@@ -1791,6 +1946,7 @@ export async function mountProductBrowserHost(
       ));
     },
     onFailure: (cause) => {
+      if (isInputRecoveryGateError(cause)) return;
       recoverOrClose(cause, 'transport_failed');
     },
   });
@@ -1805,7 +1961,10 @@ export async function mountProductBrowserHost(
     const { binding, ...runtimeInputOptions } = options.runtimeInput;
     runtimeInput = {
       ...runtimeInputOptions,
-      onAvailable: () => cadence?.pulseInput(globalThis.performance?.now() ?? Date.now()),
+      onAvailable: () => {
+        if (inputRecovery !== null) requestInputRecovery();
+        else cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
+      },
       ...(binding === undefined
         ? {}
         : {
@@ -1857,7 +2016,7 @@ export async function mountProductBrowserHost(
       stagedRendererContent = initialContent;
       rendererForMount = remainingRendererOptions;
     }
-    application = await mountRustyApplication({
+    application = await mountApplication({
       root: options.root,
       mountUi: options.mountUi,
       ...(options.presentationAspectBounds === undefined
@@ -2014,6 +2173,7 @@ export async function mountProductBrowserHost(
       ));
     }
     return queue.enqueue(async () => {
+      requireReady();
       const result = await transport.completeTimeline!(completion);
       if (result.readout !== undefined) applyOutputBatch([{ kind: 'runtime-readout', readout: result.readout }]);
       if (!result.accepted) {
@@ -2032,6 +2192,7 @@ export async function mountProductBrowserHost(
       restoreReadyAfterHealthyTransport();
       return result;
     }).catch((cause: unknown) => {
+      if (isInputRecoveryGateError(cause)) throw cause;
       throw recoverOrClose(cause, 'transport_failed');
     });
   };
@@ -2051,10 +2212,11 @@ export async function mountProductBrowserHost(
       ));
     }
     return queue.enqueue(async () => {
+      requireReady();
       const host = requireApplication();
       host.input?.sampleController();
       const batch = host.input?.drain() ?? [];
-      if (batch.length > 0) applyInputResult(await transport.input(batch));
+      if (batch.length > 0) await sendInput(batch);
       const result = await flushProductBrowserRendererFeedbackBeforeUpdate(
         flushRendererFeedback,
         () => transport.admitDemandStep!(),
@@ -2062,6 +2224,7 @@ export async function mountProductBrowserHost(
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
+      if (isInputRecoveryGateError(cause)) throw cause;
       throw recoverOrClose(cause, 'transport_failed');
     });
   };
@@ -2081,10 +2244,11 @@ export async function mountProductBrowserHost(
       ));
     }
     return queue.enqueue(async () => {
+      requireReady();
       const host = requireApplication();
       host.input?.sampleController();
       const batch = host.input?.drain() ?? [];
-      if (batch.length > 0) applyInputResult(await transport.input(batch));
+      if (batch.length > 0) await sendInput(batch);
       const result = await flushProductBrowserRendererFeedbackBeforeUpdate(
         flushRendererFeedback,
         () => transport.admitExternalStep!(step),
@@ -2092,6 +2256,7 @@ export async function mountProductBrowserHost(
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
+      if (isInputRecoveryGateError(cause)) throw cause;
       throw recoverOrClose(cause, 'transport_failed');
     });
   };

@@ -64,6 +64,7 @@ export type {
   ProductBrowserLocalEventSource,
   ProductBrowserLocalEventSourceConstructor,
   ProductBrowserLocalFetch,
+  ProductBrowserLocalTransportMutationState,
   ProductBrowserLocalTransportErrorCode,
   ProductBrowserLocalTransportOptions,
 } from './local-transport.js';

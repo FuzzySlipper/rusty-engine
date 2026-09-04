@@ -82,7 +82,11 @@ class FakeEventSource implements ProductBrowserLocalEventSource {
 function response(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json', ...headers },
+    headers: {
+      'content-type': 'application/json',
+      'x-rusty-commit-disposition': 'committed',
+      ...headers,
+    },
   });
 }
 
@@ -274,7 +278,7 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
   );
 });
 
-test('local transport distinguishes an uncertain request from an HTTP rejection', async () => {
+test('local transport distinguishes an unknown mutation outcome from an HTTP rejection', async () => {
   const unavailable = createProductBrowserLocalHttpAdapter({
     fetch: async () => { throw new TypeError('Failed to fetch'); },
     eventSource: FakeEventSource,
@@ -283,7 +287,9 @@ test('local transport distinguishes an uncertain request from an HTTP rejection'
     unavailable.lifecycle({ kind: 'start' }),
     (error: unknown) => error instanceof ProductBrowserLocalTransportError
       && error.code === 'request_failed'
-      && error.retryable === true
+      && error.mutation.certainty === 'outcome-unknown'
+      && error.mutation.outputRecovery === 'none'
+      && error.mutation.outputThrough === null
       && error.route === 'lifecycle/start',
   );
 
@@ -295,8 +301,70 @@ test('local transport distinguishes an uncertain request from an HTTP rejection'
     rejected.lifecycle({ kind: 'start' }),
     (error: unknown) => error instanceof ProductBrowserLocalTransportError
       && error.code === 'request_failed'
-      && error.retryable === false,
+      && error.mutation.certainty === 'not-applied',
   );
+});
+
+test('local transport exposes only the fixed control-replace recovery fence', async () => {
+  const requests: Array<{ readonly url: string; readonly body: string | null }> = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (url, init) => {
+      requests.push({ url: String(url), body: typeof init?.body === 'string' ? init.body : null });
+      return response(result('replace-control'));
+    },
+    eventSource: FakeEventSource,
+  });
+  assert.deepEqual(await adapter.replaceControl?.(RUNTIME), result('replace-control'));
+  assert.deepEqual(requests, [{
+    url: `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}control/replace`,
+    body: JSON.stringify({ runtime: RUNTIME }),
+  }]);
+  adapter.dispose();
+});
+
+test('local transport preserves committed output headers for #7761 when the response body truncates', async () => {
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"accepted":true'));
+        controller.error(new TypeError('truncated response body'));
+      },
+    }), {
+      headers: {
+        'content-type': 'application/json',
+        'x-rusty-commit-disposition': 'committed',
+        'x-rusty-output-through': '7',
+      },
+    }),
+    eventSource: FakeEventSource,
+  });
+  await assert.rejects(
+    adapter.lifecycle({ kind: 'start' }),
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError
+      && error.code === 'request_failed'
+      && error.mutation.certainty === 'committed'
+      && error.mutation.outputRecovery === 'none'
+      && error.mutation.outputThrough === '7'
+      && error.route === 'lifecycle/start',
+  );
+  adapter.dispose();
+});
+
+test('local transport marks a successful response with no commit boundary outcome-unknown', async () => {
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => new Response(JSON.stringify(result('start')), {
+      headers: { 'content-type': 'application/json' },
+    }),
+    eventSource: FakeEventSource,
+  });
+  await assert.rejects(
+    adapter.lifecycle({ kind: 'start' }),
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError
+      && error.code === 'response_decode_failed'
+      && error.mutation.certainty === 'outcome-unknown'
+      && error.mutation.outputThrough === null,
+  );
+  adapter.dispose();
 });
 
 test('completed unnumbered baseline discards a cursorless replacement attach after reconnect', async () => {
@@ -664,22 +732,27 @@ test('resync-required commit reconnects the fresh output baseline without replay
   adapter.dispose();
 });
 
-test('incoherent commit headers close the local transport terminally', async () => {
-  const failures: unknown[] = [];
+test('incoherent commit headers remain outcome-unknown for recovery fencing', async () => {
+  let first = true;
   const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response(result('start'), 200, {
-      'x-rusty-commit-disposition': 'committed',
-      'x-rusty-resync-outputs': 'fresh',
-    }),
+    fetch: async () => {
+      if (first) {
+        first = false;
+        return response(result('start'), 200, {
+          'x-rusty-commit-disposition': 'committed',
+          'x-rusty-resync-outputs': 'fresh',
+        });
+      }
+      return response(result('advance-realtime'));
+    },
     eventSource: FakeEventSource,
   });
-  adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
-  await assert.rejects(adapter.lifecycle({ kind: 'start' }), /unknown or incoherent commit disposition/u);
-  assert.equal(failures.length, 1);
   await assert.rejects(
-    adapter.advanceRealtime('1'),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'stream_failed',
+    adapter.lifecycle({ kind: 'start' }),
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError
+      && error.mutation.certainty === 'outcome-unknown',
   );
+  assert.equal((await adapter.advanceRealtime('1')).operation, 'advance-realtime');
   adapter.dispose();
 });
 
@@ -970,7 +1043,9 @@ test('local transport hardens the JSON border before requests', async () => {
   adapter.dispose();
 
   const wrongContentType = createProductBrowserLocalHttpAdapter({
-    fetch: async () => new Response('{}', { headers: { 'content-type': 'text/plain' } }),
+    fetch: async () => new Response('{}', {
+      headers: { 'content-type': 'text/plain', 'x-rusty-commit-disposition': 'committed' },
+    }),
     eventSource: FakeEventSource,
   });
   await assert.rejects(

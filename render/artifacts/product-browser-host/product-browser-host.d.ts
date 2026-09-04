@@ -1,4 +1,4 @@
-import { type RustyApplicationFrame, type RustyApplicationAnimationCueDefinition, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
+import { mountRustyApplication, type RustyApplicationFrame, type RustyApplicationAnimationCueDefinition, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export declare const PRODUCT_BROWSER_HOST_ARTIFACT: "rusty.product.browser-host";
 export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
@@ -30,7 +30,7 @@ export type ProductBrowserLifecycleOperation = {
 } | {
     readonly kind: 'report-fault';
 };
-export type ProductBrowserRuntimeOperationKind = ProductBrowserLifecycleOperation['kind'] | 'connect' | 'advance-realtime' | 'admit-demand-step' | 'admit-external-step';
+export type ProductBrowserRuntimeOperationKind = ProductBrowserLifecycleOperation['kind'] | 'replace-control' | 'connect' | 'advance-realtime' | 'admit-demand-step' | 'admit-external-step';
 /**
  * Closed Engine recovery posture for a completed local-host operation. The
  * accompanying stable code identifies the exact condition; callers must not
@@ -350,6 +350,8 @@ export interface ProductBrowserRuntimeAdapter {
      */
     readonly connect?: () => Promise<ProductBrowserRuntimeOperationResult>;
     readonly lifecycle: (operation: ProductBrowserLifecycleOperation) => Promise<ProductBrowserRuntimeOperationResult>;
+    /** Advances only the current input control fence; it does not fault or restart the product. */
+    readonly replaceControl?: (runtime: RustyApplicationRuntimeIdentity) => Promise<ProductBrowserRuntimeOperationResult>;
     readonly input: (batch: readonly RustyApplicationRuntimeInputEnvelope[]) => Promise<ProductBrowserRuntimeInputResult>;
     readonly reportAudioFeedback: (feedback: ProductBrowserAudioFeedback) => Promise<ProductBrowserAudioFeedbackResult>;
     readonly reportAnimationFeedback: (feedback: ProductBrowserAnimationFeedback) => Promise<ProductBrowserAnimationFeedbackResult>;
@@ -372,6 +374,7 @@ export interface ProductBrowserRuntimeAdapter {
 export interface ProductBrowserRuntimeTransport {
     readonly connect?: NonNullable<ProductBrowserRuntimeAdapter['connect']>;
     readonly lifecycle: ProductBrowserRuntimeAdapter['lifecycle'];
+    readonly replaceControl?: NonNullable<ProductBrowserRuntimeAdapter['replaceControl']>;
     readonly input: ProductBrowserRuntimeAdapter['input'];
     readonly reportAudioFeedback: ProductBrowserRuntimeAdapter['reportAudioFeedback'];
     readonly reportAnimationFeedback: ProductBrowserRuntimeAdapter['reportAnimationFeedback'];
@@ -554,6 +557,8 @@ export declare function flushProductBrowserRendererFeedbackBeforeUpdate<T>(flush
  * retained presentation.
  */
 export declare function mountProductBrowserHost(options: ProductBrowserHostOptions): Promise<ProductBrowserHost>;
+/** @internal Focused composition seam for host recovery tests. */
+export declare function mountProductBrowserHostWithApplication(options: ProductBrowserHostOptions, mountApplication: typeof mountRustyApplication): Promise<ProductBrowserHost>;
 /** Fixed relative location of the complete Engine runtime closure. */
 export declare const PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE: "engine/product-browser-host.js";
 export type ProductBrowserBundleAssetName = 'index.html' | 'main.js' | 'bridge.js' | typeof PRODUCT_BROWSER_BUNDLE_ENGINE_MODULE;

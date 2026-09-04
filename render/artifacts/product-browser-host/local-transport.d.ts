@@ -42,14 +42,29 @@ export interface ProductBrowserLocalTransportOptions {
     readonly onTransportError?: (error: ProductBrowserLocalTransportError) => void;
 }
 export type ProductBrowserLocalTransportErrorCode = 'invalid_options' | 'disposed' | 'request_failed' | 'response_decode_failed' | 'output_decode_failed' | 'stream_failed';
+/**
+ * What the browser can prove about a mutating request after an error.
+ *
+ * `outcome-unknown` is deliberately not retry advice: callers must fence and
+ * rebaseline state before sending another mutation. A committed response can
+ * still require an output resynchronization when its headers say so. Output
+ * projection consumes that resynchronization in #7761; this transport only
+ * preserves the proof when response-body delivery later fails.
+ */
+export interface ProductBrowserLocalTransportMutationState {
+    readonly certainty: 'outcome-unknown' | 'not-applied' | 'committed';
+    readonly outputRecovery: 'none' | 'fresh-baseline-required';
+    /** Canonical retained-output cursor observed with the response, if any. */
+    readonly outputThrough: string | null;
+}
 export declare class ProductBrowserLocalTransportError extends Error {
     readonly code: ProductBrowserLocalTransportErrorCode;
     readonly route: string | null;
-    /** True only when no response boundary established the operation outcome. */
-    readonly retryable: boolean;
+    /** Explicit request-outcome and required output-recovery posture. */
+    readonly mutation: ProductBrowserLocalTransportMutationState;
     constructor(code: ProductBrowserLocalTransportErrorCode, message: string, options?: ErrorOptions & {
         readonly route?: string;
-        readonly retryable?: boolean;
+        readonly mutation?: ProductBrowserLocalTransportMutationState;
     });
 }
 /**
