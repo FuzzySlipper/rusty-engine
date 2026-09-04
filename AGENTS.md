@@ -111,6 +111,10 @@ full guide.
   actual question. Do not chase old documentation, provider-wide, browser,
   packaging, security, conformance, or downstream-Rust gates without a task
   requirement.
+- When Engine and a downstream product advance together, do not leave the
+  product on an older known-good pair after Engine advances. Update it to the
+  exact current pair before completion; if that pair has not been produced,
+  leave the downstream failure visible and report it rather than pinning back.
 - Preserve unrelated work and follow the task's branch and promotion
   instructions.
 
