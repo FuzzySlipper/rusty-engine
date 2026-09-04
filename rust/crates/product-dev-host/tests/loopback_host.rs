@@ -28,6 +28,7 @@ struct ReconnectRuntime {
     started: bool,
     starts: Arc<AtomicUsize>,
     attaches: Arc<AtomicUsize>,
+    fail_connect: bool,
 }
 
 struct OutputFailureRuntime {
@@ -110,6 +111,13 @@ impl ProductDevRuntime for ReconnectRuntime {
         ProductDevRuntimeReceipt<ProductDevOperationResult>,
         product_dev_host::ProductDevRuntimeError,
     > {
+        if self.fail_connect {
+            return Err(product_dev_host::ProductDevRuntimeError::new(
+                "FIXTURE_CONNECT_TAINTED",
+                "fixture start callback escaped after entry",
+            )
+            .unwrap());
+        }
         let operation = if self.started {
             self.attaches.fetch_add(1, Ordering::SeqCst);
             ProductDevOperationKind::Connect
@@ -498,6 +506,14 @@ fn start_reconnect(
     starts: Arc<AtomicUsize>,
     attaches: Arc<AtomicUsize>,
 ) -> product_dev_host::RunningProductDevHost {
+    start_reconnect_with_failure(starts, attaches, false)
+}
+
+fn start_reconnect_with_failure(
+    starts: Arc<AtomicUsize>,
+    attaches: Arc<AtomicUsize>,
+    fail_connect: bool,
+) -> product_dev_host::RunningProductDevHost {
     let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
         "index.html",
         "text/html; charset=utf-8",
@@ -510,6 +526,7 @@ fn start_reconnect(
             started: false,
             starts,
             attaches,
+            fail_connect,
         },
         ProductDevHostConfig::new(0, bundle),
     )
@@ -1052,6 +1069,23 @@ fn partial_fresh_baseline_reconnects_without_a_cursor_or_second_start() {
     assert_eq!(starts.load(Ordering::SeqCst), 1);
     assert_eq!(attaches.load(Ordering::SeqCst), 1);
     drop(retry);
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn fresh_sse_connect_replacement_error_requests_host_termination() {
+    let host = start_reconnect_with_failure(
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        true,
+    );
+    let origin = host.origin();
+    let response = request(
+        &origin,
+        "GET /__rusty/product/runtime/outputs/fresh HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
+    );
+    assert!(response.starts_with("HTTP/1.1 500"), "{response}");
+    assert!(host.termination_requested());
     host.shutdown().unwrap();
 }
 

@@ -993,6 +993,11 @@ pub struct CsharpProductRuntime {
     renderer_metrics_visible: bool,
     renderer_diagnostics_received_at: Option<Instant>,
     shutdown_called: bool,
+    /// A product callback crossed into managed code and did not complete its
+    /// host contract. Its managed state and this retained EngineServiceSet can
+    /// no longer be safely reused, even when an earlier immediate Engine
+    /// mutation already committed.
+    tainted: bool,
     diagnostics: ProductDevLog,
     pending_update_attribution: Option<ProductDevUpdateAttribution>,
 }
@@ -1233,6 +1238,7 @@ impl CsharpProductRuntime {
             renderer_metrics_visible: false,
             renderer_diagnostics_received_at: None,
             shutdown_called: false,
+            tainted: false,
             diagnostics: config.diagnostics,
             pending_update_attribution: None,
         })
@@ -2076,22 +2082,19 @@ impl CsharpProductRuntime {
             Ok(result) => result,
             Err(error) => {
                 let error = prefer_engine_call_error(&mut self.services, error);
-                self.discard_staged_call();
-                return Err(error);
+                return Err(self.taint_after_callback(error));
             }
         };
         let staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
-                self.discard_staged_call();
-                return Err(error.into());
+                return Err(self.taint_after_callback(error.into()));
             }
         };
         let mut outputs = match service_outputs(self.services.outputs(&staged)) {
             Ok(outputs) => outputs,
             Err(error) => {
-                self.discard_staged_call();
-                return Err(error);
+                return Err(self.taint_after_callback(error));
             }
         };
         // Clear only after staged Engine output has been converted. A failed
@@ -2163,6 +2166,21 @@ impl CsharpProductRuntime {
     fn discard_staged_call(&mut self) {
         self.services.discard_call();
         complete_product_call(&self.api, self.handle, false, false);
+    }
+
+    /// Latch the whole incarnation after a callback has started. Discarding
+    /// staged output is only local cleanup; it cannot undo immediate Engine
+    /// mutations or restore managed product state, so every later operation
+    /// must force a fresh process incarnation instead of retrying here.
+    fn taint_after_callback(
+        &mut self,
+        error: CsharpProductRuntimeError,
+    ) -> CsharpProductRuntimeError {
+        self.tainted = true;
+        self.pending_inputs.clear();
+        self.pending_recovery_outputs.clear();
+        self.discard_staged_call();
+        error
     }
 
     /// Advances the input binding fence after a host or callback-facing queue
@@ -2244,27 +2262,23 @@ impl CsharpProductRuntime {
             Ok(()) => {}
             Err(error) => {
                 let error = prefer_engine_call_error(&mut self.services, error);
-                self.discard_staged_call();
-                return Err(error);
+                return Err(self.taint_after_callback(error));
             }
         }
         let mut staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
-                self.discard_staged_call();
-                return Err(error.into());
+                return Err(self.taint_after_callback(error.into()));
             }
         };
         // Convert the complete staged output before the Rust lifecycle is
         // changed. The later UI retag is infallible: it changes only the
         // already-typed runtime binding of an already validated envelope.
         if let Err(error) = service_outputs(self.services.outputs(&staged)) {
-            self.discard_staged_call();
-            return Err(error);
+            return Err(self.taint_after_callback(error));
         }
         if let Err(error) = transition(&mut self.lifecycle) {
-            self.discard_staged_call();
-            return Err(lifecycle_error(error));
+            return Err(self.taint_after_callback(lifecycle_error(error)));
         }
         let binding = ui_binding(&self.lifecycle);
         staged.rebind_ui_runtime(binding);
@@ -2364,6 +2378,10 @@ impl CsharpProductRuntime {
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
         let error = ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
             .expect("fixed bounded NativeAOT error");
+        if self.tainted {
+            self.publish_diagnostic(&error);
+            return Err(error);
+        }
         self.resync_operation_runtime_error(operation, error)
     }
 
@@ -2504,6 +2522,7 @@ impl CsharpProductRuntime {
         operation: ProductDevLifecycleOperation,
         binding: Option<ProductDevRuntimeBinding>,
     ) -> Result<(), ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         if operation == ProductDevLifecycleOperation::Start
             && self.lifecycle.state() == RuntimeState::Created
             && binding.is_none_or(|value| value == self.binding())
@@ -2517,6 +2536,7 @@ impl CsharpProductRuntime {
         &self,
         binding: Option<ProductDevRuntimeBinding>,
     ) -> Result<(), ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         if binding == Some(self.binding()) {
             return Ok(());
         }
@@ -2532,6 +2552,7 @@ impl CsharpProductRuntime {
     /// transition, because the Rust lifecycle remains the authority that
     /// decides whether a new generation can be admitted.
     fn require_restart_state(&self) -> Result<(), ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         if matches!(
             self.lifecycle.state(),
             RuntimeState::Running | RuntimeState::Paused | RuntimeState::Faulted
@@ -2546,6 +2567,17 @@ impl CsharpProductRuntime {
             ),
         )
         .expect("fixed lifecycle-state diagnostic"))
+    }
+
+    fn require_not_tainted(&self) -> Result<(), ProductDevRuntimeError> {
+        if !self.tainted {
+            return Ok(());
+        }
+        Err(ProductDevRuntimeError::new(
+            "CSHARP_RUNTIME_TAINTED",
+            "a C# product callback escaped after entry; replace this runtime incarnation",
+        )
+        .expect("fixed tainted-runtime diagnostic"))
     }
 
     fn tag_complete_baseline(
@@ -2646,6 +2678,9 @@ impl ProductDevRuntime for CsharpProductRuntime {
     }
 
     fn realtime_schedule_state(&self) -> ProductDevRuntimeScheduleState {
+        if self.tainted {
+            return ProductDevRuntimeScheduleState::Shutdown;
+        }
         if !matches!(self.lifecycle.mode(), RuntimeMode::Realtime) {
             return ProductDevRuntimeScheduleState::Unsupported;
         }
@@ -2673,6 +2708,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
     fn connect(
         &mut self,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         if self.lifecycle.state() == RuntimeState::Created {
             return self.lifecycle_with_binding(ProductDevLifecycleOperation::Start, None);
         }
@@ -2843,6 +2879,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         batch: ProductDevInputBatch,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevInputResult>, ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         if self.lifecycle.state() != RuntimeState::Running {
             return Err(ProductDevRuntimeError::new_not_applied(
                 "CSHARP_INPUT_STATE",
@@ -2902,6 +2939,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
     fn recover_input_overflow(
         &mut self,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         self.recover_pending_input_overflow()
     }
 
@@ -2909,6 +2947,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         command: &str,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevDebugResult>, ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         if let Some(action) = renderer_debug_command(command) {
             let result = self.execute_renderer_debug(action)?;
             return ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error);
@@ -2965,6 +3004,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         ProductDevRuntimeReceipt<product_dev_host::ProductDevDebugCatalog>,
         ProductDevRuntimeError,
     > {
+        self.require_not_tainted()?;
         let Some((describe, release)) = self.api.debug_describe else {
             return ProductDevRuntimeReceipt::new(
                 product_dev_host::ProductDevDebugCatalog::unavailable().with_renderer_diagnostics(),
@@ -2990,6 +3030,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         observed_time_ns: CanonicalU64,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         let admission = self
             .lifecycle
             .advance_realtime(HostMonotonicTime::from_nanoseconds(observed_time_ns.get()))
@@ -3023,6 +3064,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
     fn admit_demand_step(
         &mut self,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         let admission = self
             .lifecycle
             .admit_demand_step()
@@ -3045,6 +3087,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         &mut self,
         step: CanonicalU64,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.require_not_tainted()?;
         let admission = self
             .lifecycle
             .admit_external_step(ExternalStep::new(step.get()))
@@ -3067,6 +3110,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         completion: ProductDevTimelineCompletion,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>, ProductDevRuntimeError>
     {
+        self.require_not_tainted()?;
         let envelope = completion.envelope();
         let ticket = CanonicalU64::new(envelope.ticket().value());
         let binding = envelope.binding();
@@ -3539,7 +3583,7 @@ impl Drop for CsharpProductRuntime {
         if self.handle.is_null() {
             return;
         }
-        if !self.shutdown_called {
+        if !self.shutdown_called && !self.tainted {
             // Implicit shutdown has the same service-transaction composition
             // as an explicit lifecycle action. In particular, a managed lease
             // release cannot run outside a call and vanish before terminal
@@ -3557,6 +3601,22 @@ impl Drop for CsharpProductRuntime {
                 self.pending_inputs.clear();
                 self.shutdown_called = true;
             }
+        }
+        if self.tainted {
+            eprintln!(
+                "CsharpProductRuntime implicit shutdown skipped: callback-tainted runtime requires replacement"
+            );
+            // `destroy` reaches ProductLifetime.Dispose in generated managed
+            // code, so it is another product callback boundary. Replacement
+            // exits this process immediately after host teardown; do not turn
+            // that process exit into an in-process cleanup callback.
+            if let LoadedProductHost::NativeAot(library) = &mut self.api.host {
+                if let Some(library) = library.take() {
+                    std::mem::forget(library);
+                }
+            }
+            self.handle = ptr::null_mut();
+            return;
         }
         // Product Dispose may release Engine leases. Mark the generated
         // coordinator terminal before it runs so final teardown is locally
@@ -5418,7 +5478,7 @@ fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDe
 mod tests {
     use super::*;
     use std::sync::{
-        atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering},
         Mutex,
     };
 
@@ -5428,6 +5488,11 @@ mod tests {
     static DROP_FIXTURE_GATE: Mutex<()> = Mutex::new(());
     static DROP_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(ABI_OK);
     static UPDATE_CALLBACK_STATUS: AtomicI32 = AtomicI32::new(ABI_OK);
+    static UPDATE_CALLBACK_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC: AtomicBool = AtomicBool::new(false);
+    static UPDATE_CALLBACK_DIAGNOSTIC_STATUS: AtomicI32 = AtomicI32::new(0);
+    static FIXTURE_DIAGNOSTICS_CONTEXT: AtomicUsize = AtomicUsize::new(0);
+    static FIXTURE_DIAGNOSTICS_PUBLISH: AtomicUsize = AtomicUsize::new(0);
     static DROP_EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
     static PRODUCT_ERROR_RELEASES: AtomicUsize = AtomicUsize::new(0);
     static DIRECT_INPUT_FIXTURE_GATE: Mutex<()> = Mutex::new(());
@@ -5678,10 +5743,23 @@ mod tests {
         DROP_EVENTS.lock().expect("drop fixture events").push(event);
     }
 
+    fn fixture_utf8(bytes: &'static [u8]) -> NativeUtf8Slice {
+        NativeUtf8Slice {
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        }
+    }
+
     unsafe extern "C" fn drop_fixture_create(
-        _args: *const NativeProductCreateArgs,
+        args: *const NativeProductCreateArgs,
         handle: *mut *mut c_void,
     ) -> i32 {
+        // SAFETY: product creation receives the live Engine service table;
+        // this fixture copies only the one diagnostics function/context needed
+        // by its immediate update callback.
+        let diagnostics = unsafe { (*args).engine.diagnostics };
+        FIXTURE_DIAGNOSTICS_CONTEXT.store(diagnostics.context as usize, Ordering::SeqCst);
+        FIXTURE_DIAGNOSTICS_PUBLISH.store(diagnostics.publish as usize, Ordering::SeqCst);
         // SAFETY: the fixture provides a non-null opaque value which is never
         // dereferenced by its callbacks.
         unsafe { *handle = std::ptr::NonNull::<u8>::dangling().as_ptr().cast() };
@@ -5702,6 +5780,25 @@ mod tests {
         _args: *const NativeProductUpdateArgs,
         result: *mut NativeProductUpdateResult,
     ) -> i32 {
+        UPDATE_CALLBACK_CALLS.fetch_add(1, Ordering::SeqCst);
+        if UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.swap(false, Ordering::SeqCst) {
+            let publish = FIXTURE_DIAGNOSTICS_PUBLISH.load(Ordering::SeqCst);
+            let context = FIXTURE_DIAGNOSTICS_CONTEXT.load(Ordering::SeqCst);
+            let request = NativeDiagnosticsPublishRequest {
+                severity: NativeDiagnosticsSeverity::Info,
+                disposition: NativeDiagnosticsDisposition::Accepted,
+                source: fixture_utf8(b"fixture"),
+                code: fixture_utf8(b"FIXTURE_IMMEDIATE_MUTATION"),
+                message: fixture_utf8(b"committed before callback escape"),
+                correlation: fixture_utf8(b"fixture-update"),
+            };
+            // SAFETY: `drop_fixture_create` captured this function table from
+            // the currently loaded runtime; the call occurs synchronously
+            // inside its update callback while the service set remains live.
+            let publish: NativePublishDiagnostics = unsafe { std::mem::transmute(publish) };
+            let status = unsafe { publish(context as *mut c_void, &request) };
+            UPDATE_CALLBACK_DIAGNOSTIC_STATUS.store(status, Ordering::SeqCst);
+        }
         // SAFETY: the fixture owns the provided writable result pointer.
         unsafe { *result = NativeProductUpdateResult::None };
         UPDATE_CALLBACK_STATUS.load(Ordering::SeqCst)
@@ -5845,6 +5942,27 @@ mod tests {
         (runtime, root)
     }
 
+    fn drop_fixture_runtime_with_diagnostics(
+        label: &str,
+        diagnostics: ProductDevLog,
+    ) -> (CsharpProductRuntime, PathBuf) {
+        let root = content_fixture_root(label);
+        fs::create_dir_all(&root).expect("drop fixture content root");
+        let content = CsharpProductContent::admit(&root).expect("drop fixture content");
+        let runtime = CsharpProductRuntime::load_admitted_with(
+            content,
+            CsharpProductRuntimeConfig::new(
+                RuntimeInstanceId::new(1),
+                RuntimeLifecycleConfig::Demand,
+                Vec::new(),
+            )
+            .with_diagnostics(diagnostics),
+            || Ok(drop_fixture_api()),
+        )
+        .expect("drop fixture runtime");
+        (runtime, root)
+    }
+
     fn direct_input_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
         let root = content_fixture_root(label);
         fs::create_dir_all(&root).expect("direct-input fixture content root");
@@ -5892,34 +6010,55 @@ mod tests {
     }
 
     #[test]
-    fn post_admission_update_failure_returns_current_resync_receipt() {
+    fn escaped_update_taints_the_incarnation_and_skips_drop_shutdown() {
         let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        DROP_EVENTS.lock().expect("drop fixture events").clear();
+        let diagnostics = ProductDevLog::new(Default::default()).expect("fixture diagnostics");
+        UPDATE_CALLBACK_CALLS.store(0, Ordering::SeqCst);
+        UPDATE_CALLBACK_PUBLISH_DIAGNOSTIC.store(true, Ordering::SeqCst);
+        UPDATE_CALLBACK_DIAGNOSTIC_STATUS.store(0, Ordering::SeqCst);
         UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
-        let (mut runtime, root) = drop_fixture_runtime("post-admission-resync");
+        let (mut runtime, root) =
+            drop_fixture_runtime_with_diagnostics("tainted-update", diagnostics.clone());
         runtime
             .lifecycle(ProductDevLifecycleOperation::Start)
             .expect("fixture start");
-        let receipt = runtime
+        let error = runtime
             .admit_demand_step()
-            .expect("post-admission failures are typed receipts");
-        let result = receipt.result();
-        assert!(!result.is_accepted());
+            .expect_err("escaped callback requires replacement");
         assert_eq!(
-            result.disposition(),
-            ProductDevFaultDisposition::ResyncRequired
+            error.recovery().next_action(),
+            product_dev_host::ProductDevNextAction::ReplaceIncarnation
         );
-        assert_eq!(result.admitted_through(), Some(CanonicalU64::new(0)));
-        let encoded = serde_json::to_value(result).expect("resync receipt serializes");
-        assert_eq!(encoded["binding"]["instanceId"], "1");
-        assert_eq!(encoded["nextInputSequence"], "1");
-        assert_eq!(encoded["readout"]["admittedSimulationSteps"], "1");
-        assert_eq!(encoded["disposition"], "resync-required");
-        assert_eq!(encoded["recovery"]["mutation"], "unknown");
-        assert_eq!(encoded["recovery"]["invalidatedScope"], "incarnation");
-        assert_eq!(encoded["recovery"]["nextAction"], "replace-incarnation");
+        assert_eq!(
+            UPDATE_CALLBACK_DIAGNOSTIC_STATUS.load(Ordering::SeqCst),
+            ABI_OK
+        );
+        assert!(
+            diagnostics
+                .snapshot()
+                .events
+                .iter()
+                .any(|event| event.code() == "FIXTURE_IMMEDIATE_MUTATION"),
+            "the immediate Engine diagnostics mutation remains committed after callback escape"
+        );
+        assert_eq!(UPDATE_CALLBACK_CALLS.load(Ordering::SeqCst), 1);
+        let later = runtime
+            .admit_demand_step()
+            .expect_err("tainted runtime refuses a later product callback");
+        assert_eq!(later.code(), "CSHARP_RUNTIME_TAINTED");
+        assert_eq!(
+            later.recovery().next_action(),
+            product_dev_host::ProductDevNextAction::ReplaceIncarnation
+        );
+        assert_eq!(UPDATE_CALLBACK_CALLS.load(Ordering::SeqCst), 1);
         UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
         drop(runtime);
-        fs::remove_dir_all(root).expect("remove post-admission fixture content");
+        let events = DROP_EVENTS.lock().expect("drop fixture events").clone();
+        assert!(!events.contains(&"shutdown"));
+        assert!(!events.contains(&"terminal"));
+        assert!(!events.contains(&"destroy"));
+        fs::remove_dir_all(root).expect("remove tainted fixture content");
     }
 
     unsafe extern "C" fn debug_semantic_failure(
@@ -6083,7 +6222,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_implicit_shutdown_discards_before_terminal_disposal_without_replay() {
+    fn failed_implicit_shutdown_taints_without_terminal_product_disposal() {
         let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
         DROP_CALLBACK_STATUS.store(41, Ordering::SeqCst);
         DROP_EVENTS.lock().expect("drop fixture events").clear();
@@ -6093,7 +6232,7 @@ mod tests {
         drop(runtime);
         assert_eq!(
             DROP_EVENTS.lock().expect("drop fixture events").as_slice(),
-            ["shutdown", "discard", "terminal", "destroy"],
+            ["shutdown", "discard"],
         );
         DROP_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
         fs::remove_dir_all(root).expect("remove drop fixture content");

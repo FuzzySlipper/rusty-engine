@@ -16,7 +16,7 @@ use csharp_product_runtime::{
 };
 use product_dev_host::{
     ProductDevBundle, ProductDevBundleEntry, ProductDevHost, ProductDevHostConfig, ProductDevLog,
-    ProductDevRendererResource,
+    ProductDevRendererResource, RunningProductDevHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -148,7 +148,7 @@ fn main() -> Result<(), String> {
             host.origin()
         );
         println!("Press Ctrl+C to stop.");
-        wait_for_process_termination(args.supervised);
+        wait_for_process_termination(args.supervised, &host);
     }
     Ok(())
 }
@@ -215,25 +215,44 @@ fn print_runtime_identity(machine_readable: bool) {
 /// closing it is its cross-platform clean-replacement signal. Returning here
 /// lets `RunningProductDevHost` and then `CsharpProductRuntime` execute their
 /// normal shutdown/drop ordering before the process exits.
-fn wait_for_process_termination(supervised: bool) {
+fn wait_for_process_termination(supervised: bool, host: &RunningProductDevHost) {
     let termination = install_termination_signal_hook();
     if supervised {
-        let mut input = std::io::stdin();
-        let mut byte = [0_u8; 1];
+        // Keep stdin as the supervisor's clean-stop mechanism, but read it on
+        // a helper so a terminal runtime recovery can wake this foreground
+        // owner without waiting for the supervisor to close the pipe.
+        let supervisor_stdin_closed = Arc::new(AtomicBool::new(false));
+        let reader_closed = Arc::clone(&supervisor_stdin_closed);
+        std::thread::spawn(move || {
+            let mut input = std::io::stdin();
+            let mut byte = [0_u8; 1];
+            while input.read(&mut byte).is_ok_and(|count| count != 0) {}
+            reader_closed.store(true, Ordering::Release);
+        });
         while !termination.load(Ordering::Relaxed)
-            && input.read(&mut byte).is_ok_and(|count| count != 0)
-        {}
-        let reason = if termination.load(Ordering::Relaxed) {
+            && !supervisor_stdin_closed.load(Ordering::Acquire)
+            && !host.termination_requested()
+        {
+            std::thread::park_timeout(std::time::Duration::from_millis(50));
+        }
+        let reason = if host.termination_requested() {
+            "replace-incarnation"
+        } else if termination.load(Ordering::Relaxed) {
             "termination-signal"
         } else {
             "supervisor-stdin-closed"
         };
         println!("RUSTY_HOST shutdown={{\"reason\":\"{reason}\"}}");
     } else {
-        while !termination.load(Ordering::Relaxed) {
+        while !termination.load(Ordering::Relaxed) && !host.termination_requested() {
             std::thread::park_timeout(std::time::Duration::from_millis(100));
         }
-        println!("RUSTY_HOST shutdown={{\"reason\":\"termination-signal\"}}");
+        let reason = if host.termination_requested() {
+            "replace-incarnation"
+        } else {
+            "termination-signal"
+        };
+        println!("RUSTY_HOST shutdown={{\"reason\":\"{reason}\"}}");
     }
 }
 

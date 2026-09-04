@@ -20,12 +20,12 @@ use crate::{
     ProductDevBrowserDiagnosticsResult, ProductDevBrowserHostState, ProductDevBundle,
     ProductDevControlOperation, ProductDevHostError, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
-    ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult, ProductDevRuntime,
-    ProductDevRuntimeError, ProductDevRuntimeOutput, ProductDevRuntimeReceipt,
-    ProductDevTelemetrySnapshot, ProductDevTimelineCompletion, ProductDevUpdateAttribution,
-    ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
-    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
-    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevLogSeverity, ProductDevNextAction, ProductDevOperationKind,
+    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
+    ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
+    ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, MAX_CONNECTIONS,
+    MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES,
+    MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -216,14 +216,19 @@ impl RunningProductDevHost {
         format!("http://{}", self.address)
     }
 
+    /// A terminal runtime recovery asks the foreground product-host process to
+    /// leave this incarnation. The outer `rusty dev` supervisor remains the
+    /// owner of replacement and observes the resulting child exit.
+    pub fn termination_requested(&self) -> bool {
+        self.shutdown.load(Ordering::Acquire)
+    }
+
     pub fn shutdown(mut self) -> Result<(), ProductDevHostError> {
         self.stop()
     }
 
     fn stop(&mut self) -> Result<(), ProductDevHostError> {
-        if self.shutdown.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
+        let was_shutdown = self.shutdown.swap(true, Ordering::SeqCst);
         // Stop the host-owned realtime loop first. It may be in a product
         // callback, so joining it before connection handlers/runtime drop
         // preserves one clear teardown order and prevents post-shutdown work.
@@ -236,7 +241,9 @@ impl RunningProductDevHost {
         }
         // Wake a nonblocking accept loop promptly. The connection is accepted
         // and observes the same shutdown flag before it parses a request.
-        let _ = TcpStream::connect_timeout(&self.address, SOCKET_TIMEOUT);
+        if !was_shutdown || self.listener_thread.is_some() {
+            let _ = TcpStream::connect_timeout(&self.address, SOCKET_TIMEOUT);
+        }
         if let Some(thread) = self.listener_thread.take() {
             thread.join().map_err(|_| {
                 ProductDevHostError::new("DEV_HOST_THREAD_JOIN", "listener thread panicked")
@@ -732,6 +739,7 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
                         error.diagnostic(),
                         [],
                     );
+                    request_incarnation_replacement(&state, &error);
                 }
             }
             Err(error) => {
@@ -743,6 +751,7 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
                     error.diagnostic(),
                     [],
                 );
+                request_incarnation_replacement(&state, &error);
             }
         }
         let after = Instant::now();
@@ -751,6 +760,28 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             .filter(|deadline| *deadline > after)
             .unwrap_or_else(|| after + fixed_interval);
     }
+}
+
+fn request_incarnation_replacement<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    error: &ProductDevRuntimeError,
+) {
+    if error.recovery().next_action() != ProductDevNextAction::ReplaceIncarnation {
+        return;
+    }
+    if state.shutdown.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    publish_host_diagnostic(
+        &state.diagnostics,
+        ProductDevLogSeverity::Error,
+        ProductDevLogDisposition::Terminal,
+        "DEV_HOST_REPLACE_INCARNATION",
+        "runtime recovery requires a fresh product-host process incarnation",
+        [("cause", error.code().to_owned())],
+    );
+    state.scheduler_wake.notify();
+    state.output_wake.notify();
 }
 
 fn disposition_for_runtime_error(error: &ProductDevRuntimeError) -> ProductDevLogDisposition {
@@ -1749,6 +1780,7 @@ where
                     )
                     .expect("runtime diagnostics are bounded"),
                 );
+                request_incarnation_replacement(state, &error);
                 return Ok((match error_result(error) {
                     Ok(result) => json_response(200, &result),
                     Err(host_error) => {
@@ -1937,6 +1969,7 @@ fn handle_sse<R: ProductDevRuntime>(
                     return;
                 }
                 Err(error) => {
+                    request_incarnation_replacement(&state, &error);
                     let _ = write_response(
                         &mut stream,
                         HttpResponse::error(500, error.code(), error.diagnostic()),

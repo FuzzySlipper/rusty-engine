@@ -21,6 +21,8 @@ const STAGED_PRODUCT_PROPERTY: &str = "RustyEngineStagedProductDirectory";
 const WATCH_PATHS_PROPERTY: &str = "RustyEngineWatchPaths";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CLEAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const UNEXPECTED_EXIT_RESTART_BACKOFF: Duration = Duration::from_millis(100);
+const MAX_UNEXPECTED_EXITS_PER_ARTIFACT: u8 = 2;
 static NEXT_SUPERVISED_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 const IGNORED_WATCH_DIRECTORY_NAMES: &[&str] = &[
     ".git",
@@ -53,12 +55,13 @@ fn dev(options: DevOptions) -> Result<(), String> {
     verify_staged_product(&staged)?;
     let mut watches = query_watch_paths(&options.project)?;
     let mut snapshot = FileSnapshot::capture(&watches)?;
-    let mut child = SupervisedHost::start(
+    let mut child = Some(SupervisedHost::start(
         &runtime.host,
         &staged,
         &persistence_root,
         &content_store_root,
-    )?;
+    )?);
+    let mut crash_budget = CrashBudget::new(MAX_UNEXPECTED_EXITS_PER_ARTIFACT);
 
     diagnostic(
         "started",
@@ -70,16 +73,62 @@ fn dev(options: DevOptions) -> Result<(), String> {
             "runtimePack": runtime.root,
             "loader": "coreclr",
             "watchPaths": watches,
-            "pid": child.child.id(),
-            "runtimeInstanceId": child.runtime_instance_id,
+            "pid": child.as_ref().expect("initial child is present").child.id(),
+            "runtimeInstanceId": child.as_ref().expect("initial child is present").runtime_instance_id,
         }),
     );
 
     loop {
-        if let Some(status) = child.try_wait()? {
-            return Err(format!(
-                "RUSTY_DEV_CHILD_EXIT: CoreCLR product host exited unexpectedly with {status}"
-            ));
+        if let Some(active_child) = child.as_mut() {
+            if let Some(status) = active_child.try_wait()? {
+                let exited_child = child.take().expect("observed child is present");
+                diagnostic(
+                    "child-exited-unexpectedly",
+                    serde_json::json!({
+                        "pid": exited_child.child.id(),
+                        "status": status.code(),
+                        "runtimeInstanceId": exited_child.runtime_instance_id,
+                    }),
+                );
+                match crash_budget.record_unexpected_exit() {
+                    CrashBudgetDecision::Restart { backoff } => {
+                        diagnostic(
+                            "restart-backoff",
+                            serde_json::json!({
+                                "backoffMs": backoff.as_millis(),
+                                "unexpectedExitCount": crash_budget.unexpected_exit_count(),
+                            }),
+                        );
+                        thread::sleep(backoff);
+                        let restarted = SupervisedHost::start(
+                            &runtime.host,
+                            &staged,
+                            &persistence_root,
+                            &content_store_root,
+                        )?;
+                        diagnostic(
+                            "restarted-after-unexpected-exit",
+                            serde_json::json!({
+                                "pid": restarted.child.id(),
+                                "runtimeInstanceId": restarted.runtime_instance_id,
+                                "unexpectedExitCount": crash_budget.unexpected_exit_count(),
+                            }),
+                        );
+                        child = Some(restarted);
+                    }
+                    CrashBudgetDecision::PausedFault => {
+                        diagnostic(
+                            "paused-fault",
+                            serde_json::json!({
+                                "reason": "unexpected-child-exit-budget-exhausted",
+                                "unexpectedExitCount": crash_budget.unexpected_exit_count(),
+                                "crashBudget": crash_budget.limit(),
+                                "productDirectory": staged,
+                            }),
+                        );
+                    }
+                }
+            }
         }
         thread::sleep(POLL_INTERVAL);
         let next = FileSnapshot::capture(&watches)?;
@@ -91,18 +140,21 @@ fn dev(options: DevOptions) -> Result<(), String> {
             "change-detected",
             serde_json::json!({ "watchPaths": watches }),
         );
-        child.stop_cleanly()?;
+        if let Some(mut active_child) = child.take() {
+            active_child.stop_cleanly()?;
+        }
         let staged = stage_product(&options)?;
         verify_staged_product(&staged)?;
         let refreshed_watches = query_watch_paths(&options.project)?;
         snapshot = FileSnapshot::capture(&refreshed_watches)?;
         watches = refreshed_watches;
-        child = SupervisedHost::start(
+        crash_budget.reset_after_successful_restage();
+        child = Some(SupervisedHost::start(
             &runtime.host,
             &staged,
             &persistence_root,
             &content_store_root,
-        )?;
+        )?);
         diagnostic(
             "restarted",
             serde_json::json!({
@@ -111,10 +163,58 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 "contentStoreRoot": content_store_root,
                 "loader": "coreclr",
                 "watchPaths": watches,
-                "pid": child.child.id(),
-                "runtimeInstanceId": child.runtime_instance_id,
+                "pid": child.as_ref().expect("restarted child is present").child.id(),
+                "runtimeInstanceId": child.as_ref().expect("restarted child is present").runtime_instance_id,
+                "crashBudgetReset": true,
             }),
         );
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CrashBudgetDecision {
+    Restart { backoff: Duration },
+    PausedFault,
+}
+
+/// Pure, per-staged-artifact crash-loop state. It deliberately does not infer
+/// health from process age or an HTTP request: only a successful source
+/// restage permits another replacement attempt after the budget is exhausted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CrashBudget {
+    limit: u8,
+    unexpected_exits: u8,
+}
+
+impl CrashBudget {
+    const fn new(limit: u8) -> Self {
+        Self {
+            limit,
+            unexpected_exits: 0,
+        }
+    }
+
+    fn record_unexpected_exit(&mut self) -> CrashBudgetDecision {
+        self.unexpected_exits = self.unexpected_exits.saturating_add(1);
+        if self.unexpected_exits >= self.limit {
+            CrashBudgetDecision::PausedFault
+        } else {
+            CrashBudgetDecision::Restart {
+                backoff: UNEXPECTED_EXIT_RESTART_BACKOFF,
+            }
+        }
+    }
+
+    const fn reset_after_successful_restage(&mut self) {
+        self.unexpected_exits = 0;
+    }
+
+    const fn unexpected_exit_count(self) -> u8 {
+        self.unexpected_exits
+    }
+
+    const fn limit(self) -> u8 {
+        self.limit
     }
 }
 
@@ -697,6 +797,38 @@ fn diagnostic(event: &str, detail: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crash_budget_restarts_once_then_pauses_for_the_same_artifact() {
+        let mut budget = CrashBudget::new(2);
+        assert_eq!(
+            budget.record_unexpected_exit(),
+            CrashBudgetDecision::Restart {
+                backoff: UNEXPECTED_EXIT_RESTART_BACKOFF
+            }
+        );
+        assert_eq!(
+            budget.record_unexpected_exit(),
+            CrashBudgetDecision::PausedFault
+        );
+        assert_eq!(budget.unexpected_exit_count(), 2);
+    }
+
+    #[test]
+    fn successful_restage_resets_a_paused_crash_budget() {
+        let mut budget = CrashBudget::new(2);
+        let _ = budget.record_unexpected_exit();
+        assert_eq!(
+            budget.record_unexpected_exit(),
+            CrashBudgetDecision::PausedFault
+        );
+        budget.reset_after_successful_restage();
+        assert_eq!(budget.unexpected_exit_count(), 0);
+        assert!(matches!(
+            budget.record_unexpected_exit(),
+            CrashBudgetDecision::Restart { .. }
+        ));
+    }
 
     #[test]
     fn dev_options_are_explicit_and_coreclr_scoped() {
