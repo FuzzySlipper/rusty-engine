@@ -591,6 +591,7 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
             ));
         }
     }
+    validate_webp_texture_extensions(&json_document)?;
     let parsed = gltf::Gltf::from_slice(source).map_err(|error| {
         ImportDiagnostic::error(
             ImportCode::InvalidContainer,
@@ -680,12 +681,12 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
                 ));
             }
             ImageSource::View { view, mime_type } => {
-                if !matches!(mime_type, "image/png" | "image/jpeg") {
+                if !matches!(mime_type, "image/png" | "image/jpeg" | "image/webp") {
                     return Err(ImportDiagnostic::error(
                         ImportCode::UnsupportedFeature,
                         format!("source.images[{}].mimeType", image.index()),
                         format!("embedded image MIME type `{mime_type}` is not admitted"),
-                        "embed a PNG or JPEG image",
+                        "embed a PNG, JPEG, or WebP image",
                     ));
                 }
                 if view.length() == 0 || view.length() > MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES {
@@ -718,7 +719,79 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
 }
 
 fn is_admitted_extension(extension: &str) -> bool {
-    matches!(extension, "KHR_materials_unlit" | "KHR_texture_transform")
+    matches!(
+        extension,
+        "EXT_texture_webp" | "KHR_materials_unlit" | "KHR_texture_transform"
+    )
+}
+
+/// `gltf`'s `allow_empty_texture` feature is necessary because the glTF 2.0
+/// representation of `EXT_texture_webp` deliberately omits the core texture
+/// source. Keep that parser accommodation narrow at the Engine boundary: an
+/// otherwise empty texture remains invalid unless the extension supplies one
+/// indexed embedded WebP image.
+fn validate_webp_texture_extensions(document: &serde_json::Value) -> Result<(), ImportDiagnostic> {
+    let images = document
+        .get("images")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let Some(textures) = document
+        .get("textures")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(());
+    };
+
+    for (texture_index, texture) in textures.iter().enumerate() {
+        let Some(texture) = texture.as_object() else {
+            // The glTF parser provides the ordinary structural diagnostic.
+            continue;
+        };
+        let extension = texture
+            .get("extensions")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|extensions| extensions.get("EXT_texture_webp"));
+        let texture_locus = format!("source.textures[{texture_index}]");
+        let Some(extension) = extension else {
+            if !texture.contains_key("source") {
+                return Err(ImportDiagnostic::error(
+                    ImportCode::InvalidContainer,
+                    format!("{texture_locus}.source"),
+                    "texture omits core source without EXT_texture_webp source",
+                    "provide a core image source or one EXT_texture_webp image source",
+                ));
+            }
+            continue;
+        };
+        let source = extension
+            .as_object()
+            .and_then(|extension| extension.get("source"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|index| *index < images.len())
+            .ok_or_else(|| {
+                ImportDiagnostic::error(
+                    ImportCode::InvalidContainer,
+                    format!("{texture_locus}.extensions.EXT_texture_webp.source"),
+                    "EXT_texture_webp source must be one valid image index",
+                    "reference one declared embedded WebP image",
+                )
+            })?;
+        let mime_type = images[source]
+            .as_object()
+            .and_then(|image| image.get("mimeType"))
+            .and_then(serde_json::Value::as_str);
+        if mime_type != Some("image/webp") {
+            return Err(ImportDiagnostic::error(
+                ImportCode::UnsupportedFeature,
+                format!("source.images[{source}].mimeType"),
+                "EXT_texture_webp must reference an image/webp image",
+                "embed a WebP image for the extension texture source",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn extension_names(

@@ -398,6 +398,88 @@ fn animated_glb_admits_bounded_texture_transform_and_retains_exact_bytes() {
 }
 
 #[test]
+fn animated_glb_admits_required_embedded_webp_texture_extension_and_retains_exact_bytes() {
+    let source = embedded_webp_texture_extension_glb();
+    let uri = SourceUri::RelativePath("content/actors/webp-character.glb".to_owned());
+
+    let imported = import_animated_glb_asset(&uri, &source, &ImportContext::default());
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+    let assets = imported.assets.expect("embedded WebP GLB is admitted");
+    assert_eq!(assets.runtime_resource_bytes, source);
+    assert_eq!(
+        assets.receipt.source_hash,
+        format!("sha256:{:x}", sha2::Sha256::digest(&source))
+    );
+    assert_eq!(assets.receipt.texture_count, 1);
+    assert_eq!(assets.receipt.image_count, 1);
+    assert_eq!(
+        assets.animated_mesh.embedded_material_slots,
+        vec![render_model::AnimatedMeshEmbeddedMaterialSlot {
+            slot: 0,
+            source_material_slot: 0,
+        }]
+    );
+}
+
+#[test]
+fn animated_glb_rejects_empty_or_malformed_webp_extension_texture_sources() {
+    let valid = embedded_webp_texture_extension_glb();
+    let cases = [
+        (
+            rewrite_glb_json(&valid, |root| {
+                root["textures"][0]["extensions"]["EXT_texture_webp"]["source"] =
+                    serde_json::json!("0");
+            }),
+            ImportCode::InvalidContainer,
+            "source.textures[0].extensions.EXT_texture_webp.source",
+        ),
+        (
+            rewrite_glb_json(&valid, |root| {
+                root["textures"][0]["extensions"]["EXT_texture_webp"]["source"] =
+                    serde_json::json!(99);
+            }),
+            ImportCode::InvalidContainer,
+            "source.textures[0].extensions.EXT_texture_webp.source",
+        ),
+        (
+            rewrite_glb_json(&valid, |root| {
+                root["images"][0]["mimeType"] = serde_json::json!("image/png");
+            }),
+            ImportCode::UnsupportedFeature,
+            "source.images[0].mimeType",
+        ),
+        (
+            rewrite_glb_json(&valid, |root| {
+                root["textures"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("extensions");
+            }),
+            ImportCode::InvalidContainer,
+            "source.textures[0].source",
+        ),
+    ];
+    for (source, code, locus) in cases {
+        let imported = import_animated_glb_asset(
+            &SourceUri::RelativePath("content/actors/invalid-webp.glb".to_owned()),
+            &source,
+            &ImportContext::default(),
+        );
+        assert!(imported.assets.is_none());
+        assert_eq!(
+            imported.diagnostics[0].code, code,
+            "{:?}",
+            imported.diagnostics
+        );
+        assert_eq!(
+            imported.diagnostics[0].locus, locus,
+            "{:?}",
+            imported.diagnostics
+        );
+    }
+}
+
+#[test]
 fn animated_glb_rejects_malformed_or_unrealizable_texture_transforms_atomically() {
     let cases = [
         (
@@ -520,6 +602,29 @@ fn binary_glb_closure_packs_external_image_and_admits_embedded_clips() {
         .map(|clip| clip.id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(clips, ["idle", "run", "jump"]);
+}
+
+#[test]
+fn glb_closure_keeps_basisu_and_dds_required_extensions_outside_the_admitted_contract() {
+    for extension in ["KHR_texture_basisu", "MSFT_texture_dds"] {
+        let source = test_glb(
+            &format!(
+                r#"{{
+                  "asset":{{"version":"2.0"}},
+                  "extensionsRequired":["{extension}"],
+                  "buffers":[{{"byteLength":4}}]
+                }}"#
+            ),
+            &[0; 4],
+        );
+        let error = admit_glb_source(&GlbSourceClosure {
+            root_glb: source,
+            resources: Vec::new(),
+        })
+        .expect_err("generic GLB packing must not admit {extension}");
+        assert_eq!(error.code, ImportCode::UnsupportedFeature);
+        assert_eq!(error.locus, "source.extensionsRequired");
+    }
 }
 
 #[test]
@@ -1535,6 +1640,61 @@ fn static_triangle_glb() -> Vec<u8> {
 
 fn static_unlit_glb() -> Vec<u8> {
     BASE64.decode(STATIC_UNLIT_GLB_BASE64.trim()).unwrap()
+}
+
+fn embedded_webp_texture_extension_glb() -> Vec<u8> {
+    // A valid one-pixel VP8 WebP. The fixture deliberately uses the extension
+    // form with no core texture source, matching the historical source shape.
+    const WEBP_1X1: &[u8] = &[
+        0x52, 0x49, 0x46, 0x46, 0x22, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38,
+        0x20, 0x16, 0x00, 0x00, 0x00, 0xd0, 0x01, 0x00, 0x9d, 0x01, 0x2a, 0x01, 0x00, 0x01, 0x00,
+        0x01, 0x40, 0x26, 0x25, 0xa4, 0x00, 0x03, 0x70, 0x00, 0xfe, 0xfb, 0x94, 0x00, 0x00,
+    ];
+    assert_eq!(&ANIMATED_GLB[..4], b"glTF");
+    let json_length = u32::from_le_bytes(ANIMATED_GLB[12..16].try_into().unwrap()) as usize;
+    let json_end = 20 + json_length;
+    let bin_header = json_end;
+    assert_eq!(
+        u32::from_le_bytes(
+            ANIMATED_GLB[bin_header + 4..bin_header + 8]
+                .try_into()
+                .unwrap()
+        ),
+        0x004e_4942
+    );
+    let bin_length =
+        u32::from_le_bytes(ANIMATED_GLB[bin_header..bin_header + 4].try_into().unwrap()) as usize;
+    let bin_start = bin_header + 8;
+    let mut root: serde_json::Value = serde_json::from_slice(&ANIMATED_GLB[20..json_end]).unwrap();
+    let mut bin = ANIMATED_GLB[bin_start..bin_start + bin_length].to_vec();
+    let webp_offset = bin.len();
+    bin.extend_from_slice(WEBP_1X1);
+
+    root["buffers"][0]["byteLength"] = serde_json::json!(bin.len());
+    let buffer_view_index = root["bufferViews"].as_array().unwrap().len();
+    root["bufferViews"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "buffer": 0,
+            "byteOffset": webp_offset,
+            "byteLength": WEBP_1X1.len()
+        }));
+    root["images"][0] = serde_json::json!({
+        "name": "embedded-webp",
+        "mimeType": "image/webp",
+        "bufferView": buffer_view_index
+    });
+    root["textures"][0] = serde_json::json!({
+        "sampler": 0,
+        "extensions": {"EXT_texture_webp": {"source": 0}}
+    });
+    root["extensionsUsed"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!("EXT_texture_webp"));
+    root["extensionsRequired"] = serde_json::json!(["EXT_texture_webp"]);
+    test_glb(&serde_json::to_string(&root).unwrap(), &bin)
 }
 
 fn external_gltf(glb: &[u8], buffer_uri: &str, image_uri: Option<&str>) -> GltfSourceClosure {

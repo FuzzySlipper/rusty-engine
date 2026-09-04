@@ -355,6 +355,7 @@ fn parse_root(root_json: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
             "send .glb sources through the existing binary import path",
         ));
     }
+    validate_required_extensions(&parsed)?;
     Ok(parsed)
 }
 
@@ -386,7 +387,28 @@ fn parse_glb_root(root_glb: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
             "send JSON glTF sources through the existing JSON closure path",
         ));
     }
+    validate_required_extensions(&parsed)?;
     Ok(parsed)
+}
+
+/// The shared parser must allow an omitted core texture source so an admitted
+/// `EXT_texture_webp` asset can reach the animated importer. Do not let that
+/// parser feature expand the package-level required-extension contract.
+fn validate_required_extensions(parsed: &gltf::Gltf) -> Result<(), ImportDiagnostic> {
+    for extension in parsed.document.extensions_required() {
+        if !matches!(
+            extension,
+            "EXT_texture_webp" | "KHR_materials_unlit" | "KHR_texture_transform"
+        ) {
+            return Err(error(
+                ImportCode::UnsupportedFeature,
+                "source.extensionsRequired",
+                format!("required glTF extension `{extension}` is not admitted"),
+                "export core glTF data or an admitted required extension",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn document_resource_uris(parsed: &gltf::Gltf) -> Vec<(String, &str)> {
