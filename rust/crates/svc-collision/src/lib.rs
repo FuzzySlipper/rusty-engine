@@ -64,10 +64,10 @@ use svc_volume::VoxelChunk;
 
 use parry3d_f64::math::{Pose, Real, Vector};
 use parry3d_f64::query::{
-    cast_shapes, contact, intersection_test, Contact, Ray as ParryRay, RayCast, ShapeCastHit,
+    cast_shapes, contact, intersection_test, Contact, Ray as ParryRay, ShapeCastHit,
     ShapeCastOptions, ShapeCastStatus,
 };
-use parry3d_f64::shape::{Capsule, Compound, Cuboid, Shape, SharedShape};
+use parry3d_f64::shape::{Capsule, CompositeShapeRef, Compound, Cuboid, Shape, SharedShape};
 
 /// How a voxel value participates in collision. Derived from the value/material;
 /// per-material collision kinds (decision 1) are deferred behind this enum.
@@ -214,6 +214,11 @@ struct ChunkCollider {
     source_hash: u64,
     /// World-positioned solid cuboids. A chunk with no solids has no collider entry.
     shape: Compound,
+    /// The canonical voxel owning each Compound child, in the same order as
+    /// `shape.shapes()`. Ray queries need this rather than reconstructing a
+    /// cell from an impact point: a ray may strike a top face precisely at an
+    /// adjacent sparse-cell boundary.
+    voxels: Vec<VoxelCoord>,
     /// Conservatively cached world-space bounds for outer character-query
     /// pruning. `None` deliberately means "unknown": queries fail open to
     /// the established full scan instead of risking a false negative.
@@ -900,13 +905,14 @@ impl CollisionProjection {
     /// entry if the chunk has become all-empty.
     fn set_chunk(&mut self, coord: ChunkCoord, chunk: &VoxelChunk) {
         match build_chunk_shape(&self.grid, self.world_offset, coord, chunk) {
-            Some(shape) => {
+            Some((shape, voxels)) => {
                 let bounds = shape_world_aabb(&shape);
                 self.chunks.insert(
                     coord,
                     ChunkCollider {
                         source_hash: chunk.content_hash().0,
                         shape,
+                        voxels,
                         bounds,
                     },
                 );
@@ -991,36 +997,27 @@ impl CollisionProjection {
         let inv = 1.0 / len;
         let dir = WorldVec::new(ray.dir.x * inv, ray.dir.y * inv, ray.dir.z * inv);
         let parry_ray = ParryRay::new(world_to_point(ray.origin), Vector::new(dir.x, dir.y, dir.z));
-        let id = identity();
-
-        let mut best: Option<(Real, Vector)> = None;
+        let mut best: Option<(Real, Vector, VoxelCoord)> = None;
         for collider in self.chunks.values() {
-            if let Some(hit) =
-                collider
-                    .shape
-                    .cast_ray_and_get_normal(&id, &parry_ray, max_distance, true)
+            if let Some((primitive, hit)) = CompositeShapeRef(&collider.shape)
+                .cast_local_ray_and_get_normal(&parry_ray, max_distance, true)
             {
-                if best.is_none_or(|(t, _)| hit.time_of_impact < t) {
-                    best = Some((hit.time_of_impact, hit.normal));
+                let Some(&voxel) = collider.voxels.get(primitive as usize) else {
+                    debug_assert!(false, "compound ray primitive must retain a voxel owner");
+                    continue;
+                };
+                if best.is_none_or(|(t, _, _)| hit.time_of_impact < t) {
+                    best = Some((hit.time_of_impact, hit.normal, voxel));
                 }
             }
         }
 
-        let (toi, normal) = best?;
-        // Impact point, then step a hair inside along the inward normal to name the
-        // solid voxel that was hit (the surface point sits exactly on its boundary).
+        let (toi, normal, voxel) = best?;
         let point = WorldPos::new(
             ray.origin.x + dir.x * toi,
             ray.origin.y + dir.y * toi,
             ray.origin.z + dir.z * toi,
         );
-        let eps = self.grid.voxel_size() * 1e-4;
-        let inside = WorldPos::new(
-            point.x - normal.x * eps,
-            point.y - normal.y * eps,
-            point.z - normal.z * eps,
-        );
-        let voxel = self.grid.world_to_voxel(inside - self.world_offset);
         Some(VoxelHit {
             voxel,
             chunk: self.grid.voxel_to_chunk(voxel),
@@ -1173,9 +1170,10 @@ fn build_chunk_shape(
     world_offset: WorldVec,
     coord: ChunkCoord,
     chunk: &VoxelChunk,
-) -> Option<Compound> {
+) -> Option<(Compound, Vec<VoxelCoord>)> {
     let half: Real = spec.voxel_size() * 0.5;
     let mut parts: Vec<(Pose, SharedShape)> = Vec::new();
+    let mut voxels = Vec::new();
     for (local, value) in chunk.iter() {
         if collision_class(value) != CollisionClass::Solid {
             continue;
@@ -1184,11 +1182,12 @@ fn build_chunk_shape(
         let center = spec.voxel_center_world(voxel) + world_offset;
         let pose = Pose::translation(center.x, center.y, center.z);
         parts.push((pose, SharedShape::cuboid(half, half, half)));
+        voxels.push(voxel);
     }
     if parts.is_empty() {
         None
     } else {
-        Some(Compound::new(parts))
+        Some((Compound::new(parts), voxels))
     }
 }
 
@@ -1725,6 +1724,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hit.voxel, VoxelCoord::new(2, 0, 0)); // nearer one
+    }
+
+    #[test]
+    fn raycast_keeps_the_owning_voxel_at_a_sparse_top_face_boundary() {
+        // This is the streamed-residency failure shape: the ray enters the top
+        // face of one sparse voxel exactly where two empty neighbouring cells
+        // meet it. Deriving a coordinate from that boundary point would name
+        // (8,3,7), which is not solid; the hit must retain its Compound child.
+        let world = world_with(ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(7, 3, 6)]);
+        let projection = CollisionProjection::build(&world);
+        let hit = projection
+            .raycast(
+                Ray::new(WorldPos::new(8.0, 5.0, 7.0), WorldVec::new(0.0, -1.0, 0.0)),
+                10.0,
+            )
+            .expect("ray should retain the sparse voxel hit");
+
+        assert_eq!(hit.voxel, VoxelCoord::new(7, 3, 6));
+        assert_eq!(hit.face, Face::PosY);
+        assert!(projection.contains_point(spec().voxel_center_world(hit.voxel)));
     }
 
     #[test]

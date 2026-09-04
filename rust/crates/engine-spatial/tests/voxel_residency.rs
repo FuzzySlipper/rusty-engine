@@ -4,8 +4,9 @@ use engine_spatial::{
     VoxelChunkPayload, VoxelChunkResidencyApplyError, VoxelChunkResidencyOperation,
     VoxelChunkResidencyRejection, VoxelChunkResidencyService, VoxelChunkResidencyTransaction,
     VoxelCollisionScene, VoxelEdit, VoxelEditHistory, VoxelEditHistoryError,
-    VoxelEditHistoryLimits, VoxelResidencyHistoryPolicy, VoxelSourceRevision, MAX_SOLID_VOXELS,
-    MAX_VOXEL_CHUNKS_PER_RESIDENCY_TRANSACTION, MAX_VOXEL_CHUNK_PAYLOAD_SLOTS_PER_TRANSACTION,
+    VoxelEditHistoryLimits, VoxelEditService, VoxelResidencyHistoryPolicy, VoxelSourceRevision,
+    MAX_SOLID_VOXELS, MAX_VOXEL_CHUNKS_PER_RESIDENCY_TRANSACTION,
+    MAX_VOXEL_CHUNK_PAYLOAD_SLOTS_PER_TRANSACTION,
 };
 
 fn identity(x: i64, y: i64, z: i64) -> VoxelChunkIdentity {
@@ -84,6 +85,50 @@ fn first_admission_publishes_one_coherent_revision() {
     assert_eq!(scene.source_revision(), receipt.accepted_revision);
     assert!(scene.has_collider_chunk(chunk.to_array()));
     assert_eq!(scene.mesh_chunks().len(), 1);
+}
+
+#[test]
+fn streamed_sparse_boundary_hit_is_readable_and_clearable_at_the_same_revision() {
+    let mut scene = empty_scene(8, SurfaceMode::GreedyCubes);
+    let leases = VoxelChunkLeaseRegistry::default();
+    let chunk = identity(0, 0, 0);
+    let admitted = apply(
+        &mut scene,
+        &leases,
+        &[VoxelChunkResidencyOperation::Admit {
+            chunk,
+            payload: payload(8, &[([7, 3, 6], 1)]),
+        }],
+    )
+    .unwrap();
+
+    // The downward ray reaches the sparse solid's top face at the boundary of
+    // the empty cells (8,3,7). Its reported coordinate must remain the
+    // Compound child that owns the collision, rather than that empty neighbour.
+    let hit = scene
+        .raycast([8.0, 5.0, 7.0], [0.0, -1.0, 0.0], 10.0)
+        .expect("streamed sparse voxel should be hit");
+    assert_eq!(hit.voxel, [7, 3, 6]);
+    assert_eq!(hit.face, core_space::Face::PosY);
+    assert!(scene
+        .material_voxels()
+        .iter()
+        .any(|voxel| voxel.address == hit.voxel && voxel.material_slot == 1));
+    assert_eq!(scene.source_revision(), admitted.accepted_revision);
+
+    let cleared = VoxelEditService::apply(
+        &mut scene,
+        engine_spatial::VoxelEditTransaction {
+            expected_revision: admitted.accepted_revision,
+            edits: &[VoxelEdit::Clear { address: hit.voxel }],
+        },
+    )
+    .unwrap();
+    assert_eq!(cleared.revision_before, admitted.accepted_revision);
+    assert!(!scene
+        .material_voxels()
+        .iter()
+        .any(|voxel| voxel.address == hit.voxel));
 }
 
 #[test]

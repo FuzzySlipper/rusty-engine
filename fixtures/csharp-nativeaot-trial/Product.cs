@@ -219,6 +219,7 @@ public sealed class Product : IEngineProduct
         _lastRandom = _engine.Random.NextU64(_forkedRng).Value;
         _uiStream = _engine.Ui.OpenStream(new UiStreamRequest("nativeaot-trial", "nativeaot.trial.hud"));
         ExerciseGeneratedVoxelPickCoherence();
+        ExerciseGeneratedStreamedVoxelPickCoherence();
         _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
         VoxelSceneReadout initialVoxelScene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(_spatial));
         Require(initialVoxelScene.Present && initialVoxelScene.ChunkSize == 16 && initialVoxelScene.SourceRevision == 0,
@@ -729,6 +730,74 @@ public sealed class Product : IEngineProduct
             && afterClearProjection.SourceRevision == cleared.AcceptedRevision
             && afterClearProjection.AuthorityHash == cleared.AuthorityHash,
             "generated Spatial and Voxel authority facts diverged after clearing the picked cell");
+    }
+
+    private void ExerciseGeneratedStreamedVoxelPickCoherence()
+    {
+        using SpatialSession session = _engine.Spatial.CreateSession(
+            new SpatialSessionConfig(1.0, 8, VoxelSurfaceMode.GreedyCubes));
+        VoxelSceneReadout initial = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(session));
+        VoxelChunkIdentity chunk = new(0, 0, 0);
+        VoxelAddress solid = new(7, 3, 6);
+        uint[] sparseChunk = new uint[8 * 8 * 8];
+        sparseChunk[7 + 8 * (3 + 8 * 6)] = 1;
+        VoxelResidencyReceipt admitted = _engine.Voxel.ApplyResidency(new VoxelResidencyTransaction(
+            session,
+            initial.SourceRevision,
+            VoxelResidencyHistoryPolicy.RejectIfNonEmpty,
+            new[] { new VoxelResidencyOperation(VoxelResidencyOperationKind.Admit, chunk, 0, 0, (uint)sparseChunk.Length) },
+            sparseChunk));
+        Require(admitted.AcceptedRevision == initial.SourceRevision + 1
+            && admitted.ResidentChunkCount == 1 && admitted.ResidentSolidVoxelCount == 1,
+            "generated residency admission did not publish the sparse canonical voxel");
+        SpatialProjectionReadout admittedProjection = _engine.Spatial.ReadProjection(
+            new SpatialProjectionReadRequest(session));
+        Require(admittedProjection.SourceRevision == admitted.AcceptedRevision
+            && admittedProjection.AuthorityHash == admitted.AuthorityHash,
+            "generated spatial projection did not retain streamed voxel authority");
+
+        SpatialHit cast = _engine.Spatial.CastRay(new SpatialRaycastRequest(
+            session,
+            new Vector3(8.0f, 5.0f, 7.0f),
+            -Vector3.UnitY,
+            10.0,
+            new SpatialQueryFilter(0, 0),
+            ReadOnlyMemory<SpatialEntityCollider>.Empty,
+            ReadOnlyMemory<ulong>.Empty,
+            ReadOnlyMemory<SpatialEntityCollider>.Empty));
+        Require(cast.Present && cast.Kind == SpatialHitKind.Voxel
+            && new VoxelAddress(cast.VoxelX, cast.VoxelY, cast.VoxelZ) == solid
+            && cast.Face == SpatialFace.PosY,
+            "generated Spatial.CastRay attributed a sparse top-face boundary to an empty cell");
+
+        SpatialHit picked = _engine.Spatial.PickVoxel(new SpatialPickRequest(
+            session,
+            new Vector3(8.0f, 5.0f, 7.0f),
+            -Vector3.UnitY,
+            10.0,
+            cast.VoxelX,
+            cast.VoxelY,
+            cast.VoxelZ,
+            cast.Face));
+        VoxelReadout beforeClear = _engine.Voxel.Read(new VoxelReadRequest(
+            session,
+            new VoxelAddress(picked.VoxelX, picked.VoxelY, picked.VoxelZ)));
+        Require(picked.Present && picked.Kind == SpatialHitKind.Voxel && beforeClear.Present
+            && beforeClear.Address == solid && beforeClear.MaterialSlot == 1,
+            "generated Spatial.PickVoxel named a cell absent from canonical Voxel.Read");
+        VoxelSceneReadout beforeClearScene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(session));
+        Require(beforeClearScene.SourceRevision == admitted.AcceptedRevision
+            && beforeClearScene.AuthorityHash == admitted.AuthorityHash,
+            "generated Voxel.Read did not share the streamed pick source revision");
+
+        VoxelEditReceipt cleared = _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+            session,
+            beforeClearScene.SourceRevision,
+            new[] { new VoxelEdit(VoxelEditKind.Clear, beforeClear.Address, 0) }));
+        Require(cleared.Status == VoxelEditStatus.Accepted
+            && cleared.RevisionBefore == beforeClearScene.SourceRevision
+            && !_engine.Voxel.Read(new VoxelReadRequest(session, solid)).Present,
+            "generated exact-revision Clear did not remove the streamed picked voxel");
     }
 
     private static void ExerciseManagedMechanics()

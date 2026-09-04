@@ -2106,12 +2106,34 @@ impl CsharpProductRuntime {
         // staging is gone. The returned frame is deliberately not tagged as a
         // complete product baseline: this incarnation stays tainted and must
         // still be replaced before normal interaction can resume.
-        if let Ok(recovery) = self.services.recover_voxel_presentation_outputs() {
-            if let Ok(outputs) = service_outputs(recovery) {
-                self.pending_recovery_outputs = outputs;
+        match self.services.recover_voxel_presentation_outputs() {
+            Ok(recovery) => match service_outputs(recovery) {
+                Ok(outputs) => self.pending_recovery_outputs = outputs,
+                Err(recovery_error) => {
+                    self.publish_voxel_presentation_recovery_warning(recovery_error.code())
+                }
+            },
+            Err(recovery_error) => {
+                self.publish_voxel_presentation_recovery_warning(recovery_error.code())
             }
         }
         error
+    }
+
+    fn publish_voxel_presentation_recovery_warning(&self, recovery_code: &str) {
+        let _ = self.diagnostics.publish(
+            ProductDevLogEvent::new(
+                ProductDevLogSeverity::Warning,
+                ProductDevLogDisposition::Degraded,
+                "csharp-runtime",
+                "CSHARP_VOXEL_PRESENTATION_RECOVERY",
+                format!(
+                    "canonical voxel presentation recovery failed ({recovery_code}); no interim repair frame was emitted"
+                ),
+            )
+            .expect("recovery diagnostic is bounded")
+            .with_runtime(self.binding()),
+        );
     }
 
     /// Advances the input binding fence after a host or callback-facing queue
@@ -5433,6 +5455,10 @@ mod tests {
     static VOXEL_FAILURE_ENABLED: AtomicBool = AtomicBool::new(false);
     static VOXEL_FAILURE_SESSION: AtomicU64 = AtomicU64::new(0);
     static VOXEL_FAILURE_PRESENTATION: AtomicU64 = AtomicU64::new(0);
+    static VOXEL_FAILURE_SPATIAL_CONTEXT: AtomicUsize = AtomicUsize::new(0);
+    static VOXEL_FAILURE_DESTROY_SESSION: AtomicUsize = AtomicUsize::new(0);
+    static VOXEL_FAILURE_DESTROY_SESSION_ENABLED: AtomicBool = AtomicBool::new(false);
+    static VOXEL_FAILURE_DESTROY_SESSION_STATUS: AtomicI32 = AtomicI32::new(0);
     static VOXEL_FAILURE_VOXEL_CONTEXT: AtomicUsize = AtomicUsize::new(0);
     static VOXEL_FAILURE_APPLY_EDITS: AtomicUsize = AtomicUsize::new(0);
     static VOXEL_FAILURE_PRESENTATION_CONTEXT: AtomicUsize = AtomicUsize::new(0);
@@ -5762,6 +5788,9 @@ mod tests {
             // The focused fixture uses these function pointers only during one
             // synchronous update callback in this same runtime incarnation.
             let engine = unsafe { (*args).engine };
+            VOXEL_FAILURE_SPATIAL_CONTEXT.store(engine.spatial.context as usize, Ordering::SeqCst);
+            VOXEL_FAILURE_DESTROY_SESSION
+                .store(engine.spatial.destroy_session as usize, Ordering::SeqCst);
             VOXEL_FAILURE_VOXEL_CONTEXT.store(engine.voxel.context as usize, Ordering::SeqCst);
             VOXEL_FAILURE_APPLY_EDITS.store(engine.voxel.apply_edits as usize, Ordering::SeqCst);
             VOXEL_FAILURE_PRESENTATION_CONTEXT.store(
@@ -5782,6 +5811,23 @@ mod tests {
         result: *mut NativeProductUpdateResult,
     ) -> i32 {
         UPDATE_CALLBACK_CALLS.fetch_add(1, Ordering::SeqCst);
+        if VOXEL_FAILURE_DESTROY_SESSION_ENABLED.swap(false, Ordering::SeqCst) {
+            // SAFETY: the fixture stores the spatial function pointer from its
+            // own live Engine table and invokes it synchronously in this
+            // generated product callback.
+            let destroy: NativeDestroySpatialSession = unsafe {
+                std::mem::transmute(VOXEL_FAILURE_DESTROY_SESSION.load(Ordering::SeqCst))
+            };
+            let status = unsafe {
+                destroy(
+                    VOXEL_FAILURE_SPATIAL_CONTEXT.load(Ordering::SeqCst) as *mut c_void,
+                    NativeSpatialSessionHandle {
+                        value: VOXEL_FAILURE_SESSION.load(Ordering::SeqCst),
+                    },
+                )
+            };
+            VOXEL_FAILURE_DESTROY_SESSION_STATUS.store(status, Ordering::SeqCst);
+        }
         if VOXEL_FAILURE_ENABLED.swap(false, Ordering::SeqCst) {
             // SAFETY: the fixture stores exact function pointers from its own
             // live Engine table in create, and invokes them synchronously in
@@ -6022,7 +6068,10 @@ mod tests {
         (runtime, root)
     }
 
-    fn voxel_failure_fixture_runtime(label: &str) -> (CsharpProductRuntime, PathBuf) {
+    fn voxel_failure_fixture_runtime_with_diagnostics(
+        label: &str,
+        diagnostics: ProductDevLog,
+    ) -> (CsharpProductRuntime, PathBuf) {
         let root = content_fixture_root(label);
         fs::create_dir_all(&root).expect("voxel failure fixture content root");
         let content = CsharpProductContent::admit(&root).expect("voxel failure fixture content");
@@ -6032,7 +6081,8 @@ mod tests {
                 RuntimeInstanceId::new(1),
                 RuntimeLifecycleConfig::Demand,
                 Vec::new(),
-            ),
+            )
+            .with_diagnostics(diagnostics),
             || Ok(voxel_failure_fixture_api()),
         )
         .expect("voxel failure fixture runtime");
@@ -6227,11 +6277,17 @@ mod tests {
     #[test]
     fn taint_delivers_only_the_canonical_voxel_repair_before_existing_replacement() {
         let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        let diagnostics = ProductDevLog::new(Default::default()).expect("fixture diagnostics");
         UPDATE_CALLBACK_CALLS.store(0, Ordering::SeqCst);
         UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
+        VOXEL_FAILURE_DESTROY_SESSION_ENABLED.store(false, Ordering::SeqCst);
+        VOXEL_FAILURE_DESTROY_SESSION_STATUS.store(0, Ordering::SeqCst);
         VOXEL_FAILURE_APPLY_STATUS.store(0, Ordering::SeqCst);
         VOXEL_FAILURE_REFRESH_STATUS.store(0, Ordering::SeqCst);
-        let (mut runtime, root) = voxel_failure_fixture_runtime("tainted-voxel-recovery");
+        let (mut runtime, root) = voxel_failure_fixture_runtime_with_diagnostics(
+            "tainted-voxel-recovery",
+            diagnostics.clone(),
+        );
         runtime
             .lifecycle(ProductDevLifecycleOperation::Start)
             .expect("start voxel failure fixture");
@@ -6258,6 +6314,14 @@ mod tests {
         assert!(encoded
             .iter()
             .all(|output| output["kind"] != "complete-baseline"));
+        assert!(
+            diagnostics
+                .snapshot()
+                .events
+                .iter()
+                .all(|event| event.code() != "CSHARP_VOXEL_PRESENTATION_RECOVERY"),
+            "successful canonical recovery must not publish a recovery-failure warning"
+        );
         assert_eq!(
             runtime
                 .admit_demand_step()
@@ -6270,6 +6334,82 @@ mod tests {
 
         drop(runtime);
         fs::remove_dir_all(root).expect("remove tainted voxel recovery fixture content");
+    }
+
+    #[test]
+    fn failed_canonical_voxel_recovery_warns_without_replacing_the_callback_fault() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
+        let diagnostics = ProductDevLog::new(Default::default()).expect("fixture diagnostics");
+        UPDATE_CALLBACK_CALLS.store(0, Ordering::SeqCst);
+        UPDATE_CALLBACK_STATUS.store(99, Ordering::SeqCst);
+        VOXEL_FAILURE_ENABLED.store(false, Ordering::SeqCst);
+        VOXEL_FAILURE_DESTROY_SESSION_ENABLED.store(false, Ordering::SeqCst);
+        VOXEL_FAILURE_DESTROY_SESSION_STATUS.store(0, Ordering::SeqCst);
+        let (mut runtime, root) = voxel_failure_fixture_runtime_with_diagnostics(
+            "failed-tainted-voxel-recovery",
+            diagnostics.clone(),
+        );
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start voxel failure fixture");
+        let (session, presentation) = commit_voxel_presentation_for_recovery(&mut runtime);
+        VOXEL_FAILURE_SESSION.store(session.value, Ordering::SeqCst);
+        VOXEL_FAILURE_PRESENTATION.store(presentation.value, Ordering::SeqCst);
+        VOXEL_FAILURE_DESTROY_SESSION_ENABLED.store(true, Ordering::SeqCst);
+
+        let error = runtime
+            .admit_demand_step()
+            .expect_err("failed repair leaves the original callback fault terminal");
+        assert_eq!(
+            VOXEL_FAILURE_DESTROY_SESSION_STATUS.load(Ordering::SeqCst),
+            ABI_OK
+        );
+        assert_eq!(
+            error.recovery().next_action(),
+            product_dev_host::ProductDevNextAction::ReplaceIncarnation
+        );
+        assert!(
+            runtime.pending_recovery_outputs.is_empty(),
+            "a failed repair must not leak a partial recovery receipt"
+        );
+        assert_eq!(UPDATE_CALLBACK_CALLS.load(Ordering::SeqCst), 1);
+
+        let events = diagnostics.snapshot().events;
+        let warnings = events
+            .iter()
+            .filter(|event| event.code() == "CSHARP_VOXEL_PRESENTATION_RECOVERY")
+            .collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 1, "failed recovery emits one warning");
+        assert_eq!(warnings[0].severity(), ProductDevLogSeverity::Warning);
+        assert_eq!(
+            warnings[0].disposition(),
+            ProductDevLogDisposition::Degraded
+        );
+        assert!(warnings[0]
+            .message()
+            .contains("no interim repair frame was emitted"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.code() == error.code())
+                .count(),
+            1,
+            "the callback fault remains the single primary diagnostic"
+        );
+
+        let later = runtime
+            .admit_demand_step()
+            .expect_err("the tainted product does not receive a callback replay");
+        assert_eq!(later.code(), "CSHARP_RUNTIME_TAINTED");
+        assert_eq!(
+            later.recovery().next_action(),
+            product_dev_host::ProductDevNextAction::ReplaceIncarnation
+        );
+        assert_eq!(UPDATE_CALLBACK_CALLS.load(Ordering::SeqCst), 1);
+        UPDATE_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+
+        drop(runtime);
+        fs::remove_dir_all(root).expect("remove failed tainted voxel recovery fixture content");
     }
 
     unsafe extern "C" fn debug_semantic_failure(
