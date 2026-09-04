@@ -1247,6 +1247,10 @@ export async function mountProductBrowserHostWithApplication(
   // runtime keeps running, but browser projection must not admit a second
   // incremental frame until its fresh baseline has replaced the old one.
   let projectionRecovery: { readonly fromEpoch: number } | null = null;
+  let pendingProjectionBaseline: {
+    readonly epoch: number;
+    readonly outputs: readonly ProductBrowserRuntimeOutput[];
+  } | null = null;
   let acceptedProjectionEpoch = 0;
   let browserDiagnosticsReportInFlight = false;
   let pendingHealthTransition = false;
@@ -1842,6 +1846,9 @@ export async function mountProductBrowserHostWithApplication(
   const beginProjectionRecovery = (epoch: number): void => {
     if (projectionRecovery !== null && epoch <= projectionRecovery.fromEpoch) return;
     projectionRecovery = { fromEpoch: epoch };
+    if (pendingProjectionBaseline !== null && pendingProjectionBaseline.epoch <= epoch) {
+      pendingProjectionBaseline = null;
+    }
     // Work already queued from the discarded retained projection is never
     // allowed to reach the renderer after its fresh replacement arrives.
     rendererProjectionEpoch += 1;
@@ -1959,11 +1966,21 @@ export async function mountProductBrowserHostWithApplication(
       return;
     }
     if (metadata !== undefined && metadata.epoch < acceptedProjectionEpoch) return;
-    if (metadata?.baseline === true && projectionRecovery !== null && application !== null) {
-      applyProjectionBaseline(outputs, metadata.epoch);
+    if (projectionRecovery !== null) {
+      if (metadata?.baseline === true && metadata.epoch > projectionRecovery.fromEpoch) {
+        if (application === null) {
+          if (pendingProjectionBaseline === null || metadata.epoch > pendingProjectionBaseline.epoch) {
+            pendingProjectionBaseline = Object.freeze({
+              epoch: metadata.epoch,
+              outputs: Object.freeze([...outputs]),
+            });
+          }
+        } else {
+          applyProjectionBaseline(outputs, metadata.epoch);
+        }
+      }
       return;
     }
-    if (projectionRecovery !== null && application !== null) return;
     if (metadata !== undefined) acceptedProjectionEpoch = Math.max(acceptedProjectionEpoch, metadata.epoch);
     for (const output of outputs) {
       applyOutput(output);
@@ -2274,6 +2291,14 @@ export async function mountProductBrowserHostWithApplication(
         }
       });
     }
+    const stagedProjectionBaseline = pendingProjectionBaseline as {
+      readonly epoch: number;
+      readonly outputs: readonly ProductBrowserRuntimeOutput[];
+    } | null;
+    pendingProjectionBaseline = null;
+    if (stagedProjectionBaseline !== null) {
+      applyProjectionBaseline(stagedProjectionBaseline.outputs, stagedProjectionBaseline.epoch);
+    }
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
     applyOutputBatch(bufferedOutputs);
     await rendererOutputTail;
@@ -2287,9 +2312,9 @@ export async function mountProductBrowserHostWithApplication(
       if (failure !== null) throw failure;
     }
     started = true;
-    state = 'ready';
+    state = projectionRecovery === null ? 'ready' : 'degraded';
     publishHealth();
-    scheduleRendererFeedbackFlush();
+    if (state === 'ready') scheduleRendererFeedbackFlush();
   } catch (cause) {
     // Output delivery can fail and close the shared transport while the
     // lifecycle response is still in flight. Preserve that first concrete

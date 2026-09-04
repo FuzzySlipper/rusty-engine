@@ -463,6 +463,105 @@ test('host swaps a recovered output projection through renderer replaceFrame and
   }
 });
 
+test('a fresh projection baseline received during mount is applied before readiness', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const runtime = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    const replacedFrames: unknown[] = [];
+    const boundRuntimes: unknown[] = [];
+    const transport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportAnimationFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportGhostPlateFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => undefined,
+        resetAnimationRealizationOwner: () => undefined,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => undefined,
+        acknowledgeAnimationRealizedFacts: () => undefined,
+        replaceFrame: async (frame: unknown) => {
+          replacedFrames.push(frame);
+          return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+        },
+      },
+      input: {
+        sampleController: () => 0,
+        drain: () => [],
+        bindRuntime: (binding: unknown) => { boundRuntimes.push(binding); },
+      },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    let resolveMount: ((value: unknown) => void) | null = null;
+    const mounted = mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport: transport as never,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => new Promise((resolve) => { resolveMount = resolve; }) as never);
+    await Promise.resolve();
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publish([], { epoch: 1, baseline: false, recovery: 'fresh-baseline-required' });
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '1' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [] } },
+    ], { epoch: 2, baseline: true, recovery: 'none' });
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '2' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'newest-baseline' }] } },
+    ], { epoch: 3, baseline: true, recovery: 'none' });
+    // A late callback from the older fresh attachment cannot overwrite the
+    // newer pending envelope while mount is still unresolved.
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '1' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'stale-baseline' }] } },
+    ], { epoch: 2, baseline: true, recovery: 'none' });
+    (resolveMount as unknown as (value: unknown) => void)(fakeApplication);
+    const host = await mounted;
+    assert.equal(host.readout().state, 'ready');
+    assert.equal(replacedFrames.length, 1);
+    assert.deepEqual((replacedFrames[0] as { readonly ops: readonly unknown[] }).ops, [{ op: 'newest-baseline' }]);
+    assert.deepEqual(boundRuntimes, [{ runtime, context: 'gameplay.default', nextSequence: '2' }]);
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
 test('only the typed lifecycle clock regression is a dropped cadence observation', () => {
   const dropped = {
     accepted: false,
