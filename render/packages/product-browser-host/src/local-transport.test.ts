@@ -553,6 +553,37 @@ test('local transport decodes scheduled input receipts with authoritative progre
   adapter.dispose();
 });
 
+test('local transport accepts a host-bounded decode-resync receipt without widening outgoing input batches', async () => {
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({
+      accepted: false,
+      code: 'DEV_HOST_INPUT_DECODE',
+      disposition: 'resync-required',
+      count: 1_025,
+      acceptedCount: 0,
+      droppedCount: 1_025,
+      diagnostic: 'input binding was resynchronized after strict decode rejection',
+    }),
+    eventSource: FakeEventSource,
+  });
+
+  assert.deepEqual(await adapter.input([]), {
+    accepted: false,
+    code: 'DEV_HOST_INPUT_DECODE',
+    disposition: 'resync-required',
+    count: 1_025,
+    acceptedCount: 0,
+    droppedCount: 1_025,
+    diagnostic: 'input binding was resynchronized after strict decode rejection',
+  });
+  assert.throws(
+    () => adapter.input(Array.from({ length: 1_025 }, () => ({})) as never),
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError
+      && error.code === 'invalid_options',
+  );
+  adapter.dispose();
+});
+
 test('operation response waits for its exact retained-output cursor', async () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({

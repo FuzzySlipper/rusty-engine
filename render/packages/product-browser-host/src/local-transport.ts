@@ -2080,12 +2080,17 @@ function decodeInputResult(value: unknown): ProductBrowserRuntimeInputResult {
   if (record.accepted !== true && record.accepted !== false) {
     throw new TypeError('accepted must be boolean');
   }
-  if (!Number.isSafeInteger(record.count)
-    || (record.count as number) < 0
-    || (record.count as number) > MAXIMUM_INPUT_BATCH_LENGTH) {
+  if (!Number.isSafeInteger(record.count) || (record.count as number) < 0) {
     throw new TypeError(`count must be a non-negative integer no greater than ${String(MAXIMUM_INPUT_BATCH_LENGTH)}`);
   }
   const fault = decodeFault(record, 'input result');
+  // The Rust host rejects strict-decode failures before wire admission. That
+  // response preserves the host-bounded submitted count diagnostically, so it
+  // can exceed the smaller outgoing/admitted batch limit without widening it.
+  if ((record.count as number) > MAXIMUM_INPUT_BATCH_LENGTH
+    && (record.accepted !== false || fault.disposition !== 'resync-required')) {
+    throw new TypeError(`count must be a non-negative integer no greater than ${String(MAXIMUM_INPUT_BATCH_LENGTH)}`);
+  }
   if (record['acceptedCount'] !== undefined
     && (!Number.isSafeInteger(record['acceptedCount'])
       || (record['acceptedCount'] as number) < 0
