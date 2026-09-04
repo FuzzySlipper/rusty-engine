@@ -36,6 +36,8 @@ import type {
   ProductBrowserRuntimeOperationKind,
   ProductBrowserRuntimeOperationResult,
   ProductBrowserRuntimeOutput,
+  ProductBrowserRuntimeOutputBatchListener,
+  ProductBrowserRuntimeOutputBatchMetadata,
   ProductBrowserRuntimeReadout,
   ProductBrowserRuntimeTerminalFailure,
   ProductBrowserRuntimeTerminalFailureListener,
@@ -371,13 +373,16 @@ export function createProductBrowserLocalHttpAdapter(
   let reattachingFreshBaseline = false;
   let pendingConnectionOutputs: ProductBrowserRuntimeOutput[] = [];
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
+  let nextOutputEpoch = 0;
+  let currentOutputEpoch = 0;
+  let freshOutputRecovery: Promise<void> | null = null;
   let observedOutputSequence = 0n;
   const outputSequenceWaiters = new Set<{
     readonly through: bigint;
-    readonly resolve: () => void;
+    readonly resolve: (outcome: 'observed' | 'fresh-baseline' | 'closed') => void;
   }>();
   const listeners = new Set<(output: ProductBrowserRuntimeOutput) => void>();
-  const batchListeners = new Set<(outputs: readonly ProductBrowserRuntimeOutput[]) => void>();
+  const batchListeners = new Set<ProductBrowserRuntimeOutputBatchListener>();
   const terminalFailureListeners = new Set<ProductBrowserRuntimeTerminalFailureListener>();
   const abortController = new AbortController();
 
@@ -407,10 +412,12 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
-  const wakeOutputSequenceWaiters = (): void => {
+  const releaseOutputSequenceWaiters = (
+    outcome: 'fresh-baseline' | 'closed',
+  ): void => {
     for (const waiter of [...outputSequenceWaiters]) {
       outputSequenceWaiters.delete(waiter);
-      waiter.resolve();
+      waiter.resolve(outcome);
     }
   };
 
@@ -418,7 +425,7 @@ export function createProductBrowserLocalHttpAdapter(
     for (const waiter of [...outputSequenceWaiters]) {
       if (waiter.through > observedOutputSequence) continue;
       outputSequenceWaiters.delete(waiter);
-      waiter.resolve();
+      waiter.resolve('observed');
     }
   };
 
@@ -445,9 +452,13 @@ export function createProductBrowserLocalHttpAdapter(
         { route: ROUTES.outputs },
       );
     }
-    await new Promise<void>((resolve) => {
+    const outcome = await new Promise<'observed' | 'fresh-baseline' | 'closed'>((resolve) => {
       outputSequenceWaiters.add({ through, resolve });
     });
+    // A fenced fresh baseline is a complete retained projection at the
+    // moment the old cursor became unusable. It therefore satisfies an
+    // already-committed response boundary without replaying that operation.
+    if (outcome === 'fresh-baseline') return;
     ensureOpen();
     if (through > observedOutputSequence) {
       throw new ProductBrowserLocalTransportError(
@@ -482,7 +493,7 @@ export function createProductBrowserLocalHttpAdapter(
     }
     pendingFragment = null;
     pendingConnectionOutputs = [];
-    wakeOutputSequenceWaiters();
+    releaseOutputSequenceWaiters('closed');
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
     outputSubscriptionReady = null;
@@ -504,7 +515,7 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
-  const reconnectFreshOutputs = async (): Promise<void> => {
+  const reconnectFreshOutputsOnce = async (): Promise<void> => {
     if (stream === null || listeners.size === 0 || !connectionBaselineComplete) {
       throw new ProductBrowserLocalTransportError(
         'stream_failed',
@@ -526,7 +537,6 @@ export function createProductBrowserLocalHttpAdapter(
     connectionBaselineComplete = false;
     reattachingFreshBaseline = false;
     observedOutputSequence = 0n;
-    wakeOutputSequenceWaiters();
     outputSubscriptionReady = null;
     resolveOutputSubscriptionReady = null;
     connectionReady = null;
@@ -550,6 +560,47 @@ export function createProductBrowserLocalHttpAdapter(
     ensureOpen();
   };
 
+  const publishFreshBaselineRequired = (): void => {
+    publishOutputBatch([], {
+      epoch: currentOutputEpoch,
+      baseline: false,
+      recovery: 'fresh-baseline-required',
+    });
+  };
+
+  // Output lag and resync-required responses can arrive together. Keep one
+  // replacement attach in flight so they cannot race two baseline streams.
+  const reconnectFreshOutputs = (): Promise<void> => {
+    if (freshOutputRecovery !== null) return freshOutputRecovery;
+    let recovery: Promise<void>;
+    recovery = reconnectFreshOutputsOnce().finally(() => {
+      if (freshOutputRecovery === recovery) freshOutputRecovery = null;
+    });
+    freshOutputRecovery = recovery;
+    // The stream callback owns reporting a failed recovery; this keeps the
+    // shared promise from becoming an unhandled rejection for output-only
+    // consumers.
+    void recovery.catch(() => undefined);
+    return recovery;
+  };
+
+  const recoverFreshOutputsOrTerminal = async (route: string): Promise<void> => {
+    publishFreshBaselineRequired();
+    try {
+      await reconnectFreshOutputs();
+    } catch (cause) {
+      const error = cause instanceof ProductBrowserLocalTransportError
+        ? cause
+        : new ProductBrowserLocalTransportError(
+          'stream_failed',
+          `Product Browser local runtime fresh output resync failed for ${route}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          { cause, route: ROUTES.freshOutputs },
+        );
+      reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
+      throw error;
+    }
+  };
+
   const post = async <T>(
     route: string,
     body: unknown,
@@ -558,6 +609,7 @@ export function createProductBrowserLocalHttpAdapter(
   ): Promise<T> => {
     if (!allowAfterDispose) ensureOpen();
     const url = `${basePath}${route}`;
+    const outputEpochAtRequest = currentOutputEpoch;
     const encodedBody = encodeRequestBody(body, maximumResponseBytes, route);
     let response: Response;
     try {
@@ -620,7 +672,7 @@ export function createProductBrowserLocalHttpAdapter(
             `Product Browser local runtime returned an invalid output cursor for ${route}`,
             { cause, route },
           );
-        throw new ProductBrowserLocalTransportError(
+        const error = new ProductBrowserLocalTransportError(
           source.code,
           source.message,
           {
@@ -633,6 +685,8 @@ export function createProductBrowserLocalHttpAdapter(
             }),
           },
         );
+        await recoverFreshOutputsOrTerminal(route);
+        throw error;
       }
     }
     const mutation = Object.freeze({
@@ -644,11 +698,15 @@ export function createProductBrowserLocalHttpAdapter(
     });
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
     if (!contentType.startsWith('application/json')) {
-      throw new ProductBrowserLocalTransportError(
+      const error = new ProductBrowserLocalTransportError(
         'response_decode_failed',
         `Product Browser local runtime response for ${route} must use application/json`,
         { route, mutation },
       );
+      if (mutation.outputRecovery === 'fresh-baseline-required') {
+        await recoverFreshOutputsOrTerminal(route);
+      }
+      throw error;
     }
     let text: string;
     try {
@@ -661,49 +719,50 @@ export function createProductBrowserLocalHttpAdapter(
           `Product Browser local runtime response could not be read for ${route}`,
           { cause, route, mutation },
         );
-      throw new ProductBrowserLocalTransportError(
+      const error = new ProductBrowserLocalTransportError(
         source.code,
         source.message,
         { cause: source, route, mutation },
       );
+      if (mutation.outputRecovery === 'fresh-baseline-required') {
+        await recoverFreshOutputsOrTerminal(route);
+      }
+      throw error;
     }
     let value: unknown;
     try {
       value = JSON.parse(text) as unknown;
     } catch (cause) {
-      throw new ProductBrowserLocalTransportError(
+      const error = new ProductBrowserLocalTransportError(
         'response_decode_failed',
         `Product Browser local runtime returned invalid JSON for ${route}`,
         { cause, route, mutation },
       );
+      if (mutation.outputRecovery === 'fresh-baseline-required') {
+        await recoverFreshOutputsOrTerminal(route);
+      }
+      throw error;
     }
     let decoded: T;
     try {
       if (!allowAfterDispose) ensureOpen();
       decoded = decode(value);
     } catch (cause) {
-      if (cause instanceof ProductBrowserLocalTransportError) throw cause;
-      throw new ProductBrowserLocalTransportError(
+      const error = cause instanceof ProductBrowserLocalTransportError
+        ? cause
+        : new ProductBrowserLocalTransportError(
         'response_decode_failed',
         `Product Browser local runtime returned an invalid response for ${route}: ${cause instanceof Error ? cause.message : String(cause)}`,
         { cause, route, mutation },
       );
+      if (mutation.outputRecovery === 'fresh-baseline-required') {
+        await recoverFreshOutputsOrTerminal(route);
+      }
+      throw error;
     }
     if (commitDisposition === 'resync-required') {
-      try {
-        await reconnectFreshOutputs();
-      } catch (cause) {
-        const error = cause instanceof ProductBrowserLocalTransportError
-          ? cause
-          : new ProductBrowserLocalTransportError(
-            'stream_failed',
-            `Product Browser local runtime fresh output resync failed for ${route}: ${cause instanceof Error ? cause.message : String(cause)}`,
-            { cause, route: ROUTES.freshOutputs },
-          );
-        reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
-        throw error;
-      }
-    } else if (outputThrough !== null) {
+      await recoverFreshOutputsOrTerminal(route);
+    } else if (outputThrough !== null && currentOutputEpoch === outputEpochAtRequest) {
       await waitUntilOutputSequence(outputThrough);
     }
     return decoded;
@@ -807,14 +866,21 @@ export function createProductBrowserLocalHttpAdapter(
     );
   };
 
-  const publishOutputBatch = (outputs: readonly ProductBrowserRuntimeOutput[]): void => {
+  const publishOutputBatch = (
+    outputs: readonly ProductBrowserRuntimeOutput[],
+    metadata: ProductBrowserRuntimeOutputBatchMetadata = {
+      epoch: currentOutputEpoch,
+      baseline: false,
+      recovery: 'none',
+    },
+  ): void => {
     const batch = Object.freeze([...outputs]);
     for (const output of batch) {
       if (output.kind === 'binding') currentOutputBinding = output.runtime;
     }
     for (const candidate of [...batchListeners]) {
       try {
-        candidate(batch);
+        candidate(batch, metadata);
       } catch (cause) {
         reportTransportError(new ProductBrowserLocalTransportError(
           'stream_failed',
@@ -838,9 +904,23 @@ export function createProductBrowserLocalHttpAdapter(
     }
   };
 
-  const stageOrPublishOutputBatch = (outputs: readonly ProductBrowserRuntimeOutput[]): void => {
+  const stageOrPublishOutputBatch = (
+    outputs: readonly ProductBrowserRuntimeOutput[],
+    epoch: number,
+  ): void => {
     if (connectionBaselineComplete && !reattachingFreshBaseline) {
-      publishOutputBatch(outputs);
+      const replacementBinding = outputs.find((output) => output.kind === 'binding');
+      if (replacementBinding !== undefined
+        && currentOutputBinding !== null
+        && replacementBinding.runtime.instanceId !== currentOutputBinding.instanceId) {
+        failFragmentStream(new ProductBrowserLocalTransportError(
+          'output_decode_failed',
+          'Product Browser local runtime changed incarnation without a fresh output baseline',
+          { route: ROUTES.outputs },
+        ));
+        return;
+      }
+      publishOutputBatch(outputs, { epoch, baseline: false, recovery: 'none' });
       return;
     }
     if (pendingConnectionOutputs.length + outputs.length > MAXIMUM_CONNECTION_BASELINE_OUTPUTS) {
@@ -863,7 +943,25 @@ export function createProductBrowserLocalHttpAdapter(
         'output_decode_failed',
         `Product Browser local runtime emitted invalid output fragments: ${cause instanceof Error ? cause.message : String(cause)}`,
         { cause, route: ROUTES.outputs },
-      );
+    );
+    if (connectionBaselineComplete && !reattachingFreshBaseline) {
+      publishFreshBaselineRequired();
+      reportTransportError(error);
+      void reconnectFreshOutputs().catch((cause: unknown) => {
+        const recoveryError = cause instanceof ProductBrowserLocalTransportError
+          ? cause
+          : new ProductBrowserLocalTransportError(
+            'stream_failed',
+            `Product Browser local runtime fresh output recovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            { cause, route: ROUTES.freshOutputs },
+          );
+        reportTerminalFailure(
+          { kind: 'runtime-failure', diagnostic: recoveryError.message },
+          recoveryError,
+        );
+      });
+      return;
+    }
     reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
   };
 
@@ -893,22 +991,44 @@ export function createProductBrowserLocalHttpAdapter(
         void connectionReady.catch(() => undefined);
         connectionBaselineComplete = false;
         pendingConnectionOutputs = [];
-        stream = new eventSourceConstructor(`${basePath}${ROUTES.freshOutputs}`);
-        stream.onopen = () => {
+        const attachedStream = new eventSourceConstructor(`${basePath}${ROUTES.freshOutputs}`);
+        const outputEpoch = nextOutputEpoch + 1;
+        nextOutputEpoch = outputEpoch;
+        currentOutputEpoch = outputEpoch;
+        stream = attachedStream;
+        const ownsProjection = (): boolean => !disposed
+          && terminalFailure === null
+          && stream === attachedStream
+          && currentOutputEpoch === outputEpoch;
+        attachedStream.onopen = () => {
+          if (!ownsProjection()) return;
           resolveOutputSubscriptionReady?.();
           resolveOutputSubscriptionReady = null;
         };
         streamLagListener = (event) => {
+          if (!ownsProjection()) return;
           try {
             const failure = decodeOutputLagEvent(event.data, maximumOutputBytes);
-            reportTerminalFailure(
-              failure,
-              new ProductBrowserLocalTransportError(
-                'stream_failed',
-                failure.diagnostic,
-                { route: ROUTES.outputs },
-              ),
+            const error = new ProductBrowserLocalTransportError(
+              'stream_failed',
+              failure.diagnostic,
+              { route: ROUTES.outputs },
             );
+            publishFreshBaselineRequired();
+            reportTransportError(error);
+            void reconnectFreshOutputs().catch((cause: unknown) => {
+              const recoveryError = cause instanceof ProductBrowserLocalTransportError
+                ? cause
+                : new ProductBrowserLocalTransportError(
+                  'stream_failed',
+                  `Product Browser local runtime fresh output recovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+                  { cause, route: ROUTES.freshOutputs },
+                );
+              reportTerminalFailure(
+                { kind: 'runtime-failure', diagnostic: recoveryError.message },
+                recoveryError,
+              );
+            });
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
               ? cause
@@ -926,9 +1046,9 @@ export function createProductBrowserLocalHttpAdapter(
             );
           }
         };
-        stream.addEventListener?.('rusty-output-lag', streamLagListener);
+        attachedStream.addEventListener?.('rusty-output-lag', streamLagListener);
         streamFragmentListener = (event) => {
-          if (terminalFailure !== null) return;
+          if (!ownsProjection()) return;
           try {
             const fragment = decodeOutputFragment(
               parseBoundedJson(event.data, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
@@ -980,13 +1100,14 @@ export function createProductBrowserLocalHttpAdapter(
             if (connectionBaselineComplete && !reattachingFreshBaseline) {
               observeOutputSequence(event.lastEventId);
             }
-            if (completedOutputs !== null) stageOrPublishOutputBatch(completedOutputs);
+            if (completedOutputs !== null) stageOrPublishOutputBatch(completedOutputs, outputEpoch);
           } catch (cause) {
             failFragmentStream(cause);
           }
         };
-        stream.addEventListener?.('rusty-output-fragment', streamFragmentListener);
+        attachedStream.addEventListener?.('rusty-output-fragment', streamFragmentListener);
         streamBaselineListener = (event) => {
+          if (!ownsProjection()) return;
           try {
             if (pendingFragment !== null) {
               throw new TypeError('connection baseline ended during an output fragment transfer');
@@ -1022,7 +1143,12 @@ export function createProductBrowserLocalHttpAdapter(
             reattachingFreshBaseline = false;
             const baselineOutputs = pendingConnectionOutputs;
             pendingConnectionOutputs = [];
-            publishOutputBatch(baselineOutputs);
+            publishOutputBatch(baselineOutputs, {
+              epoch: outputEpoch,
+              baseline: true,
+              recovery: 'none',
+            });
+            releaseOutputSequenceWaiters('fresh-baseline');
             resolveConnectionReady?.(result);
             resolveConnectionReady = null;
             rejectConnectionReady = null;
@@ -1040,9 +1166,9 @@ export function createProductBrowserLocalHttpAdapter(
             reportTerminalFailure({ kind: 'runtime-failure', diagnostic: error.message }, error);
           }
         };
-        stream.addEventListener?.('rusty-output-baseline', streamBaselineListener);
-        stream.onmessage = (event) => {
-          if (terminalFailure !== null) return;
+        attachedStream.addEventListener?.('rusty-output-baseline', streamBaselineListener);
+        attachedStream.onmessage = (event) => {
+          if (!ownsProjection()) return;
           try {
             if (pendingFragment !== null) {
               throw new ProductBrowserLocalTransportError(
@@ -1058,7 +1184,7 @@ export function createProductBrowserLocalHttpAdapter(
             if (connectionBaselineComplete && !reattachingFreshBaseline) {
               observeOutputSequence(event.lastEventId);
             }
-            stageOrPublishOutputBatch(outputs);
+            stageOrPublishOutputBatch(outputs, outputEpoch);
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
               ? cause
@@ -1070,8 +1196,8 @@ export function createProductBrowserLocalHttpAdapter(
             failFragmentStream(error);
           }
         };
-        stream.onerror = (event) => {
-          if (terminalFailure !== null) return;
+        attachedStream.onerror = (event) => {
+          if (!ownsProjection()) return;
           if (!connectionBaselineComplete) {
             pendingFragment = null;
             pendingConnectionOutputs = [];
@@ -1103,7 +1229,7 @@ export function createProductBrowserLocalHttpAdapter(
         pendingFragment = null;
         pendingConnectionOutputs = [];
         reattachingFreshBaseline = false;
-        wakeOutputSequenceWaiters();
+        releaseOutputSequenceWaiters('closed');
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
         outputSubscriptionReady = null;
@@ -1140,7 +1266,7 @@ export function createProductBrowserLocalHttpAdapter(
         pendingFragment = null;
         pendingConnectionOutputs = [];
         reattachingFreshBaseline = false;
-        wakeOutputSequenceWaiters();
+        releaseOutputSequenceWaiters('closed');
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
         outputSubscriptionReady = null;
@@ -1152,7 +1278,7 @@ export function createProductBrowserLocalHttpAdapter(
   };
 
   const subscribeOutputBatches = (
-    listener: (outputs: readonly ProductBrowserRuntimeOutput[]) => void,
+    listener: ProductBrowserRuntimeOutputBatchListener,
   ): (() => void) => {
     ensureOpen();
     if (typeof listener !== 'function') {
@@ -1253,7 +1379,7 @@ export function createProductBrowserLocalHttpAdapter(
     pendingFragment = null;
     pendingConnectionOutputs = [];
     reattachingFreshBaseline = false;
-    wakeOutputSequenceWaiters();
+    releaseOutputSequenceWaiters('closed');
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
     outputSubscriptionReady = null;

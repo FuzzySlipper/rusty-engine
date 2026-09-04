@@ -699,6 +699,24 @@ test('operation response waits for its exact retained-output cursor', async () =
   adapter.dispose();
 });
 
+test('a committed output boundary joins a fresh baseline when its old cursor is lost', async () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response(result('start'), 200, { 'x-rusty-output-through': '2' }),
+    eventSource: FakeEventSource,
+  });
+  adapter.subscribeOutputs(() => undefined);
+  const first = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(first);
+  const operation = adapter.lifecycle({ kind: 'start' });
+  await Promise.resolve();
+  first.emitLag();
+  assert.equal(FakeEventSource.instances.length, 2);
+  completeConnectionBaseline(FakeEventSource.instances[1]!);
+  assert.equal((await operation).operation, 'start');
+  adapter.dispose();
+});
+
 test('resync-required commit reconnects the fresh output baseline without replaying the operation', async () => {
   FakeEventSource.instances.length = 0;
   let operations = 0;
@@ -732,6 +750,63 @@ test('resync-required commit reconnects the fresh output baseline without replay
   adapter.dispose();
 });
 
+test('a truncated committed resync response refreshes output before surfacing its known mutation failure', async () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => new Response(new ReadableStream<string>({
+      start(controller) {
+        controller.error(new TypeError('truncated response body'));
+      },
+    }), {
+      headers: {
+        'content-type': 'application/json',
+        'x-rusty-commit-disposition': 'resync-required',
+        'x-rusty-resync-outputs': 'fresh',
+      },
+    }),
+    eventSource: FakeEventSource,
+  });
+  const failures: unknown[] = [];
+  adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
+  adapter.subscribeOutputs(() => undefined);
+  completeConnectionBaseline(FakeEventSource.instances[0]!);
+  const operation = adapter.lifecycle({ kind: 'start' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(FakeEventSource.instances.length, 2);
+  completeConnectionBaseline(FakeEventSource.instances[1]!);
+  await assert.rejects(
+    operation,
+    (error: unknown) => error instanceof ProductBrowserLocalTransportError
+      && error.mutation.certainty === 'committed'
+      && error.mutation.outputRecovery === 'fresh-baseline-required',
+  );
+  assert.deepEqual(failures, []);
+  adapter.dispose();
+});
+
+test('concurrent resync-required receipts share one fresh output connection', async () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (input) => response(result(String(input).endsWith('admit-demand-step')
+      ? 'admit-demand-step'
+      : 'advance-realtime'), 200, {
+      'x-rusty-commit-disposition': 'resync-required',
+      'x-rusty-resync-outputs': 'fresh',
+    }),
+    eventSource: FakeEventSource,
+  });
+  adapter.subscribeOutputs(() => undefined);
+  completeConnectionBaseline(FakeEventSource.instances[0]!);
+
+  const first = adapter.advanceRealtime('1');
+  const second = adapter.admitDemandStep?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(FakeEventSource.instances.length, 2);
+  completeConnectionBaseline(FakeEventSource.instances[1]!);
+  await Promise.all([first, second]);
+  adapter.dispose();
+});
+
 test('incoherent commit headers remain outcome-unknown for recovery fencing', async () => {
   let first = true;
   const adapter = createProductBrowserLocalHttpAdapter({
@@ -756,24 +831,35 @@ test('incoherent commit headers remain outcome-unknown for recovery fencing', as
   adapter.dispose();
 });
 
-test('duplicate and decreasing output event ids fail before subscriber publication', () => {
+test('output cursor mismatch replaces the projection and ignores late old-stream output', () => {
   for (const staleId of ['1', '0']) {
     FakeEventSource.instances.length = 0;
     const outputs: unknown[] = [];
-    const failures: unknown[] = [];
+    const batches: Array<{ readonly outputs: unknown[]; readonly recovery: string; readonly baseline: boolean }> = [];
     const adapter = createProductBrowserLocalHttpAdapter({
       fetch: async () => response({}),
       eventSource: FakeEventSource,
     });
-    adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
+    adapter.subscribeOutputBatches?.((batch, metadata) => batches.push({
+      outputs: [...batch], recovery: metadata?.recovery ?? 'none', baseline: metadata?.baseline ?? false,
+    }));
     adapter.subscribeOutputs((output) => outputs.push(output));
     const stream = FakeEventSource.instances[0]!;
     completeConnectionBaseline(stream);
     stream.emit({ kind: 'runtime-readout', readout: READOUT }, '1');
     stream.emit({ kind: 'runtime-readout', readout: READOUT }, staleId);
     assert.equal(outputs.length, 2);
-    assert.equal(failures.length, 1);
+    assert.equal(FakeEventSource.instances.length, 2);
     assert.equal(stream.closed, true);
+    const fresh = FakeEventSource.instances[1]!;
+    completeConnectionBaseline(fresh);
+    // FakeEventSource deliberately still invokes a callback after close: the
+    // browser-local epoch must fence that stale delivery.
+    stream.emit({ kind: 'runtime-readout', readout: { ...READOUT, admittedSimulationSteps: '99' } }, '2');
+    fresh.emit({ kind: 'runtime-readout', readout: READOUT }, '1');
+    assert.equal(outputs.length, 4);
+    assert.equal(batches.some((batch) => batch.recovery === 'fresh-baseline-required'), true);
+    assert.equal(batches.some((batch) => batch.baseline), true);
     adapter.dispose();
   }
 });
@@ -811,15 +897,13 @@ test('large retained output fragments publish once after complete ordered reasse
   adapter.dispose();
 });
 
-test('duplicate final fragment event id fails before assembled output publication', () => {
+test('corrupt completed fragment replacement does not publish the corrupt batch', () => {
   FakeEventSource.instances.length = 0;
   const outputs: unknown[] = [];
-  const failures: unknown[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async () => response({}),
     eventSource: FakeEventSource,
   });
-  adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
   adapter.subscribeOutputs((output) => outputs.push(output));
   const stream = FakeEventSource.instances[0]!;
   completeConnectionBaseline(stream);
@@ -835,12 +919,12 @@ test('duplicate final fragment event id fails before assembled output publicatio
     data,
   }, fragmentIndex === chunks.length - 1 ? String(fragmentIndex) : String(fragmentIndex + 2)));
   assert.equal(outputs.length, 1);
-  assert.equal(failures.length, 1);
+  assert.equal(FakeEventSource.instances.length, 2);
   assert.equal(stream.closed, true);
   adapter.dispose();
 });
 
-test('output fragments fail closed on missing, duplicate, stale, oversized, and interrupted transfers', () => {
+test('output fragments recover through a fresh baseline when an active projection is corrupt', () => {
   const cases: readonly ((stream: FakeEventSource) => void)[] = [
     (stream) => stream.emitFragment(fragment({ fragmentIndex: 1 })),
     (stream) => {
@@ -862,15 +946,12 @@ test('output fragments fail closed on missing, duplicate, stale, oversized, and 
       eventSource: FakeEventSource,
     });
     const outputs: unknown[] = [];
-    const failures: unknown[] = [];
-    adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
     adapter.subscribeOutputs((output) => outputs.push(output));
     const stream = FakeEventSource.instances[0]!;
     completeConnectionBaseline(stream);
     exercise(stream);
     assert.equal(outputs.length, 1);
-    assert.equal(failures.length, 1);
-    assert.equal((failures[0] as { kind: string }).kind, 'runtime-failure');
+    assert.equal(FakeEventSource.instances.length, 2);
     assert.equal(stream.closed, true);
     adapter.dispose();
   }
@@ -963,42 +1044,40 @@ test('ordinary outputs honor the configured quota below the hard event bound', (
   adapter.dispose();
 });
 
-test('named output lag is a terminal typed failure and never reconnects', async () => {
+test('named output lag asks for one fresh baseline without closing the runtime transport', async () => {
   FakeEventSource.instances.length = 0;
-  const terminalFailures: unknown[] = [];
+  const transportErrors: unknown[] = [];
   const requestBodies: unknown[] = [];
   const requestUrls: string[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async (input, init) => {
       requestUrls.push(String(input));
       requestBodies.push(JSON.parse(String(init?.body)) as unknown);
+      if (String(input).endsWith('advance-realtime')) return response(result('advance-realtime'));
       return response({ accepted: true, reported: 1 });
     },
     eventSource: FakeEventSource,
-    onTransportError: (error) => terminalFailures.push(error),
+    onTransportError: (error) => transportErrors.push(error),
   });
   const hostFailures: unknown[] = [];
   const unsubscribeFailure = adapter.subscribeTerminalFailures?.((failure) => hostFailures.push(failure));
   const unsubscribeOutput = adapter.subscribeOutputs(() => undefined);
   const stream = FakeEventSource.instances[0];
   assert.ok(stream);
+  completeConnectionBaseline(stream);
   stream.emitLag();
   assert.equal(stream.closed, true);
-  assert.deepEqual(hostFailures, [{
-    kind: 'output-lag',
-    diagnostic: 'Product Browser local runtime output stream lost retained output; a fresh snapshot is required',
-  }]);
-  assert.equal(terminalFailures.length, 1);
-  assert.equal(FakeEventSource.instances.length, 1);
+  assert.deepEqual(hostFailures, []);
+  assert.equal(transportErrors.length, 1);
+  assert.equal(FakeEventSource.instances.length, 2);
+  completeConnectionBaseline(FakeEventSource.instances[1]!);
 
-  // The output stream is terminally closed, but the bounded browser-health
-  // route remains available so the failure can be recorded without reopening
-  // or replaying the runtime stream.
+  // The bounded browser-health route stays usable during a projection swap.
   const terminalReport = {
-    hostState: 'failed' as const,
+    hostState: 'degraded' as const,
     runtimeProgress: '9',
-    transportState: 'closed' as const,
-    outputState: 'closed' as const,
+    transportState: 'open' as const,
+    outputState: 'open' as const,
     lastRendererSequence: '60',
     rendererObservationAgeMs: '100',
     firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'output stream lagged' },
@@ -1008,10 +1087,7 @@ test('named output lag is a terminal typed failure and never reconnects', async 
   assert.deepEqual(requestUrls, [`${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}browser-diagnostics`]);
   assert.deepEqual(requestBodies, [terminalReport]);
 
-  await assert.rejects(
-    adapter.advanceRealtime('1'),
-    (error: unknown) => error instanceof ProductBrowserLocalTransportError && error.code === 'stream_failed',
-  );
+  await adapter.advanceRealtime('1');
   unsubscribeFailure?.();
   unsubscribeOutput();
   adapter.dispose();

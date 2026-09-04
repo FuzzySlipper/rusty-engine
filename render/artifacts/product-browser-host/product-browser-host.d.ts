@@ -298,7 +298,18 @@ export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
  */
 export declare function bufferProductBrowserPreMountOutput(pendingOutputs: ProductBrowserRuntimeOutput[], output: ProductBrowserRuntimeOutput, maximumPendingOutputs: number): boolean;
 export type ProductBrowserRuntimeOutputListener = (output: ProductBrowserRuntimeOutput) => void;
-export type ProductBrowserRuntimeOutputBatchListener = (outputs: readonly ProductBrowserRuntimeOutput[]) => void;
+export type ProductBrowserRuntimeOutputBatchListener = (outputs: readonly ProductBrowserRuntimeOutput[], metadata: ProductBrowserRuntimeOutputBatchMetadata) => void;
+/**
+ * Browser-local projection framing for one ordered output delivery. The epoch
+ * is deliberately local to the attached EventSource; it is not a second
+ * runtime identity or an ABI field. A recovery marker has no outputs and
+ * keeps the host gated until the following complete baseline arrives.
+ */
+export interface ProductBrowserRuntimeOutputBatchMetadata {
+    readonly epoch: number;
+    readonly baseline: boolean;
+    readonly recovery: 'none' | 'fresh-baseline-required';
+}
 /**
  * Terminal local-transport failures. A dropped retained-output diff cannot
  * be recovered by EventSource retry; the host must stop until a fresh runtime

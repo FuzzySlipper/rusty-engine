@@ -340,7 +340,20 @@ export type ProductBrowserRuntimeOutputListener = (
 
 export type ProductBrowserRuntimeOutputBatchListener = (
   outputs: readonly ProductBrowserRuntimeOutput[],
+  metadata: ProductBrowserRuntimeOutputBatchMetadata,
 ) => void;
+
+/**
+ * Browser-local projection framing for one ordered output delivery. The epoch
+ * is deliberately local to the attached EventSource; it is not a second
+ * runtime identity or an ABI field. A recovery marker has no outputs and
+ * keeps the host gated until the following complete baseline arrives.
+ */
+export interface ProductBrowserRuntimeOutputBatchMetadata {
+  readonly epoch: number;
+  readonly baseline: boolean;
+  readonly recovery: 'none' | 'fresh-baseline-required';
+}
 
 /**
  * Terminal local-transport failures. A dropped retained-output diff cannot
@@ -1230,6 +1243,11 @@ export async function mountProductBrowserHostWithApplication(
     readonly uncertainBinding: RustyApplicationRuntimeIdentity;
     inFlight: boolean;
   } | null = null;
+  // A retained-output replacement is distinct from input certainty: the
+  // runtime keeps running, but browser projection must not admit a second
+  // incremental frame until its fresh baseline has replaced the old one.
+  let projectionRecovery: { readonly fromEpoch: number } | null = null;
+  let acceptedProjectionEpoch = 0;
   let browserDiagnosticsReportInFlight = false;
   let pendingHealthTransition = false;
   let transportClosed = false;
@@ -1255,6 +1273,7 @@ export async function mountProductBrowserHostWithApplication(
   // realization order private to this host so a later frame cannot overtake a
   // teardown presentation from the same product callback.
   let rendererOutputTail: Promise<void> = Promise.resolve();
+  let rendererProjectionEpoch = 0;
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
   const maximumPendingOutputs = 64;
   const requiresInitialRendererFrame = productBrowserInitialRendererFrameRequired(options.renderer);
@@ -1410,18 +1429,23 @@ export async function mountProductBrowserHostWithApplication(
     return application;
   };
 
-  const INPUT_RECOVERY_GATE = Symbol('input-recovery-gate');
-  const inputRecoveryGateError = (): ProductBrowserHostError => new ProductBrowserHostError(
+  const RECOVERY_GATE = Symbol('browser-host-recovery-gate');
+  const recoveryGateError = (message: string): ProductBrowserHostError => new ProductBrowserHostError(
     'transport_failed',
-    'Product Browser Host is reconciling an uncertain input mutation',
-    { cause: INPUT_RECOVERY_GATE },
+    message,
+    { cause: RECOVERY_GATE },
   );
-  const isInputRecoveryGateError = (cause: unknown): boolean => cause instanceof ProductBrowserHostError
-    && (cause as Error & { readonly cause?: unknown }).cause === INPUT_RECOVERY_GATE;
+  const isRecoveryGateError = (cause: unknown): boolean => cause instanceof ProductBrowserHostError
+    && (cause as Error & { readonly cause?: unknown }).cause === RECOVERY_GATE;
 
   const requireReady = (): void => {
     if (inputRecovery !== null) {
-      throw inputRecoveryGateError();
+      throw recoveryGateError('Product Browser Host is reconciling an uncertain input mutation');
+    }
+    if (projectionRecovery !== null) {
+      throw recoveryGateError(
+        'Product Browser Host is replacing an invalidated retained output projection',
+      );
     }
     if (state === 'ready' || state === 'degraded') return;
     throw new ProductBrowserHostError(
@@ -1489,18 +1513,29 @@ export async function mountProductBrowserHostWithApplication(
     && (cause as { readonly name?: unknown }).name === 'ProductBrowserLocalTransportError'
     && (cause as { readonly mutation?: { readonly certainty?: unknown } }).mutation?.certainty === 'outcome-unknown';
 
+  const isFreshOutputRecoveryMutationFailure = (cause: unknown): boolean => typeof cause === 'object'
+    && cause !== null
+    && (cause as { readonly name?: unknown }).name === 'ProductBrowserLocalTransportError'
+    && (cause as { readonly mutation?: { readonly outputRecovery?: unknown } }).mutation?.outputRecovery
+      === 'fresh-baseline-required';
+
   const recoverOrClose = (
     cause: unknown,
     code: ProductBrowserHostError['code'],
   ): ProductBrowserHostError => {
-    if (isUnknownLocalMutationFailure(cause) && (state === 'ready' || state === 'degraded')) {
-      const error = cause instanceof ProductBrowserHostError
-        ? cause
-        : new ProductBrowserHostError(
-          code,
-          cause instanceof Error ? cause.message : String(cause),
-          cause instanceof Error ? { cause } : undefined,
+    const error = cause instanceof ProductBrowserHostError
+      ? cause
+      : new ProductBrowserHostError(
+        code,
+        cause instanceof Error ? cause.message : String(cause),
+        cause instanceof Error ? { cause } : undefined,
       );
+    if (isFreshOutputRecoveryMutationFailure(cause)) {
+      if (recoveryFailure === null) recoveryFailure = error;
+      publishHealth();
+      return error;
+    }
+    if (isUnknownLocalMutationFailure(cause) && (state === 'ready' || state === 'degraded')) {
       if (recoveryFailure === null) recoveryFailure = error;
       state = 'degraded';
       publishHealth();
@@ -1510,7 +1545,7 @@ export async function mountProductBrowserHostWithApplication(
   };
 
   const restoreReadyAfterHealthyTransport = (): void => {
-    if (state !== 'degraded' || inputRecovery !== null) return;
+    if (state !== 'degraded' || inputRecovery !== null || projectionRecovery !== null) return;
     state = 'ready';
     publishHealth();
   };
@@ -1637,17 +1672,20 @@ export async function mountProductBrowserHostWithApplication(
   const scheduleRendererFeedbackFlush = (): void => {
     if (state !== 'ready') return;
     void queue.enqueue(flushRendererFeedback).catch((cause: unknown) => {
-      if (isInputRecoveryGateError(cause)) return;
+      if (isRecoveryGateError(cause)) return;
       recoverOrClose(cause, 'transport_failed');
     });
   };
 
-  const enqueueRendererOutput = (apply: () => void | Promise<void>): void => {
+  const enqueueRendererOutput = (
+    apply: () => void | Promise<void>,
+    projectionEpoch = rendererProjectionEpoch,
+  ): void => {
     rendererOutputTail = rendererOutputTail.then(async () => {
       // Disposal unsubscribes the source before awaiting this tail, so work
       // already accepted by the host must still drain. A terminal renderer
       // failure is the only state that invalidates the remaining queue.
-      if (state === 'failed') return;
+      if (state === 'failed' || projectionEpoch !== rendererProjectionEpoch) return;
       try {
         await apply();
       } catch (cause) {
@@ -1769,6 +1807,7 @@ export async function mountProductBrowserHostWithApplication(
               try {
                 await queue.enqueue(flushRendererFeedback);
               } catch (cause) {
+                if (isRecoveryGateError(cause)) return;
                 recoverOrClose(cause, 'transport_failed');
                 return;
               }
@@ -1800,7 +1839,132 @@ export async function mountProductBrowserHostWithApplication(
     }
   };
 
-  const applyOutputBatch = (outputs: readonly ProductBrowserRuntimeOutput[]): void => {
+  const beginProjectionRecovery = (epoch: number): void => {
+    if (projectionRecovery !== null && epoch <= projectionRecovery.fromEpoch) return;
+    projectionRecovery = { fromEpoch: epoch };
+    // Work already queued from the discarded retained projection is never
+    // allowed to reach the renderer after its fresh replacement arrives.
+    rendererProjectionEpoch += 1;
+    if (state === 'ready') state = 'degraded';
+    publishHealth();
+  };
+
+  const applyProjectionBaseline = (
+    outputs: readonly ProductBrowserRuntimeOutput[],
+    epoch: number,
+  ): void => {
+    const pending = projectionRecovery;
+    if (pending === null || epoch <= pending.fromEpoch || application === null) return;
+    const host = requireApplication();
+    const frameOps = outputs.flatMap((output) => output.kind === 'frame'
+      ? [...(output.frame['ops'] as readonly unknown[])]
+      : []);
+    const retainedFrame = Object.freeze({
+      schemaVersion: 1,
+      ops: Object.freeze(frameOps),
+    }) as RustyApplicationFrame;
+    const retainedOutputs = outputs.filter((output) => output.kind !== 'frame'
+      && output.kind !== 'runtime-progress'
+      && output.kind !== 'runtime-input-result'
+      && output.kind !== 'presentation');
+
+    const replacementEpoch = rendererProjectionEpoch;
+    // CompleteBaseline is emitted by Rust as one ordered binding-to-marker
+    // group. Its Frame outputs are ordered renderer diffs, not individually
+    // replaceable scenes; preserving every operation in that order is the
+    // existing complete-frame representation accepted by replaceFrame.
+    rendererOutputTail = rendererOutputTail.then(async () => {
+      if (projectionRecovery?.fromEpoch !== pending.fromEpoch
+        || rendererProjectionEpoch !== replacementEpoch
+        || state === 'failed'
+        || state === 'disposed') return;
+      try {
+        const receipt = await host.renderer.replaceFrame(retainedFrame);
+        // A normal incremental frame may continue after rejected_atomic, but
+        // a recovery baseline is not installed until the replacement applied.
+        if (receipt.outcome !== 'applied') {
+          if (recoveryFailure === null) {
+            recoveryFailure = new ProductBrowserHostError(
+              'output_failed',
+              'renderer did not apply the recovered retained projection',
+            );
+          }
+          if (state === 'ready') state = 'degraded';
+          publishHealth();
+          return;
+        }
+
+        // Replacement is now visible. Recreate only the fixed realization
+        // reporters and then switch the other retained facets in original
+        // baseline order. Presentation/progress/input receipts stay dropped.
+        host.renderer.resetAudioRealizationOwner();
+        host.renderer.resetAnimationRealizationOwner();
+        audioFeedbackReporter = createProductBrowserAudioFeedbackReporter({
+          renderer: host.renderer,
+          report: transport.reportAudioFeedback,
+        });
+        animationFeedbackReporter = createProductBrowserAnimationFeedbackReporter({
+          renderer: host.renderer,
+          report: transport.reportAnimationFeedback,
+        });
+        ghostPlateFeedbackReporter = createProductBrowserGhostPlateFeedbackReporter({
+          renderer: host.renderer,
+          report: transport.reportGhostPlateFeedback,
+        });
+        for (const output of retainedOutputs) {
+          if (output.kind === 'view-composition') {
+            const viewReceipt = host.renderer.configureViews(output.composition);
+            if (viewReceipt.outcome !== 'applied') {
+              throw new ProductBrowserHostError('output_failed', 'renderer did not apply recovered view composition');
+            }
+          } else if (output.kind === 'animation-cue-definitions') {
+            const cueReceipt = host.renderer.replaceAnimationCueDefinitions(output.definitions);
+            if (cueReceipt.outcome !== 'applied') {
+              throw new ProductBrowserHostError('output_failed', 'renderer did not apply recovered animation cues');
+            }
+          } else {
+            applyOutput(output);
+          }
+        }
+        if (projectionRecovery?.fromEpoch !== pending.fromEpoch
+          || rendererProjectionEpoch !== replacementEpoch
+          || failure !== null
+          || transportClosed) return;
+        acceptedProjectionEpoch = epoch;
+        projectionRecovery = null;
+        restoreReadyAfterHealthyTransport();
+        cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
+      } catch (cause) {
+        if (recoveryFailure === null) {
+          recoveryFailure = cause instanceof ProductBrowserHostError
+            ? cause
+            : new ProductBrowserHostError(
+              'output_failed',
+              cause instanceof Error ? cause.message : String(cause),
+              cause instanceof Error ? { cause } : undefined,
+            );
+        }
+        if (state === 'ready') state = 'degraded';
+        publishHealth();
+      }
+    });
+  };
+
+  const applyOutputBatch = (
+    outputs: readonly ProductBrowserRuntimeOutput[],
+    metadata?: ProductBrowserRuntimeOutputBatchMetadata,
+  ): void => {
+    if (metadata?.recovery === 'fresh-baseline-required') {
+      beginProjectionRecovery(metadata.epoch);
+      return;
+    }
+    if (metadata !== undefined && metadata.epoch < acceptedProjectionEpoch) return;
+    if (metadata?.baseline === true && projectionRecovery !== null && application !== null) {
+      applyProjectionBaseline(outputs, metadata.epoch);
+      return;
+    }
+    if (projectionRecovery !== null && application !== null) return;
+    if (metadata !== undefined) acceptedProjectionEpoch = Math.max(acceptedProjectionEpoch, metadata.epoch);
     for (const output of outputs) {
       applyOutput(output);
     }
@@ -1908,7 +2072,10 @@ export async function mountProductBrowserHostWithApplication(
   cadence = createProductBrowserCadence({
     lifecycleMode: options.lifecycleMode,
     realtimeAdvanceOwner,
-    isReady: () => inputRecovery === null && started && (state === 'ready' || state === 'degraded'),
+    isReady: () => inputRecovery === null
+      && projectionRecovery === null
+      && started
+      && (state === 'ready' || state === 'degraded'),
     enqueueOperation: queue.enqueue,
     sampleInput: () => {
       if (inputRecovery !== null) return [];
@@ -1946,7 +2113,7 @@ export async function mountProductBrowserHostWithApplication(
       ));
     },
     onFailure: (cause) => {
-      if (isInputRecoveryGateError(cause)) return;
+      if (isRecoveryGateError(cause)) return;
       recoverOrClose(cause, 'transport_failed');
     },
   });
@@ -2192,7 +2359,7 @@ export async function mountProductBrowserHostWithApplication(
       restoreReadyAfterHealthyTransport();
       return result;
     }).catch((cause: unknown) => {
-      if (isInputRecoveryGateError(cause)) throw cause;
+      if (isRecoveryGateError(cause)) throw cause;
       throw recoverOrClose(cause, 'transport_failed');
     });
   };
@@ -2224,7 +2391,7 @@ export async function mountProductBrowserHostWithApplication(
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
-      if (isInputRecoveryGateError(cause)) throw cause;
+      if (isRecoveryGateError(cause)) throw cause;
       throw recoverOrClose(cause, 'transport_failed');
     });
   };
@@ -2256,7 +2423,7 @@ export async function mountProductBrowserHostWithApplication(
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
-      if (isInputRecoveryGateError(cause)) throw cause;
+      if (isRecoveryGateError(cause)) throw cause;
       throw recoverOrClose(cause, 'transport_failed');
     });
   };

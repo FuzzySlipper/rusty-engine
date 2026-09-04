@@ -22,6 +22,7 @@ import {
   productBrowserBundleAssets,
   productBrowserBundleDescriptor,
   mountProductBrowserHostWithApplication,
+  type ProductBrowserRuntimeOutputBatchListener,
 } from './product-browser-host.js';
 import { ProductBrowserLocalTransportError } from './local-transport.js';
 
@@ -244,7 +245,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
       context: 'gameplay.default',
       fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
     };
-    let emitOutputs: ((outputs: readonly ProductBrowserRuntimeOutput[]) => void) | null = null;
+    let emitOutputs: ProductBrowserRuntimeOutputBatchListener | null = null;
     const baselines: unknown[] = [];
     const boundRuntimes: unknown[] = [];
     let controlAttempts = 0;
@@ -280,7 +281,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
         return { accepted: true as const, ...ACCEPTED_FAULT, runtime: oldRuntime, ticket: '1' } as never;
       },
       subscribeOutputs: () => () => undefined,
-      subscribeOutputBatches: (listener: (outputs: readonly ProductBrowserRuntimeOutput[]) => void) => {
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
         emitOutputs = listener;
         return () => { emitOutputs = null; };
       },
@@ -317,8 +318,10 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
       autoStart: false,
     }, async () => fakeApplication as never);
 
-    const publishOutputs = emitOutputs as unknown as (outputs: readonly ProductBrowserRuntimeOutput[]) => void;
-    publishOutputs([{ kind: 'binding', runtime: oldRuntime, nextInputSequence: '4' }]);
+    const publishOutputs = emitOutputs as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publishOutputs([{ kind: 'binding', runtime: oldRuntime, nextInputSequence: '4' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
     assert.deepEqual(boundRuntimes, [{
       runtime: oldRuntime,
       context: 'gameplay.default',
@@ -332,7 +335,9 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
     assert.equal(host.readout().state, 'degraded');
     assert.equal(controlAttempts, 1, 'the lost control response remains in the one recovery episode');
     assert.equal(timelineCalls, 0, 'a queued mutation is cancelled at execution after recovery begins');
-    publishOutputs([{ kind: 'binding', runtime: freshRuntime, nextInputSequence: '1' }]);
+    publishOutputs([{ kind: 'binding', runtime: freshRuntime, nextInputSequence: '1' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
     assert.equal(host.readout().state, 'ready');
     assert.deepEqual(baselines, [{
       runtime: freshRuntime,
@@ -349,9 +354,109 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
         binding: oldRuntime,
         nextInputSequence: '5',
       },
-    }]);
+    }], { epoch: 1, baseline: false, recovery: 'none' });
     assert.equal(baselines.length, 1);
     assert.equal(boundRuntimes.length, 1, 'late old input result cannot rebind the fresh control revision');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
+test('host swaps a recovered output projection through renderer replaceFrame and gates stale batches', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const runtime = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    const replacedFrames: unknown[] = [];
+    const boundRuntimes: unknown[] = [];
+    let demandCalls = 0;
+    const transport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportAnimationFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportGhostPlateFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => {
+        demandCalls += 1;
+        return { accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const };
+      },
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => undefined,
+        resetAnimationRealizationOwner: () => undefined,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => undefined,
+        acknowledgeAnimationRealizedFacts: () => undefined,
+        replaceFrame: async (frame: unknown) => {
+          replacedFrames.push(frame);
+          return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+        },
+      },
+      input: {
+        sampleController: () => 0,
+        drain: () => [],
+        bindRuntime: (binding: unknown) => { boundRuntimes.push(binding); },
+      },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport: transport as never,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => fakeApplication as never);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    // This operation clears the synchronous ready check, then loses the race
+    // to the recovery marker while waiting in the serialized host lane.
+    const queuedDemand = host.admitDemandStep();
+    publish([], { epoch: 1, baseline: false, recovery: 'fresh-baseline-required' });
+    await assert.rejects(queuedDemand, /replacing an invalidated retained output projection/u);
+    assert.equal(demandCalls, 0, 'a queued update is gated rather than terminally recovered');
+    assert.equal(host.readout().state, 'degraded');
+    // A normal output from the invalidated epoch cannot reach the renderer.
+    publish([{ kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'createMesh', id: 'stale' }] } }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '1' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [] } },
+    ], { epoch: 2, baseline: true, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(host.readout().state, 'ready');
+    assert.equal(replacedFrames.length, 1);
+    assert.deepEqual((replacedFrames[0] as { readonly ops: readonly unknown[] }).ops, []);
+    assert.deepEqual(boundRuntimes, [{ runtime, context: 'gameplay.default', nextSequence: '1' }]);
     await host.dispose();
   } finally {
     Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
