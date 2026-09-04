@@ -709,9 +709,13 @@ test('a committed output boundary joins a fresh baseline when its old cursor is 
   const first = FakeEventSource.instances[0]!;
   completeConnectionBaseline(first);
   const operation = adapter.lifecycle({ kind: 'start' });
+  let settled = false;
+  void operation.then(() => { settled = true; });
   await Promise.resolve();
   first.emitLag();
   assert.equal(FakeEventSource.instances.length, 2);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, 'the replacement stream alone does not settle the old committed boundary');
   completeConnectionBaseline(FakeEventSource.instances[1]!);
   assert.equal((await operation).operation, 'start');
   adapter.dispose();

@@ -762,8 +762,15 @@ export function createProductBrowserLocalHttpAdapter(
     }
     if (commitDisposition === 'resync-required') {
       await recoverFreshOutputsOrTerminal(route);
-    } else if (outputThrough !== null && currentOutputEpoch === outputEpochAtRequest) {
-      await waitUntilOutputSequence(outputThrough);
+    } else if (outputThrough !== null) {
+      if (currentOutputEpoch === outputEpochAtRequest) {
+        await waitUntilOutputSequence(outputThrough);
+      } else {
+        // The request belongs to the now-discarded attachment. Opening the
+        // replacement stream is not sufficient: its complete baseline must
+        // arrive before this committed operation can be observed as settled.
+        await freshOutputRecovery;
+      }
     }
     return decoded;
   };

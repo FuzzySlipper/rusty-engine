@@ -29056,7 +29056,7 @@ function jO(e = {}) {
 			});
 			throw m.outputRecovery === "fresh-baseline-required" && await ce(e), n;
 		}
-		return d === "resync-required" ? await ce(e) : p !== null && C === c && await re(p), _;
+		return d === "resync-required" ? await ce(e) : p !== null && (C === c ? await re(p) : await w), _;
 	}, ue = (e) => le(JD.lifecycle[e.kind], {}, (t) => vk(t, e.kind)), de = (e) => le(JD.control.replace, { runtime: XO(e) }, (e) => vk(e, "replace-control")), fe = (e) => le(JD.input, { batch: YO(e) }, bk), pe = (e) => {
 		let t = QO(e);
 		return le(JD.audioFeedback, t, (e) => xk(e, t.runtime, t.facts));
