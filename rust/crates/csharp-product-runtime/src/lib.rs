@@ -1828,12 +1828,7 @@ impl CsharpProductRuntime {
         }
         let mismatched = payload_intent(
             current_binding,
-            next_sequence.checked_add(1).ok_or_else(|| {
-                CsharpProductRuntimeError::new(
-                    "CSHARP_EXERCISE_DIRECT_INTENT",
-                    "direct-intent exercise sequence overflowed",
-                )
-            })?,
+            next_sequence,
             descriptor.id(),
             "runtime.wrong.contract",
         )?;
@@ -1848,12 +1843,7 @@ impl CsharpProductRuntime {
         }
         let admitted = direct_intent(
             current_binding,
-            next_sequence.checked_add(2).ok_or_else(|| {
-                CsharpProductRuntimeError::new(
-                    "CSHARP_EXERCISE_DIRECT_INTENT",
-                    "direct-intent exercise sequence overflowed",
-                )
-            })?,
+            next_sequence,
             &descriptor,
         )?;
         self.input(ProductDevInputBatch::new(vec![admitted]))
@@ -1874,7 +1864,7 @@ impl CsharpProductRuntime {
             })?;
         let admitted = direct_intent(
             current_binding,
-            next_sequence.checked_add(3).ok_or_else(|| {
+            next_sequence.checked_add(1).ok_or_else(|| {
                 CsharpProductRuntimeError::new(
                     "CSHARP_EXERCISE_DIRECT_INTENT",
                     "direct-intent exercise sequence overflowed",
