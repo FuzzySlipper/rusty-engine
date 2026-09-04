@@ -58,11 +58,14 @@ let scheduledInputResultIndex = 0;
 const inputBatches: (readonly RustyApplicationRuntimeInputEnvelope[])[] = [];
 const inputAttempts: (readonly RustyApplicationRuntimeInputEnvelope[])[] = [];
 let transientInputFailuresRemaining = new URLSearchParams(window.location.search).has('transientInputFailure') ? 1 : 0;
+let transientInputFailureObserved = false;
+let repeatedRetryableFailureRemaining = new URLSearchParams(window.location.search).has('repeatRetryableFailure') ? 1 : 0;
 const realtimeTicks: string[] = [];
 const outputs: ProductBrowserRuntimeOutput[] = [];
 const diagnosticReports: ProductBrowserDiagnosticsReport[] = [];
 const acceptedDiagnosticReports: ProductBrowserDiagnosticsReport[] = [];
 let rejectedRecoveryDiagnosticsRemaining = new URLSearchParams(window.location.search).has('rejectRecoveryDiagnostic') ? 1 : 0;
+const delayRecoveryDiagnostic = new URLSearchParams(window.location.search).has('delayRecoveryDiagnostic');
 let activeDiagnostics = 0;
 window.__rustyProductBrowserMaximumActiveDiagnostics = 0;
 window.__rustyProductBrowserInputBatches = inputBatches;
@@ -111,6 +114,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
     inputAttempts.push(batch);
     if (transientInputFailuresRemaining > 0) {
       transientInputFailuresRemaining -= 1;
+      transientInputFailureObserved = true;
       throw new ProductBrowserLocalTransportError(
         'request_failed',
         'fixture same-origin input request was transiently unavailable',
@@ -152,6 +156,10 @@ const adapter: ProductBrowserRuntimeAdapter = {
         rejectedRecoveryDiagnosticsRemaining -= 1;
         throw new Error('fixture rejected the first recovery diagnostic');
       }
+      if (delayRecoveryDiagnostic
+        && report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
+        await new Promise<void>((resolve) => { window.setTimeout(resolve, 100); });
+      }
       acceptedDiagnosticReports.push(report);
       return { accepted: true, reported: 1 };
     } finally {
@@ -159,6 +167,14 @@ const adapter: ProductBrowserRuntimeAdapter = {
     }
   },
   advanceRealtime: async (observedTimeNs) => {
+    if (transientInputFailureObserved && repeatedRetryableFailureRemaining > 0) {
+      repeatedRetryableFailureRemaining -= 1;
+      throw new ProductBrowserLocalTransportError(
+        'request_failed',
+        'fixture repeated same-origin advance request was transiently unavailable',
+        { retryable: true, route: '/__rusty/product/runtime/advance-realtime' },
+      );
+    }
     realtimeTicks.push(observedTimeNs);
     emit({ kind: 'runtime-readout', readout: runtimeReadout('running') });
     return {

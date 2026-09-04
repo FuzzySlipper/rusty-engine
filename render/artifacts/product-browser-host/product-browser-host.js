@@ -27980,26 +27980,33 @@ async function dD(e) {
 			code: "BROWSER_LOCAL_REQUEST_UNAVAILABLE",
 			message: vD(f.message)
 		}) : void 0;
-		if (t && n.reportBrowserDiagnostics !== void 0 && (D || A !== void 0 || r.length > 0 || k !== b) && !m) {
-			b = k, D && (x = !0), A?.code === "CSHARP_LIFECYCLE_CLOCK_REGRESSION" ? (S = !1, C = !0) : A?.code === "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE" && (T = !0);
-			let e = y === null ? void 0 : String(Math.max(0, c - y)), t = Object.freeze({
-				hostState: O,
-				runtimeProgress: String(_),
-				transportState: g ? "closed" : "open",
-				outputState: g ? "closed" : "open",
-				...v === null ? {} : { lastRendererSequence: v },
-				...e === void 0 ? {} : { rendererObservationAgeMs: e },
-				...D ? { firstTerminal: u } : {},
-				...A === void 0 ? {} : { recoverableEvent: A },
-				pageEvents: Object.freeze([...r])
-			});
-			m = !0, n.reportBrowserDiagnostics(t).then(() => {
-				m = !1, A?.code === "BROWSER_LOCAL_REQUEST_UNAVAILABLE" && (p = !0);
-				let e = h && f !== null && !p;
-				h = !1, e && ce();
-			}, () => {
-				m = !1, h && f !== null && !p && (h = !1, ce());
-			});
+		if (t && n.reportBrowserDiagnostics !== void 0 && (D || A !== void 0 || r.length > 0 || k !== b)) {
+			if (m) {
+				h = !0;
+				return;
+			}
+			{
+				let e = y === null ? void 0 : String(Math.max(0, c - y)), t = Object.freeze({
+					hostState: O,
+					runtimeProgress: String(_),
+					transportState: g ? "closed" : "open",
+					outputState: g ? "closed" : "open",
+					...v === null ? {} : { lastRendererSequence: v },
+					...e === void 0 ? {} : { rendererObservationAgeMs: e },
+					...D ? { firstTerminal: u } : {},
+					...A === void 0 ? {} : { recoverableEvent: A },
+					pageEvents: Object.freeze([...r])
+				});
+				m = !0, n.reportBrowserDiagnostics(t).then(() => {
+					m = !1, b = k, D && (x = !0), A?.code === "CSHARP_LIFECYCLE_CLOCK_REGRESSION" ? (S = !1, C = !0) : A?.code === "BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE" && (T = !0), A?.code === "BROWSER_LOCAL_REQUEST_UNAVAILABLE" && (p = !0);
+					let e = h;
+					h = !1, e && ce();
+				}, () => {
+					m = !1;
+					let e = h;
+					h = !1, e && ce();
+				});
+			}
 		}
 	}, le = () => {
 		if (o === null || i === "disposed") throw new Z("disposed", "Product Browser Host is disposed or has not mounted");
@@ -28023,7 +28030,7 @@ async function dD(e) {
 		}
 		return he(e, t);
 	}, ve = () => {
-		i === "degraded" && (i = "ready", m && f !== null && !p && (h = !0), ce());
+		i === "degraded" && (i = "ready", ce());
 	}, ye = e.root.ownerDocument.defaultView;
 	if (ye !== null) {
 		let e = (e, t, n) => {

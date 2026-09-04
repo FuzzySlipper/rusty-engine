@@ -86,7 +86,7 @@ test('a transient local input request degrades once, drops its uncertain batch, 
   await page.keyboard.up('KeyW');
   await expect.poll(() => page.evaluate(() => window.__rustyProductBrowserHost?.readout().state)).toBe('ready');
   await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserAcceptedDiagnosticReports ?? []).some((report) =>
-    report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
+    report.hostState === 'ready' && report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
   ))).toBe(true);
   const evidence = await page.evaluate(() => ({
     attempts: window.__rustyProductBrowserInputAttempts ?? [],
@@ -105,6 +105,21 @@ test('a transient local input request degrades once, drops its uncertain batch, 
     report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
   )).toHaveLength(2);
   expect(evidence.maximumActiveDiagnostics).toBe(1);
+});
+
+test('a delayed degraded report flushes the later terminal transition with its first cause', async ({ page }) => {
+  await page.goto('/browser/product-browser-host.html?transientInputFailure=1&delayRecoveryDiagnostic=1&repeatRetryableFailure=1');
+  const canvas = page.locator('canvas[data-rusty-application-renderer="engine-owned"]');
+  await canvas.focus();
+  await page.keyboard.down('KeyW');
+  await expect.poll(() => page.evaluate(() => window.__rustyProductBrowserHost?.readout().state)).toBe('failed');
+  await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserAcceptedDiagnosticReports ?? []).some((report) =>
+    report.hostState === 'failed'
+      && report.transportState === 'closed'
+      && report.outputState === 'closed'
+      && report.firstTerminal?.code === 'BROWSER_HOST_TRANSPORT_FAILED',
+  ))).toBe(true);
+  await expect(page.locator('#application')).toHaveAttribute('data-transport-disposed', 'true');
 });
 
 test('generated product browser host keeps UI controls out of gameplay pointer input and focuses canvas once', async ({ page }) => {

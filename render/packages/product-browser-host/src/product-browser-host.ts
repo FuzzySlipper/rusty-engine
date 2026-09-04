@@ -1208,7 +1208,7 @@ export async function mountProductBrowserHost(
   let recoveryFailure: ProductBrowserHostError | null = null;
   let recoveryDiagnosticReported = false;
   let browserDiagnosticsReportInFlight = false;
-  let retryRecoveryDiagnosticAfterInFlight = false;
+  let pendingHealthTransition = false;
   let transportClosed = false;
   let runtimeProgress = 0;
   let lastRendererSequence: string | null = null;
@@ -1325,15 +1325,15 @@ export async function mountProductBrowserHost(
         : undefined;
     const shouldReport = reportToTransport && transport.reportBrowserDiagnostics !== undefined
       && (includeTerminal || recoverableEvent !== undefined || pageEvents.length > 0 || statusKey !== lastDiagnosticsStatusKey);
-    if (shouldReport && !browserDiagnosticsReportInFlight) {
-      lastDiagnosticsStatusKey = statusKey;
-      if (includeTerminal) terminalDiagnosticsReported = true;
-      if (recoverableEvent?.code === 'CSHARP_LIFECYCLE_CLOCK_REGRESSION') {
-        recoverableClockDiagnosticPending = false;
-        recoverableClockDiagnosticReported = true;
-      } else if (recoverableEvent?.code === 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE') {
-        rendererDiagnosticsFailureReported = true;
-      }
+    if (!shouldReport) return;
+    if (browserDiagnosticsReportInFlight) {
+      // Keep only one follow-up: every diagnostic fact is derived from the
+      // current host state, while first terminal/recovery facts remain held
+      // until an accepted report acknowledges them.
+      pendingHealthTransition = true;
+      return;
+    }
+    {
       const age = lastRendererObservationAtMs === null
         ? undefined
         : String(Math.max(0, now - lastRendererObservationAtMs));
@@ -1352,26 +1352,26 @@ export async function mountProductBrowserHost(
       void transport.reportBrowserDiagnostics(report).then(
         () => {
           browserDiagnosticsReportInFlight = false;
+          lastDiagnosticsStatusKey = statusKey;
+          if (includeTerminal) terminalDiagnosticsReported = true;
+          if (recoverableEvent?.code === 'CSHARP_LIFECYCLE_CLOCK_REGRESSION') {
+            recoverableClockDiagnosticPending = false;
+            recoverableClockDiagnosticReported = true;
+          } else if (recoverableEvent?.code === 'BROWSER_RENDERER_DIAGNOSTICS_UNAVAILABLE') {
+            rendererDiagnosticsFailureReported = true;
+          }
           if (recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE') {
             recoveryDiagnosticReported = true;
           }
-          const retryRecoveryDiagnostic = retryRecoveryDiagnosticAfterInFlight
-            && recoveryFailure !== null
-            && !recoveryDiagnosticReported;
-          retryRecoveryDiagnosticAfterInFlight = false;
-          if (retryRecoveryDiagnostic) publishHealth();
+          const flushPendingHealthTransition = pendingHealthTransition;
+          pendingHealthTransition = false;
+          if (flushPendingHealthTransition) publishHealth();
         },
         () => {
           browserDiagnosticsReportInFlight = false;
-          const retryRecoveryDiagnostic = retryRecoveryDiagnosticAfterInFlight
-            && recoveryFailure !== null
-            && !recoveryDiagnosticReported;
-          if (!retryRecoveryDiagnostic) return;
-          // A ready transition occurred while the first warning was in
-          // flight. Retry once from that healthy traffic; never loop on a
-          // diagnostics endpoint that remains unavailable.
-          retryRecoveryDiagnosticAfterInFlight = false;
-          publishHealth();
+          const flushPendingHealthTransition = pendingHealthTransition;
+          pendingHealthTransition = false;
+          if (flushPendingHealthTransition) publishHealth();
         },
       );
     }
@@ -1479,9 +1479,6 @@ export async function mountProductBrowserHost(
   const restoreReadyAfterHealthyTransport = (): void => {
     if (state !== 'degraded') return;
     state = 'ready';
-    if (browserDiagnosticsReportInFlight && recoveryFailure !== null && !recoveryDiagnosticReported) {
-      retryRecoveryDiagnosticAfterInFlight = true;
-    }
     publishHealth();
   };
 
