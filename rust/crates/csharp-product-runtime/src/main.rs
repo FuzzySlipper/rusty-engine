@@ -322,6 +322,9 @@ fn supervise_worker_replacements(
                 continue;
             }
             if automatic_restart_used {
+                if let Err(error) = runtime.stop_generation(generation) {
+                    publish_shell_diagnostic(diagnostics, "DEV_HOST_WORKER_STOP", &error);
+                }
                 if paused_generation != Some(generation) {
                     paused_generation = Some(generation);
                     publish_shell_diagnostic(
@@ -536,6 +539,23 @@ impl WorkerRuntime {
         }
         *inflight = None;
         Some(generation)
+    }
+
+    fn stop_generation(&self, generation: u64) -> Result<(), String> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DEV_HOST_WORKER_LOCK: worker connection lock is poisoned".to_owned())?;
+        if connection.generation != generation {
+            return Ok(());
+        }
+        stop_worker(&mut connection);
+        if let Ok(mut inflight) = self.scheduler_inflight.lock() {
+            if inflight.is_some_and(|(active_generation, _)| active_generation == generation) {
+                *inflight = None;
+            }
+        }
+        Ok(())
     }
 
     fn start(
@@ -1502,6 +1522,8 @@ fn worker_scheduler(
         let mut input_outputs = Vec::new();
         let mut update_outputs = Vec::new();
         if !publish_scheduler_activity(&writer, true) {
+            shutdown_worker_channel(&writer);
+            shutdown.store(true, Ordering::Release);
             return;
         }
         let scheduled = owner.advance_realtime_with_input_and_publish(
@@ -1520,6 +1542,8 @@ fn worker_scheduler(
             || {},
         );
         if !publish_scheduler_activity(&writer, false) {
+            shutdown_worker_channel(&writer);
+            shutdown.store(true, Ordering::Release);
             return;
         }
         match scheduled {
@@ -1538,13 +1562,14 @@ fn worker_scheduler(
                         return;
                     }
                 };
-                let Ok(mut writer) = writer.lock() else {
-                    shutdown.store(true, Ordering::Release);
-                    return;
+                let mut writer = match writer.lock() {
+                    Ok(writer) => writer,
+                    Err(poisoned) => poisoned.into_inner(),
                 };
                 if write_worker_frame(&mut *writer, &ProductDevWorkerEvent::Outputs { outputs })
                     .is_err()
                 {
+                    let _ = writer.shutdown(Shutdown::Both);
                     shutdown.store(true, Ordering::Release);
                     return;
                 }
@@ -1557,6 +1582,7 @@ fn worker_scheduler(
                     )
                     .is_err()
                 {
+                    let _ = writer.shutdown(Shutdown::Both);
                     shutdown.store(true, Ordering::Release);
                     return;
                 }
@@ -1610,6 +1636,14 @@ fn publish_scheduler_activity(writer: &Arc<Mutex<TcpStream>>, active: bool) -> b
             .ok()
         })
         .is_some()
+}
+
+fn shutdown_worker_channel(writer: &Arc<Mutex<TcpStream>>) {
+    let writer = match writer.lock() {
+        Ok(writer) => writer,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let _ = writer.shutdown(Shutdown::Both);
 }
 
 fn drain_worker_diagnostics(

@@ -132,8 +132,20 @@ fn dev(options: DevOptions) -> Result<(), String> {
             }
         }
         thread::sleep(POLL_INTERVAL);
-        let next = FileSnapshot::capture(&watches)?;
-        if next == snapshot {
+        let next = match FileSnapshot::capture(&watches) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                diagnostic(
+                    "watch-snapshot-failed",
+                    serde_json::json!({
+                        "watchPaths": watches,
+                        "error": error,
+                    }),
+                );
+                continue;
+            }
+        };
+        if !record_observed_snapshot(&mut snapshot, next) {
             continue;
         }
 
@@ -141,12 +153,60 @@ fn dev(options: DevOptions) -> Result<(), String> {
             "change-detected",
             serde_json::json!({ "watchPaths": watches }),
         );
-        let next_staged = stage_product(&options)?;
-        verify_staged_product(&next_staged)?;
-        let refreshed_watches = query_watch_paths(&options.project)?;
-        snapshot = FileSnapshot::capture(&refreshed_watches)?;
+        let next_staged = match stage_product(&options) {
+            Ok(staged) => staged,
+            Err(error) => {
+                diagnostic(
+                    "restage-failed",
+                    serde_json::json!({
+                        "phase": "stage-product",
+                        "error": error,
+                    }),
+                );
+                continue;
+            }
+        };
+        if let Err(error) = verify_staged_product(&next_staged) {
+            diagnostic(
+                "restage-failed",
+                serde_json::json!({
+                    "phase": "verify-staged-product",
+                    "productDirectory": next_staged,
+                    "error": error,
+                }),
+            );
+            continue;
+        }
+        let refreshed_watches = match query_watch_paths(&options.project) {
+            Ok(watches) => watches,
+            Err(error) => {
+                diagnostic(
+                    "restage-failed",
+                    serde_json::json!({
+                        "phase": "query-watch-paths",
+                        "error": error,
+                    }),
+                );
+                continue;
+            }
+        };
+        let refreshed_snapshot = match FileSnapshot::capture(&refreshed_watches) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                diagnostic(
+                    "restage-failed",
+                    serde_json::json!({
+                        "phase": "capture-refreshed-watch-snapshot",
+                        "watchPaths": refreshed_watches,
+                        "error": error,
+                    }),
+                );
+                continue;
+            }
+        };
+        snapshot = refreshed_snapshot;
         watches = refreshed_watches;
-        crash_budget.reset_after_successful_restage();
+        let mut replacement_failed = false;
         let started_after_restage = if let Some(active_child) = child.as_mut() {
             if let Some(status) = active_child.try_wait()? {
                 diagnostic(
@@ -175,7 +235,16 @@ fn dev(options: DevOptions) -> Result<(), String> {
                             child.take();
                             true
                         } else {
-                            return Err(error);
+                            diagnostic(
+                                "restage-failed",
+                                serde_json::json!({
+                                    "phase": "replace-runtime",
+                                    "productDirectory": next_staged,
+                                    "error": error,
+                                }),
+                            );
+                            replacement_failed = true;
+                            false
                         }
                     }
                 }
@@ -197,6 +266,10 @@ fn dev(options: DevOptions) -> Result<(), String> {
                 &content_store_root,
             )?);
         }
+        if replacement_failed {
+            continue;
+        }
+        crash_budget.reset_after_successful_restage();
         if started_after_restage {
             diagnostic(
                 "started-after-restage",
@@ -813,6 +886,18 @@ impl FileSnapshot {
     }
 }
 
+/// Records an observed source state before trying to stage it. If staging is
+/// broken, the watcher retains the known-good runtime but does not rebuild the
+/// identical broken state every polling interval; a subsequent edit differs
+/// and is admitted as the next restage attempt.
+fn record_observed_snapshot(current: &mut FileSnapshot, observed: FileSnapshot) -> bool {
+    if *current == observed {
+        return false;
+    }
+    *current = observed;
+    true
+}
+
 fn capture_path(path: &Path, files: &mut BTreeMap<PathBuf, FileStamp>) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         format!(
@@ -913,6 +998,33 @@ mod tests {
             budget.record_unexpected_exit(),
             CrashBudgetDecision::Restart { .. }
         ));
+    }
+
+    #[test]
+    fn observed_broken_snapshot_is_recorded_until_a_later_edit_changes_it() {
+        let path = PathBuf::from("/workspace/Product/Program.cs");
+        let snapshot = |bytes| {
+            FileSnapshot(BTreeMap::from([(
+                path.clone(),
+                FileStamp {
+                    modified: None,
+                    bytes,
+                },
+            )]))
+        };
+        let mut recorded = snapshot(10);
+        let broken = snapshot(20);
+
+        assert!(record_observed_snapshot(&mut recorded, broken.clone()));
+        assert_eq!(recorded, broken);
+        assert!(
+            !record_observed_snapshot(&mut recorded, broken),
+            "the unchanged broken state must not restage again"
+        );
+        assert!(
+            record_observed_snapshot(&mut recorded, snapshot(30)),
+            "a correcting source edit gets a fresh restage attempt"
+        );
     }
 
     #[test]
