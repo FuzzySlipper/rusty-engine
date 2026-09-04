@@ -363,7 +363,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
   }
 });
 
-test('host swaps a recovered output projection through renderer replaceFrame and gates stale batches', async () => {
+test('host swaps a recovered output projection before applying current-epoch trailing output', async () => {
   const previousHTMLElement = globalThis.HTMLElement;
   class FakeElement {
     readonly childNodes: unknown[] = [];
@@ -385,7 +385,9 @@ test('host swaps a recovered output projection through renderer replaceFrame and
     const runtime = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
     let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
     const replacedFrames: unknown[] = [];
+    const appliedFrames: unknown[] = [];
     const boundRuntimes: unknown[] = [];
+    let resolveReplacement: ((value: { readonly applied: true; readonly outcome: 'applied'; readonly diagnostics: readonly [] }) => void) | null = null;
     let demandCalls = 0;
     const transport = {
       lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
@@ -418,7 +420,11 @@ test('host swaps a recovered output projection through renderer replaceFrame and
         acknowledgeAnimationRealizedFacts: () => undefined,
         replaceFrame: async (frame: unknown) => {
           replacedFrames.push(frame);
-          return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+          return new Promise((resolve) => { resolveReplacement = resolve; });
+        },
+        applyFrame: (frame: unknown) => {
+          appliedFrames.push(frame);
+          return { outcome: 'applied' as const, diagnostics: [] };
         },
       },
       input: {
@@ -453,10 +459,27 @@ test('host swaps a recovered output projection through renderer replaceFrame and
       { kind: 'frame', frame: { schemaVersion: 1, ops: [] } },
     ], { epoch: 2, baseline: true, recovery: 'none' });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(host.readout().state, 'ready');
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '2' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'current-epoch-trailing' }] } },
+    ], { epoch: 2, baseline: false, recovery: 'none' });
+    assert.equal(host.readout().state, 'degraded');
     assert.equal(replacedFrames.length, 1);
     assert.deepEqual((replacedFrames[0] as { readonly ops: readonly unknown[] }).ops, []);
-    assert.deepEqual(boundRuntimes, [{ runtime, context: 'gameplay.default', nextSequence: '1' }]);
+    assert.deepEqual(boundRuntimes, [], 'trailing binding stays gated until the replacement applies');
+    assert.deepEqual(appliedFrames, [], 'trailing frame stays gated until the replacement applies');
+    (resolveReplacement as unknown as (value: { readonly applied: true; readonly outcome: 'applied'; readonly diagnostics: readonly [] }) => void)({
+      applied: true,
+      outcome: 'applied',
+      diagnostics: [],
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(host.readout().state, 'ready');
+    assert.deepEqual(boundRuntimes, [
+      { runtime, context: 'gameplay.default', nextSequence: '1' },
+      { runtime, context: 'gameplay.default', nextSequence: '2' },
+    ]);
+    assert.deepEqual(appliedFrames, [{ schemaVersion: 1, ops: [{ op: 'current-epoch-trailing' }] }]);
     await host.dispose();
   } finally {
     Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });

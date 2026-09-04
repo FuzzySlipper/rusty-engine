@@ -1251,6 +1251,11 @@ export async function mountProductBrowserHostWithApplication(
     readonly epoch: number;
     readonly outputs: readonly ProductBrowserRuntimeOutput[];
   } | null = null;
+  let selectedProjectionBaselineEpoch: number | null = null;
+  let pendingProjectionIncrementals: {
+    readonly epoch: number;
+    readonly outputs: readonly ProductBrowserRuntimeOutput[];
+  } | null = null;
   let acceptedProjectionEpoch = 0;
   let browserDiagnosticsReportInFlight = false;
   let pendingHealthTransition = false;
@@ -1849,6 +1854,8 @@ export async function mountProductBrowserHostWithApplication(
     if (pendingProjectionBaseline !== null && pendingProjectionBaseline.epoch <= epoch) {
       pendingProjectionBaseline = null;
     }
+    selectedProjectionBaselineEpoch = null;
+    pendingProjectionIncrementals = null;
     // Work already queued from the discarded retained projection is never
     // allowed to reach the renderer after its fresh replacement arrives.
     rendererProjectionEpoch += 1;
@@ -1862,6 +1869,15 @@ export async function mountProductBrowserHostWithApplication(
   ): void => {
     const pending = projectionRecovery;
     if (pending === null || epoch <= pending.fromEpoch || application === null) return;
+    if (selectedProjectionBaselineEpoch !== null) {
+      if (epoch <= selectedProjectionBaselineEpoch) return;
+      // A newer retained replacement supersedes one that was selected but has
+      // not become visible yet. Its queued renderer work cannot release this
+      // gate, and only the new epoch's trailing output remains relevant.
+      rendererProjectionEpoch += 1;
+      pendingProjectionIncrementals = null;
+    }
+    selectedProjectionBaselineEpoch = epoch;
     const host = requireApplication();
     const frameOps = outputs.flatMap((output) => output.kind === 'frame'
       ? [...(output.frame['ops'] as readonly unknown[])]
@@ -1939,6 +1955,15 @@ export async function mountProductBrowserHostWithApplication(
           || transportClosed) return;
         acceptedProjectionEpoch = epoch;
         projectionRecovery = null;
+        selectedProjectionBaselineEpoch = null;
+        const trailingOutputs = pendingProjectionIncrementals?.epoch === epoch
+          ? pendingProjectionIncrementals.outputs
+          : [];
+        pendingProjectionIncrementals = null;
+        // The retained replacement is physically installed before any normal
+        // output accepted behind its CompleteBaseline. This preserves the
+        // current epoch rather than dropping it during the asynchronous swap.
+        for (const output of trailingOutputs) applyOutput(output);
         restoreReadyAfterHealthyTransport();
         cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
       } catch (cause) {
@@ -1978,6 +2003,16 @@ export async function mountProductBrowserHostWithApplication(
         } else {
           applyProjectionBaseline(outputs, metadata.epoch);
         }
+      } else if (metadata !== undefined
+        && selectedProjectionBaselineEpoch === metadata.epoch) {
+        const trailing = pendingProjectionIncrementals;
+        pendingProjectionIncrementals = Object.freeze({
+          epoch: metadata.epoch,
+          outputs: Object.freeze([
+            ...(trailing?.epoch === metadata.epoch ? trailing.outputs : []),
+            ...outputs,
+          ]),
+        });
       }
       return;
     }
