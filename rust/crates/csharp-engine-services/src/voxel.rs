@@ -21,8 +21,69 @@ use crate::{
 };
 
 const LEASE_ID_MASK: u64 = u32::MAX as u64;
+const VOXEL_SERVICE: &[u8] = b"Voxel";
+const APPLY_EDITS_OPERATION: &[u8] = b"ApplyEdits";
+const APPLY_RESIDENCY_OPERATION: &[u8] = b"ApplyResidency";
+const UNDO_OPERATION: &[u8] = b"Undo";
+const REDO_OPERATION: &[u8] = b"Redo";
+
+/// Voxel mutation failures retain their original Engine diagnostic until the
+/// generated managed call has copied it and released this exact lease.
+pub(crate) struct VoxelOperationDiagnosticLease {
+    _code: Box<str>,
+    _message: Box<str>,
+    _source: Box<str>,
+    diagnostic: NativeEngineDiagnostic,
+}
+
+impl VoxelOperationDiagnosticLease {
+    fn new(error: &CsharpEngineServicesError) -> Self {
+        let code: Box<str> = error.code().into();
+        let message: Box<str> = error.detail().into();
+        let source: Box<str> = "".into();
+        let diagnostic = NativeEngineDiagnostic {
+            code: native_utf8(code.as_bytes()),
+            message: native_utf8(message.as_bytes()),
+            source: native_utf8(source.as_bytes()),
+        };
+        Self {
+            _code: code,
+            _message: message,
+            _source: source,
+            diagnostic,
+        }
+    }
+}
 
 impl RuntimeSpatialBridge {
+    fn retain_voxel_operation_diagnostic(
+        &mut self,
+        error: &CsharpEngineServicesError,
+    ) -> Option<NativeEngineDiagnosticLease> {
+        let value = self.next_voxel_operation_diagnostic_lease;
+        self.next_voxel_operation_diagnostic_lease = value.checked_add(1)?;
+        let lease = VoxelOperationDiagnosticLease::new(error);
+        self.voxel_operation_diagnostic_leases.insert(value, lease);
+        let lease = self.voxel_operation_diagnostic_leases.get(&value)?;
+        let diagnostics = NativeEngineDiagnosticLease {
+            handle: NativeEngineDiagnosticLeaseHandle { value },
+            diagnostics: std::ptr::from_ref(&lease.diagnostic),
+            diagnostics_len: 1,
+        };
+        Some(diagnostics)
+    }
+
+    fn destroy_voxel_operation_diagnostic_lease(
+        &mut self,
+        handle: NativeEngineDiagnosticLeaseHandle,
+    ) -> bool {
+        handle.value != 0
+            && self
+                .voxel_operation_diagnostic_leases
+                .remove(&handle.value)
+                .is_some()
+    }
+
     fn read_voxel_scene(
         &mut self,
         request: NativeVoxelSceneReadRequest,
@@ -695,6 +756,17 @@ fn voxel_error(code: &'static str, detail: impl Into<String>) -> CsharpEngineSer
     CsharpEngineServicesError::new(code, detail)
 }
 
+fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
+    NativeUtf8Slice {
+        bytes: if value.is_empty() {
+            std::ptr::null()
+        } else {
+            value.as_ptr()
+        },
+        len: value.len(),
+    }
+}
+
 unsafe extern "C" fn read_scene(
     context: *mut c_void,
     request: NativeVoxelSceneReadRequest,
@@ -784,18 +856,26 @@ unsafe extern "C" fn apply_edits(
     context: *mut c_void,
     request: *const NativeVoxelEditTransaction,
     output: *mut NativeVoxelEditReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }
-        .apply_voxel_edits(unsafe { &*request })
-    {
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.apply_voxel_edits(unsafe { &*request }) {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            retain_voxel_operation_error(bridge, &error, receipt, APPLY_EDITS_OPERATION);
+            0
+        }
     }
 }
 
@@ -820,7 +900,13 @@ unsafe extern "C" fn apply_residency(
     context: *mut c_void,
     request: *const NativeVoxelResidencyTransaction,
     output: *mut NativeVoxelResidencyReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || request.is_null() || output.is_null() {
         return 0;
     }
@@ -834,7 +920,10 @@ unsafe extern "C" fn apply_residency(
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            retain_voxel_operation_error(bridge, &error, receipt, APPLY_RESIDENCY_OPERATION);
+            0
+        }
     }
 }
 
@@ -940,16 +1029,26 @@ unsafe extern "C" fn undo(
     context: *mut c_void,
     request: NativeVoxelHistoryActionRequest,
     output: *mut NativeVoxelHistoryReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || output.is_null() {
         return 0;
     }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.undo_voxel(request) {
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.undo_voxel(request) {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            retain_voxel_operation_error(bridge, &error, receipt, UNDO_OPERATION);
+            0
+        }
     }
 }
 
@@ -957,17 +1056,58 @@ unsafe extern "C" fn redo(
     context: *mut c_void,
     request: NativeVoxelHistoryActionRequest,
     output: *mut NativeVoxelHistoryReceipt,
+    receipt: *mut NativeOperationErrorReceipt,
 ) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    // SAFETY: this borrowed receipt starts empty for every direct callback.
+    unsafe { *receipt = std::mem::zeroed() };
     if context.is_null() || output.is_null() {
         return 0;
     }
-    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.redo_voxel(request) {
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.redo_voxel(request) {
         Ok(value) => {
             unsafe { *output = value };
             ABI_OK
         }
-        Err(_) => 0,
+        Err(error) => {
+            retain_voxel_operation_error(bridge, &error, receipt, REDO_OPERATION);
+            0
+        }
     }
+}
+
+fn retain_voxel_operation_error(
+    bridge: &mut RuntimeSpatialBridge,
+    error: &CsharpEngineServicesError,
+    receipt: *mut NativeOperationErrorReceipt,
+    operation: &'static [u8],
+) {
+    if let Some(diagnostics) = bridge.retain_voxel_operation_diagnostic(error) {
+        // SAFETY: receipt was checked by the direct callback and names only
+        // this independently retained Voxel diagnostic lease.
+        unsafe {
+            *receipt = NativeOperationErrorReceipt {
+                service: native_utf8(VOXEL_SERVICE),
+                operation: native_utf8(operation),
+                status: 0,
+                diagnostics,
+            };
+        }
+    }
+}
+
+unsafe extern "C" fn destroy_operation_diagnostic_lease(
+    context: *mut c_void,
+    handle: NativeEngineDiagnosticLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    i32::from(bridge.destroy_voxel_operation_diagnostic_lease(handle))
 }
 
 unsafe extern "C" fn read_history_codec_info(
@@ -1050,6 +1190,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeVoxelApi {
         read_history_delta_at,
         undo,
         redo,
+        destroy_operation_diagnostic_lease,
         read_history_codec_info,
         export_history,
         destroy_history_export_lease,
@@ -1087,6 +1228,104 @@ mod tests {
             address,
             material_slot,
         }
+    }
+
+    fn copied_utf8(value: NativeUtf8Slice) -> String {
+        let bytes = unsafe { std::slice::from_raw_parts(value.bytes, value.len) };
+        std::str::from_utf8(bytes).unwrap().to_owned()
+    }
+
+    fn assert_edit_rejection(
+        api: &NativeVoxelApi,
+        receipt: &mut NativeOperationErrorReceipt,
+        expected_message: &str,
+    ) {
+        assert_eq!(receipt.status, 0);
+        assert_eq!(copied_utf8(receipt.service), "Voxel");
+        assert_eq!(copied_utf8(receipt.operation), "ApplyEdits");
+        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
+        assert_eq!(copied_utf8(diagnostic.code), "CSHARP_VOXEL_EDIT");
+        assert!(copied_utf8(diagnostic.message).contains(expected_message));
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+            },
+            0
+        );
+    }
+
+    #[test]
+    fn mutation_callbacks_retain_copyable_diagnostics_for_no_change_and_stale_edits() {
+        let mut bridge = RuntimeSpatialBridge::new();
+        let session = create_session(&mut bridge);
+        let api = api(&mut bridge);
+        let edit = [set(NativeVoxelAddress { x: 1, y: 0, z: 0 }, 2)];
+        let mut accepted = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.apply_edits)(
+                    api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: 0,
+                        edits: edit.as_ptr(),
+                        edits_len: edit.len(),
+                    },
+                    &mut accepted,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(error.diagnostics.handle.value, 0);
+
+        let mut no_change = NativeVoxelEditReceipt::default();
+        let mut no_change_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.apply_edits)(
+                    api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: accepted.accepted_revision,
+                        edits: edit.as_ptr(),
+                        edits_len: edit.len(),
+                    },
+                    &mut no_change,
+                    &mut no_change_error,
+                )
+            },
+            0
+        );
+        assert_edit_rejection(&api, &mut no_change_error, "NoChanges");
+
+        let mut stale = NativeVoxelEditReceipt::default();
+        let mut stale_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.apply_edits)(
+                    api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: 0,
+                        edits: edit.as_ptr(),
+                        edits_len: edit.len(),
+                    },
+                    &mut stale,
+                    &mut stale_error,
+                )
+            },
+            0
+        );
+        assert_edit_rejection(&api, &mut stale_error, "stale voxel revision");
     }
 
     #[test]

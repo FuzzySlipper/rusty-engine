@@ -137,12 +137,15 @@ struct SpatialContentIdentity {
 pub(crate) struct RuntimeSpatialBridge {
     pub(crate) sessions: BTreeMap<u64, SpatialSession>,
     pub(crate) voxel_history_exports: BTreeMap<u64, Arc<[u8]>>,
+    pub(crate) voxel_operation_diagnostic_leases:
+        BTreeMap<u64, crate::voxel::VoxelOperationDiagnosticLease>,
     trigger_diagnostic_leases: BTreeMap<u64, SpatialTriggerDiagnosticLease>,
     trigger_overlap_page_leases: BTreeMap<u64, TriggerOverlapPageLease>,
     collision_source: SpatialCollisionSource,
     content: Option<*const crate::content::RuntimeContentBridge>,
     next_session: u64,
     pub(crate) next_voxel_history_export: u64,
+    pub(crate) next_voxel_operation_diagnostic_lease: u64,
     next_trigger_diagnostic_lease: u64,
     next_trigger_overlap_page_lease: u64,
     pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
@@ -408,12 +411,14 @@ impl RuntimeSpatialBridge {
         Self {
             sessions: BTreeMap::new(),
             voxel_history_exports: BTreeMap::new(),
+            voxel_operation_diagnostic_leases: BTreeMap::new(),
             trigger_diagnostic_leases: BTreeMap::new(),
             trigger_overlap_page_leases: BTreeMap::new(),
             collision_source: SpatialCollisionSource::new(),
             content: None,
             next_session: 1,
             next_voxel_history_export: 1,
+            next_voxel_operation_diagnostic_lease: 1,
             next_trigger_diagnostic_lease: 1,
             next_trigger_overlap_page_lease: 1,
             prepared_world_origins: BTreeMap::new(),
@@ -5635,6 +5640,7 @@ mod tests {
             material_slot: 1,
         }];
         let mut receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
         assert_eq!(
             unsafe {
                 (voxel_api.apply_edits)(
@@ -5646,6 +5652,7 @@ mod tests {
                         edits_len: edits.len(),
                     },
                     &mut receipt,
+                    &mut error,
                 )
             },
             ABI_OK
@@ -6047,6 +6054,7 @@ mod tests {
             material_slot: 1,
         }];
         let mut voxel_receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
         assert_eq!(
             unsafe {
                 (voxel_api.apply_edits)(
@@ -6058,6 +6066,7 @@ mod tests {
                         edits_len: edits.len(),
                     },
                     &mut voxel_receipt,
+                    &mut error,
                 )
             },
             ABI_OK

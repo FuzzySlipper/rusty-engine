@@ -1,4 +1,7 @@
-use crate::{NativeByteLease, NativeByteLeaseHandle, NativeByteSlice, NativeSpatialSessionHandle};
+use crate::{
+    NativeByteLease, NativeByteLeaseHandle, NativeByteSlice, NativeEngineDiagnosticLeaseHandle,
+    NativeOperationErrorReceipt, NativeSpatialSessionHandle,
+};
 use std::ffi::c_void;
 
 /// One signed voxel address in the session's canonical world grid.
@@ -393,6 +396,7 @@ pub type NativeApplyVoxelEdits = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelEditTransaction,
     *mut NativeVoxelEditReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeReadVoxelDirtyChunkAt = unsafe extern "C" fn(
     *mut c_void,
@@ -403,6 +407,7 @@ pub type NativeApplyVoxelResidency = unsafe extern "C" fn(
     *mut c_void,
     *const NativeVoxelResidencyTransaction,
     *mut NativeVoxelResidencyReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeAcquireVoxelChunkLease = unsafe extern "C" fn(
     *mut c_void,
@@ -435,12 +440,16 @@ pub type NativeUndoVoxel = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelHistoryActionRequest,
     *mut NativeVoxelHistoryReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
 pub type NativeRedoVoxel = unsafe extern "C" fn(
     *mut c_void,
     NativeVoxelHistoryActionRequest,
     *mut NativeVoxelHistoryReceipt,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeDestroyVoxelOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 pub type NativeReadVoxelHistoryCodecInfo =
     unsafe extern "C" fn(*mut c_void, *mut NativeVoxelHistoryCodecInfo) -> i32;
 pub type NativeExportVoxelHistory =
@@ -473,6 +482,7 @@ pub struct NativeVoxelApi {
     pub read_history_delta_at: NativeReadVoxelHistoryDeltaAt,
     pub undo: NativeUndoVoxel,
     pub redo: NativeRedoVoxel,
+    pub destroy_operation_diagnostic_lease: NativeDestroyVoxelOperationDiagnosticLease,
     pub read_history_codec_info: NativeReadVoxelHistoryCodecInfo,
     pub export_history: NativeExportVoxelHistory,
     pub destroy_history_export_lease: NativeDestroyVoxelHistoryExportLease,

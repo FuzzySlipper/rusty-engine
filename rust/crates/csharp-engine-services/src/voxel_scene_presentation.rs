@@ -1129,6 +1129,7 @@ mod tests {
             material_slot: 1,
         }];
         let mut receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
         assert_eq!(
             unsafe {
                 (voxel_api.apply_edits)(
@@ -1140,6 +1141,7 @@ mod tests {
                         edits_len: edits.len(),
                     },
                     &mut receipt,
+                    &mut error,
                 )
             },
             ABI_OK
@@ -1409,6 +1411,7 @@ mod tests {
             material_slot: 2,
         }];
         let mut voxel_receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
         assert_eq!(
             unsafe {
                 (voxel_api.apply_edits)(
@@ -1420,6 +1423,7 @@ mod tests {
                         edits_len: add_slot.len(),
                     },
                     &mut voxel_receipt,
+                    &mut error,
                 )
             },
             ABI_OK
