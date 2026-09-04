@@ -191,7 +191,7 @@ def main() -> None:
         'dotnet build "$MANAGED_PROJECT" --no-restore',
         'dotnet publish "$NATIVE_AOT_PROJECT"',
         '--runtime linux-x64',
-        'cargo run -p csharp-product-runtime --bin csharp-product-runtime --locked --',
+        'cargo run -p csharp-product-runtime --bin rusty-product-host --locked --',
         '--exercise',
     ):
         if required not in csharp_gate:

@@ -21,7 +21,7 @@ dotnet publish "$NATIVE_AOT_PROJECT" \
   --no-restore \
   --output "$EXERCISE_ROOT/product"
 
-cargo run -p csharp-product-runtime --bin csharp-product-runtime --locked -- \
+cargo run -p csharp-product-runtime --bin rusty-product-host --locked -- \
   --library "$EXERCISE_ROOT/product/CsharpNativeAotTrial.so" \
   --bundle-dir "$REPO_ROOT/fixtures/csharp-nativeaot-trial/browser" \
   --content-dir "$REPO_ROOT/fixtures/csharp-nativeaot-trial/content" \
