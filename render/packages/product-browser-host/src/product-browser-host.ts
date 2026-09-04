@@ -1999,12 +1999,17 @@ export async function mountProductBrowserHostWithApplication(
               epoch: metadata.epoch,
               outputs: Object.freeze([...outputs]),
             });
+            // A newer retained baseline makes any trailing output staged for
+            // the older pre-mount projection irrelevant.
+            pendingProjectionIncrementals = null;
           }
         } else {
           applyProjectionBaseline(outputs, metadata.epoch);
         }
-      } else if (metadata !== undefined
-        && selectedProjectionBaselineEpoch === metadata.epoch) {
+      } else if (metadata !== undefined && (
+        selectedProjectionBaselineEpoch === metadata.epoch
+        || (application === null && pendingProjectionBaseline?.epoch === metadata.epoch)
+      )) {
         const trailing = pendingProjectionIncrementals;
         pendingProjectionIncrementals = Object.freeze({
           epoch: metadata.epoch,

@@ -508,6 +508,7 @@ test('a fresh projection baseline received during mount is applied before readin
     const runtime = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
     let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
     const replacedFrames: unknown[] = [];
+    const appliedFrames: unknown[] = [];
     const boundRuntimes: unknown[] = [];
     const transport = {
       lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
@@ -539,6 +540,10 @@ test('a fresh projection baseline received during mount is applied before readin
           replacedFrames.push(frame);
           return { applied: true, outcome: 'applied' as const, diagnostics: [] };
         },
+        applyFrame: (frame: unknown) => {
+          appliedFrames.push(frame);
+          return { outcome: 'applied' as const, diagnostics: [] };
+        },
       },
       input: {
         sampleController: () => 0,
@@ -567,6 +572,12 @@ test('a fresh projection baseline received during mount is applied before readin
       { kind: 'binding', runtime, nextInputSequence: '2' },
       { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'newest-baseline' }] } },
     ], { epoch: 3, baseline: true, recovery: 'none' });
+    // The next receipt belongs to the selected staged baseline. It is held
+    // until that baseline replaces the renderer after application mount.
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '3' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'pre-mount-trailing' }] } },
+    ], { epoch: 3, baseline: false, recovery: 'none' });
     // A late callback from the older fresh attachment cannot overwrite the
     // newer pending envelope while mount is still unresolved.
     publish([
@@ -575,10 +586,15 @@ test('a fresh projection baseline received during mount is applied before readin
     ], { epoch: 2, baseline: true, recovery: 'none' });
     (resolveMount as unknown as (value: unknown) => void)(fakeApplication);
     const host = await mounted;
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(host.readout().state, 'ready');
     assert.equal(replacedFrames.length, 1);
     assert.deepEqual((replacedFrames[0] as { readonly ops: readonly unknown[] }).ops, [{ op: 'newest-baseline' }]);
-    assert.deepEqual(boundRuntimes, [{ runtime, context: 'gameplay.default', nextSequence: '2' }]);
+    assert.deepEqual(boundRuntimes, [
+      { runtime, context: 'gameplay.default', nextSequence: '2' },
+      { runtime, context: 'gameplay.default', nextSequence: '3' },
+    ]);
+    assert.deepEqual(appliedFrames, [{ schemaVersion: 1, ops: [{ op: 'pre-mount-trailing' }] }]);
     await host.dispose();
   } finally {
     Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });

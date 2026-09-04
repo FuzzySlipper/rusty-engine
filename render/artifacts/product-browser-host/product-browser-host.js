@@ -28245,8 +28245,8 @@ async function fD(e, t) {
 				if (t?.baseline === !0 && t.epoch > _.fromEpoch) s === null ? (v === null || t.epoch > v.epoch) && (v = Object.freeze({
 					epoch: t.epoch,
 					outputs: Object.freeze([...e])
-				})) : Re(e, t.epoch);
-				else if (t !== void 0 && y === t.epoch) {
+				}), b = null) : Re(e, t.epoch);
+				else if (t !== void 0 && (y === t.epoch || s === null && v?.epoch === t.epoch)) {
 					let n = b;
 					b = Object.freeze({
 						epoch: t.epoch,
