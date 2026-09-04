@@ -572,6 +572,12 @@ export interface RenderFramePublication {
   readonly operationCount: number;
 }
 
+/** One active retained-stream continuation point installed with a complete replacement. */
+export interface RenderPublicationFrontier {
+  readonly stream: string;
+  readonly revision: number;
+}
+
 export type RenderAssetKind =
   | 'material'
   | 'texture'

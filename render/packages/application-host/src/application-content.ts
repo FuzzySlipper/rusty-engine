@@ -17,6 +17,7 @@ import {
 } from '@rusty-engine/renderer-host';
 
 import type { RustyApplicationFrame } from './application-host.js';
+import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 
 export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture';
 
@@ -34,6 +35,7 @@ export interface RustyApplicationResource {
 export interface RustyApplicationContent {
   readonly frame: RustyApplicationFrame;
   readonly resources?: readonly RustyApplicationResource[];
+  readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
 }
 
 export type RustyApplicationContentDiagnosticCode =
@@ -66,6 +68,7 @@ export interface PreparedRustyApplicationContent {
   readonly frame: RustyApplicationFrame;
   readonly resources: readonly PreparedRustyApplicationResource[];
   readonly resourceBytes: number;
+  readonly publicationFrontiers: readonly RenderPublicationFrontier[];
 }
 
 export interface RustyApplicationSurfaceResourceOptions {
@@ -94,6 +97,7 @@ export function prepareRustyApplicationContent(
     throw contentError('content_invalid', null, 'application content resources must be an array');
   }
   const frame = structuredClone(content.frame);
+  const publicationFrontiers = structuredClone(content.publicationFrontiers ?? []);
   const identities = new Set<string>();
   let meshCount = 0;
   let meshBytes = 0;
@@ -230,6 +234,7 @@ export function prepareRustyApplicationContent(
     frame,
     resources: Object.freeze(resources),
     resourceBytes: audioBytes + meshBytes + textureBytes,
+    publicationFrontiers,
   });
 }
 

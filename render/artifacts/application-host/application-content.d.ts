@@ -1,4 +1,5 @@
 import type { RustyApplicationFrame } from './application-host.js';
+import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture';
 export declare const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES: number;
 export declare const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT = 64;
@@ -12,6 +13,7 @@ export interface RustyApplicationResource {
 export interface RustyApplicationContent {
     readonly frame: RustyApplicationFrame;
     readonly resources?: readonly RustyApplicationResource[];
+    readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
 }
 export type RustyApplicationContentDiagnosticCode = 'content_invalid' | 'resource_duplicate' | 'resource_identity_invalid' | 'resource_limit_exceeded' | 'resource_media_type_unsupported';
 export declare class RustyApplicationContentError extends Error {

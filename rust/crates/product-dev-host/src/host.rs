@@ -2474,7 +2474,15 @@ fn push_outputs_staged(
             // Admission is fail-atomic. Once a complete baseline is rejected,
             // discard its staging buffer so the producer can replay the same
             // full binding-to-completion sequence without a phantom baseline.
-            append_staged_output_events(bus, &mut staged, pending.binding, pending.outputs)?;
+            let mut outputs = pending.outputs;
+            let baseline = outputs.first_mut().ok_or_else(|| {
+                ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_BASELINE",
+                    "a complete baseline lost its binding before publication",
+                )
+            })?;
+            output.attach_complete_baseline_frontiers_to_binding(baseline)?;
+            append_staged_output_events(bus, &mut staged, pending.binding, outputs)?;
             staged.active_binding = Some(binding);
             continue;
         }

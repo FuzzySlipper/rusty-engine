@@ -75,6 +75,25 @@ void test('update mutates transform and visibility', () => {
   assert.equal(obj.visible, false);
 });
 
+void test('recovered publication frontiers continue through the Three renderer', () => {
+  const renderer = new ThreeRenderer({
+    publicationFrontiers: [{ stream: 'voxel:active', revision: 4 }],
+  });
+  const handle = renderHandle(77);
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [createDiff(handle, cubeNode('recovered-voxel'))],
+  });
+
+  renderer.applyFrame({
+    schemaVersion: 1,
+    publication: { stream: 'voxel:active', baseRevision: 4, revision: 5, operationCount: 1 },
+    ops: [{ op: 'replaceMeshPayload', handle, payload: quadPayload() }],
+  });
+
+  assert.equal(renderer.objectFor(handle)?.name, 'recovered-voxel');
+});
+
 void test('destroy removes the node and frees the handle', () => {
   const r = new ThreeRenderer();
   r.applyDiff(createDiff(1, cubeNode()));

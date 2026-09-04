@@ -24,6 +24,7 @@ import type {
   RenderMaterialDescriptor,
   RenderMetadata,
   RenderNode,
+  RenderPublicationFrontier,
   SkyBackgroundDescriptor,
   SpriteAtlasDescriptor,
   SpriteInstanceDescriptor,
@@ -269,6 +270,25 @@ export class RenderProjection {
    */
   validateFrame(frame: RenderFrameDiff): readonly RenderProjectionInstruction[] {
     return this.#stageFrame(frame).instructions;
+  }
+
+  /** Atomically install all active stream continuation points for a complete retained replacement. */
+  replacePublicationFrontiers(frontiers: readonly RenderPublicationFrontier[]): void {
+    const next = new Map<string, number>();
+    for (const frontier of frontiers) {
+      if (typeof frontier.stream !== 'string' || frontier.stream.trim().length === 0
+        || frontier.stream.length > 256) {
+        throw new RenderProjectionError('publication frontier stream must contain 1..=256 characters');
+      }
+      if (!Number.isSafeInteger(frontier.revision) || frontier.revision < 0) {
+        throw new RenderProjectionError(`publication frontier ${frontier.stream} revision must be a JSON-safe unsigned integer`);
+      }
+      if (next.has(frontier.stream)) {
+        throw new RenderProjectionError(`duplicate publication frontier ${frontier.stream}`);
+      }
+      next.set(frontier.stream, frontier.revision);
+    }
+    this.#publishedRevisions = next;
   }
 
   /** Apply one diff. Throws `RenderProjectionError` on stale handles or malformed payloads. */

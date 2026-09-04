@@ -330,6 +330,15 @@ impl VoxelRenderProjector {
             chunk,
         })
     }
+
+    /// The active consumer's continuation point. Attachment projections use a
+    /// detached projector with a fresh frame revision, so callers recovering a
+    /// renderer must obtain this from the committed projector instead.
+    pub fn publication_frontier(&self) -> Option<(&str, u64)> {
+        self.publication_stream
+            .as_deref()
+            .map(|stream| (stream, self.publication_revision))
+    }
 }
 
 fn voxel_publication_stream<'a>(instances: impl Iterator<Item = &'a String>) -> String {
@@ -755,6 +764,44 @@ mod tests {
         let second = projector.project(&instances, &materials).unwrap();
         assert!(second.frame.is_empty());
         assert_eq!(projector.chunk_handle("room", [0, 0, 0]), Some(handle));
+    }
+
+    #[test]
+    fn active_publication_frontier_is_not_a_detached_baseline_revision() {
+        let scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            16,
+            [MaterialVoxel {
+                address: [0, 0, 0],
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        let instances = [VoxelProjectionInstance {
+            instance_id: "room".to_string(),
+            asset_id: "voxel-object/room".to_string(),
+            transform: Transform::IDENTITY,
+            scene: &scene,
+        }];
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut active = VoxelRenderProjector::new();
+        active.project(&instances, &materials).unwrap();
+        active.project(&instances, &materials).unwrap();
+        let mut detached = VoxelRenderProjector::new();
+        let baseline = detached.project(&instances, &materials).unwrap();
+
+        assert_eq!(
+            active.publication_frontier().map(|(_, revision)| revision),
+            Some(2)
+        );
+        assert_eq!(
+            baseline
+                .frame
+                .publication
+                .as_ref()
+                .map(|value| value.revision),
+            Some(1)
+        );
     }
 
     #[test]

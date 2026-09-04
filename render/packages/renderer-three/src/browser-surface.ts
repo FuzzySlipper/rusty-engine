@@ -11,6 +11,7 @@ import {
   type RenderLayer,
   type RenderNode,
   type PerspectiveProjection,
+  type RenderPublicationFrontier,
   type RendererViewComposition,
   type Transform,
 } from '@rusty-engine/render-contracts';
@@ -72,6 +73,8 @@ export interface RendererBrowserSurfaceOptions {
   readonly frame?: RenderFrameDiff;
   readonly meshBufferSource?: MeshBufferSource;
   readonly meshResourceSource?: MeshResourceSource;
+  /** Active stream continuation points supplied with one complete replacement. */
+  readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
   readonly textureResourceSource?: TextureResourceSource;
   readonly pixelRatio?: number;
   readonly lighting?: RendererBrowserSurfaceLightingOptions;
@@ -338,6 +341,8 @@ export function mountRendererBrowserSurface(
         ? {} : { meshResourceSource: options.meshResourceSource }),
       ...(options.textureResourceSource === undefined
         ? {} : { textureResourceSource: options.textureResourceSource }),
+      ...(options.publicationFrontiers === undefined
+        ? {} : { publicationFrontiers: options.publicationFrontiers }),
       shadowsEnabled: lighting.shadows.enabled,
       maximumActiveShadowLights: lighting.shadows.maximumActiveLights,
     },

@@ -14,7 +14,11 @@ import type {
   RustyApplicationRuntimeIntentValue,
   RustyApplicationUiProjectionEnvelope,
 } from '@rusty-engine/application-host';
-import { validateRendererViewComposition, type RendererViewComposition } from '@rusty-engine/render-contracts';
+import {
+  decodeRenderPublicationFrontiers,
+  validateRendererViewComposition,
+  type RendererViewComposition,
+} from '@rusty-engine/render-contracts';
 import type {
   ProductBrowserLifecycleOperation,
   ProductBrowserAudioFeedback,
@@ -1424,6 +1428,7 @@ export function createProductBrowserLocalHttpAdapter(
     subscribeOutputs,
     subscribeOutputBatches,
     waitUntilOutputSubscriptionReady,
+    recoverOutputProjection: () => recoverFreshOutputsOrTerminal(ROUTES.freshOutputs),
     dispose,
   });
 }
@@ -2633,11 +2638,14 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
   const record = requireRecord(value, 'runtime output');
   switch (record.kind) {
     case 'binding':
-      requireKnownFields(record, ['kind', 'runtime', 'nextInputSequence'], 'binding output');
+      requireKnownFields(record, ['kind', 'runtime', 'nextInputSequence', 'publicationFrontiers'], 'binding output');
       return {
         kind: 'binding',
         runtime: decodeRuntimeIdentity(record.runtime),
         nextInputSequence: requireU64Text(record['nextInputSequence'], 'binding nextInputSequence'),
+        ...(record['publicationFrontiers'] === undefined
+          ? {}
+          : { publicationFrontiers: decodeRenderPublicationFrontiers(record['publicationFrontiers']) }),
       };
     case 'frame':
       requireKnownFields(record, ['kind', 'frame'], 'frame output');

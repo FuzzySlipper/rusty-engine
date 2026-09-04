@@ -1,4 +1,8 @@
-import { MAX_RENDER_LIGHT_INTENSITY, type RenderFrameDiff } from './render.js';
+import {
+  MAX_RENDER_LIGHT_INTENSITY,
+  type RenderFrameDiff,
+  type RenderPublicationFrontier,
+} from './render.js';
 import type { PresentationFrameDiff } from './presentation.js';
 
 const JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991;
@@ -42,6 +46,25 @@ export function decodeRenderFrameDiff(input: unknown): RenderFrameDiff {
   }
   ops.forEach((operation, index) => renderDiff(operation, `$.ops[${String(index)}]`));
   return input as RenderFrameDiff;
+}
+
+export function decodeRenderPublicationFrontiers(input: unknown): readonly RenderPublicationFrontier[] {
+  const frontiers = list(input, '$.publicationFrontiers');
+  const streams = new Set<string>();
+  return Object.freeze(frontiers.map((candidate, index) => {
+    const path = `$.publicationFrontiers[${String(index)}]`;
+    const frontier = record(candidate, path, ['stream', 'revision']);
+    const stream = text(frontier['stream'], `${path}.stream`);
+    if (stream.trim().length === 0 || stream.length > 256) {
+      fail(`${path}.stream`, 'must contain 1..=256 characters');
+    }
+    if (streams.has(stream)) fail(`${path}.stream`, 'must not duplicate a renderer publication stream');
+    streams.add(stream);
+    return Object.freeze({
+      stream,
+      revision: integer(frontier['revision'], `${path}.revision`, 0, JSON_SAFE_INTEGER_MAX),
+    });
+  }));
 }
 
 export function decodePresentationFrameDiff(input: unknown): PresentationFrameDiff {

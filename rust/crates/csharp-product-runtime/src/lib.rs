@@ -39,11 +39,11 @@ use product_dev_host::{
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
     ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult,
     ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
-    ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
-    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeOutput,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
-    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
-    ProductDevUpdateAttribution,
+    ProductDevRendererPublicationFrontier, ProductDevRendererResource, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
+    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
+    ProductDevRuntimeScheduleState, ProductDevRuntimeState, ProductDevTimelineCompletion,
+    ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -2036,7 +2036,7 @@ impl CsharpProductRuntime {
                 binding,
                 self.next_input_sequence(),
             ));
-            outputs.push(ProductDevRuntimeOutput::complete_baseline(binding));
+            outputs.push(self.complete_baseline_output(binding)?);
         }
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         Ok(outputs)
@@ -2159,7 +2159,7 @@ impl CsharpProductRuntime {
         self.pending_recovery_outputs.clear();
         self.receipt(
             ProductDevOperationKind::ReplaceControl,
-            self.tag_complete_baseline(Vec::new()),
+            self.tag_complete_baseline(Vec::new())?,
         )
     }
 
@@ -2544,7 +2544,7 @@ impl CsharpProductRuntime {
     fn tag_complete_baseline(
         &self,
         mut outputs: Vec<ProductDevRuntimeOutput>,
-    ) -> Vec<ProductDevRuntimeOutput> {
+    ) -> Result<Vec<ProductDevRuntimeOutput>, ProductDevRuntimeError> {
         let binding = self.binding();
         let mut tagged = Vec::with_capacity(outputs.len() + 2);
         tagged.push(ProductDevRuntimeOutput::binding(
@@ -2552,8 +2552,27 @@ impl CsharpProductRuntime {
             self.next_input_sequence(),
         ));
         tagged.append(&mut outputs);
-        tagged.push(ProductDevRuntimeOutput::complete_baseline(binding));
-        tagged
+        tagged.push(
+            self.complete_baseline_output(binding)
+                .map_err(|error| self.runtime_error(error))?,
+        );
+        Ok(tagged)
+    }
+
+    fn complete_baseline_output(
+        &self,
+        binding: ProductDevRuntimeBinding,
+    ) -> Result<ProductDevRuntimeOutput, CsharpProductRuntimeError> {
+        let frontiers = self
+            .services
+            .renderer_publication_frontiers()
+            .into_iter()
+            .map(|(stream, revision)| ProductDevRendererPublicationFrontier::new(stream, revision))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(host_error)?;
+        Ok(ProductDevRuntimeOutput::complete_baseline_with_frontiers(
+            binding, frontiers,
+        ))
     }
 
     fn rebind_input(&mut self, reason: InputClearReason) -> Result<(), CsharpProductRuntimeError> {
@@ -2692,7 +2711,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .map_err(|error| self.runtime_error(error))?;
         self.receipt(
             ProductDevOperationKind::Connect,
-            self.tag_complete_baseline(outputs),
+            self.tag_complete_baseline(outputs)?,
         )
     }
 
@@ -2722,7 +2741,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
                     ProductDevOperationKind::Start,
-                    self.tag_complete_baseline(outputs),
+                    self.tag_complete_baseline(outputs)?,
                 )
             }
             ProductDevLifecycleOperation::Pause => {
@@ -2737,7 +2756,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
                     ProductDevOperationKind::Pause,
-                    self.tag_complete_baseline(outputs),
+                    self.tag_complete_baseline(outputs)?,
                 )
             }
             ProductDevLifecycleOperation::Resume => {
@@ -2752,7 +2771,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
                     ProductDevOperationKind::Resume,
-                    self.tag_complete_baseline(outputs),
+                    self.tag_complete_baseline(outputs)?,
                 )
             }
             ProductDevLifecycleOperation::Restart => {
@@ -2772,7 +2791,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                     .map_err(|error| self.runtime_error(error))?;
                 self.receipt(
                     ProductDevOperationKind::Restart,
-                    self.tag_complete_baseline(outputs),
+                    self.tag_complete_baseline(outputs)?,
                 )
             }
             ProductDevLifecycleOperation::ReportFault => {
@@ -2788,7 +2807,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
                 self.receipt(
                     ProductDevOperationKind::ReportFault,
-                    self.tag_complete_baseline(Vec::new()),
+                    self.tag_complete_baseline(Vec::new())?,
                 )
             }
             ProductDevLifecycleOperation::Shutdown => {
@@ -2807,7 +2826,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 self.shutdown_called = true;
                 let receipt = self.receipt(
                     ProductDevOperationKind::Shutdown,
-                    self.tag_complete_baseline(outputs),
+                    self.tag_complete_baseline(outputs)?,
                 );
                 receipt
             }
@@ -2832,7 +2851,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         self.receipt(
             operation.operation_kind(),
-            self.tag_complete_baseline(Vec::new()),
+            self.tag_complete_baseline(Vec::new())?,
         )
     }
 

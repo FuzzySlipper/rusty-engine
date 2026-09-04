@@ -7,6 +7,7 @@ import type {
   RenderFrameDiff,
   RenderHandle,
   RenderLayer,
+  RenderPublicationFrontier,
   RendererViewComposition,
 } from '@rusty-engine/render-contracts';
 import {
@@ -283,6 +284,8 @@ export interface RendererSurfaceOptions {
   readonly pixelRatio?: number;
   readonly presentationHosts?: RendererPresentationHostSet;
   readonly projection?: PerspectiveProjection;
+  /** Active publisher continuation points installed before this surface admits later frames. */
+  readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
   readonly viewComposition?: RendererViewComposition;
 }
 
@@ -712,6 +715,7 @@ function mountPreparedRendererSurface(
   const lighting = normalizeSurfaceLighting(options.lighting);
   const frame = options.frame ?? createRendererDefaultSurfaceFrame();
   const projection = new RenderProjection();
+  projection.replacePublicationFrontiers(options.publicationFrontiers ?? []);
   projection.applyFrame(frame);
   const controls = createRendererSurfaceFirstPersonControls(canvas, options.controls);
   let backendSurface: RendererBrowserSurface;
@@ -725,6 +729,8 @@ function mountPreparedRendererSurface(
         ? {} : { meshResourceSource: resources.meshResourceSource }),
       ...(resources.textureResourceSource === undefined
         ? {} : { textureResourceSource: resources.textureResourceSource }),
+      ...(options.publicationFrontiers === undefined
+        ? {} : { publicationFrontiers: options.publicationFrontiers }),
       camera: {
         initialPose: controls.cameraPose(),
         ...(options.projection === undefined ? {} : { projection: options.projection }),

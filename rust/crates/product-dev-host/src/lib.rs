@@ -52,11 +52,11 @@ pub use model::{
     ProductDevGhostPlateFeedbackFact, ProductDevGhostPlateFeedbackResult, ProductDevInputBatch,
     ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationKind,
     ProductDevOperationResult, ProductDevRendererDiagnosticsFeedback,
-    ProductDevRendererDiagnosticsFeedbackResult, ProductDevRuntime, ProductDevRuntimeBinding,
-    ProductDevRuntimeFault, ProductDevRuntimeMode, ProductDevRuntimeOutput,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
-    ProductDevRuntimeState, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
-    ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
+    ProductDevRendererDiagnosticsFeedbackResult, ProductDevRendererPublicationFrontier,
+    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeFault, ProductDevRuntimeMode,
+    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
+    ProductDevRuntimeScheduleState, ProductDevRuntimeState, ProductDevTelemetrySnapshot,
+    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
     ProductDevUpdateAttributionSnapshot, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use session::ProductDevOperationOwner;

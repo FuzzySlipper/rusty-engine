@@ -16,6 +16,7 @@ import {
   type RustyApplicationPresentationAspectBounds,
   type RustyApplicationViewComposition,
 } from '@rusty-engine/application-host';
+import { type RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { createProductBrowserCadence, type ProductBrowserCadence } from './realtime-cadence.js';
 
 /** Fixed current artifact identity; compatibility follows actual code changes. */
@@ -283,6 +284,12 @@ export interface ProductBrowserRuntimeBindingOutput {
   readonly kind: 'binding';
   readonly runtime: RustyApplicationRuntimeIdentity;
   readonly nextInputSequence: string;
+  /**
+   * Active renderer stream frontiers captured when this binding's complete
+   * retained baseline was committed. They seed the replacement projection
+   * before any new-epoch trailing frame is allowed through.
+   */
+  readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
 }
 
 export type ProductBrowserRuntimeOutput =
@@ -468,6 +475,8 @@ export interface ProductBrowserRuntimeAdapter {
   ) => () => void;
   /** Resolves once an asynchronous output subscription can receive runtime publications. */
   readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
+  /** Reattach through the local transport's existing single-flight fresh-baseline path. */
+  readonly recoverOutputProjection?: () => Promise<void>;
   readonly dispose: () => Promise<void> | void;
 }
 
@@ -490,6 +499,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
   readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
   readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
+  readonly recoverOutputProjection?: NonNullable<ProductBrowserRuntimeAdapter['recoverOutputProjection']>;
   readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
 }
 
@@ -536,6 +546,9 @@ export function createProductBrowserRuntimeTransport(
   if (adapter.waitUntilOutputSubscriptionReady !== undefined) {
     requireFunction(adapter.waitUntilOutputSubscriptionReady, 'waitUntilOutputSubscriptionReady');
   }
+  if (adapter.recoverOutputProjection !== undefined) {
+    requireFunction(adapter.recoverOutputProjection, 'recoverOutputProjection');
+  }
   requireFunction(adapter.dispose, 'dispose');
   return Object.freeze({
     ...(adapter.connect === undefined ? {} : { connect: adapter.connect }),
@@ -565,6 +578,9 @@ export function createProductBrowserRuntimeTransport(
     ...(adapter.waitUntilOutputSubscriptionReady === undefined
       ? {}
       : { waitUntilOutputSubscriptionReady: adapter.waitUntilOutputSubscriptionReady }),
+    ...(adapter.recoverOutputProjection === undefined
+      ? {}
+      : { recoverOutputProjection: adapter.recoverOutputProjection }),
     dispose: adapter.dispose,
   });
 }
@@ -1717,7 +1733,7 @@ export async function mountProductBrowserHostWithApplication(
     });
   };
 
-  const applyOutput = (output: ProductBrowserRuntimeOutput): void => {
+  const applyOutput = (output: ProductBrowserRuntimeOutput, outputEpoch = acceptedProjectionEpoch): void => {
     if (application === null) {
       if (!bufferProductBrowserPreMountOutput(pendingOutputs, output, maximumPendingOutputs)) {
         failAndClose(
@@ -1786,6 +1802,27 @@ export async function mountProductBrowserHostWithApplication(
           const receivedAtMs = productFrameObservation.received();
           enqueueRendererOutput(() => {
             const receipt = host.renderer.applyFrame(output.frame);
+            if (receipt.outcome === 'rejected_atomic' && output.frame['publication'] !== undefined) {
+              const diagnostic = receipt.diagnostics.map((entry) => entry.message).join('; ')
+                || 'renderer rejected a published frame';
+              if (recoveryFailure === null) {
+                recoveryFailure = new ProductBrowserHostError('output_failed', diagnostic);
+              }
+              if (projectionRecovery === null || outputEpoch > projectionRecovery.fromEpoch) {
+                beginProjectionRecovery(outputEpoch);
+                if (transport.recoverOutputProjection === undefined) {
+                  failAndClose(new ProductBrowserHostError(
+                    'transport_failed',
+                    'runtime transport did not provide the required fresh output recovery',
+                  ), 'transport_failed');
+                } else {
+                  void transport.recoverOutputProjection().catch((cause: unknown) => {
+                    recoverOrClose(cause, 'transport_failed');
+                  });
+                }
+              }
+              return;
+            }
             if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
               throw new ProductBrowserHostError(
                 'output_failed',
@@ -1893,6 +1930,16 @@ export async function mountProductBrowserHostWithApplication(
     }
     selectedProjectionBaselineEpoch = epoch;
     const host = requireApplication();
+    const frontierBindings = outputs.filter((output): output is ProductBrowserRuntimeBindingOutput => (
+      output.kind === 'binding' && output.publicationFrontiers !== undefined
+    ));
+    if (frontierBindings.length > 1) {
+      throw new ProductBrowserHostError(
+        'output_failed',
+        'recovered retained projection contained multiple publication frontier bindings',
+      );
+    }
+    const publicationFrontiers = frontierBindings[0]?.publicationFrontiers ?? [];
     const frameOps = outputs.flatMap((output) => output.kind === 'frame'
       ? [...(output.frame['ops'] as readonly unknown[])]
       : []);
@@ -1906,7 +1953,7 @@ export async function mountProductBrowserHostWithApplication(
       && output.kind !== 'presentation');
 
     const replacementEpoch = rendererProjectionEpoch;
-    // CompleteBaseline is emitted by Rust as one ordered binding-to-marker
+    // Rust attaches complete-baseline frontiers to its binding in one ordered
     // group. Its Frame outputs are ordered renderer diffs, not individually
     // replaceable scenes; preserving every operation in that order is the
     // existing complete-frame representation accepted by replaceFrame.
@@ -1916,7 +1963,7 @@ export async function mountProductBrowserHostWithApplication(
         || state === 'failed'
         || state === 'disposed') return;
       try {
-        const receipt = await host.renderer.replaceFrame(retainedFrame);
+        const receipt = await host.renderer.replaceFrame(retainedFrame, publicationFrontiers);
         // A normal incremental frame may continue after rejected_atomic, but
         // a recovery baseline is not installed until the replacement applied.
         if (receipt.outcome !== 'applied') {
@@ -1960,7 +2007,7 @@ export async function mountProductBrowserHostWithApplication(
               throw new ProductBrowserHostError('output_failed', 'renderer did not apply recovered animation cues');
             }
           } else {
-            applyOutput(output);
+            applyOutput(output, epoch);
           }
         }
         if (projectionRecovery?.fromEpoch !== pending.fromEpoch
@@ -1977,7 +2024,7 @@ export async function mountProductBrowserHostWithApplication(
         // The retained replacement is physically installed before any normal
         // output accepted behind its CompleteBaseline. This preserves the
         // current epoch rather than dropping it during the asynchronous swap.
-        for (const output of trailingOutputs) applyOutput(output);
+        for (const output of trailingOutputs) applyOutput(output, epoch);
         restoreReadyAfterHealthyTransport();
         cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
       } catch (cause) {
@@ -2037,7 +2084,7 @@ export async function mountProductBrowserHostWithApplication(
     }
     if (metadata !== undefined) acceptedProjectionEpoch = Math.max(acceptedProjectionEpoch, metadata.epoch);
     for (const output of outputs) {
-      applyOutput(output);
+      applyOutput(output, metadata?.epoch ?? acceptedProjectionEpoch);
     }
     if (productBrowserOutputBatchNeedsRustHostPulse(outputs) && state !== 'failed' && state !== 'disposed') {
       cadence?.pulseRustHost();

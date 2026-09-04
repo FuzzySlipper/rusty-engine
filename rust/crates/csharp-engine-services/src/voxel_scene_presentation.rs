@@ -99,6 +99,14 @@ impl RuntimeVoxelScenePresentationBridge {
         self.update_attribution
     }
 
+    pub(crate) fn publication_frontiers(&self) -> Vec<(String, u64)> {
+        self.state
+            .projector
+            .publication_frontier()
+            .map(|(stream, revision)| vec![(stream.to_owned(), revision)])
+            .unwrap_or_default()
+    }
+
     fn record_presentation_attribution(&mut self, duration_us: u64) {
         self.update_attribution.voxel_scene_presentation_calls = CanonicalU64::new(
             self.update_attribution

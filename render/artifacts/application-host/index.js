@@ -1727,6 +1727,16 @@ var jt, H = class extends Error {
 	validateFrame(e) {
 		return this.#X(e).instructions;
 	}
+	replacePublicationFrontiers(e) {
+		let t = /* @__PURE__ */ new Map();
+		for (let n of e) {
+			if (typeof n.stream != "string" || n.stream.trim().length === 0 || n.stream.length > 256) throw new H("publication frontier stream must contain 1..=256 characters");
+			if (!Number.isSafeInteger(n.revision) || n.revision < 0) throw new H(`publication frontier ${n.stream} revision must be a JSON-safe unsigned integer`);
+			if (t.has(n.stream)) throw new H(`duplicate publication frontier ${n.stream}`);
+			t.set(n.stream, n.revision);
+		}
+		this.#l = t;
+	}
 	applyDiff(e) {
 		switch ($t(e), e.op) {
 			case "create": return [this.#f(e)];
@@ -18750,7 +18760,7 @@ var k_ = 31, A_ = 4096, j_ = 2, M_ = class {
 	#P = null;
 	constructor(e = {}) {
 		if (this.#h = e.meshBufferSource, this.#g = e.meshResourceSource, this.#_ = e.textureResourceSource, this.#v = e.animatedMeshSource, this.#y = new kh(this.#v), this.#b = e.shadowsEnabled ?? !1, this.#x = e.maximumActiveShadowLights ?? 8, !Number.isSafeInteger(this.#x) || this.#x < 0 || this.#x > 8) throw new yg("invalid_shadow_limit", "maximumActiveShadowLights must be an integer in 0..=8");
-		this.#e.name = "scene", this.#t.name = "debug", this.#n.name = "ui", this.#r.name = "viewmodel", this.viewmodelScene.name = "viewmodel", this.scene.add(this.#e, this.#t, this.#n), this.viewmodelScene.add(this.#r);
+		this.#S.replacePublicationFrontiers(e.publicationFrontiers ?? []), this.#e.name = "scene", this.#t.name = "debug", this.#n.name = "ui", this.#r.name = "viewmodel", this.viewmodelScene.name = "viewmodel", this.scene.add(this.#e, this.#t, this.#n), this.viewmodelScene.add(this.#r);
 	}
 	#F(e) {
 		switch (e) {
@@ -21947,6 +21957,7 @@ function Ab(e, t = {}) {
 		...t.meshBufferSource === void 0 ? {} : { meshBufferSource: t.meshBufferSource },
 		...t.meshResourceSource === void 0 ? {} : { meshResourceSource: t.meshResourceSource },
 		...t.textureResourceSource === void 0 ? {} : { textureResourceSource: t.textureResourceSource },
+		...t.publicationFrontiers === void 0 ? {} : { publicationFrontiers: t.publicationFrontiers },
 		shadowsEnabled: n.shadows.enabled,
 		maximumActiveShadowLights: n.shadows.maximumActiveLights
 	}), i = [() => r.dispose()];
@@ -23669,7 +23680,7 @@ async function gS(e, t) {
 }
 function _S(e, t, n = {}) {
 	let r = FS(t.lighting), i = t.frame ?? fS(), a = new Mt();
-	a.applyFrame(i);
+	a.replacePublicationFrontiers(t.publicationFrontiers ?? []), a.applyFrame(i);
 	let o = TS(e, t.controls), s;
 	try {
 		s = Ab(e, {
@@ -23678,6 +23689,7 @@ function _S(e, t, n = {}) {
 			...t.meshBufferSource === void 0 ? {} : { meshBufferSource: t.meshBufferSource },
 			...n.meshResourceSource === void 0 ? {} : { meshResourceSource: n.meshResourceSource },
 			...n.textureResourceSource === void 0 ? {} : { textureResourceSource: n.textureResourceSource },
+			...t.publicationFrontiers === void 0 ? {} : { publicationFrontiers: t.publicationFrontiers },
 			camera: {
 				initialPose: o.cameraPose(),
 				...t.projection === void 0 ? {} : { projection: t.projection }
@@ -26081,25 +26093,25 @@ var Gw = 8 * 1024 * 1024, Kw = 64, qw = 32 * 1024 * 1024, Jw = class extends Err
 function Xw(e) {
 	if (typeof e != "object" || !e || typeof e.frame != "object" || e.frame === null) throw aT("content_invalid", null, "application content must include one frame");
 	if (e.resources !== void 0 && !Array.isArray(e.resources)) throw aT("content_invalid", null, "application content resources must be an array");
-	let t = structuredClone(e.frame), n = /* @__PURE__ */ new Set(), r = 0, i = 0, a = 0, o = 0, s = 0, c = 0, l = (e.resources ?? []).map((e, t) => {
+	let t = structuredClone(e.frame), n = structuredClone(e.publicationFrontiers ?? []), r = /* @__PURE__ */ new Set(), i = 0, a = 0, o = 0, s = 0, c = 0, l = 0, u = (e.resources ?? []).map((e, t) => {
 		if (typeof e != "object" || !e || typeof e.identity != "string" || typeof e.contentHash != "string" || typeof e.mediaType != "string" || !(e.bytes instanceof Uint8Array)) throw aT("content_invalid", null, `application content resource ${String(t)} is malformed`);
-		let l = Yw.exec(e.identity), u = /^sha256:([0-9a-f]{64})$/u.exec(e.contentHash)?.[1];
-		if (l === null || u === void 0 || l[2] !== u) throw aT("resource_identity_invalid", e.identity || null, "application resource identity must match its lowercase SHA-256 content hash");
-		if (n.has(e.identity)) throw aT("resource_duplicate", e.identity, "application resource identity is duplicated");
-		n.add(e.identity);
-		let d = l[1] === "clip-pack" ? "clipPack" : l[1] === "animated-mesh" ? "animatedMesh" : l[1];
+		let n = Yw.exec(e.identity), u = /^sha256:([0-9a-f]{64})$/u.exec(e.contentHash)?.[1];
+		if (n === null || u === void 0 || n[2] !== u) throw aT("resource_identity_invalid", e.identity || null, "application resource identity must match its lowercase SHA-256 content hash");
+		if (r.has(e.identity)) throw aT("resource_duplicate", e.identity, "application resource identity is duplicated");
+		r.add(e.identity);
+		let d = n[1] === "clip-pack" ? "clipPack" : n[1] === "animated-mesh" ? "animatedMesh" : n[1];
 		if (d === "audio") {
 			if (e.mediaType !== "audio/wav") throw aT("resource_media_type_unsupported", e.identity, "audio resources must use audio/wav");
-			if (a += 1, o += e.bytes.byteLength, a > 64 || e.bytes.byteLength < 44 || e.bytes.byteLength > 8388608 || o > 33554432) throw aT("resource_limit_exceeded", e.identity, "audio resource count or byte length exceeds the application-host bound");
+			if (o += 1, s += e.bytes.byteLength, o > 64 || e.bytes.byteLength < 44 || e.bytes.byteLength > 8388608 || s > 33554432) throw aT("resource_limit_exceeded", e.identity, "audio resource count or byte length exceeds the application-host bound");
 		} else if (d === "texture") {
 			if (e.mediaType !== "image/png") throw aT("resource_media_type_unsupported", e.identity, "texture resources must use image/png");
-			if (s += 1, c += e.bytes.byteLength, s > 256 || e.bytes.byteLength === 0 || e.bytes.byteLength > 16777216 || c > 134217728) throw aT("resource_limit_exceeded", e.identity, "texture resource count or byte length exceeds the application-host bound");
+			if (c += 1, l += e.bytes.byteLength, c > 256 || e.bytes.byteLength === 0 || e.bytes.byteLength > 16777216 || l > 134217728) throw aT("resource_limit_exceeded", e.identity, "texture resource count or byte length exceeds the application-host bound");
 		} else if (d === "animatedMesh") {
 			if (e.mediaType !== "model/gltf-binary") throw aT("resource_media_type_unsupported", e.identity, "animated mesh resources must use model/gltf-binary");
-			if (r += 1, i += e.bytes.byteLength, r > 1024 || e.bytes.byteLength < 20 || e.bytes[0] !== 103 || e.bytes[1] !== 108 || e.bytes[2] !== 84 || e.bytes[3] !== 70 || e.bytes.byteLength > 67108864 || i > 268435456) throw aT("resource_limit_exceeded", e.identity, "animated mesh resource count or byte length exceeds the application-host bound");
+			if (i += 1, a += e.bytes.byteLength, i > 1024 || e.bytes.byteLength < 20 || e.bytes[0] !== 103 || e.bytes[1] !== 108 || e.bytes[2] !== 84 || e.bytes[3] !== 70 || e.bytes.byteLength > 67108864 || a > 268435456) throw aT("resource_limit_exceeded", e.identity, "animated mesh resource count or byte length exceeds the application-host bound");
 		} else {
 			if (e.mediaType !== "application/octet-stream") throw aT("resource_media_type_unsupported", e.identity, "mesh resources must use application/octet-stream");
-			if (r += 1, i += e.bytes.byteLength, r > 1024 || e.bytes.byteLength < 16 || e.bytes.byteLength > 67108864 || i > 268435456) throw aT("resource_limit_exceeded", e.identity, "mesh resource count or byte length exceeds the application-host bound");
+			if (i += 1, a += e.bytes.byteLength, i > 1024 || e.bytes.byteLength < 16 || e.bytes.byteLength > 67108864 || a > 268435456) throw aT("resource_limit_exceeded", e.identity, "mesh resource count or byte length exceeds the application-host bound");
 		}
 		return Object.freeze({
 			identity: e.identity,
@@ -26111,8 +26123,9 @@ function Xw(e) {
 	});
 	return Object.freeze({
 		frame: t,
-		resources: Object.freeze(l),
-		resourceBytes: o + i + c
+		resources: Object.freeze(u),
+		resourceBytes: s + a + l,
+		publicationFrontiers: n
 	});
 }
 function Zw(e) {
@@ -27075,6 +27088,7 @@ async function AE(e, t) {
 			autoStart: !0,
 			controls: { enabled: !1 },
 			frame: r.frame,
+			publicationFrontiers: r.publicationFrontiers,
 			...e.renderer?.clearColor === void 0 ? {} : { clearColor: e.renderer.clearColor },
 			...e.renderer?.fog === void 0 ? {} : { fog: e.renderer.fog },
 			...e.renderer?.lighting === void 0 ? {} : { lighting: {
@@ -27337,11 +27351,14 @@ async function AE(e, t) {
 			e === void 0 ? A().renderOnce() : A().renderOnce(e);
 		},
 		replaceContent: ie,
-		replaceFrame: (e) => {
+		replaceFrame: (e, t = []) => {
 			A();
-			let t;
+			let n;
 			try {
-				t = Xw({ frame: e }).frame;
+				n = Xw({
+					frame: e,
+					publicationFrontiers: t
+				});
 			} catch (e) {
 				return Promise.resolve(jE(e));
 			}
@@ -27349,7 +27366,8 @@ async function AE(e, t) {
 				let e = v;
 				if (e === null) throw new EE("disposed", "Rusty Application Host is disposed");
 				return Object.freeze({
-					frame: t,
+					frame: n.frame,
+					publicationFrontiers: n.publicationFrontiers,
 					resources: e.resources,
 					resourceBytes: e.resourceBytes
 				});

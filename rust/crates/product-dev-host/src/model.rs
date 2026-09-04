@@ -1,5 +1,6 @@
 use std::fmt;
 
+use render_model::JSON_SAFE_U64_MAX;
 use runtime_input::RuntimeInputEvent;
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 use runtime_timeline::{
@@ -2139,6 +2140,35 @@ pub struct ProductDevRuntimeOutput {
     wire: ProductDevRuntimeOutputWire,
 }
 
+/// One retained renderer stream frontier captured at a complete baseline
+/// boundary. Revisions intentionally remain JSON numbers: renderer frame
+/// publication uses JavaScript-safe numeric revisions rather than the host's
+/// canonical-string control counters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevRendererPublicationFrontier {
+    pub stream: String,
+    pub revision: u64,
+}
+
+impl ProductDevRendererPublicationFrontier {
+    pub fn new(stream: String, revision: u64) -> Result<Self, ProductDevHostError> {
+        if stream.trim().is_empty() || stream.len() > 256 {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RENDERER_FRONTIER",
+                "renderer publication frontier stream must contain 1..=256 characters",
+            ));
+        }
+        if revision > JSON_SAFE_U64_MAX {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_RENDERER_FRONTIER",
+                "renderer publication frontier revision is outside the JSON-safe range",
+            ));
+        }
+        Ok(Self { stream, revision })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ProductDevRuntimeOutputWire {
@@ -2146,9 +2176,17 @@ enum ProductDevRuntimeOutputWire {
         runtime: ProductDevRuntimeBinding,
         #[serde(rename = "nextInputSequence")]
         next_input_sequence: CanonicalU64,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "publicationFrontiers"
+        )]
+        publication_frontiers: Option<Vec<ProductDevRendererPublicationFrontier>>,
     },
     CompleteBaseline {
         runtime: ProductDevRuntimeBinding,
+        #[serde(rename = "publicationFrontiers")]
+        publication_frontiers: Vec<ProductDevRendererPublicationFrontier>,
     },
     Frame {
         frame: Value,
@@ -2275,6 +2313,7 @@ impl ProductDevRuntimeOutput {
             wire: ProductDevRuntimeOutputWire::Binding {
                 runtime,
                 next_input_sequence,
+                publication_frontiers: None,
             },
         }
     }
@@ -2410,8 +2449,18 @@ impl ProductDevRuntimeOutput {
     /// buffers its preceding binding-tagged facts and exposes them together;
     /// later facts for that binding are incremental.
     pub fn complete_baseline(runtime: ProductDevRuntimeBinding) -> Self {
+        Self::complete_baseline_with_frontiers(runtime, Vec::new())
+    }
+
+    pub fn complete_baseline_with_frontiers(
+        runtime: ProductDevRuntimeBinding,
+        publication_frontiers: Vec<ProductDevRendererPublicationFrontier>,
+    ) -> Self {
         Self {
-            wire: ProductDevRuntimeOutputWire::CompleteBaseline { runtime },
+            wire: ProductDevRuntimeOutputWire::CompleteBaseline {
+                runtime,
+                publication_frontiers,
+            },
         }
     }
 
@@ -2424,9 +2473,37 @@ impl ProductDevRuntimeOutput {
 
     pub(crate) const fn complete_baseline_marker(&self) -> Option<ProductDevRuntimeBinding> {
         match &self.wire {
-            ProductDevRuntimeOutputWire::CompleteBaseline { runtime } => Some(*runtime),
+            ProductDevRuntimeOutputWire::CompleteBaseline { runtime, .. } => Some(*runtime),
             _ => None,
         }
+    }
+
+    pub(crate) fn attach_complete_baseline_frontiers_to_binding(
+        &self,
+        binding: &mut Self,
+    ) -> Result<(), ProductDevHostError> {
+        let ProductDevRuntimeOutputWire::CompleteBaseline {
+            publication_frontiers,
+            ..
+        } = &self.wire
+        else {
+            return Ok(());
+        };
+        if publication_frontiers.is_empty() {
+            return Ok(());
+        }
+        let ProductDevRuntimeOutputWire::Binding {
+            publication_frontiers: destination,
+            ..
+        } = &mut binding.wire
+        else {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_OUTPUT_BASELINE",
+                "a complete renderer frontier must attach to its baseline binding",
+            ));
+        };
+        *destination = Some(publication_frontiers.clone());
+        Ok(())
     }
 }
 
@@ -2884,6 +2961,38 @@ mod tests {
         assert_eq!(
             ProductDevRuntimeOutput::decode_json(&encoded).unwrap(),
             output
+        );
+    }
+
+    #[test]
+    fn complete_baseline_frontiers_are_carried_by_its_binding() {
+        let binding = ProductDevRuntimeBinding {
+            instance_id: CanonicalU64::new(7),
+            generation: CanonicalU64::new(3),
+            control_revision: CanonicalU64::new(5),
+        };
+        let completion = ProductDevRuntimeOutput::complete_baseline_with_frontiers(
+            binding,
+            vec![ProductDevRendererPublicationFrontier::new("voxel:active".to_owned(), 4).unwrap()],
+        );
+        let mut baseline = ProductDevRuntimeOutput::binding(binding, CanonicalU64::new(0));
+
+        completion
+            .attach_complete_baseline_frontiers_to_binding(&mut baseline)
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(baseline).unwrap(),
+            serde_json::json!({
+                "kind": "binding",
+                "runtime": {
+                    "instanceId": "7",
+                    "generation": "3",
+                    "controlRevision": "5",
+                },
+                "nextInputSequence": "0",
+                "publicationFrontiers": [{ "stream": "voxel:active", "revision": 4 }],
+            }),
         );
     }
 }

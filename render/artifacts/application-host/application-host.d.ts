@@ -1,3 +1,4 @@
+import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { type RendererSurface, type RendererSurfaceDiagnosticsReadout, type RendererSurfaceOptions, type RendererSurfaceResourceOptions } from '@rusty-engine/renderer-host';
 import { type RustyApplicationContent } from './application-content.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
@@ -275,7 +276,7 @@ export interface RustyApplicationRendererPort {
     /** Atomically replace the immutable resource catalog and complete retained frame. */
     readonly replaceContent: (content: RustyApplicationContent) => Promise<RustyApplicationFrameReceipt>;
     /** Prepare and atomically publish a complete Rust-projected retained frame. */
-    readonly replaceFrame: (frame: RustyApplicationFrame) => Promise<RustyApplicationFrameReceipt>;
+    readonly replaceFrame: (frame: RustyApplicationFrame, publicationFrontiers?: readonly RenderPublicationFrontier[]) => Promise<RustyApplicationFrameReceipt>;
     /** Resume the browser audio context from a downstream user-gesture handler. */
     readonly resumeAudio: () => Promise<RustyApplicationAudioResumeReceipt>;
     readonly setCameraPose: (pose: RustyApplicationCameraPose) => void;

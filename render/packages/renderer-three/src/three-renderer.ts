@@ -25,6 +25,7 @@ import type {
   RenderMaterialDescriptor,
   RenderMetadata,
   RenderNode,
+  RenderPublicationFrontier,
   SpriteAtlasDescriptor,
   SpriteInstanceDescriptor,
   SpritePickHit,
@@ -418,6 +419,8 @@ export class ThreeRenderer {
     animatedMeshSource?: AnimatedMeshAssetSource;
     shadowsEnabled?: boolean;
     maximumActiveShadowLights?: number;
+    /** Complete-replacement stream continuation points installed before the recovered frame. */
+    publicationFrontiers?: readonly RenderPublicationFrontier[];
   } = {}) {
     this.#meshBufferSource = options.meshBufferSource;
     this.#meshResourceSource = options.meshResourceSource;
@@ -435,6 +438,7 @@ export class ThreeRenderer {
         `maximumActiveShadowLights must be an integer in 0..=${String(RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS)}`,
       );
     }
+    this.#projection.replacePublicationFrontiers(options.publicationFrontiers ?? []);
     this.#sceneGroup.name = 'scene';
     this.#debugGroup.name = 'debug';
     this.#uiGroup.name = 'ui';

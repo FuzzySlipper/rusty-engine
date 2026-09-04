@@ -1,4 +1,4 @@
-import type { PresentationFrameDiff, RenderFrameDiff } from '@rusty-engine/render-contracts';
+import type { PresentationFrameDiff, RenderFrameDiff, RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import {
   RendererAnimationHost,
   RendererAnimationCueDefinitionError,
@@ -380,6 +380,7 @@ export interface RustyApplicationRendererPort {
   /** Prepare and atomically publish a complete Rust-projected retained frame. */
   readonly replaceFrame: (
     frame: RustyApplicationFrame,
+    publicationFrontiers?: readonly RenderPublicationFrontier[],
   ) => Promise<RustyApplicationFrameReceipt>;
   /** Resume the browser audio context from a downstream user-gesture handler. */
   readonly resumeAudio: () => Promise<RustyApplicationAudioResumeReceipt>;
@@ -665,6 +666,7 @@ export async function mountRustyApplicationWithEnvironment(
       autoStart: true,
       controls: { enabled: false },
       frame: content.frame as unknown as RenderFrameDiff,
+      publicationFrontiers: content.publicationFrontiers,
       ...(options.renderer?.clearColor === undefined
         ? {} : { clearColor: options.renderer.clearColor }),
       ...(options.renderer?.fog === undefined
@@ -966,11 +968,12 @@ export async function mountRustyApplicationWithEnvironment(
   };
   const replaceFrame = (
     frame: RustyApplicationFrame,
+    publicationFrontiers: readonly RenderPublicationFrontier[] = [],
   ): Promise<RustyApplicationFrameReceipt> => {
     requireActive();
-    let snapshot: RustyApplicationFrame;
+    let prepared: PreparedRustyApplicationContent;
     try {
-      snapshot = prepareRustyApplicationContent({ frame }).frame;
+      prepared = prepareRustyApplicationContent({ frame, publicationFrontiers });
     } catch (cause) {
       return Promise.resolve(replacementFailure(cause));
     }
@@ -980,7 +983,8 @@ export async function mountRustyApplicationWithEnvironment(
         throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
       }
       return Object.freeze({
-        frame: snapshot,
+        frame: prepared.frame,
+        publicationFrontiers: prepared.publicationFrontiers,
         resources: current.resources,
         resourceBytes: current.resourceBytes,
       });

@@ -1,4 +1,5 @@
 import { mountRustyApplication, type RustyApplicationFrame, type RustyApplicationAnimationCueDefinition, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
+import { type RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export declare const PRODUCT_BROWSER_HOST_ARTIFACT: "rusty.product.browser-host";
 export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
@@ -271,6 +272,12 @@ export interface ProductBrowserRuntimeBindingOutput {
     readonly kind: 'binding';
     readonly runtime: RustyApplicationRuntimeIdentity;
     readonly nextInputSequence: string;
+    /**
+     * Active renderer stream frontiers captured when this binding's complete
+     * retained baseline was committed. They seed the replacement projection
+     * before any new-epoch trailing frame is allowed through.
+     */
+    readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
 }
 export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
 /** Fixed host evidence that one Rust-owned realtime advance was accepted. */
@@ -392,6 +399,8 @@ export interface ProductBrowserRuntimeAdapter {
     readonly subscribeOutputBatches?: (listener: ProductBrowserRuntimeOutputBatchListener) => () => void;
     /** Resolves once an asynchronous output subscription can receive runtime publications. */
     readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
+    /** Reattach through the local transport's existing single-flight fresh-baseline path. */
+    readonly recoverOutputProjection?: () => Promise<void>;
     readonly dispose: () => Promise<void> | void;
 }
 /** The transport kept by the generated bridge and consumed by the host. */
@@ -413,6 +422,7 @@ export interface ProductBrowserRuntimeTransport {
     readonly subscribeOutputs: ProductBrowserRuntimeAdapter['subscribeOutputs'];
     readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
     readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
+    readonly recoverOutputProjection?: NonNullable<ProductBrowserRuntimeAdapter['recoverOutputProjection']>;
     readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
 }
 export declare function createProductBrowserRuntimeTransport(adapter: ProductBrowserRuntimeAdapter): ProductBrowserRuntimeTransport;

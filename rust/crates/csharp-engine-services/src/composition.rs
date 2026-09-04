@@ -394,6 +394,14 @@ impl EngineServiceSet {
         self.begin_other_services(ui_binding);
     }
 
+    /// Returns every committed renderer stream continuation point. Detached
+    /// attachment projectors deliberately do not participate: their revision
+    /// only describes the fresh baseline construction, not the active product
+    /// publication frontier that the replacement renderer must continue.
+    pub fn renderer_publication_frontiers(&self) -> Vec<(String, u64)> {
+        self.voxel_scene_presentation.publication_frontiers()
+    }
+
     /// Returns one completed update sample after the C# callback has returned.
     /// Service durations are nested within `callback_duration_us`, not additive
     /// frame stages.

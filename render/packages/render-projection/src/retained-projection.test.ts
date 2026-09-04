@@ -407,6 +407,42 @@ void test('published frames reject clipping and stale revision without retained 
   assert.equal(projection.snapshot().nodes[0]?.visible, false);
 });
 
+void test('complete replacement frontiers continue independent published streams', () => {
+  const projection = new RenderProjection();
+  projection.replacePublicationFrontiers([
+    { stream: 'voxel:terrain', revision: 4 },
+    { stream: 'voxel:props', revision: 9 },
+  ]);
+  assert.throws(
+    () => projection.replacePublicationFrontiers([
+      { stream: 'voxel:terrain', revision: 6 },
+      { stream: 'voxel:terrain', revision: 7 },
+    ]),
+    /duplicate publication frontier/u,
+  );
+  assert.throws(
+    () => projection.replacePublicationFrontiers([
+      { stream: 'voxel:unsafe', revision: Number.MAX_SAFE_INTEGER + 1 },
+    ]),
+    /JSON-safe unsigned integer/u,
+  );
+  projection.applyFrame({ schemaVersion: 1, ops: [createPrimitive(42, 'recovered-chunk')] });
+
+  projection.applyFrame({
+    schemaVersion: 1,
+    publication: { stream: 'voxel:terrain', baseRevision: 4, revision: 5, operationCount: 1 },
+    ops: [{ op: 'replaceMeshPayload', handle: renderHandle(42), payload: quadPayload() }],
+  });
+  projection.applyFrame({
+    schemaVersion: 1,
+    publication: { stream: 'voxel:props', baseRevision: 9, revision: 10, operationCount: 1 },
+    ops: [{ op: 'update', handle: renderHandle(42), transform: null, material: null, visible: false, metadata: null }],
+  });
+
+  assert.deepEqual(projection.node(renderHandle(42))?.meshPayload, quadPayload());
+  assert.equal(projection.node(renderHandle(42))?.visible, false);
+});
+
 void test('small atomic frames structurally share unrelated retained definitions', () => {
   const projection = new RenderProjection();
   projection.applyFrame({
