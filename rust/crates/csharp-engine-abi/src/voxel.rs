@@ -128,6 +128,18 @@ pub enum NativeVoxelEditKind {
     Clear = 1,
 }
 
+/// The outcome of one voxel edit transaction. `NoChanges` and
+/// `StaleRevision` are expected product-control results; all other failures
+/// stay on the ABI diagnostic lane.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeVoxelEditStatus {
+    #[default]
+    Accepted = 0,
+    NoChanges = 1,
+    StaleRevision = 2,
+}
+
 /// Flat edit records are borrowed for one call and copied into the Engine
 /// owner before any retained state is changed.
 #[repr(C)]
@@ -164,6 +176,8 @@ pub struct NativeVoxelEditReceipt {
     pub rebuilt_mesh_chunks: u32,
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
+    pub status: NativeVoxelEditStatus,
+    pub current_revision: u64,
 }
 
 #[repr(u32)]

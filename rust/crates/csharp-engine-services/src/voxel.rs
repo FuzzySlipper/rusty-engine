@@ -10,8 +10,9 @@ use csharp_engine_abi::*;
 use engine_spatial::{
     decode_voxel_edit_history, encode_voxel_edit_history, VoxelChunkContentHash,
     VoxelChunkIdentity, VoxelChunkLeaseId, VoxelChunkPayload, VoxelChunkResidencyOperation,
-    VoxelChunkResidencyService, VoxelChunkResidencyTransaction, VoxelEdit, VoxelEditHistoryLimits,
-    VoxelEditHistoryRevertReceipt, VoxelResidencyHistoryPolicy, MAX_VOXEL_EDIT_HISTORY_BYTES,
+    VoxelChunkResidencyService, VoxelChunkResidencyTransaction, VoxelEdit, VoxelEditApplyError,
+    VoxelEditHistoryError, VoxelEditHistoryLimits, VoxelEditHistoryRevertReceipt,
+    VoxelEditRejection, VoxelResidencyHistoryPolicy, MAX_VOXEL_EDIT_HISTORY_BYTES,
     VOXEL_EDIT_HISTORY_SCHEMA_VERSION,
 };
 
@@ -198,20 +199,26 @@ impl RuntimeSpatialBridge {
         let (scene, receipt) = {
             let session = self.session_mut(request.session)?;
             if session.scene.source_revision().raw() != request.expected_revision {
-                return Err(voxel_error(
-                    "CSHARP_VOXEL_EDIT",
-                    format!(
-                        "stale voxel revision: expected {}, actual {}",
-                        request.expected_revision,
-                        session.scene.source_revision().raw()
-                    ),
+                return Ok(native_edit_outcome(
+                    NativeVoxelEditStatus::StaleRevision,
+                    session.scene.source_revision().raw(),
                 ));
             }
             let mut scene = (*session.scene).clone();
-            let receipt = session
-                .voxel_history
-                .apply(&mut scene, &edits)
-                .map_err(|error| voxel_error("CSHARP_VOXEL_EDIT", error.to_string()))?;
+            let receipt = match session.voxel_history.apply(&mut scene, &edits) {
+                Ok(receipt) => receipt,
+                Err(VoxelEditHistoryError::Edit(VoxelEditApplyError::Rejected(
+                    VoxelEditRejection::NoChanges,
+                ))) => {
+                    return Ok(native_edit_outcome(
+                        NativeVoxelEditStatus::NoChanges,
+                        session.scene.source_revision().raw(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(voxel_error("CSHARP_VOXEL_EDIT", error.to_string()));
+                }
+            };
             let edit = native_edit_receipt(&receipt.edit);
             session.last_voxel_dirty_chunks = receipt.edit.dirty_mesh_chunks.clone();
             let scene = Arc::new(scene);
@@ -611,6 +618,19 @@ fn native_edit_receipt(receipt: &engine_spatial::VoxelEditReceipt) -> NativeVoxe
         rebuilt_mesh_chunks: narrow(receipt.rebuilt_mesh_chunks),
         reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
         removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
+        status: NativeVoxelEditStatus::Accepted,
+        current_revision: receipt.accepted_revision.raw(),
+    }
+}
+
+fn native_edit_outcome(
+    status: NativeVoxelEditStatus,
+    current_revision: u64,
+) -> NativeVoxelEditReceipt {
+    NativeVoxelEditReceipt {
+        status,
+        current_revision,
+        ..Default::default()
     }
 }
 
@@ -1235,34 +1255,8 @@ mod tests {
         std::str::from_utf8(bytes).unwrap().to_owned()
     }
 
-    fn assert_edit_rejection(
-        api: &NativeVoxelApi,
-        receipt: &mut NativeOperationErrorReceipt,
-        expected_message: &str,
-    ) {
-        assert_eq!(receipt.status, 0);
-        assert_eq!(copied_utf8(receipt.service), "Voxel");
-        assert_eq!(copied_utf8(receipt.operation), "ApplyEdits");
-        assert_eq!(receipt.diagnostics.diagnostics_len, 1);
-        let diagnostic = unsafe { *receipt.diagnostics.diagnostics };
-        assert_eq!(copied_utf8(diagnostic.code), "CSHARP_VOXEL_EDIT");
-        assert!(copied_utf8(diagnostic.message).contains(expected_message));
-        assert_eq!(
-            unsafe {
-                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
-            },
-            ABI_OK
-        );
-        assert_eq!(
-            unsafe {
-                (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
-            },
-            0
-        );
-    }
-
     #[test]
-    fn mutation_callbacks_retain_copyable_diagnostics_for_no_change_and_stale_edits() {
+    fn mutation_callbacks_return_typed_no_change_and_stale_edit_outcomes() {
         let mut bridge = RuntimeSpatialBridge::new();
         let session = create_session(&mut bridge);
         let api = api(&mut bridge);
@@ -1286,6 +1280,8 @@ mod tests {
             ABI_OK
         );
         assert_eq!(error.diagnostics.handle.value, 0);
+        assert_eq!(accepted.status, NativeVoxelEditStatus::Accepted);
+        assert_eq!(accepted.current_revision, accepted.accepted_revision);
 
         let mut no_change = NativeVoxelEditReceipt::default();
         let mut no_change_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
@@ -1303,9 +1299,11 @@ mod tests {
                     &mut no_change_error,
                 )
             },
-            0
+            ABI_OK
         );
-        assert_edit_rejection(&api, &mut no_change_error, "NoChanges");
+        assert_eq!(no_change_error.diagnostics.handle.value, 0);
+        assert_eq!(no_change.status, NativeVoxelEditStatus::NoChanges);
+        assert_eq!(no_change.current_revision, accepted.accepted_revision);
 
         let mut stale = NativeVoxelEditReceipt::default();
         let mut stale_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
@@ -1323,9 +1321,50 @@ mod tests {
                     &mut stale_error,
                 )
             },
+            ABI_OK
+        );
+        assert_eq!(stale_error.diagnostics.handle.value, 0);
+        assert_eq!(stale.status, NativeVoxelEditStatus::StaleRevision);
+        assert_eq!(stale.current_revision, accepted.accepted_revision);
+
+        let invalid = [NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Set,
+            address: NativeVoxelAddress { x: 2, y: 0, z: 0 },
+            material_slot: u32::from(u16::MAX) + 1,
+        }];
+        let mut invalid_receipt = NativeVoxelEditReceipt::default();
+        let mut invalid_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.apply_edits)(
+                    api.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: accepted.accepted_revision,
+                        edits: invalid.as_ptr(),
+                        edits_len: invalid.len(),
+                    },
+                    &mut invalid_receipt,
+                    &mut invalid_error,
+                )
+            },
             0
         );
-        assert_edit_rejection(&api, &mut stale_error, "stale voxel revision");
+        assert_eq!(invalid_error.status, 0);
+        assert_eq!(copied_utf8(invalid_error.service), "Voxel");
+        assert_eq!(copied_utf8(invalid_error.operation), "ApplyEdits");
+        assert_eq!(invalid_error.diagnostics.diagnostics_len, 1);
+        let diagnostic = unsafe { *invalid_error.diagnostics.diagnostics };
+        assert_eq!(copied_utf8(diagnostic.code), "CSHARP_VOXEL_EDIT");
+        assert_eq!(
+            unsafe {
+                (api.destroy_operation_diagnostic_lease)(
+                    api.context,
+                    invalid_error.diagnostics.handle,
+                )
+            },
+            ABI_OK
+        );
     }
 
     #[test]

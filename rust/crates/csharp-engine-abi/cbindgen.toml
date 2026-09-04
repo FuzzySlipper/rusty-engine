@@ -196,6 +196,7 @@ include = [
     "NativeVoxelDirtyChunkAtRequest",
     "NativeVoxelDirtyChunkAtReceipt",
     "NativeVoxelEditKind",
+    "NativeVoxelEditStatus",
     "NativeVoxelEdit",
     "NativeVoxelEditTransaction",
     "NativeVoxelEditReceipt",

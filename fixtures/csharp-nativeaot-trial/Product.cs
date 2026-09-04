@@ -234,7 +234,8 @@ public sealed class Product : IEngineProduct
             _spatial,
             initialVoxelScene.SourceRevision,
             new[] { new VoxelEdit(VoxelEditKind.Set, exercisedVoxel, 3) }));
-        Require(voxelEdit.AcceptedRevision == 1 && voxelEdit.ChangedVoxels == 1 && voxelEdit.CollisionRevision == 1
+        Require(voxelEdit.Status == VoxelEditStatus.Accepted && voxelEdit.CurrentRevision == voxelEdit.AcceptedRevision
+            && voxelEdit.AcceptedRevision == 1 && voxelEdit.ChangedVoxels == 1 && voxelEdit.CollisionRevision == 1
             && voxelEdit.NavigationRevision == 1 && voxelEdit.MeshRevision == 1,
             "voxel edit did not publish coherent projection revisions");
         VoxelReadout exercisedReadout = _engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel));
@@ -259,12 +260,26 @@ public sealed class Product : IEngineProduct
         Require(sharedVoxelProjection.SourceRevision == voxelEdit.AcceptedRevision
             && sharedVoxelProjection.AuthorityHash == voxelEdit.AuthorityHash,
             "spatial projection did not observe the canonical voxel authority");
-        ExpectEngineFailure(() => _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+        VoxelEditReceipt noChangeVoxelEdit = _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+            _spatial,
+            voxelEdit.AcceptedRevision,
+            new[] { new VoxelEdit(VoxelEditKind.Set, exercisedVoxel, 3) }));
+        Require(noChangeVoxelEdit.Status == VoxelEditStatus.NoChanges
+            && noChangeVoxelEdit.CurrentRevision == voxelEdit.AcceptedRevision,
+            "no-change voxel edit did not return its typed current revision");
+        VoxelEditReceipt staleVoxelEdit = _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
             _spatial,
             initialVoxelScene.SourceRevision,
-            new[] { new VoxelEdit(VoxelEditKind.Clear, exercisedVoxel, 0) })));
+            new[] { new VoxelEdit(VoxelEditKind.Clear, exercisedVoxel, 0) }));
+        Require(staleVoxelEdit.Status == VoxelEditStatus.StaleRevision
+            && staleVoxelEdit.CurrentRevision == voxelEdit.AcceptedRevision,
+            "stale voxel edit did not return its typed current revision");
+        ExpectEngineFailure(() => _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+            _spatial,
+            voxelEdit.AcceptedRevision,
+            new[] { new VoxelEdit(VoxelEditKind.Set, new VoxelAddress(5, 0, 4), uint.MaxValue) })));
         Require(_engine.Voxel.Read(new VoxelReadRequest(_spatial, exercisedVoxel)).MaterialSlot == 3,
-            "rejected stale voxel edit changed canonical state");
+            "rejected voxel edit changed canonical state");
         VoxelHistoryCursorReadout voxelCursor = _engine.Voxel.ReadHistoryCursor(
             new VoxelHistoryCursorReadRequest(_spatial));
         Require(voxelCursor.EntryCount == 1 && voxelCursor.UndoDepth == 1,
