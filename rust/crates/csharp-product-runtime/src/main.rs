@@ -803,6 +803,11 @@ impl WorkerRuntime {
             }
         };
         let mut channel = channel;
+        // Framed commands write their length and payload separately. Do not
+        // wait for delayed ACKs before delivering these small interactive frames.
+        if let Err(error) = channel.set_nodelay(true) {
+            return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_CHANNEL: {error}"));
+        }
         if let Err(error) = channel.set_read_timeout(args.worker_operation_timeout()) {
             return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_CHANNEL: {error}"));
         }
@@ -1553,6 +1558,9 @@ fn run_worker(args: Arguments) -> Result<(), String> {
     }
     let mut channel = TcpStream::connect_timeout(&address, WORKER_OPERATION_TIMEOUT)
         .map_err(|error| format!("DEV_HOST_WORKER_CONNECT: {error}"))?;
+    channel
+        .set_nodelay(true)
+        .map_err(|error| format!("DEV_HOST_WORKER_CHANNEL: {error}"))?;
     let owner = Arc::new(ProductDevOperationOwner::new(runtime));
     let mailbox = Arc::new(WorkerInputMailbox::default());
     let diagnostic_cursor = Arc::new(Mutex::new(None));
