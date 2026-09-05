@@ -388,7 +388,20 @@ export interface ProductBrowserRuntimeTerminalFailure {
 }
 
 /** Fixed health facts copied into the Engine diagnostic ring; never console data. */
+export interface ProductBrowserAttachmentBaseline {
+  readonly runtime: RustyApplicationRuntimeIdentity;
+  readonly nextInputSequence: string;
+  readonly publicationFrontiers: readonly RenderPublicationFrontier[];
+}
+
+export interface ProductBrowserAttachmentEvidence {
+  readonly id: string;
+  readonly replaces?: string;
+  readonly baseline?: ProductBrowserAttachmentBaseline;
+}
+
 export interface ProductBrowserDiagnosticsReport {
+  readonly attachment?: ProductBrowserAttachmentEvidence;
   readonly hostState: 'loading' | 'ready' | 'degraded' | 'failed' | 'disposed';
   readonly runtimeProgress: string;
   readonly transportState: 'open' | 'closed';
@@ -477,6 +490,8 @@ export interface ProductBrowserRuntimeAdapter {
   readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
   /** Reattach through the local transport's existing single-flight fresh-baseline path. */
   readonly recoverOutputProjection?: () => Promise<void>;
+  /** Confirms physical installation, after the renderer's baseline tail settles. */
+  readonly confirmOutputBaseline?: (epoch: number) => void;
   readonly dispose: () => Promise<void> | void;
 }
 
@@ -500,6 +515,7 @@ export interface ProductBrowserRuntimeTransport {
   readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
   readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
   readonly recoverOutputProjection?: NonNullable<ProductBrowserRuntimeAdapter['recoverOutputProjection']>;
+  readonly confirmOutputBaseline?: NonNullable<ProductBrowserRuntimeAdapter['confirmOutputBaseline']>;
   readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
 }
 
@@ -581,6 +597,9 @@ export function createProductBrowserRuntimeTransport(
     ...(adapter.recoverOutputProjection === undefined
       ? {}
       : { recoverOutputProjection: adapter.recoverOutputProjection }),
+    ...(adapter.confirmOutputBaseline === undefined
+      ? {}
+      : { confirmOutputBaseline: adapter.confirmOutputBaseline }),
     dispose: adapter.dispose,
   });
 }
@@ -2070,6 +2089,13 @@ export async function mountProductBrowserHostWithApplication(
         // output accepted behind its CompleteBaseline. This preserves the
         // current epoch rather than dropping it during the asynchronous swap.
         for (const output of trailingOutputs) applyOutput(output, epoch);
+        // Retained presentation can settle asynchronously behind the graphics
+        // replacement. Report recovery only after that realization tail drains.
+        enqueueRendererOutput(() => {
+          transport.confirmOutputBaseline?.(epoch);
+          lastDiagnosticsStatusKey = null;
+          publishHealth();
+        }, replacementEpoch);
         restoreReadyAfterHealthyTransport();
         cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
       } catch (cause) {
@@ -2518,6 +2544,7 @@ export async function mountProductBrowserHostWithApplication(
     applyOutputBatch(bufferedOutputs);
     await rendererOutputTail;
     if (failure !== null) throw failure;
+    transport.confirmOutputBaseline?.(acceptedProjectionEpoch);
     if (options.autoStart !== false && !runtimeStartedBeforeMount) {
       await transport.waitUntilOutputSubscriptionReady?.();
       if (failure !== null) throw failure;

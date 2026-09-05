@@ -1413,17 +1413,31 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
         handle_sse(stream, state, request, fresh);
         return;
     }
+    // Preserve the browser attachment correlation before dispatch consumes the
+    // request. A response write may fail only after a route has admitted work.
+    let request_path = request.path.clone();
+    let attachment_id = request
+        .headers
+        .get("x-rusty-browser-attachment")
+        .filter(|value| crate::model::browser_attachment_id_is_admitted(value))
+        .cloned()
+        .unwrap_or_else(|| "none".to_owned());
     let response = dispatch_request(&state, request);
-    let commit = response.commit_disposition;
+    let delivery_certainty = response.delivery_certainty;
     if let Err(error) = write_response(&mut stream, response) {
-        if commit.is_some() {
+        if let Some(certainty) = delivery_certainty {
             publish_host_diagnostic(
                 &state.diagnostics,
                 ProductDevLogSeverity::Warning,
                 ProductDevLogDisposition::ResyncRequired,
                 "DEV_HOST_RESPONSE_WRITE_RESYNC",
-                "response delivery failed after an authoritative runtime receipt; reconnect for a fresh readout instead of replaying",
-                [("error-kind", format!("{:?}", error.kind()))],
+                "response delivery failed after a confirmed host admission; preserve its delivery certainty and do not replay the request",
+                [
+                    ("error-kind", format!("{:?}", error.kind())),
+                    ("attachment-id", attachment_id),
+                    ("request-path", request_path),
+                    ("response-certainty", certainty.as_field().to_owned()),
+                ],
             );
         }
     }
@@ -1709,7 +1723,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
                 match ProductDevInputResult::queued(count) {
                     // Admission committed to the mailbox; runtime consumption
                     // and its output cursor arrive separately through SSE.
-                    Ok(result) => json_response(200, &result).with_committed(),
+                    Ok(result) => json_response(200, &result).with_queued_input(),
                     Err(error) => HttpResponse::error(500, error.code(), error.detail()),
                 }
             }
@@ -2012,8 +2026,49 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
         Ok(event) => event,
         Err(error) => return HttpResponse::error(500, error.code(), error.detail()),
     };
+    let established_baseline = matches!(report.host_state, ProductDevBrowserHostState::Ready)
+        && matches!(
+            report.transport_state,
+            ProductDevBrowserConnectionState::Open
+        )
+        && matches!(report.output_state, ProductDevBrowserConnectionState::Open)
+        && report.first_terminal.is_none()
+        && report
+            .attachment
+            .as_ref()
+            .and_then(|attachment| attachment.baseline.as_ref())
+            .is_some();
+    let attachment_id = report
+        .attachment
+        .as_ref()
+        .map_or_else(|| "none".to_owned(), |attachment| attachment.id.clone());
+    let replaces_attachment_id = report
+        .attachment
+        .as_ref()
+        .and_then(|attachment| attachment.replaces.clone());
+    let baseline_facts = if established_baseline {
+        let baseline = report
+            .attachment
+            .as_ref()
+            .and_then(|attachment| attachment.baseline.as_ref())
+            .expect("established baseline requires a baseline");
+        let revisions = baseline
+            .publication_frontiers
+            .iter()
+            .map(|frontier| frontier.revision.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "runtime={}/{}/{};next-input={};revisions={revisions}",
+            baseline.runtime.instance_id.get(),
+            baseline.runtime.generation.get(),
+            baseline.runtime.control_revision.get(),
+            baseline.next_input_sequence.get(),
+        )
+    } else {
+        "none".to_owned()
+    };
     for (key, value) in [
-        ("scope", "transition".to_owned()),
         (
             "host-state",
             browser_host_state(report.host_state).to_owned(),
@@ -2030,18 +2085,13 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
             "output",
             browser_connection_state(report.output_state).to_owned(),
         ),
+        ("attachment-id", attachment_id),
         (
-            "renderer-sequence",
-            report
-                .last_renderer_sequence
-                .map_or_else(|| "none".to_owned(), |value| value.get().to_string()),
+            "replaces-attachment-id",
+            replaces_attachment_id.unwrap_or_else(|| "none".to_owned()),
         ),
-        (
-            "renderer-observation-age-ms",
-            report
-                .renderer_observation_age_ms
-                .map_or_else(|| "none".to_owned(), |value| value.get().to_string()),
-        ),
+        ("baseline-established", established_baseline.to_string()),
+        ("baseline-facts", baseline_facts),
     ] {
         status = match status.with_field(key, value) {
             Ok(event) => event,
@@ -2110,10 +2160,9 @@ fn invoke_browser_diagnostics<R: ProductDevRuntime>(
             reported,
         },
     )
-    // Browser diagnostics append to the host-owned diagnostic log. It has no
-    // retained runtime output cursor, but the accepted mutation is still
-    // definitive and must use the same browser transport commit boundary.
-    .with_committed()
+    // Browser diagnostics are an observation acknowledgement. They do not
+    // settle a runtime receipt or a queued input admission.
+    .with_observation()
 }
 
 fn browser_host_state(state: ProductDevBrowserHostState) -> &'static str {
@@ -2254,7 +2303,7 @@ where
                     [("cause", error.code().to_owned())],
                 );
                 return Ok((HttpResponse::bytes(200, "application/json", encoded_result)
-                    .with_resync_required(), runtime.take_update_attribution()));
+                    .with_settled_resync_required(), runtime.take_update_attribution()));
             }
         };
         let output_through = match push_host_outputs(state, outputs) {
@@ -2273,7 +2322,7 @@ where
                     [("cause", error.code().to_owned())],
                 );
                 return Ok((HttpResponse::bytes(200, "application/json", encoded_result)
-                    .with_resync_required(), runtime.take_update_attribution()));
+                    .with_settled_resync_required(), runtime.take_update_attribution()));
             }
         };
         Ok((HttpResponse::bytes(200, "application/json", encoded_result)
@@ -3054,6 +3103,33 @@ fn try_acquire(counter: &AtomicUsize, maximum: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn response_delivery_certainty_distinguishes_receipts_mailbox_and_observations() {
+        let settled =
+            HttpResponse::bytes(200, "application/json", Vec::new()).with_output_through(7);
+        assert!(matches!(
+            settled.delivery_certainty,
+            Some(ResponseDeliveryCertainty::Settled)
+        ));
+
+        let queued = HttpResponse::bytes(200, "application/json", Vec::new()).with_queued_input();
+        assert!(matches!(
+            queued.delivery_certainty,
+            Some(ResponseDeliveryCertainty::QueuedInput)
+        ));
+
+        let observation =
+            HttpResponse::bytes(200, "application/json", Vec::new()).with_observation();
+        assert!(matches!(
+            observation.delivery_certainty,
+            Some(ResponseDeliveryCertainty::Observation)
+        ));
+
+        let unclassified =
+            HttpResponse::bytes(200, "application/json", Vec::new()).with_resync_required();
+        assert!(unclassified.delivery_certainty.is_none());
+    }
 
     #[test]
     fn output_wake_releases_every_current_subscriber() {
@@ -4227,6 +4303,7 @@ struct HttpResponse {
     body: Vec<u8>,
     output_through: Option<u64>,
     commit_disposition: Option<CommitDisposition>,
+    delivery_certainty: Option<ResponseDeliveryCertainty>,
 }
 
 /// The host makes only two delivery claims for a typed runtime receipt.
@@ -4237,6 +4314,26 @@ struct HttpResponse {
 enum CommitDisposition {
     Committed,
     ResyncRequired,
+}
+
+/// What the host knows was admitted when its HTTP response cannot be written.
+/// This is intentionally independent from the public commit header, which
+/// also describes recovery instructions for non-settled route responses.
+#[derive(Clone, Copy)]
+enum ResponseDeliveryCertainty {
+    Settled,
+    QueuedInput,
+    Observation,
+}
+
+impl ResponseDeliveryCertainty {
+    const fn as_field(self) -> &'static str {
+        match self {
+            Self::Settled => "settled",
+            Self::QueuedInput => "queued-input",
+            Self::Observation => "observation",
+        }
+    }
 }
 
 impl CommitDisposition {
@@ -4256,22 +4353,37 @@ impl HttpResponse {
             body,
             output_through: None,
             commit_disposition: None,
+            delivery_certainty: None,
         }
     }
 
     fn with_output_through(mut self, output_through: u64) -> Self {
         self.output_through = Some(output_through);
         self.commit_disposition = Some(CommitDisposition::Committed);
+        self.delivery_certainty = Some(ResponseDeliveryCertainty::Settled);
         self
     }
 
-    fn with_committed(mut self) -> Self {
+    fn with_queued_input(mut self) -> Self {
         self.commit_disposition = Some(CommitDisposition::Committed);
+        self.delivery_certainty = Some(ResponseDeliveryCertainty::QueuedInput);
+        self
+    }
+
+    fn with_observation(mut self) -> Self {
+        self.commit_disposition = Some(CommitDisposition::Committed);
+        self.delivery_certainty = Some(ResponseDeliveryCertainty::Observation);
         self
     }
 
     fn with_resync_required(mut self) -> Self {
         self.commit_disposition = Some(CommitDisposition::ResyncRequired);
+        self
+    }
+
+    fn with_settled_resync_required(mut self) -> Self {
+        self.commit_disposition = Some(CommitDisposition::ResyncRequired);
+        self.delivery_certainty = Some(ResponseDeliveryCertainty::Settled);
         self
     }
 

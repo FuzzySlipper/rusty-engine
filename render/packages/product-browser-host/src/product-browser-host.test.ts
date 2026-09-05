@@ -1021,6 +1021,7 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     let activeRevision = 0;
     const replacements: unknown[] = [];
     const applied: unknown[] = [];
+    const confirmations: Array<{epoch: number; applied: number; replacements: number}> = [];
     const transport = {
       lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
         accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
@@ -1032,6 +1033,7 @@ test('a normal fresh attachment installs its complete frontier baseline before t
       advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
       admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
       recoverOutputProjection: async () => { recoveries += 1; },
+      confirmOutputBaseline: (epoch: number) => { if (epoch > 0) confirmations.push({epoch, applied: applied.length, replacements: replacements.length}); },
       subscribeOutputs: () => () => undefined,
       subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
         emit = listener;
@@ -1100,6 +1102,7 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     assert.equal(replacements.length, 1);
     assert.equal(applied.length, 1);
     assert.equal(recoveries, 0);
+    assert.deepEqual(confirmations, [{ epoch: 1, applied: 1, replacements: 1 }]);
     assert.equal(host.readout().state, 'ready');
     await host.dispose();
   } finally {

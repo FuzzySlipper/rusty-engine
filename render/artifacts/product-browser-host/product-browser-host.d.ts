@@ -341,7 +341,18 @@ export interface ProductBrowserRuntimeTerminalFailure {
     readonly diagnostic: string;
 }
 /** Fixed health facts copied into the Engine diagnostic ring; never console data. */
+export interface ProductBrowserAttachmentBaseline {
+    readonly runtime: RustyApplicationRuntimeIdentity;
+    readonly nextInputSequence: string;
+    readonly publicationFrontiers: readonly RenderPublicationFrontier[];
+}
+export interface ProductBrowserAttachmentEvidence {
+    readonly id: string;
+    readonly replaces?: string;
+    readonly baseline?: ProductBrowserAttachmentBaseline;
+}
 export interface ProductBrowserDiagnosticsReport {
+    readonly attachment?: ProductBrowserAttachmentEvidence;
     readonly hostState: 'loading' | 'ready' | 'degraded' | 'failed' | 'disposed';
     readonly runtimeProgress: string;
     readonly transportState: 'open' | 'closed';
@@ -401,6 +412,8 @@ export interface ProductBrowserRuntimeAdapter {
     readonly waitUntilOutputSubscriptionReady?: () => Promise<void>;
     /** Reattach through the local transport's existing single-flight fresh-baseline path. */
     readonly recoverOutputProjection?: () => Promise<void>;
+    /** Confirms physical installation, after the renderer's baseline tail settles. */
+    readonly confirmOutputBaseline?: (epoch: number) => void;
     readonly dispose: () => Promise<void> | void;
 }
 /** The transport kept by the generated bridge and consumed by the host. */
@@ -423,6 +436,7 @@ export interface ProductBrowserRuntimeTransport {
     readonly subscribeOutputBatches?: NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>;
     readonly waitUntilOutputSubscriptionReady?: NonNullable<ProductBrowserRuntimeAdapter['waitUntilOutputSubscriptionReady']>;
     readonly recoverOutputProjection?: NonNullable<ProductBrowserRuntimeAdapter['recoverOutputProjection']>;
+    readonly confirmOutputBaseline?: NonNullable<ProductBrowserRuntimeAdapter['confirmOutputBaseline']>;
     readonly dispose: ProductBrowserRuntimeAdapter['dispose'];
 }
 export declare function createProductBrowserRuntimeTransport(adapter: ProductBrowserRuntimeAdapter): ProductBrowserRuntimeTransport;

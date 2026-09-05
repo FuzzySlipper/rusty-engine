@@ -3,7 +3,7 @@ use std::{
     net::{Shutdown, TcpStream},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        mpsc, Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -37,6 +37,12 @@ struct ReconnectRuntime {
 
 struct OutputFailureRuntime {
     inputs: Arc<AtomicUsize>,
+}
+
+struct GatedLifecycleRuntime {
+    lifecycle_calls: Arc<AtomicUsize>,
+    entered: mpsc::SyncSender<()>,
+    release: mpsc::Receiver<()>,
 }
 
 impl FixtureRuntime {
@@ -467,6 +473,107 @@ impl ProductDevRuntime for OutputFailureRuntime {
     }
 }
 
+impl ProductDevRuntime for GatedLifecycleRuntime {
+    fn connect(
+        &mut self,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(ProductDevOperationKind::Connect))
+    }
+
+    fn lifecycle(
+        &mut self,
+        operation: ProductDevLifecycleOperation,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        self.lifecycle_calls.fetch_add(1, Ordering::SeqCst);
+        self.entered
+            .send(())
+            .expect("test waits for lifecycle entry");
+        self.release
+            .recv_timeout(Duration::from_secs(3))
+            .expect("test releases lifecycle receipt");
+        Ok(FixtureRuntime::operation(operation.operation_kind()))
+    }
+
+    fn input(
+        &mut self,
+        batch: ProductDevInputBatch,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevInputResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(ProductDevRuntimeReceipt::new(
+            ProductDevInputResult::accepted(
+                batch.events().len(),
+                FixtureRuntime::binding(),
+                FixtureRuntime::readout(),
+            )
+            .unwrap(),
+            Vec::new(),
+        )
+        .unwrap())
+    }
+
+    fn advance_realtime(
+        &mut self,
+        _observed_time_ns: CanonicalU64,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(
+            ProductDevOperationKind::AdvanceRealtime,
+        ))
+    }
+
+    fn admit_demand_step(
+        &mut self,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(
+            ProductDevOperationKind::AdmitDemandStep,
+        ))
+    }
+
+    fn admit_external_step(
+        &mut self,
+        _step: CanonicalU64,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevOperationResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(FixtureRuntime::operation(
+            ProductDevOperationKind::AdmitExternalStep,
+        ))
+    }
+
+    fn complete_timeline(
+        &mut self,
+        completion: ProductDevTimelineCompletion,
+    ) -> Result<
+        ProductDevRuntimeReceipt<ProductDevTimelineCompletionResult>,
+        product_dev_host::ProductDevRuntimeError,
+    > {
+        Ok(ProductDevRuntimeReceipt::new(
+            ProductDevTimelineCompletionResult::accepted(
+                CanonicalU64::new(completion.envelope().ticket().value()),
+                FixtureRuntime::binding(),
+                FixtureRuntime::readout(),
+            )
+            .unwrap(),
+            Vec::new(),
+        )
+        .unwrap())
+    }
+}
+
 fn start() -> product_dev_host::RunningProductDevHost {
     let bundle = ProductDevBundle::new(vec![
         ProductDevBundleEntry::new(
@@ -550,10 +657,10 @@ fn open_sse(address: std::net::SocketAddr, path: &str) -> TcpStream {
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
-    let request = format!(
+    let raw_request = format!(
         "GET {path} HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
     );
-    stream.write_all(request.as_bytes()).unwrap();
+    stream.write_all(raw_request.as_bytes()).unwrap();
     stream
 }
 
@@ -698,6 +805,120 @@ fn output_publication_failure_returns_the_consumed_receipt_for_resync_without_re
 }
 
 #[test]
+fn closed_response_socket_records_the_exact_settled_attachment_before_fresh_baseline() {
+    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    let lifecycle_calls = Arc::new(AtomicUsize::new(0));
+    let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let host = ProductDevHost::start(
+        GatedLifecycleRuntime {
+            lifecycle_calls: Arc::clone(&lifecycle_calls),
+            entered: entered_sender,
+            release: release_receiver,
+        },
+        ProductDevHostConfig::new(0, bundle).with_live_debug(true),
+    )
+    .unwrap();
+    let address = host.address();
+    let origin = host.origin();
+    let mut request_stream = TcpStream::connect(address).unwrap();
+    request_stream.set_nodelay(true).unwrap();
+    let raw_request = format!(
+        "POST /__rusty/product/runtime/lifecycle/start HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nContent-Type: application/json\r\nX-Rusty-Browser-Attachment: attachment-original\r\nContent-Length: 2\r\n\r\n{{}}"
+    );
+    request_stream.write_all(raw_request.as_bytes()).unwrap();
+    entered_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("runtime operation entered before client closes");
+
+    // Close both directions before the runtime is released. On the real
+    // loopback socket this leaves the host's later response writes with a
+    // reset/broken-pipe delivery failure rather than a synthetic diagnostic.
+    request_stream.shutdown(Shutdown::Both).unwrap();
+    drop(request_stream);
+    thread::sleep(Duration::from_millis(50));
+    release_sender.send(()).unwrap();
+
+    let diagnostic_request = "POST /__rusty/product/runtime/diagnostics/read HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let response_write_warning = loop {
+        let read = request(&origin, diagnostic_request);
+        if read.contains("DEV_HOST_RESPONSE_WRITE_RESYNC") {
+            break read;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "closed socket did not produce a response-write warning: {read}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(lifecycle_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        response_write_warning.contains("\"attachment-id\",\"value\":\"attachment-original\""),
+        "{response_write_warning}"
+    );
+    assert!(
+        response_write_warning
+            .contains("\"request-path\",\"value\":\"/__rusty/product/runtime/lifecycle/start\""),
+        "{response_write_warning}"
+    );
+    assert!(
+        response_write_warning.contains("\"response-certainty\",\"value\":\"settled\""),
+        "{response_write_warning}"
+    );
+    assert!(
+        response_write_warning.contains("\"error-kind\",\"value\":\"BrokenPipe\"")
+            || response_write_warning.contains("\"error-kind\",\"value\":\"ConnectionReset\""),
+        "expected a real socket close error: {response_write_warning}"
+    );
+
+    let mut fresh = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let baseline = read_until(&mut fresh, "\"operation\":\"connect\"");
+    assert!(
+        baseline.contains("event: rusty-output-baseline"),
+        "{baseline}"
+    );
+    drop(fresh);
+
+    let replacement_report = r#"{"hostState":"ready","runtimeProgress":"1","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment-replacement","replaces":"attachment-original","baseline":{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"nextInputSequence":"0","publicationFrontiers":[]}}}"#;
+    let replacement = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/browser-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nX-Rusty-Browser-Attachment: attachment-replacement\r\nContent-Length: {}\r\n\r\n{replacement_report}",
+            replacement_report.len(),
+        ),
+    );
+    assert!(
+        replacement.starts_with("HTTP/1.1 200 OK\r\n"),
+        "{replacement}"
+    );
+
+    let final_diagnostics = request(&origin, diagnostic_request);
+    assert_eq!(
+        final_diagnostics
+            .matches("DEV_HOST_RESPONSE_WRITE_RESYNC")
+            .count(),
+        1,
+        "the settled operation must not be replayed: {final_diagnostics}"
+    );
+    assert!(
+        final_diagnostics.contains("\"attachment-id\",\"value\":\"attachment-replacement\""),
+        "{final_diagnostics}"
+    );
+    assert!(
+        final_diagnostics.contains("\"baseline-established\",\"value\":\"true\""),
+        "{final_diagnostics}"
+    );
+    host.shutdown().unwrap();
+}
+
+#[test]
 fn serves_only_admitted_bundle_and_fixed_runtime_routes() {
     let host = start();
     let origin = host.origin();
@@ -827,11 +1048,11 @@ fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
         "{read}"
     );
     assert!(
-        read.contains("\"scope\",\"value\":\"transition\""),
+        read.contains("\"attachment-id\",\"value\":\"none\""),
         "{read}"
     );
     assert!(
-        read.contains("\"renderer-sequence\",\"value\":\"60\""),
+        read.contains("\"baseline-established\",\"value\":\"false\""),
         "{read}"
     );
     assert!(read.contains("\"nextCursor\":\"3\""), "{read}");
@@ -839,6 +1060,64 @@ fn browser_diagnostics_readback_preserves_closed_terminal_facts() {
     assert!(
         read.contains("\"runtimeProgressRateMillihertz\":null"),
         "{read}"
+    );
+    host.shutdown().unwrap();
+}
+
+#[test]
+fn browser_diagnostics_establishes_a_typed_attachment_baseline() {
+    let host = start_debug();
+    let origin = host.origin();
+    let report_body = r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment-2","replaces":"attachment-1","baseline":{"runtime":{"instanceId":"7","generation":"3","controlRevision":"12"},"nextInputSequence":"14","publicationFrontiers":[{"stream":"primary","revision":9}]}}}"#;
+    let reported = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/browser-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nX-Rusty-Browser-Attachment: attachment-2\r\nContent-Length: {}\r\n\r\n{report_body}",
+            report_body.len(),
+        ),
+    );
+    assert!(reported.starts_with("HTTP/1.1 200 OK\r\n"), "{reported}");
+    assert!(
+        reported.contains("X-Rusty-Commit-Disposition: committed\r\n"),
+        "{reported}"
+    );
+    let read = request(
+        &origin,
+        "POST /__rusty/product/runtime/diagnostics/read HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+    );
+    assert!(read.starts_with("HTTP/1.1 200 OK\r\n"), "{read}");
+    assert!(
+        read.contains("\"attachment-id\",\"value\":\"attachment-2\""),
+        "{read}"
+    );
+    assert!(
+        read.contains("\"replaces-attachment-id\",\"value\":\"attachment-1\""),
+        "{read}"
+    );
+    assert!(
+        read.contains("\"baseline-established\",\"value\":\"true\""),
+        "{read}"
+    );
+    assert!(
+        read.contains("runtime=7/3/12;next-input=14;revisions=9"),
+        "{read}"
+    );
+
+    let invalid_body = r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"attachment has a space","replaces":null,"baseline":null}}"#;
+    let invalid = request(
+        &origin,
+        &format!(
+            "POST /__rusty/product/runtime/browser-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{invalid_body}",
+            invalid_body.len(),
+        ),
+    );
+    assert!(
+        invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "{invalid}"
+    );
+    assert!(
+        invalid.contains("DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS"),
+        "{invalid}"
     );
     host.shutdown().unwrap();
 }

@@ -12,6 +12,13 @@ const CAPTURE_PROTOCOL = 'rusty-engine.playtest-warning-delta/v1';
 const MAX_MESSAGE_LENGTH = 512;
 const MAX_ENGINE_READS = 32;
 const DEFAULT_SETTLE_MS = 150;
+const DEV_HOST_RESPONSE_WRITE_RESYNC = 'DEV_HOST_RESPONSE_WRITE_RESYNC';
+const BROWSER_HOST_STATUS = 'BROWSER_HOST_STATUS';
+const RECOVERABLE_RESPONSE_CERTAINTIES = new Set(['settled', 'observation']);
+
+function isAttachmentId(value) {
+  return typeof value === 'string' && value.length > 0 && value !== 'none';
+}
 
 export function normalizeMessage(value) {
   return String(value ?? '')
@@ -25,6 +32,8 @@ export function normalizeMessage(value) {
 }
 
 export function fingerprintFinding(finding) {
+  const correlatedEngineFinding = finding.source === 'engine'
+    && (finding.code === DEV_HOST_RESPONSE_WRITE_RESYNC || finding.code === BROWSER_HOST_STATUS);
   const identity = [
     finding.source,
     finding.kind,
@@ -32,8 +41,16 @@ export function fingerprintFinding(finding) {
     finding.code ?? '',
     finding.disposition ?? '',
     finding.message,
-  ].join('\u001f');
-  return createHash('sha256').update(identity).digest('hex');
+  ];
+  // Preserve existing fingerprints when no new correlation/resource facts are
+  // available. Extended identities keep distinct attachments and occurrences
+  // from sharing one recovery verdict.
+  for (const key of ['attachmentId', 'replacesAttachmentId', 'requestPath',
+    'responseCertainty', 'url', 'status', 'requestfailureURL',
+    ...(correlatedEngineFinding ? ['sequence'] : [])]) {
+    if (finding[key] !== undefined) identity.push(key, finding[key]);
+  }
+  return createHash('sha256').update(identity.join('\u001f')).digest('hex');
 }
 
 export function deduplicateFindings(findings) {
@@ -46,6 +63,18 @@ export function deduplicateFindings(findings) {
       ...(candidate.code === undefined ? {} : { code: candidate.code }),
       ...(candidate.disposition === undefined ? {} : { disposition: candidate.disposition }),
       message: normalizeMessage(candidate.message),
+      ...(candidate.sequence === undefined ? {} : { sequence: candidate.sequence }),
+      ...(candidate.fields === undefined ? {} : { fields: cloneFields(candidate.fields) }),
+      ...(candidate.attachmentId === undefined ? {} : { attachmentId: candidate.attachmentId }),
+      ...(candidate.replacesAttachmentId === undefined ? {} : { replacesAttachmentId: candidate.replacesAttachmentId }),
+      ...(candidate.requestPath === undefined ? {} : { requestPath: candidate.requestPath }),
+      ...(candidate.responseCertainty === undefined ? {} : { responseCertainty: candidate.responseCertainty }),
+      ...(candidate.url === undefined ? {} : { url: candidate.url }),
+      ...(candidate.status === undefined ? {} : { status: candidate.status }),
+      ...(candidate.requestfailureURL === undefined ? {} : { requestfailureURL: candidate.requestfailureURL }),
+      ...(candidate.attributedResponse === undefined ? {} : { attributedResponse: cloneJson(candidate.attributedResponse) }),
+      ...(candidate.attributedRequestFailure === undefined ? {} : { attributedRequestFailure: cloneJson(candidate.attributedRequestFailure) }),
+      ...(candidate.recovery === undefined ? {} : { recovery: cloneJson(candidate.recovery) }),
     });
     if (finding.message.length === 0) continue;
     const fingerprint = fingerprintFinding(finding);
@@ -54,9 +83,29 @@ export function deduplicateFindings(findings) {
       indexed.set(fingerprint, { ...finding, fingerprint, occurrenceCount: 1 });
     } else {
       existing.occurrenceCount += 1;
+      if (existing.recovery?.status !== 'recovered' && finding.recovery?.status === 'recovered') {
+        existing.recovery = finding.recovery;
+      }
+      if (existing.attributedResponse === undefined && finding.attributedResponse !== undefined) {
+        existing.attributedResponse = finding.attributedResponse;
+      }
+      if (existing.attributedRequestFailure === undefined && finding.attributedRequestFailure !== undefined) {
+        existing.attributedRequestFailure = finding.attributedRequestFailure;
+      }
     }
   }
   return [...indexed.values()].sort((left, right) => left.fingerprint.localeCompare(right.fingerprint));
+}
+
+function cloneJson(value) {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((item) => cloneJson(item));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneJson(item)]));
+}
+
+function cloneFields(fields) {
+  return Array.isArray(fields) ? fields.map((field) => cloneJson(field)) : fields;
 }
 
 export function compareBaseline(report, baseline, baselineLabel) {
@@ -93,7 +142,9 @@ export function captureBlockers(capture, comparison, findings = []) {
   if (findings.some((finding) => finding.severity === 'error')) {
     blockers.push('Capture contains an Error finding that requires disposition');
   }
-  if (findings.some((finding) => finding.source === 'engine' && finding.disposition === 'resync-required')) {
+  if (findings.some((finding) => finding.source === 'engine'
+    && finding.disposition === 'resync-required'
+    && !(finding.code === DEV_HOST_RESPONSE_WRITE_RESYNC && finding.recovery?.status === 'recovered'))) {
     blockers.push('Engine capture requires resynchronization');
   }
   if (findings.some((finding) => finding.source === 'engine'
@@ -264,17 +315,213 @@ async function captureEngine(origin, checkpoint, checkpointMetadata) {
   }
 }
 
-function engineFindings(events) {
-  return events
-    .filter((event) => event?.severity === 'warning' || event?.severity === 'error')
-    .map((event) => ({
-      source: 'engine',
-      kind: 'structured',
-      severity: event.severity,
-      code: typeof event.code === 'string' ? event.code : 'UNKNOWN_ENGINE_CODE',
-      disposition: typeof event.disposition === 'string' ? event.disposition : 'unknown',
-      message: event.message,
-    }));
+function eventFieldValues(event) {
+  const fields = Array.isArray(event?.fields) ? event.fields : [];
+  const values = new Map();
+  let valid = true;
+  for (const field of fields) {
+    if (field === null || typeof field !== 'object'
+      || typeof field.key !== 'string' || typeof field.value !== 'string') {
+      valid = false;
+      continue;
+    }
+    if (values.has(field.key)) valid = false;
+    values.set(field.key, field.value);
+  }
+  return { fields, values, valid };
+}
+
+function eventSequence(event) {
+  if (typeof event?.sequence === 'string' && /^(?:0|[1-9]\d*)$/u.test(event.sequence)) {
+    return event.sequence;
+  }
+  if (Number.isSafeInteger(event?.sequence) && event.sequence >= 0) return String(event.sequence);
+  return undefined;
+}
+
+function eventContext(event) {
+  const { fields, values, valid } = eventFieldValues(event);
+  return {
+    fields,
+    fieldsValid: valid,
+    sequence: eventSequence(event),
+    attachmentId: values.get('attachment-id'),
+    replacesAttachmentId: values.get('replaces-attachment-id'),
+    requestPath: values.get('request-path'),
+    responseCertainty: values.get('response-certainty'),
+    baselineEstablished: values.get('baseline-established') === 'true',
+    hostState: values.get('host-state'),
+    transport: values.get('transport'),
+    output: values.get('output'),
+  };
+}
+
+function isConfirmedBaseline(event, context) {
+  return event?.code === BROWSER_HOST_STATUS
+    && event.severity === 'info'
+    && event.disposition === 'accepted'
+    && context.fieldsValid
+    && context.sequence !== undefined
+    && isAttachmentId(context.attachmentId)
+    && context.baselineEstablished
+    && context.hostState === 'ready'
+    && context.transport === 'open'
+    && context.output === 'open';
+}
+
+function followsLater(later, earlier) {
+  if (later.sequence === undefined || earlier.sequence === undefined) return false;
+  return BigInt(later.sequence) > BigInt(earlier.sequence);
+}
+
+function unresolvedAttachmentRecovery(reason) {
+  return {
+    status: 'unresolved',
+    scope: 'attachment',
+    reason,
+  };
+}
+
+function resolvedAttachmentRecovery(warning, warningContext, baseline, baselineContext, method) {
+  return {
+    status: 'recovered',
+    scope: 'attachment',
+    method,
+    attachmentId: warningContext.attachmentId,
+    ...(warningContext.requestPath === undefined ? {} : { requestPath: warningContext.requestPath }),
+    evidence: {
+      warningSequence: warningContext.sequence,
+      recoverySequence: baselineContext.sequence,
+      recoveryCode: BROWSER_HOST_STATUS,
+      attachmentId: warningContext.attachmentId,
+      recoveryAttachmentId: baselineContext.attachmentId,
+      replacesAttachmentId: baselineContext.replacesAttachmentId,
+      responseCertainty: warningContext.responseCertainty,
+      ...(baseline?.source === undefined ? {} : { recoverySource: baseline.source }),
+    },
+  };
+}
+
+function responseWriteRecovery(event, context, orderedEvents) {
+  if (event.severity !== 'warning') return unresolvedAttachmentRecovery('error-or-nonwarning-response-delivery');
+  if (!context.fieldsValid) return unresolvedAttachmentRecovery('invalid-attachment-fields');
+  if (!isAttachmentId(context.attachmentId)) return unresolvedAttachmentRecovery('missing-attachment-id');
+  if (!RECOVERABLE_RESPONSE_CERTAINTIES.has(context.responseCertainty)) {
+    return unresolvedAttachmentRecovery('response-certainty-is-not-settled-or-observation');
+  }
+  const recovery = orderedEvents.find(({ event: candidate, context: candidateContext }) => (
+    followsLater(candidateContext, context)
+      && isConfirmedBaseline(candidate, candidateContext)
+      && candidateContext.replacesAttachmentId === context.attachmentId
+  ));
+  if (recovery === undefined) return unresolvedAttachmentRecovery('missing-matching-fresh-baseline');
+  return resolvedAttachmentRecovery(event, context, recovery.event, recovery.context, 'fresh-baseline');
+}
+
+function browserStatusRecovery(event, context, orderedEvents) {
+  if (event.severity !== 'warning' || event.disposition !== 'degraded') return undefined;
+  if (!context.fieldsValid || !isAttachmentId(context.attachmentId)) {
+    return unresolvedAttachmentRecovery('missing-attachment-id');
+  }
+  const recovery = orderedEvents.find(({ event: candidate, context: candidateContext }) => (
+    followsLater(candidateContext, context)
+      && isConfirmedBaseline(candidate, candidateContext)
+      && (candidateContext.attachmentId === context.attachmentId
+        || candidateContext.replacesAttachmentId === context.attachmentId)
+  ));
+  if (recovery === undefined) return unresolvedAttachmentRecovery('missing-matching-baseline');
+  const method = recovery.context.attachmentId === context.attachmentId
+    ? 'same-attachment-baseline'
+    : 'fresh-baseline';
+  return resolvedAttachmentRecovery(event, context, recovery.event, recovery.context, method);
+}
+
+export function engineFindings(events) {
+  const orderedEvents = (Array.isArray(events) ? events : [])
+    .map((event) => ({ event, context: eventContext(event) }))
+    .sort((left, right) => {
+      if (left.context.sequence === undefined) return right.context.sequence === undefined ? 0 : 1;
+      if (right.context.sequence === undefined) return -1;
+      if (BigInt(left.context.sequence) < BigInt(right.context.sequence)) return -1;
+      if (BigInt(left.context.sequence) > BigInt(right.context.sequence)) return 1;
+      return 0;
+    });
+  return orderedEvents
+    .filter(({ event }) => event?.severity === 'warning' || event?.severity === 'error')
+    .map(({ event, context }) => {
+      let recovery;
+      if (event.code === DEV_HOST_RESPONSE_WRITE_RESYNC && event.disposition === 'resync-required') {
+        recovery = responseWriteRecovery(event, context, orderedEvents);
+      } else if (event.code === BROWSER_HOST_STATUS) {
+        recovery = browserStatusRecovery(event, context, orderedEvents);
+      }
+      return {
+        source: 'engine',
+        kind: 'structured',
+        severity: event.severity,
+        code: typeof event.code === 'string' ? event.code : 'UNKNOWN_ENGINE_CODE',
+        disposition: typeof event.disposition === 'string' ? event.disposition : 'unknown',
+        message: event.message,
+        ...(context.sequence === undefined ? {} : { sequence: context.sequence }),
+        ...(context.fields.length === 0 ? {} : { fields: cloneFields(context.fields) }),
+        ...(context.attachmentId === undefined ? {} : { attachmentId: context.attachmentId }),
+        ...(context.replacesAttachmentId === undefined ? {} : { replacesAttachmentId: context.replacesAttachmentId }),
+        ...(context.requestPath === undefined ? {} : { requestPath: context.requestPath }),
+        ...(context.responseCertainty === undefined ? {} : { responseCertainty: context.responseCertainty }),
+        ...(recovery === undefined ? {} : { recovery }),
+      };
+    });
+}
+
+function failedResponseStatus(text) {
+  const match = String(text ?? '').match(/status of (\d{3})/iu);
+  if (match === null) return undefined;
+  const status = Number(match[1]);
+  return status >= 400 && status <= 599 ? status : undefined;
+}
+
+/** Collapse a browser console/request failure only when its URL and status
+ * prove that a captured response already accounts for the same failure. */
+export function attributeBrowserFailureEvents(events) {
+  const sourceEvents = Array.isArray(events) ? events : [];
+  const responseEvents = sourceEvents
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event?.kind === 'resource-response'
+      && typeof event.url === 'string' && Number.isInteger(event.status));
+  const requestFailureEvents = sourceEvents
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event?.kind === 'requestfailed'
+      && typeof event.requestfailureURL === 'string');
+  const consumed = new Set();
+  const attributed = sourceEvents.map((event) => ({ ...event }));
+  for (const event of attributed) {
+    if (event.kind !== 'console' || typeof event.url !== 'string') continue;
+    const status = event.status ?? event.responseStatus ?? failedResponseStatus(event.message);
+    const response = responseEvents.find(({ event: responseEvent, index }) => (
+      !consumed.has(index) && responseEvent.url === event.url && responseEvent.status === status
+    ));
+    if (response !== undefined) {
+      consumed.add(response.index);
+      event.status = response.event.status;
+      event.attributedResponse = {
+        url: response.event.url,
+        status: response.event.status,
+      };
+    }
+    const requestFailure = requestFailureEvents.find(({ event: requestEvent, index }) => (
+      !consumed.has(index)
+        && requestEvent.requestfailureURL === event.url
+        && normalizeMessage(requestEvent.message) === normalizeMessage(event.message)
+    ));
+    if (requestFailure !== undefined) {
+      consumed.add(requestFailure.index);
+      event.requestfailureURL = requestFailure.event.requestfailureURL;
+      event.attributedRequestFailure = {
+        url: requestFailure.event.requestfailureURL,
+      };
+    }
+  }
+  return attributed.filter((_event, index) => !consumed.has(index));
 }
 
 function checkoutMetadata() {
@@ -297,20 +544,73 @@ async function runCapture(options) {
   let browserInstance;
   let browserVersion;
   let page;
+  const listenerFailure = (error) => {
+    browser = { status: 'listener-failed', error: normalizeMessage(error instanceof Error ? error.message : error) };
+  };
   const consoleListener = (message) => {
     try {
-      if (message.type() === 'warning' || message.type() === 'error') {
-        browserEvents.push({ source: 'playwright', kind: 'console', severity: message.type(), message: message.text() });
-      }
+      const severity = message.type();
+      if (severity !== 'warning' && severity !== 'error') return;
+      const messageText = message.text();
+      const location = typeof message.location === 'function' ? message.location() : undefined;
+      const url = typeof location?.url === 'string' && location.url.length > 0 ? location.url : undefined;
+      const status = failedResponseStatus(messageText);
+      browserEvents.push({
+        source: 'playwright',
+        kind: 'console',
+        severity,
+        message: messageText,
+        ...(url === undefined ? {} : { url }),
+        ...(status === undefined ? {} : { status }),
+      });
     } catch (error) {
-      browser = { status: 'listener-failed', error: normalizeMessage(error instanceof Error ? error.message : error) };
+      listenerFailure(error);
     }
   };
   const pageErrorListener = (error) => {
     try {
       browserEvents.push({ source: 'playwright', kind: 'pageerror', severity: 'error', message: error.message });
     } catch (listenerError) {
-      browser = { status: 'listener-failed', error: normalizeMessage(listenerError instanceof Error ? listenerError.message : listenerError) };
+      listenerFailure(listenerError);
+    }
+  };
+  const responseListener = (response) => {
+    try {
+      const status = response.status();
+      if (!Number.isInteger(status) || status < 400 || status > 599) return;
+      const url = response.url();
+      browserEvents.push({
+        source: 'playwright',
+        kind: 'resource-response',
+        severity: 'error',
+        code: 'PLAYWRIGHT_RESOURCE_RESPONSE',
+        message: `resource response returned HTTP ${status}`,
+        ...(typeof url === 'string' && url.length > 0 ? { url } : {}),
+        status,
+      });
+    } catch (error) {
+      listenerFailure(error);
+    }
+  };
+  const requestFailedListener = (request) => {
+    try {
+      const requestfailureURL = request.url();
+      const failure = typeof request.failure === 'function' ? request.failure() : undefined;
+      const errorText = typeof failure?.errorText === 'string' && failure.errorText.length > 0
+        ? failure.errorText
+        : 'unknown request failure';
+      browserEvents.push({
+        source: 'playwright',
+        kind: 'requestfailed',
+        severity: 'error',
+        code: 'PLAYWRIGHT_REQUEST_FAILED',
+        message: `request failed: ${errorText}`,
+        ...(typeof requestfailureURL === 'string' && requestfailureURL.length > 0
+          ? { requestfailureURL, url: requestfailureURL }
+          : {}),
+      });
+    } catch (error) {
+      listenerFailure(error);
     }
   };
   try {
@@ -321,6 +621,8 @@ async function runCapture(options) {
     page = await browserInstance.newPage();
     page.on('console', consoleListener);
     page.on('pageerror', pageErrorListener);
+    page.on('response', responseListener);
+    page.on('requestfailed', requestFailedListener);
     browser = { status: 'complete' };
     const exercise = await loadExercise(options.exercise);
     const initialEngineBatch = options.engineOrigin === undefined
@@ -346,9 +648,14 @@ async function runCapture(options) {
   } finally {
     page?.off('console', consoleListener);
     page?.off('pageerror', pageErrorListener);
+    page?.off('response', responseListener);
+    page?.off('requestfailed', requestFailedListener);
     await browserInstance?.close();
   }
-  const findings = deduplicateFindings([...browserEvents, ...engineFindings(engineCapture.events)]);
+  const findings = deduplicateFindings([
+    ...attributeBrowserFailureEvents(browserEvents),
+    ...engineFindings(engineCapture.events),
+  ]);
   const report = {
     schemaVersion: SCHEMA_VERSION,
     captureProtocol: CAPTURE_PROTOCOL,
@@ -378,8 +685,8 @@ async function runCapture(options) {
 }
 
 function withoutEvents(capture) {
-  const { events, ...metadata } = capture;
-  return metadata;
+  const { events = [], ...metadata } = capture;
+  return { ...metadata, events: events.map((event) => cloneJson(event)) };
 }
 
 async function main() {

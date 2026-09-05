@@ -1231,7 +1231,10 @@ test('named output lag asks for one fresh baseline without closing the runtime t
   };
   await adapter.reportBrowserDiagnostics?.(terminalReport);
   assert.deepEqual(requestUrls, [`${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}browser-diagnostics`]);
-  assert.deepEqual(requestBodies, [terminalReport]);
+  const attachment = (requestBodies[0] as { attachment: { id: string; baseline?: unknown } }).attachment;
+  assert.match(attachment.id, /^browser-[0-9a-f]{32}$/u);
+  assert.equal(attachment.baseline, undefined);
+  assert.deepEqual(requestBodies, [{ ...terminalReport, attachment }]);
 
   await adapter.advanceRealtime('1');
   unsubscribeFailure?.();
@@ -1423,7 +1426,11 @@ test('terminal browser diagnostics remain postable after the output transport cl
     recoverableEvent: { code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION', message: 'dropped clock observation' },
     pageEvents: [],
   });
+  const attachment = (requestBodies[0] as { attachment: { id: string; baseline?: unknown } }).attachment;
+  assert.match(attachment.id, /^browser-[0-9a-f]{32}$/u);
+  assert.equal(attachment.baseline, undefined);
   assert.deepEqual(requestBodies, [{
+    attachment,
     hostState: 'failed', runtimeProgress: '9', transportState: 'closed', outputState: 'closed',
     lastRendererSequence: '60', rendererObservationAgeMs: '100',
     firstTerminal: { code: 'BROWSER_HOST_TRANSPORT_FAILED', message: 'transport closed' },
@@ -1455,5 +1462,42 @@ test('browser diagnostics accepts the production committed response without reco
   });
   assert.deepEqual(result, { accepted: true, reported: 1 });
   assert.equal(requests, 1, 'an accepted committed report is neither retried nor recovered');
+  adapter.dispose();
+});
+
+test('attachment health reports only renderer-confirmed baselines and correlates each request', async () => {
+  FakeEventSource.instances.length = 0;
+  const reports: Array<{ attachment: { id: string; replaces?: string; baseline?: unknown } }> = [];
+  const headers: Array<string | null> = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (_input, init) => {
+      reports.push(JSON.parse(String(init?.body)) as typeof reports[number]);
+      headers.push(new Headers(init?.headers).get('x-rusty-browser-attachment'));
+      return response({ accepted: true, reported: 1 });
+    }, eventSource: FakeEventSource,
+  });
+  adapter.subscribeOutputs(() => undefined);
+  completeConnectionBaseline(FakeEventSource.instances[0]!);
+  const report = { hostState: 'ready' as const, runtimeProgress: '1',
+    transportState: 'open' as const, outputState: 'open' as const, pageEvents: [] };
+  await adapter.reportBrowserDiagnostics?.(report);
+  assert.equal(reports[0]!.attachment.baseline, undefined, 'delivery is not realization');
+  adapter.confirmOutputBaseline?.(1);
+  await adapter.reportBrowserDiagnostics?.(report);
+  assert.deepEqual(reports[1]!.attachment.baseline, {
+    runtime: RUNTIME, nextInputSequence: '1', publicationFrontiers: [],
+  });
+  FakeEventSource.instances[0]!.emitLag();
+  completeConnectionBaseline(FakeEventSource.instances[1]!);
+  await adapter.reportBrowserDiagnostics?.(report);
+  assert.equal(reports[2]!.attachment.replaces, reports[1]!.attachment.id);
+  assert.equal(reports[2]!.attachment.baseline, undefined);
+  adapter.confirmOutputBaseline?.(1);
+  await adapter.reportBrowserDiagnostics?.(report);
+  assert.equal(reports[3]!.attachment.baseline, undefined, 'old confirmation cannot settle new attachment');
+  adapter.confirmOutputBaseline?.(2);
+  await adapter.reportBrowserDiagnostics?.(report);
+  assert.ok(reports[4]!.attachment.baseline);
+  assert.deepEqual(headers, reports.map((entry) => entry.attachment.id));
   adapter.dispose();
 });

@@ -37,10 +37,18 @@ may carry a local, reasoned Clippy exception; warnings-as-errors remains active.
 `scripts/capture-playtest-warning-delta.mjs` is a small report writer for one
 named Playwright exercise. It independently listens for Playwright console
 warnings/errors and `pageerror` events, and, when an Engine host origin is
-provided, reads only structured Engine Warning/Error diagnostics through the
-bounded local diagnostics route. It retains normalized, 512-character messages
+provided, reads structured Engine diagnostics through the bounded local route.
+Warnings/errors remain findings; later confirmed baseline observations can
+resolve an exact attachment's settled response-delivery warning. It retains normalized, 512-character messages
 and stable fingerprints with occurrence counts; it never forwards console
 arguments, request/response bodies, or stacks.
+
+Attachment recovery preserves the original warning and records its matching
+baseline sequence. A queued input acknowledgement does not prove C# execution;
+queued-input or unknown delivery certainty remains unresolved. New tabs, missing
+correlation, incomplete capture, and terminal errors cannot clear that warning.
+Failed browser resources carry their observed URL and status rather than an
+assumed favicon diagnosis.
 
 Run a named navigation-only exercise:
 

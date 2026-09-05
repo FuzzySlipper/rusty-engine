@@ -1,3 +1,4 @@
+import { browserAttachmentEvidence } from './attachment-evidence.js';
 import { snapshotRustyApplicationProductPayloadJson } from '@rusty-engine/application-host';
 import type {
   RustyApplicationFrame,
@@ -360,6 +361,7 @@ export function createProductBrowserLocalHttpAdapter(
   options: ProductBrowserLocalTransportOptions = {},
 ): ProductBrowserRuntimeAdapter {
   const basePath = validateBasePath(options.basePath ?? PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH);
+  const attachment = browserAttachmentEvidence(basePath);
   const fetchImpl = options.fetch ?? resolveFetch();
   const eventSourceConstructor = options.eventSource ?? resolveEventSource();
   const maximumResponseBytes = validateMaximumBytes(
@@ -635,6 +637,7 @@ export function createProductBrowserLocalHttpAdapter(
         headers: {
           accept: 'application/json',
           'content-type': 'application/json',
+          'x-rusty-browser-attachment': attachment.read().id,
         },
         body: encodedBody,
         ...(allowAfterDispose ? {} : { signal: abortController.signal }),
@@ -858,7 +861,7 @@ export function createProductBrowserLocalHttpAdapter(
     const snapshot = snapshotBrowserDiagnosticsReport(report);
     // The first terminal host report must survive closing the SSE transport.
     // This exact route remains bounded and does not reopen the runtime API.
-    return post(ROUTES.browserDiagnostics, snapshot, decodeBrowserDiagnosticsResult, true);
+    return post(ROUTES.browserDiagnostics, { ...snapshot, attachment: attachment.read() }, decodeBrowserDiagnosticsResult, true);
   };
 
   const advanceRealtime = (observedTimeNs: string): Promise<ProductBrowserRuntimeOperationResult> =>
@@ -898,6 +901,14 @@ export function createProductBrowserLocalHttpAdapter(
     },
   ): void => {
     const batch = Object.freeze([...outputs]);
+    if (metadata.baseline) {
+      const binding = batch.find((output) => output.kind === 'binding');
+      if (binding?.kind === 'binding') attachment.stage(metadata.epoch, {
+        runtime: binding.runtime,
+        nextInputSequence: binding.nextInputSequence,
+        publicationFrontiers: binding.publicationFrontiers ?? [],
+      });
+    }
     for (const output of batch) {
       if (output.kind === 'binding') currentOutputBinding = output.runtime;
     }
@@ -1028,6 +1039,7 @@ export function createProductBrowserLocalHttpAdapter(
         const outputEpoch = nextOutputEpoch + 1;
         nextOutputEpoch = outputEpoch;
         currentOutputEpoch = outputEpoch;
+        attachment.begin(outputEpoch);
         stream = attachedStream;
         const ownsProjection = (): boolean => !disposed
           && terminalFailure === null
@@ -1445,6 +1457,7 @@ export function createProductBrowserLocalHttpAdapter(
     subscribeOutputBatches,
     waitUntilOutputSubscriptionReady,
     recoverOutputProjection: () => recoverFreshOutputsOrTerminal(ROUTES.freshOutputs),
+    confirmOutputBaseline: (epoch: number) => attachment.confirm(epoch),
     dispose,
   });
 }

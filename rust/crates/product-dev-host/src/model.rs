@@ -850,6 +850,29 @@ pub struct ProductDevBrowserDiagnosticsReport {
     pub first_terminal: Option<ProductDevBrowserTerminalDiagnostic>,
     pub recoverable_event: Option<ProductDevBrowserTerminalDiagnostic>,
     pub page_events: Vec<ProductDevBrowserPageDiagnostic>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<ProductDevBrowserAttachment>,
+}
+
+/// A browser connection identity and, after a fresh successful attachment, its
+/// retained runtime boundary. This is deliberately limited to the one browser
+/// attachment that may correlate a previously lost HTTP response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevBrowserAttachment {
+    pub id: String,
+    pub replaces: Option<String>,
+    pub baseline: Option<ProductDevBrowserAttachmentBaseline>,
+}
+
+/// The fixed runtime facts that prove a browser attachment has a fresh output
+/// baseline. It is not a general browser state snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductDevBrowserAttachmentBaseline {
+    pub runtime: ProductDevRuntimeBinding,
+    pub next_input_sequence: CanonicalU64,
+    pub publication_frontiers: Vec<ProductDevRendererPublicationFrontier>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -893,6 +916,7 @@ pub enum ProductDevBrowserPageDiagnosticKind {
 
 impl ProductDevBrowserDiagnosticsReport {
     pub const MAX_PAGE_EVENTS: usize = 8;
+    pub const MAX_ATTACHMENT_FRONTIERS: usize = 8;
 
     pub fn validate(&self) -> Result<(), ProductDevHostError> {
         if self.page_events.len() > Self::MAX_PAGE_EVENTS {
@@ -921,7 +945,46 @@ impl ProductDevBrowserDiagnosticsReport {
         for diagnostic in &self.page_events {
             validate_browser_diagnostic(&diagnostic.code, &diagnostic.message)?;
         }
+        if let Some(attachment) = &self.attachment {
+            validate_browser_attachment_id(&attachment.id)?;
+            if let Some(replaces) = &attachment.replaces {
+                validate_browser_attachment_id(replaces)?;
+            }
+            if let Some(baseline) = &attachment.baseline {
+                if baseline.publication_frontiers.len() > Self::MAX_ATTACHMENT_FRONTIERS {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
+                        "browser attachment baseline frontier count exceeds its fixed bound",
+                    ));
+                }
+                for frontier in &baseline.publication_frontiers {
+                    ProductDevRendererPublicationFrontier::new(
+                        frontier.stream.clone(),
+                        frontier.revision,
+                    )?;
+                }
+            }
+        }
         Ok(())
+    }
+}
+
+pub(crate) fn browser_attachment_id_is_admitted(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn validate_browser_attachment_id(value: &str) -> Result<(), ProductDevHostError> {
+    if browser_attachment_id_is_admitted(value) {
+        Ok(())
+    } else {
+        Err(ProductDevHostError::new(
+            "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS",
+            "browser attachment identity is outside fixed bounds",
+        ))
     }
 }
 
@@ -3216,6 +3279,66 @@ pub trait ProductDevRuntime: Send + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_attachment_report_uses_bounded_typed_baseline_facts() {
+        let report: ProductDevBrowserDiagnosticsReport = serde_json::from_str(
+            r#"{
+                "hostState":"ready",
+                "runtimeProgress":"9",
+                "transportState":"open",
+                "outputState":"open",
+                "pageEvents":[],
+                "attachment":{
+                    "id":"attachment-2",
+                    "replaces":"attachment-1",
+                    "baseline":{
+                        "runtime":{"instanceId":"7","generation":"3","controlRevision":"12"},
+                        "nextInputSequence":"14",
+                        "publicationFrontiers":[{"stream":"primary","revision":9}]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        report.validate().unwrap();
+        let encoded = serde_json::to_value(&report).unwrap();
+        assert_eq!(encoded["attachment"]["id"], "attachment-2");
+        assert_eq!(
+            encoded["attachment"]["baseline"]["publicationFrontiers"][0]["revision"],
+            9
+        );
+
+        let invalid_id: ProductDevBrowserDiagnosticsReport = serde_json::from_str(
+            r#"{"hostState":"ready","runtimeProgress":"9","transportState":"open","outputState":"open","pageEvents":[],"attachment":{"id":"invalid id","replaces":null,"baseline":null}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            invalid_id.validate().unwrap_err().code(),
+            "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS"
+        );
+
+        let mut too_many_frontiers = report;
+        too_many_frontiers
+            .attachment
+            .as_mut()
+            .unwrap()
+            .baseline
+            .as_mut()
+            .unwrap()
+            .publication_frontiers = (0
+            ..=ProductDevBrowserDiagnosticsReport::MAX_ATTACHMENT_FRONTIERS)
+            .map(|revision| ProductDevRendererPublicationFrontier {
+                stream: "primary".to_owned(),
+                revision: revision as u64,
+            })
+            .collect();
+        assert_eq!(
+            too_many_frontiers.validate().unwrap_err().code(),
+            "DEV_HOST_BROWSER_DIAGNOSTICS_BOUNDS"
+        );
+    }
 
     fn feedback(fact: ProductDevGhostPlateFeedbackFact) -> ProductDevGhostPlateFeedback {
         ProductDevGhostPlateFeedback {
