@@ -3734,7 +3734,10 @@ impl RuntimeAppearanceBridge {
         let groups = groups
             .iter()
             .map(|group| {
-                if !group.start.is_multiple_of(3) || group.count == 0 || !group.count.is_multiple_of(3) {
+                if !group.start.is_multiple_of(3)
+                    || group.count == 0
+                    || !group.count.is_multiple_of(3)
+                {
                     return Err(invalid(
                         "mesh groups must contain complete nonempty triangles",
                     ));
