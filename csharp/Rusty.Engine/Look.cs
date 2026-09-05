@@ -75,6 +75,34 @@ public static class Look
                     request.State.PitchRadians + pitchDelta)));
     }
 
+    /// <summary>
+    /// Applies interactive input, saturating each angular delta at the product's
+    /// configured maximum. Large finite mouse/stick samples do not reject the
+    /// update; invalid configuration, state, and non-finite input still do.
+    /// Use <see cref="Integrate"/> when exceeding the limit must reject a command.
+    /// </summary>
+    public static LookReceipt IntegrateClamped(LookRequest request)
+    {
+        LookDiagnostic diagnostic = Diagnose(request);
+        if (diagnostic is not (LookDiagnostic.Accepted or LookDiagnostic.DeltaLimitExceeded))
+        {
+            throw new ArgumentException($"Look request was rejected: {diagnostic}.", nameof(request));
+        }
+
+        // Multiply before narrowing so finite input cannot overflow before it
+        // reaches the configured angular bound.
+        float yawDelta = (float)Math.Clamp(
+            (double)request.Delta.X * request.Config.HorizontalRadiansPerUnit,
+            -request.Config.MaximumDeltaRadians, request.Config.MaximumDeltaRadians)
+            * (request.Config.InvertHorizontal ? -1f : 1f);
+        float pitchDelta = (float)Math.Clamp(
+            (double)request.Delta.Y * request.Config.VerticalRadiansPerUnit,
+            -request.Config.MaximumDeltaRadians, request.Config.MaximumDeltaRadians)
+            * (request.Config.InvertVertical ? -1f : 1f);
+        return Receipt(request.State, Normalize(request.Config,
+            new LookState(request.State.YawRadians + yawDelta, request.State.PitchRadians + pitchDelta)));
+    }
+
     /// <summary>Returns neutral look state even when the previous accumulator was corrupt.</summary>
     public static LookReceipt Reset(LookResetRequest request) => Receipt(request.State, default);
 

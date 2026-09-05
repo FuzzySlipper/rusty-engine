@@ -541,6 +541,33 @@ struct WorkerResponse {
     connection_output_cursor: Option<u64>,
 }
 
+// Scoped to one worker incarnation. Preserve the initiating failure when its
+// subsequent socket closure/write errors reach other host operations.
+#[derive(Clone, Default)]
+struct WorkerTerminalCause(Arc<Mutex<Option<ProductDevRuntimeError>>>);
+
+impl WorkerTerminalCause {
+    fn read(&self) -> Option<ProductDevRuntimeError> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn retain(&self, error: ProductDevRuntimeError) -> ProductDevRuntimeError {
+        let mut first = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if error.recovery().next_action()
+            == product_dev_host::ProductDevNextAction::ReplaceIncarnation
+        {
+            first.get_or_insert_with(|| error.clone());
+        }
+        first.clone().unwrap_or(error)
+    }
+}
+
 struct WorkerConnection {
     child: Child,
     writer: TcpStream,
@@ -548,6 +575,7 @@ struct WorkerConnection {
     next_request_id: u64,
     operation_timeout: Option<Duration>,
     pending_attribution: Option<product_dev_host::ProductDevUpdateAttribution>,
+    terminal_cause: WorkerTerminalCause,
     retiring: Arc<AtomicBool>,
     reader: Option<thread::JoinHandle<()>>,
     generation: u64,
@@ -830,9 +858,11 @@ impl WorkerRuntime {
         }
         let (response_tx, response_rx) = mpsc::channel();
         let retiring = Arc::new(AtomicBool::new(false));
+        let terminal_cause = WorkerTerminalCause::default();
         let lifetime = WorkerReaderLifetime {
             generation,
             retiring: Arc::clone(&retiring),
+            terminal_cause: terminal_cause.clone(),
         };
         let reader = match thread::Builder::new()
             .name("rusty-product-worker-reader".to_owned())
@@ -863,6 +893,7 @@ impl WorkerRuntime {
                 next_request_id: 1,
                 operation_timeout: args.worker_operation_timeout(),
                 pending_attribution: None,
+                terminal_cause,
                 retiring,
                 reader: Some(reader),
                 generation,
@@ -884,6 +915,18 @@ impl WorkerRuntime {
 }
 
 fn invoke_connection<T: serde::de::DeserializeOwned>(
+    failures: &mpsc::SyncSender<u64>,
+    connection: &mut WorkerConnection,
+    request: impl FnOnce(u64) -> ProductDevWorkerRequest,
+) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError> {
+    if let Some(error) = connection.terminal_cause.read() {
+        return Err(error);
+    }
+    invoke_connection_inner(failures, connection, request)
+        .map_err(|error| connection.terminal_cause.retain(error))
+}
+
+fn invoke_connection_inner<T: serde::de::DeserializeOwned>(
     failures: &mpsc::SyncSender<u64>,
     connection: &mut WorkerConnection,
     request: impl FnOnce(u64) -> ProductDevWorkerRequest,
@@ -982,6 +1025,7 @@ fn invoke_connection<T: serde::de::DeserializeOwned>(
 struct WorkerReaderLifetime {
     generation: u64,
     retiring: Arc<AtomicBool>,
+    terminal_cause: WorkerTerminalCause,
 }
 
 fn worker_reader(
@@ -1017,7 +1061,7 @@ fn worker_reader(
                         "DEV_HOST_WORKER_CONNECTION_BOUNDARY",
                         "worker connection publication boundary was not acknowledged",
                     );
-                    let _ = responses.send(Err(error));
+                    let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
                     let _ = failures.try_send(generation);
                     return;
                 };
@@ -1065,7 +1109,7 @@ fn worker_reader(
                             let _ = diagnostics.try_send(
                                 ProductDevWorkerDiagnostic::from_runtime_error(error.clone()),
                             );
-                            let _ = responses.send(Err(error));
+                            let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
                             let _ = failures.try_send(generation);
                             return;
                         }
@@ -1074,7 +1118,7 @@ fn worker_reader(
                         let _ = diagnostics.try_send(
                             ProductDevWorkerDiagnostic::from_runtime_error(error.clone()),
                         );
-                        let _ = responses.send(Err(error));
+                        let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
                         let _ = failures.try_send(generation);
                         return;
                     }
@@ -1102,7 +1146,7 @@ fn worker_reader(
                 let _ = diagnostics.try_send(ProductDevWorkerDiagnostic::from_runtime_error(
                     error.clone(),
                 ));
-                let _ = responses.send(Err(error));
+                let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
                 let _ = failures.try_send(generation);
             }
             Ok(ProductDevWorkerEvent::UpdateTelemetry { telemetry }) => {
@@ -1147,7 +1191,7 @@ fn worker_reader(
                 let _ = diagnostics.try_send(ProductDevWorkerDiagnostic::from_runtime_error(
                     error.clone(),
                 ));
-                let _ = responses.send(Err(error));
+                let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
                 let _ = failures.try_send(generation);
                 return;
             }
@@ -3290,6 +3334,7 @@ mod tests {
                 WorkerReaderLifetime {
                     generation: 3,
                     retiring: Arc::new(AtomicBool::new(false)),
+                    terminal_cause: WorkerTerminalCause::default(),
                 },
             )
         });
@@ -3341,6 +3386,77 @@ mod tests {
     }
 
     #[test]
+    fn callback_failure_survives_eof_and_later_connection_writes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let child_channel = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (channel, _) = listener.accept().unwrap();
+        let mut writer = channel.try_clone().unwrap();
+        let (response_tx, response_rx) = mpsc::channel();
+        let (output_tx, _) = mpsc::sync_channel(8);
+        let (diagnostic_tx, _diagnostic_rx) = mpsc::sync_channel(8);
+        let (failure_tx, _failure_rx) = mpsc::sync_channel(8);
+        let terminal_cause = WorkerTerminalCause::default();
+        let reader_cause = terminal_cause.clone();
+        let reader_failure = failure_tx.clone();
+        let reader = thread::spawn(move || {
+            worker_reader(
+                channel,
+                response_tx,
+                output_tx,
+                diagnostic_tx,
+                reader_failure,
+                Arc::new(Mutex::new(None)),
+                WorkerReaderLifetime {
+                    generation: 1,
+                    retiring: Arc::new(AtomicBool::new(false)),
+                    terminal_cause: reader_cause,
+                },
+            )
+        });
+        let original = worker_runtime_error(
+            "CSHARP_PRODUCT_CALL",
+            "Look request rejected: DeltaLimitExceeded",
+        );
+        report_scheduler_failure(
+            &Arc::new(Mutex::new(child_channel)),
+            Vec::new(),
+            original.clone(),
+        );
+        reader.join().unwrap();
+        writer.shutdown(Shutdown::Both).unwrap();
+        assert!(write_worker_frame(
+            &mut writer,
+            &ProductDevWorkerRequest::Activate { request_id: 1 }
+        )
+        .is_err());
+        let mut connection = WorkerConnection {
+            child: Command::new("sleep").arg("30").spawn().unwrap(),
+            writer,
+            responses: response_rx,
+            next_request_id: 1,
+            operation_timeout: Some(Duration::from_secs(1)),
+            pending_attribution: None,
+            terminal_cause,
+            retiring: Arc::new(AtomicBool::new(false)),
+            reader: None,
+            generation: 1,
+        };
+        for _ in 0..2 {
+            let result = invoke_connection::<serde_json::Value>(
+                &failure_tx,
+                &mut connection,
+                |request_id| ProductDevWorkerRequest::Activate { request_id },
+            );
+            let error = result.expect_err("retired worker must remain unavailable");
+            assert_eq!(error.code(), original.code());
+            assert_eq!(error.diagnostic(), original.diagnostic());
+            assert_eq!(error.recovery(), original.recovery());
+        }
+        // spawn_connection creates a new holder for every replacement.
+        assert!(WorkerTerminalCause::default().read().is_none());
+    }
+
+    #[test]
     fn reader_distinguishes_deliberate_retirement_from_unexpected_eof() {
         for retiring in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3361,6 +3477,7 @@ mod tests {
                 WorkerReaderLifetime {
                     generation: 4,
                     retiring: Arc::new(AtomicBool::new(retiring)),
+                    terminal_cause: WorkerTerminalCause::default(),
                 },
             );
             assert_eq!(diagnostic_rx.try_recv().is_ok(), !retiring);

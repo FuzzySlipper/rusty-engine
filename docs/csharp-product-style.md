@@ -93,6 +93,11 @@ C# publishes supported product facts. TypeScript is the DOM UI and explicit
 Engine host/backend lane, never the owner of non-UI rendering or gameplay
 state.
 
+Keep implementation topology in developer documentation. Do not add static
+"runtime connected" or "product host active" banners to product UI: they do
+not establish that gameplay is running. Show actionable failures and requested
+diagnostics through the Engine's existing surfaces.
+
 ## C# baseline
 
 - Enable nullable reference types and use file-scoped namespaces.

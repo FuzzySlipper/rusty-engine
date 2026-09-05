@@ -7,13 +7,6 @@ import {
 const root = document.querySelector('#application');
 if (root === null) throw new Error('Rusty runtime shell root is missing');
 
-const mountDefaultUi = (uiRoot) => {
-  const status = document.createElement('output');
-  status.id = 'rusty-runtime-status';
-  status.textContent = 'Rusty Engine browser runtime connected.';
-  uiRoot.append(status);
-};
-
 const bootstrap = await fetch('./product-bootstrap.json').then(async (response) => {
   if (!response.ok) throw new Error(`Product bootstrap failed: HTTP ${response.status}`);
   return response.json();
@@ -49,10 +42,7 @@ void mountProductBrowserHost({
   runtimeInput: {},
   renderer: { initialContent: rendererInitialContent },
   ...(uiProjection === undefined ? {} : { uiProjection }),
-  mountUi: (uiRoot, context) => {
-    mountDefaultUi(uiRoot);
-    return productUi.mountProductUi(uiRoot, context);
-  },
+  mountUi: (uiRoot, context) => productUi.mountProductUi(uiRoot, context),
 }).catch((error) => {
   const detail = document.createElement('pre');
   detail.id = 'rusty-runtime-shell-failure';

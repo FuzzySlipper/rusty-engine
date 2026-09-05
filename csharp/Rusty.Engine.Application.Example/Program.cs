@@ -16,6 +16,25 @@ Require(
     Look.Diagnose(new LookRequest(lookBefore, new System.Numerics.Vector2(3f, 0f), lookConfig))
         == LookDiagnostic.DeltaLimitExceeded,
     "managed look did not preserve the delta-limit diagnostic");
+// A quick mouse turn can exceed a per-update angular bound. Interactive
+// saturation must preserve signs, pitch limits, and a usable next update.
+LookReceipt clampedLook = Look.IntegrateClamped(new LookRequest(
+    lookBefore, new System.Numerics.Vector2(float.MaxValue, -float.MaxValue), lookConfig));
+Require(MathF.Abs(clampedLook.After.YawRadians + 1.75f) < 0.0001f,
+    "interactive look did not saturate and invert the horizontal delta");
+Require(clampedLook.After.PitchRadians == -0.5f, "interactive look did not clamp negative pitch");
+LookReceipt nextLook = Look.IntegrateClamped(new LookRequest(
+    clampedLook.After, new System.Numerics.Vector2(-0.25f, 0.25f), lookConfig));
+Require(MathF.Abs(nextLook.After.YawRadians + 1.5f) < 0.0001f
+    && nextLook.After.PitchRadians == -0.25f, "interactive look did not continue after a large delta");
+Require(Look.IntegrateClamped(new LookRequest(lookBefore, new(0.75f, 1f), lookConfig)) == looked,
+    "interactive look changed in-range behavior");
+try
+{
+    Look.IntegrateClamped(new LookRequest(lookBefore, new(float.NaN, 0f), lookConfig));
+    throw new InvalidOperationException("interactive look accepted non-finite input");
+}
+catch (ArgumentException) { }
 var scheduler = new SimulationScheduler();
 var defaultOrder = new List<string>();
 var defaultPipeline = new UpdatePipeline(engine);

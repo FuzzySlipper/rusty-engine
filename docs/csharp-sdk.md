@@ -172,6 +172,10 @@ input order; the Engine validates the hierarchy and publishes parents first.
 
 Look math is `Look.Integrate(request)` (and `Reset`, `Rebase`, `Diagnose`) in
 the managed toolkit. Replace former `context.Look` calls with these helpers.
+Use `Look.IntegrateClamped` for interactive pointer/stick input: it saturates
+large finite angular deltas at the configured limit so a quick mouse turn does
+not throw out of the product update. `Integrate` retains strict rejection for
+commands that must remain within that bound.
 
 ### Runtime-generated geometry
 

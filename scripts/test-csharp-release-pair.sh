@@ -123,7 +123,7 @@ host_pid=$!
 origin=""
 for _ in $(seq 1 40); do
     origin=$(sed -n 's/.*listening at \(http:\/\/[^ ]*\).*/\1/p' "$host_log" | head -n 1)
-    if [[ -n "$origin" ]] && curl --fail --silent "$origin/" | grep -F 'Rusty Engine browser runtime connected' >/dev/null; then
+    if [[ -n "$origin" ]] && curl --fail --silent "$origin/" >/dev/null; then
         break
     fi
     sleep 0.25
