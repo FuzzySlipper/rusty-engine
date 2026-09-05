@@ -53,3 +53,19 @@ cadence and CPU submission time, asynchronous pacing/fence observations,
 draw/triangle/live-resource counts, realized texture encoded/decoded sizes,
 sprite/material fallback counts, and voxel-specialized material count. Reading
 it never submits a frame or synchronizes the GPU.
+
+## Headless Chromium readback warnings
+
+Chromium 149 with headless software rendering can log `GPU stall due to
+ReadPixels` while presenting a WebGL canvas, even when application JavaScript
+never reads pixels. In the #7798 probe, both CraftSurvive and a page containing
+only a WebGL clear emitted it without screenshots or calls to instrumented
+WebGL/canvas readback APIs. The clear-only headed Xvfb control did not emit it.
+This isolates that observation to the browser's headless/software presentation
+path; it does not establish an Engine synchronous readback or a hardware-browser
+performance regression.
+
+Keep the warning in report-only captures. For a new occurrence, compare an empty
+WebGL control and instrument application readback calls before attributing it to
+Ghost Plate capture. This finding is not a blanket warning suppression or a
+claim that other readback stalls have the same source.
