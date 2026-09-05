@@ -21659,7 +21659,7 @@ function ob(e) {
 			for (let t = 0; t < o.count; t += 1) e.getVertexPosition(t, c), s.setXYZ(t, c.x, c.y, c.z);
 			s.needsUpdate = !0, a.setAttribute("position", s), a.deleteAttribute("skinIndex"), a.deleteAttribute("skinWeight"), a.morphAttributes = {}, a.morphTargetsRelative = !1, a.computeBoundingBox(), a.computeBoundingSphere();
 			let l = new xs(a, e.material);
-			l.copy(e, !1);
+			l.copy(e, !1), l.geometry = a;
 			for (let t of [...e.children]) l.add(t);
 			if (t === null) i = l;
 			else {

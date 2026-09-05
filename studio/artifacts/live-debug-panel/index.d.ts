@@ -1,6 +1,7 @@
 import type { LiveDebugTransport } from './live-debug-client.js';
 import type { LiveDebugPanelPresentation } from './live-debug-panel-model.js';
 export { mountRendererMetricsWidget, type RendererMetricsWidgetMount, type RendererMetricsWidgetMountOptions, } from './renderer-metrics-widget.js';
+export { createLiveDebugHttpTransport, type LiveDebugCatalog, type LiveDebugHttpTransportOptions, type LiveDebugResult, type LiveDebugTransport, } from './live-debug-client.js';
 /** Explicit, product-owned configuration for one optional live-debug panel. */
 export interface LiveDebugPanelMountOptions {
     /** False keeps the mounted panel inert: it does not contact a debug host. */
