@@ -105,3 +105,8 @@ fs2 = "0.4"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Optimized runtime packs retain file/line information for native sampling.
+# Contributors can request full locals/types with CARGO_PROFILE_RELEASE_DEBUG=2.
+[profile.release]
+debug = "line-tables-only"

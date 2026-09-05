@@ -7,6 +7,7 @@
 use std::{
     io::{self, Read, Write},
     sync::mpsc::SyncSender,
+    time::Instant,
 };
 
 use serde::{Deserialize, Serialize};
@@ -131,6 +132,7 @@ pub enum ProductDevWorkerRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductDevWorkerResponse {
     pub request_id: u64,
+    pub attribution: Option<crate::ProductDevUpdateAttribution>,
     pub result: Option<Value>,
     pub outputs: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -174,6 +176,8 @@ pub struct ProductDevWorkerDiagnosticField {
 pub struct ProductDevWorkerOutputBatch {
     pub generation: u64,
     pub outputs: Vec<crate::ProductDevRuntimeOutput>,
+    pub received_at: Instant,
+    pub decode_duration_us: u64,
 }
 
 /// One ordered shell-side publication item from a disposable worker.
@@ -184,6 +188,11 @@ pub struct ProductDevWorkerOutputBatch {
 /// not cross the worker wire or become a product callback.
 pub enum ProductDevWorkerPublication {
     Outputs(ProductDevWorkerOutputBatch),
+    UpdateTelemetry {
+        generation: u64,
+        telemetry: Box<ProductDevWorkerUpdateTelemetry>,
+        delivery_interval_us: Option<u64>,
+    },
     ConnectionBoundary {
         generation: u64,
         acknowledged: SyncSender<Option<u64>>,
@@ -255,6 +264,17 @@ impl ProductDevWorkerDiagnostic {
     }
 }
 
+/// One scheduler observation, emitted after its output frame on the same
+/// ordered channel. No worker absolute timestamp crosses this boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevWorkerUpdateTelemetry {
+    pub worker_pid: crate::CanonicalU64,
+    pub readout: Option<crate::ProductDevRuntimeReadout>,
+    pub attribution: Option<crate::ProductDevUpdateAttribution>,
+    pub phases: runtime_diagnostics::RuntimeWorkerPhases,
+}
+
 /// Worker-originated facts.  Runtime output is separate so the worker-side
 /// realtime scheduler can publish without waking or recreating an HTTP host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -272,6 +292,9 @@ pub enum ProductDevWorkerEvent {
     ConnectionResponse(ProductDevWorkerResponse),
     Outputs {
         outputs: Vec<Value>,
+    },
+    UpdateTelemetry {
+        telemetry: Box<ProductDevWorkerUpdateTelemetry>,
     },
     Diagnostics {
         diagnostics: Vec<ProductDevWorkerDiagnostic>,

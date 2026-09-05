@@ -23,9 +23,10 @@ use crate::{
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
     ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, ProductDevWorkerDiagnostic,
-    ProductDevWorkerPublication, MAX_BASELINE_AGGREGATE_BYTES, MAX_CONNECTIONS,
-    MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES,
-    MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevWorkerPublication, ProductDevWorkerUpdateSnapshot, MAX_BASELINE_AGGREGATE_BYTES,
+    MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES,
+    MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES,
+    MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -63,6 +64,7 @@ pub struct ProductDevHostConfig {
     worker_failures: Option<mpsc::SyncSender<u64>>,
     worker_diagnostics: Option<WorkerDiagnosticReceiver>,
     worker_owns_scheduler: bool,
+    worker_activity: Option<runtime_diagnostics::RuntimeOperationActivity>,
     disposable_worker_runtime: bool,
 }
 
@@ -82,6 +84,7 @@ impl ProductDevHostConfig {
             worker_failures: None,
             worker_diagnostics: None,
             worker_owns_scheduler: false,
+            worker_activity: None,
             disposable_worker_runtime: false,
         }
     }
@@ -138,7 +141,11 @@ impl ProductDevHostConfig {
 
     /// Marks the runtime scheduler as worker-owned. The stable HTTP shell
     /// then does not create even an idle local scheduler thread.
-    pub fn with_worker_scheduler(mut self) -> Self {
+    pub fn with_worker_scheduler(
+        mut self,
+        activity: runtime_diagnostics::RuntimeOperationActivity,
+    ) -> Self {
+        self.worker_activity = Some(activity);
         self.worker_owns_scheduler = true;
         self.disposable_worker_runtime = true;
         self
@@ -190,9 +197,10 @@ impl ProductDevHost {
             bundle: Arc::clone(&bundle),
             runtime: Arc::new(ProductDevOperationOwner::new(runtime)),
             input_mailbox: Arc::new(HostInputMailbox::default()),
-            telemetry: Mutex::new(HostTelemetry::default()),
+            telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
             realtime_scheduler_enabled,
             disposable_worker_runtime: config.disposable_worker_runtime,
+            worker_activity: config.worker_activity,
             outputs: Arc::clone(&outputs),
             output_wake: Arc::clone(&output_wake),
             shutdown: Arc::clone(&shutdown),
@@ -258,6 +266,7 @@ impl ProductDevHost {
             }
         };
         let worker_output_thread = worker_outputs.map(|receiver| {
+            let telemetry = Arc::clone(&state.telemetry);
             let outputs = Arc::clone(&outputs);
             let wake = Arc::clone(&output_wake);
             let shutdown = Arc::clone(&shutdown);
@@ -286,8 +295,21 @@ impl ProductDevHost {
                                     continue;
                                 }
                                 let worker_generation = outputs_from_worker.generation;
+                                let publication_started = Instant::now();
+                                let queue_duration_us =
+                                    elapsed_microseconds(outputs_from_worker.received_at)
+                                        .saturating_sub(outputs_from_worker.decode_duration_us);
                                 match push_outputs(&outputs, outputs_from_worker.outputs) {
-                                    Ok(_) => wake.notify(),
+                                    Ok(_) => {
+                                        if let Ok(mut telemetry) = telemetry.lock() {
+                                            telemetry.last_output_phases = (
+                                                outputs_from_worker.decode_duration_us,
+                                                queue_duration_us,
+                                                elapsed_microseconds(publication_started),
+                                            );
+                                        }
+                                        wake.notify();
+                                    }
                                     Err(error) => {
                                         generation.store(0, Ordering::Release);
                                         publish_host_diagnostic(
@@ -300,6 +322,27 @@ impl ProductDevHost {
                                         );
                                         let _ = failures.try_send(worker_generation);
                                     }
+                                }
+                            }
+                            Ok(ProductDevWorkerPublication::UpdateTelemetry {
+                                generation: update_generation,
+                                telemetry: update,
+                                delivery_interval_us,
+                            }) => {
+                                let Ok(_projection) = projection_gate.read() else {
+                                    return;
+                                };
+                                if update_generation != generation.load(Ordering::Acquire) as u64 {
+                                    continue;
+                                }
+                                if let (Some(now_ns), Ok(mut telemetry)) =
+                                    (diagnostics.now_monotonic_nanoseconds(), telemetry.lock())
+                                {
+                                    telemetry.record_worker_update(
+                                        now_ns,
+                                        *update,
+                                        delivery_interval_us,
+                                    );
                                 }
                             }
                             Ok(ProductDevWorkerPublication::ConnectionBoundary {
@@ -361,6 +404,7 @@ impl ProductDevHost {
             worker_generation,
             worker_output_thread,
             worker_diagnostic_thread,
+            telemetry: Arc::clone(&state.telemetry),
         })
     }
 }
@@ -383,6 +427,7 @@ pub struct RunningProductDevHost {
     worker_generation: Option<Arc<AtomicUsize>>,
     worker_output_thread: Option<JoinHandle<()>>,
     worker_diagnostic_thread: Option<JoinHandle<()>>,
+    telemetry: Arc<Mutex<HostTelemetry>>,
 }
 
 impl RunningProductDevHost {
@@ -458,6 +503,9 @@ impl RunningProductDevHost {
         })?;
         *bus = staged;
         *current = bundle;
+        if let Ok(mut telemetry) = self.telemetry.lock() {
+            *telemetry = HostTelemetry::default();
+        }
         if let Some(generation) = &self.worker_generation {
             generation.store(worker_generation as usize, Ordering::Release);
         }
@@ -517,9 +565,10 @@ struct HostState<R> {
     bundle: Arc<RwLock<ProductDevBundle>>,
     runtime: Arc<ProductDevOperationOwner<R>>,
     input_mailbox: Arc<HostInputMailbox>,
-    telemetry: Mutex<HostTelemetry>,
+    telemetry: Arc<Mutex<HostTelemetry>>,
     realtime_scheduler_enabled: bool,
     disposable_worker_runtime: bool,
+    worker_activity: Option<runtime_diagnostics::RuntimeOperationActivity>,
     outputs: Arc<Mutex<OutputBus>>,
     output_wake: Arc<OutputWake>,
     shutdown: Arc<AtomicBool>,
@@ -534,6 +583,10 @@ struct HostState<R> {
     subscribers: AtomicUsize,
 }
 
+fn elapsed_microseconds(started: Instant) -> u64 {
+    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+}
+
 /// Small process-local observation state. It intentionally has no runtime
 /// reference: diagnostics can read it while the product owner is in a slow
 /// callback and therefore never become another source of input backpressure.
@@ -546,6 +599,8 @@ struct HostTelemetry {
     progress_samples_ns: VecDeque<u64>,
     update_attribution_samples: VecDeque<(u64, ProductDevUpdateAttribution)>,
     slowest_update_attribution: Option<(u64, ProductDevUpdateAttribution)>,
+    last_output_phases: (u64, u64, u64),
+    worker_update: Option<(u64, ProductDevWorkerUpdateSnapshot)>,
 }
 
 impl HostTelemetry {
@@ -594,6 +649,22 @@ impl HostTelemetry {
         completed_ns: u64,
         sample: ProductDevUpdateAttribution,
     ) {
+        if self
+            .update_attribution_samples
+            .back()
+            .is_some_and(|(_, previous)| {
+                previous
+                    .runtime
+                    .zip(sample.runtime)
+                    .is_some_and(|(old, new)| {
+                        old.instance_id != new.instance_id || old.generation != new.generation
+                    })
+            })
+        {
+            self.update_attribution_samples.clear();
+            self.slowest_update_attribution = None;
+            self.progress_samples_ns.clear();
+        }
         self.update_attribution_samples
             .push_back((completed_ns, sample));
         while self.update_attribution_samples.len() > Self::MAX_UPDATE_ATTRIBUTION_SAMPLES {
@@ -604,6 +675,31 @@ impl HostTelemetry {
         }) {
             self.slowest_update_attribution = Some((completed_ns, sample));
         }
+    }
+
+    fn record_worker_update(
+        &mut self,
+        now_ns: u64,
+        update: crate::ProductDevWorkerUpdateTelemetry,
+        delivery_interval_us: Option<u64>,
+    ) {
+        if let Some(attribution) = update.attribution {
+            self.record_update_attribution(now_ns, attribution);
+            self.record_progress(now_ns);
+        }
+        self.worker_update = Some((
+            now_ns,
+            ProductDevWorkerUpdateSnapshot {
+                worker_pid: update.worker_pid,
+                readout: update.readout,
+                phases: update.phases,
+                shell_delivery_interval_us: delivery_interval_us.map(CanonicalU64::new),
+                shell_output_decode_duration_us: CanonicalU64::new(self.last_output_phases.0),
+                shell_output_queue_duration_us: CanonicalU64::new(self.last_output_phases.1),
+                shell_publication_duration_us: CanonicalU64::new(self.last_output_phases.2),
+                age_ms: CanonicalU64::new(0),
+            },
+        ));
     }
 
     fn update_attribution_snapshot(
@@ -660,12 +756,16 @@ impl HostTelemetry {
             self.progress_samples_ns.front(),
             self.progress_samples_ns.back(),
         ) {
-            (Some(first), Some(last)) if last > first => Some(CanonicalU64::new(
-                ((self.progress_samples_ns.len().saturating_sub(1) as u128)
-                    .saturating_mul(1_000_000_000_000)
-                    .saturating_div(u128::from(last - first)))
-                .min(u128::from(u64::MAX)) as u64,
-            )),
+            (Some(first), Some(last))
+                if last > first && now_ns.saturating_sub(*last) <= Self::PROGRESS_WINDOW_NS =>
+            {
+                Some(CanonicalU64::new(
+                    ((self.progress_samples_ns.len().saturating_sub(1) as u128)
+                        .saturating_mul(1_000_000_000_000)
+                        .saturating_div(u128::from(last - first)))
+                    .min(u128::from(u64::MAX)) as u64,
+                ))
+            }
             _ => None,
         };
         ProductDevTelemetrySnapshot {
@@ -688,6 +788,21 @@ impl HostTelemetry {
             input_overflow_pending: input.overflowed,
             runtime_progress_rate_millihertz: progress_rate_millihertz,
             runtime_progress_age_ms: progress_age_ms.map(CanonicalU64::new),
+            runtime_progress_unavailable_reason: progress_rate_millihertz.is_none().then(|| {
+                match progress_age_ms {
+                    None => "No completed update observed in this incarnation",
+                    Some(age) if age > Self::PROGRESS_WINDOW_NS / 1_000_000 => {
+                        "No completed update in the last five seconds (paused, stopped, or busy)"
+                    }
+                    _ => "Waiting for a second completed update to measure progress",
+                }
+                .to_owned()
+            }),
+            worker_update: self.worker_update.as_ref().map(|(at, update)| {
+                let mut update = update.clone();
+                update.age_ms = CanonicalU64::new(now_ns.saturating_sub(*at) / 1_000_000);
+                update
+            }),
             connections: transport.connections,
             subscribers: transport.subscribers,
             output_queue_items: transport.output_queue_items,
@@ -1785,11 +1900,24 @@ fn telemetry_snapshot<R: ProductDevRuntime>(
             subscribers: state.subscribers.load(Ordering::Acquire),
             ..TransportTelemetry::default()
         });
-    state
+    let mut snapshot = state
         .telemetry
         .lock()
         .map(|telemetry| telemetry.snapshot(now_ns, input, transport))
-        .unwrap_or_else(|_| HostTelemetry::default().snapshot(now_ns, input, transport))
+        .unwrap_or_else(|_| HostTelemetry::default().snapshot(now_ns, input, transport));
+    if snapshot.in_flight_operation.is_none() {
+        if let Some(activity) = &state.worker_activity {
+            if let Ok(activity) = activity.lock() {
+                if let Some((_, started)) = *activity {
+                    snapshot.in_flight_operation = Some(ProductDevOperationKind::AdvanceRealtime);
+                    snapshot.in_flight_age_ms = Some(CanonicalU64::new(
+                        started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                    ));
+                }
+            }
+        }
+    }
+    snapshot
 }
 
 fn invoke_browser_diagnostics<R: ProductDevRuntime>(
@@ -1993,6 +2121,9 @@ fn record_update_attribution<R: ProductDevRuntime>(
     };
     if let Ok(mut telemetry) = state.telemetry.lock() {
         telemetry.record_update_attribution(completed_ns, attribution);
+        if !state.realtime_scheduler_enabled {
+            telemetry.record_progress(completed_ns);
+        }
     }
 }
 
@@ -3054,6 +3185,78 @@ mod tests {
     }
 
     #[test]
+    fn worker_progress_uses_shell_time_and_resets_callback_history_per_incarnation() {
+        let mut telemetry = HostTelemetry {
+            last_output_phases: (11, 22, 33),
+            ..HostTelemetry::default()
+        };
+        let update = |instance, duration| crate::ProductDevWorkerUpdateTelemetry {
+            worker_pid: CanonicalU64::new(123),
+            readout: None,
+            attribution: Some(ProductDevUpdateAttribution {
+                runtime: Some(crate::ProductDevRuntimeBinding {
+                    instance_id: CanonicalU64::new(instance),
+                    generation: CanonicalU64::new(1),
+                    control_revision: CanonicalU64::new(1),
+                }),
+                simulation_step: CanonicalU64::new(9),
+                callback_duration_us: CanonicalU64::new(duration),
+                post_callback_duration_us: CanonicalU64::new(70),
+                ..ProductDevUpdateAttribution::default()
+            }),
+            phases: runtime_diagnostics::RuntimeWorkerPhases {
+                operation_duration_us: CanonicalU64::new(duration + 100),
+                output_conversion_duration_us: CanonicalU64::new(10),
+                output_encode_write_duration_us: CanonicalU64::new(20),
+                input_queue_age_us: None,
+            },
+        };
+        telemetry.record_worker_update(1_000_000_000, update(1, 9_000), Some(10_000));
+        telemetry.record_worker_update(2_000_000_000, update(1, 100), Some(200));
+        let snapshot = telemetry.snapshot(
+            2_500_000_000,
+            InputTelemetry::default(),
+            TransportTelemetry::default(),
+        );
+        assert_eq!(
+            snapshot.runtime_progress_rate_millihertz,
+            Some(CanonicalU64::new(1_000))
+        );
+        let worker = snapshot.worker_update.unwrap();
+        assert_eq!(worker.age_ms, CanonicalU64::new(500));
+        assert_eq!(worker.shell_output_queue_duration_us, CanonicalU64::new(22));
+        assert_eq!(worker.phases.operation_duration_us, CanonicalU64::new(200));
+        assert_eq!(
+            snapshot
+                .update_attribution
+                .unwrap()
+                .latest
+                .callback_duration_us,
+            CanonicalU64::new(100)
+        );
+        let idle = telemetry.snapshot(
+            8_000_000_000,
+            InputTelemetry::default(),
+            TransportTelemetry::default(),
+        );
+        assert!(idle.runtime_progress_rate_millihertz.is_none());
+        assert!(idle
+            .runtime_progress_unavailable_reason
+            .unwrap()
+            .contains("five seconds"));
+        telemetry.record_worker_update(9_000_000_000, update(2, 5), Some(80));
+        let replacement = telemetry.snapshot(
+            9_000_000_000,
+            InputTelemetry::default(),
+            TransportTelemetry::default(),
+        );
+        let callbacks = replacement.update_attribution.unwrap();
+        assert_eq!(callbacks.sample_count, CanonicalU64::new(1));
+        assert_eq!(callbacks.slowest.callback_duration_us, CanonicalU64::new(5));
+        assert!(replacement.runtime_progress_rate_millihertz.is_none());
+    }
+
+    #[test]
     fn scheduled_input_result_preserves_cursor_and_recovery_disposition() {
         let accepted = ProductDevInputResult::with_progress(
             2,
@@ -3122,9 +3325,10 @@ mod tests {
             )),
             runtime: Arc::clone(&runtime),
             input_mailbox: Arc::new(HostInputMailbox::default()),
-            telemetry: Mutex::new(HostTelemetry::default()),
+            telemetry: Arc::new(Mutex::new(HostTelemetry::default())),
             realtime_scheduler_enabled: true,
             disposable_worker_runtime: false,
+            worker_activity: None,
             outputs: Arc::new(Mutex::new(OutputBus::default())),
             output_wake: Arc::new(OutputWake::default()),
             shutdown: Arc::new(AtomicBool::new(false)),

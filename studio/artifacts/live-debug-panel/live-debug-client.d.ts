@@ -62,6 +62,10 @@ export interface LiveDebugTelemetrySnapshot {
     /** Progress rate in millihertz (1000 = one update per second). */
     readonly runtimeProgressRateMillihertz: string | null;
     readonly runtimeProgressAgeMs: string | null;
+    /** Why this host cannot currently report runtime progress, if known. */
+    readonly runtimeProgressUnavailableReason: string | null;
+    /** Most recent completed worker update and shell-local publication phases. */
+    readonly workerUpdate: LiveDebugWorkerUpdateSnapshot | null;
     readonly connections: number;
     readonly subscribers: number;
     readonly outputQueueItems: number;
@@ -72,6 +76,13 @@ export interface LiveDebugTelemetrySnapshot {
     readonly updateAttribution: LiveDebugUpdateAttributionSnapshot | null;
 }
 export interface LiveDebugUpdateAttribution {
+    /** Runtime incarnation that produced this completed callback, if available. */
+    readonly runtime: LiveDebugRuntimeBinding | null;
+    readonly simulationStep: string;
+    readonly admittedStepCount: string;
+    /** Rust staging/reduction/conversion/completion after the callback returns. */
+    readonly postCallbackDurationUs: string;
+    /** Inclusive C# callback duration, including native service calls. */
     readonly callbackDurationUs: string;
     readonly characterStepCalls: string;
     readonly characterStepDurationUs: string;
@@ -85,6 +96,46 @@ export interface LiveDebugUpdateAttribution {
     readonly voxelResidencyDurationUs: string;
     readonly voxelScenePresentationCalls: string;
     readonly voxelScenePresentationDurationUs: string;
+}
+/** Exact runtime incarnation carried by worker readouts and update samples. */
+export interface LiveDebugRuntimeBinding {
+    readonly instanceId: string;
+    readonly generation: string;
+    readonly controlRevision: string;
+}
+/** Product runtime readout passed through unchanged from the worker owner. */
+export interface LiveDebugRuntimeReadout {
+    readonly artifact: string;
+    readonly runtime: LiveDebugRuntimeBinding;
+    readonly mode: 'realtime' | 'demand' | 'external';
+    readonly state: 'created' | 'running' | 'paused' | 'faulted' | 'shutdown';
+    readonly admittedSimulationSteps: string;
+    readonly admittedPresentations: string;
+    readonly droppedRealtimeSteps: string;
+    readonly clockRegressions: string;
+    readonly scaledRemainder: number | null;
+    readonly lastObservedTimeNs: string | null;
+    readonly fault: 'owner-reported' | 'counter-exhausted' | null;
+}
+/** Timings measured entirely in one worker process; they are not additive. */
+export interface LiveDebugWorkerPhases {
+    /** Includes callback, post-callback work, input, and lifecycle work. */
+    readonly operationDurationUs: string;
+    readonly outputConversionDurationUs: string;
+    readonly outputEncodeWriteDurationUs: string;
+    readonly inputQueueAgeUs: string | null;
+}
+/** A worker completion plus shell-local delivery, decode, queue, and publication facts. */
+export interface LiveDebugWorkerUpdateSnapshot {
+    readonly workerPid: string;
+    readonly readout: LiveDebugRuntimeReadout | null;
+    readonly phases: LiveDebugWorkerPhases;
+    /** Shell-local interval spanning worker work and delivery; it is not network latency. */
+    readonly shellDeliveryIntervalUs: string | null;
+    readonly shellOutputDecodeDurationUs: string;
+    readonly shellOutputQueueDurationUs: string;
+    readonly shellPublicationDurationUs: string;
+    readonly ageMs: string;
 }
 export interface LiveDebugUpdateAttributionSnapshot {
     readonly sampleCount: string;

@@ -28,6 +28,15 @@ impl<R> ProductDevOperationOwner<R> {
 }
 
 impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
+    /// Drains call-local attribution while the outer publisher holds its
+    /// operation/publication order (used by the disposable worker adapter).
+    pub fn take_update_attribution(
+        &self,
+    ) -> Result<Option<ProductDevUpdateAttribution>, ProductDevRuntimeError> {
+        let mut runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
+        Ok(runtime.take_update_attribution())
+    }
+
     /// Reads the runtime's explicit scheduler posture while holding the same
     /// serialization guard as every mutating operation.
     pub fn realtime_schedule_state(

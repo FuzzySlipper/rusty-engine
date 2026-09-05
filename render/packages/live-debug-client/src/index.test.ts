@@ -45,13 +45,28 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
         queuedInputBatches: 3, queuedInputEvents: 4, inputBatchCapacity: 256,
         oldestInputAgeMs: '9', inputOverflowPending: false,
         runtimeProgressRateMillihertz: '60000', runtimeProgressAgeMs: '1',
+        runtimeProgressUnavailableReason: null,
+        workerUpdate: {
+          workerPid: '4321',
+          readout: {
+            artifact: 'rusty.product.runtime-readout',
+            runtime: { instanceId: '42', generation: '7', controlRevision: '9' },
+            mode: 'realtime', state: 'running', admittedSimulationSteps: '12', admittedPresentations: '13',
+            droppedRealtimeSteps: '0', clockRegressions: '0', scaledRemainder: null,
+            lastObservedTimeNs: '1234', fault: null,
+          },
+          phases: {
+            operationDurationUs: '180', outputConversionDurationUs: '25', outputEncodeWriteDurationUs: '35', inputQueueAgeUs: '8',
+          },
+          shellDeliveryIntervalUs: '240', shellOutputDecodeDurationUs: '7', shellOutputQueueDurationUs: '4', shellPublicationDurationUs: '6', ageMs: '3',
+        },
         connections: 1, subscribers: 1, outputQueueItems: 2, outputQueueCapacity: 256,
         outputQueueFloor: '7', outputBindingActive: true,
         updateAttribution: {
           sampleCount: '2048', callbackDurationUsP50: '80', callbackDurationUsP95: '120', callbackDurationUsMax: '140', rollingSlowestAgeMs: '20', slowestAgeMs: '2000',
-          latest: { callbackDurationUs: '90', characterStepCalls: '1', characterStepDurationUs: '30', characterStepCastCount: '4', characterStepCandidateCount: '16', characterStepNarrowPhaseCount: '16', voxelResidencyCalls: '0', voxelResidencyDurationUs: '0', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '10' },
-          rollingSlowest: { callbackDurationUs: '140', characterStepCalls: '1', characterStepDurationUs: '60', characterStepCastCount: '8', characterStepCandidateCount: '32', characterStepNarrowPhaseCount: '32', voxelResidencyCalls: '1', voxelResidencyDurationUs: '30', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '20' },
-          slowest: { callbackDurationUs: '140', characterStepCalls: '1', characterStepDurationUs: '60', characterStepCastCount: '8', characterStepCandidateCount: '32', characterStepNarrowPhaseCount: '32', voxelResidencyCalls: '1', voxelResidencyDurationUs: '30', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '20' },
+          latest: { runtime: { instanceId: '42', generation: '7', controlRevision: '9' }, simulationStep: '12', admittedStepCount: '13', postCallbackDurationUs: '15', callbackDurationUs: '90', characterStepCalls: '1', characterStepDurationUs: '30', characterStepCastCount: '4', characterStepCandidateCount: '16', characterStepNarrowPhaseCount: '16', voxelResidencyCalls: '0', voxelResidencyDurationUs: '0', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '10' },
+          rollingSlowest: { runtime: null, simulationStep: '10', admittedStepCount: '11', postCallbackDurationUs: '20', callbackDurationUs: '140', characterStepCalls: '1', characterStepDurationUs: '60', characterStepCastCount: '8', characterStepCandidateCount: '32', characterStepNarrowPhaseCount: '32', voxelResidencyCalls: '1', voxelResidencyDurationUs: '30', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '20' },
+          slowest: { runtime: null, simulationStep: '10', admittedStepCount: '11', postCallbackDurationUs: '20', callbackDurationUs: '140', characterStepCalls: '1', characterStepDurationUs: '60', characterStepCastCount: '8', characterStepCandidateCount: '32', characterStepNarrowPhaseCount: '32', voxelResidencyCalls: '1', voxelResidencyDurationUs: '30', voxelScenePresentationCalls: '1', voxelScenePresentationDurationUs: '20' },
         },
       },
     }), { status: 200 })) as typeof fetch,
@@ -64,6 +79,11 @@ test('diagnostics retain independent cursor facts and age a stopped browser obse
   assert.equal(batch.telemetry?.updateAttribution?.slowest.characterStepCastCount, '8');
   assert.equal(batch.telemetry?.updateAttribution?.slowest.characterStepNarrowPhaseCount, '32');
   assert.equal(batch.telemetry?.updateAttribution?.rollingSlowestAgeMs, '20');
+  assert.deepEqual(batch.telemetry?.workerUpdate?.readout?.runtime, {
+    instanceId: '42', generation: '7', controlRevision: '9',
+  });
+  assert.equal(batch.telemetry?.workerUpdate?.phases.outputEncodeWriteDurationUs, '35');
+  assert.equal(batch.telemetry?.updateAttribution?.latest.postCallbackDurationUs, '15');
 });
 
 test('diagnostics reject a malformed optional telemetry snapshot', async () => {
@@ -78,6 +98,7 @@ test('diagnostics reject a malformed optional telemetry snapshot', async () => {
         queuedInputBatches: 'not-a-count', queuedInputEvents: 0, inputBatchCapacity: 256,
         oldestInputAgeMs: null, inputOverflowPending: false,
         runtimeProgressRateMillihertz: null, runtimeProgressAgeMs: null,
+        runtimeProgressUnavailableReason: 'worker replacement has not completed a runtime update', workerUpdate: null,
         connections: 0, subscribers: 0, outputQueueItems: 0, outputQueueCapacity: 256,
         outputQueueFloor: '0', outputBindingActive: false,
         updateAttribution: null,

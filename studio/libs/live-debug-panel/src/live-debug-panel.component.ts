@@ -20,12 +20,16 @@ import {
   type LiveDebugDiagnosticEvent,
   type LiveDebugTelemetrySnapshot,
   type LiveDebugTransport,
+  type LiveDebugUpdateAttribution,
+  type LiveDebugWorkerUpdateSnapshot,
 } from '@rusty-engine/live-debug-client';
 
 import {
   appendLiveDebugTranscript,
   commandSummary,
   historyCommand,
+  updateAttributionLabel,
+  workerUpdateLabel,
   type LiveDebugPanelPresentation,
   type LiveDebugTranscriptEntry,
 } from './live-debug-panel-model.js';
@@ -123,13 +127,20 @@ let nextLiveDebugPanelInstance = 1;
           <strong>Product/runtime lane</strong>
           <span>In flight: {{ telemetry.inFlightOperation || 'none' }} · age {{ milliseconds(telemetry.inFlightAgeMs) }}</span>
           <span>Admission: product {{ milliseconds(telemetry.lastProductAdmissionLatencyMs) }} · input {{ milliseconds(telemetry.lastInputAdmissionLatencyMs) }}</span>
+          <ng-container *ngIf="telemetry.workerUpdate as worker">
+            <span>{{ workerLabel(worker) }}</span>
+            <span>Worker phases: operation {{ microseconds(worker.phases.operationDurationUs) }} (callback, post-callback, input, lifecycle) · output conversion {{ microseconds(worker.phases.outputConversionDurationUs) }} · encode/write {{ microseconds(worker.phases.outputEncodeWriteDurationUs) }} · input queue age {{ microsecondsNullable(worker.phases.inputQueueAgeUs) }}</span>
+            <span>Shell local: delivery interval {{ microsecondsNullable(worker.shellDeliveryIntervalUs) }} (overlaps worker work and serialization; not network latency) · output decode {{ microseconds(worker.shellOutputDecodeDurationUs) }} · output queue {{ microseconds(worker.shellOutputQueueDurationUs) }} · publication {{ microseconds(worker.shellPublicationDurationUs) }}</span>
+          </ng-container>
           <ng-container *ngIf="telemetry.updateAttribution as attribution">
             <span>C# update callback ({{ attribution.sampleCount }} retained): p50 {{ microseconds(attribution.callbackDurationUsP50) }} · p95 {{ microseconds(attribution.callbackDurationUsP95) }} · rolling max {{ microseconds(attribution.callbackDurationUsMax) }}</span>
+            <span>Latest update: {{ updateLabel(attribution.latest) }}. Callback includes native services; post-callback is separate Rust staging, reduction, conversion, and completion.</span>
             <span>Rolling slowest callback {{ microseconds(attribution.rollingSlowest.callbackDurationUs) }} · {{ milliseconds(attribution.rollingSlowestAgeMs) }} ago. Nested service totals: character {{ attribution.rollingSlowest.characterStepCalls }} call(s), {{ microseconds(attribution.rollingSlowest.characterStepDurationUs) }}, {{ attribution.rollingSlowest.characterStepCastCount }} controller cast(s), {{ attribution.rollingSlowest.characterStepCandidateCount }} eligible collider(s), {{ attribution.rollingSlowest.characterStepNarrowPhaseCount }} Parry narrow-phase queries; residency {{ attribution.rollingSlowest.voxelResidencyCalls }} call(s), {{ microseconds(attribution.rollingSlowest.voxelResidencyDurationUs) }}; scene presentation {{ attribution.rollingSlowest.voxelScenePresentationCalls }} call(s), {{ microseconds(attribution.rollingSlowest.voxelScenePresentationDurationUs) }}.</span>
-            <span>Lifetime slowest callback {{ microseconds(attribution.slowest.callbackDurationUs) }} · {{ milliseconds(attribution.slowestAgeMs) }} ago.</span>
+            <span>Incarnation slowest callback {{ microseconds(attribution.slowest.callbackDurationUs) }} · {{ milliseconds(attribution.slowestAgeMs) }} ago.</span>
           </ng-container>
           <span>Input queue: {{ telemetry.queuedInputBatches }}/{{ telemetry.inputBatchCapacity }} batches · {{ telemetry.queuedInputEvents }} events · oldest {{ milliseconds(telemetry.oldestInputAgeMs) }}<ng-container *ngIf="telemetry.inputOverflowPending"> · overflow pending</ng-container></span>
-          <span>Runtime progress: {{ millihertz(telemetry.runtimeProgressRateMillihertz) }} · last {{ milliseconds(telemetry.runtimeProgressAgeMs) }}</span>
+          <span *ngIf="telemetry.runtimeProgressUnavailableReason !== null; else runtimeProgress">Runtime progress unavailable: {{ telemetry.runtimeProgressUnavailableReason }}</span>
+          <ng-template #runtimeProgress><span>Runtime progress: {{ millihertz(telemetry.runtimeProgressRateMillihertz) }} · last {{ milliseconds(telemetry.runtimeProgressAgeMs) }}</span></ng-template>
           <span>Transport: {{ telemetry.connections }} connection(s) · {{ telemetry.subscribers }} subscriber(s) · retained output history {{ telemetry.outputQueueItems }}/{{ telemetry.outputQueueCapacity }} · advancing floor {{ telemetry.outputQueueFloor }} · binding {{ telemetry.outputBindingActive ? 'active' : 'inactive' }}</span>
         </section>
       </ng-container>
@@ -317,6 +328,18 @@ export class LiveDebugPanelComponent implements OnDestroy {
 
   microseconds(value: string): string {
     return /^\d+$/u.test(value) ? `${value} us` : 'unavailable';
+  }
+
+  microsecondsNullable(value: string | null): string {
+    return value === null ? 'unavailable' : this.microseconds(value);
+  }
+
+  workerLabel(update: LiveDebugWorkerUpdateSnapshot): string {
+    return workerUpdateLabel(update);
+  }
+
+  updateLabel(sample: LiveDebugUpdateAttribution): string {
+    return updateAttributionLabel(sample);
   }
 
   clearTranscript(): void {

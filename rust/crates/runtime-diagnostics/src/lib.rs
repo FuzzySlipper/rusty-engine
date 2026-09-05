@@ -492,6 +492,8 @@ impl RuntimeDiagnosticsSink {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RuntimeUpdateAttribution {
     pub callback_duration_us: u64,
+    /// Rust staging, output conversion/reduction and completion after callback return.
+    pub post_callback_duration_us: u64,
     pub character_step_calls: u64,
     pub character_step_duration_us: u64,
     pub character_step_cast_count: u64,
@@ -501,6 +503,22 @@ pub struct RuntimeUpdateAttribution {
     pub voxel_residency_duration_us: u64,
     pub voxel_scene_presentation_calls: u64,
     pub voxel_scene_presentation_duration_us: u64,
+}
+
+/// Shared, process-local observation of a disposable worker operation:
+/// incarnation generation plus the receiving shell's start Instant. This is
+/// never serialized and never compares worker/browser clock origins.
+pub type RuntimeOperationActivity = Arc<Mutex<Option<(u64, Instant)>>>;
+
+/// Durations measured entirely in the worker process. Operation time includes
+/// callbacks and post-callback work; these fields are not additive frame time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeWorkerPhases {
+    pub operation_duration_us: CanonicalU64,
+    pub output_conversion_duration_us: CanonicalU64,
+    pub output_encode_write_duration_us: CanonicalU64,
+    pub input_queue_age_us: Option<CanonicalU64>,
 }
 
 fn monotonic_nanoseconds(started: Instant) -> u64 {

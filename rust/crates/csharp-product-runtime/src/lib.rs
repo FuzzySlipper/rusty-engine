@@ -1996,6 +1996,14 @@ impl CsharpProductRuntime {
             self.services
                 .complete_update_attribution(callback_duration_us),
         ));
+        let post_callback_started = Instant::now();
+        let update_binding = self.binding();
+        if let Some(attribution) = &mut self.pending_update_attribution {
+            attribution.runtime = Some(update_binding);
+            attribution.simulation_step = CanonicalU64::new(facts.simulation_step);
+            attribution.admitted_step_count =
+                CanonicalU64::new(u64::from(facts.admitted_step_count));
+        }
         let result = match callback_result {
             Ok(result) => result,
             Err(error) => {
@@ -2037,6 +2045,14 @@ impl CsharpProductRuntime {
             outputs.push(self.complete_baseline_output(binding)?);
         }
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
+        if let Some(attribution) = &mut self.pending_update_attribution {
+            attribution.post_callback_duration_us = CanonicalU64::new(
+                post_callback_started
+                    .elapsed()
+                    .as_micros()
+                    .min(u128::from(u64::MAX)) as u64,
+            );
+        }
         Ok(outputs)
     }
 

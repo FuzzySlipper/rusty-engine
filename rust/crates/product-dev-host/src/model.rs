@@ -967,6 +967,8 @@ pub struct ProductDevTelemetrySnapshot {
     /// per second without introducing floating point into the wire snapshot.
     pub runtime_progress_rate_millihertz: Option<CanonicalU64>,
     pub runtime_progress_age_ms: Option<CanonicalU64>,
+    pub runtime_progress_unavailable_reason: Option<String>,
+    pub worker_update: Option<ProductDevWorkerUpdateSnapshot>,
     pub connections: usize,
     pub subscribers: usize,
     pub output_queue_items: usize,
@@ -978,11 +980,31 @@ pub struct ProductDevTelemetrySnapshot {
     pub update_attribution: Option<ProductDevUpdateAttributionSnapshot>,
 }
 
+/// One completed worker publication, correlated with its runtime readout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDevWorkerUpdateSnapshot {
+    pub worker_pid: CanonicalU64,
+    pub readout: Option<ProductDevRuntimeReadout>,
+    pub phases: runtime_diagnostics::RuntimeWorkerPhases,
+    /// Shell-local interval from scheduler activity to received completion.
+    /// Includes worker work and delivery; never subtract unrelated clocks.
+    pub shell_delivery_interval_us: Option<CanonicalU64>,
+    pub shell_output_decode_duration_us: CanonicalU64,
+    pub shell_output_queue_duration_us: CanonicalU64,
+    pub shell_publication_duration_us: CanonicalU64,
+    pub age_ms: CanonicalU64,
+}
+
 /// One complete C# update callback observation. Durations are integer
 /// microseconds so the diagnostics wire remains canonical and float-free.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductDevUpdateAttribution {
+    pub runtime: Option<ProductDevRuntimeBinding>,
+    pub simulation_step: CanonicalU64,
+    pub admitted_step_count: CanonicalU64,
+    pub post_callback_duration_us: CanonicalU64,
     pub callback_duration_us: CanonicalU64,
     pub character_step_calls: CanonicalU64,
     pub character_step_duration_us: CanonicalU64,
@@ -1004,6 +1026,10 @@ pub struct ProductDevUpdateAttribution {
 impl Default for ProductDevUpdateAttribution {
     fn default() -> Self {
         Self {
+            runtime: None,
+            simulation_step: CanonicalU64::new(0),
+            admitted_step_count: CanonicalU64::new(0),
+            post_callback_duration_us: CanonicalU64::new(0),
             callback_duration_us: CanonicalU64::new(0),
             character_step_calls: CanonicalU64::new(0),
             character_step_duration_us: CanonicalU64::new(0),
@@ -1021,6 +1047,10 @@ impl Default for ProductDevUpdateAttribution {
 impl From<RuntimeUpdateAttribution> for ProductDevUpdateAttribution {
     fn from(value: RuntimeUpdateAttribution) -> Self {
         Self {
+            runtime: None,
+            simulation_step: CanonicalU64::new(0),
+            admitted_step_count: CanonicalU64::new(0),
+            post_callback_duration_us: CanonicalU64::new(value.post_callback_duration_us),
             callback_duration_us: CanonicalU64::new(value.callback_duration_us),
             character_step_calls: CanonicalU64::new(value.character_step_calls),
             character_step_duration_us: CanonicalU64::new(value.character_step_duration_us),

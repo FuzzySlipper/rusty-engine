@@ -19,6 +19,8 @@ already exposed to C#.
   service families, managed helpers, and retained native runtime mechanisms.
 - [CoreCLR diagnostics](coreclr-diagnostics.md) covers worker discovery, standard
   managed profiling, callback breakpoints over SSH, and dumps.
+- [Runtime profiling](runtime-profiling.md) explains worker timing, runtime
+  correlation, and optimized Rust CPU captures.
 - [Verification notes](verification.md) describe the report-only Playwright
   warning-delta capture and compatible-baseline comparison.
 

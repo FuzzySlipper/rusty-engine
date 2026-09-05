@@ -395,6 +395,8 @@ struct DiagnosticsTelemetryWire {
     input_overflow_pending: bool,
     runtime_progress_rate_millihertz: Option<String>,
     runtime_progress_age_ms: Option<String>,
+    runtime_progress_unavailable_reason: Option<String>,
+    worker_update: Option<product_dev_host::ProductDevWorkerUpdateSnapshot>,
     connections: usize,
     subscribers: usize,
     output_queue_items: usize,
@@ -423,6 +425,10 @@ struct DiagnosticsUpdateAttributionWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(dead_code)]
 struct DiagnosticsUpdateAttributionSampleWire {
+    runtime: Option<product_dev_host::ProductDevRuntimeBinding>,
+    simulation_step: String,
+    admitted_step_count: String,
+    post_callback_duration_us: String,
     callback_duration_us: String,
     character_step_calls: String,
     character_step_duration_us: String,

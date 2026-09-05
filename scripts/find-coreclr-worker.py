@@ -206,6 +206,7 @@ def worker_record(
     return {
         "pid": pid,
         "parentPid": parent,
+        "runtimeInstanceId": option_value(arguments, "--runtime-instance-id"),
         "productDirectory": str(product),
         "coreclr": True,
         "diagnosticPort": str(port),

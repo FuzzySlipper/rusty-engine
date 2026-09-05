@@ -89,6 +89,20 @@ fi
 
 IDENTITY="$($STAGE/bin/rusty-product-host --identity)"
 REVISION="$(git rev-parse HEAD)"
+# Source/compiler provenance travels with the symbols. Dirty contributor packs
+# identify that fact explicitly; published packs should come from a clean commit.
+{
+  printf 'sourceRevision=%s\n' "$REVISION"
+  if [[ -n "$(git status --porcelain)" ]]; then
+    printf 'sourceDirty=true\n'
+  else
+    printf 'sourceDirty=false\n'
+  fi
+  printf 'profile=release\ndebug=%s\noptLevel=%s\n' \
+    "${CARGO_PROFILE_RELEASE_DEBUG:-line-tables-only}" "${CARGO_PROFILE_RELEASE_OPT_LEVEL:-3}"
+  printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
+  rustc --version --verbose
+} > "$STAGE/symbols/build-info.txt"
 {
   printf '{\n'
   printf '  "artifact": "rusty.product.runtime-pack",\n'

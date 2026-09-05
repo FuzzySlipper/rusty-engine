@@ -432,6 +432,7 @@ impl EngineServiceSet {
         let presentation = self.voxel_scene_presentation.update_attribution();
         RuntimeUpdateAttribution {
             callback_duration_us,
+            post_callback_duration_us: 0,
             character_step_calls: spatial.character_step_calls,
             character_step_duration_us: spatial.character_step_duration_us,
             character_step_cast_count: spatial.character_step_cast_count,

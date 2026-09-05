@@ -152,8 +152,9 @@ dotnet-dump analyze /tmp/game.dmp -c 'clrstack -all' -c exit
 A mini dump is useful for stacks, not complete heap analysis. Collection briefly
 suspends the runtime; use `--debugger` if investigation may exceed normal callback
 deadlines. See the [managed dump guide](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-linux-dumps).
-For Rust stacks and native/mixed investigation, retain the runtime pack's native
-symbols and use GDB/LLDB or a native profiler. `dotnet-dump` is not a native debugger.
+For Rust stacks and native/mixed investigation, see [runtime profiling](runtime-profiling.md)
+for the optimized symbol pack and user-mode Linux CPU capture. Use GDB/LLDB for
+native debugger inspection. `dotnet-dump` is not a native debugger.
 
 NativeAOT is a separate fidelity/release lane. It has no CoreCLR worker socket or
 ordinary managed-debugger attach parity. Use the published native debug symbols

@@ -57,7 +57,8 @@ pub use model::{
     ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
     ProductDevRuntimeScheduleState, ProductDevRuntimeState, ProductDevTelemetrySnapshot,
     ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
-    ProductDevUpdateAttributionSnapshot, PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
+    ProductDevUpdateAttributionSnapshot, ProductDevWorkerUpdateSnapshot, PRODUCT_DEV_HOST_ARTIFACT,
+    PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
 pub use session::ProductDevOperationOwner;
 pub use worker::{
@@ -66,7 +67,7 @@ pub use worker::{
     ProductDevWorkerEvent, ProductDevWorkerFault, ProductDevWorkerFeedbackOperation,
     ProductDevWorkerLifecycleOperation, ProductDevWorkerOutputBatch, ProductDevWorkerPublication,
     ProductDevWorkerRequest, ProductDevWorkerResponse, ProductDevWorkerUpdateOperation,
-    MAX_WORKER_FRAME_BYTES,
+    ProductDevWorkerUpdateTelemetry, MAX_WORKER_FRAME_BYTES,
 };
 
 /// Upper bound for one HTTP request header block, including its terminator.

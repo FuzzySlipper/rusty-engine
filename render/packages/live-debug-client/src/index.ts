@@ -86,6 +86,10 @@ export interface LiveDebugTelemetrySnapshot {
   /** Progress rate in millihertz (1000 = one update per second). */
   readonly runtimeProgressRateMillihertz: string | null;
   readonly runtimeProgressAgeMs: string | null;
+  /** Why this host cannot currently report runtime progress, if known. */
+  readonly runtimeProgressUnavailableReason: string | null;
+  /** Most recent completed worker update and shell-local publication phases. */
+  readonly workerUpdate: LiveDebugWorkerUpdateSnapshot | null;
   readonly connections: number;
   readonly subscribers: number;
   readonly outputQueueItems: number;
@@ -97,6 +101,13 @@ export interface LiveDebugTelemetrySnapshot {
 }
 
 export interface LiveDebugUpdateAttribution {
+  /** Runtime incarnation that produced this completed callback, if available. */
+  readonly runtime: LiveDebugRuntimeBinding | null;
+  readonly simulationStep: string;
+  readonly admittedStepCount: string;
+  /** Rust staging/reduction/conversion/completion after the callback returns. */
+  readonly postCallbackDurationUs: string;
+  /** Inclusive C# callback duration, including native service calls. */
   readonly callbackDurationUs: string;
   readonly characterStepCalls: string;
   readonly characterStepDurationUs: string;
@@ -110,6 +121,50 @@ export interface LiveDebugUpdateAttribution {
   readonly voxelResidencyDurationUs: string;
   readonly voxelScenePresentationCalls: string;
   readonly voxelScenePresentationDurationUs: string;
+}
+
+/** Exact runtime incarnation carried by worker readouts and update samples. */
+export interface LiveDebugRuntimeBinding {
+  readonly instanceId: string;
+  readonly generation: string;
+  readonly controlRevision: string;
+}
+
+/** Product runtime readout passed through unchanged from the worker owner. */
+export interface LiveDebugRuntimeReadout {
+  readonly artifact: string;
+  readonly runtime: LiveDebugRuntimeBinding;
+  readonly mode: 'realtime' | 'demand' | 'external';
+  readonly state: 'created' | 'running' | 'paused' | 'faulted' | 'shutdown';
+  readonly admittedSimulationSteps: string;
+  readonly admittedPresentations: string;
+  readonly droppedRealtimeSteps: string;
+  readonly clockRegressions: string;
+  readonly scaledRemainder: number | null;
+  readonly lastObservedTimeNs: string | null;
+  readonly fault: 'owner-reported' | 'counter-exhausted' | null;
+}
+
+/** Timings measured entirely in one worker process; they are not additive. */
+export interface LiveDebugWorkerPhases {
+  /** Includes callback, post-callback work, input, and lifecycle work. */
+  readonly operationDurationUs: string;
+  readonly outputConversionDurationUs: string;
+  readonly outputEncodeWriteDurationUs: string;
+  readonly inputQueueAgeUs: string | null;
+}
+
+/** A worker completion plus shell-local delivery, decode, queue, and publication facts. */
+export interface LiveDebugWorkerUpdateSnapshot {
+  readonly workerPid: string;
+  readonly readout: LiveDebugRuntimeReadout | null;
+  readonly phases: LiveDebugWorkerPhases;
+  /** Shell-local interval spanning worker work and delivery; it is not network latency. */
+  readonly shellDeliveryIntervalUs: string | null;
+  readonly shellOutputDecodeDurationUs: string;
+  readonly shellOutputQueueDurationUs: string;
+  readonly shellPublicationDurationUs: string;
+  readonly ageMs: string;
 }
 
 export interface LiveDebugUpdateAttributionSnapshot {
@@ -246,7 +301,8 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
     'inFlightOperation', 'inFlightAgeMs', 'lastProductAdmissionLatencyMs',
     'lastInputAdmissionLatencyMs', 'queuedInputBatches', 'queuedInputEvents',
     'inputBatchCapacity', 'oldestInputAgeMs', 'inputOverflowPending',
-    'runtimeProgressRateMillihertz', 'runtimeProgressAgeMs', 'connections',
+    'runtimeProgressRateMillihertz', 'runtimeProgressAgeMs', 'runtimeProgressUnavailableReason',
+    'workerUpdate', 'connections',
     'subscribers', 'outputQueueItems', 'outputQueueCapacity', 'outputQueueFloor',
     'outputBindingActive',
     'updateAttribution',
@@ -282,6 +338,8 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
   if (typeof candidate.inputOverflowPending !== 'boolean'
     || typeof candidate.outputBindingActive !== 'boolean'
     || !canonicalU64(candidate.outputQueueFloor)
+    || (candidate.runtimeProgressUnavailableReason !== null && typeof candidate.runtimeProgressUnavailableReason !== 'string')
+    || (candidate.workerUpdate !== null && !isObject(candidate.workerUpdate))
     || (candidate.updateAttribution !== null && !isObject(candidate.updateAttribution))) {
     throw new Error('Live-debug telemetry snapshot is invalid.');
   }
@@ -297,6 +355,10 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
     inputOverflowPending: candidate.inputOverflowPending,
     runtimeProgressRateMillihertz: candidate.runtimeProgressRateMillihertz as string | null,
     runtimeProgressAgeMs: candidate.runtimeProgressAgeMs as string | null,
+    runtimeProgressUnavailableReason: candidate.runtimeProgressUnavailableReason as string | null,
+    workerUpdate: candidate.workerUpdate === null
+      ? null
+      : decodeWorkerUpdateSnapshot(candidate.workerUpdate),
     connections: candidate.connections as number,
     subscribers: candidate.subscribers as number,
     outputQueueItems: candidate.outputQueueItems as number,
@@ -306,6 +368,99 @@ function decodeTelemetrySnapshot(value: unknown): LiveDebugTelemetrySnapshot {
     updateAttribution: candidate.updateAttribution === null
       ? null
       : decodeUpdateAttributionSnapshot(candidate.updateAttribution),
+  });
+}
+
+function decodeWorkerUpdateSnapshot(value: Record<string, unknown>): LiveDebugWorkerUpdateSnapshot {
+  const fields = [
+    'workerPid', 'readout', 'phases', 'shellDeliveryIntervalUs', 'shellOutputDecodeDurationUs',
+    'shellOutputQueueDurationUs', 'shellPublicationDurationUs', 'ageMs',
+  ];
+  if (Object.keys(value).some((key) => !fields.includes(key))
+    || !canonicalU64(value.workerPid)
+    || (value.readout !== null && !isObject(value.readout))
+    || !isObject(value.phases)
+    || (value.shellDeliveryIntervalUs !== null && !canonicalU64(value.shellDeliveryIntervalUs))
+    || !canonicalU64(value.shellOutputDecodeDurationUs)
+    || !canonicalU64(value.shellOutputQueueDurationUs)
+    || !canonicalU64(value.shellPublicationDurationUs)
+    || !canonicalU64(value.ageMs)) {
+    throw new Error('Live-debug worker update is invalid.');
+  }
+  return Object.freeze({
+    workerPid: value.workerPid,
+    readout: value.readout === null ? null : decodeRuntimeReadout(value.readout),
+    phases: decodeWorkerPhases(value.phases),
+    shellDeliveryIntervalUs: value.shellDeliveryIntervalUs as string | null,
+    shellOutputDecodeDurationUs: value.shellOutputDecodeDurationUs,
+    shellOutputQueueDurationUs: value.shellOutputQueueDurationUs,
+    shellPublicationDurationUs: value.shellPublicationDurationUs,
+    ageMs: value.ageMs,
+  });
+}
+
+function decodeWorkerPhases(value: Record<string, unknown>): LiveDebugWorkerPhases {
+  const fields = [
+    'operationDurationUs', 'outputConversionDurationUs', 'outputEncodeWriteDurationUs', 'inputQueueAgeUs',
+  ];
+  if (Object.keys(value).some((key) => !fields.includes(key))
+    || !canonicalU64(value.operationDurationUs)
+    || !canonicalU64(value.outputConversionDurationUs)
+    || !canonicalU64(value.outputEncodeWriteDurationUs)
+    || (value.inputQueueAgeUs !== null && !canonicalU64(value.inputQueueAgeUs))) {
+    throw new Error('Live-debug worker phases are invalid.');
+  }
+  return Object.freeze({
+    operationDurationUs: value.operationDurationUs,
+    outputConversionDurationUs: value.outputConversionDurationUs,
+    outputEncodeWriteDurationUs: value.outputEncodeWriteDurationUs,
+    inputQueueAgeUs: value.inputQueueAgeUs as string | null,
+  });
+}
+
+function decodeRuntimeReadout(value: Record<string, unknown>): LiveDebugRuntimeReadout {
+  const fields = [
+    'artifact', 'runtime', 'mode', 'state', 'admittedSimulationSteps', 'admittedPresentations',
+    'droppedRealtimeSteps', 'clockRegressions', 'scaledRemainder', 'lastObservedTimeNs', 'fault',
+  ];
+  if (Object.keys(value).some((key) => !fields.includes(key))
+    || typeof value.artifact !== 'string'
+    || !isObject(value.runtime)
+    || !['realtime', 'demand', 'external'].includes(String(value.mode))
+    || !['created', 'running', 'paused', 'faulted', 'shutdown'].includes(String(value.state))
+    || !canonicalU64(value.admittedSimulationSteps)
+    || !canonicalU64(value.admittedPresentations)
+    || !canonicalU64(value.droppedRealtimeSteps)
+    || !canonicalU64(value.clockRegressions)
+    || (value.scaledRemainder !== null && (!Number.isSafeInteger(value.scaledRemainder) || (value.scaledRemainder as number) < 0 || (value.scaledRemainder as number) > 4_294_967_295))
+    || (value.lastObservedTimeNs !== null && !canonicalU64(value.lastObservedTimeNs))
+    || (value.fault !== null && !['owner-reported', 'counter-exhausted'].includes(String(value.fault)))) {
+    throw new Error('Live-debug runtime readout is invalid.');
+  }
+  return Object.freeze({
+    artifact: value.artifact,
+    runtime: decodeRuntimeBinding(value.runtime),
+    mode: value.mode as LiveDebugRuntimeReadout['mode'],
+    state: value.state as LiveDebugRuntimeReadout['state'],
+    admittedSimulationSteps: value.admittedSimulationSteps,
+    admittedPresentations: value.admittedPresentations,
+    droppedRealtimeSteps: value.droppedRealtimeSteps,
+    clockRegressions: value.clockRegressions,
+    scaledRemainder: value.scaledRemainder as number | null,
+    lastObservedTimeNs: value.lastObservedTimeNs as string | null,
+    fault: value.fault as LiveDebugRuntimeReadout['fault'],
+  });
+}
+
+function decodeRuntimeBinding(value: Record<string, unknown>): LiveDebugRuntimeBinding {
+  const fields = ['instanceId', 'generation', 'controlRevision'];
+  if (Object.keys(value).some((key) => !fields.includes(key)) || fields.some((field) => !canonicalU64(value[field]))) {
+    throw new Error('Live-debug runtime binding is invalid.');
+  }
+  return Object.freeze({
+    instanceId: value.instanceId as string,
+    generation: value.generation as string,
+    controlRevision: value.controlRevision as string,
   });
 }
 
@@ -341,15 +496,22 @@ function decodeUpdateAttributionSnapshot(value: Record<string, unknown>): LiveDe
 
 function decodeUpdateAttribution(value: Record<string, unknown>): LiveDebugUpdateAttribution {
   const fields = [
-    'callbackDurationUs', 'characterStepCalls', 'characterStepDurationUs', 'characterStepCastCount',
+    'runtime', 'simulationStep', 'admittedStepCount', 'postCallbackDurationUs', 'callbackDurationUs',
+    'characterStepCalls', 'characterStepDurationUs', 'characterStepCastCount',
     'characterStepCandidateCount', 'characterStepNarrowPhaseCount',
     'voxelResidencyCalls', 'voxelResidencyDurationUs', 'voxelScenePresentationCalls', 'voxelScenePresentationDurationUs',
   ];
+  const durationAndCounterFields = fields.filter((field) => field !== 'runtime');
   if (Object.keys(value).some((key) => !fields.includes(key))
-    || fields.some((field) => !canonicalU64(value[field]))) {
+    || (value.runtime !== null && !isObject(value.runtime))
+    || durationAndCounterFields.some((field) => !canonicalU64(value[field]))) {
     throw new Error('Live-debug update attribution sample is invalid.');
   }
   return Object.freeze({
+    runtime: value.runtime === null ? null : decodeRuntimeBinding(value.runtime),
+    simulationStep: value.simulationStep as string,
+    admittedStepCount: value.admittedStepCount as string,
+    postCallbackDurationUs: value.postCallbackDurationUs as string,
     callbackDurationUs: value.callbackDurationUs as string,
     characterStepCalls: value.characterStepCalls as string,
     characterStepDurationUs: value.characterStepDurationUs as string,
