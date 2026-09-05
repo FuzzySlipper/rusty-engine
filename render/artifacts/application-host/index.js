@@ -23984,43 +23984,41 @@ function xS(e, t, n = {}) {
 			} catch (e) {
 				C("animationCallback", e);
 			}
-			let r = g.consumeDecision(MS(e), T()), o = CS();
-			if (r.shouldSubmit) {
-				let e = s.automaticSubmissionReady(n), t = CS(), c = s.automaticSubmissionPacing();
-				if (e) try {
-					let e = k(n, "animationFrame"), s = CS();
-					_.record(n, "admitted", r, c, DS({
-						callbackStartedAtMs: i,
-						successorQueuedAtMs: a,
-						demandObservedAtMs: o,
-						backendReadinessObservedAtMs: t,
-						controlsUpdatedAtMs: e.controlsUpdatedAtMs,
-						cameraUpdatedAtMs: e.cameraUpdatedAtMs,
-						presentationAdvancedAtMs: e.presentationAdvancedAtMs,
-						backendSubmittedAtMs: e.backendSubmittedAtMs,
-						callbackEndedAtMs: s
-					}));
-				} catch (e) {
-					ne(e instanceof pS ? e.cause : e);
-				}
-				else {
-					let e = CS();
-					_.record(n, "backendBlocked", r, c, DS({
-						callbackStartedAtMs: i,
-						successorQueuedAtMs: a,
-						demandObservedAtMs: o,
-						backendReadinessObservedAtMs: t,
-						callbackEndedAtMs: e
-					})), E();
-				}
-			} else {
+			let r = g.consumeDecision(MS(e), T()), o = CS(), c = s.automaticSubmissionReady(n), l = CS(), u = s.automaticSubmissionPacing();
+			if (!r.shouldSubmit) {
 				let e = CS();
-				_.record(n, "noDemand", r, s.automaticSubmissionPacing(), DS({
+				_.record(n, "noDemand", r, u, DS({
 					callbackStartedAtMs: i,
 					successorQueuedAtMs: a,
 					demandObservedAtMs: o,
+					backendReadinessObservedAtMs: l,
 					callbackEndedAtMs: e
 				}));
+			} else if (c) try {
+				let e = k(n, "animationFrame"), t = CS();
+				_.record(n, "admitted", r, u, DS({
+					callbackStartedAtMs: i,
+					successorQueuedAtMs: a,
+					demandObservedAtMs: o,
+					backendReadinessObservedAtMs: l,
+					controlsUpdatedAtMs: e.controlsUpdatedAtMs,
+					cameraUpdatedAtMs: e.cameraUpdatedAtMs,
+					presentationAdvancedAtMs: e.presentationAdvancedAtMs,
+					backendSubmittedAtMs: e.backendSubmittedAtMs,
+					callbackEndedAtMs: t
+				}));
+			} catch (e) {
+				ne(e instanceof pS ? e.cause : e);
+			}
+			else {
+				let e = CS();
+				_.record(n, "backendBlocked", r, u, DS({
+					callbackStartedAtMs: i,
+					successorQueuedAtMs: a,
+					demandObservedAtMs: o,
+					backendReadinessObservedAtMs: l,
+					callbackEndedAtMs: e
+				})), E();
 			}
 		} catch (e) {
 			C("automaticSubmission", e), y = "terminal", j();

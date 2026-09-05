@@ -909,24 +909,28 @@ function mountPreparedRendererSurface(
         continuousDemand(),
       );
       const demandObservedAtMs = surfaceTimingNow();
+      // Completion observation must continue while the scene is idle. If we
+      // wait for new demand, software/fallback pacing mistakes the entire idle
+      // interval for GPU work and delays the next visible change by seconds.
+      const ready = backendSurface.automaticSubmissionReady(timeMs);
+      const backendReadinessObservedAtMs = surfaceTimingNow();
+      const backendPacing = backendSurface.automaticSubmissionPacing();
       if (!demand.shouldSubmit) {
         const callbackEndedAtMs = surfaceTimingNow();
         automaticSubmissionAdmission.record(
           timeMs,
           'noDemand',
           demand,
-          backendSurface.automaticSubmissionPacing(),
+          backendPacing,
           callbackPhases({
             callbackStartedAtMs,
             successorQueuedAtMs,
             demandObservedAtMs,
+            backendReadinessObservedAtMs,
             callbackEndedAtMs,
           }),
         );
       } else {
-        const ready = backendSurface.automaticSubmissionReady(timeMs);
-        const backendReadinessObservedAtMs = surfaceTimingNow();
-        const backendPacing = backendSurface.automaticSubmissionPacing();
         if (ready) {
           try {
             const rendered = renderFrame(timeMs, 'animationFrame');
