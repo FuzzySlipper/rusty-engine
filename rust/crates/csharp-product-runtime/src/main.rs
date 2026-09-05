@@ -1325,6 +1325,21 @@ impl ProductDevRuntime for WorkerRuntime {
         })
     }
 
+    fn control(
+        &mut self,
+        operation: ProductDevControlOperation,
+        binding: ProductDevRuntimeBinding,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::Control {
+            request_id,
+            operation: match operation {
+                ProductDevControlOperation::Replace => ProductDevWorkerControlOperation::Replace,
+                ProductDevControlOperation::Release => ProductDevWorkerControlOperation::Release,
+            },
+            binding,
+        })
+    }
+
     fn input(
         &mut self,
         batch: ProductDevInputBatch,
@@ -3289,6 +3304,92 @@ fn content_type(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_proxy_forwards_control_fences_and_their_fresh_binding() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut worker = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (writer, _) = listener.accept().unwrap();
+        let (responses, response_rx) = mpsc::channel();
+        let (outputs, _) = mpsc::sync_channel(8);
+        let (diagnostics, _) = mpsc::sync_channel(8);
+        let (failures, _) = mpsc::sync_channel(8);
+        let mut proxy = WorkerRuntime {
+            connection: Arc::new(Mutex::new(WorkerConnection {
+                child: Command::new("sleep").arg("30").spawn().unwrap(),
+                writer,
+                responses: response_rx,
+                next_request_id: 1,
+                operation_timeout: Some(Duration::from_secs(1)),
+                pending_attribution: None,
+                terminal_cause: WorkerTerminalCause::default(),
+                retiring: Arc::new(AtomicBool::new(false)),
+                reader: None,
+                generation: 1,
+            })),
+            outputs,
+            output_generation: Arc::new(AtomicUsize::new(1)),
+            diagnostics,
+            failures,
+            scheduler_inflight: Arc::new(Mutex::new(None)),
+            operation_timeout: Some(Duration::from_secs(1)),
+        };
+        let mut binding = ProductDevRuntimeBinding {
+            instance_id: CanonicalU64::new(7),
+            generation: CanonicalU64::new(1),
+            control_revision: CanonicalU64::new(1),
+        };
+        for (index, operation) in [
+            ProductDevControlOperation::Replace,
+            ProductDevControlOperation::Release,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let fresh = ProductDevRuntimeBinding {
+                control_revision: CanonicalU64::new(index as u64 + 2),
+                ..binding
+            };
+            responses.send(Ok(WorkerResponse {
+                response: ProductDevWorkerResponse {
+                    request_id: index as u64 + 1,
+                    attribution: None,
+                    result: Some(serde_json::json!({
+                        "accepted": true, "code": "DEV_HOST_ACCEPTED", "disposition": "accepted",
+                        "operation": operation.operation_kind(), "binding": fresh, "nextInputSequence": "1",
+                    })),
+                    outputs: vec![serde_json::json!({
+                        "kind": "binding", "runtime": fresh, "nextInputSequence": "1",
+                    })],
+                    error: None,
+                },
+                connection_output_cursor: None,
+            })).unwrap();
+            let receipt = proxy
+                .control(operation, binding)
+                .expect("worker control fence is supported");
+            let request: ProductDevWorkerRequest = read_worker_frame(&mut worker).unwrap();
+            let ProductDevWorkerRequest::Control {
+                request_id,
+                operation: forwarded,
+                binding: observed,
+            } = request
+            else {
+                panic!("the proxy must send control rather than restarting the product");
+            };
+            assert_eq!(request_id, index as u64 + 1);
+            assert_eq!(worker_control(forwarded), operation);
+            assert_eq!(observed, binding);
+            assert!(receipt.result().is_accepted());
+            assert_eq!(receipt.result().binding(), Some(fresh));
+            assert_eq!(
+                receipt.result().next_input_sequence(),
+                Some(CanonicalU64::new(1))
+            );
+            assert_eq!(receipt.into_parts().1.len(), 1);
+            binding = fresh;
+        }
+    }
 
     #[test]
     fn worker_output_group_only_admits_large_complete_baselines() {
