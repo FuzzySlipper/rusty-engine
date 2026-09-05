@@ -29,8 +29,7 @@ use netcorehost::{
     pdcstring::PdCString,
 };
 use product_dev_host::{
-    runtime_fault_disposition, CanonicalU64, ProductDevAnimationCueDefinition,
-    ProductDevAnimationCueSignalDomain, ProductDevAnimationFeedback,
+    runtime_fault_disposition, CanonicalU64, ProductDevAnimationFeedback,
     ProductDevAnimationFeedbackResult, ProductDevAudioCompletionSource, ProductDevAudioFeedback,
     ProductDevAudioFeedbackFact, ProductDevAudioFeedbackResult, ProductDevControlOperation,
     ProductDevDebugResult, ProductDevFaultDisposition, ProductDevGhostPlateFallbackReason,
@@ -39,11 +38,10 @@ use product_dev_host::{
     ProductDevLifecycleOperation, ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent,
     ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult,
     ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
-    ProductDevRendererPublicationFrontier, ProductDevRendererResource, ProductDevRuntime,
-    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeFault,
-    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
-    ProductDevRuntimeScheduleState, ProductDevRuntimeState, ProductDevTimelineCompletion,
-    ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
+    ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
+    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeReadout,
+    ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState, ProductDevRuntimeState,
+    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -56,6 +54,10 @@ use runtime_lifecycle::{
     ExternalStep, HostMonotonicTime, RealtimeLifecycleConfig, RuntimeControlOperation,
     RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig, RuntimeLifecycleReadout,
     RuntimeMode, RuntimeState,
+};
+use runtime_publication::{
+    RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
+    RuntimePublicationError, RuntimePublicationFrontier,
 };
 use runtime_ui::RuntimeUiRuntimeBinding;
 
@@ -984,7 +986,7 @@ pub struct CsharpProductRuntime {
     /// can call `input` without receiving an operation receipt, so retain at
     /// most the latest bounded baseline until the next scheduled receipt can
     /// publish it.
-    pending_recovery_outputs: Vec<ProductDevRuntimeOutput>,
+    pending_recovery_outputs: Vec<RuntimePublication>,
     services: Box<EngineServiceSet>,
     initial_output: Option<CsharpEngineCallOutput>,
     render_resources: Vec<ProductDevRendererResource>,
@@ -1970,7 +1972,7 @@ impl CsharpProductRuntime {
     fn update(
         &mut self,
         facts: NativeProductUpdateFacts,
-    ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
+    ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
         let events: Vec<NativeInputEvent> = self
             .pending_inputs
             .iter()
@@ -2038,9 +2040,9 @@ impl CsharpProductRuntime {
                 .map_err(lifecycle_error)?;
             self.rebind_input(InputClearReason::ControlRevisionChange)?;
             let binding = self.binding();
-            outputs.push(ProductDevRuntimeOutput::binding(
-                binding,
-                self.next_input_sequence(),
+            outputs.push(RuntimePublication::binding(
+                input_binding(&self.lifecycle),
+                self.next_input_sequence().get(),
             ));
             outputs.push(self.complete_baseline_output(binding)?);
         }
@@ -2062,7 +2064,7 @@ impl CsharpProductRuntime {
         observed_host_time_nanoseconds: Option<u64>,
         admission: runtime_lifecycle::SimulationAdmission,
         dropped_step_count: u128,
-    ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
+    ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
         // Realtime catch-up remains one product update per host
         // observation. Correlate that update with the last lifecycle-admitted
         // step while Runtime Input retains all ingress and held state once.
@@ -2220,7 +2222,7 @@ impl CsharpProductRuntime {
         action: NativeProductAction,
         operation: ProductDevOperationKind,
         transition: F,
-    ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError>
+    ) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError>
     where
         F: FnOnce(&mut RuntimeLifecycle) -> Result<T, runtime_lifecycle::RuntimeLifecycleError>,
     {
@@ -2272,7 +2274,7 @@ impl CsharpProductRuntime {
         Ok(outputs)
     }
 
-    fn snapshot_outputs(&self) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
+    fn snapshot_outputs(&self) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
         service_outputs(
             self.services
                 .snapshot_outputs(ui_binding(&self.lifecycle))?,
@@ -2282,7 +2284,7 @@ impl CsharpProductRuntime {
     fn receipt(
         &mut self,
         operation: ProductDevOperationKind,
-        outputs: Vec<ProductDevRuntimeOutput>,
+        outputs: Vec<RuntimePublication>,
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
         let mut all_outputs = self.take_pending_recovery_outputs();
         all_outputs.extend(outputs);
@@ -2297,7 +2299,7 @@ impl CsharpProductRuntime {
         ProductDevRuntimeReceipt::new(result, all_outputs).map_err(host_runtime_error)
     }
 
-    fn take_pending_recovery_outputs(&mut self) -> Vec<ProductDevRuntimeOutput> {
+    fn take_pending_recovery_outputs(&mut self) -> Vec<RuntimePublication> {
         std::mem::take(&mut self.pending_recovery_outputs)
     }
 
@@ -2525,8 +2527,8 @@ impl CsharpProductRuntime {
 
     fn tag_complete_baseline(
         &self,
-        outputs: Vec<ProductDevRuntimeOutput>,
-    ) -> Result<Vec<ProductDevRuntimeOutput>, ProductDevRuntimeError> {
+        outputs: Vec<RuntimePublication>,
+    ) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
         let binding = self.binding();
         // Every binding baseline reconstructs committed state. Callback deltas
         // already precede its frontier and cannot be replayed against it.
@@ -2536,15 +2538,15 @@ impl CsharpProductRuntime {
         for output in outputs {
             if let Some(events) = output
                 .transient_presentation()
-                .map_err(host_runtime_error)?
+                .map_err(|error| self.runtime_error(publication_error(error)))?
             {
                 snapshot.push(events);
             }
         }
         let mut tagged = Vec::with_capacity(snapshot.len() + 2);
-        tagged.push(ProductDevRuntimeOutput::binding(
-            binding,
-            self.next_input_sequence(),
+        tagged.push(RuntimePublication::binding(
+            input_binding(&self.lifecycle),
+            self.next_input_sequence().get(),
         ));
         tagged.append(&mut snapshot);
         tagged.push(
@@ -2556,17 +2558,18 @@ impl CsharpProductRuntime {
 
     fn complete_baseline_output(
         &self,
-        binding: ProductDevRuntimeBinding,
-    ) -> Result<ProductDevRuntimeOutput, CsharpProductRuntimeError> {
+        _binding: ProductDevRuntimeBinding,
+    ) -> Result<RuntimePublication, CsharpProductRuntimeError> {
         let frontiers = self
             .services
             .renderer_publication_frontiers()
             .into_iter()
-            .map(|(stream, revision)| ProductDevRendererPublicationFrontier::new(stream, revision))
+            .map(|(stream, revision)| RuntimePublicationFrontier::new(stream, revision))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(host_error)?;
-        Ok(ProductDevRuntimeOutput::complete_baseline_with_frontiers(
-            binding, frontiers,
+            .map_err(publication_error)?;
+        Ok(RuntimePublication::complete_baseline_with_frontiers(
+            input_binding(&self.lifecycle),
+            frontiers,
         ))
     }
 
@@ -5263,17 +5266,21 @@ fn rebind_ui_output(output: &mut CsharpEngineCallOutput, binding: RuntimeUiRunti
         .collect();
 }
 
+fn publication_error(error: RuntimePublicationError) -> CsharpProductRuntimeError {
+    CsharpProductRuntimeError::new("RUNTIME_PUBLICATION", error.to_string())
+}
+
 fn service_outputs(
     output: csharp_engine_services::CsharpEngineCallOutput,
-) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
+) -> Result<Vec<RuntimePublication>, CsharpProductRuntimeError> {
     let mut outputs = Vec::new();
     for appearance in &output.appearance {
         match appearance {
             CsharpAppearanceCallOutput::Frame(frame) => {
-                outputs.push(ProductDevRuntimeOutput::frame(frame).map_err(host_error)?);
+                outputs.push(RuntimePublication::frame(frame).map_err(publication_error)?);
             }
             CsharpAppearanceCallOutput::Presentation(frame) => {
-                outputs.push(ProductDevRuntimeOutput::presentation(frame).map_err(host_error)?);
+                outputs.push(RuntimePublication::presentation(frame).map_err(publication_error)?);
             }
             CsharpAppearanceCallOutput::AnimationCueDefinitions(definitions) => {
                 let definitions = definitions
@@ -5281,39 +5288,39 @@ fn service_outputs(
                     .map(product_dev_animation_cue_definition)
                     .collect::<Result<Vec<_>, _>>()?;
                 outputs.push(
-                    ProductDevRuntimeOutput::animation_cue_definitions(definitions)
-                        .map_err(host_error)?,
+                    RuntimePublication::animation_cue_definitions(definitions)
+                        .map_err(publication_error)?,
                 );
             }
         }
     }
     for frame in &output.frames {
-        outputs.push(ProductDevRuntimeOutput::frame(frame).map_err(host_error)?);
+        outputs.push(RuntimePublication::frame(frame).map_err(publication_error)?);
     }
     if let Some(composition) = output.view_composition.as_ref() {
-        outputs.push(ProductDevRuntimeOutput::view_composition(composition).map_err(host_error)?);
+        outputs.push(RuntimePublication::view_composition(composition).map_err(publication_error)?);
     }
     for projection in &output.ui {
-        outputs.push(ProductDevRuntimeOutput::ui_projection(projection).map_err(host_error)?);
+        outputs.push(RuntimePublication::ui_projection(projection).map_err(publication_error)?);
     }
     for frame in &output.presentation {
-        outputs.push(ProductDevRuntimeOutput::presentation(frame).map_err(host_error)?);
+        outputs.push(RuntimePublication::presentation(frame).map_err(publication_error)?);
     }
     Ok(outputs)
 }
 
 fn product_dev_animation_cue_definition(
     definition: &csharp_engine_services::AnimationCueDefinition,
-) -> Result<ProductDevAnimationCueDefinition, CsharpProductRuntimeError> {
+) -> Result<RuntimeAnimationCueDefinition, CsharpProductRuntimeError> {
     let signal_domain = match definition.signal_domain {
         csharp_engine_abi::NativeAnimationCueSignalDomain::Audio => {
-            ProductDevAnimationCueSignalDomain::Audio
+            RuntimeAnimationCueSignalDomain::Audio
         }
         csharp_engine_abi::NativeAnimationCueSignalDomain::Particle => {
-            ProductDevAnimationCueSignalDomain::Particle
+            RuntimeAnimationCueSignalDomain::Particle
         }
     };
-    ProductDevAnimationCueDefinition::new(
+    RuntimeAnimationCueDefinition::new(
         definition.cue_id.clone(),
         definition.asset.clone(),
         definition.clip.clone(),
@@ -5321,52 +5328,27 @@ fn product_dev_animation_cue_definition(
         signal_domain,
         definition.signal_id.clone(),
     )
-    .map_err(host_error)
+    .map_err(publication_error)
 }
 
 fn assert_ui_projection_binding(
-    outputs: &[ProductDevRuntimeOutput],
+    outputs: &[RuntimePublication],
     expected: RuntimeInputBinding,
 ) -> Result<usize, CsharpProductRuntimeError> {
-    let expected_instance = expected.instance_id().value().to_string();
-    let expected_generation = expected.generation().value().to_string();
-    let expected_revision = expected.control_revision().value().to_string();
     let mut count = 0;
     for output in outputs {
-        let encoded = serde_json::to_value(output).map_err(|error| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_UI_BINDING",
-                format!("could not inspect UI projection output: {error}"),
-            )
-        })?;
-        if encoded.get("kind").and_then(serde_json::Value::as_str) != Some("ui-projection") {
+        let RuntimePublication::UiProjection(envelope) = output else {
             continue;
-        }
+        };
         count += 1;
-        let runtime = encoded
-            .get("envelope")
-            .and_then(|envelope| envelope.get("runtime"));
-        let matches_expected = runtime.is_some_and(|runtime| {
-            runtime
-                .get("instanceId")
-                .and_then(serde_json::Value::as_str)
-                == Some(expected_instance.as_str())
-                && runtime
-                    .get("generation")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(expected_generation.as_str())
-                && runtime
-                    .get("controlRevision")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(expected_revision.as_str())
-        });
-        if !matches_expected {
+        let runtime = envelope.runtime();
+        if runtime.instance_id() != expected.instance_id()
+            || runtime.generation() != expected.generation()
+            || runtime.control_revision() != expected.control_revision()
+        {
             return Err(CsharpProductRuntimeError::new(
                 "CSHARP_EXERCISE_UI_BINDING",
-                format!(
-                    "UI projection runtime identity did not match {}:{}:{}",
-                    expected_instance, expected_generation, expected_revision
-                ),
+                "UI projection runtime identity did not match the admitted runtime binding",
             ));
         }
     }
@@ -5381,21 +5363,15 @@ fn assert_ui_projection_binding(
 }
 
 fn complete_voxel_baseline(
-    outputs: &[ProductDevRuntimeOutput],
+    outputs: &[RuntimePublication],
 ) -> Result<serde_json::Value, CsharpProductRuntimeError> {
     for output in outputs {
-        let encoded = serde_json::to_value(output).map_err(|error| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_EXERCISE_ATTACH",
-                format!("could not inspect fresh attachment output: {error}"),
-            )
-        })?;
-        if encoded.get("kind").and_then(serde_json::Value::as_str) != Some("frame") {
-            continue;
-        }
-        let Some(frame) = encoded.get("frame") else {
+        let RuntimePublication::Frame(frame) = output else {
             continue;
         };
+        let frame = serde_json::to_value(frame).map_err(|error| {
+            CsharpProductRuntimeError::new("CSHARP_EXERCISE_ATTACH", error.to_string())
+        })?;
         let operations = frame
             .get("ops")
             .and_then(serde_json::Value::as_array)
@@ -5420,9 +5396,6 @@ fn complete_voxel_baseline(
     ))
 }
 
-fn host_error(error: product_dev_host::ProductDevHostError) -> CsharpProductRuntimeError {
-    CsharpProductRuntimeError::new(error.code(), error.detail().to_owned())
-}
 fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDevRuntimeError {
     ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
         .expect("bounded host error")
@@ -5431,6 +5404,15 @@ fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn publication_value(output: &RuntimePublication) -> serde_json::Value {
+        serde_json::to_value(
+            product_dev_host::ProductDevRuntimeOutput::from_publication(output.clone())
+                .expect("publication adapts"),
+        )
+        .expect("wire output encodes")
+    }
+
     use std::sync::{
         atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering},
         Mutex,
@@ -6182,10 +6164,7 @@ mod tests {
         assert!(service_outputs(runtime.services.outputs(&staged))
             .expect("initial output")
             .iter()
-            .any(
-                |output| serde_json::to_value(output).expect("initial output encodes")["kind"]
-                    == "frame"
-            ));
+            .any(|output| publication_value(output)["kind"] == "frame"));
         runtime.services.commit_call(staged);
         (session, presentation)
     }
@@ -6266,10 +6245,7 @@ mod tests {
         );
         assert_eq!(runtime.binding(), binding);
         assert_eq!(runtime.services.renderer_publication_frontiers(), frontier);
-        assert_eq!(
-            serde_json::to_value(&first).unwrap(),
-            serde_json::to_value(&second).unwrap()
-        );
+        assert_eq!(first, second);
         let baseline = complete_voxel_baseline(&first).unwrap();
         assert!(
             baseline["ops"]
@@ -6442,10 +6418,7 @@ mod tests {
             .into_parts();
         assert_eq!(VOXEL_FAILURE_APPLY_STATUS.load(Ordering::SeqCst), ABI_OK);
         assert_eq!(VOXEL_FAILURE_REFRESH_STATUS.load(Ordering::SeqCst), ABI_OK);
-        let encoded = outputs
-            .iter()
-            .map(|output| serde_json::to_value(output).expect("recovery output encodes"))
-            .collect::<Vec<_>>();
+        let encoded = outputs.iter().map(publication_value).collect::<Vec<_>>();
         assert!(encoded.iter().any(|output| {
             output["kind"] == "frame"
                 && output["frame"]["ops"]
@@ -6835,10 +6808,7 @@ mod tests {
         let deltas = service_outputs(runtime.services.outputs(&call)).unwrap();
         runtime.services.commit_call(call);
         let baseline = runtime.tag_complete_baseline(deltas).unwrap();
-        let encoded = baseline
-            .iter()
-            .map(|output| serde_json::to_value(output).unwrap())
-            .collect::<Vec<_>>();
+        let encoded = baseline.iter().map(publication_value).collect::<Vec<_>>();
         assert!(encoded
             .iter()
             .filter(|output| output["kind"] == "presentation")
@@ -7077,7 +7047,7 @@ mod tests {
         let values = service_outputs(output).expect("cue output maps");
         assert_eq!(values.len(), 1);
         assert_eq!(
-            serde_json::to_value(&values[0]).expect("cue output encodes"),
+            publication_value(&values[0]),
             serde_json::json!({
                 "kind": "animation-cue-definitions",
                 "definitions": [{
@@ -7118,8 +7088,7 @@ mod tests {
             .expect("ordered service output")
             .into_iter()
             .map(|output| {
-                serde_json::to_value(output)
-                    .expect("runtime output JSON")
+                publication_value(&output)
                     .get("kind")
                     .and_then(serde_json::Value::as_str)
                     .expect("runtime output kind")
@@ -7383,7 +7352,7 @@ mod tests {
         let recovery = runtime
             .pending_recovery_outputs
             .iter()
-            .map(|output| serde_json::to_value(output).unwrap())
+            .map(publication_value)
             .collect::<Vec<_>>();
         assert_eq!(recovery.first().unwrap()["kind"], "binding");
         assert_eq!(recovery.last().unwrap()["kind"], "complete-baseline");
@@ -7393,10 +7362,7 @@ mod tests {
             .admit_demand_step()
             .expect("next operation remains usable after input recovery")
             .into_parts();
-        let encoded = outputs
-            .iter()
-            .map(|output| serde_json::to_value(output).expect("recovery output serializes"))
-            .collect::<Vec<_>>();
+        let encoded = outputs.iter().map(publication_value).collect::<Vec<_>>();
         assert!(encoded.iter().any(|output| output["kind"] == "binding"));
         assert!(
             encoded

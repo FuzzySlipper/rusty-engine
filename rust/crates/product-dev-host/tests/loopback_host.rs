@@ -15,9 +15,13 @@ use product_dev_host::{
     ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationKind,
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeMode,
-    ProductDevRuntimeOutput, ProductDevRuntimeReadout, ProductDevRuntimeReceipt,
-    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
+    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
 };
+use render_model::RenderFrameDiff;
+use runtime_input::RuntimeInputBinding;
+use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
+use runtime_publication::RuntimePublication;
 
 #[derive(Default)]
 struct FixtureRuntime {
@@ -52,6 +56,24 @@ impl FixtureRuntime {
         )
     }
 
+    fn publication_binding() -> RuntimeInputBinding {
+        RuntimeInputBinding::new(
+            RuntimeInstanceId::new(7),
+            RuntimeGeneration::new(1),
+            RuntimeControlRevision::new(2),
+        )
+    }
+
+    fn baseline_publications() -> Vec<RuntimePublication> {
+        vec![
+            RuntimePublication::binding(Self::publication_binding(), 0),
+            RuntimePublication::complete_baseline_with_frontiers(
+                Self::publication_binding(),
+                Vec::new(),
+            ),
+        ]
+    }
+
     fn operation(
         operation: ProductDevOperationKind,
     ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
@@ -63,10 +85,7 @@ impl FixtureRuntime {
                 Self::readout(),
             )
             .unwrap(),
-            vec![
-                ProductDevRuntimeOutput::binding(Self::binding(), CanonicalU64::new(0)),
-                ProductDevRuntimeOutput::complete_baseline(Self::binding()),
-            ],
+            Self::baseline_publications(),
         )
         .unwrap()
     }
@@ -78,18 +97,12 @@ impl ReconnectRuntime {
         operation: ProductDevOperationKind,
         baseline: bool,
     ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
-        let mut outputs = vec![ProductDevRuntimeOutput::runtime_readout(
-            FixtureRuntime::readout(),
-        )];
-        if baseline {
-            outputs.insert(
-                0,
-                ProductDevRuntimeOutput::binding(FixtureRuntime::binding(), CanonicalU64::new(0)),
-            );
-            outputs.push(ProductDevRuntimeOutput::complete_baseline(
-                FixtureRuntime::binding(),
-            ));
-        }
+        let outputs = if baseline {
+            FixtureRuntime::baseline_publications()
+        } else {
+            vec![RuntimePublication::frame(&RenderFrameDiff::new())
+                .expect("empty frame is a valid logical publication")]
+        };
         ProductDevRuntimeReceipt::new(
             ProductDevOperationResult::accepted(
                 operation,
@@ -382,9 +395,8 @@ impl ProductDevRuntime for OutputFailureRuntime {
             // This receipt is valid, but it cannot be attached to a retained
             // stream until a binding baseline exists. It models publication
             // failure after the authoritative input call has consumed once.
-            vec![ProductDevRuntimeOutput::runtime_readout(
-                FixtureRuntime::readout(),
-            )]
+            vec![RuntimePublication::frame(&RenderFrameDiff::new())
+                .expect("empty frame is a valid logical publication")]
         } else {
             Vec::new()
         };
@@ -957,7 +969,7 @@ fn sse_receives_runtime_receipt_outputs_without_blocking_post() {
 }
 
 #[test]
-fn sse_delivers_realtime_progress_at_publication_cadence() {
+fn sse_delivers_realtime_publications_at_publication_cadence() {
     let host = start_reconnect(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let mut stream = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
     let baseline = read_until(&mut stream, "\"operation\":\"start\"");
@@ -991,7 +1003,7 @@ fn sse_delivers_realtime_progress_at_publication_cadence() {
         while let Some(end) = pending.find("\n\n") {
             let record = pending[..end].to_owned();
             pending.drain(..end + 2);
-            if record.contains("\"kind\":\"runtime-readout\"") {
+            if record.contains("\"kind\":\"frame\"") {
                 arrivals.push(Instant::now());
             }
         }

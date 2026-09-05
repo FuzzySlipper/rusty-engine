@@ -7,6 +7,7 @@ members = [
     "rust/crates/product-dev-host",
     "rust/crates/runtime-diagnostics",
     "rust/crates/runtime-session",
+    "rust/crates/runtime-publication",
     "rust/crates/csharp-engine-abi",
     "rust/crates/csharp-engine-services",
     "rust/crates/csharp-product-runtime",
@@ -52,6 +53,7 @@ edition = "2021"
 product-dev-host = { path = "rust/crates/product-dev-host" }
 runtime-diagnostics = { path = "rust/crates/runtime-diagnostics" }
 runtime-session = { path = "rust/crates/runtime-session" }
+runtime-publication = { path = "rust/crates/runtime-publication" }
 csharp-engine-abi = { path = "rust/crates/csharp-engine-abi" }
 csharp-engine-services = { path = "rust/crates/csharp-engine-services" }
 cap-primitives = "3"

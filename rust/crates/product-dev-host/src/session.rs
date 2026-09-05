@@ -1,12 +1,9 @@
-#[cfg(test)]
-use std::sync::MutexGuard;
-
 use runtime_session::RuntimeSession;
 
 use crate::{
     CanonicalU64, ProductDevDebugResult, ProductDevHostError, ProductDevInputBatch,
-    ProductDevInputResult, ProductDevLifecycleOperation, ProductDevOperationResult,
-    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeReceipt,
+    ProductDevLifecycleOperation, ProductDevOperationResult, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeReceipt,
     ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
     ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
 };
@@ -25,6 +22,12 @@ impl<R> ProductDevOperationOwner<R> {
             session: RuntimeSession::new(runtime),
         }
     }
+
+    /// Exposes the host-neutral serialized scope for host-owned work that must
+    /// remain ordered with a direct product operation.
+    pub(crate) fn session(&self) -> &RuntimeSession<R> {
+        &self.session
+    }
 }
 
 impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
@@ -33,8 +36,9 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     pub fn take_update_attribution(
         &self,
     ) -> Result<Option<ProductDevUpdateAttribution>, ProductDevRuntimeError> {
-        let mut runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
-        Ok(runtime.take_update_attribution())
+        self.session
+            .with_locked(|runtime| runtime.take_update_attribution())
+            .map_err(|_| runtime_poisoned())
     }
 
     /// Reads the runtime's explicit scheduler posture while holding the same
@@ -42,8 +46,9 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     pub fn realtime_schedule_state(
         &self,
     ) -> Result<ProductDevRuntimeScheduleState, ProductDevRuntimeError> {
-        let runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
-        Ok(runtime.realtime_schedule_state())
+        self.session
+            .with_locked(|runtime| runtime.realtime_schedule_state())
+            .map_err(|_| runtime_poisoned())
     }
 
     /// Reads the runtime's admitted realtime observation interval under the
@@ -51,8 +56,9 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     pub fn realtime_schedule_interval(
         &self,
     ) -> Result<Option<std::time::Duration>, ProductDevRuntimeError> {
-        let runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
-        Ok(runtime.realtime_schedule_interval())
+        self.session
+            .with_locked(|runtime| runtime.realtime_schedule_interval())
+            .map_err(|_| runtime_poisoned())
     }
 
     /// Runs one explicit lifecycle operation while holding the session's
@@ -171,65 +177,6 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.with_runtime(|runtime| runtime.advance_realtime(observed_time_ns))
     }
 
-    /// Atomically drains one host-mailbox snapshot through the runtime input
-    /// owner immediately before one realtime advance. Each successful input
-    /// receipt is delivered to `publish_input` before the update receipt;
-    /// input admission errors are returned as recoverable observations while
-    /// the scheduled advance still proceeds. Lifecycle/update serialization
-    /// never has a second owner or an input queue hidden inside the browser
-    /// route. Both publication callbacks run while this owner lock is held, so
-    /// output ordering cannot race a lifecycle/control operation.
-    pub fn advance_realtime_with_input_and_publish<F, I, P, B, E>(
-        &self,
-        drain: F,
-        observed_time_ns: CanonicalU64,
-        mut publish_input: I,
-        mut publish: P,
-        begin: B,
-        finish: E,
-    ) -> Result<
-        (
-            Vec<ProductDevRuntimeError>,
-            Option<ProductDevUpdateAttribution>,
-        ),
-        ProductDevRuntimeError,
-    >
-    where
-        F: FnOnce() -> (Vec<ProductDevInputBatch>, bool),
-        I: FnMut(ProductDevRuntimeReceipt<ProductDevInputResult>),
-        P: FnMut(ProductDevRuntimeReceipt<ProductDevOperationResult>),
-        B: FnOnce(),
-        E: FnOnce(),
-    {
-        let mut runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
-        begin();
-        let (batches, overflowed) = drain();
-        let mut input_errors = Vec::new();
-        if overflowed {
-            match runtime.recover_input_overflow() {
-                Ok(receipt) => publish(receipt),
-                Err(error) => input_errors.push(error),
-            }
-        }
-        for batch in batches {
-            match runtime.input(batch) {
-                Ok(receipt) => publish_input(receipt),
-                Err(error) => input_errors.push(error),
-            }
-        }
-        let result = runtime.advance_realtime(observed_time_ns);
-        let attribution = runtime.take_update_attribution();
-        let result = match result {
-            Ok(receipt) => {
-                publish(receipt);
-                Ok((input_errors, attribution))
-            }
-            Err(error) => Err(error),
-        };
-        finish();
-        result
-    }
-
     /// Strictly admits a canonical JSON u64 and advances the realtime lane.
     pub fn advance_realtime_json(
         &self,
@@ -292,48 +239,14 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     where
         F: FnOnce(&mut R) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
     {
-        self.with_locked_runtime(call)
-    }
-
-    /// Runs an owner operation while retaining the serialization guard for
-    /// the complete callback. Host routes use this when they must publish a
-    /// receipt before another runtime mutation can begin.
-    pub(crate) fn with_locked_runtime<T, F>(&self, call: F) -> Result<T, ProductDevRuntimeError>
-    where
-        F: FnOnce(&mut R) -> Result<T, ProductDevRuntimeError>,
-    {
-        let mut runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
-        call(&mut runtime)
-    }
-
-    /// Runs a serialized owner operation with lifecycle callbacks inside the
-    /// owner lock. Host telemetry uses this to represent the operation that is
-    /// actually executing, rather than a contender merely waiting for it.
-    pub(crate) fn with_locked_runtime_timed<T, F, B, E>(
-        &self,
-        begin: B,
-        call: F,
-        finish: E,
-    ) -> Result<T, ProductDevRuntimeError>
-    where
-        F: FnOnce(&mut R) -> Result<T, ProductDevRuntimeError>,
-        B: FnOnce(),
-        E: FnOnce(),
-    {
-        let mut runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
-        begin();
-        let result = call(&mut runtime);
-        finish();
-        result
-    }
-
-    #[cfg(test)]
-    fn lock_for_test(&self) -> MutexGuard<'_, R> {
-        self.session.lock().expect("fixture session lock")
+        self.session
+            .with_locked(call)
+            .map_err(|_| runtime_poisoned())
+            .and_then(|result| result)
     }
 }
 
-fn runtime_poisoned() -> ProductDevRuntimeError {
+pub(crate) fn runtime_poisoned() -> ProductDevRuntimeError {
     ProductDevRuntimeError::new(
         "DEV_HOST_RUNTIME_POISONED",
         "runtime serialization lock is poisoned",
@@ -362,14 +275,11 @@ fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{mpsc, Arc, Mutex},
-        thread,
-        time::Duration,
-    };
-
     use super::*;
     use crate::ProductDevOperationKind;
+    use runtime_input::RuntimeInputBinding;
+    use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
+    use runtime_publication::RuntimePublication;
 
     #[derive(Default)]
     struct FixtureRuntime;
@@ -380,10 +290,7 @@ mod tests {
         ) -> ProductDevRuntimeReceipt<ProductDevOperationResult> {
             ProductDevRuntimeReceipt::new(
                 ProductDevOperationResult::rejected(operation, "fixture").unwrap(),
-                vec![crate::ProductDevRuntimeOutput::binding(
-                    binding(),
-                    CanonicalU64::new(0),
-                )],
+                publications(),
             )
             .unwrap()
         }
@@ -395,6 +302,17 @@ mod tests {
             generation: CanonicalU64::new(1),
             control_revision: CanonicalU64::new(1),
         }
+    }
+
+    fn publications() -> Vec<RuntimePublication> {
+        vec![RuntimePublication::binding(
+            RuntimeInputBinding::new(
+                RuntimeInstanceId::new(1),
+                RuntimeGeneration::new(1),
+                RuntimeControlRevision::new(1),
+            ),
+            0,
+        )]
     }
 
     fn readout() -> crate::ProductDevRuntimeReadout {
@@ -435,10 +353,7 @@ mod tests {
                     readout(),
                 )
                 .unwrap(),
-                vec![crate::ProductDevRuntimeOutput::binding(
-                    binding(),
-                    CanonicalU64::new(0),
-                )],
+                publications(),
             )
             .unwrap())
         }
@@ -479,10 +394,7 @@ mod tests {
                     "fixture",
                 )
                 .unwrap(),
-                vec![crate::ProductDevRuntimeOutput::binding(
-                    binding(),
-                    CanonicalU64::new(0),
-                )],
+                publications(),
             )
             .unwrap())
         }
@@ -547,101 +459,5 @@ mod tests {
         assert_eq!(time.code(), "DEV_HOST_CANONICAL_U64");
         let timeline = session.complete_timeline_json(br#"{}"#).unwrap_err();
         assert_eq!(timeline.code(), "DEV_HOST_TIMELINE_DECODE");
-    }
-
-    #[test]
-    fn poisoned_runtime_lock_is_reported_without_dispatch() {
-        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime));
-        let poisoned = Arc::clone(&session);
-        let _ = thread::spawn(move || {
-            let _guard = poisoned.lock_for_test();
-            panic!("poison fixture lock");
-        })
-        .join();
-        let error = session.admit_demand_step().unwrap_err();
-        assert_eq!(error.code(), "DEV_HOST_RUNTIME_POISONED");
-    }
-
-    #[test]
-    fn debug_execution_uses_the_same_runtime_serialization_lock() {
-        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime));
-        let guard = session.lock_for_test();
-        let (sent, received) = mpsc::channel();
-        let blocked = Arc::clone(&session);
-        let join = thread::spawn(move || {
-            let result = blocked.execute_debug("fixture.count");
-            sent.send(result.map(|_| ())).expect("send debug result");
-        });
-        assert!(
-            received.recv_timeout(Duration::from_millis(25)).is_err(),
-            "debug operation bypassed the lifecycle/update serialization lock"
-        );
-        drop(guard);
-        let error = received
-            .recv_timeout(Duration::from_secs(1))
-            .expect("debug operation completed after lock release")
-            .expect_err("fixture does not implement debug execution");
-        assert_eq!(error.code(), "DEV_HOST_DEBUG_UNSUPPORTED");
-        join.join().expect("debug worker");
-    }
-
-    #[test]
-    fn scheduled_publication_stays_inside_owner_serialization() {
-        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime));
-        let (published, published_ready) = mpsc::channel();
-        let (release, release_publication) = mpsc::channel();
-        let order = Arc::new(Mutex::new(Vec::new()));
-        let input_order = Arc::clone(&order);
-        let update_order = Arc::clone(&order);
-        let scheduled_session = Arc::clone(&session);
-        let scheduled = thread::spawn(move || {
-            scheduled_session
-                .advance_realtime_with_input_and_publish(
-                    || (vec![ProductDevInputBatch::new(Vec::new())], false),
-                    CanonicalU64::new(1),
-                    |receipt| {
-                        let _ = receipt;
-                        input_order.lock().expect("input order lock").push("input");
-                    },
-                    |receipt| {
-                        let _ = receipt;
-                        update_order
-                            .lock()
-                            .expect("update order lock")
-                            .push("advance");
-                        published.send(()).expect("publication marker");
-                        release_publication
-                            .recv_timeout(Duration::from_secs(1))
-                            .expect("publication release");
-                    },
-                    || {},
-                    || {},
-                )
-                .expect("scheduled fixture advance");
-        });
-        published_ready
-            .recv_timeout(Duration::from_secs(1))
-            .expect("scheduled publication started");
-
-        let competing_session = Arc::clone(&session);
-        let (finished, competing_finished) = mpsc::channel();
-        let competing = thread::spawn(move || {
-            let result = competing_session.lifecycle(ProductDevLifecycleOperation::Start);
-            finished.send(result).expect("competing result");
-        });
-        assert!(
-            competing_finished
-                .recv_timeout(Duration::from_millis(25))
-                .is_err(),
-            "a later runtime operation overtook scheduled output publication"
-        );
-        release.send(()).expect("release scheduled publication");
-        scheduled.join().expect("scheduled worker");
-        competing.join().expect("competing worker");
-        assert_eq!(
-            *order.lock().expect("final order lock"),
-            vec!["input", "advance"],
-            "runtime input receipts must publish before the scheduled advance receipt"
-        );
     }
 }

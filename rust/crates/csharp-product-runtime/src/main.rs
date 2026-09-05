@@ -18,11 +18,12 @@ use csharp_product_runtime::{
     CsharpProductRuntimeConfig,
 };
 use product_dev_host::{
-    read_worker_frame, write_worker_frame, CanonicalU64, ProductDevAnimationFeedback,
-    ProductDevAnimationFeedbackResult, ProductDevAudioFeedback, ProductDevAudioFeedbackResult,
-    ProductDevBundle, ProductDevBundleEntry, ProductDevControlOperation, ProductDevDebugCatalog,
-    ProductDevDebugResult, ProductDevGhostPlateFeedback, ProductDevGhostPlateFeedbackResult,
-    ProductDevHost, ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
+    advance_realtime_with_input_and_publish, read_worker_frame, write_worker_frame, CanonicalU64,
+    ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult, ProductDevAudioFeedback,
+    ProductDevAudioFeedbackResult, ProductDevBundle, ProductDevBundleEntry,
+    ProductDevControlOperation, ProductDevDebugCatalog, ProductDevDebugResult,
+    ProductDevGhostPlateFeedback, ProductDevGhostPlateFeedbackResult, ProductDevHost,
+    ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationOwner,
     ProductDevOperationResult, ProductDevRendererDiagnosticsFeedback,
     ProductDevRendererDiagnosticsFeedbackResult, ProductDevRendererResource, ProductDevRuntime,
@@ -963,7 +964,7 @@ fn invoke_connection<T: serde::de::DeserializeOwned>(
             "worker response did not match the requested result family",
         )
     })?;
-    let outputs = match worker_outputs(response.outputs) {
+    let outputs = match worker_publications(response.outputs) {
         Ok(outputs) => outputs,
         Err(error) => {
             stop_worker(connection);
@@ -1194,6 +1195,15 @@ fn worker_output(
         )
     })?;
     ProductDevRuntimeOutput::decode_json(&bytes).map_err(worker_host_error)
+}
+
+fn worker_publications(
+    values: Vec<serde_json::Value>,
+) -> Result<Vec<runtime_publication::RuntimePublication>, ProductDevRuntimeError> {
+    worker_outputs(values)?
+        .into_iter()
+        .map(|output| output.into_publication().map_err(worker_host_error))
+        .collect()
 }
 
 /// Decode the full worker output group before admitting it. A complete
@@ -1524,7 +1534,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             })
             .collect(),
     };
-    let outputs = worker_output_values(outputs)?;
+    let outputs = worker_publication_values(outputs)?;
     write_worker_frame(
         &mut channel,
         &ProductDevWorkerEvent::Ready {
@@ -1705,7 +1715,8 @@ fn worker_scheduler(
         }
         let operation_started = Instant::now();
         let mut input_queue_age_us = None;
-        let scheduled = owner.advance_realtime_with_input_and_publish(
+        let scheduled = advance_realtime_with_input_and_publish(
+            &owner,
             || {
                 let drained = mailbox.drain();
                 input_queue_age_us = mailbox
@@ -1719,8 +1730,7 @@ fn worker_scheduler(
             observed,
             |receipt| {
                 let (result, receipt_outputs) = receipt.into_parts();
-                input_outputs.push(ProductDevRuntimeOutput::runtime_input_result(result));
-                input_outputs.extend(receipt_outputs);
+                input_outputs.push((result, receipt_outputs));
             },
             |receipt| {
                 let (result, receipt_outputs) = receipt.into_parts();
@@ -1738,9 +1748,6 @@ fn worker_scheduler(
         }
         match scheduled {
             Ok((input_errors, attribution)) => {
-                let mut outputs = input_outputs;
-                outputs.extend(update_outputs);
-                outputs.push(ProductDevRuntimeOutput::runtime_progress());
                 let mut worker_diagnostics =
                     drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
                 worker_diagnostics.extend(
@@ -1749,7 +1756,16 @@ fn worker_scheduler(
                         .map(ProductDevWorkerDiagnostic::from_runtime_error),
                 );
                 let conversion_started = Instant::now();
-                let outputs = match worker_output_values(outputs) {
+                let outputs = match (|| -> Result<_, String> {
+                    let mut outputs = Vec::new();
+                    for (result, publications) in input_outputs {
+                        outputs.push(ProductDevRuntimeOutput::runtime_input_result(result));
+                        outputs.extend(publication_wire_outputs(publications)?);
+                    }
+                    outputs.extend(publication_wire_outputs(update_outputs)?);
+                    outputs.push(ProductDevRuntimeOutput::runtime_progress());
+                    worker_output_values(outputs)
+                })() {
                     Ok(outputs) => outputs,
                     Err(detail) => {
                         let error = worker_runtime_error("DEV_HOST_WORKER_OUTPUT_ENCODE", detail);
@@ -1893,6 +1909,24 @@ fn drain_worker_diagnostics_shared(
         return Vec::new();
     };
     drain_worker_diagnostics(diagnostics, &mut cursor)
+}
+
+fn publication_wire_outputs(
+    publications: Vec<runtime_publication::RuntimePublication>,
+) -> Result<Vec<ProductDevRuntimeOutput>, String> {
+    publications
+        .into_iter()
+        .map(|publication| {
+            ProductDevRuntimeOutput::from_publication(publication)
+                .map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+fn worker_publication_values(
+    publications: Vec<runtime_publication::RuntimePublication>,
+) -> Result<Vec<serde_json::Value>, String> {
+    worker_output_values(publication_wire_outputs(publications)?)
 }
 
 fn worker_output_values(
@@ -2127,7 +2161,9 @@ fn worker_receipt<T: serde::Serialize>(
             let (result, outputs) = receipt.into_parts();
             let response = serde_json::to_value(result)
                 .map_err(|error| error.to_string())
-                .and_then(|result| worker_output_values(outputs).map(|outputs| (result, outputs)));
+                .and_then(|result| {
+                    worker_publication_values(outputs).map(|outputs| (result, outputs))
+                });
             match response {
                 Ok((result, outputs)) => ProductDevWorkerResponse {
                     attribution: None,

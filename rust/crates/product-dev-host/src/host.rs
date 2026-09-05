@@ -1065,7 +1065,8 @@ fn scheduler_loop<R: ProductDevRuntime>(state: Arc<HostState<R>>, wake: Arc<Sche
             continue;
         }
         let observed = clock.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        let input_errors = state.runtime.advance_realtime_with_input_and_publish(
+        let input_errors = crate::advance_realtime_with_input_and_publish(
+            &state.runtime,
             || state.input_mailbox.drain(),
             CanonicalU64::new(observed),
             |receipt| publish_scheduled_input_receipt(&state, receipt),
@@ -1168,7 +1169,20 @@ fn publish_scheduled_input_receipt<R: ProductDevRuntime>(
     state: &HostState<R>,
     receipt: crate::ProductDevRuntimeReceipt<ProductDevInputResult>,
 ) {
-    let (result, mut outputs) = receipt.into_parts();
+    let (result, mut outputs) = match receipt.into_wire_parts() {
+        Ok(parts) => parts,
+        Err(error) => {
+            publish_host_diagnostic(
+                &state.diagnostics,
+                ProductDevLogSeverity::Warning,
+                ProductDevLogDisposition::ResyncRequired,
+                "DEV_HOST_SCHEDULE_INPUT_OUTPUT_RESYNC",
+                "committed scheduled input receipt could not be encoded; reconnect for a fresh readout instead of replaying",
+                [("cause", error.code().to_owned())],
+            );
+            return;
+        }
+    };
     // Input is admitted by the Rust-host scheduler rather than by the HTTP
     // request thread. Carry the complete typed result through the same
     // ordered SSE output family so accepted/consumed cursors and recoverable
@@ -1207,7 +1221,20 @@ fn publish_scheduled_receipt<R: ProductDevRuntime>(
             telemetry.record_progress(progress_ns);
         }
     }
-    let (result, mut outputs) = receipt.into_parts();
+    let (result, mut outputs) = match receipt.into_wire_parts() {
+        Ok(parts) => parts,
+        Err(error) => {
+            publish_host_diagnostic(
+                &state.diagnostics,
+                ProductDevLogSeverity::Warning,
+                ProductDevLogDisposition::ResyncRequired,
+                "DEV_HOST_SCHEDULE_OUTPUT_RESYNC",
+                "committed scheduled receipt could not be encoded; reconnect for a fresh readout instead of replaying",
+                [("cause", error.code().to_owned())],
+            );
+            return;
+        }
+    };
     if let Some(readout) = result.readout().cloned() {
         outputs.push(ProductDevRuntimeOutput::runtime_readout(readout));
     }
@@ -1513,24 +1540,37 @@ fn dispatch_request<R: ProductDevRuntime>(
 }
 
 fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpResponse {
-    match state.runtime.with_locked_runtime_timed(
-        || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
-        |runtime| {
-            let receipt = match runtime.describe_debug() {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    return Ok(HttpResponse::error(500, error.code(), error.diagnostic()))
-                }
-            };
-            let (catalog, outputs) = receipt.into_parts();
-            let output_through = match push_host_outputs(state, outputs) {
-                Ok(output_through) => output_through,
-                Err(error) => return Ok(HttpResponse::error(503, error.code(), error.detail())),
-            };
-            Ok(json_response(200, &catalog).with_output_through(output_through))
-        },
-        || finish_telemetry(state, ProductDevOperationKind::ExecuteDebug),
-    ) {
+    match state
+        .runtime
+        .session()
+        .with_locked_timed(
+            || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+            |runtime| {
+                let receipt = match runtime.describe_debug() {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        return Ok(HttpResponse::error(500, error.code(), error.diagnostic()))
+                    }
+                };
+                let (catalog, outputs) = match receipt.into_wire_parts() {
+                    Ok(parts) => parts,
+                    Err(error) => {
+                        return Ok(HttpResponse::error(503, error.code(), error.detail()))
+                    }
+                };
+                let output_through = match push_host_outputs(state, outputs) {
+                    Ok(output_through) => output_through,
+                    Err(error) => {
+                        return Ok(HttpResponse::error(503, error.code(), error.detail()))
+                    }
+                };
+                Ok(json_response(200, &catalog).with_output_through(output_through))
+            },
+            || finish_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+        )
+        .map_err(|_| crate::session::runtime_poisoned())
+        .and_then(|response| response)
+    {
         Ok(response) => response,
         Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
     }
@@ -1544,36 +1584,50 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
         Ok(command) => command,
         Err(_) => return debug_text_error(400, "debug command body must be valid UTF-8"),
     };
-    match state.runtime.with_locked_runtime_timed(
-        || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
-        |runtime| {
-            let receipt = match runtime.execute_debug(command) {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    return Ok(debug_text_error(
-                        500,
-                        &format!("{}: {}", error.code(), error.diagnostic()),
-                    ));
-                }
-            };
-            let (result, outputs) = receipt.into_parts();
-            let output_through = match push_host_outputs(state, outputs) {
-                Ok(output_through) => output_through,
-                Err(error) => {
-                    return Ok(debug_text_error(
-                        503,
-                        &format!("{}: {}", error.code(), error.detail()),
-                    ));
-                }
-            };
-            Ok(HttpResponse::text(
-                if result.succeeded() { 200 } else { 422 },
-                result.message().to_owned(),
-            )
-            .with_output_through(output_through))
-        },
-        || finish_telemetry(state, ProductDevOperationKind::ExecuteDebug),
-    ) {
+    match state
+        .runtime
+        .session()
+        .with_locked_timed(
+            || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+            |runtime| {
+                let receipt = match runtime.execute_debug(command) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        return Ok(debug_text_error(
+                            500,
+                            &format!("{}: {}", error.code(), error.diagnostic()),
+                        ));
+                    }
+                };
+                let (result, outputs) = match receipt.into_wire_parts() {
+                    Ok(parts) => parts,
+                    Err(error) => {
+                        return Ok(debug_text_error(
+                            503,
+                            &format!("{}: {}", error.code(), error.detail()),
+                        ));
+                    }
+                };
+                let output_through = match push_host_outputs(state, outputs) {
+                    Ok(output_through) => output_through,
+                    Err(error) => {
+                        return Ok(debug_text_error(
+                            503,
+                            &format!("{}: {}", error.code(), error.detail()),
+                        ));
+                    }
+                };
+                Ok(HttpResponse::text(
+                    if result.succeeded() { 200 } else { 422 },
+                    result.message().to_owned(),
+                )
+                .with_output_through(output_through))
+            },
+            || finish_telemetry(state, ProductDevOperationKind::ExecuteDebug),
+        )
+        .map_err(|_| crate::session::runtime_poisoned())
+        .and_then(|response| response)
+    {
         Ok(response) => response,
         Err(error) => HttpResponse::error(500, error.code(), error.diagnostic()),
     }
@@ -2139,7 +2193,10 @@ where
     F: FnOnce(&mut R) -> Result<crate::ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
     E: FnOnce(ProductDevRuntimeError) -> Result<T, ProductDevHostError>,
 {
-    let response = state.runtime.with_locked_runtime_timed(
+    let response = state
+        .runtime
+        .session()
+        .with_locked_timed(
         || begin_telemetry(state, operation),
         |runtime| {
         let receipt = match call(runtime) {
@@ -2169,10 +2226,9 @@ where
                 }, runtime.take_update_attribution()));
             }
         };
-        let (result, outputs) = receipt.into_parts();
         // Encoding is a host-owned preflight. A bad response must not first
         // publish retained output for a runtime mutation the client cannot name.
-        let encoded_result = match encode_runtime_result(&result) {
+        let encoded_result = match encode_runtime_result(receipt.result()) {
             Ok(bytes) => bytes,
             Err(error) => {
                 publish_host_diagnostic(
@@ -2184,6 +2240,21 @@ where
                     [("cause", error.code().to_owned())],
                 );
                 return Ok((HttpResponse::error(500, error.code(), error.detail()), runtime.take_update_attribution()));
+            }
+        };
+        let (_result, outputs) = match receipt.into_wire_parts() {
+            Ok(parts) => parts,
+            Err(error) => {
+                publish_host_diagnostic(
+                    &state.diagnostics,
+                    ProductDevLogSeverity::Warning,
+                    ProductDevLogDisposition::ResyncRequired,
+                    "DEV_HOST_OUTPUT_COMMIT_RESYNC",
+                    "committed runtime receipt could not be encoded for output publication; reconnect for a fresh readout instead of replaying",
+                    [("cause", error.code().to_owned())],
+                );
+                return Ok((HttpResponse::bytes(200, "application/json", encoded_result)
+                    .with_resync_required(), runtime.take_update_attribution()));
             }
         };
         let output_through = match push_host_outputs(state, outputs) {
@@ -2209,7 +2280,9 @@ where
             .with_output_through(output_through), runtime.take_update_attribution()))
         },
         || finish_telemetry(state, operation),
-    );
+    )
+    .map_err(|_| crate::session::runtime_poisoned())
+    .and_then(|response| response);
     match response {
         Ok((response, attribution)) => {
             record_update_attribution(state, attribution);
@@ -2287,12 +2360,24 @@ fn handle_sse<R: ProductDevRuntime>(
             }
         },
         None if fresh_connection => {
-            let connection = state.runtime.with_locked_runtime_timed(
+            let connection = state
+                .runtime
+                .session()
+                .with_locked_timed(
                 || begin_telemetry(&state, ProductDevOperationKind::Connect),
                 |runtime| {
                     let receipt = runtime.connect()?;
                     let connection_output_cursor = receipt.connection_output_cursor();
-                    let (result, outputs) = receipt.into_parts();
+                    let (result, outputs) = match receipt.into_wire_parts() {
+                        Ok(parts) => parts,
+                        Err(error) => {
+                            return Ok(Err(HttpResponse::error(
+                                503,
+                                error.code(),
+                                error.detail(),
+                            )));
+                        }
+                    };
                     // A connection baseline is subscriber-private. Keep its
                     // complete bounded resource set even when its fragment
                     // count exceeds the reconnect ring; public history may
@@ -2362,7 +2447,9 @@ fn handle_sse<R: ProductDevRuntime>(
                     Ok(Ok(cursor))
                 },
                 || finish_telemetry(&state, ProductDevOperationKind::Connect),
-            );
+            )
+            .map_err(|_| crate::session::runtime_poisoned())
+            .and_then(|response| response);
             match connection {
                 Ok(Ok(cursor)) => {
                     state.scheduler_wake.notify();
@@ -3347,13 +3434,14 @@ mod tests {
         let locked_runtime = Arc::clone(&runtime);
         let owner_thread = thread::spawn(move || {
             locked_runtime
-                .with_locked_runtime(|_| {
+                .session()
+                .with_locked(|_| {
                     held.send(()).expect("owner lock marker");
                     release_owner
                         .recv_timeout(Duration::from_secs(1))
                         .expect("owner lock release");
-                    Ok(())
                 })
+                .map_err(|_| crate::session::runtime_poisoned())
                 .expect("owner lock fixture");
         });
         held_ready

@@ -1,12 +1,17 @@
 use render_model::JSON_SAFE_U64_MAX;
 pub use runtime_diagnostics::CanonicalU64;
 use runtime_diagnostics::{RuntimeDiagnosticRuntimeBinding, RuntimeUpdateAttribution};
-use runtime_input::RuntimeInputEvent;
+use runtime_input::{RuntimeInputBinding, RuntimeInputEvent};
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
+use runtime_publication::{
+    RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
+    RuntimePublicationError, RuntimePublicationFrontier,
+};
 use runtime_timeline::{
     RuntimeOpaqueData, RuntimeProvenance, RuntimeTimelineBinding, TimelineCompletionEnvelope,
     TimelineCompletionOutcome, TimelineCompletionTicketId,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -2327,6 +2332,151 @@ impl ProductDevRuntimeOutput {
         })
     }
 
+    /// Converts one logical Engine publication into the existing browser
+    /// output schema. The conversion belongs to this host adapter so the
+    /// neutral runtime-publication crate never acquires JSON wire DTOs or
+    /// delivery policy.
+    pub fn from_publication(publication: RuntimePublication) -> Result<Self, ProductDevHostError> {
+        publication.validate().map_err(publication_error)?;
+        match publication {
+            RuntimePublication::Binding {
+                runtime,
+                next_input_sequence,
+                publication_frontiers,
+            } => {
+                let publication_frontiers = publication_frontiers
+                    .map(|frontiers| {
+                        frontiers
+                            .into_iter()
+                            .map(host_publication_frontier)
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?;
+                let mut output = Self::binding(
+                    host_runtime_binding(runtime),
+                    CanonicalU64::new(next_input_sequence),
+                );
+                if let Some(publication_frontiers) = publication_frontiers {
+                    if let ProductDevRuntimeOutputWire::Binding {
+                        publication_frontiers: destination,
+                        ..
+                    } = &mut output.wire
+                    {
+                        *destination = Some(publication_frontiers);
+                    }
+                }
+                Ok(output)
+            }
+            RuntimePublication::CompleteBaseline {
+                runtime,
+                publication_frontiers,
+            } => Ok(Self::complete_baseline_with_frontiers(
+                host_runtime_binding(runtime),
+                publication_frontiers
+                    .into_iter()
+                    .map(host_publication_frontier)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            RuntimePublication::Frame(frame) => Self::frame(&frame),
+            RuntimePublication::ViewComposition(composition) => {
+                Self::view_composition(&composition)
+            }
+            RuntimePublication::Presentation(frame) => Self::presentation(&frame),
+            RuntimePublication::AnimationCueDefinitions(definitions) => {
+                let definitions = definitions
+                    .into_iter()
+                    .map(host_animation_cue_definition)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Self::animation_cue_definitions(definitions)
+            }
+            RuntimePublication::UiProjection(envelope) => Self::ui_projection(&envelope),
+        }
+    }
+
+    /// Converts the browser wire DTO back to a typed logical publication.
+    /// Runtime readouts, input receipts, and host progress markers are
+    /// deliberately rejected because they are serving-host observations, not
+    /// Engine publications.
+    pub fn into_publication(self) -> Result<RuntimePublication, ProductDevHostError> {
+        match self.wire {
+            ProductDevRuntimeOutputWire::Binding {
+                runtime,
+                next_input_sequence,
+                publication_frontiers,
+            } => {
+                let publication = RuntimePublication::Binding {
+                    runtime: neutral_runtime_binding(runtime),
+                    next_input_sequence: next_input_sequence.get(),
+                    publication_frontiers: publication_frontiers
+                        .map(|frontiers| {
+                            frontiers
+                                .into_iter()
+                                .map(neutral_publication_frontier)
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .transpose()?,
+                };
+                publication.validate().map_err(publication_error)?;
+                Ok(publication)
+            }
+            ProductDevRuntimeOutputWire::CompleteBaseline {
+                runtime,
+                publication_frontiers,
+            } => {
+                let publication = RuntimePublication::complete_baseline_with_frontiers(
+                    neutral_runtime_binding(runtime),
+                    publication_frontiers
+                        .into_iter()
+                        .map(neutral_publication_frontier)
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+                publication.validate().map_err(publication_error)?;
+                Ok(publication)
+            }
+            ProductDevRuntimeOutputWire::Frame { frame } => {
+                RuntimePublication::frame(&decode_render_frame(frame)?).map_err(publication_error)
+            }
+            ProductDevRuntimeOutputWire::ViewComposition { composition } => {
+                let composition = decode_typed_value(composition, "DEV_HOST_VIEW_COMPOSITION")?;
+                RuntimePublication::view_composition(&composition).map_err(publication_error)
+            }
+            ProductDevRuntimeOutputWire::Presentation { frame } => {
+                RuntimePublication::presentation(&decode_presentation_frame(frame)?)
+                    .map_err(publication_error)
+            }
+            ProductDevRuntimeOutputWire::AnimationCueDefinitions { definitions } => {
+                let definitions = definitions
+                    .into_iter()
+                    .map(neutral_animation_cue_definition)
+                    .collect::<Result<Vec<_>, _>>()?;
+                RuntimePublication::animation_cue_definitions(definitions)
+                    .map_err(publication_error)
+            }
+            ProductDevRuntimeOutputWire::UiProjection { envelope } => {
+                let bytes = serde_json::to_vec(&envelope).map_err(|_| {
+                    ProductDevHostError::new(
+                        "DEV_HOST_UI_PROJECTION",
+                        "UI projection output could not be converted to typed JSON",
+                    )
+                })?;
+                let envelope = runtime_ui::RuntimeUiProjectionEnvelope::decode_json(&bytes)
+                    .map_err(|_| {
+                        ProductDevHostError::new(
+                            "DEV_HOST_UI_PROJECTION",
+                            "UI projection output is not a valid typed envelope",
+                        )
+                    })?;
+                RuntimePublication::ui_projection(&envelope).map_err(publication_error)
+            }
+            ProductDevRuntimeOutputWire::RuntimeReadout { .. }
+            | ProductDevRuntimeOutputWire::RuntimeInputResult { .. }
+            | ProductDevRuntimeOutputWire::RuntimeProgress { .. } => Err(ProductDevHostError::new(
+                "DEV_HOST_OUTPUT_LOGICAL_VARIANT",
+                "host-only runtime observation cannot become an Engine publication",
+            )),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn test_frame_value(frame: Value) -> Self {
         Self {
@@ -2617,6 +2767,126 @@ impl ProductDevRuntimeOutput {
     }
 }
 
+fn publication_error(error: RuntimePublicationError) -> ProductDevHostError {
+    ProductDevHostError::new("DEV_HOST_RUNTIME_PUBLICATION", error.to_string())
+}
+
+fn host_runtime_binding(binding: RuntimeInputBinding) -> ProductDevRuntimeBinding {
+    ProductDevRuntimeBinding {
+        instance_id: CanonicalU64::new(binding.instance_id().value()),
+        generation: CanonicalU64::new(binding.generation().value()),
+        control_revision: CanonicalU64::new(binding.control_revision().value()),
+    }
+}
+
+fn neutral_runtime_binding(binding: ProductDevRuntimeBinding) -> RuntimeInputBinding {
+    RuntimeInputBinding::new(
+        RuntimeInstanceId::new(binding.instance_id.get()),
+        RuntimeGeneration::new(binding.generation.get()),
+        RuntimeControlRevision::new(binding.control_revision.get()),
+    )
+}
+
+fn host_publication_frontier(
+    frontier: RuntimePublicationFrontier,
+) -> Result<ProductDevRendererPublicationFrontier, ProductDevHostError> {
+    ProductDevRendererPublicationFrontier::new(frontier.stream().to_owned(), frontier.revision())
+}
+
+fn neutral_publication_frontier(
+    frontier: ProductDevRendererPublicationFrontier,
+) -> Result<RuntimePublicationFrontier, ProductDevHostError> {
+    RuntimePublicationFrontier::new(frontier.stream, frontier.revision).map_err(publication_error)
+}
+
+fn host_animation_cue_definition(
+    definition: RuntimeAnimationCueDefinition,
+) -> Result<ProductDevAnimationCueDefinition, ProductDevHostError> {
+    let signal_domain = match definition.signal_domain() {
+        RuntimeAnimationCueSignalDomain::Audio => ProductDevAnimationCueSignalDomain::Audio,
+        RuntimeAnimationCueSignalDomain::Particle => ProductDevAnimationCueSignalDomain::Particle,
+    };
+    ProductDevAnimationCueDefinition::new(
+        definition.cue_id().to_owned(),
+        definition.asset().to_owned(),
+        definition.clip().to_owned(),
+        definition.marker_millis(),
+        signal_domain,
+        definition.signal_id().to_owned(),
+    )
+}
+
+fn neutral_animation_cue_definition(
+    definition: ProductDevAnimationCueDefinition,
+) -> Result<RuntimeAnimationCueDefinition, ProductDevHostError> {
+    let signal_domain = match definition.signal_domain {
+        ProductDevAnimationCueSignalDomain::Audio => RuntimeAnimationCueSignalDomain::Audio,
+        ProductDevAnimationCueSignalDomain::Particle => RuntimeAnimationCueSignalDomain::Particle,
+    };
+    // The existing host DTO is derived from an Engine millisecond marker.
+    // Round back to the integral source unit before entering the neutral model.
+    let marker_millis = definition.at_seconds * 1_000.0;
+    if !marker_millis.is_finite()
+        || marker_millis < 0.0
+        || marker_millis > u64::MAX as f64
+        || marker_millis.fract() != 0.0
+    {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_ANIMATION_CUE",
+            "animation cue marker is not an integral millisecond value",
+        ));
+    }
+    RuntimeAnimationCueDefinition::new(
+        definition.cue_id,
+        definition.asset,
+        definition.clip,
+        marker_millis as u64,
+        signal_domain,
+        definition.signal_id,
+    )
+    .map_err(publication_error)
+}
+
+fn decode_typed_value<T: DeserializeOwned>(
+    value: Value,
+    code: &'static str,
+) -> Result<T, ProductDevHostError> {
+    serde_json::from_value(value)
+        .map_err(|_| ProductDevHostError::new(code, "typed runtime publication JSON is invalid"))
+}
+
+fn decode_render_frame(value: Value) -> Result<render_model::RenderFrameDiff, ProductDevHostError> {
+    let encoded = serde_json::to_string(&value).map_err(|_| {
+        ProductDevHostError::new(
+            "DEV_HOST_RENDER_FRAME",
+            "render frame output could not be converted to typed JSON",
+        )
+    })?;
+    render_model::RenderFrameDiff::decode_json(&encoded).map_err(|_| {
+        ProductDevHostError::new(
+            "DEV_HOST_RENDER_FRAME",
+            "render frame output is not a valid typed frame",
+        )
+    })
+}
+
+fn decode_presentation_frame(
+    value: Value,
+) -> Result<render_presentation::PresentationFrameDiff, ProductDevHostError> {
+    let encoded = serde_json::to_string(&value).map_err(|_| {
+        ProductDevHostError::new(
+            "DEV_HOST_PRESENTATION_FRAME",
+            "presentation output could not be converted to typed JSON",
+        )
+    })?;
+    render_presentation::PresentationFrameDiff::decode_json(&encoded).map_err(|_| {
+        ProductDevHostError::new(
+            "DEV_HOST_PRESENTATION_FRAME",
+            "presentation output is not a valid typed frame",
+        )
+    })
+}
+
 impl Serialize for ProductDevRuntimeOutput {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.wire.serialize(serializer)
@@ -2633,7 +2903,7 @@ impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
 /// separate server-side output mutation/callback path.
 #[derive(Debug, Clone)]
 pub struct ProductDevRuntimeReceipt<T> {
-    receipt: runtime_session::RuntimeReceipt<T, ProductDevRuntimeOutput>,
+    receipt: runtime_publication::RuntimeReceipt<T>,
     connection_output_cursor: Option<u64>,
 }
 
@@ -2707,11 +2977,10 @@ fn bounded_diagnostic(value: String) -> Result<String, ProductDevHostError> {
 }
 
 impl<T> ProductDevRuntimeReceipt<T> {
-    pub fn new(
-        result: T,
-        outputs: Vec<ProductDevRuntimeOutput>,
-    ) -> Result<Self, ProductDevHostError> {
-        ProductDevRuntimeOutput::validate_output_group(&outputs)?;
+    pub fn new(result: T, outputs: Vec<RuntimePublication>) -> Result<Self, ProductDevHostError> {
+        for output in &outputs {
+            output.validate().map_err(publication_error)?;
+        }
         Ok(Self {
             receipt: runtime_session::RuntimeReceipt::new(result, outputs),
             connection_output_cursor: None,
@@ -2736,8 +3005,20 @@ impl<T> ProductDevRuntimeReceipt<T> {
         self.connection_output_cursor
     }
 
-    pub fn into_parts(self) -> (T, Vec<ProductDevRuntimeOutput>) {
+    pub fn into_parts(self) -> (T, Vec<RuntimePublication>) {
         self.receipt.into_parts()
+    }
+
+    /// Encode only at the serving/worker edge. Runtime receipts retain typed
+    /// Engine facts; byte budgets and JSON conversion belong to this adapter.
+    pub fn into_wire_parts(self) -> Result<(T, Vec<ProductDevRuntimeOutput>), ProductDevHostError> {
+        let (result, publications) = self.into_parts();
+        let outputs = publications
+            .into_iter()
+            .map(ProductDevRuntimeOutput::from_publication)
+            .collect::<Result<Vec<_>, _>>()?;
+        ProductDevRuntimeOutput::validate_output_group(&outputs)?;
+        Ok((result, outputs))
     }
 }
 
@@ -3101,6 +3382,72 @@ mod tests {
             ProductDevRuntimeOutput::decode_json(&encoded).unwrap(),
             output
         );
+    }
+
+    #[test]
+    fn logical_publications_round_trip_through_the_existing_wire_schema() {
+        use render_model::RenderFrameDiff;
+        use runtime_input::RuntimeInputBinding;
+        use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
+        use runtime_publication::{
+            RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
+            RuntimePublicationFrontier,
+        };
+        use runtime_ui::{RuntimeUiProjectionEnvelope, RuntimeUiRuntimeBinding};
+
+        let binding = RuntimeInputBinding::new(
+            RuntimeInstanceId::new(7),
+            RuntimeGeneration::new(3),
+            RuntimeControlRevision::new(5),
+        );
+        let frontier = RuntimePublicationFrontier::new("voxel", 4).unwrap();
+        let baseline =
+            RuntimePublication::complete_baseline_with_frontiers(binding, vec![frontier]);
+        let baseline_wire = ProductDevRuntimeOutput::from_publication(baseline.clone()).unwrap();
+        assert_eq!(baseline_wire.into_publication().unwrap(), baseline);
+
+        let frame = RenderFrameDiff::new();
+        let frame_publication = RuntimePublication::frame(&frame).unwrap();
+        let frame_wire =
+            ProductDevRuntimeOutput::from_publication(frame_publication.clone()).unwrap();
+        assert_eq!(frame_wire.into_publication().unwrap(), frame_publication);
+
+        let cue = RuntimeAnimationCueDefinition::new(
+            "footstep",
+            "audio/footstep",
+            "walk",
+            125,
+            RuntimeAnimationCueSignalDomain::Audio,
+            "left",
+        )
+        .unwrap();
+        let cue_publication = RuntimePublication::animation_cue_definitions(vec![cue]).unwrap();
+        let cue_wire = ProductDevRuntimeOutput::from_publication(cue_publication.clone()).unwrap();
+        assert_eq!(cue_wire.into_publication().unwrap(), cue_publication);
+
+        let envelope = RuntimeUiProjectionEnvelope::new(
+            RuntimeUiRuntimeBinding::new(
+                RuntimeInstanceId::new(7),
+                RuntimeGeneration::new(3),
+                RuntimeControlRevision::new(5),
+            ),
+            1,
+            "hud",
+            "fixture",
+            serde_json::json!({ "visible": true }),
+        )
+        .unwrap();
+        let ui_publication = RuntimePublication::ui_projection(&envelope).unwrap();
+        let ui_wire = ProductDevRuntimeOutput::from_publication(ui_publication.clone()).unwrap();
+        assert_eq!(ui_wire.into_publication().unwrap(), ui_publication);
+    }
+
+    #[test]
+    fn host_observations_do_not_enter_the_logical_publication_model() {
+        let error = ProductDevRuntimeOutput::runtime_progress()
+            .into_publication()
+            .expect_err("host progress is not an Engine publication");
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_LOGICAL_VARIANT");
     }
 
     #[test]

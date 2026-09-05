@@ -20,6 +20,7 @@ mod error;
 mod host;
 mod log;
 mod model;
+mod scheduler;
 mod session;
 mod worker;
 
@@ -60,6 +61,11 @@ pub use model::{
     ProductDevUpdateAttributionSnapshot, ProductDevWorkerUpdateSnapshot, PRODUCT_DEV_HOST_ARTIFACT,
     PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
+pub use runtime_publication::{
+    RuntimeAnimationCueDefinition, RuntimeAnimationCueSignalDomain, RuntimePublication,
+    RuntimePublicationError, RuntimePublicationFrontier, RuntimeReceipt,
+};
+pub use scheduler::advance_realtime_with_input_and_publish;
 pub use session::ProductDevOperationOwner;
 pub use worker::{
     read_worker_frame, write_worker_frame, ProductDevWorkerBundle, ProductDevWorkerBundleEntry,

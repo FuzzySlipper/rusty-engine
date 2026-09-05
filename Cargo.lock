@@ -724,6 +724,7 @@ dependencies = [
  "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",
+ "runtime-publication",
  "runtime-session",
  "runtime-timeline",
  "runtime-ui",
@@ -2985,6 +2986,7 @@ dependencies = [
  "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",
+ "runtime-publication",
  "runtime-session",
  "runtime-timeline",
  "runtime-ui",
@@ -3226,6 +3228,20 @@ dependencies = [
 [[package]]
 name = "runtime-lifecycle"
 version = "0.1.0"
+
+[[package]]
+name = "runtime-publication"
+version = "0.1.0"
+dependencies = [
+ "render-host-contracts",
+ "render-model",
+ "render-presentation",
+ "runtime-input",
+ "runtime-lifecycle",
+ "runtime-session",
+ "runtime-ui",
+ "serde_json",
+]
 
 [[package]]
 name = "runtime-session"
