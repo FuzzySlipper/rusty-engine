@@ -31,8 +31,8 @@ use product_dev_host::{
     ProductDevTimelineCompletionResult, ProductDevWorkerBundle, ProductDevWorkerBundleEntry,
     ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic, ProductDevWorkerEvent,
     ProductDevWorkerFault, ProductDevWorkerFeedbackOperation, ProductDevWorkerLifecycleOperation,
-    ProductDevWorkerOutputBatch, ProductDevWorkerRequest, ProductDevWorkerResponse,
-    ProductDevWorkerUpdateOperation, RunningProductDevHost,
+    ProductDevWorkerOutputBatch, ProductDevWorkerPublication, ProductDevWorkerRequest,
+    ProductDevWorkerResponse, ProductDevWorkerUpdateOperation, RunningProductDevHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -496,7 +496,7 @@ fn replacement_arguments(
 #[derive(Clone)]
 struct WorkerRuntime {
     connection: Arc<Mutex<WorkerConnection>>,
-    outputs: mpsc::SyncSender<ProductDevWorkerOutputBatch>,
+    outputs: mpsc::SyncSender<ProductDevWorkerPublication>,
     output_generation: Arc<AtomicUsize>,
     diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
     failures: mpsc::SyncSender<u64>,
@@ -508,10 +508,15 @@ struct PendingWorker {
     generation: u64,
 }
 
+struct WorkerResponse {
+    response: ProductDevWorkerResponse,
+    connection_output_cursor: Option<u64>,
+}
+
 struct WorkerConnection {
     child: Child,
     writer: TcpStream,
-    responses: mpsc::Receiver<Result<ProductDevWorkerResponse, ProductDevRuntimeError>>,
+    responses: mpsc::Receiver<Result<WorkerResponse, ProductDevRuntimeError>>,
     next_request_id: u64,
     reader: Option<thread::JoinHandle<()>>,
     generation: u64,
@@ -565,7 +570,7 @@ impl WorkerRuntime {
             Self,
             ProductDevBundle,
             Vec<ProductDevRuntimeOutput>,
-            mpsc::Receiver<ProductDevWorkerOutputBatch>,
+            mpsc::Receiver<ProductDevWorkerPublication>,
             mpsc::Receiver<ProductDevWorkerDiagnostic>,
             mpsc::Receiver<u64>,
         ),
@@ -672,7 +677,7 @@ impl WorkerRuntime {
 
     fn spawn_connection(
         args: &Arguments,
-        output_tx: mpsc::SyncSender<ProductDevWorkerOutputBatch>,
+        output_tx: mpsc::SyncSender<ProductDevWorkerPublication>,
         diagnostic_tx: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
         failure_tx: mpsc::SyncSender<u64>,
         scheduler_inflight: Arc<Mutex<Option<(u64, Instant)>>>,
@@ -888,6 +893,10 @@ fn invoke_connection<T: serde::de::DeserializeOwned>(
             ));
         }
     };
+    let WorkerResponse {
+        response,
+        connection_output_cursor,
+    } = response;
     if response.request_id != request_id {
         stop_worker(connection);
         let _ = failures.try_send(connection.generation);
@@ -931,13 +940,17 @@ fn invoke_connection<T: serde::de::DeserializeOwned>(
             return Err(error);
         }
     };
-    ProductDevRuntimeReceipt::new(result, outputs).map_err(worker_host_error)
+    let receipt = ProductDevRuntimeReceipt::new(result, outputs).map_err(worker_host_error)?;
+    Ok(match connection_output_cursor {
+        Some(cursor) => receipt.with_connection_output_cursor(cursor),
+        None => receipt,
+    })
 }
 
 fn worker_reader(
     mut channel: TcpStream,
-    responses: mpsc::Sender<Result<ProductDevWorkerResponse, ProductDevRuntimeError>>,
-    outputs: mpsc::SyncSender<ProductDevWorkerOutputBatch>,
+    responses: mpsc::Sender<Result<WorkerResponse, ProductDevRuntimeError>>,
+    outputs: mpsc::SyncSender<ProductDevWorkerPublication>,
     diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
     failures: mpsc::SyncSender<u64>,
     scheduler_inflight: Arc<Mutex<Option<(u64, Instant)>>>,
@@ -945,8 +958,48 @@ fn worker_reader(
 ) {
     loop {
         match read_worker_frame::<ProductDevWorkerEvent>(&mut channel) {
+            Ok(ProductDevWorkerEvent::ConnectionResponse(response)) => {
+                // The child writes this between serialized publications. Route
+                // a marker through the same shell queue as those publications;
+                // later ticks must not move this snapshot's subscription cursor.
+                let (acknowledged, acknowledgement) = mpsc::sync_channel(1);
+                let queued = outputs.try_send(ProductDevWorkerPublication::ConnectionBoundary {
+                    generation,
+                    acknowledged,
+                });
+                let cursor = queued.ok().and_then(|()| {
+                    acknowledgement
+                        .recv_timeout(WORKER_OPERATION_TIMEOUT)
+                        .ok()
+                        .flatten()
+                });
+                let Some(cursor) = cursor else {
+                    let error = worker_runtime_error(
+                        "DEV_HOST_WORKER_CONNECTION_BOUNDARY",
+                        "worker connection publication boundary was not acknowledged",
+                    );
+                    let _ = responses.send(Err(error));
+                    let _ = failures.try_send(generation);
+                    return;
+                };
+                if responses
+                    .send(Ok(WorkerResponse {
+                        response,
+                        connection_output_cursor: Some(cursor),
+                    }))
+                    .is_err()
+                {
+                    return;
+                }
+            }
             Ok(ProductDevWorkerEvent::Response(response)) => {
-                if responses.send(Ok(response)).is_err() {
+                if responses
+                    .send(Ok(WorkerResponse {
+                        response,
+                        connection_output_cursor: None,
+                    }))
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -956,10 +1009,12 @@ fn worker_reader(
                     .map(worker_output)
                     .collect::<Result<Vec<_>, _>>();
                 match decoded {
-                    Ok(decoded) => match outputs.try_send(ProductDevWorkerOutputBatch {
-                        generation,
-                        outputs: decoded,
-                    }) {
+                    Ok(decoded) => match outputs.try_send(ProductDevWorkerPublication::Outputs(
+                        ProductDevWorkerOutputBatch {
+                            generation,
+                            outputs: decoded,
+                        },
+                    )) {
                         Ok(()) => {}
                         Err(mpsc::TrySendError::Disconnected(_)) => return,
                         Err(mpsc::TrySendError::Full(_)) => {
@@ -1399,6 +1454,9 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             .map_err(|error| format!("DEV_HOST_WORKER_CHANNEL: {error}"))?,
     ));
     let scheduler_shutdown = Arc::new(AtomicBool::new(false));
+    // Mutation, snapshotting, encoding, and wire publication share one order.
+    // The runtime owner alone does not cover encoding after a receipt returns.
+    let publication_gate = Arc::new(Mutex::new(()));
     let mut scheduler: Option<thread::JoinHandle<()>> = None;
     loop {
         let request = match read_worker_frame::<ProductDevWorkerRequest>(&mut channel) {
@@ -1434,13 +1492,28 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             }
             continue;
         }
+        let connection = matches!(
+            request,
+            ProductDevWorkerRequest::Lifecycle {
+                operation: ProductDevWorkerLifecycleOperation::Connect,
+                ..
+            }
+        );
+        let publication = publication_gate
+            .lock()
+            .map_err(|_| "DEV_HOST_WORKER_PUBLICATION: publication lock is poisoned".to_owned())?;
         let result = worker_request(&owner, &mailbox, request);
+        let response = if connection {
+            ProductDevWorkerEvent::ConnectionResponse(result)
+        } else {
+            ProductDevWorkerEvent::Response(result)
+        };
         let worker_diagnostics = drain_worker_diagnostics_shared(&diagnostics, &diagnostic_cursor);
         let write = writer
             .lock()
             .map_err(|_| "DEV_HOST_WORKER_CHANNEL: writer lock is poisoned".to_owned())
             .and_then(|mut writer| {
-                write_worker_frame(&mut *writer, &ProductDevWorkerEvent::Response(result))
+                write_worker_frame(&mut *writer, &response)
                     .and_then(|_| {
                         if worker_diagnostics.is_empty() {
                             Ok(())
@@ -1455,6 +1528,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
                     })
                     .map_err(|error| error.to_string())
             });
+        drop(publication);
         if let Err(error) = write {
             scheduler_shutdown.store(true, Ordering::Release);
             if let Some(scheduler) = scheduler.take() {
@@ -1469,6 +1543,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             let shutdown = Arc::clone(&scheduler_shutdown);
             let diagnostics = diagnostics.clone();
             let diagnostic_cursor = Arc::clone(&diagnostic_cursor);
+            let publication_gate = Arc::clone(&publication_gate);
             scheduler = Some(
                 thread::Builder::new()
                     .name("rusty-product-worker-scheduler".to_owned())
@@ -1480,6 +1555,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
                             shutdown,
                             diagnostics,
                             diagnostic_cursor,
+                            publication_gate,
                         )
                     })
                     .map_err(|error| format!("DEV_HOST_WORKER_SCHEDULER: {error}"))?,
@@ -1500,6 +1576,7 @@ fn worker_scheduler(
     shutdown: Arc<AtomicBool>,
     diagnostics: ProductDevLog,
     diagnostic_cursor: Arc<Mutex<Option<u64>>>,
+    publication_gate: Arc<Mutex<()>>,
 ) {
     let started = Instant::now();
     while !shutdown.load(Ordering::Acquire) {
@@ -1517,6 +1594,14 @@ fn worker_scheduler(
             thread::sleep(Duration::from_millis(10));
             continue;
         }
+        let publication = match publication_gate.lock() {
+            Ok(publication) => publication,
+            Err(_) => {
+                shutdown.store(true, Ordering::Release);
+                shutdown_worker_channel(&writer);
+                return;
+            }
+        };
         let observed =
             CanonicalU64::new(started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
         let mut input_outputs = Vec::new();
@@ -1595,6 +1680,7 @@ fn worker_scheduler(
                 return;
             }
         }
+        drop(publication);
         thread::sleep(interval);
     }
 }
@@ -2430,7 +2516,9 @@ impl Arguments {
                 }
                 "--physical-mapping" => {
                     if physical_mappings.len() == MAX_PHYSICAL_MAPPINGS {
-                        return Err(format!("--physical-mapping accepts at most {MAX_PHYSICAL_MAPPINGS} declarations"));
+                        return Err(format!(
+                            "--physical-mapping accepts at most {MAX_PHYSICAL_MAPPINGS} declarations"
+                        ));
                     }
                     physical_mappings.push(parse_physical_mapping(
                         &values
@@ -2521,7 +2609,7 @@ impl Arguments {
             (Some(_), None) => {
                 return Err(
                     "--loader is required with --product; choose nativeaot or coreclr".to_owned(),
-                )
+                );
             }
             (None, Some(loader)) => loader,
             (None, None) => ProductLoader::NativeAot,
@@ -2580,10 +2668,10 @@ impl Arguments {
                     return Err(
                         "--loader coreclr requires --runtimeconfig <product.runtimeconfig.json>"
                             .to_owned(),
-                    )
+                    );
                 }
                 (ProductLoader::NativeAot, Some(_)) => {
-                    return Err("--runtimeconfig is only valid with --loader coreclr".to_owned())
+                    return Err("--runtimeconfig is only valid with --loader coreclr".to_owned());
                 }
                 _ => {}
             }
@@ -2949,6 +3037,72 @@ fn content_type(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_response_keeps_its_ordered_output_boundary() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut child = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (channel, _) = listener.accept().unwrap();
+        let (response_tx, response_rx) = mpsc::channel();
+        let (output_tx, output_rx) = mpsc::sync_channel(8);
+        let (diagnostic_tx, _diagnostic_rx) = mpsc::sync_channel(8);
+        let (failure_tx, _failure_rx) = mpsc::sync_channel(8);
+        let reader = thread::spawn(move || {
+            worker_reader(
+                channel,
+                response_tx,
+                output_tx,
+                diagnostic_tx,
+                failure_tx,
+                Arc::new(Mutex::new(None)),
+                3,
+            )
+        });
+        let output = ProductDevWorkerEvent::Outputs {
+            outputs: vec![serde_json::json!({ "kind": "runtime-progress", "owner": "rust-host" })],
+        };
+        write_worker_frame(&mut child, &output).unwrap();
+        write_worker_frame(
+            &mut child,
+            &ProductDevWorkerEvent::ConnectionResponse(ProductDevWorkerResponse {
+                request_id: 7,
+                result: Some(serde_json::json!({ "accepted": true })),
+                outputs: Vec::new(),
+                error: None,
+            }),
+        )
+        .unwrap();
+        write_worker_frame(&mut child, &output).unwrap();
+        assert!(matches!(
+            output_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ProductDevWorkerPublication::Outputs(_)
+        ));
+        let ProductDevWorkerPublication::ConnectionBoundary {
+            generation,
+            acknowledged,
+        } = output_rx.recv_timeout(Duration::from_secs(2)).unwrap()
+        else {
+            panic!("the snapshot boundary precedes later output");
+        };
+        assert_eq!(generation, 3);
+        assert!(matches!(
+            response_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        acknowledged.send(Some(41)).unwrap();
+        let response = response_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.response.request_id, 7);
+        assert_eq!(response.connection_output_cursor, Some(41));
+        assert!(matches!(
+            output_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ProductDevWorkerPublication::Outputs(_)
+        ));
+        child.shutdown(Shutdown::Both).unwrap();
+        reader.join().unwrap();
+    }
 
     fn parse_test_args(arguments: &[&str]) -> Result<Arguments, String> {
         let mut values = vec![

@@ -64,8 +64,9 @@ pub use worker::{
     read_worker_frame, write_worker_frame, ProductDevWorkerBundle, ProductDevWorkerBundleEntry,
     ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic, ProductDevWorkerDiagnosticField,
     ProductDevWorkerEvent, ProductDevWorkerFault, ProductDevWorkerFeedbackOperation,
-    ProductDevWorkerLifecycleOperation, ProductDevWorkerOutputBatch, ProductDevWorkerRequest,
-    ProductDevWorkerResponse, ProductDevWorkerUpdateOperation, MAX_WORKER_FRAME_BYTES,
+    ProductDevWorkerLifecycleOperation, ProductDevWorkerOutputBatch, ProductDevWorkerPublication,
+    ProductDevWorkerRequest, ProductDevWorkerResponse, ProductDevWorkerUpdateOperation,
+    MAX_WORKER_FRAME_BYTES,
 };
 
 /// Upper bound for one HTTP request header block, including its terminator.

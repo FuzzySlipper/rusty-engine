@@ -85,7 +85,10 @@ browser/GPU objects. Fresh browser attachment reads committed Rust snapshots
 without calling the product's `Attach` callback. Graphics snapshots preserve
 active handles and resource dependencies, with a `presentation-world`
 continuation revision. The runtime session guard covers snapshot capture and
-the output cursor handover, so subsequent deltas follow that snapshot.
+the output cursor handover, so subsequent deltas follow that snapshot. A worker
+also serializes snapshot responses with output publication; the shell captures
+their ordered queue boundary before later ticks can advance the cursor. The
+presentation revision and transport cursor remain separate facts.
 
 The TS `render-projection` model has no Three or DOM dependency. A mounted
 `renderer-host` surface and its `renderer-three` backend share one neutral

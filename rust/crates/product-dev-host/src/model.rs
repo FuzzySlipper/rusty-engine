@@ -2525,6 +2525,7 @@ impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
 pub struct ProductDevRuntimeReceipt<T> {
     result: T,
     outputs: Vec<ProductDevRuntimeOutput>,
+    connection_output_cursor: Option<u64>,
 }
 
 fn encode_validated_wire(value: String) -> Result<Value, ProductDevHostError> {
@@ -2590,11 +2591,29 @@ impl<T> ProductDevRuntimeReceipt<T> {
                 ));
             }
         }
-        Ok(Self { result, outputs })
+        Ok(Self {
+            result,
+            outputs,
+            connection_output_cursor: None,
+        })
     }
 
     pub fn result(&self) -> &T {
         &self.result
+    }
+
+    /// Attaches the shell-retained output cursor captured at a fresh worker
+    /// connection boundary. This is local delivery metadata, not a product
+    /// output or a worker-wire field.
+    pub fn with_connection_output_cursor(mut self, cursor: u64) -> Self {
+        self.connection_output_cursor = Some(cursor);
+        self
+    }
+
+    /// Returns the shell-retained output cursor captured with a fresh worker
+    /// connection response, when this receipt originated from that path.
+    pub const fn connection_output_cursor(&self) -> Option<u64> {
+        self.connection_output_cursor
     }
 
     pub fn into_parts(self) -> (T, Vec<ProductDevRuntimeOutput>) {

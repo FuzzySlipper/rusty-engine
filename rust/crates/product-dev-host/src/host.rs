@@ -23,7 +23,7 @@ use crate::{
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
     ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, ProductDevWorkerDiagnostic,
-    ProductDevWorkerOutputBatch, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
+    ProductDevWorkerPublication, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
     MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
     MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
@@ -43,7 +43,7 @@ pub const MAX_HOST_INPUT_BATCHES: usize = 256;
 /// A deliberately narrow test seam for one listener accept decision. It is
 /// not a transport abstraction: production always invokes `TcpListener`.
 type AcceptDecisionHook = Arc<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>;
-type WorkerOutputReceiver = Arc<Mutex<mpsc::Receiver<ProductDevWorkerOutputBatch>>>;
+type WorkerOutputReceiver = Arc<Mutex<mpsc::Receiver<ProductDevWorkerPublication>>>;
 type WorkerDiagnosticReceiver = Arc<Mutex<mpsc::Receiver<ProductDevWorkerDiagnostic>>>;
 
 /// Configuration for the fixed development host.
@@ -111,7 +111,7 @@ impl ProductDevHostConfig {
     /// is intentionally one-way: requests remain on the typed runtime owner.
     pub fn with_worker_outputs(
         mut self,
-        receiver: mpsc::Receiver<ProductDevWorkerOutputBatch>,
+        receiver: mpsc::Receiver<ProductDevWorkerPublication>,
         generation: Arc<AtomicUsize>,
         failures: mpsc::SyncSender<u64>,
         initial_outputs: Vec<ProductDevRuntimeOutput>,
@@ -275,7 +275,7 @@ impl ProductDevHost {
                             Err(_) => return,
                         };
                         match batch {
-                            Ok(outputs_from_worker) => {
+                            Ok(ProductDevWorkerPublication::Outputs(outputs_from_worker)) => {
                                 let _projection = match projection_gate.read() {
                                     Ok(gate) => gate,
                                     Err(_) => return,
@@ -301,6 +301,18 @@ impl ProductDevHost {
                                         let _ = failures.try_send(worker_generation);
                                     }
                                 }
+                            }
+                            Ok(ProductDevWorkerPublication::ConnectionBoundary {
+                                generation: boundary_generation,
+                                acknowledged,
+                            }) => {
+                                let cursor = worker_connection_boundary_cursor(
+                                    &outputs,
+                                    &projection_gate,
+                                    &generation,
+                                    boundary_generation,
+                                );
+                                let _ = acknowledged.send(cursor);
                             }
                             Err(mpsc::RecvTimeoutError::Timeout) => {}
                             Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -2142,6 +2154,7 @@ fn handle_sse<R: ProductDevRuntime>(
                 || begin_telemetry(&state, ProductDevOperationKind::Connect),
                 |runtime| {
                     let receipt = runtime.connect()?;
+                    let connection_output_cursor = receipt.connection_output_cursor();
                     let (result, outputs) = receipt.into_parts();
                     let isolated = Mutex::new(OutputBus::default());
                     if let Err(error) = push_outputs(&isolated, outputs) {
@@ -2184,13 +2197,27 @@ fn handle_sse<R: ProductDevRuntime>(
                             )));
                         }
                     };
-                    // Keep runtime connection, binding publication, and cursor
-                    // assignment in one owner section so a scheduler receipt
-                    // cannot be emitted between them.
+                    // The disposable worker supplies the cursor captured by
+                    // its ordered output boundary. Never replace it with the
+                    // current bus cursor: later worker deltas may already be
+                    // retained while this connection baseline is decoded.
                     outputs.active_binding = Some(connection_binding);
                     private_events = isolated.events.into_iter().collect();
                     connection_result = Some(result_json);
-                    let cursor = outputs.next_id;
+                    let cursor = if state.disposable_worker_runtime {
+                        match connection_output_cursor {
+                            Some(cursor) => cursor,
+                            None => {
+                                return Ok(Err(HttpResponse::error(
+                                    503,
+                                    "DEV_HOST_WORKER_CONNECTION_CURSOR",
+                                    "worker connection response did not establish an output boundary",
+                                )));
+                            }
+                        }
+                    } else {
+                        outputs.next_id
+                    };
                     Ok(Ok(cursor))
                 },
                 || finish_telemetry(&state, ProductDevOperationKind::Connect),
@@ -2414,6 +2441,24 @@ fn push_host_outputs<R: ProductDevRuntime>(
         state.output_wake.notify();
     }
     Ok(output_through)
+}
+
+/// Captures the retained cursor immediately after every worker publication
+/// ordered before a fresh connection response. The projection gate keeps a
+/// replacement from changing the active generation while the cursor is read.
+/// A stale worker or poisoned owner deliberately produces no cursor, forcing
+/// the fresh attachment to recover instead of skipping uncertain deltas.
+fn worker_connection_boundary_cursor(
+    outputs: &Mutex<OutputBus>,
+    projection_gate: &RwLock<()>,
+    active_generation: &AtomicUsize,
+    boundary_generation: u64,
+) -> Option<u64> {
+    let _projection = projection_gate.read().ok()?;
+    if active_generation.load(Ordering::Acquire) as u64 != boundary_generation {
+        return None;
+    }
+    outputs.lock().ok().map(|outputs| outputs.next_id)
 }
 
 fn push_outputs_staged(
@@ -3109,6 +3154,43 @@ mod tests {
         assert_eq!(value["outputs"].as_array().map(Vec::len), Some(2));
         assert_eq!(value["outputs"][0]["kind"], "runtime-readout");
         assert_eq!(value["outputs"][1]["kind"], "runtime-progress");
+    }
+
+    #[test]
+    fn worker_connection_boundary_keeps_later_output_after_its_cursor() {
+        let runtime = binding();
+        let outputs = Mutex::new(OutputBus {
+            active_binding: Some(runtime),
+            ..OutputBus::default()
+        });
+        append_output_events(
+            &mut outputs.lock().expect("output bus lock"),
+            runtime,
+            vec![crate::ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"revision": "67"}),
+            )],
+        )
+        .expect("snapshot prefix publishes");
+        let gate = RwLock::new(());
+        let generation = AtomicUsize::new(7);
+        let cursor = worker_connection_boundary_cursor(&outputs, &gate, &generation, 7)
+            .expect("current worker boundary has a cursor");
+
+        append_output_events(
+            &mut outputs.lock().expect("output bus lock"),
+            runtime,
+            vec![crate::ProductDevRuntimeOutput::test_frame_value(
+                serde_json::json!({"revision": "68"}),
+            )],
+        )
+        .expect("following delta publishes");
+        let following = outputs.lock().expect("output bus lock").after(cursor);
+        assert_eq!(following.events.len(), 1);
+        assert!(following.events[0].json.contains("68"));
+        assert!(
+            worker_connection_boundary_cursor(&outputs, &gate, &generation, 8).is_none(),
+            "a retired worker cannot establish a cursor for the active projection"
+        );
     }
 
     fn representative_realtime_receipt(tick: u64) -> Vec<ProductDevRuntimeOutput> {

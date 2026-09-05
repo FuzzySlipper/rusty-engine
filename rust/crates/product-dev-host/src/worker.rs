@@ -4,7 +4,10 @@
 //! already-admitted product bundle at worker readiness plus concrete runtime
 //! operations and their receipts; it is not a product extension protocol.
 
-use std::io::{self, Read, Write};
+use std::{
+    io::{self, Read, Write},
+    sync::mpsc::SyncSender,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -173,6 +176,20 @@ pub struct ProductDevWorkerOutputBatch {
     pub outputs: Vec<crate::ProductDevRuntimeOutput>,
 }
 
+/// One ordered shell-side publication item from a disposable worker.
+///
+/// A connection boundary follows every output frame that the worker emitted
+/// before a connection snapshot response. The browser host acknowledges the
+/// exact retained output cursor after it has committed that prefix; it does
+/// not cross the worker wire or become a product callback.
+pub enum ProductDevWorkerPublication {
+    Outputs(ProductDevWorkerOutputBatch),
+    ConnectionBoundary {
+        generation: u64,
+        acknowledged: SyncSender<Option<u64>>,
+    },
+}
+
 impl ProductDevWorkerDiagnostic {
     pub fn from_log_event(event: ProductDevLogEvent) -> Self {
         Self {
@@ -249,6 +266,10 @@ pub enum ProductDevWorkerEvent {
         diagnostics: Vec<ProductDevWorkerDiagnostic>,
     },
     Response(ProductDevWorkerResponse),
+    /// A fresh-connection response. The shell reader inserts its local
+    /// publication boundary immediately before forwarding this response to
+    /// the invoking runtime owner.
+    ConnectionResponse(ProductDevWorkerResponse),
     Outputs {
         outputs: Vec<Value>,
     },
