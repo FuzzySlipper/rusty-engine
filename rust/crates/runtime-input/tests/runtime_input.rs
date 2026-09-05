@@ -640,6 +640,37 @@ fn wire_decode_retains_canonical_host_facts_and_rejects_bad_values() {
 }
 
 #[test]
+fn browser_digit_controls_use_the_same_strict_wire_names_as_letters() {
+    let controls = [
+        KeyboardControl::Digit0,
+        KeyboardControl::Digit1,
+        KeyboardControl::Digit2,
+        KeyboardControl::Digit3,
+        KeyboardControl::Digit4,
+        KeyboardControl::Digit5,
+        KeyboardControl::Digit6,
+        KeyboardControl::Digit7,
+        KeyboardControl::Digit8,
+        KeyboardControl::Digit9,
+    ];
+    for (digit, control) in controls.into_iter().enumerate() {
+        let code = format!("digit-{digit}");
+        let wire = serde_json::json!({
+            "runtime": {"instanceId": "41", "generation": "1", "controlRevision": "1"},
+            "sequence": "14", "context": "gameplay.default",
+            "fact": {"kind": "key", "code": code, "edge": "pressed"}
+        });
+        let decoded = runtime_input::decode_runtime_input_wire_event_json(
+            &serde_json::to_vec(&wire).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(decoded, RuntimeInputEvent::Physical(event)
+            if event.fact() == &RuntimeInputFact::Key { code: control, edge: PhysicalEdge::Pressed }));
+        assert_eq!(serde_json::to_value(control).unwrap(), code);
+    }
+}
+
+#[test]
 fn neutral_mapping_construction_validates_identity_and_value_kind() {
     assert_eq!(
         serde_json::to_string(&IntentValueKind::ProductPayload).unwrap(),

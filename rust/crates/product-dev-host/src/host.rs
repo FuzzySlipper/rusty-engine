@@ -1534,7 +1534,9 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
             true => {
                 state.scheduler_wake.notify();
                 match ProductDevInputResult::queued(count) {
-                    Ok(result) => json_response(200, &result),
+                    // Admission committed to the mailbox; runtime consumption
+                    // and its output cursor arrive separately through SSE.
+                    Ok(result) => json_response(200, &result).with_committed(),
                     Err(error) => HttpResponse::error(500, error.code(), error.detail()),
                 }
             }
@@ -3075,13 +3077,21 @@ mod tests {
         let input_state = Arc::clone(&state);
         let input_thread = thread::spawn(move || {
             response
-                .send(invoke_input(&input_state, br#"{"batch":[]}"#))
+                .send(invoke_input(&input_state, br#"{"batch":[{"runtime":{"instanceId":"41","generation":"1","controlRevision":"1"},"sequence":"14","context":"gameplay.default","fact":{"kind":"key","code":"digit-1","edge":"pressed"}},{"runtime":{"instanceId":"41","generation":"1","controlRevision":"1"},"sequence":"15","context":"gameplay.default","fact":{"kind":"key","code":"digit-1","edge":"released"}}]}"#))
                 .expect("input response");
         });
         let input_response = response_ready
             .recv_timeout(Duration::from_millis(100))
             .expect("input enqueue must not wait for a slow product update");
         assert_eq!(input_response.status, 200);
+        assert!(matches!(
+            input_response.commit_disposition,
+            Some(CommitDisposition::Committed)
+        ));
+        assert_eq!(input_response.output_through, None);
+        let body: serde_json::Value = serde_json::from_slice(&input_response.body).unwrap();
+        assert_eq!(body["accepted"], true);
+        assert_eq!(body["acceptedCount"], 2);
         assert_eq!(state.input_mailbox.len(), 1);
 
         release.send(()).expect("release runtime owner");

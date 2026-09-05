@@ -69,15 +69,25 @@ pub enum KeyboardControl {
     KeyX,
     KeyY,
     KeyZ,
+    #[serde(rename = "digit-0")]
     Digit0,
+    #[serde(rename = "digit-1")]
     Digit1,
+    #[serde(rename = "digit-2")]
     Digit2,
+    #[serde(rename = "digit-3")]
     Digit3,
+    #[serde(rename = "digit-4")]
     Digit4,
+    #[serde(rename = "digit-5")]
     Digit5,
+    #[serde(rename = "digit-6")]
     Digit6,
+    #[serde(rename = "digit-7")]
     Digit7,
+    #[serde(rename = "digit-8")]
     Digit8,
+    #[serde(rename = "digit-9")]
     Digit9,
     Space,
     Enter,
