@@ -28488,7 +28488,12 @@ async function fD(e, t) {
 				complete: !0,
 				publicationFrontiers: s.publicationFrontiers
 			});
-			s === null ? de.splice(0, de.length, ...c.remainingOutputs) : de.splice(0, s.outputs.length, ...c.remainingOutputs), n = JE(e.renderer, c.frame, c.publicationFrontiers), o = !0;
+			if (s === null) de.splice(0, de.length, ...c.remainingOutputs);
+			else {
+				let e = new Set(s.outputs.filter((e) => e.kind === "frame")), t = de.filter((t) => !e.has(t));
+				de.splice(0, de.length, ...t);
+			}
+			n = JE(e.renderer, c.frame, c.publicationFrontiers), o = !0;
 		}
 		let u, p = n;
 		if (n?.initialContent !== void 0) {

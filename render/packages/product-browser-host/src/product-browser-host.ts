@@ -2368,13 +2368,18 @@ export async function mountProductBrowserHostWithApplication(
       if (completeBaseline === null) {
         pendingOutputs.splice(0, pendingOutputs.length, ...baseline.remainingOutputs);
       } else {
-        // Connection baselines arrive before later live output in their epoch.
-        // Replace just that envelope, leaving any trailing deltas queued for
-        // ordinary post-mount delivery.
+        // Pre-mount buffering coalesces snapshots and drops liveness pulses,
+        // so the original envelope length is not a prefix length here. Remove
+        // only graphics frames consumed into the initial content. Keep the
+        // buffer's non-frame state (including coalescing) and every later delta.
+        const baselineFrames = new Set<ProductBrowserRuntimeOutput>(
+          completeBaseline.outputs.filter((output) => output.kind === 'frame'),
+        );
+        const remainingOutputs = pendingOutputs.filter((output) => !baselineFrames.has(output));
         pendingOutputs.splice(
           0,
-          completeBaseline.outputs.length,
-          ...baseline.remainingOutputs,
+          pendingOutputs.length,
+          ...remainingOutputs,
         );
       }
       renderer = bindProductBrowserInitialRendererFrame(

@@ -801,6 +801,153 @@ test('a completed initial baseline consumes a published first renderer frame and
   assert.deepEqual(baseline.remainingOutputs, [retainedPresentation]);
 });
 
+test('preload mounting preserves deltas after a coalesced complete baseline envelope', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const runtime = { instanceId: 'preload', generation: '1', controlRevision: '1' } as const;
+    const animatedDefinition = { op: 'defineAnimatedMesh', asset: { asset: 'mesh/preload' } };
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let activeRevision = 0;
+    const replacedContent: unknown[] = [];
+    const applied: unknown[] = [];
+    const configuredViews: unknown[] = [];
+    const transport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      connect: async () => {
+        const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+        // Five raw outputs become three pending outputs: progress is dropped
+        // and the later view snapshot replaces the earlier one.
+        publish([
+          {
+            kind: 'binding', runtime, nextInputSequence: '1',
+            publicationFrontiers: [{ stream: 'presentation-world', revision: 7 }],
+          },
+          { kind: 'runtime-progress', owner: 'rust-host' },
+          { kind: 'view-composition', composition: { revision: 1 } },
+          { kind: 'view-composition', composition: { revision: 2 } },
+          {
+            kind: 'frame',
+            frame: {
+              schemaVersion: 1,
+              publication: {
+                stream: 'presentation-world', baseRevision: 6, revision: 7, operationCount: 1,
+              },
+              ops: [animatedDefinition],
+            },
+          },
+        ] as never, { epoch: 1, baseline: true, recovery: 'none' });
+        // This arrives before connect resolves and must survive removal of the
+        // raw complete-baseline members from the coalesced pending buffer.
+        publish([{
+          kind: 'frame',
+          frame: {
+            schemaVersion: 1,
+            publication: {
+              stream: 'presentation-world', baseRevision: 7, revision: 8, operationCount: 1,
+            },
+            ops: [{ op: 'update', handle: 1 }],
+          },
+        }], { epoch: 1, baseline: false, recovery: 'none' });
+        return { accepted: true as const, ...ACCEPTED_FAULT, operation: 'start' as const };
+      },
+      input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportAnimationFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportGhostPlateFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => true,
+        resetAnimationRealizationOwner: () => true,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => true,
+        acknowledgeAnimationRealizedFacts: () => true,
+        replaceContent: async (content: { readonly publicationFrontiers?: readonly { readonly revision: number }[] }) => {
+          replacedContent.push(content);
+          activeRevision = content.publicationFrontiers?.[0]?.revision ?? 0;
+          return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+        },
+        configureViews: (composition: unknown) => {
+          configuredViews.push(composition);
+          return { outcome: 'applied' as const, diagnostics: [] };
+        },
+        applyFrame: (frame: { readonly publication?: { readonly baseRevision: number; readonly revision: number } }) => {
+          applied.push(frame);
+          const publication = frame.publication;
+          if (publication !== undefined && publication.baseRevision !== activeRevision) {
+            return {
+              outcome: 'rejected_atomic' as const,
+              diagnostics: [{ code: 'publication_gap', message: 'trailing presentation-world delta was lost' }],
+            };
+          }
+          if (publication !== undefined) activeRevision = publication.revision;
+          return { outcome: 'applied' as const, diagnostics: [] };
+        },
+      },
+      input: { sampleController: () => 0, drain: () => [], bindRuntime: () => undefined },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport: transport as never,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      renderer: {
+        initialContent: {
+          frame: { schemaVersion: 1, ops: [] },
+          resources: [{
+            identity: 'animated-mesh-resource/preload',
+            contentHash: 'sha256:preload',
+            mediaType: 'model/gltf-binary',
+            bytes: new Uint8Array([0]),
+          }],
+        },
+      },
+    }, async () => fakeApplication as never);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const initial = replacedContent[0] as { readonly frame: RustyApplicationFrame; readonly publicationFrontiers: readonly unknown[] };
+    assert.deepEqual(initial.frame['ops'], [animatedDefinition]);
+    assert.deepEqual(initial.publicationFrontiers, [{ stream: 'presentation-world', revision: 7 }]);
+    assert.equal(configuredViews.length, 1);
+    assert.deepEqual(configuredViews[0], { revision: 2 });
+    assert.equal(applied.length, 1);
+    assert.equal(host.readout().state, 'ready');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
 test('a normal fresh attachment installs its complete frontier baseline before the next presentation-world delta', async () => {
   const previousHTMLElement = globalThis.HTMLElement;
   class FakeElement {
