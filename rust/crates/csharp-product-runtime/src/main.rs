@@ -927,6 +927,16 @@ fn invoke_connection<T: serde::de::DeserializeOwned>(
     if let Some(error) = connection.terminal_cause.read() {
         return Err(error);
     }
+    // Preparation deliberately leaves the old connection installed until the
+    // new projection is ready. Requests queued across that window were never
+    // applied; do not write to the retired socket or taint its replacement.
+    if connection.retiring.load(Ordering::Acquire) {
+        return Err(ProductDevRuntimeError::new_not_applied(
+            "DEV_HOST_WORKER_REPLACING",
+            "worker replacement is in progress; request was not applied",
+        )
+        .expect("fixed replacement diagnostic"));
+    }
     invoke_connection_inner(failures, connection, request)
         .map_err(|error| connection.terminal_cause.retain(error))
 }
@@ -3410,6 +3420,26 @@ mod tests {
             assert_eq!(receipt.into_parts().1.len(), 1);
             binding = fresh;
         }
+        // A request can acquire the connection after prepare_replace stopped
+        // the old child but before activate_pending installs its successor.
+        proxy
+            .connection
+            .lock()
+            .unwrap()
+            .retiring
+            .store(true, Ordering::Release);
+        let next_request_id = proxy.connection.lock().unwrap().next_request_id;
+        let error = proxy
+            .control(ProductDevControlOperation::Replace, binding)
+            .expect_err("retirement rejects before writing another worker request");
+        assert_eq!(error.code(), "DEV_HOST_WORKER_REPLACING");
+        let connection = proxy.connection.lock().unwrap();
+        assert_eq!(connection.next_request_id, next_request_id);
+        assert!(connection.terminal_cause.read().is_none());
+        assert_eq!(
+            error.recovery(),
+            product_dev_host::ProductDevRuntimeRecovery::not_applied()
+        );
     }
 
     #[test]
