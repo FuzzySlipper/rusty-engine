@@ -70,6 +70,9 @@ fn main() -> Result<(), String> {
         return run_worker(args);
     }
     if args.supervised {
+        if args.debugger {
+            eprintln!("RUSTY_HOST debugger: worker startup and callback deadlines are disabled; source restaging still replaces the worker");
+        }
         return run_supervised_shell(args);
     }
     let diagnostics = ProductDevLog::new(Default::default()).map_err(|error| error.to_string())?;
@@ -488,6 +491,7 @@ fn replacement_arguments(
         exercise: false,
         performance_probe: None,
         supervised: false,
+        debugger: shell_args.debugger,
         runtime_instance_id: Some(RuntimeInstanceId::new(runtime_instance_id)),
         worker: false,
         worker_channel: None,
@@ -502,6 +506,7 @@ struct WorkerRuntime {
     diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
     failures: mpsc::SyncSender<u64>,
     scheduler_inflight: Arc<Mutex<Option<(u64, Instant)>>>,
+    operation_timeout: Option<Duration>,
 }
 
 type WorkerStart = (
@@ -528,6 +533,7 @@ struct WorkerConnection {
     writer: TcpStream,
     responses: mpsc::Receiver<Result<WorkerResponse, ProductDevRuntimeError>>,
     next_request_id: u64,
+    operation_timeout: Option<Duration>,
     reader: Option<thread::JoinHandle<()>>,
     generation: u64,
 }
@@ -547,9 +553,10 @@ impl WorkerRuntime {
     }
 
     fn expired_scheduler_generation(&self) -> Option<u64> {
+        let timeout = self.operation_timeout?;
         let mut inflight = self.scheduler_inflight.lock().ok()?;
         let (generation, started) = *inflight.as_ref()?;
-        if started.elapsed() <= WORKER_OPERATION_TIMEOUT {
+        if started.elapsed() <= timeout {
             return None;
         }
         *inflight = None;
@@ -597,6 +604,7 @@ impl WorkerRuntime {
                 diagnostics: diagnostic_tx,
                 failures: failure_tx,
                 scheduler_inflight,
+                operation_timeout: args.worker_operation_timeout(),
             },
             bundle,
             initial_outputs,
@@ -712,12 +720,14 @@ impl WorkerRuntime {
         if let Err(error) = listener.set_nonblocking(true) {
             return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_BIND: {error}"));
         }
-        let deadline = Instant::now() + WORKER_OPERATION_TIMEOUT;
+        let deadline = args
+            .worker_operation_timeout()
+            .map(|timeout| Instant::now() + timeout);
         let channel = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
+                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err("DEV_HOST_WORKER_READY: worker did not connect before the startup deadline".to_owned());
@@ -750,7 +760,7 @@ impl WorkerRuntime {
             }
         };
         let mut channel = channel;
-        if let Err(error) = channel.set_read_timeout(Some(WORKER_OPERATION_TIMEOUT)) {
+        if let Err(error) = channel.set_read_timeout(args.worker_operation_timeout()) {
             return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_CHANNEL: {error}"));
         }
         let ready = match read_worker_frame::<ProductDevWorkerEvent>(&mut channel) {
@@ -800,7 +810,7 @@ impl WorkerRuntime {
                 );
             }
         };
-        if let Err(error) = writer.set_write_timeout(Some(WORKER_OPERATION_TIMEOUT)) {
+        if let Err(error) = writer.set_write_timeout(args.worker_operation_timeout()) {
             return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_CHANNEL: {error}"));
         }
         let (response_tx, response_rx) = mpsc::channel();
@@ -831,6 +841,7 @@ impl WorkerRuntime {
                 writer,
                 responses: response_rx,
                 next_request_id: 1,
+                operation_timeout: args.worker_operation_timeout(),
                 reader: Some(reader),
                 generation,
             },
@@ -863,7 +874,16 @@ fn invoke_connection<T: serde::de::DeserializeOwned>(
         stop_worker(connection);
         return Err(error);
     }
-    let response = match connection.responses.recv_timeout(WORKER_OPERATION_TIMEOUT) {
+    // A debugger can stop inside any managed callback. Only the explicit
+    // development mode waits without a deadline; channel EOF still fails.
+    let received = match connection.operation_timeout {
+        Some(timeout) => connection.responses.recv_timeout(timeout),
+        None => connection
+            .responses
+            .recv()
+            .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+    };
+    let response = match received {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
             stop_worker(connection);
@@ -1371,6 +1391,9 @@ fn worker_arguments(args: &Arguments, channel: SocketAddr) -> Result<Vec<String>
             "--content-store-root".to_owned(),
             root.to_string_lossy().into_owned(),
         ]);
+    }
+    if args.debugger {
+        values.push("--debugger".to_owned());
     }
     Ok(values)
 }
@@ -2265,6 +2288,7 @@ struct Arguments {
     exercise: bool,
     performance_probe: Option<u32>,
     supervised: bool,
+    debugger: bool,
     runtime_instance_id: Option<RuntimeInstanceId>,
     worker: bool,
     worker_channel: Option<SocketAddr>,
@@ -2351,6 +2375,10 @@ impl RuntimeMode {
 }
 
 impl Arguments {
+    fn worker_operation_timeout(&self) -> Option<Duration> {
+        (!self.debugger).then_some(WORKER_OPERATION_TIMEOUT)
+    }
+
     fn runtime_config(&self) -> CsharpProductRuntimeConfig {
         let (direct_intents, physical_mappings) = self.input_configuration();
         let lifecycle = match &self.product {
@@ -2470,6 +2498,7 @@ impl Arguments {
         let mut exercise = false;
         let mut performance_probe = None;
         let mut supervised = false;
+        let mut debugger = false;
         let mut runtime_instance_id = None;
         let mut worker = false;
         let mut worker_channel = None;
@@ -2557,6 +2586,7 @@ impl Arguments {
                     performance_probe = Some(iterations);
                 }
                 "--supervised" => supervised = true,
+                "--debugger" => debugger = true,
                 "--worker" => worker = true,
                 "--worker-channel" => {
                     worker_channel = Some(
@@ -2580,7 +2610,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--content-store-root <absolute-path>] [--exercise] [--performance-probe <1..=256>]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables worker startup/callback deadlines for supervised CoreCLR debugging; normal sessions retain their deadlines. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -2639,10 +2669,17 @@ impl Arguments {
             exercise,
             performance_probe,
             supervised,
+            debugger,
             runtime_instance_id,
             worker,
             worker_channel,
         };
+        if arguments.debugger
+            && (!matches!(arguments.loader, ProductLoader::CoreClr)
+                || !(arguments.supervised || arguments.worker))
+        {
+            return Err("--debugger requires supervised CoreCLR (rusty dev --debugger)".to_owned());
+        }
         if arguments.worker != arguments.worker_channel.is_some() {
             return Err("--worker and --worker-channel must be supplied together".to_owned());
         }
@@ -3160,6 +3197,41 @@ mod tests {
             Ok(_) => panic!("argument list unexpectedly parsed"),
             Err(error) => error,
         }
+    }
+
+    #[test]
+    fn debugger_wait_is_explicit_and_coreclr_scoped() {
+        let normal = parse_test_args(&[]).expect("normal arguments");
+        assert_eq!(
+            normal.worker_operation_timeout(),
+            Some(Duration::from_secs(5))
+        );
+        assert!(parse_test_error(&["--debugger", "--supervised"])
+            .contains("requires supervised CoreCLR"));
+        assert!(parse_test_error(&[
+            "--debugger",
+            "--loader",
+            "coreclr",
+            "--runtimeconfig",
+            "product.runtimeconfig.json"
+        ])
+        .contains("requires supervised CoreCLR"));
+        let mut debugging = parse_test_args(&[
+            "--debugger",
+            "--supervised",
+            "--loader",
+            "coreclr",
+            "--runtimeconfig",
+            "product.runtimeconfig.json",
+            "--runtime-instance-id",
+            "7",
+        ])
+        .expect("explicit debugger mode");
+        assert_eq!(debugging.worker_operation_timeout(), None);
+        debugging.product_path = Some(PathBuf::from("/product"));
+        let worker =
+            worker_arguments(&debugging, "127.0.0.1:1".parse().unwrap()).expect("worker arguments");
+        assert!(worker.iter().any(|argument| argument == "--debugger"));
     }
 
     #[test]

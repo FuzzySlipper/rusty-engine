@@ -64,7 +64,9 @@ It builds the ordinary project, asks the SDK to atomically stage a loose
 Product directory, launches the packaged host through CoreCLR, and restarts it
 when declared C#, UI, or content inputs change. `--bind-host`, `--port`, and
 `--live-debug` override the corresponding staging properties for a development
-session.
+session. Use `--debugger` for managed breakpoint sessions; see
+[CoreCLR diagnostics](coreclr-diagnostics.md) for worker discovery, profiling,
+and the opt-in deadline behavior.
 
 The Product directory has `product.json`, managed output under `coreclr/`, and
 Product-owned `ui/` and `content/`. Engine JavaScript and host binaries stay in

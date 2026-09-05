@@ -17,6 +17,8 @@ already exposed to C#.
   organization that does not require a hidden Engine framework.
 - [C# capability map](csharp-capabilities.md) inventories the current generated
   service families, managed helpers, and retained native runtime mechanisms.
+- [CoreCLR diagnostics](coreclr-diagnostics.md) covers worker discovery, standard
+  managed profiling, callback breakpoints over SSH, and dumps.
 - [Verification notes](verification.md) describe the report-only Playwright
   warning-delta capture and compatible-baseline comparison.
 
