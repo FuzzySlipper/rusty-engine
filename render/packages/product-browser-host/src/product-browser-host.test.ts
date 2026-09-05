@@ -1252,6 +1252,45 @@ test('ghost plate feedback replaces an active snapshot with an empty snapshot af
   assert.equal(reports[1]?.replaceOwner, false);
 });
 
+test('renderer cadence reports ghost camera changes without product updates or presentation mutations', async () => {
+  const sectors: number[] = [];
+  const plate = {
+    handle: 9, sourceMatch: true, currentSector: 0, localAzimuthDegrees: 0,
+    fallbackActive: false, fallbackReason: null, limitationMask: 125,
+    preparationCpuMilliseconds: 1, captureCpuSubmissionMilliseconds: 2,
+    retainedResourceCounts: { sectors: 8, meshes: 1, materials: 1, borrowedTextures: 0 },
+  };
+  // Diagnostics are optional; ghost observations must still reach C#.
+  const renderer = {
+    ghostPlateReadout: () => ({ activePlates: 1, plates: [plate] }),
+  } as unknown as Parameters<typeof createProductBrowserGhostPlateFeedbackReporter>[0]['renderer'];
+  const reporter = createProductBrowserGhostPlateFeedbackReporter({
+    renderer,
+    report: async (feedback) => {
+      sectors.push(feedback.facts[0]!.currentSector);
+      return { accepted: true, ...ACCEPTED_FAULT, runtime: feedback.runtime };
+    },
+    initialRuntime: AUDIO_RUNTIME,
+  });
+  const sampler = createProductBrowserRendererDiagnosticsCadenceSampler({
+    enqueueOperation: (operation) => operation(),
+    flush: reporter.flush,
+    onFailure: (cause) => assert.fail(String(cause)),
+  });
+  sampler.sample(0);
+  await sampler.settle();
+  plate.currentSector = 2;
+  plate.localAzimuthDegrees = 90;
+  sampler.sample(750);
+  await sampler.settle();
+  plate.currentSector = 6;
+  plate.localAzimuthDegrees = 270;
+  sampler.sample(1_500);
+  await sampler.settle();
+  sampler.dispose();
+  assert.deepEqual(sectors, [0, 2, 6]);
+});
+
 test('renderer diagnostics retries one recoverable rejection without loss or flood', async () => {
   const reports: number[] = [];
   const observations: number[] = [];

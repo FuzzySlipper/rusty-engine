@@ -1339,7 +1339,7 @@ export async function mountProductBrowserHostWithApplication(
   let animationFeedbackReporter: ProductBrowserAnimationFeedbackReporter | null = null;
   let ghostPlateFeedbackReporter: ProductBrowserGhostPlateFeedbackReporter | null = null;
   let rendererDiagnosticsReporter: ProductBrowserRendererDiagnosticsReporter | null = null;
-  let rendererDiagnosticsCadenceSampler: ProductBrowserRendererDiagnosticsCadenceSampler | null = null;
+  let rendererObservationCadenceSampler: ProductBrowserRendererDiagnosticsCadenceSampler | null = null;
   const productFrameObservation = createProductBrowserProductFrameObservation();
   // Renderer calls can be asynchronous (notably presentation realization),
   // while the retained runtime output port is synchronous. Keep their typed
@@ -1562,7 +1562,7 @@ export async function mountProductBrowserHostWithApplication(
     transportClosed = true;
     started = false;
     cadence?.dispose();
-    rendererDiagnosticsCadenceSampler?.dispose();
+    rendererObservationCadenceSampler?.dispose();
     unsubscribeTerminalFailures?.();
     unsubscribeTerminalFailures = null;
     unsubscribeOutputs?.();
@@ -2350,7 +2350,7 @@ export async function mountProductBrowserHostWithApplication(
 
   const observeRendererCadence = (timeMs: number): void => {
     cadence?.enqueue(timeMs);
-    if (started && state === 'ready') rendererDiagnosticsCadenceSampler?.sample(timeMs);
+    if (started && state === 'ready') rendererObservationCadenceSampler?.sample(timeMs);
   };
 
   let runtimeInput: RustyApplicationRuntimeInputOptions | undefined;
@@ -2503,22 +2503,25 @@ export async function mountProductBrowserHostWithApplication(
           ? {}
           : { initialRuntime: options.runtimeInput.binding }),
       });
-      rendererDiagnosticsCadenceSampler = createProductBrowserRendererDiagnosticsCadenceSampler({
-        enqueueOperation: queue.enqueue,
-        flush: rendererDiagnosticsReporter.flush,
-        onFailure: (cause) => {
-          // Renderer diagnostics are an auxiliary observation lane. A failed
-          // sample must never stop authoritative output, input, or lifecycle
-          // work. Report the first failure as a bounded warning and let the
-          // existing cadence retry later snapshots.
-          if (rendererDiagnosticsFailureReported || rendererDiagnosticsFailure !== null) return;
-          rendererDiagnosticsFailure = boundedDiagnostic(
-            `renderer diagnostics reporting was temporarily unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
-          );
-          publishHealth();
-        },
-      });
     }
+    // Rust-driven updates need no browser advance or presentation mutation.
+    // Sample realized ghost direction on the existing renderer cadence so C#
+    // readouts follow camera movement even while retained presentation is quiet.
+    rendererObservationCadenceSampler = createProductBrowserRendererDiagnosticsCadenceSampler({
+      enqueueOperation: queue.enqueue,
+      flush: async () => {
+        await ghostPlateFeedbackReporter?.flush();
+        await rendererDiagnosticsReporter?.flush();
+      },
+      onFailure: (cause) => {
+        // Derived observations can retry without stopping product work.
+        if (rendererDiagnosticsFailureReported || rendererDiagnosticsFailure !== null) return;
+        rendererDiagnosticsFailure = boundedDiagnostic(
+          `renderer observation reporting was temporarily unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+        publishHealth();
+      },
+    });
     if (stagedRendererContent !== undefined) {
       const content = stagedRendererContent;
       const mountedApplication = application;
@@ -2707,7 +2710,7 @@ export async function mountProductBrowserHostWithApplication(
       transportClosed = true;
       publishHealth();
       cadence?.dispose();
-      rendererDiagnosticsCadenceSampler?.dispose();
+      rendererObservationCadenceSampler?.dispose();
       unsubscribeTerminalFailures?.();
       unsubscribeTerminalFailures = null;
       unsubscribeOutputs?.();

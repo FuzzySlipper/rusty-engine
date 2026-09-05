@@ -28776,13 +28776,15 @@ async function _D(e, t) {
 				E = String(e), D = Date.now();
 			},
 			...e.runtimeInput?.binding === void 0 ? {} : { initialRuntime: e.runtimeInput.binding }
-		}), ce = mD({
+		})), ce = mD({
 			enqueueOperation: i.enqueue,
-			flush: se.flush,
+			flush: async () => {
+				await oe?.flush(), await se?.flush();
+			},
 			onFailure: (e) => {
-				ne || j !== null || (j = wD(`renderer diagnostics reporting was temporarily unavailable: ${e instanceof Error ? e.message : String(e)}`), ye());
+				ne || j !== null || (j = wD(`renderer observation reporting was temporarily unavailable: ${e instanceof Error ? e.message : String(e)}`), ye());
 			}
-		})), u !== void 0) {
+		}), u !== void 0) {
 			let e = u, t = s;
 			Re(async () => {
 				let n = await t.renderer.replaceContent(e);
