@@ -556,6 +556,18 @@ void test('voxel-object resources decode strictly and reject invalid frame refer
   assert.throws(() => decodeRenderFrameDiff(invalid), /must be in 0\.\.=0/);
 });
 
+void test('static mesh releases decode strictly', () => {
+  const frame = {
+    schemaVersion: 1,
+    ops: [{ op: 'releaseStaticMesh', asset: 'mesh/runner' }],
+  };
+  assert.deepEqual(decodeRenderFrameDiff(frame).ops, frame.ops);
+  assert.throws(
+    () => decodeRenderFrameDiff({ schemaVersion: 1, ops: [{ op: 'releaseStaticMesh', asset: '' }] }),
+    /asset/u,
+  );
+});
+
 void test('content-addressed mesh resources validate identity, layout, and bounds', () => {
   const digest = '1'.repeat(64);
   const frame = {

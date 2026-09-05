@@ -174,6 +174,11 @@ function renderDiff(input: unknown, path: string): void {
       staticMesh(value['asset'], `${path}.asset`);
       return;
     }
+    case 'releaseStaticMesh': {
+      const value = record(input, path, ['op', 'asset']);
+      nonEmptyText(value['asset'], `${path}.asset`);
+      return;
+    }
     case 'defineAnimatedMesh': {
       const value = record(input, path, ['op', 'asset']);
       animatedMesh(value['asset'], `${path}.asset`);

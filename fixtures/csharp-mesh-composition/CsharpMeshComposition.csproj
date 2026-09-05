@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+
+    <!-- This is an ordinary package consumer. The SDK-generated composition
+         owns the CoreCLR and NativeAOT binding below obj. -->
+    <RustyEngineProductEntryType>CsharpMeshComposition.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>csharp-mesh-composition</RustyEngineProductId>
+    <RustyEngineProductTitle>C# Mesh Composition</RustyEngineProductTitle>
+    <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
+    <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/content</RustyEngineProductContentRoot>
+    <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductUiProjectionStream>mesh-composition.hud</RustyEngineProductUiProjectionStream>
+    <RustyEngineProductUiProjectionContract>mesh-composition.ui.snapshot.v1</RustyEngineProductUiProjectionContract>
+    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
+    <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineStagedProductDirectory>$(MSBuildProjectDirectory)/obj/Rusty.Engine/Product</RustyEngineStagedProductDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$(RustyEngineFixtureSdkVersion)" />
+    <RustyEngineProductInputIntent Include="mesh.pulse" Value="digital" />
+    <RustyEngineProductInputIntent Include="mesh.recreate" Value="digital" />
+  </ItemGroup>
+</Project>

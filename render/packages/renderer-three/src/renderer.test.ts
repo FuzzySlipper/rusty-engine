@@ -2271,22 +2271,26 @@ void test('batch admission excludes invisible, overridden, reflected, and non-wo
   );
 });
 
-void test('static mesh definitions survive zero instances and dispose only on redefine or renderer disposal', () => {
+void test('static mesh definitions survive zero instances until explicit release or renderer disposal', () => {
   const r = new ThreeRenderer();
   r.applyDiff({ op: 'defineStaticMesh', asset: crateAsset() });
   r.applyDiff({ op: 'createStaticMeshInstance', handle: renderHandle(1), parent: null, instance: crateInstance() });
   r.applyDiff({ op: 'createStaticMeshInstance', handle: renderHandle(2), parent: null, instance: crateInstance() });
 
   const shared = (r.objectFor(renderHandle(1)) as THREE.Mesh).geometry;
-  let disposed = false;
-  shared.addEventListener('dispose', () => { disposed = true; });
+  let disposed = 0;
+  shared.addEventListener('dispose', () => { disposed += 1; });
 
   r.applyDiff({ op: 'destroy', handle: renderHandle(1) });
-  assert.equal(disposed, false, 'shared geometry must survive while an instance remains');
+  assert.equal(disposed, 0, 'shared geometry must survive while an instance remains');
   assert.equal(r.instanceCountFor('mesh/crate'), 1);
+  assert.throws(
+    () => r.applyDiff({ op: 'releaseStaticMesh', asset: 'mesh/crate' }),
+    /in use by 1 instance/u,
+  );
 
   r.applyDiff({ op: 'destroy', handle: renderHandle(2) });
-  assert.equal(disposed, false, 'retained definition survives when its last instance is gone');
+  assert.equal(disposed, 0, 'retained definition survives when its last instance is gone');
   assert.equal(r.instanceCountFor('mesh/crate'), 0);
   assert.deepEqual(r.resourceStatistics(), {
     renderHandleCount: 0,
@@ -2306,8 +2310,11 @@ void test('static mesh definitions survive zero instances and dispose only on re
   assert.equal(r.instanceCountFor('mesh/crate'), 1);
 
   r.applyDiff({ op: 'destroy', handle: renderHandle(3) });
+  r.applyDiff({ op: 'releaseStaticMesh', asset: 'mesh/crate' });
+  assert.equal(disposed, 1, 'release disposes the shared definition exactly once');
+  assert.equal(r.instanceCountFor('mesh/crate'), 0);
+  assert.equal(r.resourceStatistics().geometryResourceCount, 0);
   r.applyDiff({ op: 'defineStaticMesh', asset: crateAsset() });
-  assert.equal(disposed, true, 'redefining an unused asset disposes the replaced definition');
 
   const replacement = (() => {
     r.applyDiff({

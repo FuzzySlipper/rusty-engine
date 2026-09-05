@@ -305,6 +305,9 @@ pub enum RenderDiff {
     DefineStaticMesh {
         asset: StaticMeshAsset,
     },
+    ReleaseStaticMesh {
+        asset: String,
+    },
     DefineAnimatedMesh {
         asset: AnimatedMeshAsset,
     },
@@ -408,6 +411,10 @@ impl RenderDiff {
             Self::DefineStaticMesh { asset } => {
                 asset.validate().map_err(RenderOperationError::StaticMesh)
             }
+            Self::ReleaseStaticMesh { asset } => {
+                crate::validate_asset_id(asset, crate::RenderAssetKind::StaticMesh)
+                    .map_err(RenderOperationError::Asset)
+            }
             Self::DefineAnimatedMesh { asset } => {
                 asset.validate().map_err(RenderOperationError::AnimatedMesh)
             }
@@ -469,6 +476,7 @@ impl RenderDiff {
             | Self::SetSkyBackground { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
+            | Self::ReleaseStaticMesh { .. }
             | Self::DefineAnimatedMesh { .. }
             | Self::DefineVoxelObject { .. }
             | Self::ReleaseVoxelObject { .. } => {}

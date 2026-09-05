@@ -913,6 +913,8 @@ sealed class GraphicsServiceFake : IGraphicsService
     public Material ReplaceMaterial(MaterialUpdateRequest arg0) => throw new NotSupportedException();
     public Appearance CreatePrimitive(PrimitiveAppearanceRequest arg0) => throw new NotSupportedException();
     public Appearance ReplacePrimitive(PrimitiveAppearanceReplaceRequest arg0) => throw new NotSupportedException();
+    public MeshResource CreateMeshResource(MeshResourceCreateRequest arg0) => throw new NotSupportedException();
+    public Appearance CreateMeshAppearance(MeshResource arg0) => throw new NotSupportedException();
     public Appearance CreateStaticMesh(StaticMeshAppearanceRequest arg0) => throw new NotSupportedException();
     public Appearance CreateStaticMeshFromContent(StaticMeshContentAppearanceRequest arg0) => throw new NotSupportedException();
     public Appearance ReplaceStaticMesh(Appearance arg0, StaticMeshAppearanceRequest arg1) => throw new NotSupportedException();

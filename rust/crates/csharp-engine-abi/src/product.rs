@@ -444,6 +444,16 @@ pub type NativeReplacePrimitiveAppearance = unsafe extern "C" fn(
     NativePrimitiveAppearanceReplaceRequest,
     *mut NativeAppearanceHandle,
 ) -> i32;
+pub type NativeCreateMeshResource = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeMeshResourceCreateRequest,
+    *mut NativeMeshResourceHandle,
+) -> i32;
+pub type NativeDestroyMeshResource =
+    unsafe extern "C" fn(*mut c_void, NativeMeshResourceHandle) -> i32;
+pub type NativeCreateMeshAppearance =
+    unsafe extern "C" fn(*mut c_void, NativeMeshResourceHandle, *mut NativeAppearanceHandle) -> i32;
+
 pub type NativeCreateStaticMeshAppearance = unsafe extern "C" fn(
     *mut c_void,
     *const NativeStaticMeshAppearanceRequest,
@@ -919,6 +929,9 @@ pub struct NativeGraphicsApi {
     pub destroy_material: NativeDestroyMaterial,
     pub create_primitive: NativeCreatePrimitiveAppearance,
     pub replace_primitive: NativeReplacePrimitiveAppearance,
+    pub create_mesh_resource: NativeCreateMeshResource,
+    pub destroy_mesh_resource: NativeDestroyMeshResource,
+    pub create_mesh_appearance: NativeCreateMeshAppearance,
     pub create_static_mesh: NativeCreateStaticMeshAppearance,
     pub create_static_mesh_from_content: NativeCreateStaticMeshContentAppearance,
     pub replace_static_mesh: NativeReplaceStaticMeshAppearance,

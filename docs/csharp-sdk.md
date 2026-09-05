@@ -167,11 +167,36 @@ input order; the Engine validates the hierarchy and publishes parents first.
 - Target indicators: compose child sprites/meshes with anchored billboards;
   choose depth-tested, occluded, or always-on-top layers through `Presentation`.
 - Procedural effects: combine admitted meshes/materials with lights and
-  retained emitters or explicit bursts. Runtime-generated mesh admission is a
-  separate planned mechanism (#7787), not a downstream renderer extension.
+  retained emitters or explicit bursts. `Graphics.CreateMeshResource` also
+  admits runtime-generated triangle streams as a disposable Engine resource.
 
 Look math is `Look.Integrate(request)` (and `Reset`, `Rebase`, `Diagnose`) in
 the managed toolkit. Replace former `context.Look` calls with these helpers.
+
+### Runtime-generated geometry
+
+`Graphics.CreateMeshResource(new MeshResourceCreateRequest(positions, normals,
+uvs, indices, groups, bindings))` copies ordinary managed arrays into an
+immutable retained mesh. Positions/normals are `Vector3`; optional UVs are
+`Vector2`; indices are `uint`. `MeshGroup` ranges tile the triangle index list,
+and `MeshMaterialBinding` selects an existing Engine material for every used
+slot. Bounds are computed by Rust. Admission accepts 3–65,536 vertices,
+3–196,608 indices and up to 256 groups/bindings; invalid streams or missing
+materials fail before creating an owner.
+
+Create one or more appearances with `Graphics.CreateMeshAppearance(mesh)` and
+publish ordinary `AppearanceFact` values. Existing static-mesh material
+updates can override instance slots. Geometry is visual-only; C# still selects
+any separate spatial mechanism its gameplay needs. To change geometry, admit a
+new immutable resource and publish the replacement appearance. Product arrays
+may be reused immediately after admission.
+
+Remove appearances from the published snapshot before disposing them, then
+dispose their mesh resource. Dispose bound materials after their resources and
+appearances. The Engine releases unused mesh definitions and GPU geometry;
+a browser reconnect reconstructs only current retained geometry. See the
+[procedural mesh fixture](../fixtures/csharp-mesh-composition) for a C# shockwave
+composed from these primitives.
 
 ### Atlas sprite playback
 

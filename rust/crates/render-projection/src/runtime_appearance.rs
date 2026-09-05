@@ -117,6 +117,24 @@ impl RuntimeAppearanceProjector {
         self.catalog.resources_mut()
     }
 
+    /// Releases an unused mesh definition and publishes its removal through the
+    /// same retained resource diff as ordinary snapshots. A never-published
+    /// resource needs no renderer release. Failure preserves the current state.
+    pub fn release_static_mesh(
+        &mut self,
+        asset: &str,
+    ) -> Result<RuntimeAppearanceProjection, RuntimeAppearanceProjectionError> {
+        let mut next = self.clone();
+        next.catalog
+            .resources
+            .static_meshes
+            .retain(|mesh| mesh.asset != asset);
+        let projection =
+            next.project_scene(next.appearance_facts.clone(), next.light_facts.clone())?;
+        *self = next;
+        Ok(projection)
+    }
+
     /// Projects one complete snapshot. Omitted object identities are destroyed by the
     /// retained projector; the Engine-owned catalog remains available for later facts.
     pub fn project(

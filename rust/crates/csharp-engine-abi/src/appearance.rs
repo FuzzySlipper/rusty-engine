@@ -477,6 +477,32 @@ pub struct NativeMeshMaterialBinding {
     pub material: NativeMaterialHandle,
 }
 
+/// Immutable copied geometry with Engine-owned identity and explicit lifetime.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMeshResourceHandle {
+    pub value: u64,
+}
+
+/// Triangle streams are copied during this call. Groups must tile the indices;
+/// bindings supply every used material slot. Empty UVs omit that attribute.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMeshResourceCreateRequest {
+    pub positions: *const NativeVec3,
+    pub positions_len: usize,
+    pub normals: *const NativeVec3,
+    pub normals_len: usize,
+    pub uvs: *const NativeVec2,
+    pub uvs_len: usize,
+    pub indices: *const u32,
+    pub indices_len: usize,
+    pub groups: *const NativeMeshGroup,
+    pub groups_len: usize,
+    pub bindings: *const NativeMeshMaterialBinding,
+    pub bindings_len: usize,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeStaticMeshAppearanceRequest {

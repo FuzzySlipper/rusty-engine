@@ -131,8 +131,10 @@ explicit recapture replaces the source pose.
 
 The public C# service is `Graphics`; `Appearance` remains a resource/fact name.
 Facts can form a hierarchy, so equipment and layered visuals compose with
-ordinary resources rather than feature-specific ABI calls. Runtime-generated
-mesh resource admission remains a separate Engine mechanism, tracked in #7787.
+ordinary resources rather than feature-specific ABI calls. Typed runtime mesh
+admission copies C# triangle streams into retained Engine resources. Mesh
+appearances reuse the existing material and static-mesh projection; explicit
+resource release removes its canonical definition and browser/GPU realization.
 
 ## Packaging and development
 

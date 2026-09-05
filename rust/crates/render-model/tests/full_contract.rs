@@ -316,6 +316,18 @@ fn every_retained_operation_survives_the_versioned_json_border() {
 }
 
 #[test]
+fn static_mesh_release_survives_the_versioned_json_border() {
+    let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::ReleaseStaticMesh {
+        asset: "mesh/triangle".to_string(),
+    }])
+    .unwrap();
+    assert_eq!(
+        RenderFrameDiff::decode_json(&frame.encode_json().unwrap()).unwrap(),
+        frame
+    );
+}
+
+#[test]
 fn committed_cross_language_fixture_is_a_valid_canonical_frame() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()

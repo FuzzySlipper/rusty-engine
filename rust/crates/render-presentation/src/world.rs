@@ -67,6 +67,7 @@ pub enum PresentationWorldError {
     UnknownNode(RenderHandle),
     DuplicateNode(RenderHandle),
     WrongNodeKind(RenderHandle),
+    UndefinedStaticMesh(String),
     ReferencedResource(String),
 }
 
@@ -746,6 +747,15 @@ impl PresentationWorld {
                 self.static_meshes
                     .insert(asset.asset.clone(), Arc::new(asset.clone()));
             }
+            RenderDiff::ReleaseStaticMesh { asset } => {
+                if !self.static_meshes.contains_key(asset) {
+                    return Err(PresentationWorldError::UndefinedStaticMesh(asset.clone()));
+                }
+                if self.nodes.values().any(|node| matches!(&node.kind, NodeKind::StaticMesh(instance) if &instance.asset == asset)) {
+                    return Err(PresentationWorldError::ReferencedResource(asset.clone()));
+                }
+                self.static_meshes.remove(asset);
+            }
             RenderDiff::DefineAnimatedMesh { asset } => {
                 self.animated_meshes
                     .insert(asset.asset.clone(), Arc::new(asset.clone()));
@@ -772,6 +782,112 @@ mod tests {
 
     fn frame(ops: Vec<RenderDiff>) -> RenderFrameDiff {
         RenderFrameDiff::try_from_ops(ops).unwrap()
+    }
+
+    fn static_mesh(asset: &str) -> StaticMeshAsset {
+        StaticMeshAsset {
+            asset: asset.to_string(),
+            payload: MeshPayloadDescriptor {
+                layout: MeshBufferLayout {
+                    vertex_count: 3,
+                    index_count: 3,
+                    index_width: MeshIndexWidth::U32,
+                    attributes: vec![
+                        MeshAttribute {
+                            name: MeshAttributeName::Position,
+                            components: 3,
+                            kind: MeshAttributeKind::F32,
+                        },
+                        MeshAttribute {
+                            name: MeshAttributeName::Normal,
+                            components: 3,
+                            kind: MeshAttributeKind::F32,
+                        },
+                    ],
+                },
+                groups: vec![MeshGroupDescriptor {
+                    material_slot: 0,
+                    start: 0,
+                    count: 3,
+                }],
+                bounds: MeshBoundsDescriptor {
+                    min: [0.0; 3],
+                    max: [1.0, 1.0, 0.0],
+                },
+                source: MeshPayloadSource::Inline {
+                    positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                    normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                    uvs: None,
+                    colors: None,
+                    indices: vec![0, 1, 2],
+                },
+                provenance: MeshProvenance::StaticAsset,
+            },
+            material_slots: vec![MeshMaterialSlot {
+                slot: 0,
+                material: "material/plain".to_string(),
+            }],
+            collision: MeshCollisionPolicy::VisualOnly,
+        }
+    }
+
+    #[test]
+    fn static_mesh_release_requires_an_unused_live_asset_and_preserves_frozen_capture() {
+        let mut world = PresentationWorld::default();
+        let asset = static_mesh("mesh/frozen-capture");
+        let handle = RenderHandle::new(41);
+        world
+            .apply(&frame(vec![
+                RenderDiff::DefineStaticMesh {
+                    asset: asset.clone(),
+                },
+                RenderDiff::CreateStaticMeshInstance {
+                    handle,
+                    parent: None,
+                    instance: StaticMeshInstanceDescriptor {
+                        asset: asset.asset.clone(),
+                        transform: Transform::IDENTITY,
+                        visible: true,
+                        material_overrides: Vec::new(),
+                        metadata: RenderMetadata::default(),
+                    },
+                },
+            ]))
+            .unwrap();
+        let frozen_capture = world.capture_scene(handle).unwrap();
+        assert!(frozen_capture
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, RenderDiff::DefineStaticMesh { asset } if asset.asset == "mesh/frozen-capture")));
+
+        assert!(matches!(
+            world.apply(&frame(vec![RenderDiff::ReleaseStaticMesh {
+                asset: asset.asset.clone(),
+            }])),
+            Err(PresentationWorldError::ReferencedResource(_))
+        ));
+        world
+            .apply(&frame(vec![RenderDiff::Destroy { handle }]))
+            .unwrap();
+        world
+            .apply(&frame(vec![RenderDiff::ReleaseStaticMesh {
+                asset: asset.asset.clone(),
+            }]))
+            .unwrap();
+
+        assert!(!world.snapshot().frame.ops.iter().any(
+            |operation| matches!(operation, RenderDiff::DefineStaticMesh { asset } if asset.asset == "mesh/frozen-capture"),
+        ));
+        assert!(frozen_capture
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, RenderDiff::DefineStaticMesh { asset } if asset.asset == "mesh/frozen-capture")));
+        assert!(matches!(
+            world.apply(&frame(vec![RenderDiff::ReleaseStaticMesh {
+                asset: asset.asset.clone(),
+            }])),
+            Err(PresentationWorldError::UndefinedStaticMesh(_))
+        ));
     }
 
     #[test]

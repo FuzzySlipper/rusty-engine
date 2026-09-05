@@ -681,6 +681,11 @@ fn ensure_acyclic(nodes: &BTreeMap<u64, ProjectedNode>) -> Result<(), SceneProje
 
 fn resource_diffs(previous: &ResourceSnapshot, next: &ResourceSnapshot) -> Vec<RenderDiff> {
     let mut operations = Vec::new();
+    for id in previous.static_meshes.keys() {
+        if !next.static_meshes.contains_key(id) {
+            operations.push(RenderDiff::ReleaseStaticMesh { asset: id.clone() });
+        }
+    }
     for (id, value) in &next.textures {
         if previous.textures.get(id) != Some(value) {
             operations.push(RenderDiff::DefineTexture {

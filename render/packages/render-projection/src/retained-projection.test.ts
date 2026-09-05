@@ -914,6 +914,37 @@ void test('tracks static mesh definitions and fails closed on in-use redefinitio
   assert.doesNotThrow(() => projection.applyDiff({ op: 'defineStaticMesh', asset: meshAsset() }));
 });
 
+void test('releases defined unused static meshes and excludes them from the retained baseline', () => {
+  const projection = new RenderProjection();
+  projection.applyDiff({ op: 'defineStaticMesh', asset: meshAsset() });
+  projection.applyDiff({
+    op: 'createStaticMeshInstance',
+    handle: renderHandle(1),
+    parent: null,
+    instance: {
+      asset: 'mesh/crate',
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      visible: true,
+      materialOverrides: [],
+      metadata: { sourceEntity: 1, sourceSceneNode: null, tags: [], label: 'crate' },
+    },
+  });
+  assert.throws(
+    () => projection.applyDiff({ op: 'releaseStaticMesh', asset: 'mesh/crate' }),
+    /in use by 1 instance/u,
+  );
+  projection.applyDiff({ op: 'destroy', handle: renderHandle(1) });
+  assert.deepEqual(projection.applyDiff({ op: 'releaseStaticMesh', asset: 'mesh/crate' }), [
+    { op: 'releaseStaticMesh', asset: 'mesh/crate' },
+  ]);
+  assert.equal(projection.staticMesh('mesh/crate'), undefined);
+  assert.deepEqual(projection.snapshot().staticMeshes, []);
+  assert.throws(
+    () => projection.applyDiff({ op: 'releaseStaticMesh', asset: 'mesh/crate' }),
+    /undefined static mesh/u,
+  );
+});
+
 void test('voxel objects retain stable instances, explicit frames, and bounded resource lifetime', () => {
   const projection = new RenderProjection();
   const handle = renderHandle(31);

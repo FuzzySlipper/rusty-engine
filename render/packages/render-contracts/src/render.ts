@@ -560,6 +560,7 @@ export type RenderDiff =
   | { readonly op: 'setSkyBackground'; readonly background: SkyBackgroundDescriptor | null }
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
+  | { readonly op: 'releaseStaticMesh'; readonly asset: string }
   | { readonly op: 'defineAnimatedMesh'; readonly asset: AnimatedMeshAsset }
   | { readonly op: 'defineVoxelObject'; readonly asset: VoxelObjectRenderAsset }
   | { readonly op: 'releaseVoxelObject'; readonly asset: string }

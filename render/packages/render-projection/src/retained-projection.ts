@@ -122,6 +122,7 @@ export type RenderProjectionInstruction =
   | { readonly op: 'setSkyBackground'; readonly background: SkyBackgroundDescriptor | null }
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
+  | { readonly op: 'releaseStaticMesh'; readonly asset: string }
   | { readonly op: 'defineAnimatedMesh'; readonly asset: AnimatedMeshAsset }
   | { readonly op: 'defineVoxelObject'; readonly asset: VoxelObjectRenderAsset }
   | { readonly op: 'releaseVoxelObject'; readonly asset: string }
@@ -379,6 +380,8 @@ export class RenderProjection {
         return [this.#defineSpriteAtlas(diff.atlas)];
       case 'defineStaticMesh':
         return [this.#defineStaticMesh(diff.asset)];
+      case 'releaseStaticMesh':
+        return [this.#releaseStaticMesh(diff.asset)];
       case 'defineAnimatedMesh':
         return [this.#defineAnimatedMesh(diff.asset)];
       case 'defineVoxelObject':
@@ -748,6 +751,20 @@ export class RenderProjection {
     }
     this.#staticMeshes.set(asset.asset, { asset: clone(asset), refCount: 0 });
     return { op: 'defineStaticMesh', asset: clone(asset) };
+  }
+
+  #releaseStaticMesh(asset: string): RenderProjectionInstruction {
+    const existing = this.#staticMeshes.get(asset);
+    if (existing === undefined) {
+      throw new RenderProjectionError(`releaseStaticMesh: undefined static mesh ${asset}`);
+    }
+    if (existing.refCount !== 0) {
+      throw new RenderProjectionError(
+        `releaseStaticMesh: ${asset} is in use by ${existing.refCount} instance(s)`,
+      );
+    }
+    this.#staticMeshes.delete(asset);
+    return { op: 'releaseStaticMesh', asset };
   }
 
   #defineAnimatedMesh(asset: AnimatedMeshAsset): RenderProjectionInstruction {
@@ -1778,6 +1795,7 @@ function validateOperationHandles(diff: RenderDiff): void {
     case 'setSkyBackground':
     case 'defineSpriteAtlas':
     case 'defineStaticMesh':
+    case 'releaseStaticMesh':
     case 'defineAnimatedMesh':
     case 'defineVoxelObject':
     case 'releaseVoxelObject':

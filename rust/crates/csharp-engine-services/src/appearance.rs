@@ -1363,6 +1363,9 @@ pub(crate) struct RuntimeAppearanceState {
     projector: RuntimeAppearanceProjector,
     appearances: BTreeMap<u64, String>,
     next_appearance: u64,
+    mesh_resources: BTreeMap<u64, RuntimeMeshResource>,
+    mesh_appearances: BTreeMap<u64, u64>,
+    next_mesh_resource: u64,
     lights: BTreeMap<u64, RuntimeLightFact>,
     next_light: u64,
     materials: BTreeMap<u64, String>,
@@ -1401,6 +1404,12 @@ pub(crate) struct RuntimeAppearanceState {
     ghost_plate_projector: GhostPlateProjector,
     ghost_plates: BTreeMap<u64, RuntimeGhostPlatePresentation>,
     next_ghost_plate: u64,
+}
+
+#[derive(Clone)]
+struct RuntimeMeshResource {
+    asset: String,
+    material_handles: BTreeSet<u64>,
 }
 
 #[derive(Clone)]
@@ -1579,6 +1588,9 @@ impl RuntimeAppearanceBridge {
                 projector: RuntimeAppearanceProjector::new(catalog),
                 appearances: BTreeMap::new(),
                 next_appearance: 1,
+                mesh_resources: BTreeMap::new(),
+                mesh_appearances: BTreeMap::new(),
+                next_mesh_resource: 1,
                 lights: BTreeMap::new(),
                 next_light: 1,
                 materials: BTreeMap::new(),
@@ -3398,11 +3410,16 @@ impl RuntimeAppearanceBridge {
             .appearance_materials
             .values()
             .any(|bindings| bindings.contains(&material.value))
+            || staged
+                .state
+                .mesh_resources
+                .values()
+                .any(|mesh| mesh.material_handles.contains(&material.value))
         {
             staged.state.materials.insert(material.value, id);
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_MATERIAL_IN_USE",
-                "dispose appearances using this material before disposing the material",
+                "dispose appearances and mesh resources using this material before disposing the material",
             ));
         }
         let resources = staged.state.projector.resources_mut();
@@ -3454,6 +3471,7 @@ impl RuntimeAppearanceBridge {
             return Ok(());
         };
         staged.state.appearance_materials.remove(&appearance.value);
+        staged.state.mesh_appearances.remove(&appearance.value);
         staged.state.animated_appearances.remove(&appearance.value);
         staged
             .state
@@ -3680,6 +3698,218 @@ impl RuntimeAppearanceBridge {
                 wireframe: request.wireframe,
             },
         })
+    }
+
+    unsafe fn create_mesh_resource(
+        &mut self,
+        request: &NativeMeshResourceCreateRequest,
+    ) -> Result<NativeMeshResourceHandle, CsharpEngineServicesError> {
+        let invalid =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_ADMISSION", message);
+        // Bound borrowed lengths before copying, including optional streams.
+        if !(3..=65_536).contains(&request.positions_len)
+            || request.normals_len != request.positions_len
+            || (request.uvs_len != 0 && request.uvs_len != request.positions_len)
+            || !(3..=196_608).contains(&request.indices_len)
+            || !request.indices_len.is_multiple_of(3)
+            || !(1..=256).contains(&request.groups_len)
+            || !(1..=256).contains(&request.bindings_len)
+        {
+            return Err(invalid("mesh requires 3..65536 vertices, matching normals/optional UVs, 3..196608 triangle indices and 1..256 groups/bindings"));
+        }
+        let positions = borrowed_slice(request.positions, request.positions_len, "mesh positions")?;
+        let normals = borrowed_slice(request.normals, request.normals_len, "mesh normals")?;
+        let uvs = borrowed_slice(request.uvs, request.uvs_len, "mesh UVs")?;
+        let indices = borrowed_slice(request.indices, request.indices_len, "mesh indices")?;
+        let groups = borrowed_slice(request.groups, request.groups_len, "mesh groups")?;
+        let bindings = borrowed_slice(request.bindings, request.bindings_len, "mesh bindings")?;
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for position in positions {
+            for (axis, value) in native_vec3_array(*position).into_iter().enumerate() {
+                min[axis] = min[axis].min(value);
+                max[axis] = max[axis].max(value);
+            }
+        }
+        let groups = groups
+            .iter()
+            .map(|group| {
+                if !group.start.is_multiple_of(3) || group.count == 0 || !group.count.is_multiple_of(3) {
+                    return Err(invalid(
+                        "mesh groups must contain complete nonempty triangles",
+                    ));
+                }
+                Ok(MeshGroupDescriptor {
+                    material_slot: u16::try_from(group.material_slot)
+                        .map_err(|_| invalid("mesh material slot exceeds u16"))?,
+                    start: group.start,
+                    count: group.count,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let slots = groups
+            .iter()
+            .map(|group| group.material_slot)
+            .collect::<BTreeSet<_>>();
+        let mut attributes = vec![
+            MeshAttribute {
+                name: MeshAttributeName::Position,
+                components: 3,
+                kind: MeshAttributeKind::F32,
+            },
+            MeshAttribute {
+                name: MeshAttributeName::Normal,
+                components: 3,
+                kind: MeshAttributeKind::F32,
+            },
+        ];
+        if !uvs.is_empty() {
+            attributes.push(MeshAttribute {
+                name: MeshAttributeName::Uv,
+                components: 2,
+                kind: MeshAttributeKind::F32,
+            });
+        }
+        let payload = MeshPayloadDescriptor {
+            layout: MeshBufferLayout {
+                vertex_count: positions.len() as u32,
+                index_count: indices.len() as u32,
+                index_width: MeshIndexWidth::U32,
+                attributes,
+            },
+            groups,
+            bounds: MeshBoundsDescriptor { min, max },
+            source: MeshPayloadSource::Inline {
+                positions: positions
+                    .iter()
+                    .flat_map(|value| native_vec3_array(*value))
+                    .collect(),
+                normals: normals
+                    .iter()
+                    .flat_map(|value| native_vec3_array(*value))
+                    .collect(),
+                uvs: (!uvs.is_empty())
+                    .then(|| uvs.iter().flat_map(|value| [value.x, value.y]).collect()),
+                colors: None,
+                indices: indices.to_vec(),
+            },
+            provenance: MeshProvenance::Generated,
+        };
+        payload
+            .validate()
+            .map_err(|error| invalid(&format!("invalid mesh streams: {error:?}")))?;
+        let staged = self.staged_mut()?;
+        let mut bound_slots = BTreeSet::new();
+        let mut material_slots = Vec::new();
+        let mut material_handles = BTreeSet::new();
+        for binding in bindings {
+            let slot = u16::try_from(binding.material_slot)
+                .map_err(|_| invalid("mesh material slot exceeds u16"))?;
+            if !slots.contains(&slot) || !bound_slots.insert(slot) {
+                return Err(invalid(
+                    "mesh bindings must name each used slot exactly once",
+                ));
+            }
+            let material = staged
+                .state
+                .materials
+                .get(&binding.material.value)
+                .ok_or_else(|| invalid("mesh binding requires a live material"))?
+                .clone();
+            material_slots.push(MeshMaterialSlot { slot, material });
+            material_handles.insert(binding.material.value);
+        }
+        if slots != bound_slots {
+            return Err(invalid(
+                "mesh bindings must cover every group material slot",
+            ));
+        }
+        let handle = staged.state.next_mesh_resource;
+        let next = handle
+            .checked_add(1)
+            .ok_or_else(|| invalid("mesh handle overflow"))?;
+        let asset = format!("mesh/runtime-{handle}");
+        let definition = StaticMeshAsset {
+            asset: asset.clone(),
+            payload,
+            material_slots,
+            collision: MeshCollisionPolicy::VisualOnly,
+        };
+        definition
+            .validate()
+            .map_err(|error| invalid(&format!("invalid mesh resource: {error:?}")))?;
+        staged
+            .state
+            .projector
+            .resources_mut()
+            .static_meshes
+            .push(definition);
+        staged.state.mesh_resources.insert(
+            handle,
+            RuntimeMeshResource {
+                asset,
+                material_handles,
+            },
+        );
+        staged.state.next_mesh_resource = next;
+        Ok(NativeMeshResourceHandle { value: handle })
+    }
+
+    fn create_mesh_appearance(
+        &mut self,
+        resource: NativeMeshResourceHandle,
+    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        let asset = self
+            .staged_ref()?
+            .state
+            .mesh_resources
+            .get(&resource.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_MESH_HANDLE", "mesh resource is not live")
+            })?
+            .asset
+            .clone();
+        let appearance = self.allocate_appearance(Appearance::StaticMesh {
+            asset,
+            material_overrides: Vec::new(),
+        })?;
+        self.staged_mut()?
+            .state
+            .mesh_appearances
+            .insert(appearance.value, resource.value);
+        Ok(appearance)
+    }
+
+    fn destroy_mesh_resource(
+        &mut self,
+        resource: NativeMeshResourceHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let Some(mesh) = staged.state.mesh_resources.get(&resource.value) else {
+            return Ok(());
+        };
+        if staged
+            .state
+            .mesh_appearances
+            .values()
+            .any(|handle| *handle == resource.value)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_MESH_IN_USE",
+                "dispose appearances using this mesh before disposing its resource",
+            ));
+        }
+        let asset = mesh.asset.clone();
+        let projection = staged
+            .state
+            .projector
+            .release_static_mesh(&asset)
+            .map_err(|error| {
+                CsharpEngineServicesError::new("CSHARP_MESH_RELEASE", format!("{error:?}"))
+            })?;
+        staged.state.mesh_resources.remove(&resource.value);
+        push_extra_frame(staged, projection.frame);
+        Ok(())
     }
 
     unsafe fn create_static_mesh(
@@ -7330,6 +7560,36 @@ pub(crate) unsafe extern "C" fn replace_primitive_appearance(
     appearance_result(context, result, |bridge| bridge.replace_primitive(request))
 }
 
+pub(crate) unsafe extern "C" fn create_mesh_resource(
+    context: *mut c_void,
+    request: *const NativeMeshResourceCreateRequest,
+    result: *mut NativeMeshResourceHandle,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    animation_result(context, result, |bridge| unsafe {
+        bridge.create_mesh_resource(&*request)
+    })
+}
+
+pub(crate) unsafe extern "C" fn create_mesh_appearance(
+    context: *mut c_void,
+    resource: NativeMeshResourceHandle,
+    result: *mut NativeAppearanceHandle,
+) -> i32 {
+    appearance_result(context, result, |bridge| {
+        bridge.create_mesh_appearance(resource)
+    })
+}
+
+pub(crate) unsafe extern "C" fn destroy_mesh_resource(
+    context: *mut c_void,
+    resource: NativeMeshResourceHandle,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.destroy_mesh_resource(resource))
+}
+
 pub(crate) unsafe extern "C" fn create_static_mesh_appearance(
     context: *mut c_void,
     request: *const NativeStaticMeshAppearanceRequest,
@@ -7883,10 +8143,11 @@ pub(crate) unsafe extern "C" fn read_presentation(
         .as_ref()
         .map(|call| &call.state)
         .unwrap_or(&bridge.state);
-    let resource_count = match u32::try_from(state.render_resources.len()) {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
+    let resource_count =
+        match u32::try_from(state.render_resources.len() + state.mesh_resources.len()) {
+            Ok(value) => value,
+            Err(_) => return 0,
+        };
     let appearance_count = match u32::try_from(state.appearances.len()) {
         Ok(value) => value,
         Err(_) => return 0,
@@ -8934,6 +9195,134 @@ pub(super) mod tests {
                 shadow_intent: NativeLightShadowIntent::Requested,
             },
         }
+    }
+
+    #[test]
+    fn generated_mesh_copies_streams_recovers_and_releases_exactly() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let color = NativeColor {
+            r: 1.0,
+            g: 0.4,
+            b: 0.1,
+            a: 1.0,
+        };
+        let material = bridge
+            .create_material(NativeMaterialRequest {
+                color,
+                texture: NativeRenderResourceHandle { value: 0 },
+                roughness: 0.7,
+                texture_tint: color,
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: true,
+            })
+            .unwrap();
+        let mut positions = [
+            NativeVec3::default(),
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+        ];
+        let normals = [NativeVec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        }; 3];
+        let mut indices = [0, 1, 2];
+        let groups = [NativeMeshGroup {
+            material_slot: 3,
+            start: 0,
+            count: 3,
+        }];
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 3,
+            material,
+        }];
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+        };
+        let resource = unsafe { bridge.create_mesh_resource(&request) }.unwrap();
+        positions[1].x = 99.0;
+        indices[1] = 99;
+        assert_eq!(positions[1].x, 99.0);
+        assert_eq!(indices[1], 99);
+        // Bad indices fail before admission, preserving the prior owner/allocator.
+        let count = bridge.staged_ref().unwrap().state.mesh_resources.len();
+        assert!(unsafe { bridge.create_mesh_resource(&request) }.is_err());
+        assert_eq!(
+            bridge.staged_ref().unwrap().state.mesh_resources.len(),
+            count
+        );
+        let appearance = bridge.create_mesh_appearance(resource).unwrap();
+        assert!(bridge.destroy_mesh_resource(resource).is_err());
+        assert!(bridge.destroy_material(material).is_err());
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        let mut world = render_presentation::PresentationWorld::default();
+        for output in &call.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                world.apply(frame).unwrap();
+            }
+        }
+        let baseline = world.snapshot();
+        let encoded = serde_json::to_value(&baseline.frame).unwrap();
+        assert!(encoded.to_string().contains("mesh/runtime-1"));
+        let asset = &call.state.projector.clone().resources_mut().static_meshes[0].clone();
+        match &asset.payload.source {
+            MeshPayloadSource::Inline {
+                positions, indices, ..
+            } => {
+                assert_eq!(positions[3], 1.0);
+                assert_eq!(indices, &[0, 1, 2]);
+            }
+            _ => panic!("generated stream must be retained and reconstructible"),
+        }
+        bridge.commit(Some(call));
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
+        bridge.destroy_appearance(appearance).unwrap();
+        bridge.destroy_mesh_resource(resource).unwrap();
+        bridge.destroy_mesh_resource(resource).unwrap();
+        bridge.destroy_material(material).unwrap();
+        assert!(bridge.create_mesh_appearance(resource).is_err());
+        let removal = bridge.take_staged_call().unwrap().unwrap();
+        let mut releases = 0;
+        for output in &removal.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                releases += frame
+                    .ops
+                    .iter()
+                    .filter(|op| matches!(op, RenderDiff::ReleaseStaticMesh { .. }))
+                    .count();
+                world.apply(frame).unwrap();
+            }
+        }
+        assert_eq!(releases, 1);
+        assert!(removal.state.mesh_resources.is_empty());
+        assert!(!serde_json::to_string(&world.snapshot().frame)
+            .unwrap()
+            .contains("mesh/runtime-1"));
     }
 
     #[test]

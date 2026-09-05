@@ -879,6 +879,9 @@ export class ThreeRenderer {
       case 'defineStaticMesh':
         this.#defineStaticMesh(diff.asset, preparedGeometry?.[0]);
         break;
+      case 'releaseStaticMesh':
+        this.#releaseDefinedStaticMesh(diff.asset);
+        break;
       case 'defineAnimatedMesh':
         this.#defineAnimatedMesh(diff);
         break;
@@ -1806,6 +1809,21 @@ export class ThreeRenderer {
     def.refCount -= 1;
   }
 
+  #releaseDefinedStaticMesh(asset: string): void {
+    const definition = this.#staticMeshes.get(asset);
+    if (definition === undefined) {
+      throw new RenderApplyError(`releaseStaticMesh: undefined static mesh ${asset}`);
+    }
+    if (definition.refCount !== 0) {
+      throw new RenderApplyError(
+        `releaseStaticMesh: ${asset} is in use by ${definition.refCount} instance(s)`,
+      );
+    }
+    definition.geometry.dispose();
+    definition.materials.forEach((material) => material.dispose());
+    this.#staticMeshes.delete(asset);
+  }
+
   // ── Animated mesh assets + named playback (projection-only) ────────────────
 
   #defineAnimatedMesh(diff: Extract<RenderDiff, { op: 'defineAnimatedMesh' }>): void {
@@ -2234,6 +2252,7 @@ export class ThreeRenderer {
       switch (operation.op) {
         case 'defineMaterial':
         case 'defineStaticMesh':
+        case 'releaseStaticMesh':
         case 'defineVoxelObject':
         case 'releaseVoxelObject':
         case 'createStaticMeshInstance':
