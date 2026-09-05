@@ -5,7 +5,7 @@
 //! normal incremental voxel projector, and stages renderer work.  No mesh or
 //! renderer object is ever admitted from C#.
 
-use product_dev_host::{CanonicalU64, ProductDevUpdateAttribution};
+use runtime_diagnostics::RuntimeUpdateAttribution;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
@@ -64,7 +64,7 @@ pub(crate) struct RuntimeVoxelScenePresentationBridge {
     state: VoxelScenePresentationState,
     staged: Option<RuntimeVoxelScenePresentationCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
-    update_attribution: ProductDevUpdateAttribution,
+    update_attribution: RuntimeUpdateAttribution,
 }
 
 impl RuntimeVoxelScenePresentationBridge {
@@ -80,7 +80,7 @@ impl RuntimeVoxelScenePresentationBridge {
             },
             staged: None,
             appearance: None,
-            update_attribution: ProductDevUpdateAttribution::default(),
+            update_attribution: RuntimeUpdateAttribution::default(),
         }
     }
 
@@ -92,26 +92,22 @@ impl RuntimeVoxelScenePresentationBridge {
     }
 
     pub(crate) fn reset_update_attribution(&mut self) {
-        self.update_attribution = ProductDevUpdateAttribution::default();
+        self.update_attribution = RuntimeUpdateAttribution::default();
     }
 
-    pub(crate) fn update_attribution(&self) -> ProductDevUpdateAttribution {
+    pub(crate) fn update_attribution(&self) -> RuntimeUpdateAttribution {
         self.update_attribution
     }
 
     fn record_presentation_attribution(&mut self, duration_us: u64) {
-        self.update_attribution.voxel_scene_presentation_calls = CanonicalU64::new(
-            self.update_attribution
-                .voxel_scene_presentation_calls
-                .get()
-                .saturating_add(1),
-        );
-        self.update_attribution.voxel_scene_presentation_duration_us = CanonicalU64::new(
-            self.update_attribution
-                .voxel_scene_presentation_duration_us
-                .get()
-                .saturating_add(duration_us),
-        );
+        self.update_attribution.voxel_scene_presentation_calls = self
+            .update_attribution
+            .voxel_scene_presentation_calls
+            .saturating_add(1);
+        self.update_attribution.voxel_scene_presentation_duration_us = self
+            .update_attribution
+            .voxel_scene_presentation_duration_us
+            .saturating_add(duration_us);
     }
 
     pub(crate) fn begin_call(&mut self) {
@@ -1245,10 +1241,7 @@ mod tests {
             ABI_OK
         );
         let attribution = bridge.update_attribution();
-        assert_eq!(
-            attribution.voxel_scene_presentation_calls,
-            CanonicalU64::new(1)
-        );
+        assert_eq!(attribution.voxel_scene_presentation_calls, 1);
         let staged = bridge
             .take_staged_call()
             .expect("staged voxel scene projection");

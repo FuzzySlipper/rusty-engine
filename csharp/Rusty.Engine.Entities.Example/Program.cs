@@ -682,30 +682,38 @@ static void ExerciseAppearanceEntityComposition()
     EntityId second = world.Create();
     world.Set(first, EngineComponentTypes.Transform, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One));
     world.Set(second, EngineComponentTypes.Transform, new Transform(new Vector3(2, 0, 0), Quaternion.Identity, Vector3.One));
-    var appearance = new AppearanceServiceFake();
+    var graphics = new GraphicsServiceFake();
     using var firstHandle = new Appearance(new AppearanceHandle(10), () => { });
     using var secondHandle = new Appearance(new AppearanceHandle(20), () => { });
-    var adapter = new AppearanceEntityWorld(world, appearance);
+    var adapter = new AppearanceEntityWorld(world, graphics);
     AppearanceEntityWorldEntry[] entries =
     [
-        new(second, secondHandle, true, RenderLayer.Debug),
+        new(second, secondHandle, true, RenderLayer.Debug, first),
         new(first, firstHandle, true, RenderLayer.Scene),
     ];
 
     AppearanceEntityWorldReceipt receipt = adapter.Publish(entries, maximumEntities: 2);
-    Require(appearance.PublishCalls == 1
+    Require(graphics.PublishCalls == 1
         && receipt.Facts.Span.Length == 2
-        && appearance.LastSnapshot.Span[0].ObjectId == first.Value
-        && appearance.LastSnapshot.Span[0].Appearance == firstHandle
-        && appearance.LastSnapshot.Span[1].ObjectId == second.Value
-        && appearance.LastSnapshot.Span[1].Appearance == secondHandle,
-        "appearance adapter did not publish caller-owned handles in deterministic managed entity order");
+        && graphics.LastSnapshot.Span[0].ObjectId == first.Value
+        && graphics.LastSnapshot.Span[0].Appearance == firstHandle
+        && graphics.LastSnapshot.Span[1].ObjectId == second.Value
+        && graphics.LastSnapshot.Span[1].Appearance == secondHandle
+        && graphics.LastSnapshot.Span[1].HasParentObject
+        && graphics.LastSnapshot.Span[1].ParentObjectId == first.Value,
+        "graphics adapter did not publish caller-owned handles and hierarchy in parent-before-child order");
+
+    Throws(
+        () => adapter.Publish(
+            new AppearanceEntityWorldEntry[] { new(second, secondHandle, true, RenderLayer.Debug, new EntityId(999)) },
+            maximumEntities: 1),
+        "graphics adapter accepted a parent that was absent from its complete snapshot");
 
     world.Set(first, EngineComponentTypes.Transform, new Transform(Vector3.UnitY, Quaternion.Identity, Vector3.One));
     Throws(
         () => adapter.Publish(entries, maximumEntities: 2, receipt.Guard),
         "appearance adapter accepted a stale managed transform projection");
-    Require(appearance.PublishCalls == 1,
+    Require(graphics.PublishCalls == 1,
         "stale appearance managed state reached the generated service");
 }
 
@@ -890,7 +898,7 @@ sealed class SpatialServiceFake : ISpatialService
             : default;
 }
 
-sealed class AppearanceServiceFake : IAppearanceService
+sealed class GraphicsServiceFake : IGraphicsService
 {
     private AppearanceFact[] _lastSnapshot = [];
 
@@ -940,7 +948,7 @@ sealed class AppearanceServiceFake : IAppearanceService
 
 sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngineContext
 {
-    public ILookService Look => throw new NotSupportedException();
+    public IDiagnosticsService Diagnostics => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public IMotionService Motion => throw new NotSupportedException();
     public IKinematicService Kinematic => throw new NotSupportedException();
@@ -951,7 +959,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IVoxelContentService VoxelContent => throw new NotSupportedException();
     public IContentService Content => throw new NotSupportedException();
     public IAuthoredContentService AuthoredContent => throw new NotSupportedException();
-    public IAppearanceService Appearance => throw new NotSupportedException();
+    public IGraphicsService Graphics => throw new NotSupportedException();
     public IPresentationService Presentation => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
@@ -1105,7 +1113,7 @@ sealed class MotionServiceFake : IMotionService
     public MotionResolveReceipt Resolve(MotionResolveRequest request)
     {
         ResolveCount++;
-        MotionEntityRow mover = request.Entities.Span
+        MotionSpatialEntity mover = request.Entities.Span
             .ToArray()
             .Single(row => row.EntityId == request.TargetEntityId);
         Transform candidate = mover.Transform with

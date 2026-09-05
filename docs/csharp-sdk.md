@@ -135,12 +135,14 @@ renderer. Publish current presentation during ordinary product lifecycle and
 updates. The generated `Attach` member remains as an optional default method for
 source continuity, but placing required initialization only there has no effect on a
 fresh attachment. Graphics/voxel handles and publication frontiers survive the
-baseline; exact audio/animation time and frozen ghost-capture recovery remain
-tracked in Engine #7779.
+baseline. Playback cursors and controller clip phases resume from Engine-owned
+update facts, and ghost plates reconstruct from their capture-time source.
+Historical sounds, particle bursts, animation cues, and completion callbacks
+are not replayed. Continuous emitters restart their cosmetic simulation.
 
 Current `IEngineContext` properties are named service families generated from
-the ABI: look, dynamics, motion, kinematic, spatial, perception, world origin,
-voxel, voxel content and presentation, content, authored content, appearance,
+the ABI: dynamics, motion, kinematic, spatial, perception, world origin,
+voxel, voxel content and presentation, content, authored content, graphics,
 presentation, animation, audio, camera view, random, persistence, content
 store, and UI. The exact method set is defined by the current generated
 `Rusty.Engine` output and Rust ABI source. Mechanics, resolution, and state
@@ -148,9 +150,30 @@ machines are ordinary managed helpers, not native context services. See the
 [current capability map](csharp-capabilities.md) and do not assume a Rust API
 is callable from C# simply because its crate is public.
 
+### Composing graphics
+
+Use `context.Graphics` for resources and retained facts; `Appearance` still
+names a selected visual resource. `AppearanceFact` carries `ObjectId`,
+`HasParentObject`, `ParentObjectId`, local `Transform`, `Appearance`, `Visible`,
+and `Layer`. A complete snapshot may contain parents and children in either
+input order; the Engine validates the hierarchy and publishes parents first.
+`AppearanceEntityWorld` also accepts an optional parent `EntityId`.
+
+- Attached equipment: publish the actor and equipment as ordinary facts, with
+  the equipment parent naming the actor. Product code selects equipment and
+  local placement; Engine owns hierarchy and resource realization.
+- Target indicators: compose child sprites/meshes with anchored billboards;
+  choose depth-tested, occluded, or always-on-top layers through `Presentation`.
+- Procedural effects: combine admitted meshes/materials with lights and
+  retained emitters or explicit bursts. Runtime-generated mesh admission is a
+  separate planned mechanism (#7787), not a downstream renderer extension.
+
+Look math is `Look.Integrate(request)` (and `Reset`, `Rebase`, `Diagnose`) in
+the managed toolkit. Replace former `context.Look` calls with these helpers.
+
 ### Atlas sprite playback
 
-`Appearance.CreateSpritePlayback` retains one admitted sequence for an
+`Graphics.CreateSpritePlayback` retains one admitted sequence for an
 atlas-backed sprite. `SelectSpritePlaybackFrame` selects the start of an exact
 sequence entry and atomically updates both the playback readout and rendered
 sprite frame. It preserves stopped, playing, or paused state; a completed

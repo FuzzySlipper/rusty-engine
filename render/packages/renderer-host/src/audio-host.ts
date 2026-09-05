@@ -261,13 +261,28 @@ export class RendererAudioHost {
         this.#recordHostDiagnostic('hostFailure', 'audio host is disposed'),
       );
     }
+    const epoch = this.#epoch;
     const diagnostics: AudioProjectionDiagnostic[] = [];
     let applied = 0;
     for (const operation of presentation.ops) {
       if (operation.domain !== 'audio') {
         continue;
       }
-      const diagnostic = await this.#applyOperation(operation);
+      if (!this.#isCurrentEpoch(epoch)) {
+        return this.#receipt(0, []);
+      }
+      let diagnostic: AudioProjectionDiagnostic | null;
+      try {
+        diagnostic = await this.#applyOperation(operation, epoch);
+      } catch (error) {
+        if (error instanceof StaleAudioOperation) {
+          return this.#receipt(0, []);
+        }
+        throw error;
+      }
+      if (!this.#isCurrentEpoch(epoch)) {
+        return this.#receipt(0, []);
+      }
       if (diagnostic === null) {
         applied += 1;
       } else {
@@ -371,6 +386,7 @@ export class RendererAudioHost {
 
   async #applyOperation(
     operation: Extract<PresentationOp, { readonly domain: 'audio' }>,
+    epoch: number,
   ): Promise<AudioProjectionDiagnostic | null> {
     const { meta, op } = operation;
     try {
@@ -378,7 +394,8 @@ export class RendererAudioHost {
         if (this.#seenSignals.has(op.signalId)) {
           return null;
         }
-        const graph = await this.#createGraph(op.descriptor, meta.sequence);
+        const graph = await this.#createGraph(op.descriptor, meta.sequence, epoch);
+        this.#assertCurrentEpoch(epoch);
         this.#seenSignals.add(op.signalId);
         this.#oneShots.add(graph);
         this.#startOneShotGraph(graph, op.signalHandle);
@@ -396,10 +413,31 @@ export class RendererAudioHost {
           cursor: 0,
           graph: null,
         };
-        const graph = await this.#createGraph(voice.descriptor, voice.sequence);
+        const graph = await this.#createGraph(voice.descriptor, voice.sequence, epoch);
+        this.#assertCurrentEpoch(epoch);
         voice.graph = graph;
         this.#retained.set(op.handle as number, voice);
         this.#startRetainedGraph(op.handle, voice, graph, 0);
+        return null;
+      }
+      if (op.op === 'restore') {
+        if (this.#retained.has(op.handle as number)) {
+          return operationDiagnostic('duplicateHandle', meta, op.handle, 'audio handle is active');
+        }
+        const voice: RendererRetainedVoice = {
+          descriptor: op.descriptor,
+          sequence: meta.sequence,
+          state: op.desiredState,
+          cursor: op.cursorSeconds,
+          graph: null,
+        };
+        if (voice.state === 'playing') {
+          const graph = await this.#createGraph(voice.descriptor, voice.sequence, epoch);
+          this.#assertCurrentEpoch(epoch);
+          voice.graph = graph;
+          this.#startRetainedGraph(op.handle, voice, graph, voice.cursor);
+        }
+        this.#retained.set(op.handle as number, voice);
         return null;
       }
       if (op.op === 'destroy') {
@@ -412,14 +450,17 @@ export class RendererAudioHost {
         return null;
       }
       if (op.op === 'voiceControl') {
-        return await this.#applyVoiceControl(meta, op.handle, op.control);
+        return await this.#applyVoiceControl(meta, op.handle, op.control, epoch);
       }
       if (op.op === 'busControl') {
         this.#applyBusControl(op.bus, op.control);
         return null;
       }
-      return await this.#updateGraph(meta, op.handle, op.patch);
+      return await this.#updateGraph(meta, op.handle, op.patch, epoch);
     } catch (error) {
+      if (error instanceof StaleAudioOperation) {
+        throw error;
+      }
       return operationDiagnostic(
         classifyHostError(error),
         meta,
@@ -433,6 +474,7 @@ export class RendererAudioHost {
     meta: Extract<PresentationOp, { readonly domain: 'audio' }>['meta'],
     handle: AudioHandle,
     patch: AudioSourcePatch,
+    epoch: number,
   ): Promise<AudioProjectionDiagnostic | null> {
     const voice = this.#retained.get(handle as number);
     if (voice === undefined) {
@@ -447,7 +489,8 @@ export class RendererAudioHost {
     }
     const cursor = playbackCursor(graph, this.#context.currentTime);
     if (patch.emitter !== null) {
-      const replacement = await this.#createGraph(next, meta.sequence);
+      const replacement = await this.#createGraph(next, meta.sequence, epoch);
+      this.#assertCurrentEpoch(epoch);
       disposeGraph(graph);
       voice.graph = replacement;
       voice.descriptor = next;
@@ -467,6 +510,7 @@ export class RendererAudioHost {
     meta: Extract<PresentationOp, { readonly domain: 'audio' }>['meta'],
     handle: AudioHandle,
     control: 'pause' | 'resume' | 'retrigger',
+    epoch: number,
   ): Promise<AudioProjectionDiagnostic | null> {
     const voice = this.#retained.get(handle as number);
     if (voice === undefined) {
@@ -489,13 +533,15 @@ export class RendererAudioHost {
       if (voice.state === 'playing') {
         return null;
       }
-      const graph = await this.#createGraph(voice.descriptor, voice.sequence);
+      const graph = await this.#createGraph(voice.descriptor, voice.sequence, epoch);
+      this.#assertCurrentEpoch(epoch);
       voice.graph = graph;
       voice.state = 'playing';
       this.#startRetainedGraph(handle, voice, graph, voice.cursor);
       return null;
     }
-    const replacement = await this.#createGraph(voice.descriptor, voice.sequence);
+    const replacement = await this.#createGraph(voice.descriptor, voice.sequence, epoch);
+    this.#assertCurrentEpoch(epoch);
     disposeGraph(voice.graph);
     voice.cursor = 0;
     voice.graph = replacement;
@@ -531,9 +577,11 @@ export class RendererAudioHost {
   async #createGraph(
     descriptor: AudioSourceDescriptor,
     sequence: number,
+    epoch: number,
   ): Promise<RendererAudioSourceGraph> {
-    const source = this.#context.createBufferSource();
     const buffer = await this.#decodeClip(descriptor.clip);
+    this.#assertCurrentEpoch(epoch);
+    const source = this.#context.createBufferSource();
     source.buffer = buffer;
     const graph: RendererAudioSourceGraph = {
       descriptor,
@@ -547,7 +595,7 @@ export class RendererAudioHost {
       startedAt: this.#context.currentTime,
       startedOffset: 0,
       playbackRate: descriptor.pitch,
-      epoch: this.#epoch,
+      epoch,
       disposed: false,
     };
     source.connect(graph.stereoPanner);
@@ -560,6 +608,16 @@ export class RendererAudioHost {
     }
     applyGraphParameters(this.#context, graph, descriptor, this.#resolveEntityPosition);
     return graph;
+  }
+
+  #isCurrentEpoch(epoch: number): boolean {
+    return !this.#disposed && this.#epoch === epoch;
+  }
+
+  #assertCurrentEpoch(epoch: number): void {
+    if (!this.#isCurrentEpoch(epoch)) {
+      throw new StaleAudioOperation();
+    }
   }
 
   async #decodeClip(clip: AudioClipRef): Promise<unknown> {
@@ -671,6 +729,18 @@ export class RendererAudioHost {
     graph: RendererAudioSourceGraph,
     offset: number,
   ): void {
+    const normalizedOffset = normalizeCursor(offset, graph.duration, graph.descriptor.looping);
+    if (!graph.descriptor.looping && graph.duration !== null && normalizedOffset >= graph.duration) {
+      // A baseline can carry an Engine cursor from a format whose byte-rate
+      // metadata was absent or disagreed with browser decoding. It is already
+      // complete in this realization, so retain that state quietly rather
+      // than starting at the end and fabricating a new completion callback.
+      voice.graph = null;
+      voice.state = 'completed';
+      voice.cursor = graph.duration;
+      disposeGraph(graph);
+      return;
+    }
     graph.source.onended = () => {
       if (graph.disposed || graph.epoch !== this.#epoch) return;
       if (this.#retained.get(handle as number)?.graph !== graph) return;
@@ -687,7 +757,7 @@ export class RendererAudioHost {
       }
       disposeGraph(graph);
     };
-    startGraph(graph, offset, this.#context.currentTime);
+    startGraph(graph, normalizedOffset, this.#context.currentTime);
   }
 
   #receipt(
@@ -697,6 +767,8 @@ export class RendererAudioHost {
     return { applied, diagnostics, readout: this.readout() };
   }
 }
+
+class StaleAudioOperation extends Error {}
 
 class RendererAudioResourceError extends Error {
   constructor(

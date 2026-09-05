@@ -26,7 +26,7 @@ use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityAuthoringService, EntityDefinition,
     EntityState, EntityTransform, Quat,
 };
-use product_dev_host::{CanonicalU64, ProductDevUpdateAttribution};
+use runtime_diagnostics::RuntimeUpdateAttribution;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use svc_pathfinding::{
@@ -153,7 +153,7 @@ pub(crate) struct RuntimeSpatialBridge {
     pub(crate) kinematic_motion_leases:
         BTreeMap<u64, crate::kinematic::KinematicMotionLeaseBacking>,
     pub(crate) next_kinematic_motion_lease: u64,
-    update_attribution: ProductDevUpdateAttribution,
+    update_attribution: RuntimeUpdateAttribution,
     last_character_query_stats: CharacterCollisionQueryStats,
 }
 
@@ -425,7 +425,7 @@ impl RuntimeSpatialBridge {
             next_world_origin_prepared: 1,
             kinematic_motion_leases: BTreeMap::new(),
             next_kinematic_motion_lease: 1,
-            update_attribution: ProductDevUpdateAttribution::default(),
+            update_attribution: RuntimeUpdateAttribution::default(),
             last_character_query_stats: CharacterCollisionQueryStats::default(),
         }
     }
@@ -435,10 +435,10 @@ impl RuntimeSpatialBridge {
     }
 
     pub(crate) fn reset_update_attribution(&mut self) {
-        self.update_attribution = ProductDevUpdateAttribution::default();
+        self.update_attribution = RuntimeUpdateAttribution::default();
     }
 
-    pub(crate) fn update_attribution(&self) -> ProductDevUpdateAttribution {
+    pub(crate) fn update_attribution(&self) -> RuntimeUpdateAttribution {
         self.update_attribution
     }
 
@@ -448,51 +448,37 @@ impl RuntimeSpatialBridge {
         cast_count: u64,
         query_stats: CharacterCollisionQueryStats,
     ) {
-        self.update_attribution.character_step_calls = CanonicalU64::new(
-            self.update_attribution
-                .character_step_calls
-                .get()
-                .saturating_add(1),
-        );
-        self.update_attribution.character_step_duration_us = CanonicalU64::new(
-            self.update_attribution
-                .character_step_duration_us
-                .get()
-                .saturating_add(duration_us),
-        );
-        self.update_attribution.character_step_cast_count = CanonicalU64::new(
-            self.update_attribution
-                .character_step_cast_count
-                .get()
-                .saturating_add(cast_count),
-        );
-        self.update_attribution.character_step_candidate_count = CanonicalU64::new(
-            self.update_attribution
-                .character_step_candidate_count
-                .get()
-                .saturating_add(query_stats.candidate_count()),
-        );
-        self.update_attribution.character_step_narrow_phase_count = CanonicalU64::new(
-            self.update_attribution
-                .character_step_narrow_phase_count
-                .get()
-                .saturating_add(query_stats.narrow_phase_count()),
-        );
+        self.update_attribution.character_step_calls = self
+            .update_attribution
+            .character_step_calls
+            .saturating_add(1);
+        self.update_attribution.character_step_duration_us = self
+            .update_attribution
+            .character_step_duration_us
+            .saturating_add(duration_us);
+        self.update_attribution.character_step_cast_count = self
+            .update_attribution
+            .character_step_cast_count
+            .saturating_add(cast_count);
+        self.update_attribution.character_step_candidate_count = self
+            .update_attribution
+            .character_step_candidate_count
+            .saturating_add(query_stats.candidate_count());
+        self.update_attribution.character_step_narrow_phase_count = self
+            .update_attribution
+            .character_step_narrow_phase_count
+            .saturating_add(query_stats.narrow_phase_count());
     }
 
     pub(crate) fn record_voxel_residency_attribution(&mut self, duration_us: u64) {
-        self.update_attribution.voxel_residency_calls = CanonicalU64::new(
-            self.update_attribution
-                .voxel_residency_calls
-                .get()
-                .saturating_add(1),
-        );
-        self.update_attribution.voxel_residency_duration_us = CanonicalU64::new(
-            self.update_attribution
-                .voxel_residency_duration_us
-                .get()
-                .saturating_add(duration_us),
-        );
+        self.update_attribution.voxel_residency_calls = self
+            .update_attribution
+            .voxel_residency_calls
+            .saturating_add(1);
+        self.update_attribution.voxel_residency_duration_us = self
+            .update_attribution
+            .voxel_residency_duration_us
+            .saturating_add(duration_us);
     }
 
     pub(crate) fn bind_content(&mut self, content: &crate::content::RuntimeContentBridge) {

@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use core_math::Vec3;
 use csharp_engine_abi::*;
 use entity_state::Quat;
-use product_dev_host::{CanonicalU64, ProductDevUpdateAttribution};
+use runtime_diagnostics::{RuntimeDiagnosticsSink, RuntimeUpdateAttribution};
 
 use crate::{
     audio::{AudioRealizationFact, RuntimeAudioBridge, RuntimeAudioCall},
@@ -63,7 +63,6 @@ fn engine_api(
     appearance_bridge.bind_authored_content(authored_content_bridge);
     NativeEngineApi {
         diagnostics: crate::diagnostics::api(diagnostics_bridge),
-        look: crate::look::api(),
         dynamics: crate::dynamics::api(dynamics_bridge),
         motion: crate::motion::api(),
         kinematic: crate::kinematic::api(spatial_bridge),
@@ -83,7 +82,7 @@ fn engine_api(
         content: crate::content::api(content_bridge),
         authored_content: crate::authored_content::api(authored_content_bridge),
         content_store: crate::content_store::api(content_store_bridge),
-        appearance: NativeAppearanceApi {
+        graphics: NativeGraphicsApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
             create_material,
@@ -232,6 +231,7 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 /// The runtime drives call boundaries; this owner stages and commits only
 /// Engine-facing effects created through the generated function tables.
 pub struct EngineServiceSet {
+    call_elapsed_seconds: f64,
     presentation_world: render_presentation::PresentationWorld,
     diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance: RuntimeAppearanceBridge,
@@ -292,7 +292,7 @@ impl EngineServiceSet {
         content_resources: BTreeMap<String, Arc<[u8]>>,
         persistence_root: Option<PathBuf>,
         content_store_root: Option<PathBuf>,
-        diagnostics_sink: product_dev_host::ProductDevLog,
+        diagnostics_sink: RuntimeDiagnosticsSink,
     ) -> Result<Self, CsharpEngineServicesError> {
         let mut spatial = crate::spatial::RuntimeSpatialBridge::new();
         let perception = crate::perception::RuntimePerceptionBridge::new(&spatial);
@@ -312,6 +312,7 @@ impl EngineServiceSet {
         let mut audio = RuntimeAudioBridge::new(content_resources);
         audio.bind_diagnostics_sink(diagnostics_sink.clone());
         Ok(Self {
+            call_elapsed_seconds: 0.0,
             presentation_world: render_presentation::PresentationWorld::default(),
             diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::new(diagnostics_sink),
             appearance,
@@ -368,6 +369,7 @@ impl EngineServiceSet {
     }
 
     pub fn begin_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
+        self.call_elapsed_seconds = 0.0;
         self.appearance.begin_call();
         self.begin_other_services(ui_binding);
     }
@@ -379,6 +381,7 @@ impl EngineServiceSet {
         &mut self,
         ui_binding: RuntimeUiRuntimeBinding,
     ) -> Result<(), CsharpEngineServicesError> {
+        self.call_elapsed_seconds = 0.0;
         self.appearance.begin_attach_call();
         self.audio.begin_call();
         self.camera_view.begin_attach_call()?;
@@ -396,8 +399,11 @@ impl EngineServiceSet {
     ) {
         self.spatial.reset_update_attribution();
         self.voxel_scene_presentation.reset_update_attribution();
+        self.call_elapsed_seconds =
+            facts.fixed_delta_seconds * f64::from(facts.admitted_step_count);
         self.appearance.begin_update_call(facts);
         self.begin_other_services(ui_binding);
+        self.audio.begin_update_call(self.call_elapsed_seconds);
     }
 
     /// Returns every committed renderer stream continuation point. Detached
@@ -417,11 +423,11 @@ impl EngineServiceSet {
     pub fn complete_update_attribution(
         &self,
         callback_duration_us: u64,
-    ) -> ProductDevUpdateAttribution {
+    ) -> RuntimeUpdateAttribution {
         let spatial = self.spatial.update_attribution();
         let presentation = self.voxel_scene_presentation.update_attribution();
-        ProductDevUpdateAttribution {
-            callback_duration_us: CanonicalU64::new(callback_duration_us),
+        RuntimeUpdateAttribution {
+            callback_duration_us,
             character_step_calls: spatial.character_step_calls,
             character_step_duration_us: spatial.character_step_duration_us,
             character_step_cast_count: spatial.character_step_cast_count,
@@ -527,13 +533,24 @@ impl EngineServiceSet {
             voxel_content,
             voxel_scene_presentation,
         };
+        call.presentation_world
+            .advance_elapsed(self.call_elapsed_seconds);
         let mut output = self.raw_outputs(&call);
         for item in &mut output.appearance {
-            if let CsharpAppearanceCallOutput::Frame(frame) = item {
-                *frame = call
-                    .presentation_world
-                    .apply(frame)
-                    .map_err(presentation_world_error)?;
+            match item {
+                CsharpAppearanceCallOutput::Frame(frame) => {
+                    *frame = call
+                        .presentation_world
+                        .apply(frame)
+                        .map_err(presentation_world_error)?;
+                }
+                CsharpAppearanceCallOutput::Presentation(frame) => {
+                    *frame = call
+                        .presentation_world
+                        .apply_presentation(frame)
+                        .map_err(presentation_world_error)?;
+                }
+                CsharpAppearanceCallOutput::AnimationCueDefinitions(_) => {}
             }
         }
         for frame in &mut output.frames {
@@ -542,6 +559,21 @@ impl EngineServiceSet {
                 .apply(frame)
                 .map_err(presentation_world_error)?;
         }
+        for frame in &mut output.presentation {
+            *frame = call
+                .presentation_world
+                .apply_presentation(frame)
+                .map_err(presentation_world_error)?;
+        }
+        let mut effects = match &call.appearance {
+            Some(appearance) => RuntimeAppearanceBridge::snapshot_call_presentation(appearance)?,
+            None => self.appearance.snapshot_presentation_frames()?,
+        };
+        let audio = RuntimeAudioBridge::snapshot_call_frame(&call.audio)?;
+        if !audio.ops.is_empty() {
+            effects.push(audio);
+        }
+        call.presentation_world.retain_effects(effects);
         call.output = output;
         Ok(call)
     }
@@ -584,11 +616,7 @@ impl EngineServiceSet {
         binding: RuntimeUiRuntimeBinding,
     ) -> Result<CsharpEngineCallOutput, CsharpEngineServicesError> {
         let snapshot = self.presentation_world.snapshot();
-        let mut presentation = self.appearance.snapshot_presentation_frames()?;
-        let audio = self.audio.snapshot_frame()?;
-        if !audio.ops.is_empty() {
-            presentation.push(audio);
-        }
+        let presentation = self.presentation_world.effects_snapshot();
         Ok(CsharpEngineCallOutput {
             appearance: vec![
                 CsharpAppearanceCallOutput::Frame(snapshot.frame),
@@ -768,7 +796,7 @@ mod tests {
             content,
             None,
             None,
-            product_dev_host::ProductDevLog::new(Default::default()).unwrap(),
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
         .expect("service set");
 
@@ -777,8 +805,8 @@ mod tests {
         let mut texture = NativeRenderResourceInfo::default();
         assert_eq!(
             unsafe {
-                (api.appearance.open_resource)(
-                    api.appearance.context,
+                (api.graphics.open_resource)(
+                    api.graphics.context,
                     &crate::appearance::tests::resource_request("sky.png"),
                     &mut texture,
                 )
@@ -883,7 +911,7 @@ mod tests {
             BTreeMap::new(),
             None,
             None,
-            product_dev_host::ProductDevLog::new(Default::default()).unwrap(),
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
         .expect("service set");
         services.begin_call(binding());
@@ -994,7 +1022,7 @@ mod tests {
             content,
             None,
             None,
-            product_dev_host::ProductDevLog::new(Default::default()).unwrap(),
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
         .expect("service set");
         services.begin_call(binding());

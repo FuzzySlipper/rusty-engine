@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import type {
   GhostPlateCaptureLighting,
   GhostPlateDescriptor,
+  RenderFrameDiff,
 } from '@rusty-engine/render-contracts';
 import {
   RendererThreeGhostPlatePresentation,
@@ -138,9 +139,41 @@ void test('successful replacement adjusts current accounting once and disposal r
   }
 });
 
+void test('captured ghost scenes stay isolated across placement updates and change only on explicit recapture', () => {
+  const renderer = new FakeRenderer();
+  const backend = new CapturedSceneBackend();
+  const presentation = createPresentation(renderer, backend);
+  const initial = capturedScene('initial-frozen-pose');
+  const recaptured = capturedScene('explicitly-recaptured-pose');
+  try {
+    assert.equal(presentation.create({ ...descriptor(8), capturedScene: initial }).applied, true);
+    assert.deepEqual(backend.realizedLabels, ['initial-frozen-pose']);
+    assert.equal(backend.disposals, 1);
+
+    assert.equal(presentation.update({
+      placement: {
+        ...descriptor(8).placement,
+        transform: { translation: [9, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      },
+    }).applied, true);
+    assert.deepEqual(backend.realizedLabels, ['initial-frozen-pose', 'initial-frozen-pose']);
+
+    assert.equal(presentation.recapture(null, recaptured).applied, true);
+    assert.deepEqual(backend.realizedLabels, [
+      'initial-frozen-pose',
+      'initial-frozen-pose',
+      'explicitly-recaptured-pose',
+    ]);
+    assert.equal(backend.disposals, 3);
+  } finally {
+    presentation.dispose();
+    backend.dispose();
+  }
+});
+
 function createPresentation(
   renderer: FakeRenderer,
-  backend: FakeBackend,
+  backend: RendererThreeGhostPlateBackend,
 ): RendererThreeGhostPlatePresentation {
   return new RendererThreeGhostPlatePresentation({
     webgl: renderer as unknown as THREE.WebGLRenderer,
@@ -207,6 +240,64 @@ class FakeBackend implements RendererThreeGhostPlateBackend {
     if (Array.isArray(material)) material.forEach((item) => item.dispose());
     else material.dispose();
   }
+}
+
+class CapturedSceneBackend implements RendererThreeGhostPlateBackend {
+  readonly scene = new THREE.Scene();
+  readonly realizedLabels: string[] = [];
+  disposals = 0;
+
+  objectFor(_handle: GhostPlateDescriptor['source']): THREE.Object3D | undefined {
+    throw new Error('captured ghost realization must not read the live source');
+  }
+
+  createIsolatedCaptureScene(frame: RenderFrameDiff) {
+    const source = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x88aaff }),
+    );
+    const label = frame.ops[0]?.op === 'create' ? frame.ops[0].node.metadata.label : null;
+    if (label === null) throw new Error('test capture frame must create the frozen source');
+    this.realizedLabels.push(label);
+    const scene = new THREE.Scene();
+    scene.add(source);
+    return {
+      scene,
+      objectFor: (handle: GhostPlateDescriptor['source']) => handle === SOURCE_HANDLE ? source : undefined,
+      sceneFor: (handle: GhostPlateDescriptor['source']) => handle === SOURCE_HANDLE ? scene : undefined,
+      dispose: () => {
+        this.disposals += 1;
+        scene.clear();
+        source.geometry.dispose();
+        const material = source.material;
+        if (Array.isArray(material)) material.forEach((item) => item.dispose());
+        else material.dispose();
+      },
+    };
+  }
+
+  dispose(): void {
+    this.scene.clear();
+  }
+}
+
+function capturedScene(label: string): RenderFrameDiff {
+  return {
+    schemaVersion: 1,
+    ops: [{
+      op: 'create',
+      handle: SOURCE_HANDLE,
+      parent: null,
+      node: {
+        geometry: { kind: 'cube' },
+        material: { color: [1, 1, 1, 1], wireframe: false },
+        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        visible: true,
+        layer: 'scene',
+        metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label },
+      },
+    }],
+  };
 }
 
 class FakeRenderer {

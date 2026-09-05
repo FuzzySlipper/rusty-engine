@@ -1,6 +1,6 @@
-use std::fmt;
-
 use render_model::JSON_SAFE_U64_MAX;
+pub use runtime_diagnostics::CanonicalU64;
+use runtime_diagnostics::{RuntimeDiagnosticRuntimeBinding, RuntimeUpdateAttribution};
 use runtime_input::RuntimeInputEvent;
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 use runtime_timeline::{
@@ -13,66 +13,13 @@ use serde_json::Value;
 use crate::{
     ProductDevHostError, ProductDevInvalidatedScope, ProductDevMutationCertainty,
     ProductDevNextAction, ProductDevRuntimeError, ProductDevRuntimeRecovery,
-    MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    MAX_BASELINE_AGGREGATE_BYTES, MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
 };
 
 /// Fixed Engine-owned local-runtime route prefix consumed by product-browser-host.
 pub const PRODUCT_DEV_RUNTIME_BASE_PATH: &str = "/__rusty/product/runtime/";
 /// Identity for this local development host, not a product release/schema number.
 pub const PRODUCT_DEV_HOST_ARTIFACT: &str = "rusty.product.dev-host";
-
-/// A JSON u64 always represented by its canonical decimal string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CanonicalU64(u64);
-
-impl CanonicalU64 {
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-
-    /// Strictly decodes one canonical decimal JSON string from a host-owned
-    /// payload. Keeping this admission on the typed value lets an in-process
-    /// WebView adapter use the same u64 rule as the loopback host without
-    /// exposing an unchecked string-to-u64 conversion.
-    pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
-        decode_strict_json(
-            bytes,
-            "DEV_HOST_CANONICAL_U64",
-            "canonical u64 JSON is invalid",
-        )
-    }
-}
-
-impl fmt::Display for CanonicalU64 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-impl Serialize for CanonicalU64 {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.0.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for CanonicalU64 {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        if raw.is_empty()
-            || (raw.len() > 1 && raw.starts_with('0'))
-            || !raw.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return Err(serde::de::Error::custom(
-                "u64 must be canonical decimal text",
-            ));
-        }
-        raw.parse().map(Self).map_err(serde::de::Error::custom)
-    }
-}
 
 /// Exact runtime generation binding used by browser input, operations, and outputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +28,26 @@ pub struct ProductDevRuntimeBinding {
     pub instance_id: CanonicalU64,
     pub generation: CanonicalU64,
     pub control_revision: CanonicalU64,
+}
+
+impl From<ProductDevRuntimeBinding> for RuntimeDiagnosticRuntimeBinding {
+    fn from(value: ProductDevRuntimeBinding) -> Self {
+        Self {
+            instance_id: value.instance_id,
+            generation: value.generation,
+            control_revision: value.control_revision,
+        }
+    }
+}
+
+impl From<RuntimeDiagnosticRuntimeBinding> for ProductDevRuntimeBinding {
+    fn from(value: RuntimeDiagnosticRuntimeBinding) -> Self {
+        Self {
+            instance_id: value.instance_id,
+            generation: value.generation,
+            control_revision: value.control_revision,
+        }
+    }
 }
 
 /// Closed lifecycle vocabulary with dedicated HTTP routes.
@@ -1047,6 +1014,27 @@ impl Default for ProductDevUpdateAttribution {
             voxel_residency_duration_us: CanonicalU64::new(0),
             voxel_scene_presentation_calls: CanonicalU64::new(0),
             voxel_scene_presentation_duration_us: CanonicalU64::new(0),
+        }
+    }
+}
+
+impl From<RuntimeUpdateAttribution> for ProductDevUpdateAttribution {
+    fn from(value: RuntimeUpdateAttribution) -> Self {
+        Self {
+            callback_duration_us: CanonicalU64::new(value.callback_duration_us),
+            character_step_calls: CanonicalU64::new(value.character_step_calls),
+            character_step_duration_us: CanonicalU64::new(value.character_step_duration_us),
+            character_step_cast_count: CanonicalU64::new(value.character_step_cast_count),
+            character_step_candidate_count: CanonicalU64::new(value.character_step_candidate_count),
+            character_step_narrow_phase_count: CanonicalU64::new(
+                value.character_step_narrow_phase_count,
+            ),
+            voxel_residency_calls: CanonicalU64::new(value.voxel_residency_calls),
+            voxel_residency_duration_us: CanonicalU64::new(value.voxel_residency_duration_us),
+            voxel_scene_presentation_calls: CanonicalU64::new(value.voxel_scene_presentation_calls),
+            voxel_scene_presentation_duration_us: CanonicalU64::new(
+                value.voxel_scene_presentation_duration_us,
+            ),
         }
     }
 }
@@ -2287,10 +2275,10 @@ impl ProductDevRuntimeOutput {
     /// trusted, but a shell still refuses malformed or oversized output
     /// rather than letting it poison its retained SSE history.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
-        if bytes.len() > MAX_OUTPUT_AGGREGATE_BYTES {
+        if bytes.len() > MAX_BASELINE_AGGREGATE_BYTES {
             return Err(ProductDevHostError::new(
                 "DEV_HOST_WORKER_OUTPUT_DECODE",
-                "worker output exceeds the complete output bound",
+                "worker output exceeds the maximum baseline output bound",
             ));
         }
         serde_json::from_slice(bytes).map_err(|_| {
@@ -2344,6 +2332,27 @@ impl ProductDevRuntimeOutput {
             wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
         })
     }
+    /// Preserve only newly emitted, non-retained presentation events when a
+    /// lifecycle operation publishes its complete committed snapshot.
+    pub fn transient_presentation(&self) -> Result<Option<Self>, ProductDevHostError> {
+        let ProductDevRuntimeOutputWire::Presentation { frame } = &self.wire else {
+            return Ok(None);
+        };
+        let frame: render_presentation::PresentationFrameDiff =
+            serde_json::from_value(frame.clone()).map_err(|_| {
+                ProductDevHostError::new(
+                    "DEV_HOST_PRESENTATION_FRAME",
+                    "presentation frame is invalid",
+                )
+            })?;
+        let events = frame.transient_events();
+        if events.is_empty() {
+            Ok(None)
+        } else {
+            Self::presentation(&events).map(Some)
+        }
+    }
+
     pub fn presentation(
         frame: &render_presentation::PresentationFrameDiff,
     ) -> Result<Self, ProductDevHostError> {
@@ -2478,6 +2487,69 @@ impl ProductDevRuntimeOutput {
         }
     }
 
+    /// Validates one published output group. Each complete
+    /// binding-to-completion subsequence receives the larger retained
+    /// baseline budget, while every ordinary contiguous subsequence keeps the
+    /// normal output bound. This permits a recovery baseline and following
+    /// ordinary tick facts to share one worker publication without widening
+    /// the incremental lane.
+    ///
+    /// Returns the binding only when the entire group is one baseline, which
+    /// remains useful to callers that need to recognize that simpler shape.
+    pub fn validate_output_group(
+        outputs: &[Self],
+    ) -> Result<Option<ProductDevRuntimeBinding>, ProductDevHostError> {
+        if outputs.len() > MAX_OUTPUT_QUEUE_ITEMS {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_OUTPUT_BATCH_BOUNDS",
+                "runtime receipt contains too many output events",
+            ));
+        }
+        let mut index = 0;
+        let mut entire_group_baseline = None;
+        while index < outputs.len() {
+            let complete = outputs[index]
+                .binding_marker()
+                .map(|binding| complete_baseline_end(outputs, index, binding))
+                .transpose()?;
+            let Some(complete) = complete.flatten() else {
+                let mut aggregate = 0_usize;
+                while index < outputs.len() {
+                    if let Some(binding) = outputs[index].binding_marker() {
+                        if complete_baseline_end(outputs, index, binding)?.is_some() {
+                            break;
+                        }
+                    }
+                    aggregate = aggregate.saturating_add(encoded_output_bytes(&outputs[index])?);
+                    if aggregate > MAX_OUTPUT_AGGREGATE_BYTES {
+                        return Err(ProductDevHostError::new(
+                            "DEV_HOST_OUTPUT_BOUNDS",
+                            "runtime receipt outputs exceed the maximum aggregate byte length",
+                        ));
+                    }
+                    index += 1;
+                }
+                continue;
+            };
+
+            let mut aggregate = 0_usize;
+            for output in &outputs[index..=complete] {
+                aggregate = aggregate.saturating_add(encoded_output_bytes(output)?);
+                if aggregate > MAX_BASELINE_AGGREGATE_BYTES {
+                    return Err(ProductDevHostError::new(
+                        "DEV_HOST_OUTPUT_BOUNDS",
+                        "complete retained baseline exceeds the maximum aggregate byte length",
+                    ));
+                }
+            }
+            if index == 0 && complete + 1 == outputs.len() {
+                entire_group_baseline = outputs[index].binding_marker();
+            }
+            index = complete + 1;
+        }
+        Ok(entire_group_baseline)
+    }
+
     pub(crate) fn attach_complete_baseline_frontiers_to_binding(
         &self,
         binding: &mut Self,
@@ -2523,8 +2595,7 @@ impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
 /// separate server-side output mutation/callback path.
 #[derive(Debug, Clone)]
 pub struct ProductDevRuntimeReceipt<T> {
-    result: T,
-    outputs: Vec<ProductDevRuntimeOutput>,
+    receipt: runtime_session::RuntimeReceipt<T, ProductDevRuntimeOutput>,
     connection_output_cursor: Option<u64>,
 }
 
@@ -2559,6 +2630,34 @@ where
     Ok(value)
 }
 
+fn encoded_output_bytes(output: &ProductDevRuntimeOutput) -> Result<usize, ProductDevHostError> {
+    serde_json::to_vec(output)
+        .map(|encoded| encoded.len())
+        .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))
+}
+
+fn complete_baseline_end(
+    outputs: &[ProductDevRuntimeOutput],
+    start: usize,
+    binding: ProductDevRuntimeBinding,
+) -> Result<Option<usize>, ProductDevHostError> {
+    for (index, output) in outputs.iter().enumerate().skip(start + 1) {
+        if output.binding_marker().is_some() {
+            return Ok(None);
+        }
+        if let Some(completion) = output.complete_baseline_marker() {
+            if completion != binding {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_BASELINE",
+                    "a baseline completion does not match its binding",
+                ));
+            }
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
 fn bounded_diagnostic(value: String) -> Result<String, ProductDevHostError> {
     if value.is_empty() || value.len() > 1_024 {
         return Err(ProductDevHostError::new(
@@ -2574,32 +2673,15 @@ impl<T> ProductDevRuntimeReceipt<T> {
         result: T,
         outputs: Vec<ProductDevRuntimeOutput>,
     ) -> Result<Self, ProductDevHostError> {
-        if outputs.len() > MAX_OUTPUT_QUEUE_ITEMS {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_OUTPUT_BATCH_BOUNDS",
-                "runtime receipt contains too many output events",
-            ));
-        }
-        for output in &outputs {
-            let encoded = serde_json::to_vec(output).map_err(|error| {
-                ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string())
-            })?;
-            if encoded.len() > MAX_OUTPUT_AGGREGATE_BYTES {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_BOUNDS",
-                    "runtime receipt output exceeds the maximum aggregate byte length",
-                ));
-            }
-        }
+        ProductDevRuntimeOutput::validate_output_group(&outputs)?;
         Ok(Self {
-            result,
-            outputs,
+            receipt: runtime_session::RuntimeReceipt::new(result, outputs),
             connection_output_cursor: None,
         })
     }
 
     pub fn result(&self) -> &T {
-        &self.result
+        self.receipt.result()
     }
 
     /// Attaches the shell-retained output cursor captured at a fresh worker
@@ -2617,7 +2699,7 @@ impl<T> ProductDevRuntimeReceipt<T> {
     }
 
     pub fn into_parts(self) -> (T, Vec<ProductDevRuntimeOutput>) {
-        (self.result, self.outputs)
+        self.receipt.into_parts()
     }
 }
 
@@ -3012,6 +3094,42 @@ mod tests {
                 "nextInputSequence": "0",
                 "publicationFrontiers": [{ "stream": "voxel:active", "revision": 4 }],
             }),
+        );
+    }
+
+    #[test]
+    fn output_group_only_grants_the_larger_budget_to_a_complete_baseline() {
+        let binding = ProductDevRuntimeBinding {
+            instance_id: CanonicalU64::new(7),
+            generation: CanonicalU64::new(3),
+            control_revision: CanonicalU64::new(5),
+        };
+        let large = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({
+            "payload": "x".repeat(MAX_OUTPUT_AGGREGATE_BYTES + 1),
+        }));
+        let ordinary = ProductDevRuntimeOutput::validate_output_group(&[large.clone()])
+            .expect_err("ordinary output keeps the 16 MiB limit");
+        assert_eq!(ordinary.code(), "DEV_HOST_OUTPUT_BOUNDS");
+
+        assert_eq!(
+            ProductDevRuntimeOutput::validate_output_group(&[
+                ProductDevRuntimeOutput::binding(binding, CanonicalU64::new(0)),
+                large.clone(),
+                ProductDevRuntimeOutput::complete_baseline(binding),
+            ])
+            .expect("complete retained baseline gets its bounded recovery budget"),
+            Some(binding),
+        );
+
+        assert_eq!(
+            ProductDevRuntimeOutput::validate_output_group(&[
+                ProductDevRuntimeOutput::binding(binding, CanonicalU64::new(0)),
+                large,
+                ProductDevRuntimeOutput::complete_baseline(binding),
+                ProductDevRuntimeOutput::runtime_progress(),
+            ])
+            .expect("a bounded recovery baseline may share publication with following ticks"),
+            None,
         );
     }
 }

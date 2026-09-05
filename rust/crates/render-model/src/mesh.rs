@@ -1272,6 +1272,17 @@ pub enum AnimatedMeshPlaybackCommand {
         weight: f32,
         restart: bool,
         fade_seconds: Option<f32>,
+        /// An Engine-captured offset used when a retained playback is
+        /// reconstructed on a fresh renderer. Product calls leave this as
+        /// `None`; the canonical presentation timeline materializes it only
+        /// for a baseline.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_offset_seconds: Option<f64>,
+        /// Start the reconstructed action at its retained offset but leave it
+        /// paused. This avoids replaying a prior pause command during a
+        /// baseline installation.
+        #[serde(default)]
+        start_paused: bool,
     },
     Stop {
         fade_seconds: Option<f32>,
@@ -1282,8 +1293,22 @@ pub enum AnimatedMeshPlaybackCommand {
         clip: String,
         normalized_time: f32,
     },
+    /// Hold a blended set of clips at exact Engine-derived sample times. This
+    /// is a retained frozen pose for captures and baselines, not a controller
+    /// or a browser-side animation policy.
+    SamplePose {
+        clips: Vec<AnimatedMeshClipPose>,
+    },
     Pause,
     Resume,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimatedMeshClipPose {
+    pub clip: String,
+    pub time_seconds: f64,
+    pub weight: f32,
 }
 
 impl AnimatedMeshPlaybackCommand {
@@ -1294,6 +1319,7 @@ impl AnimatedMeshPlaybackCommand {
                 speed,
                 weight,
                 fade_seconds,
+                start_offset_seconds,
                 ..
             } => {
                 if clip.trim().is_empty() {
@@ -1304,6 +1330,9 @@ impl AnimatedMeshPlaybackCommand {
                 }
                 if !weight.is_finite() || !(0.0..=1.0).contains(weight) {
                     return Err(AnimatedMeshPlaybackError::InvalidWeight);
+                }
+                if start_offset_seconds.is_some_and(|value| !value.is_finite() || value < 0.0) {
+                    return Err(AnimatedMeshPlaybackError::InvalidStartOffset);
                 }
                 validate_fade(*fade_seconds)
             }
@@ -1320,9 +1349,36 @@ impl AnimatedMeshPlaybackCommand {
                 }
                 Ok(())
             }
+            Self::SamplePose { clips } => validate_animated_mesh_pose(clips),
             Self::Pause | Self::Resume => Ok(()),
         }
     }
+}
+
+fn validate_animated_mesh_pose(
+    clips: &[AnimatedMeshClipPose],
+) -> Result<(), AnimatedMeshPlaybackError> {
+    if clips.is_empty() || clips.len() > 4 {
+        return Err(AnimatedMeshPlaybackError::InvalidPose);
+    }
+    let mut names = BTreeSet::new();
+    let mut total_weight = 0.0_f32;
+    for clip in clips {
+        if clip.clip.trim().is_empty() || !names.insert(&clip.clip) {
+            return Err(AnimatedMeshPlaybackError::InvalidPose);
+        }
+        if !clip.time_seconds.is_finite() || clip.time_seconds < 0.0 {
+            return Err(AnimatedMeshPlaybackError::InvalidPose);
+        }
+        if !clip.weight.is_finite() || !(0.0..=1.0).contains(&clip.weight) {
+            return Err(AnimatedMeshPlaybackError::InvalidPose);
+        }
+        total_weight += clip.weight;
+    }
+    if (total_weight - 1.0).abs() > 0.001 {
+        return Err(AnimatedMeshPlaybackError::InvalidPose);
+    }
+    Ok(())
 }
 
 fn validate_fade(fade: Option<f32>) -> Result<(), AnimatedMeshPlaybackError> {
@@ -1338,7 +1394,226 @@ pub enum AnimatedMeshPlaybackError {
     InvalidSpeed,
     InvalidWeight,
     InvalidFade,
+    InvalidStartOffset,
+    InvalidTimelineTime,
     InvalidNormalizedTime,
+    InvalidPose,
+}
+
+/// Canonical retained state for direct animated-mesh playback. It turns
+/// commands into a reconstructible position on an Engine-owned timeline;
+/// browser hosts receive one current command and do not replay history.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnimatedMeshPlaybackTimeline {
+    Unset,
+    Playing {
+        clip: String,
+        r#loop: AnimationLoopMode,
+        speed: f32,
+        weight: f32,
+        base_offset_seconds: f64,
+        anchor_seconds: f64,
+    },
+    Paused {
+        clip: String,
+        r#loop: AnimationLoopMode,
+        speed: f32,
+        weight: f32,
+        offset_seconds: f64,
+    },
+    Sampled {
+        clip: String,
+        normalized_time: f32,
+    },
+    Stopped,
+}
+
+impl Default for AnimatedMeshPlaybackTimeline {
+    fn default() -> Self {
+        Self::Unset
+    }
+}
+
+impl AnimatedMeshPlaybackTimeline {
+    /// Applies one direct command at a time supplied by Rust-admitted update
+    /// facts. `now_seconds` is the canonical presentation timeline, never a
+    /// browser clock or product-maintained timer.
+    pub fn apply_command(
+        &mut self,
+        command: &AnimatedMeshPlaybackCommand,
+        now_seconds: f64,
+    ) -> Result<(), AnimatedMeshPlaybackError> {
+        command.validate()?;
+        validate_playback_timeline_time(now_seconds)?;
+        match command {
+            AnimatedMeshPlaybackCommand::Play {
+                clip,
+                r#loop,
+                speed,
+                weight,
+                restart,
+                start_offset_seconds,
+                start_paused,
+                ..
+            } => {
+                let preserved_offset = match self {
+                    Self::Playing {
+                        clip: current_clip,
+                        base_offset_seconds,
+                        anchor_seconds,
+                        speed: current_speed,
+                        ..
+                    } if !restart && current_clip == clip => {
+                        *base_offset_seconds
+                            + (now_seconds - *anchor_seconds) * f64::from(*current_speed)
+                    }
+                    Self::Paused {
+                        clip: current_clip,
+                        offset_seconds,
+                        ..
+                    } if !restart && current_clip == clip => *offset_seconds,
+                    _ => 0.0,
+                };
+                let offset_seconds = start_offset_seconds.unwrap_or(preserved_offset);
+                if *start_paused {
+                    *self = Self::Paused {
+                        clip: clip.clone(),
+                        r#loop: *r#loop,
+                        speed: *speed,
+                        weight: *weight,
+                        offset_seconds,
+                    };
+                } else {
+                    *self = Self::Playing {
+                        clip: clip.clone(),
+                        r#loop: *r#loop,
+                        speed: *speed,
+                        weight: *weight,
+                        base_offset_seconds: offset_seconds,
+                        anchor_seconds: now_seconds,
+                    };
+                }
+            }
+            AnimatedMeshPlaybackCommand::Pause => {
+                if let Self::Playing {
+                    clip,
+                    r#loop,
+                    speed,
+                    weight,
+                    base_offset_seconds,
+                    anchor_seconds,
+                } = self
+                {
+                    *self = Self::Paused {
+                        clip: clip.clone(),
+                        r#loop: *r#loop,
+                        speed: *speed,
+                        weight: *weight,
+                        offset_seconds: *base_offset_seconds
+                            + (now_seconds - *anchor_seconds) * f64::from(*speed),
+                    };
+                }
+            }
+            AnimatedMeshPlaybackCommand::Resume => {
+                if let Self::Paused {
+                    clip,
+                    r#loop,
+                    speed,
+                    weight,
+                    offset_seconds,
+                } = self
+                {
+                    *self = Self::Playing {
+                        clip: clip.clone(),
+                        r#loop: *r#loop,
+                        speed: *speed,
+                        weight: *weight,
+                        base_offset_seconds: *offset_seconds,
+                        anchor_seconds: now_seconds,
+                    };
+                }
+            }
+            AnimatedMeshPlaybackCommand::Sample {
+                clip,
+                normalized_time,
+            } => {
+                *self = Self::Sampled {
+                    clip: clip.clone(),
+                    normalized_time: *normalized_time,
+                };
+            }
+            AnimatedMeshPlaybackCommand::SamplePose { .. } => {
+                // A frozen pose is already a complete retained realization;
+                // it has no resumable direct-playback continuation.
+                *self = Self::Unset;
+            }
+            AnimatedMeshPlaybackCommand::Stop { .. } => *self = Self::Stopped,
+        }
+        Ok(())
+    }
+
+    /// Materializes the retained current state for a new renderer. Fade
+    /// history deliberately does not cross this boundary: a new realization
+    /// starts from the settled current position.
+    pub fn snapshot_command(
+        &self,
+        now_seconds: f64,
+    ) -> Result<Option<AnimatedMeshPlaybackCommand>, AnimatedMeshPlaybackError> {
+        validate_playback_timeline_time(now_seconds)?;
+        Ok(match self {
+            Self::Unset => None,
+            Self::Playing {
+                clip,
+                r#loop,
+                speed,
+                weight,
+                base_offset_seconds,
+                anchor_seconds,
+            } => Some(AnimatedMeshPlaybackCommand::Play {
+                clip: clip.clone(),
+                r#loop: *r#loop,
+                speed: *speed,
+                weight: *weight,
+                restart: true,
+                fade_seconds: None,
+                start_offset_seconds: Some(
+                    *base_offset_seconds + (now_seconds - *anchor_seconds) * f64::from(*speed),
+                ),
+                start_paused: false,
+            }),
+            Self::Paused {
+                clip,
+                r#loop,
+                speed,
+                weight,
+                offset_seconds,
+            } => Some(AnimatedMeshPlaybackCommand::Play {
+                clip: clip.clone(),
+                r#loop: *r#loop,
+                speed: *speed,
+                weight: *weight,
+                restart: true,
+                fade_seconds: None,
+                start_offset_seconds: Some(*offset_seconds),
+                start_paused: true,
+            }),
+            Self::Sampled {
+                clip,
+                normalized_time,
+            } => Some(AnimatedMeshPlaybackCommand::Sample {
+                clip: clip.clone(),
+                normalized_time: *normalized_time,
+            }),
+            Self::Stopped => Some(AnimatedMeshPlaybackCommand::Stop { fade_seconds: None }),
+        })
+    }
+}
+
+fn validate_playback_timeline_time(now_seconds: f64) -> Result<(), AnimatedMeshPlaybackError> {
+    if !now_seconds.is_finite() || now_seconds < 0.0 {
+        return Err(AnimatedMeshPlaybackError::InvalidTimelineTime);
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_slots(slots: &[MeshMaterialSlot]) -> Result<(), MeshMaterialSlotError> {
@@ -1730,5 +2005,58 @@ mod tests {
             .validate(),
             Err(AnimatedMeshPlaybackError::EmptyClip)
         );
+    }
+
+    #[test]
+    fn direct_playback_timeline_reconstructs_current_offset_and_pause_without_history() {
+        let play = AnimatedMeshPlaybackCommand::Play {
+            clip: "run".to_owned(),
+            r#loop: AnimationLoopMode::Repeat,
+            speed: 1.5,
+            weight: 0.75,
+            restart: true,
+            fade_seconds: Some(0.25),
+            start_offset_seconds: None,
+            start_paused: false,
+        };
+        let mut timeline = AnimatedMeshPlaybackTimeline::default();
+        timeline.apply_command(&play, 10.0).unwrap();
+        let running = timeline.snapshot_command(12.0).unwrap().unwrap();
+        assert!(matches!(
+            running,
+            AnimatedMeshPlaybackCommand::Play {
+                restart: true,
+                fade_seconds: None,
+                start_offset_seconds: Some(offset),
+                start_paused: false,
+                ..
+            } if (offset - 3.0).abs() < f64::EPSILON
+        ));
+
+        timeline
+            .apply_command(&AnimatedMeshPlaybackCommand::Pause, 12.0)
+            .unwrap();
+        let paused = timeline.snapshot_command(99.0).unwrap().unwrap();
+        assert!(matches!(
+            paused,
+            AnimatedMeshPlaybackCommand::Play {
+                start_offset_seconds: Some(offset),
+                start_paused: true,
+                ..
+            } if (offset - 3.0).abs() < f64::EPSILON
+        ));
+
+        timeline
+            .apply_command(&AnimatedMeshPlaybackCommand::Resume, 100.0)
+            .unwrap();
+        let resumed = timeline.snapshot_command(102.0).unwrap().unwrap();
+        assert!(matches!(
+            resumed,
+            AnimatedMeshPlaybackCommand::Play {
+                start_offset_seconds: Some(offset),
+                start_paused: false,
+                ..
+            } if (offset - 6.0).abs() < f64::EPSILON
+        ));
     }
 }

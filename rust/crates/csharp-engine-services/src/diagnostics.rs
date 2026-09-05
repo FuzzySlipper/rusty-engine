@@ -8,14 +8,15 @@ use csharp_engine_abi::{
     NativeByteLease, NativeByteLeaseHandle, NativeDiagnosticsApi, NativeDiagnosticsDisposition,
     NativeDiagnosticsPublishRequest, NativeDiagnosticsSeverity,
 };
-use product_dev_host::{
-    ProductDevLog, ProductDevLogDisposition, ProductDevLogEvent, ProductDevLogSeverity,
+use runtime_diagnostics::{
+    RuntimeDiagnosticDisposition, RuntimeDiagnosticEvent, RuntimeDiagnosticSeverity,
+    RuntimeDiagnosticsSink,
 };
 
 use crate::composition::ABI_OK;
 
 pub(crate) struct RuntimeDiagnosticsBridge {
-    sink: ProductDevLog,
+    sink: RuntimeDiagnosticsSink,
     renderer_json: Option<Arc<[u8]>>,
     leases: BTreeMap<u64, Arc<[u8]>>,
     next_lease: u64,
@@ -25,7 +26,7 @@ pub(crate) struct RuntimeDiagnosticsBridge {
 /// Keep the corresponding real diagnostic useful without allowing a retrying
 /// product loop to flood the same bounded sink.
 pub(crate) fn publish_recoverable_once(
-    sink: &ProductDevLog,
+    sink: &RuntimeDiagnosticsSink,
     reported_codes: &mut BTreeSet<&'static str>,
     source: &'static str,
     code: &'static str,
@@ -34,9 +35,9 @@ pub(crate) fn publish_recoverable_once(
     if !reported_codes.insert(code) {
         return;
     }
-    let Ok(event) = ProductDevLogEvent::new(
-        ProductDevLogSeverity::Warning,
-        ProductDevLogDisposition::RejectedRecoverable,
+    let Ok(event) = RuntimeDiagnosticEvent::new(
+        RuntimeDiagnosticSeverity::Warning,
+        RuntimeDiagnosticDisposition::RejectedRecoverable,
         source,
         code,
         message,
@@ -49,7 +50,7 @@ pub(crate) fn publish_recoverable_once(
 }
 
 impl RuntimeDiagnosticsBridge {
-    pub(crate) fn new(sink: ProductDevLog) -> Self {
+    pub(crate) fn new(sink: RuntimeDiagnosticsSink) -> Self {
         Self {
             renderer_json: None,
             leases: BTreeMap::new(),
@@ -84,23 +85,23 @@ impl RuntimeDiagnosticsBridge {
         }
         .map_err(|_| ())?;
         let severity = match request.severity {
-            NativeDiagnosticsSeverity::Debug => ProductDevLogSeverity::Debug,
-            NativeDiagnosticsSeverity::Info => ProductDevLogSeverity::Info,
-            NativeDiagnosticsSeverity::Warning => ProductDevLogSeverity::Warning,
-            NativeDiagnosticsSeverity::Error => ProductDevLogSeverity::Error,
+            NativeDiagnosticsSeverity::Debug => RuntimeDiagnosticSeverity::Debug,
+            NativeDiagnosticsSeverity::Info => RuntimeDiagnosticSeverity::Info,
+            NativeDiagnosticsSeverity::Warning => RuntimeDiagnosticSeverity::Warning,
+            NativeDiagnosticsSeverity::Error => RuntimeDiagnosticSeverity::Error,
         };
         let disposition = match request.disposition {
-            NativeDiagnosticsDisposition::Accepted => ProductDevLogDisposition::Accepted,
+            NativeDiagnosticsDisposition::Accepted => RuntimeDiagnosticDisposition::Accepted,
             NativeDiagnosticsDisposition::RejectedRecoverable => {
-                ProductDevLogDisposition::RejectedRecoverable
+                RuntimeDiagnosticDisposition::RejectedRecoverable
             }
-            NativeDiagnosticsDisposition::Degraded => ProductDevLogDisposition::Degraded,
+            NativeDiagnosticsDisposition::Degraded => RuntimeDiagnosticDisposition::Degraded,
             NativeDiagnosticsDisposition::ResyncRequired => {
-                ProductDevLogDisposition::ResyncRequired
+                RuntimeDiagnosticDisposition::ResyncRequired
             }
-            NativeDiagnosticsDisposition::Terminal => ProductDevLogDisposition::Terminal,
+            NativeDiagnosticsDisposition::Terminal => RuntimeDiagnosticDisposition::Terminal,
         };
-        let event = ProductDevLogEvent::new(severity, disposition, source, code, message)
+        let event = RuntimeDiagnosticEvent::new(severity, disposition, source, code, message)
             .map_err(|_| ())?;
         let correlation = unsafe {
             crate::composition::borrowed_utf8(
@@ -198,7 +199,7 @@ mod tests {
     #[test]
     fn renderer_snapshot_is_borrowed_through_one_exact_release() {
         let mut bridge =
-            RuntimeDiagnosticsBridge::new(ProductDevLog::new(Default::default()).unwrap());
+            RuntimeDiagnosticsBridge::new(RuntimeDiagnosticsSink::new(Default::default()).unwrap());
         bridge
             .ingest_renderer(&serde_json::json!({"schemaVersion": 1, "renderer": "accelerated"}))
             .unwrap();
@@ -229,7 +230,7 @@ mod tests {
 
     #[test]
     fn publish_copies_bounded_csharp_diagnostic_into_the_engine_sink() {
-        let sink = ProductDevLog::new(Default::default()).unwrap();
+        let sink = RuntimeDiagnosticsSink::new(Default::default()).unwrap();
         let mut bridge = RuntimeDiagnosticsBridge::new(sink.clone());
         let api = api(&mut bridge);
         let source = b"product";

@@ -271,3 +271,14 @@ void test('realization feedback operations preserve their private-field-backed h
   assert.deepEqual(audio.read(), [7, 1]);
   assert.deepEqual(animation.read(), [11, 1]);
 });
+
+void test('an obsolete empty host receipt cannot acknowledge requested operations', async () => {
+  const hosts = new RendererPresentationHostSet({ audio: { applyPresentation: () => EMPTY_RECEIPT } });
+  const receipt = await hosts.apply({ schemaVersion: 1, ops: [{
+    domain: 'audio', meta: { sequence: 0 },
+    op: { op: 'busControl', bus: 'sfx', control: { kind: 'setMuted', muted: false } },
+  }] });
+  assert.equal(receipt.outcome, 'terminal');
+  assert.equal(receipt.diagnostics[0]?.code, 'hostFailure');
+  assert.equal(receipt.domains.find((domain) => domain.domain === 'audio')?.requested, 1);
+});

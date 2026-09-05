@@ -226,7 +226,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         &self,
         bytes: &[u8],
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        let observed_time_ns = CanonicalU64::decode_json(bytes).map_err(host_error_to_runtime)?;
+        let observed_time_ns = decode_canonical_u64(bytes)?;
         self.advance_realtime(observed_time_ns)
     }
 
@@ -250,7 +250,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         &self,
         bytes: &[u8],
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
-        let step = CanonicalU64::decode_json(bytes).map_err(host_error_to_runtime)?;
+        let step = decode_canonical_u64(bytes)?;
         self.admit_external_step(step)
     }
 
@@ -330,6 +330,20 @@ fn runtime_poisoned() -> ProductDevRuntimeError {
         "runtime serialization lock is poisoned",
     )
     .expect("fixed runtime poison diagnostic is valid")
+}
+
+fn decode_canonical_u64(bytes: &[u8]) -> Result<CanonicalU64, ProductDevRuntimeError> {
+    if bytes.len() > crate::MAX_REQUEST_BODY_BYTES {
+        return Err(host_error_to_runtime(ProductDevHostError::new(
+            "DEV_HOST_BODY_BOUNDS",
+            "JSON payload exceeds the host body bound",
+        )));
+    }
+    CanonicalU64::decode_json(bytes)
+        .map_err(|_| {
+            ProductDevHostError::new("DEV_HOST_CANONICAL_U64", "canonical u64 JSON is invalid")
+        })
+        .map_err(host_error_to_runtime)
 }
 
 fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {

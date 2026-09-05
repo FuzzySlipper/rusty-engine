@@ -1,10 +1,10 @@
 use crate::{NativeTransform, NativeVec3};
 
-/// One caller-owned entity fact used only for a single motion resolution.
-/// Rows are copied into a call-local Engine state and never retained.
+/// One caller-owned spatial fact used only for a single motion resolution.
+/// It is copied into a typed native spatial view and never retained.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NativeMotionEntityRow {
+pub struct NativeMotionSpatialEntity {
     pub entity_id: u64,
     pub transform: NativeTransform,
     pub bounds_min: NativeVec3,
@@ -12,7 +12,6 @@ pub struct NativeMotionEntityRow {
     pub collision_enabled: bool,
     pub collision_static: bool,
     pub has_transform_parent: bool,
-    pub transform_parent_id: u64,
 }
 
 #[repr(u32)]
@@ -29,7 +28,7 @@ pub enum NativeMotionOutcome {
 pub struct NativeMotionResolveRequest {
     pub target_entity_id: u64,
     pub delta: NativeVec3,
-    pub entities: *const NativeMotionEntityRow,
+    pub entities: *const NativeMotionSpatialEntity,
     pub entities_len: usize,
 }
 

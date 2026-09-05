@@ -103,6 +103,9 @@ pub struct GhostPlatePlacement {
 pub struct GhostPlateDescriptor {
     /// Engine-owned retained render identity. Backend resources never cross this boundary.
     pub source: RenderHandle,
+    /// Immutable Engine capture input; browser/GPU resources are reconstructed from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured_scene: Option<std::sync::Arc<render_model::RenderFrameDiff>>,
     pub placement: GhostPlatePlacement,
     pub capture: GhostPlateCaptureSettings,
     pub config: GhostPlateConfig,
@@ -135,6 +138,8 @@ pub enum GhostPlateProjectionOp {
     Recapture {
         handle: GhostPlateHandle,
         capture: Option<GhostPlateCaptureSettings>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        captured_scene: Option<std::sync::Arc<render_model::RenderFrameDiff>>,
     },
     Destroy {
         handle: GhostPlateHandle,
@@ -272,7 +277,11 @@ impl GhostPlateProjector {
                 validate_descriptor(targets, &next)?;
                 self.active.insert(*handle, next);
             }
-            GhostPlateProjectionOp::Recapture { handle, capture } => {
+            GhostPlateProjectionOp::Recapture {
+                handle,
+                capture,
+                captured_scene,
+            } => {
                 let mut current = self
                     .active
                     .get(handle)
@@ -280,6 +289,9 @@ impl GhostPlateProjector {
                     .ok_or(GhostPlateProjectionDiagnosticCode::UnknownHandle)?;
                 if let Some(capture) = capture {
                     current.capture = capture.clone();
+                }
+                if let Some(scene) = captured_scene {
+                    current.captured_scene = Some(scene.clone());
                 }
                 validate_descriptor(targets, &current)?;
                 self.active.insert(*handle, current);

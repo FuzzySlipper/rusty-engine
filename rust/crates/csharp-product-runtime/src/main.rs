@@ -427,13 +427,14 @@ fn replace_worker_projection(
     let runtime_instance_id = *next_runtime_instance_id;
     *next_runtime_instance_id = next_runtime_instance_id.saturating_add(1).max(1);
     let replacement = replacement_arguments(shell_args, product_directory, runtime_instance_id)?;
-    let (pending, bundle, baseline) = runtime.prepare_replace(&replacement)?;
-    let generation = pending.generation;
-    host.replace_worker_projection(bundle, baseline, generation, || {
-        runtime.activate_pending(pending)
-    })
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    let prepared = runtime_session::PreparedRuntimeReplacement::prepare(|| {
+        let (pending, bundle, baseline) = runtime.prepare_replace(&replacement)?;
+        let generation = pending.generation;
+        Ok::<_, String>((pending, bundle, baseline, generation))
+    })?;
+    host.replace_worker_projection(prepared, |pending| runtime.activate_pending(pending))
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn publish_shell_diagnostic(diagnostics: &ProductDevLog, code: &str, message: &str) {
@@ -778,11 +779,7 @@ impl WorkerRuntime {
             Ok(bundle) => bundle,
             Err(error) => return worker_start_failed(&mut child, error),
         };
-        let initial_outputs = match outputs
-            .into_iter()
-            .map(worker_output)
-            .collect::<Result<Vec<_>, _>>()
-        {
+        let initial_outputs = match worker_outputs(outputs) {
             Ok(outputs) => outputs,
             Err(error) => {
                 return worker_start_failed(
@@ -927,12 +924,7 @@ fn invoke_connection<T: serde::de::DeserializeOwned>(
             "worker response did not match the requested result family",
         )
     })?;
-    let outputs = match response
-        .outputs
-        .into_iter()
-        .map(worker_output)
-        .collect::<Result<Vec<_>, _>>()
-    {
+    let outputs = match worker_outputs(response.outputs) {
         Ok(outputs) => outputs,
         Err(error) => {
             stop_worker(connection);
@@ -1004,10 +996,7 @@ fn worker_reader(
                 }
             }
             Ok(ProductDevWorkerEvent::Outputs { outputs: values }) => {
-                let decoded = values
-                    .into_iter()
-                    .map(worker_output)
-                    .collect::<Result<Vec<_>, _>>();
+                let decoded = worker_outputs(values);
                 match decoded {
                     Ok(decoded) => match outputs.try_send(ProductDevWorkerPublication::Outputs(
                         ProductDevWorkerOutputBatch {
@@ -1129,6 +1118,20 @@ fn worker_output(
         )
     })?;
     ProductDevRuntimeOutput::decode_json(&bytes).map_err(worker_host_error)
+}
+
+/// Decode the full worker output group before admitting it. A complete
+/// binding-to-completion baseline may use the dedicated 64 MiB recovery
+/// budget; every other worker publication remains in the normal 16 MiB lane.
+fn worker_outputs(
+    values: Vec<serde_json::Value>,
+) -> Result<Vec<ProductDevRuntimeOutput>, ProductDevRuntimeError> {
+    let outputs = values
+        .into_iter()
+        .map(worker_output)
+        .collect::<Result<Vec<_>, _>>()?;
+    ProductDevRuntimeOutput::validate_output_group(&outputs).map_err(worker_host_error)?;
+    Ok(outputs)
 }
 
 fn worker_host_error(error: product_dev_host::ProductDevHostError) -> ProductDevRuntimeError {
@@ -1758,14 +1761,10 @@ fn drain_worker_diagnostics_shared(
 fn worker_output_values(
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let mut aggregate_bytes = 0_usize;
+    ProductDevRuntimeOutput::validate_output_group(&outputs).map_err(|error| error.to_string())?;
     let mut values = Vec::with_capacity(outputs.len());
     for output in outputs {
         let bytes = serde_json::to_vec(&output).map_err(|error| error.to_string())?;
-        aggregate_bytes = aggregate_bytes.saturating_add(bytes.len());
-        if aggregate_bytes > product_dev_host::MAX_OUTPUT_AGGREGATE_BYTES {
-            return Err("worker outputs exceed the admitted output aggregate bound".to_owned());
-        }
         values.push(serde_json::from_slice(&bytes).map_err(|error| error.to_string())?);
     }
     Ok(values)
@@ -1852,7 +1851,11 @@ fn worker_request(
         } => match operation {
             ProductDevWorkerUpdateOperation::AdvanceRealtime => {
                 let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_UPDATE")
-                    .and_then(|bytes| CanonicalU64::decode_json(&bytes).map_err(worker_host_error))
+                    .and_then(|bytes| {
+                        CanonicalU64::decode_json(&bytes)
+                            .map_err(product_dev_host::ProductDevHostError::from)
+                            .map_err(worker_host_error)
+                    })
                     .and_then(|time| owner.advance_realtime(time));
                 worker_receipt(request_id, result)
             }
@@ -1861,7 +1864,11 @@ fn worker_request(
             }
             ProductDevWorkerUpdateOperation::AdmitExternalStep => {
                 let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_UPDATE")
-                    .and_then(|bytes| CanonicalU64::decode_json(&bytes).map_err(worker_host_error))
+                    .and_then(|bytes| {
+                        CanonicalU64::decode_json(&bytes)
+                            .map_err(product_dev_host::ProductDevHostError::from)
+                            .map_err(worker_host_error)
+                    })
                     .and_then(|step| owner.admit_external_step(step));
                 worker_receipt(request_id, result)
             }
@@ -3037,6 +3044,38 @@ fn content_type(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_output_group_only_admits_large_complete_baselines() {
+        let runtime = serde_json::json!({
+            "instanceId": "7",
+            "generation": "3",
+            "controlRevision": "5",
+        });
+        let frame = serde_json::json!({
+            "kind": "frame",
+            "frame": { "payload": "x".repeat(product_dev_host::MAX_OUTPUT_AGGREGATE_BYTES + 1) },
+        });
+        let ordinary = worker_outputs(vec![frame.clone()])
+            .expect_err("ordinary worker output keeps the 16 MiB limit");
+        assert_eq!(ordinary.code(), "DEV_HOST_OUTPUT_BOUNDS");
+
+        worker_outputs(vec![
+            serde_json::json!({
+                "kind": "binding",
+                "runtime": runtime,
+                "nextInputSequence": "0",
+            }),
+            frame,
+            serde_json::json!({
+                "kind": "complete-baseline",
+                "runtime": runtime,
+                "publicationFrontiers": [],
+            }),
+            serde_json::json!({ "kind": "runtime-progress", "owner": "rust-host" }),
+        ])
+        .expect("worker admits a bounded baseline followed by ordinary tick output");
+    }
 
     #[test]
     fn connection_response_keeps_its_ordered_output_boundary() {

@@ -1133,7 +1133,7 @@ impl CsharpProductRuntime {
             content_resources,
             persistence_root,
             content_store_root,
-            config.diagnostics.clone(),
+            config.diagnostics.handle(),
         )?);
         let native_content: Vec<NativeContentFile> = content
             .iter()
@@ -1992,10 +1992,10 @@ impl CsharpProductRuntime {
             .elapsed()
             .as_micros()
             .min(u128::from(u64::MAX)) as u64;
-        self.pending_update_attribution = Some(
+        self.pending_update_attribution = Some(ProductDevUpdateAttribution::from(
             self.services
                 .complete_update_attribution(callback_duration_us),
-        );
+        ));
         let result = match callback_result {
             Ok(result) => result,
             Err(error) => {
@@ -2509,15 +2509,28 @@ impl CsharpProductRuntime {
 
     fn tag_complete_baseline(
         &self,
-        mut outputs: Vec<ProductDevRuntimeOutput>,
+        outputs: Vec<ProductDevRuntimeOutput>,
     ) -> Result<Vec<ProductDevRuntimeOutput>, ProductDevRuntimeError> {
         let binding = self.binding();
-        let mut tagged = Vec::with_capacity(outputs.len() + 2);
+        // Every binding baseline reconstructs committed state. Callback deltas
+        // already precede its frontier and cannot be replayed against it.
+        let mut snapshot = self
+            .snapshot_outputs()
+            .map_err(|error| self.runtime_error(error))?;
+        for output in outputs {
+            if let Some(events) = output
+                .transient_presentation()
+                .map_err(host_runtime_error)?
+            {
+                snapshot.push(events);
+            }
+        }
+        let mut tagged = Vec::with_capacity(snapshot.len() + 2);
         tagged.push(ProductDevRuntimeOutput::binding(
             binding,
             self.next_input_sequence(),
         ));
-        tagged.append(&mut outputs);
+        tagged.append(&mut snapshot);
         tagged.push(
             self.complete_baseline_output(binding)
                 .map_err(|error| self.runtime_error(error))?,
@@ -2665,12 +2678,9 @@ impl ProductDevRuntime for CsharpProductRuntime {
             )
             .expect("fixed connect-state diagnostic"));
         }
-        let outputs = self
-            .snapshot_outputs()
-            .map_err(|error| self.runtime_error(error))?;
         self.receipt(
             ProductDevOperationKind::Connect,
-            self.tag_complete_baseline(outputs)?,
+            self.tag_complete_baseline(Vec::new())?,
         )
     }
 
@@ -6107,8 +6117,8 @@ mod tests {
         let mut material = NativeMaterialHandle::default();
         assert_eq!(
             unsafe {
-                (api.appearance.create_material)(
-                    api.appearance.context,
+                (api.graphics.create_material)(
+                    api.graphics.context,
                     NativeMaterialRequest {
                         color: NativeColor {
                             r: 0.25,
@@ -6184,8 +6194,8 @@ mod tests {
         let mut appearance = NativeAppearanceHandle::default();
         assert_eq!(
             unsafe {
-                (api.appearance.create_primitive)(
-                    api.appearance.context,
+                (api.graphics.create_primitive)(
+                    api.graphics.context,
                     NativePrimitiveAppearanceRequest {
                         geometry: NativePrimitiveGeometry::Cube,
                         wireframe: false,
@@ -6203,6 +6213,8 @@ mod tests {
         );
         let fact = NativeAppearanceFact {
             object_id: 42,
+            has_parent_object: false,
+            parent_object_id: 0,
             appearance,
             visible: true,
             layer: NativeRenderLayer::Scene,
@@ -6224,7 +6236,7 @@ mod tests {
             },
         };
         assert_eq!(
-            unsafe { (api.appearance.publish_snapshot)(api.appearance.context, &fact, 1) },
+            unsafe { (api.graphics.publish_snapshot)(api.graphics.context, &fact, 1) },
             ABI_OK
         );
         let call = runtime.services.take_call().unwrap();
@@ -6788,6 +6800,49 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_baseline_reconstructs_effects_without_replaying_their_delta_revision() {
+        let _guard = DIRECT_INPUT_FIXTURE_GATE.lock().unwrap();
+        let _drop_guard = DROP_FIXTURE_GATE.lock().unwrap();
+        let (mut runtime, root) = direct_input_fixture_runtime("effect-baseline-frontier");
+        runtime.services.begin_call(ui_binding(&runtime.lifecycle));
+        let api = runtime.services.api();
+        assert_eq!(
+            unsafe {
+                (api.audio.set_bus_muted)(
+                    api.audio.context,
+                    &NativeAudioBusMutedRequest {
+                        bus: NativeAudioBus::Sfx,
+                        muted: true,
+                    },
+                )
+            },
+            1
+        );
+        let call = runtime.services.take_call().unwrap();
+        let deltas = service_outputs(runtime.services.outputs(&call)).unwrap();
+        runtime.services.commit_call(call);
+        let baseline = runtime.tag_complete_baseline(deltas).unwrap();
+        let encoded = baseline
+            .iter()
+            .map(|output| serde_json::to_value(output).unwrap())
+            .collect::<Vec<_>>();
+        assert!(encoded
+            .iter()
+            .filter(|output| output["kind"] == "presentation")
+            .all(|output| output["frame"].get("publication").is_none()));
+        assert!(encoded.iter().any(|output| output["kind"] == "presentation"
+            && output["frame"]["ops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|op| op["op"]["control"]["muted"] == true)));
+        assert!(encoded.iter().any(|output| output["kind"] == "frame"));
+        assert_eq!(runtime.services.renderer_publication_frontiers()[0].1, 1);
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn duplicate_input_returns_recoverable_cursor_without_replaying_the_event() {
         let _guard = DIRECT_INPUT_FIXTURE_GATE
             .lock()
@@ -7310,7 +7365,14 @@ mod tests {
             runtime.pending_inputs[0].clear_reason,
             NativeInputClearReason::ControlRevisionChange
         );
-        assert_eq!(runtime.pending_recovery_outputs.len(), 2);
+        let recovery = runtime
+            .pending_recovery_outputs
+            .iter()
+            .map(|output| serde_json::to_value(output).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(recovery.first().unwrap()["kind"], "binding");
+        assert_eq!(recovery.last().unwrap()["kind"], "complete-baseline");
+        assert!(recovery.iter().any(|output| output["kind"] == "frame"));
 
         let (_, outputs) = runtime
             .admit_demand_step()

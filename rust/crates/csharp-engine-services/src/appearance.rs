@@ -4,7 +4,6 @@ use asset_import::{
     GltfResource, ImportContext, SourceUri,
 };
 use csharp_engine_abi::*;
-use product_dev_host::ProductDevLog;
 use render_model::*;
 use render_presentation::{
     validate_animation_catalog, AnimationCatalog, AnimationClipAsset, AnimationCondition,
@@ -30,6 +29,7 @@ use render_projection::{
     Appearance, RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
     RuntimeLightFact,
 };
+use runtime_diagnostics::RuntimeDiagnosticsSink;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::c_void,
@@ -701,6 +701,8 @@ fn realtime_sprite_update(step: u64, delta: f64) -> NativeProductUpdateFacts {
 fn sprite_appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
     NativeAppearanceFact {
         object_id: 71,
+        has_parent_object: false,
+        parent_object_id: 0,
         transform: NativeTransform {
             translation: NativeVec3::default(),
             rotation: NativeQuat {
@@ -1563,7 +1565,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     animation_realization_facts: VecDeque<AnimationRealizationFact>,
     animation_realization_evicted: u64,
     authored_content: Option<*const crate::authored_content::RuntimeAuthoredContentBridge>,
-    diagnostics_sink: Option<ProductDevLog>,
+    diagnostics_sink: Option<RuntimeDiagnosticsSink>,
     reported_recoverable_codes: BTreeSet<&'static str>,
 }
 
@@ -1637,7 +1639,7 @@ impl RuntimeAppearanceBridge {
         self.authored_content = Some(authored_content);
     }
 
-    pub(crate) fn bind_diagnostics_sink(&mut self, sink: ProductDevLog) {
+    pub(crate) fn bind_diagnostics_sink(&mut self, sink: RuntimeDiagnosticsSink) {
         self.diagnostics_sink = Some(sink);
     }
 
@@ -1763,8 +1765,20 @@ impl RuntimeAppearanceBridge {
     pub(crate) fn snapshot_presentation_frames(
         &self,
     ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
+        Self::snapshot_presentation_state(&self.state)
+    }
+
+    pub(crate) fn snapshot_call_presentation(
+        call: &RuntimeAppearanceCall,
+    ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
+        Self::snapshot_presentation_state(&call.state)
+    }
+
+    fn snapshot_presentation_state(
+        state: &RuntimeAppearanceState,
+    ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
         let mut ops = Vec::new();
-        for (handle, descriptor) in self.state.billboard_projector.active_billboards() {
+        for (handle, descriptor) in state.billboard_projector.active_billboards() {
             ops.push(PresentationOp::Billboard {
                 meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
                 op: BillboardProjectionOp::Create {
@@ -1773,16 +1787,21 @@ impl RuntimeAppearanceBridge {
                 },
             });
         }
-        for (handle, descriptor) in self.state.particle_projector.active_emitters() {
+        for (handle, descriptor) in state.particle_projector.active_emitters() {
             ops.push(PresentationOp::Particle {
                 meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
                 op: ParticleProjectionOp::Create {
                     handle,
-                    descriptor: descriptor.clone(),
+                    descriptor: {
+                        let mut retained = descriptor.clone();
+                        // Continuous emissions resume; creation bursts are historical.
+                        retained.burst_count = 0;
+                        retained
+                    },
                 },
             });
         }
-        for (handle, descriptor) in self.state.ghost_plate_projector.active_plates() {
+        for (handle, descriptor) in state.ghost_plate_projector.active_plates() {
             ops.push(PresentationOp::GhostPlate {
                 meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
                 op: GhostPlateProjectionOp::Create {
@@ -1791,7 +1810,7 @@ impl RuntimeAppearanceBridge {
                 },
             });
         }
-        for controller in self.state.animation_controllers.values() {
+        for controller in state.animation_controllers.values() {
             for (handle, descriptor) in controller.projector.active_projections() {
                 ops.push(PresentationOp::Animation {
                     meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
@@ -2238,6 +2257,7 @@ impl RuntimeAppearanceBridge {
             GhostPlateProjectionOp::Recapture {
                 handle: GhostPlateHandle::new(handle),
                 capture: Some(next.capture.clone()),
+                captured_scene: None,
             },
         )?;
         self.staged_mut()?.state.ghost_plates.insert(handle, next);
@@ -6004,6 +6024,8 @@ impl RuntimeAppearanceBridge {
                 weight: request.weight,
                 restart: request.restart,
                 fade_seconds: request.has_fade.then_some(request.fade_seconds),
+                start_offset_seconds: None,
+                start_paused: false,
             },
             NativeAnimationPlaybackKind::Stop => AnimatedMeshPlaybackCommand::Stop {
                 fade_seconds: request.has_fade.then_some(request.fade_seconds),
@@ -6421,6 +6443,7 @@ impl RuntimeAppearanceBridge {
             })?;
             owned.push(RuntimeAppearanceFact {
                 object_id: fact.object_id,
+                parent_object_id: fact.has_parent_object.then_some(fact.parent_object_id),
                 appearance: appearance.clone(),
                 transform: Transform {
                     translation: [
@@ -6834,6 +6857,7 @@ fn command_clip(command: &AnimatedMeshPlaybackCommand) -> Option<&str> {
         AnimatedMeshPlaybackCommand::Play { clip, .. }
         | AnimatedMeshPlaybackCommand::Sample { clip, .. } => Some(clip),
         AnimatedMeshPlaybackCommand::Stop { .. }
+        | AnimatedMeshPlaybackCommand::SamplePose { .. }
         | AnimatedMeshPlaybackCommand::Pause
         | AnimatedMeshPlaybackCommand::Resume => None,
     }
@@ -8447,6 +8471,7 @@ fn ghost_plate_descriptor(
 ) -> GhostPlateDescriptor {
     GhostPlateDescriptor {
         source,
+        captured_scene: None,
         placement: presentation.placement.clone(),
         capture: presentation.capture.clone(),
         config: presentation.config.clone(),
@@ -8855,6 +8880,8 @@ pub(super) mod tests {
     fn appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
         NativeAppearanceFact {
             object_id: 7,
+            has_parent_object: false,
+            parent_object_id: 0,
             transform: NativeTransform {
                 translation: NativeVec3::default(),
                 rotation: NativeQuat {
@@ -8924,6 +8951,43 @@ pub(super) mod tests {
             })
             .unwrap();
         assert_ne!(replacement.value, appearance.value);
+    }
+
+    #[test]
+    fn appearance_snapshot_copies_parent_identity_into_the_retained_graph() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let parent = bridge.create_primitive(primitive_request()).unwrap();
+        let child = bridge.create_primitive(primitive_request()).unwrap();
+        let parent_fact = appearance_fact(parent);
+        let mut child_fact = appearance_fact(child);
+        child_fact.object_id = 8;
+        child_fact.has_parent_object = true;
+        child_fact.parent_object_id = parent_fact.object_id;
+
+        let facts = [child_fact, parent_fact];
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }
+            .expect("hierarchical snapshot");
+        let staged = bridge
+            .take_staged_call()
+            .expect("staged hierarchy")
+            .expect("appearance call");
+        assert!(matches!(
+            staged
+                .frame
+                .as_ref()
+                .expect("retained frame")
+                .ops
+                .as_slice(),
+            [
+                render_model::RenderDiff::Create { parent: None, .. },
+                render_model::RenderDiff::Create {
+                    parent: Some(_),
+                    ..
+                },
+            ]
+        ));
     }
 
     fn ghost_plate_request(source_object_id: u64) -> NativeCreateGhostPlatePresentationRequest {
@@ -10519,7 +10583,8 @@ pub(super) mod tests {
 
     #[test]
     fn particle_recoverable_admission_diagnostics_use_the_product_sink_once_per_code() {
-        let sink = ProductDevLog::new(Default::default()).expect("bounded product log");
+        let sink =
+            RuntimeDiagnosticsSink::new(Default::default()).expect("bounded diagnostics sink");
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
         bridge.bind_diagnostics_sink(sink.clone());

@@ -53,6 +53,12 @@ impl fmt::Display for ProductDevHostError {
 
 impl std::error::Error for ProductDevHostError {}
 
+impl From<runtime_diagnostics::RuntimeDiagnosticsError> for ProductDevHostError {
+    fn from(value: runtime_diagnostics::RuntimeDiagnosticsError) -> Self {
+        Self::new(value.code(), value.detail())
+    }
+}
+
 /// A bounded runtime-owner diagnostic. It never crosses the transport as an
 /// unconstrained error display or backtrace.
 #[derive(Debug, Clone, PartialEq, Eq)]

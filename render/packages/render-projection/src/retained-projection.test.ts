@@ -1270,3 +1270,15 @@ void test('fails closed on unknown handles, unsupported ops, and malformed mesh 
     /content-addressed identity/u,
   );
 });
+
+void test('graphics and auxiliary realization share a frontier without advancing on validation', () => {
+  const projection = new RenderProjection();
+  projection.establishBaseline({ schemaVersion: 1, ops: [] }, [{ stream: 'presentation-world', revision: 7 }]);
+  const publication = { stream: 'presentation-world', baseRevision: 7, revision: 8, operationCount: 2 };
+  projection.validatePublication(publication, 2);
+  projection.validatePublication(publication, 2);
+  assert.throws(() => projection.validatePublication({ ...publication, baseRevision: 8, revision: 9 }, 2), /publication gap/u);
+  projection.commitPublication(publication, 2);
+  projection.applyFrame({ schemaVersion: 1, publication: { ...publication, baseRevision: 8, revision: 9, operationCount: 1 }, ops: [createPrimitive(91, 'after-effects')] });
+  assert.throws(() => projection.commitPublication(publication, 2), /stale publication/u);
+});

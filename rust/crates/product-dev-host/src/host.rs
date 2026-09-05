@@ -23,9 +23,9 @@ use crate::{
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
     ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, ProductDevWorkerDiagnostic,
-    ProductDevWorkerPublication, MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES,
-    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
-    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevWorkerPublication, MAX_BASELINE_AGGREGATE_BYTES, MAX_CONNECTIONS,
+    MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES,
+    MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -409,16 +409,20 @@ impl RunningProductDevHost {
     /// shell. A changed binding fences old retained output before the new
     /// complete baseline is committed, so neither live SSE clients nor an old
     /// Last-Event-ID reconnect can consume facts from the retired incarnation.
-    pub fn replace_worker_projection<F>(
+    pub fn replace_worker_projection<P, F>(
         &self,
-        bundle: ProductDevBundle,
-        outputs: Vec<ProductDevRuntimeOutput>,
-        worker_generation: u64,
+        prepared: runtime_session::PreparedRuntimeReplacement<(
+            P,
+            ProductDevBundle,
+            Vec<ProductDevRuntimeOutput>,
+            u64,
+        )>,
         activate: F,
     ) -> Result<u64, ProductDevHostError>
     where
-        F: FnOnce() -> Result<(), ProductDevRuntimeError>,
+        F: FnOnce(P) -> Result<(), ProductDevRuntimeError>,
     {
+        let (pending, bundle, outputs, worker_generation) = prepared.into_inner();
         let _gate = self.projection_gate.write().map_err(|_| {
             ProductDevHostError::new(
                 "DEV_HOST_WORKER_REPLACE",
@@ -445,7 +449,7 @@ impl RunningProductDevHost {
                 "bundle replacement lock is poisoned",
             )
         })?;
-        activate().map_err(|error| {
+        activate(pending).map_err(|error| {
             ProductDevHostError::worker_activation(format!(
                 "{}: {}",
                 error.code(),
@@ -2158,7 +2162,11 @@ fn handle_sse<R: ProductDevRuntime>(
                     let receipt = runtime.connect()?;
                     let connection_output_cursor = receipt.connection_output_cursor();
                     let (result, outputs) = receipt.into_parts();
-                    let isolated = Mutex::new(OutputBus::default());
+                    // A connection baseline is subscriber-private. Keep its
+                    // complete bounded resource set even when its fragment
+                    // count exceeds the reconnect ring; public history may
+                    // retain only a tail and asks lagged clients to reconnect.
+                    let isolated = Mutex::new(OutputBus::private_baseline());
                     if let Err(error) = push_outputs(&isolated, outputs) {
                         return Ok(Err(HttpResponse::error(503, error.code(), error.detail())));
                     }
@@ -2364,7 +2372,7 @@ fn write_sse_event(stream: &mut TcpStream, event: &OutputEvent) -> io::Result<()
     stream.flush()
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct OutputBus {
     next_id: u64,
     next_transfer_id: u64,
@@ -2372,6 +2380,23 @@ struct OutputBus {
     floor_cursor: u64,
     active_binding: Option<crate::ProductDevRuntimeBinding>,
     pending_baseline: Option<PendingBaseline>,
+    retained_event_limit: usize,
+    private_baseline_bytes: Option<usize>,
+}
+
+impl Default for OutputBus {
+    fn default() -> Self {
+        Self {
+            next_id: 0,
+            next_transfer_id: 0,
+            events: VecDeque::new(),
+            floor_cursor: 0,
+            active_binding: None,
+            pending_baseline: None,
+            retained_event_limit: MAX_OUTPUT_QUEUE_ITEMS,
+            private_baseline_bytes: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2393,6 +2418,14 @@ struct OutputSnapshot {
 }
 
 impl OutputBus {
+    fn private_baseline() -> Self {
+        Self {
+            retained_event_limit: usize::MAX,
+            private_baseline_bytes: Some(0),
+            ..Self::default()
+        }
+    }
+
     fn after(&self, cursor: u64) -> OutputSnapshot {
         OutputSnapshot {
             floor_cursor: self.floor_cursor,
@@ -2483,6 +2516,7 @@ fn push_outputs_staged(
                     &mut staged,
                     active_binding,
                     std::mem::take(&mut incremental_outputs),
+                    OutputDelivery::Incremental,
                 )?;
             }
             if staged.pending_baseline.is_some() {
@@ -2529,7 +2563,13 @@ fn push_outputs_staged(
                 )
             })?;
             output.attach_complete_baseline_frontiers_to_binding(baseline)?;
-            append_staged_output_events(bus, &mut staged, pending.binding, outputs)?;
+            append_staged_output_events(
+                bus,
+                &mut staged,
+                pending.binding,
+                outputs,
+                OutputDelivery::Baseline,
+            )?;
             staged.active_binding = Some(binding);
             continue;
         }
@@ -2547,7 +2587,13 @@ fn push_outputs_staged(
     }
     if !incremental_outputs.is_empty() {
         let binding = staged.active_binding.expect("active binding was checked");
-        append_staged_output_events(bus, &mut staged, binding, incremental_outputs)?;
+        append_staged_output_events(
+            bus,
+            &mut staged,
+            binding,
+            incremental_outputs,
+            OutputDelivery::Incremental,
+        )?;
     }
     let output_through = staged.next_id;
     staged.commit(bus);
@@ -2561,7 +2607,13 @@ fn append_output_events(
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<(), ProductDevHostError> {
     let mut staged = OutputPushStage::new(bus);
-    append_staged_output_events(bus, &mut staged, binding, outputs)?;
+    append_staged_output_events(
+        bus,
+        &mut staged,
+        binding,
+        outputs,
+        OutputDelivery::Incremental,
+    )?;
     staged.commit(bus);
     Ok(())
 }
@@ -2574,6 +2626,7 @@ struct OutputPushStage {
     retained_start: usize,
     floor_cursor: u64,
     new_events: VecDeque<OutputEvent>,
+    private_baseline_bytes: Option<usize>,
 }
 
 impl OutputPushStage {
@@ -2586,12 +2639,13 @@ impl OutputPushStage {
             retained_start: 0,
             floor_cursor: bus.floor_cursor,
             new_events: VecDeque::new(),
+            private_baseline_bytes: bus.private_baseline_bytes,
         }
     }
 
     fn push_event(&mut self, bus: &OutputBus, event: OutputEvent) {
         let retained_existing = bus.events.len().saturating_sub(self.retained_start);
-        if retained_existing + self.new_events.len() == MAX_OUTPUT_QUEUE_ITEMS {
+        if retained_existing + self.new_events.len() == bus.retained_event_limit {
             if self.retained_start < bus.events.len() {
                 self.floor_cursor = bus.events[self.retained_start].id;
                 self.retained_start += 1;
@@ -2610,6 +2664,7 @@ impl OutputPushStage {
         bus.floor_cursor = self.floor_cursor;
         bus.active_binding = self.active_binding;
         bus.pending_baseline = self.pending_baseline;
+        bus.private_baseline_bytes = self.private_baseline_bytes;
     }
 }
 
@@ -2618,6 +2673,7 @@ fn append_staged_output_events(
     staged: &mut OutputPushStage,
     binding: crate::ProductDevRuntimeBinding,
     outputs: Vec<ProductDevRuntimeOutput>,
+    delivery: OutputDelivery,
 ) -> Result<(), ProductDevHostError> {
     let mut encoded_events = Vec::new();
     let mut next_transfer_id = staged.next_transfer_id;
@@ -2626,11 +2682,30 @@ fn append_staged_output_events(
         "outputs": outputs,
     }))
     .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))?;
-    if encoded.len() > MAX_OUTPUT_AGGREGATE_BYTES {
+    let maximum = match delivery {
+        OutputDelivery::Incremental => MAX_OUTPUT_AGGREGATE_BYTES,
+        OutputDelivery::Baseline => MAX_BASELINE_AGGREGATE_BYTES,
+    };
+    if encoded.len() > maximum {
         return Err(ProductDevHostError::new(
             "DEV_HOST_OUTPUT_BOUNDS",
-            "output aggregate exceeds host bound",
+            match delivery {
+                OutputDelivery::Incremental => "output aggregate exceeds host bound",
+                OutputDelivery::Baseline => "complete retained baseline exceeds host bound",
+            },
         ));
+    }
+    if let Some(total) = staged.private_baseline_bytes {
+        if matches!(delivery, OutputDelivery::Baseline) {
+            let total = total.saturating_add(encoded.len());
+            if total > MAX_BASELINE_AGGREGATE_BYTES {
+                return Err(ProductDevHostError::new(
+                    "DEV_HOST_OUTPUT_BOUNDS",
+                    "private connection baseline exceeds host bound",
+                ));
+            }
+            staged.private_baseline_bytes = Some(total);
+        }
     }
     if encoded.len() <= MAX_OUTPUT_EVENT_BYTES {
         encoded_events.push(EncodedOutputEvent {
@@ -2667,7 +2742,9 @@ fn append_staged_output_events(
             });
         }
     }
-    if encoded_events.len() > MAX_OUTPUT_QUEUE_ITEMS {
+    if matches!(delivery, OutputDelivery::Incremental)
+        && encoded_events.len() > MAX_OUTPUT_QUEUE_ITEMS
+    {
         return Err(ProductDevHostError::new(
             "DEV_HOST_OUTPUT_BATCH_BOUNDS",
             "encoded output batch exceeds the retained event count",
@@ -2698,6 +2775,12 @@ fn append_staged_output_events(
 struct EncodedOutputEvent {
     event: Option<&'static str>,
     json: String,
+}
+
+#[derive(Clone, Copy)]
+enum OutputDelivery {
+    Incremental,
+    Baseline,
 }
 
 #[derive(Serialize)]
@@ -3510,7 +3593,73 @@ mod tests {
     }
 
     #[test]
-    fn rejected_fragmented_baseline_accepts_a_real_full_producer_replay() {
+    fn complete_large_baseline_keeps_private_transfer_while_public_history_forces_fresh() {
+        let runtime = binding();
+        let payload = "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS + 1));
+        let baseline = || {
+            vec![
+                crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
+                crate::model::ProductDevRuntimeOutput::test_frame_value(
+                    serde_json::json!({"payload": payload}),
+                ),
+                crate::model::ProductDevRuntimeOutput::complete_baseline(runtime),
+            ]
+        };
+
+        let mut public = OutputBus::default();
+        push_outputs_staged(&mut public, baseline()).expect("large public baseline publishes");
+        assert_eq!(public.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
+        assert!(
+            public.floor_cursor > 0,
+            "public history retains only the tail"
+        );
+        assert_eq!(public.after(0).floor_cursor, public.floor_cursor);
+        assert_eq!(public.active_binding, Some(runtime));
+
+        let mut private = OutputBus::private_baseline();
+        push_outputs_staged(&mut private, baseline()).expect("private baseline publishes");
+        assert!(private.events.len() > MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(private.floor_cursor, 0);
+        assert_eq!(private.events.front().map(|event| event.id), Some(1));
+        assert_eq!(private.active_binding, Some(runtime));
+    }
+
+    #[test]
+    fn interrupted_large_baseline_never_leaks_a_private_prefix() {
+        let runtime = binding();
+        let bus = Mutex::new(OutputBus::private_baseline());
+        push_outputs(
+            &bus,
+            vec![
+                crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
+                crate::model::ProductDevRuntimeOutput::test_frame_value(
+                    serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_AGGREGATE_BYTES + 1)}),
+                ),
+            ],
+        )
+        .expect("incomplete baseline remains staged");
+        assert!(bus.lock().expect("private bus").events.is_empty());
+
+        let error = push_outputs(
+            &bus,
+            vec![crate::model::ProductDevRuntimeOutput::binding(
+                crate::ProductDevRuntimeBinding {
+                    generation: CanonicalU64::new(2),
+                    ..runtime
+                },
+                CanonicalU64::new(0),
+            )],
+        )
+        .expect_err("interrupted baseline is fenced");
+        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
+        let bus = bus.lock().expect("private bus");
+        assert!(bus.events.is_empty());
+        assert!(bus.pending_baseline.is_none());
+        assert!(bus.active_binding.is_none());
+    }
+
+    #[test]
+    fn bounded_fragmented_baseline_replaces_the_active_binding() {
         let active_runtime = binding();
         let replacement_runtime = crate::ProductDevRuntimeBinding {
             generation: CanonicalU64::new(2),
@@ -3530,7 +3679,7 @@ mod tests {
             ],
         )
         .expect("initial runtime baseline publishes");
-        let error = push_outputs(
+        push_outputs(
             &bus,
             vec![
                 crate::model::ProductDevRuntimeOutput::binding(
@@ -3548,42 +3697,24 @@ mod tests {
                 crate::model::ProductDevRuntimeOutput::complete_baseline(replacement_runtime),
             ],
         )
-        .expect_err("oversized complete producer baseline is rejected");
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BOUNDS");
-        assert!(bus
-            .lock()
-            .expect("test bus lock")
-            .pending_baseline
-            .is_none());
-        assert!(bus.lock().expect("test bus lock").active_binding.is_none());
-        let incremental = push_outputs(
+        .expect("complete producer baseline stays within its separate recovery budget");
+        let locked = bus.lock().expect("test bus lock");
+        assert!(locked.pending_baseline.is_none());
+        assert_eq!(locked.active_binding, Some(replacement_runtime));
+        assert_eq!(locked.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
+        assert!(locked.floor_cursor > 0);
+        drop(locked);
+
+        push_outputs(
             &bus,
             vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
                 serde_json::json!({"incremental": true}),
             )],
         )
-        .expect_err("incremental output cannot attach to a rejected baseline");
-        assert_eq!(incremental.code(), "DEV_HOST_OUTPUT_BASELINE");
-        assert_eq!(
-            bus.lock().expect("test bus lock").events.len(),
-            1,
-            "replacement incremental was not mislabeled as the previous runtime",
-        );
-        push_outputs(
-            &bus,
-            vec![
-                crate::model::ProductDevRuntimeOutput::binding(
-                    replacement_runtime,
-                    CanonicalU64::new(0),
-                ),
-                crate::model::ProductDevRuntimeOutput::complete_baseline(replacement_runtime),
-            ],
-        )
-        .expect("a replayed full producer baseline publishes atomically");
+        .expect("incremental output follows the admitted replacement baseline");
         let locked = bus.lock().expect("test bus lock");
         assert!(locked.pending_baseline.is_none());
         assert_eq!(locked.active_binding, Some(replacement_runtime));
-        assert_eq!(locked.events.len(), 2);
     }
 }
 

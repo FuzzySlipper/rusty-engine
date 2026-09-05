@@ -239,11 +239,23 @@ export type AnimatedMeshPlaybackCommand =
       readonly weight: number;
       readonly restart: boolean;
       readonly fadeSeconds: number | null;
+      /** Engine-materialized retained offset used only for reconstruction. */
+      readonly startOffsetSeconds?: number;
+      /** Reconstruct at the retained offset without resuming playback. */
+      readonly startPaused?: boolean;
     }
   | { readonly kind: 'stop'; readonly fadeSeconds: number | null }
   | { readonly kind: 'sample'; readonly clip: string; readonly normalizedTime: number }
+  | { readonly kind: 'samplePose'; readonly clips: readonly AnimatedMeshClipPose[] }
   | { readonly kind: 'pause' }
   | { readonly kind: 'resume' };
+
+/** A finite Engine-derived clip sample used to reconstruct a frozen blended pose. */
+export interface AnimatedMeshClipPose {
+  readonly clip: string;
+  readonly timeSeconds: number;
+  readonly weight: number;
+}
 
 export interface AnimatedMeshInstanceDescriptor {
   readonly asset: string;

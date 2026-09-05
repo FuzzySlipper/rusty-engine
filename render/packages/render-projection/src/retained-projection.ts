@@ -19,6 +19,7 @@ import type {
   MeshPickHit,
   RenderDiff,
   RenderFrameDiff,
+  RenderFramePublication,
   RenderHandle,
   RenderLayer,
   RenderMaterialDescriptor,
@@ -295,6 +296,40 @@ export class RenderProjection {
    */
   validateFrame(frame: RenderFrameDiff): readonly RenderProjectionInstruction[] {
     return this.#stageFrame(frame).instructions;
+  }
+
+  /** Shared continuation check for graphics and other presentation domains. */
+  validatePublication(publication: RenderFramePublication | undefined, operationCount: number): void {
+    this.#fork().commitPublication(publication, operationCount);
+  }
+
+  /** Advance only after the corresponding browser realization succeeded. */
+  commitPublication(publication: RenderFramePublication | undefined, operationCount: number): void {
+    if (publication !== undefined) {
+      if (publication.operationCount !== operationCount) {
+        throw new RenderProjectionError(
+          `publication ${publication.stream} operationCount does not match frame`,
+        );
+      }
+      if (publication.revision !== publication.baseRevision + 1) {
+        throw new RenderProjectionError(
+          `publication gap for ${publication.stream}; revision ${String(publication.revision)} must immediately follow base ${String(publication.baseRevision)}`,
+        );
+      }
+      const previous = this.#publishedRevisions.get(publication.stream);
+      if (previous !== undefined && publication.revision <= previous) {
+        throw new RenderProjectionError(
+          `stale publication ${publication.stream} revision ${String(publication.revision)}; latest is ${String(previous)}`,
+        );
+      }
+      const expectedBase = previous ?? 0;
+      if (publication.baseRevision !== expectedBase) {
+        throw new RenderProjectionError(
+          `publication gap for ${publication.stream}; expected base ${String(expectedBase)}, received ${String(publication.baseRevision)}`,
+        );
+      }
+      this.#publishedRevisions.set(publication.stream, publication.revision);
+    }
   }
 
   /** Atomically install all active stream continuation points for a complete retained replacement. */
@@ -1239,31 +1274,7 @@ export class RenderProjection {
     readonly instructions: readonly RenderProjectionInstruction[];
   } {
     const staged = this.#fork();
-    if (frame.publication !== undefined) {
-      if (frame.publication.operationCount !== frame.ops.length) {
-        throw new RenderProjectionError(
-          `publication ${frame.publication.stream} operationCount does not match frame`,
-        );
-      }
-      if (frame.publication.revision !== frame.publication.baseRevision + 1) {
-        throw new RenderProjectionError(
-          `publication gap for ${frame.publication.stream}; revision ${String(frame.publication.revision)} must immediately follow base ${String(frame.publication.baseRevision)}`,
-        );
-      }
-      const previous = staged.#publishedRevisions.get(frame.publication.stream);
-      if (previous !== undefined && frame.publication.revision <= previous) {
-        throw new RenderProjectionError(
-          `stale publication ${frame.publication.stream} revision ${String(frame.publication.revision)}; latest is ${String(previous)}`,
-        );
-      }
-      const expectedBase = previous ?? 0;
-      if (frame.publication.baseRevision !== expectedBase) {
-        throw new RenderProjectionError(
-          `publication gap for ${frame.publication.stream}; expected base ${String(expectedBase)}, received ${String(frame.publication.baseRevision)}`,
-        );
-      }
-      staged.#publishedRevisions.set(frame.publication.stream, frame.publication.revision);
-    }
+    staged.commitPublication(frame.publication, frame.ops.length);
     const instructions: RenderProjectionInstruction[] = [];
     for (const diff of frame.ops) {
       instructions.push(...staged.applyDiff(diff));

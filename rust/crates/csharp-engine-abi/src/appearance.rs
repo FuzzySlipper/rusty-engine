@@ -542,6 +542,10 @@ pub struct NativeSpriteAppearanceReplaceRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAppearanceFact {
     pub object_id: u64,
+    /// Optional parent from the same complete retained snapshot. Both values
+    /// identify product facts; renderer handles remain Engine-owned.
+    pub has_parent_object: bool,
+    pub parent_object_id: u64,
     pub transform: NativeTransform,
     pub appearance: NativeAppearanceHandle,
     pub visible: bool,

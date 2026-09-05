@@ -349,6 +349,12 @@ export function mountRendererBrowserSurface(
       ...(options.projection === undefined && options.publicationFrontiers !== undefined
         ? { publicationFrontiers: options.publicationFrontiers } : {}),
       ...(options.projection === undefined ? {} : { projection: options.projection }),
+      isolatedCaptureLighting: Object.freeze({
+        createWorldLights: () => lighting.defaultLights.world === 'neutral'
+          ? createNeutralLights([5, 8, 6]) : [],
+        createViewmodelLights: () => lighting.defaultLights.viewmodel === 'neutral'
+          ? createNeutralLights([2, 3, 2]) : [],
+      }),
       shadowsEnabled: lighting.shadows.enabled,
       maximumActiveShadowLights: lighting.shadows.maximumActiveLights,
     },

@@ -29,6 +29,7 @@ fn audio_descriptor() -> AudioSourceDescriptor {
         clip: AudioClipRef {
             asset: "audio/pulse".into(),
             content_hash: "aa".into(),
+            duration_seconds: Some(2.0),
         },
         bus: AudioBus::Sfx,
         volume: 0.8,

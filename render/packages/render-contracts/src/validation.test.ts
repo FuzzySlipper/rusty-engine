@@ -21,6 +21,31 @@ function mutableFixture(name: string): Record<string, unknown> {
   return structuredClone(fixture(name)) as Record<string, unknown>;
 }
 
+function ghostDescriptor(capturedScene: unknown) {
+  return {
+    source: 7,
+    capturedScene,
+    placement: {
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      width: 2,
+      height: 3,
+    },
+    capture: {
+      resolution: 64, azimuthDegrees: 0, elevationDegrees: 10, near: 0.1, far: 20, fieldOfViewDegrees: 35,
+      lighting: {
+        mode: 'isolated', ambientColor: [1, 1, 1], ambientIntensity: 1,
+        keyDirection: [1, 1, 1], keyColor: [1, 1, 1], keyIntensity: 2,
+        fillDirection: [-1, 1, 1], fillColor: [1, 1, 1], fillIntensity: 1,
+      },
+    },
+    config: {
+      depthRetention: 0.15, anchorPolicy: 'bounds-center', anchorValue: 0.5,
+      plateMapping: 'plate-locked', shellMode: 'whole-mesh', shellDepthEpsilon: 0.12,
+      sectorCount: 8, sectorHysteresisDegrees: 3,
+    },
+  };
+}
+
 void test('strict TypeScript decoders accept the committed Rust render fixtures', () => {
   const renderFrame = decodeRenderFrameDiff(fixture('retained-frame-v1.json'));
   assert.deepEqual(renderFrame.ops.map((operation) => operation.op), [
@@ -413,6 +438,35 @@ void test('presentation decoding rejects unsafe identities, sequence gaps, and n
   const content = descriptor['content'] as Record<string, unknown>;
   content['sendMessage'] = 'no';
   assert.throws(() => decodePresentationFrameDiff(unknown), /sendMessage is unknown/);
+});
+
+void test('ghost captures carry a strict frozen graphics frame and explicit recaptures replace it', () => {
+  const capturedScene = fixture('retained-frame-v1.json');
+  const frame = {
+    schemaVersion: 1,
+    ops: [{
+      domain: 'ghostPlate', meta: { sequence: 0 }, op: {
+        op: 'create', handle: 8, descriptor: ghostDescriptor(capturedScene),
+      },
+    }],
+  };
+  assert.equal(decodePresentationFrameDiff(frame).ops.length, 1);
+
+  const recapture = {
+    schemaVersion: 1,
+    ops: [{
+      domain: 'ghostPlate', meta: { sequence: 0 }, op: {
+        op: 'recapture', handle: 8, capture: null, capturedScene,
+      },
+    }],
+  };
+  assert.equal(decodePresentationFrameDiff(recapture).ops.length, 1);
+
+  const malformed = structuredClone(frame);
+  const descriptor = malformed.ops[0]!.op.descriptor as Record<string, unknown>;
+  const frozen = descriptor['capturedScene'] as Record<string, unknown>;
+  (frozen['ops'] as Array<Record<string, unknown>>)[0]!['unexpected'] = true;
+  assert.throws(() => decodePresentationFrameDiff(malformed), /capturedScene\.ops\[0\].*unexpected is unknown/u);
 });
 
 void test('presentation decoding carries only typed retained-voice and fixed-bus audio controls', () => {

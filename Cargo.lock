@@ -692,11 +692,11 @@ dependencies = [
  "csharp-engine-abi",
  "engine-spatial",
  "entity-state",
- "product-dev-host",
  "render-host-contracts",
  "render-model",
  "render-presentation",
  "render-projection",
+ "runtime-diagnostics",
  "runtime-lifecycle",
  "runtime-ui",
  "serde",
@@ -721,8 +721,10 @@ dependencies = [
  "netcorehost",
  "product-dev-host",
  "render-presentation",
+ "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",
+ "runtime-session",
  "runtime-timeline",
  "runtime-ui",
  "serde",
@@ -2980,6 +2982,7 @@ dependencies = [
  "render-host-contracts",
  "render-model",
  "render-presentation",
+ "runtime-diagnostics",
  "runtime-input",
  "runtime-lifecycle",
  "runtime-session",
@@ -3201,6 +3204,14 @@ dependencies = [
  "heapless",
  "num-traits",
  "smallvec",
+]
+
+[[package]]
+name = "runtime-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

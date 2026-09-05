@@ -1,4 +1,4 @@
-use product_dev_host::ProductDevLog;
+use runtime_diagnostics::RuntimeDiagnosticsSink;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::c_void,
@@ -30,6 +30,7 @@ const MAX_AUDIO_RESOURCE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 struct AudioClip {
     asset: String,
     content_hash: String,
+    duration_seconds: Option<f64>,
     resource: CsharpRenderResource,
 }
 
@@ -140,7 +141,7 @@ pub(crate) struct RuntimeAudioBridge {
     renderer_evicted_fact_count: u64,
     local_evicted_fact_count: u64,
     accepted_through_fact_id: Option<u64>,
-    diagnostics_sink: Option<ProductDevLog>,
+    diagnostics_sink: Option<RuntimeDiagnosticsSink>,
     reported_recoverable_codes: BTreeSet<&'static str>,
 }
 
@@ -222,7 +223,7 @@ impl RuntimeAudioBridge {
         self.accepted_through_fact_id = None;
     }
 
-    pub(crate) fn bind_diagnostics_sink(&mut self, sink: ProductDevLog) {
+    pub(crate) fn bind_diagnostics_sink(&mut self, sink: RuntimeDiagnosticsSink) {
         self.diagnostics_sink = Some(sink);
     }
 
@@ -232,6 +233,16 @@ impl RuntimeAudioBridge {
             frame: None,
         });
         self.callback_error = None;
+    }
+
+    /// Stages retained playback against the update interval that the runtime
+    /// already admitted. Advancing the clone keeps a failed callback from
+    /// mutating canonical playback intent.
+    pub(crate) fn begin_update_call(&mut self, elapsed_seconds: f64) {
+        self.begin_call();
+        if let Some(staged) = self.staged.as_mut() {
+            staged.state.projector.advance_elapsed(elapsed_seconds);
+        }
     }
 
     pub(crate) fn discard_call(&mut self) {
@@ -270,32 +281,39 @@ impl RuntimeAudioBridge {
     /// copies only voices and closed-bus state: historical one-shot signals
     /// and realization feedback intentionally never cross a baseline.
     ///
-    /// A playing voice is recreated in its normal start state. Restoring an
-    /// elapsed playback cursor or reanchoring it is a later recovery policy,
-    /// not a fact this bridge currently owns.
+    /// A baseline uses the Engine cursor and desired state. Historical
+    /// one-shots and browser realization feedback remain outside it.
+    #[cfg(test)]
     pub(crate) fn snapshot_frame(
         &self,
     ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
+        Self::snapshot_frame_for_state(&self.state)
+    }
+
+    /// Snapshot a staged call before commit when its enclosing presentation
+    /// publication needs the same transaction boundary.
+    pub(crate) fn snapshot_call_frame(
+        call: &RuntimeAudioCall,
+    ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
+        Self::snapshot_frame_for_state(&call.state)
+    }
+
+    fn snapshot_frame_for_state(
+        state: &AudioState,
+    ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
         let mut ops = Vec::new();
-        for voice in self.state.projector.active_voices() {
+        for voice in state.projector.active_voices() {
             ops.push(PresentationOp::Audio {
                 meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
-                op: AudioProjectionOp::Create {
+                op: AudioProjectionOp::Restore {
                     handle: voice.handle,
                     descriptor: voice.descriptor,
+                    desired_state: voice.desired_state,
+                    cursor_seconds: voice.cursor_seconds,
                 },
             });
-            if voice.desired_state == AudioVoiceDesiredState::Paused {
-                ops.push(PresentationOp::Audio {
-                    meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
-                    op: AudioProjectionOp::VoiceControl {
-                        handle: voice.handle,
-                        control: AudioVoiceControl::Pause,
-                    },
-                });
-            }
         }
-        for bus in self.state.projector.buses() {
+        for bus in state.projector.buses() {
             ops.push(PresentationOp::Audio {
                 meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
                 op: AudioProjectionOp::BusControl {
@@ -433,6 +451,7 @@ impl RuntimeAudioBridge {
             ));
         }
         let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
+        let duration_seconds = wav_duration_seconds(resource.bytes());
         let asset = format!("audio/{relative_path}");
         let content_hash = resource.content_hash().to_owned();
         let handle = staged.state.next_clip;
@@ -456,6 +475,7 @@ impl RuntimeAudioBridge {
             AudioClip {
                 asset,
                 content_hash,
+                duration_seconds,
                 resource,
             },
         );
@@ -507,6 +527,7 @@ impl RuntimeAudioBridge {
         // capacity receipt is allowed. Otherwise a corrupt oversized body
         // could masquerade as routine budget pressure.
         let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
+        let duration_seconds = wav_duration_seconds(resource.bytes());
         let (admitted_clip_count, admitted_bytes) = {
             let state = &self.staged_ref()?.state;
             (
@@ -557,6 +578,7 @@ impl RuntimeAudioBridge {
                 AudioClip {
                     asset,
                     content_hash,
+                    duration_seconds,
                     resource,
                 },
             );
@@ -598,6 +620,7 @@ impl RuntimeAudioBridge {
             clip: render_presentation::AudioClipRef {
                 asset: clip.asset.clone(),
                 content_hash: clip.content_hash.clone(),
+                duration_seconds: clip.duration_seconds,
             },
             bus,
             volume: value.volume,
@@ -972,6 +995,50 @@ fn next_presentation_sequence(length: usize) -> Result<u32, CsharpEngineServices
             "retained audio baseline has too many operations",
         )
     })
+}
+
+/// Reads the duration of ordinary RIFF/WAVE content with byte-rate metadata. Admission
+/// deliberately remains compatible with the previous lightweight RIFF check:
+/// an opaque or unusual body simply has no Engine timeline duration and is not
+/// expired during recovery.
+fn wav_duration_seconds(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() < 12 || bytes.get(..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {
+        return None;
+    }
+    let mut cursor = 12_usize;
+    let mut byte_rate = None;
+    let mut data_bytes = None;
+    while cursor.checked_add(8)? <= bytes.len() {
+        let id = bytes.get(cursor..cursor + 4)?;
+        let length =
+            u32::from_le_bytes(bytes.get(cursor + 4..cursor + 8)?.try_into().ok()?) as usize;
+        let body = cursor.checked_add(8)?;
+        let end = body.checked_add(length)?;
+        if end > bytes.len() {
+            return None;
+        }
+        if id == b"fmt " && length >= 12 {
+            byte_rate = Some(u32::from_le_bytes(
+                bytes.get(body + 8..body + 12)?.try_into().ok()?,
+            ));
+        } else if id == b"data" {
+            data_bytes = Some(length);
+        }
+        if byte_rate.is_some() && data_bytes.is_some() {
+            break;
+        }
+        cursor = end.checked_add(length % 2)?;
+    }
+    let byte_rate = byte_rate?;
+    let data_bytes = data_bytes?;
+    if byte_rate == 0 {
+        return None;
+    }
+    let duration = data_bytes as f64 / f64::from(byte_rate);
+    duration
+        .is_finite()
+        .then_some(duration)
+        .filter(|duration| *duration > 0.0)
 }
 
 fn audio_bus(bus: NativeAudioBus) -> AudioBus {
@@ -1374,9 +1441,20 @@ mod tests {
     use super::*;
 
     fn wav() -> Arc<[u8]> {
-        let mut bytes = vec![0_u8; 44];
+        let mut bytes = vec![0_u8; 48];
         bytes[..4].copy_from_slice(b"RIFF");
+        bytes[4..8].copy_from_slice(&40_u32.to_le_bytes());
         bytes[8..12].copy_from_slice(b"WAVE");
+        bytes[12..16].copy_from_slice(b"fmt ");
+        bytes[16..20].copy_from_slice(&16_u32.to_le_bytes());
+        bytes[20..22].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[22..24].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[24..28].copy_from_slice(&4_u32.to_le_bytes());
+        bytes[28..32].copy_from_slice(&4_u32.to_le_bytes());
+        bytes[32..34].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[34..36].copy_from_slice(&8_u16.to_le_bytes());
+        bytes[36..40].copy_from_slice(b"data");
+        bytes[40..44].copy_from_slice(&4_u32.to_le_bytes());
         Arc::from(bytes)
     }
 
@@ -1476,7 +1554,8 @@ mod tests {
             "audio/corrupt.wav".to_owned(),
             Arc::from(vec![0_u8; MAX_AUDIO_RESOURCE_BYTES + 1]),
         );
-        let sink = ProductDevLog::new(Default::default()).expect("bounded product log");
+        let sink =
+            RuntimeDiagnosticsSink::new(Default::default()).expect("bounded diagnostics sink");
         let mut bridge = RuntimeAudioBridge::new(content);
         bridge.bind_diagnostics_sink(sink.clone());
         bridge.begin_call();
@@ -1721,26 +1800,60 @@ mod tests {
         assert!(matches!(
             baseline.ops.first(),
             Some(PresentationOp::Audio {
-                op: AudioProjectionOp::Create { .. },
+                op: AudioProjectionOp::Restore { .. },
                 ..
             })
         ));
-        assert!(baseline.ops.iter().any(|op| matches!(
-            op,
-            PresentationOp::Audio {
-                op: AudioProjectionOp::VoiceControl {
-                    control: AudioVoiceControl::Pause,
-                    ..
-                },
-                ..
-            }
-        )));
         assert_eq!(
             baseline.ops.len(),
-            8,
-            "one voice, its pause, and three bus states"
+            7,
+            "one restored voice and three bus states"
         );
         assert_eq!(bridge.state.projector.readout(), before);
+    }
+
+    #[test]
+    fn staged_update_time_restores_playing_cursor_and_quiets_completed_one_shot_voices() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted clip");
+        let voice = bridge
+            .create_voice(descriptor(clip, NativeAudioBus::Sfx))
+            .expect("retained one-shot voice");
+        let initial = bridge.take_staged_call().expect("initial call");
+        bridge.commit(initial);
+
+        bridge.begin_update_call(0.75);
+        let staged = bridge.take_staged_call().expect("staged elapsed state");
+        let baseline = RuntimeAudioBridge::snapshot_call_frame(&staged).expect("baseline");
+        assert!(matches!(
+            &baseline.ops[0],
+            PresentationOp::Audio { op: AudioProjectionOp::Restore {
+                handle, desired_state: AudioVoiceDesiredState::Playing, cursor_seconds, ..
+            }, .. } if *handle == AudioHandle::new(voice.value) && (*cursor_seconds - 0.75).abs() < f64::EPSILON
+        ));
+        bridge.commit(staged);
+
+        bridge.begin_update_call(0.5);
+        let staged = bridge.take_staged_call().expect("completed elapsed state");
+        let baseline = RuntimeAudioBridge::snapshot_call_frame(&staged).expect("baseline");
+        assert!(matches!(
+            &baseline.ops[0],
+            PresentationOp::Audio { op: AudioProjectionOp::Restore {
+                desired_state: AudioVoiceDesiredState::Paused, cursor_seconds, ..
+            }, .. } if (*cursor_seconds - 1.0).abs() < f64::EPSILON
+        ));
+        bridge.commit(staged);
     }
 
     #[test]

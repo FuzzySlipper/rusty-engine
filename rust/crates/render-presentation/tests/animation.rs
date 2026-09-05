@@ -282,6 +282,88 @@ fn controller_resolves_blends_and_transition_timing_deterministically() {
 }
 
 #[test]
+fn projector_retains_per_clip_phase_across_transition_and_state_completion() {
+    let assets = assets();
+    let target = RenderHandle::new(41);
+    let targets = BTreeSet::from([target]);
+    let mut controller = AnimationControllerService::new(validated_catalog());
+    let initial = controller
+        .attach(1, "hero.locomotion")
+        .unwrap()
+        .state
+        .unwrap();
+    let mut projector = AnimationProjector::new();
+    projector
+        .create_for_state(
+            &assets,
+            &targets,
+            AnimationProjectionTarget {
+                target,
+                content_hash: "ff".into(),
+                tick_duration_millis: 1_000,
+            },
+            &initial,
+            PresentationOpMeta::new(0),
+        )
+        .unwrap();
+    controller.set_float(1, "speed", 500).unwrap();
+    let started = controller.tick(1, 1).unwrap().state.unwrap();
+    projector
+        .update_for_state(&assets, &targets, &started, PresentationOpMeta::new(1))
+        .unwrap();
+    let phases = &projector
+        .descriptor(AnimationProjectionHandle::new(1))
+        .unwrap()
+        .controller
+        .clip_phases;
+    assert_eq!(
+        phases,
+        &[
+            AnimationControllerClipPhase {
+                clip: "idle".into(),
+                time_seconds: 1.0
+            },
+            AnimationControllerClipPhase {
+                clip: "run".into(),
+                time_seconds: 0.0
+            },
+            AnimationControllerClipPhase {
+                clip: "walk".into(),
+                time_seconds: 0.0
+            },
+        ],
+    );
+
+    let advancing = controller.tick(1, 2).unwrap().state.unwrap();
+    projector
+        .update_for_state(&assets, &targets, &advancing, PresentationOpMeta::new(2))
+        .unwrap();
+    let completed = controller.tick(1, 3).unwrap().state.unwrap();
+    projector
+        .update_for_state(&assets, &targets, &completed, PresentationOpMeta::new(3))
+        .unwrap();
+    let phases = &projector
+        .descriptor(AnimationProjectionHandle::new(1))
+        .unwrap()
+        .controller
+        .clip_phases;
+    assert_eq!(
+        phases,
+        &[
+            AnimationControllerClipPhase {
+                clip: "run".into(),
+                time_seconds: 2.0
+            },
+            AnimationControllerClipPhase {
+                clip: "walk".into(),
+                time_seconds: 2.0
+            },
+        ],
+        "the transition target carries its own accumulated phase into the new state",
+    );
+}
+
+#[test]
 fn controller_priority_trigger_consumption_batch_rollback_and_reset_are_explicit() {
     let mut controller = AnimationControllerService::new(validated_catalog());
     controller.attach(2, "hero.locomotion").unwrap();

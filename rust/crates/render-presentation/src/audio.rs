@@ -62,11 +62,16 @@ pub enum AudioEmitter {
     EntityAttached { entity: u64, offset: [f32; 3] },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AudioClipRef {
     pub asset: String,
     pub content_hash: String,
+    /// Engine-admitted duration for content with a known timeline. It lets a
+    /// retained voice recover from the Engine timeline without treating a
+    /// browser callback as canonical. Older or opaque resources may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +136,9 @@ pub struct AudioVoiceReadout {
     pub handle: AudioHandle,
     pub descriptor: AudioSourceDescriptor,
     pub desired_state: AudioVoiceDesiredState,
+    /// Engine playback cursor. This is sampled only from admitted update time,
+    /// never from a browser completion callback.
+    pub cursor_seconds: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -157,6 +165,14 @@ pub enum AudioProjectionOp {
     Create {
         handle: AudioHandle,
         descriptor: AudioSourceDescriptor,
+    },
+    /// Reconstruct a retained voice at an Engine-owned cursor. This belongs
+    /// only in a baseline; normal product changes retain Create and controls.
+    Restore {
+        handle: AudioHandle,
+        descriptor: AudioSourceDescriptor,
+        desired_state: AudioVoiceDesiredState,
+        cursor_seconds: f64,
     },
     Update {
         handle: AudioHandle,
@@ -228,6 +244,7 @@ pub struct AudioProjector {
 struct RetainedAudioVoice {
     descriptor: AudioSourceDescriptor,
     desired_state: AudioVoiceDesiredState,
+    cursor_seconds: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -291,6 +308,7 @@ impl AudioProjector {
             handle,
             descriptor: voice.descriptor.clone(),
             desired_state: voice.desired_state,
+            cursor_seconds: voice.cursor_seconds,
         })
     }
 
@@ -304,6 +322,7 @@ impl AudioProjector {
                 handle,
                 descriptor: voice.descriptor.clone(),
                 desired_state: voice.desired_state,
+                cursor_seconds: voice.cursor_seconds,
             })
     }
 
@@ -344,6 +363,32 @@ impl AudioProjector {
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    /// Advances only retained desired playback on the host-admitted Engine
+    /// timeline. Non-looping voices stop at their known end and are retained
+    /// paused at that cursor, so a later baseline does not restart them.
+    pub fn advance_elapsed(&mut self, elapsed_seconds: f64) {
+        if !elapsed_seconds.is_finite() || elapsed_seconds <= 0.0 {
+            return;
+        }
+        for voice in self.active.values_mut() {
+            if voice.desired_state != AudioVoiceDesiredState::Playing {
+                continue;
+            }
+            let elapsed = elapsed_seconds * f64::from(voice.descriptor.pitch);
+            let next = voice.cursor_seconds + elapsed;
+            match voice.descriptor.clip.duration_seconds {
+                Some(duration) if voice.descriptor.looping => {
+                    voice.cursor_seconds = normalize_cursor(next, duration, true);
+                }
+                Some(duration) if next >= duration => {
+                    voice.cursor_seconds = duration;
+                    voice.desired_state = AudioVoiceDesiredState::Paused;
+                }
+                _ => voice.cursor_seconds = next,
+            }
+        }
     }
 
     fn retain_diagnostic(&mut self, diagnostic: AudioProjectionDiagnostic) {
@@ -397,6 +442,30 @@ impl AudioProjector {
                         // offset is a wire/host realization rule, not a host
                         // cursor this owner can truthfully report.
                         desired_state: AudioVoiceDesiredState::Playing,
+                        cursor_seconds: 0.0,
+                    },
+                );
+            }
+            AudioProjectionOp::Restore {
+                handle,
+                descriptor,
+                desired_state,
+                cursor_seconds,
+            } => {
+                if self.active.contains_key(handle) {
+                    return Err(AudioProjectionDiagnosticCode::DuplicateHandle);
+                }
+                validate_descriptor(assets, descriptor)?;
+                if !cursor_seconds.is_finite() || *cursor_seconds < 0.0 {
+                    return Err(AudioProjectionDiagnosticCode::InvalidDescriptor);
+                }
+                self.referenced_clips.insert(descriptor.clip.asset.clone());
+                self.active.insert(
+                    *handle,
+                    RetainedAudioVoice {
+                        descriptor: descriptor.clone(),
+                        desired_state: *desired_state,
+                        cursor_seconds: normalized_voice_cursor(descriptor, *cursor_seconds),
                     },
                 );
             }
@@ -412,6 +481,7 @@ impl AudioProjector {
                 self.active.insert(
                     *handle,
                     RetainedAudioVoice {
+                        cursor_seconds: normalized_voice_cursor(&updated, current.cursor_seconds),
                         descriptor: updated,
                         desired_state: current.desired_state,
                     },
@@ -429,7 +499,9 @@ impl AudioProjector {
                     .ok_or(AudioProjectionDiagnosticCode::UnknownHandle)?;
                 voice.desired_state = match control {
                     AudioVoiceControl::Pause => AudioVoiceDesiredState::Paused,
-                    AudioVoiceControl::Resume | AudioVoiceControl::Retrigger => {
+                    AudioVoiceControl::Resume => AudioVoiceDesiredState::Playing,
+                    AudioVoiceControl::Retrigger => {
+                        voice.cursor_seconds = 0.0;
                         AudioVoiceDesiredState::Playing
                     }
                 };
@@ -463,6 +535,10 @@ fn validate_descriptor(
         || descriptor.attenuation <= 0.0
         || !emitter_is_finite(&descriptor.emitter)
         || descriptor.clip.content_hash.is_empty()
+        || descriptor
+            .clip
+            .duration_seconds
+            .is_some_and(|duration| !duration.is_finite() || duration <= 0.0)
     {
         return Err(AudioProjectionDiagnosticCode::InvalidDescriptor);
     }
@@ -531,10 +607,31 @@ fn operation_handle(op: &AudioProjectionOp) -> Option<AudioHandle> {
     match op {
         AudioProjectionOp::Emit { .. } => None,
         AudioProjectionOp::Create { handle, .. }
+        | AudioProjectionOp::Restore { handle, .. }
         | AudioProjectionOp::Update { handle, .. }
         | AudioProjectionOp::Destroy { handle }
         | AudioProjectionOp::VoiceControl { handle, .. } => Some(*handle),
         AudioProjectionOp::BusControl { .. } => None,
+    }
+}
+
+fn normalized_voice_cursor(descriptor: &AudioSourceDescriptor, cursor_seconds: f64) -> f64 {
+    match descriptor.clip.duration_seconds {
+        Some(duration) => normalize_cursor(cursor_seconds, duration, descriptor.looping),
+        None => cursor_seconds,
+    }
+}
+
+fn normalize_cursor(cursor_seconds: f64, duration_seconds: f64, looping: bool) -> f64 {
+    if looping {
+        let remainder = cursor_seconds % duration_seconds;
+        if remainder < 0.0 {
+            remainder + duration_seconds
+        } else {
+            remainder
+        }
+    } else {
+        cursor_seconds.min(duration_seconds)
     }
 }
 

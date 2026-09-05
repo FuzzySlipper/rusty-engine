@@ -1,13 +1,5 @@
 use crate::*;
 use std::ffi::c_void;
-pub type NativeIntegrateLook =
-    unsafe extern "C" fn(*mut c_void, NativeLookRequest, *mut NativeLookReceipt) -> i32;
-pub type NativeResetLook =
-    unsafe extern "C" fn(*mut c_void, NativeLookResetRequest, *mut NativeLookReceipt) -> i32;
-pub type NativeRebaseLook =
-    unsafe extern "C" fn(*mut c_void, NativeLookRebaseRequest, *mut NativeLookReceipt) -> i32;
-pub type NativeDiagnoseLook =
-    unsafe extern "C" fn(*mut c_void, NativeLookRequest, *mut NativeLookDiagnostic) -> i32;
 pub type NativeCreateDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsWorldConfig,
@@ -804,16 +796,6 @@ pub type NativePublishContentStore = unsafe extern "C" fn(
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeLookApi {
-    pub context: *mut c_void,
-    pub integrate: NativeIntegrateLook,
-    pub reset: NativeResetLook,
-    pub rebase: NativeRebaseLook,
-    pub diagnose: NativeDiagnoseLook,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsApi {
     pub context: *mut c_void,
     pub create_world: NativeCreateDynamicsWorld,
@@ -928,7 +910,7 @@ pub struct NativeUiApi {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct NativeAppearanceApi {
+pub struct NativeGraphicsApi {
     pub context: *mut c_void,
     pub open_resource: NativeOpenRenderResource,
     pub create_material: NativeCreateMaterial,
@@ -1163,7 +1145,6 @@ pub struct NativeContentStoreApi {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeEngineApi {
     pub diagnostics: NativeDiagnosticsApi,
-    pub look: NativeLookApi,
     pub dynamics: NativeDynamicsApi,
     pub motion: NativeMotionApi,
     pub kinematic: NativeKinematicApi,
@@ -1175,7 +1156,7 @@ pub struct NativeEngineApi {
     pub voxel_scene_presentation: NativeVoxelScenePresentationApi,
     pub content: NativeContentApi,
     pub authored_content: NativeAuthoredContentApi,
-    pub appearance: NativeAppearanceApi,
+    pub graphics: NativeGraphicsApi,
     pub presentation: NativePresentationApi,
     pub animation: NativeAnimationApi,
     pub audio: NativeAudioApi,

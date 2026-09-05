@@ -138,6 +138,8 @@ export interface AnimatedMeshControllerClip {
   readonly clip: string;
   readonly weight: number;
   readonly speed: number;
+  /** Current Engine-derived sample time for a fresh controller realization. */
+  readonly timeSeconds?: number | undefined;
 }
 
 export interface AnimatedMeshPoseSample {
@@ -571,6 +573,8 @@ export class AnimatedMeshRegistry {
     // rejected creation must not publish an instance or consume a refcount.
     if (instance.playback?.kind === 'sample') {
       holdSample(instanceRecord, record, instance.playback.clip, instance.playback.normalizedTime);
+    } else if (instance.playback?.kind === 'samplePose') {
+      holdPose(instanceRecord, instance.playback);
     } else if (instance.playback) {
       applyPlaybackCommand(instanceRecord, instance.playback);
     }
@@ -587,6 +591,10 @@ export class AnimatedMeshRegistry {
         throw new AnimatedMeshApplyError(`setAnimatedMeshPlayback: missing defined asset ${instance.asset}`);
       }
       holdSample(instance, asset, command.clip, command.normalizedTime);
+      return;
+    }
+    if (command.kind === 'samplePose') {
+      holdPose(instance, command);
       return;
     }
     applyPlaybackCommand(instance, command);
@@ -1309,6 +1317,8 @@ function applyPlaybackCommand(
       return;
     case 'sample':
       throw new AnimatedMeshApplyError('sample playback must be applied through the animated mesh registry');
+    case 'samplePose':
+      throw new AnimatedMeshApplyError('sample pose playback must be applied through the animated mesh registry');
     case 'pause': {
       const action = currentAction(instance, 'pause');
       invalidateNaturalCompletion(instance);
@@ -1389,6 +1399,68 @@ function holdSample(
   );
 }
 
+/**
+ * Hold a complete blended pose on this isolated realization. The samples are
+ * already Engine-derived, so this only realizes them and never advances a
+ * controller or emits completion feedback.
+ */
+function holdPose(
+  instance: AnimatedMeshInstanceRecord,
+  command: Extract<AnimatedMeshPlaybackCommand, { readonly kind: 'samplePose' }>,
+): void {
+  const seen = new Set<string>();
+  let totalWeight = 0;
+  if (command.clips.length === 0 || command.clips.length > 4) {
+    throw new AnimatedMeshApplyError('sample pose requires one to four clips');
+  }
+  for (const sample of command.clips) {
+    if (!instance.actions.has(sample.clip)
+      || seen.has(sample.clip)
+      || !Number.isFinite(sample.timeSeconds)
+      || sample.timeSeconds < 0
+      || !Number.isFinite(sample.weight)
+      || sample.weight < 0
+      || sample.weight > 1) {
+      throw new AnimatedMeshApplyError('sample pose contains an invalid clip sample');
+    }
+    seen.add(sample.clip);
+    totalWeight += sample.weight;
+  }
+  if (Math.abs(totalWeight - 1) > 0.001) {
+    throw new AnimatedMeshApplyError('sample pose clip weights must sum to 1');
+  }
+  invalidateNaturalCompletion(instance);
+  instance.mixer.stopAllAction();
+  for (const sample of command.clips) {
+    const action = instance.actions.get(sample.clip)!;
+    action.reset();
+    action.enabled = true;
+    action.paused = false;
+    action.clampWhenFinished = true;
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.setEffectiveTimeScale(1);
+    action.setEffectiveWeight(sample.weight);
+    action.play();
+    action.time = sample.timeSeconds;
+    action.paused = true;
+  }
+  // Force Three to apply all clip values before the capture backend reads the
+  // cloned object's pose; zero elapsed time cannot advance the frozen state.
+  instance.mixer.update(0);
+  instance.currentClip = command.clips.reduce((best, sample) =>
+    best === null || sample.weight > best.weight ? sample : best, null as (typeof command.clips)[number] | null)?.clip ?? null;
+  // `samplePose` carries absolute per-clip seconds, so it cannot truthfully
+  // populate the single-clip normalized-sample readout. It is still a held
+  // pose, but not the legacy `sample` command's observation.
+  instance.heldSample = null;
+  instance.commandSelected = true;
+  instance.status = 'sampled';
+  instance.loop = 'once';
+  instance.speed = 1;
+  instance.weight = 1;
+  instance.controllerClips = [];
+}
+
 function applyControllerWeights(
   instance: AnimatedMeshInstanceRecord,
   clips: readonly AnimatedMeshControllerClip[],
@@ -1406,6 +1478,8 @@ function applyControllerWeights(
       || clip.weight > 1
       || !Number.isFinite(clip.speed)
       || clip.speed <= 0
+      || (clip.timeSeconds !== undefined
+        && (!Number.isFinite(clip.timeSeconds) || clip.timeSeconds < 0))
     ) {
       throw new AnimatedMeshApplyError('setAnimationControllerWeights: invalid clip sample');
     }
@@ -1435,6 +1509,7 @@ function applyControllerWeights(
     action.setEffectiveTimeScale(sample.speed);
     action.setEffectiveWeight(sample.weight);
     action.play();
+    if (sample.timeSeconds !== undefined) action.time = sample.timeSeconds;
   }
   instance.currentClip = clips.reduce((selected, clip) =>
     selected === null || clip.weight > selected.weight ? clip : selected, null as AnimatedMeshControllerClip | null)?.clip ?? null;
@@ -1474,15 +1549,30 @@ function playClip(
     }
   }
   action.play();
+  // A canonical baseline may start this newly realized action at a retained
+  // Engine timeline offset. Normal product commands omit it, so they preserve
+  // the ordinary Three playback behavior.
+  const restoredPastOneShotEnd = command.loop === 'once'
+    && command.startOffsetSeconds !== undefined
+    && command.startOffsetSeconds >= action.getClip().duration;
+  if (command.startOffsetSeconds !== undefined) {
+    action.time = restoredPastOneShotEnd
+      ? action.getClip().duration
+      : command.startOffsetSeconds;
+  }
+  // An installed baseline must never turn a past LoopOnce endpoint into a
+  // newly observed browser completion. Hold Three at its final pose instead;
+  // the Engine already owns the elapsed fact that made this terminal.
+  action.paused = restoredPastOneShotEnd || command.startPaused === true;
   instance.currentClip = command.clip;
   instance.heldSample = null;
   instance.controllerClips = [];
   instance.commandSelected = true;
-  instance.status = 'playing';
+  instance.status = restoredPastOneShotEnd ? 'stopped' : action.paused ? 'paused' : 'playing';
   instance.loop = command.loop;
   instance.speed = command.speed;
   instance.weight = command.weight;
-  if (command.loop === 'once') armNaturalCompletion(instance, action, command.clip);
+  if (command.loop === 'once' && !action.paused) armNaturalCompletion(instance, action, command.clip);
 }
 
 function invalidateNaturalCompletion(instance: AnimatedMeshInstanceRecord): void {

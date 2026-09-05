@@ -180,6 +180,11 @@ export class RendererPresentationHostSet {
         domains.push(degradedReceipt(domain, operations));
         continue;
       }
+      if (receipt.diagnostics.length === 0 && receipt.applied !== operations.length) {
+        this.#degrade(domain, 'apply', 'host did not acknowledge every requested operation');
+        domains.push(degradedReceipt(domain, operations));
+        continue;
+      }
       if (receipt.diagnostics.some((diagnostic) => diagnostic.code === 'hostFailure')) {
         this.#degrade(domain, 'apply', receipt.diagnostics[0]?.message ?? 'presentation host failure');
       }
@@ -188,7 +193,7 @@ export class RendererPresentationHostSet {
         configured: true,
         requested: operations.length,
         applied: receipt.applied,
-        outcome: presentationDomainOutcome(receipt),
+        outcome: presentationDomainOutcome(receipt, operations.length),
         diagnostics: receipt.diagnostics.map((diagnostic) => ({ domain, ...diagnostic })),
       });
     }
@@ -441,9 +446,10 @@ function frameReceipt(
 
 function presentationDomainOutcome(
   receipt: PresentationDomainReceipt,
+  requested: number,
 ): RendererPresentationDomainReceipt['outcome'] {
   if (receipt.diagnostics.some((diagnostic) => diagnostic.code === 'hostFailure')) return 'terminal';
-  if (receipt.diagnostics.length === 0) return 'applied';
+  if (receipt.diagnostics.length === 0 && receipt.applied === requested) return 'applied';
   return receipt.applied === 0 ? 'rejected_atomic' : 'partial';
 }
 

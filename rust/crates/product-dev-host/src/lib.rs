@@ -85,6 +85,10 @@ pub const MAX_OUTPUT_QUEUE_ITEMS: usize = 256;
 pub const MAX_OUTPUT_EVENT_BYTES: usize = 256 * 1024;
 /// Upper bound for one complete typed output before bounded SSE fragmentation.
 pub const MAX_OUTPUT_AGGREGATE_BYTES: usize = 16 * 1024 * 1024;
+/// Upper bound for one binding-to-completion retained baseline. A fresh
+/// attachment can reconstruct one current resource set at this size without
+/// widening the ordinary incremental output lane.
+pub const MAX_BASELINE_AGGREGATE_BYTES: usize = MAX_BUNDLE_BYTES;
 /// Payload target for one fragment. The serialized fragment envelope remains
 /// below `MAX_OUTPUT_EVENT_BYTES` even when JSON quotes and escapes the slice.
 pub const MAX_OUTPUT_FRAGMENT_DATA_BYTES: usize = 96 * 1024;

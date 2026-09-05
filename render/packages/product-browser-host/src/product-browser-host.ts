@@ -1827,22 +1827,7 @@ export async function mountProductBrowserHostWithApplication(
             if (receipt.outcome === 'rejected_atomic' && output.frame['publication'] !== undefined) {
               const diagnostic = receipt.diagnostics.map((entry) => entry.message).join('; ')
                 || 'renderer rejected a published frame';
-              if (recoveryFailure === null) {
-                recoveryFailure = new ProductBrowserHostError('output_failed', diagnostic);
-              }
-              if (projectionRecovery === null || outputEpoch > projectionRecovery.fromEpoch) {
-                beginProjectionRecovery(outputEpoch);
-                if (transport.recoverOutputProjection === undefined) {
-                  failAndClose(new ProductBrowserHostError(
-                    'transport_failed',
-                    'runtime transport did not provide the required fresh output recovery',
-                  ), 'transport_failed');
-                } else {
-                  void transport.recoverOutputProjection().catch((cause: unknown) => {
-                    recoverOrClose(cause, 'transport_failed');
-                  });
-                }
-              }
+              requestPublishedProjectionRecovery(outputEpoch, diagnostic);
               return;
             }
             if (!productBrowserAtomicReceiptMayContinue(receipt.outcome)) {
@@ -1882,6 +1867,19 @@ export async function mountProductBrowserHostWithApplication(
         case 'presentation':
           enqueueRendererOutput(async () => {
             const receipt = await host.renderer.applyPresentation(output.frame);
+            // `unavailableHost` is emitted only for a domain without a host.
+            // It is an optional realization capability and does not invalidate
+            // the retained presentation projection. Every other diagnostic is
+            // from a configured domain that did not realize the publication.
+            const configuredDiagnostics = receipt.diagnostics.filter((diagnostic) => (
+              diagnostic.code !== 'unavailableHost'
+            ));
+            if (output.frame['publication'] !== undefined && configuredDiagnostics.length > 0) {
+              const diagnostic = configuredDiagnostics.map((entry) => entry.message).join('; ')
+                || 'renderer did not apply configured presentation';
+              requestPublishedProjectionRecovery(outputEpoch, diagnostic);
+              return;
+            }
             if (!productBrowserPresentationReceiptMayContinue(receipt.outcome)) {
               // Preserve the existing terminal presentation posture, but give
               // the fixed audio-feedback lane one serialized attempt first so
@@ -1934,6 +1932,27 @@ export async function mountProductBrowserHostWithApplication(
     rendererProjectionEpoch += 1;
     if (state === 'ready') state = 'degraded';
     publishHealth();
+  };
+
+  const requestPublishedProjectionRecovery = (
+    epoch: number,
+    diagnostic: string,
+  ): void => {
+    if (recoveryFailure === null) {
+      recoveryFailure = new ProductBrowserHostError('output_failed', diagnostic);
+    }
+    if (projectionRecovery !== null && epoch <= projectionRecovery.fromEpoch) return;
+    beginProjectionRecovery(epoch);
+    if (transport.recoverOutputProjection === undefined) {
+      failAndClose(new ProductBrowserHostError(
+        'transport_failed',
+        'runtime transport did not provide the required fresh output recovery',
+      ), 'transport_failed');
+      return;
+    }
+    void transport.recoverOutputProjection().catch((cause: unknown) => {
+      recoverOrClose(cause, 'transport_failed');
+    });
   };
 
   const applyProjectionBaseline = (

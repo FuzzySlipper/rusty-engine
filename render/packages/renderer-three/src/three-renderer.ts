@@ -318,6 +318,26 @@ interface PreparedFrameResources {
   readonly textures: Map<number, RetainedTextureResource | null>;
 }
 
+/**
+ * A disposable, private realization of an Engine-captured graphics frame.
+ *
+ * Ghost capture uses this only to reconstruct frozen source geometry and
+ * captured lighting. It deliberately exposes no projection, host, canvas, or
+ * publication authority.
+ */
+export interface ThreeRendererIsolatedCaptureScene {
+  readonly scene: THREE.Scene;
+  objectFor(handle: RenderHandle): THREE.Object3D | undefined;
+  sceneFor(handle: RenderHandle): THREE.Scene | undefined;
+  dispose(): void;
+}
+
+/** Immutable mounted-host defaults used only by a disposable ghost capture. */
+export interface ThreeRendererIsolatedCaptureLighting {
+  createWorldLights(): readonly THREE.Light[];
+  createViewmodelLights(): readonly THREE.Light[];
+}
+
 /** A retained static mesh definition: shared resources plus a live-instance count. */
 interface StaticMeshDef {
   readonly geometry: THREE.BufferGeometry;
@@ -391,6 +411,7 @@ export class ThreeRenderer {
   readonly #meshResourceSource: MeshResourceSource | undefined;
   readonly #textureResourceSource: TextureResourceSource | undefined;
   readonly #animatedMeshSource: AnimatedMeshAssetSource | undefined;
+  readonly #isolatedCaptureLighting: ThreeRendererIsolatedCaptureLighting | undefined;
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
   readonly #maximumActiveShadowLights: number;
@@ -423,6 +444,8 @@ export class ThreeRenderer {
     meshResourceSource?: MeshResourceSource;
     textureResourceSource?: TextureResourceSource;
     animatedMeshSource?: AnimatedMeshAssetSource;
+    /** Browser-host neutral lighting recreated for each isolated ghost capture. */
+    isolatedCaptureLighting?: ThreeRendererIsolatedCaptureLighting;
     shadowsEnabled?: boolean;
     maximumActiveShadowLights?: number;
     /** Complete-replacement stream continuation points installed before the recovered frame. */
@@ -434,6 +457,7 @@ export class ThreeRenderer {
     this.#meshResourceSource = options.meshResourceSource;
     this.#textureResourceSource = options.textureResourceSource;
     this.#animatedMeshSource = options.animatedMeshSource;
+    this.#isolatedCaptureLighting = options.isolatedCaptureLighting;
     this.#animatedMeshes = new AnimatedMeshRegistry(this.#animatedMeshSource);
     this.#shadowsEnabled = options.shadowsEnabled ?? false;
     this.#maximumActiveShadowLights = options.maximumActiveShadowLights
@@ -461,6 +485,49 @@ export class ThreeRenderer {
     this.viewmodelScene.name = 'viewmodel';
     this.scene.add(this.#sceneGroup, this.#debugGroup, this.#uiGroup);
     this.viewmodelScene.add(this.#viewmodelGroup);
+  }
+
+  /**
+   * Realize an Engine-retained capture frame in a short-lived private scene.
+   * The captured frame is a complete reconstruction input, so its incremental
+   * publication is intentionally not adopted by this disposable renderer.
+   */
+  createIsolatedCaptureScene(frame: RenderFrameDiff): ThreeRendererIsolatedCaptureScene {
+    if (this.#disposed) throw new RendererDisposedError();
+    if (this.#terminalError !== null) throw this.#terminalError;
+    const isolated = new ThreeRenderer({
+      ...(this.#meshBufferSource === undefined ? {} : { meshBufferSource: this.#meshBufferSource }),
+      ...(this.#meshResourceSource === undefined ? {} : { meshResourceSource: this.#meshResourceSource }),
+      ...(this.#textureResourceSource === undefined ? {} : { textureResourceSource: this.#textureResourceSource }),
+      ...(this.#animatedMeshSource === undefined ? {} : { animatedMeshSource: this.#animatedMeshSource }),
+      shadowsEnabled: this.#shadowsEnabled,
+      maximumActiveShadowLights: this.#maximumActiveShadowLights,
+    });
+    try {
+      if (this.#isolatedCaptureLighting !== undefined) {
+        isolated.scene.add(...this.#isolatedCaptureLighting.createWorldLights());
+        isolated.viewmodelScene.add(...this.#isolatedCaptureLighting.createViewmodelLights());
+      }
+      isolated.establishBaseline(
+        Object.freeze({ schemaVersion: 1 as const, ops: frame.ops }),
+        Object.freeze([]),
+      );
+    } catch (cause) {
+      isolated.dispose();
+      throw cause;
+    }
+    return Object.freeze({
+      scene: isolated.scene,
+      objectFor: (handle: RenderHandle) => isolated.objectFor(handle),
+      sceneFor: (handle: RenderHandle) => {
+        const object = isolated.objectFor(handle);
+        if (object === undefined) return undefined;
+        return isolated.#layerForObject(object) === 'viewmodel'
+          ? isolated.viewmodelScene
+          : isolated.scene;
+      },
+      dispose: () => isolated.dispose(),
+    });
   }
 
   #layerGroup(layer: RenderLayer): THREE.Group {

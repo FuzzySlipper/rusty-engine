@@ -177,6 +177,7 @@ export interface RendererAnimationControllerClip {
   readonly clip: string;
   readonly weight: number;
   readonly speed: number;
+  readonly timeSeconds?: number | undefined;
 }
 
 export interface RendererAnimatedMeshProjectionOptions {

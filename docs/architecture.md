@@ -32,7 +32,8 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | ABI declarations | Rust | [`csharp-engine-abi`](../rust/crates/csharp-engine-abi) defines the C ABI and named function tables. |
 | Concrete Engine bridges | Rust | [`csharp-engine-services`](../rust/crates/csharp-engine-services) implements ABI-backed named capabilities. |
 | Retained graphics intent | Rust | `render-presentation::PresentationWorld` owns the committed graphics graph, snapshots, and publication revision. Existing appearance and voxel projectors feed typed changes into it. |
-| Session serialization and recovery facts | Rust | `runtime-session` owns the serialized runtime guard and mutation/scope/recovery vocabulary; `product-dev-host` adapts these to its development transport. |
+| Session serialization and recovery facts | Rust | `runtime-session` owns the serialized runtime guard, logical receipt, prepared replacement boundary, and recovery vocabulary; `product-dev-host` adapts these to its development transport. |
+| Runtime diagnostics | Rust | `runtime-diagnostics` owns bounded events, cursors, coalescing, and raw update attribution. The development host attaches its file/stderr writer to the shared sink. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
 | Safe C# contracts | Generated C# | [`Rusty.Engine`](../csharp/Rusty.Engine) compiles generated contracts and values from ignored `obj/Generated` output. |
 | Product bootstrap | Generated C# | [`Rusty.Engine.ProductGenerator`](../csharp/Rusty.Engine.ProductGenerator) produces the internal versioned bind path and service implementations for CoreCLR and NativeAOT. |
@@ -64,7 +65,7 @@ planning, rather than copying a volatile service table into this document.
    semantic input; it does not become a second game implementation.
 
 Ghost plates and standalone microvoxel objects illustrate this boundary. C#
-selects a retained `Appearance` source, placement, capture/configuration, and
+selects a retained `Graphics` appearance source, placement, capture/configuration, and
 ordinary material bindings. The Engine performs the retained capture or voxel
 mesh projection, owns renderer resources and cleanup, and returns copied
 observation/readout facts. Ghost direction uses an Engine-selected hard snap
@@ -88,7 +89,18 @@ continuation revision. The runtime session guard covers snapshot capture and
 the output cursor handover, so subsequent deltas follow that snapshot. A worker
 also serializes snapshot responses with output publication; the shell captures
 their ordered queue boundary before later ticks can advance the cursor. The
-presentation revision and transport cursor remain separate facts.
+presentation revision and transport cursor remain separate facts. Replacement preparation
+quiesces the old publisher before projection write ownership is acquired; a
+prepared replacement value carries that ordering into the host install call.
+The remaining typed logical-output and operation adapter extraction is tracked
+in #7788; ProductDev wire DTOs still belong to the serving adapter today.
+
+Complete baseline transfers use the existing ordered fragment protocol with a
+64 MiB aggregate bound. Their private staging preserves all fragments until the
+completion marker; the ordinary incremental lane retains its 16 MiB bound and
+256-event history. Lost or interrupted baseline fragments discard the staged
+projection. A large public baseline may exceed retained history, in which case
+cursor lag requests the complete private baseline instead of repairing a tail.
 
 The TS `render-projection` model has no Three or DOM dependency. A mounted
 `renderer-host` surface and its `renderer-three` backend share one neutral
@@ -97,12 +109,30 @@ realization. `product-browser-host` owns connection and attachment epochs;
 uncertain derived state uses a fresh baseline. This does not undo spatial
 mutations or make an uncertain C# callback safe to replay.
 
-The initial common world covers ordinary graphics and voxel render output.
-Camera, UI, and retained effects have read-only Engine snapshots alongside it.
-Exact audio/animation time anchoring and frozen ghost-capture reconstruction
-remain task #7779: current snapshots preserve retained intent, not elapsed GPU
-or browser playback history. Further ABI-owner extraction and TS cleanup are
-#7782; composition and the C# `Appearance` to `Graphics` rename are #7780.
+`PresentationWorld` also commits the retained audio/effect baseline and stamps
+auxiliary presentation deltas with the same revision as graphics. Named Rust
+mechanisms admit their state; the ABI adapter supplies their copied snapshots.
+The shared TS continuation advances when configured hosts apply their operations.
+Explicitly absent optional hosts do not strand unrelated graphics. A configured
+host's partial or rejected published delta requires a fresh baseline; its
+diagnostics remain visible.
+
+Playback cursors advance from admitted Engine update facts. Audio baselines
+resume loops and preserve paused or completed voices; direct sounds and emitter
+creation bursts are not replayed. Continuous emitters restart their cosmetic
+simulation from their retained descriptor. Animation baselines carry playback
+cursors and per-clip controller phases, suppressing historical cues and
+completion callbacks. Controller phase anchors initialize fresh realization;
+attached mixers and cue cursors advance together on browser display time without
+seeking on ordinary weight updates. A ghost plate retains its capture-time graphics subtree,
+resource definitions, lights, and sampled animation pose. The backend rebuilds
+its capture bank from that immutable input, including after a reconnect; only
+explicit recapture replaces the source pose.
+
+The public C# service is `Graphics`; `Appearance` remains a resource/fact name.
+Facts can form a hierarchy, so equipment and layered visuals compose with
+ordinary resources rather than feature-specific ABI calls. Runtime-generated
+mesh resource admission remains a separate Engine mechanism, tracked in #7787.
 
 ## Packaging and development
 

@@ -44,7 +44,7 @@ pub use entity_motion::{
     EntityMotionCommand, EntityMotionError, EntityMotionOutcome, EntityMotionReceipt,
     EntityMotionResolution, EntityMotionService, FirstPersonBasis, FirstPersonMotionCommand,
     FirstPersonMotionError, FirstPersonMotionInput, FirstPersonMotionReadout,
-    FirstPersonMotionReceipt, FirstPersonMotionService, FirstPersonPose,
+    FirstPersonMotionReceipt, FirstPersonMotionService, FirstPersonPose, MotionSpatialEntity,
 };
 pub use occlusion::{
     SpatialOcclusionError, SpatialOcclusionHit, SpatialOcclusionHitboxOverride,

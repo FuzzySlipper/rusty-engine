@@ -198,7 +198,7 @@ impl ProductDevWorkerDiagnostic {
             source: event.source().to_owned(),
             code: event.code().to_owned(),
             message: event.message().to_owned(),
-            runtime: event.runtime(),
+            runtime: event.runtime().map(Into::into),
             correlation: event.correlation().map(str::to_owned),
             fields: event
                 .fields()

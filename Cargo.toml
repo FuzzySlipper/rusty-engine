@@ -5,6 +5,7 @@ members = [
     "rust/crates/render-host-contracts",
     "rust/crates/renderer-webview-host",
     "rust/crates/product-dev-host",
+    "rust/crates/runtime-diagnostics",
     "rust/crates/runtime-session",
     "rust/crates/csharp-engine-abi",
     "rust/crates/csharp-engine-services",
@@ -49,6 +50,7 @@ edition = "2021"
 
 [workspace.dependencies]
 product-dev-host = { path = "rust/crates/product-dev-host" }
+runtime-diagnostics = { path = "rust/crates/runtime-diagnostics" }
 runtime-session = { path = "rust/crates/runtime-session" }
 csharp-engine-abi = { path = "rust/crates/csharp-engine-abi" }
 csharp-engine-services = { path = "rust/crates/csharp-engine-services" }

@@ -310,6 +310,61 @@ void test('renderer host maps only direct LoopOnce mixer completion into bounded
   }
 });
 
+void test('a reconstructed controller begins cue sampling at its retained clip phase', async () => {
+  const testGlobal = globalThis as unknown as { self: unknown };
+  const priorSelf = testGlobal.self;
+  testGlobal.self = globalThis;
+  try {
+    const projection = await createRendererAnimatedMeshProjection({
+      manifest: ANIMATED_MANIFEST,
+      resolveResource: fixtureResolver,
+    });
+    assert.equal(projection.applyFrame(sceneFrame()).applied, true);
+    const host = new RendererAnimationHost(projection, {
+      cues: [{
+        cueId: 'old-footfall', asset: ANIMATED_ASSET, clip: 'idle', atSeconds: 0.1,
+        signal: { domain: 'audio', id: 'footfall' },
+      }, {
+        cueId: 'next-footfall', asset: ANIMATED_ASSET, clip: 'idle', atSeconds: 0.55,
+        signal: { domain: 'audio', id: 'next-footfall' },
+      }],
+    });
+    const baseline = createFrame();
+    const operation = baseline.ops[0];
+    assert.ok(operation?.domain === 'animation' && operation.op.op === 'create');
+    assert.equal(host.applyPresentation({
+      ...baseline,
+      ops: [{
+        ...operation,
+        op: {
+          ...operation.op,
+          descriptor: {
+            ...operation.op.descriptor,
+            controller: {
+              ...operation.op.descriptor.controller,
+              clipPhases: [{ clip: 'idle', timeSeconds: 0.5 }],
+            },
+          },
+        },
+      }],
+    }).applied, 1);
+    assert.deepEqual(host.advance(0.01).cues, []);
+    assert.equal(host.applyPresentation({
+      schemaVersion: 1,
+      ops: [{ domain: 'animation', meta: { sequence: 0 }, op: {
+        op: 'update', handle: animationProjectionHandle(1),
+        controller: { ...controller(1, null), clipPhases: [{ clip: 'idle', timeSeconds: 50 }] },
+      } }],
+    }).applied, 1);
+    assert.deepEqual(host.advance(0.05).cues.map((cue) => cue.cueId), ['next-footfall']);
+    assert.ok(Math.abs((projection.playback(renderHandle(4100)).actionTimeSeconds ?? 0) - 0.56) < 1e-6);
+    assert.equal(projection.playback(renderHandle(4100)).controllerClips
+      .some((clip) => clip.timeSeconds !== undefined), false);
+  } finally {
+    testGlobal.self = priorSelf;
+  }
+});
+
 void test('animation host isolates missing targets and clips with typed diagnostics', async () => {
   const testGlobal = globalThis as unknown as { self: unknown };
   const priorSelf = testGlobal.self;

@@ -76,6 +76,8 @@ impl PresentationOp {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PresentationFrameDiff {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<render_model::RenderFramePublication>,
     pub schema_version: u32,
     pub ops: Vec<PresentationOp>,
 }
@@ -90,6 +92,7 @@ impl PresentationFrameDiff {
     pub const fn new() -> Self {
         Self {
             schema_version: PRESENTATION_FRAME_SCHEMA_VERSION,
+            publication: None,
             ops: Vec::new(),
         }
     }
@@ -97,6 +100,7 @@ impl PresentationFrameDiff {
     pub fn try_from_ops(ops: Vec<PresentationOp>) -> Result<Self, PresentationFrameError> {
         let frame = Self {
             schema_version: PRESENTATION_FRAME_SCHEMA_VERSION,
+            publication: None,
             ops,
         };
         frame.validate()?;
@@ -109,6 +113,16 @@ impl PresentationFrameDiff {
                 self.schema_version,
             ));
         }
+        if let Some(publication) = &self.publication {
+            if publication.stream.trim().is_empty()
+                || publication.stream.len() > 256
+                || publication.revision > JSON_SAFE_U64_MAX
+                || publication.base_revision.checked_add(1) != Some(publication.revision)
+                || publication.operation_count as usize != self.ops.len()
+            {
+                return Err(PresentationFrameError::InvalidPublication);
+            }
+        }
         for (index, op) in self.ops.iter().enumerate() {
             let expected = u32::try_from(index).map_err(|_| PresentationFrameError::TooManyOps)?;
             let actual = op.meta().sequence;
@@ -118,6 +132,37 @@ impl PresentationFrameDiff {
             validate_json_safe_integers(op, actual)?;
         }
         Ok(())
+    }
+
+    /// Events newly emitted by the current operation may accompany its full
+    /// baseline once. They are never copied into retained recovery state.
+    pub fn transient_events(&self) -> Self {
+        let mut ops = Vec::new();
+        for op in &self.ops {
+            let meta = PresentationOpMeta::new(ops.len() as u32);
+            match op {
+                PresentationOp::Audio {
+                    op: op @ AudioProjectionOp::Emit { .. },
+                    ..
+                } => {
+                    ops.push(PresentationOp::Audio {
+                        meta,
+                        op: op.clone(),
+                    });
+                }
+                PresentationOp::Particle {
+                    op: op @ ParticleProjectionOp::Emit { .. },
+                    ..
+                } => {
+                    ops.push(PresentationOp::Particle {
+                        meta,
+                        op: op.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        Self { ops, ..Self::new() }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -141,6 +186,7 @@ impl PresentationFrameDiff {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresentationFrameError {
+    InvalidPublication,
     UnsupportedSchemaVersion(u32),
     TooManyOps,
     NonContiguousSequence {
@@ -179,6 +225,16 @@ fn validate_json_safe_integers(
             AudioProjectionOp::Create { handle, descriptor } => {
                 json_safe(handle.raw(), sequence, "audio.handle")?;
                 validate_audio(descriptor, sequence)
+            }
+            AudioProjectionOp::Restore {
+                handle,
+                descriptor,
+                cursor_seconds,
+                ..
+            } => {
+                json_safe(handle.raw(), sequence, "audio.handle")?;
+                validate_audio(descriptor, sequence)?;
+                nonnegative_f64(*cursor_seconds, sequence, "audio.cursorSeconds")
             }
             AudioProjectionOp::Update { handle, patch } => {
                 json_safe(handle.raw(), sequence, "audio.handle")?;
@@ -260,8 +316,20 @@ fn validate_json_safe_integers(
                 }
                 Ok(())
             }
-            GhostPlateProjectionOp::Recapture { handle, capture } => {
+            GhostPlateProjectionOp::Recapture {
+                handle,
+                capture,
+                captured_scene,
+            } => {
                 json_safe(handle.raw(), sequence, "ghostPlate.handle")?;
+                if let Some(scene) = captured_scene {
+                    scene
+                        .validate()
+                        .map_err(|_| PresentationFrameError::InvalidDescriptor {
+                            sequence,
+                            field: "ghostPlate.capturedScene",
+                        })?;
+                }
                 capture.as_ref().map_or(Ok(()), |capture| {
                     validate_ghost_plate_capture(capture, sequence)
                 })
@@ -284,6 +352,14 @@ fn validate_ghost_plate(
     descriptor: &GhostPlateDescriptor,
     sequence: u32,
 ) -> Result<(), PresentationFrameError> {
+    if let Some(scene) = &descriptor.captured_scene {
+        scene
+            .validate()
+            .map_err(|_| PresentationFrameError::InvalidDescriptor {
+                sequence,
+                field: "ghostPlate.capturedScene",
+            })?;
+    }
     json_safe(descriptor.source.raw(), sequence, "ghostPlate.source")?;
     validate_ghost_plate_placement(&descriptor.placement, sequence)?;
     validate_ghost_plate_capture(&descriptor.capture, sequence)?;
@@ -726,6 +802,18 @@ fn finite_f32(
     field: &'static str,
 ) -> Result<(), PresentationFrameError> {
     if value.is_finite() {
+        Ok(())
+    } else {
+        Err(PresentationFrameError::NonFiniteNumber { sequence, field })
+    }
+}
+
+fn nonnegative_f64(
+    value: f64,
+    sequence: u32,
+    field: &'static str,
+) -> Result<(), PresentationFrameError> {
+    if value.is_finite() && value >= 0.0 {
         Ok(())
     } else {
         Err(PresentationFrameError::NonFiniteNumber { sequence, field })

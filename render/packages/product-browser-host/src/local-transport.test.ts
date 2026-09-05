@@ -982,6 +982,67 @@ test('large retained output fragments publish once after complete ordered reasse
   adapter.dispose();
 });
 
+test('private connection baseline admits a bounded resource set beyond the steady-state output limit', () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const batches: unknown[][] = [];
+  adapter.subscribeOutputBatches?.((outputs) => batches.push([...outputs]));
+  const stream = FakeEventSource.instances[0]!;
+  const encoded = JSON.stringify({
+    kind: 'runtime-output-batch',
+    outputs: [
+      { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' },
+      { kind: 'frame', frame: { payload: 'x'.repeat(96 * 1024 * 257) } },
+    ],
+  });
+  const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
+  assert.ok(chunks.length > 256, 'the baseline exceeds the normal retained event count');
+  chunks.forEach((data, fragmentIndex) => stream.emitFragment({
+    schemaVersion: 1,
+    transferId: '1',
+    runtime: RUNTIME,
+    fragmentIndex,
+    fragmentCount: chunks.length,
+    aggregateBytes: new TextEncoder().encode(encoded).byteLength,
+    data,
+  }, ''));
+  assert.equal(batches.length, 0, 'no partial connection baseline is realized');
+  stream.emitBaseline(result('connect'), '');
+  assert.equal(batches.length, 1);
+  assert.equal(((batches[0]?.[1] as { frame: { payload: string } }).frame.payload).length, 96 * 1024 * 257);
+  adapter.dispose();
+});
+
+test('interrupted private connection baseline never installs a partial projection', () => {
+  FakeEventSource.instances.length = 0;
+  const batches: unknown[][] = [];
+  const failures: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  adapter.subscribeOutputBatches?.((outputs) => batches.push([...outputs]));
+  adapter.subscribeTerminalFailures?.((failure) => failures.push(failure));
+  const stream = FakeEventSource.instances[0]!;
+  stream.emitFragment({
+    schemaVersion: 1,
+    transferId: '1',
+    runtime: RUNTIME,
+    fragmentIndex: 0,
+    fragmentCount: 2,
+    aggregateBytes: 196_608,
+    data: 'x'.repeat(98_304),
+  }, '');
+  stream.emitBaseline(result('connect'), '');
+  assert.deepEqual(batches, []);
+  assert.equal(failures.length, 1);
+  assert.equal(stream.closed, true);
+  adapter.dispose();
+});
+
 test('corrupt completed fragment replacement does not publish the corrupt batch', () => {
   FakeEventSource.instances.length = 0;
   const outputs: unknown[] = [];

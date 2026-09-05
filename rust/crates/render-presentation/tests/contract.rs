@@ -8,6 +8,7 @@ fn audio() -> AudioSourceDescriptor {
         clip: AudioClipRef {
             asset: "audio/pulse".into(),
             content_hash: "aa".into(),
+            duration_seconds: None,
         },
         bus: AudioBus::Sfx,
         volume: 0.8,
@@ -110,6 +111,8 @@ fn animation_state(revision: u64) -> AnimationControllerProjectionState {
         state_id: "idle".into(),
         revision,
         controller_tick: revision,
+        phase_seconds: revision as f64 * 0.016,
+        clip_phases: vec![],
         motion: ResolvedAnimationMotion {
             clip_a: "idle".into(),
             clip_b: None,
@@ -407,6 +410,7 @@ fn frame_rejects_sequence_gaps_and_unknown_fields() {
 fn frame_rejects_presentation_identities_outside_the_json_safe_range() {
     let unsafe_value = (1_u64 << 53) + 1;
     let frame = PresentationFrameDiff {
+        publication: None,
         schema_version: PRESENTATION_FRAME_SCHEMA_VERSION,
         ops: vec![PresentationOp::Billboard {
             meta: PresentationOpMeta::new(0),

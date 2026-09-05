@@ -6,6 +6,7 @@ import type {
   GhostPlatePatch,
   GhostPlateProjectionOp,
   PresentationFrameDiff,
+  RenderFrameDiff,
 } from '@rusty-engine/render-contracts';
 
 export interface RendererGhostPlateOperationReceipt {
@@ -38,7 +39,7 @@ export interface RendererGhostPlatePresentationReadout {
 export interface RendererGhostPlatePresentation {
   create(descriptor: GhostPlateDescriptor): RendererGhostPlateOperationReceipt;
   update(patch: GhostPlatePatch): RendererGhostPlateOperationReceipt;
-  recapture(capture: GhostPlateCaptureSettings | null): RendererGhostPlateOperationReceipt;
+  recapture(capture: GhostPlateCaptureSettings | null, capturedScene?: RenderFrameDiff): RendererGhostPlateOperationReceipt;
   destroy(): RendererGhostPlateOperationReceipt;
   readout(): RendererGhostPlatePresentationReadout;
   dispose(): void;
@@ -137,7 +138,7 @@ export class RendererGhostPlateHost {
         return receipt.applied ? { applied: true } : this.#rejected(sequence, handle, receipt.diagnostics[0]?.code ?? 'hostFailure', receipt.diagnostics[0]?.message ?? 'ghost plate update failed');
       }
       if (operation.op === 'recapture') {
-        const receipt = presentation.recapture(operation.capture);
+        const receipt = presentation.recapture(operation.capture, operation.capturedScene);
         return receipt.applied ? { applied: true } : this.#rejected(sequence, handle, receipt.diagnostics[0]?.code ?? 'hostFailure', receipt.diagnostics[0]?.message ?? 'ghost plate recapture failed');
       }
       const receipt = presentation.destroy();

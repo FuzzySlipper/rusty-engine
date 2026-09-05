@@ -392,6 +392,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
     let demandCalls = 0;
     let freshOutputRecoveries = 0;
     let activePublicationRevision = 0;
+    let presentationDomainConfigured = false;
     const transport = {
       lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
         accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
@@ -457,6 +458,21 @@ test('host swaps a recovered output projection before applying current-epoch tra
           }
           return { outcome: 'applied' as const, diagnostics: [] };
         },
+        applyPresentation: async () => ({
+          applied: 0,
+          outcome: 'rejected_atomic' as const,
+          diagnostics: [presentationDomainConfigured
+            ? {
+              domain: 'audio' as const,
+              code: 'hostFailure',
+              message: 'configured audio presentation was not realized',
+            }
+            : {
+              domain: 'audio' as const,
+              code: 'unavailableHost',
+              message: 'audio presentation was requested without a configured host',
+            }],
+        }),
       },
       input: {
         sampleController: () => 0,
@@ -555,6 +571,38 @@ test('host swaps a recovered output projection before applying current-epoch tra
         ops: [],
       },
     ]);
+    publish([{
+      kind: 'presentation',
+      frame: {
+        schemaVersion: 1,
+        publication: { stream: 'presentation-world', baseRevision: 7, revision: 8, operationCount: 0 },
+        ops: [],
+      },
+    } as never], { epoch: 2, baseline: false, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      freshOutputRecoveries,
+      1,
+      'an absent optional presentation host does not invalidate an otherwise usable projection',
+    );
+    assert.equal(host.readout().state, 'ready');
+
+    presentationDomainConfigured = true;
+    publish([{
+      kind: 'presentation',
+      frame: {
+        schemaVersion: 1,
+        publication: { stream: 'presentation-world', baseRevision: 8, revision: 9, operationCount: 0 },
+        ops: [],
+      },
+    } as never], { epoch: 2, baseline: false, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      freshOutputRecoveries,
+      2,
+      'a configured presentation domain rejection requests one fresh projection baseline',
+    );
+    assert.equal(host.readout().state, 'degraded');
     await host.dispose();
   } finally {
     Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });

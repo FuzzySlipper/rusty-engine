@@ -5,6 +5,7 @@ use render_presentation::*;
 
 fn descriptor(source: u64) -> GhostPlateDescriptor {
     GhostPlateDescriptor {
+        captured_scene: None,
         source: RenderHandle::new(source),
         placement: GhostPlatePlacement {
             transform: Transform::IDENTITY,
@@ -103,4 +104,74 @@ fn ghost_plate_projection_is_typed_source_bound_and_batch_atomic() {
         })
     ));
     assert_eq!(projector.readout().active_plates, 1);
+}
+
+#[test]
+fn canonical_capture_survives_source_changes_and_explicit_recapture_replaces_it() {
+    use render_model::{Geometry, RenderDiff, RenderFrameDiff, RenderNode};
+    let mut world = PresentationWorld::default();
+    let source = RenderHandle::new(7);
+    world
+        .apply(&RenderFrameDiff {
+            ops: vec![RenderDiff::Create {
+                handle: source,
+                parent: None,
+                node: RenderNode::new(Geometry::Cube),
+            }],
+            ..RenderFrameDiff::new()
+        })
+        .unwrap();
+    let create = PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
+        meta: PresentationOpMeta::new(0),
+        op: GhostPlateProjectionOp::Create {
+            handle: GhostPlateHandle::new(3),
+            descriptor: descriptor(7),
+        },
+    }])
+    .unwrap();
+    let first = world.apply_presentation(&create).unwrap();
+    world.retain_effects(vec![create.clone()]);
+    let capture = match &first.ops[0] {
+        PresentationOp::GhostPlate {
+            op: GhostPlateProjectionOp::Create { descriptor, .. },
+            ..
+        } => descriptor.captured_scene.clone().unwrap(),
+        _ => unreachable!(),
+    };
+    world
+        .apply(&RenderFrameDiff {
+            ops: vec![RenderDiff::Update {
+                handle: source,
+                transform: Some(Transform {
+                    translation: [10.0, 0.0, 0.0],
+                    ..Transform::IDENTITY
+                }),
+                material: None,
+                visible: None,
+                metadata: None,
+            }],
+            ..RenderFrameDiff::new()
+        })
+        .unwrap();
+    world.retain_effects(vec![create.clone()]);
+    let baseline = world.effects_snapshot();
+    assert!(
+        matches!(&baseline[0].ops[0], PresentationOp::GhostPlate { op: GhostPlateProjectionOp::Create { descriptor, .. }, .. } if descriptor.captured_scene.as_ref() == Some(&capture))
+    );
+    let recapture = world
+        .apply_presentation(
+            &PresentationFrameDiff::try_from_ops(vec![PresentationOp::GhostPlate {
+                meta: PresentationOpMeta::new(0),
+                op: GhostPlateProjectionOp::Recapture {
+                    handle: GhostPlateHandle::new(3),
+                    capture: None,
+                    captured_scene: None,
+                },
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&recapture.ops[0], PresentationOp::GhostPlate { op: GhostPlateProjectionOp::Recapture { captured_scene: Some(next), .. }, .. } if next != &capture)
+    );
 }

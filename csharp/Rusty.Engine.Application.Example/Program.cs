@@ -3,6 +3,19 @@ using Rusty.Engine.Application;
 
 // This executable is a focused helper proof harness, not a recommended product root or architecture template.
 var engine = new ExampleEngineContext();
+LookConfig lookConfig = new(1f, 1f, -0.5f, 0.5f, 2f, true, false, true);
+LookState lookBefore = new(0.25f, -0.25f);
+LookReceipt looked = Look.Integrate(new LookRequest(
+    lookBefore,
+    new System.Numerics.Vector2(0.75f, 1f),
+    lookConfig));
+Require(MathF.Abs(looked.After.YawRadians + 0.5f) < 0.0001f, "managed look did not preserve horizontal inversion");
+Require(looked.After.PitchRadians == 0.5f, "managed look did not preserve pitch clamp");
+Require(MathF.Abs(looked.Forward.Length() - 1f) < 0.0001f, "managed look did not preserve its basis");
+Require(
+    Look.Diagnose(new LookRequest(lookBefore, new System.Numerics.Vector2(3f, 0f), lookConfig))
+        == LookDiagnostic.DeltaLimitExceeded,
+    "managed look did not preserve the delta-limit diagnostic");
 var scheduler = new SimulationScheduler();
 var defaultOrder = new List<string>();
 var defaultPipeline = new UpdatePipeline(engine);
@@ -180,7 +193,6 @@ static void Require(bool condition, string message)
 sealed class ExampleEngineContext : IEngineContext
 {
     public IDiagnosticsService Diagnostics => throw new NotSupportedException();
-    public ILookService Look => throw new NotSupportedException();
     public IAudioService Audio => throw new NotSupportedException();
     public IDynamicsService Dynamics => throw new NotSupportedException();
     public IMotionService Motion => throw new NotSupportedException();
@@ -194,7 +206,7 @@ sealed class ExampleEngineContext : IEngineContext
     public IContentService Content => throw new NotSupportedException();
     public IAuthoredContentService AuthoredContent => throw new NotSupportedException();
     public IContentStoreService ContentStore => throw new NotSupportedException();
-    public IAppearanceService Appearance => throw new NotSupportedException();
+    public IGraphicsService Graphics => throw new NotSupportedException();
     public IPresentationService Presentation => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();

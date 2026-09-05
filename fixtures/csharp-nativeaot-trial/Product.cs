@@ -176,8 +176,8 @@ public sealed class Product : IEngineProduct
                 reference.Path,
                 reference.Sha256 with { Word3 = reference.Sha256.Word3 ^ 1 })));
         }
-        _appearance = _engine.Appearance.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
-        Material createdMaterial = _engine.Appearance.CreateMaterial(new MaterialRequest(
+        _appearance = _engine.Graphics.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
+        Material createdMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
             new Color(0.25f, 0.75f, 1.0f, 1.0f),
             new RenderResourceHandle(0),
             0.5f,
@@ -185,12 +185,12 @@ public sealed class Product : IEngineProduct
             Vector3.Zero,
             0,
             false));
-        _engine.Appearance.UpdateMaterial(new MaterialUpdateRequest(createdMaterial, new MaterialRequest(
+        _engine.Graphics.UpdateMaterial(new MaterialUpdateRequest(createdMaterial, new MaterialRequest(
             new Color(0.5f, 0.5f, 1, 1), new RenderResourceHandle(0), 0.25f, new Color(1, 1, 1, 1), Vector3.Zero, 0, true)));
-        _material = _engine.Appearance.ReplaceMaterial(new MaterialUpdateRequest(createdMaterial, new MaterialRequest(
+        _material = _engine.Graphics.ReplaceMaterial(new MaterialUpdateRequest(createdMaterial, new MaterialRequest(
             new Color(1, 1, 1, 1), new RenderResourceHandle(0), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false)));
         createdMaterial.Dispose();
-        _voxelTopMaterial = _engine.Appearance.CreateMaterial(new MaterialRequest(
+        _voxelTopMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
             new Color(0.2f, 0.9f, 0.2f, 1), new RenderResourceHandle(0), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false));
         ExerciseMagicaVoxelAdmission();
         CameraDescriptor initialCamera = new(
@@ -462,7 +462,7 @@ public sealed class Product : IEngineProduct
         _started = true;
         _paused = false;
         PublishPresentation();
-        PresentationReadout presentation = _engine.Appearance.ReadPresentation();
+        PresentationReadout presentation = _engine.Graphics.ReadPresentation();
         Require(presentation.RetainedObjectCount == 1 && presentation.AppearanceCount == 1 && presentation.MaterialCount == 2, "appearance readout did not report retained Engine presentation facts");
     }
 
@@ -547,7 +547,7 @@ public sealed class Product : IEngineProduct
             }
             if (input.Kind == InputEventKind.PointerDelta)
             {
-                _look = _engine.Look.Integrate(new LookRequest(_look, new Vector2(input.X, input.Y), LookConfig())).After;
+                _look = Look.Integrate(new LookRequest(_look, new Vector2(input.X, input.Y), LookConfig())).After;
             }
             if (input.Kind == InputEventKind.DirectProductPayload)
             {
@@ -606,7 +606,7 @@ public sealed class Product : IEngineProduct
         // Release the retained Engine projection before its source leaves the
         // following complete snapshot.
         _ghostPlate.Dispose();
-        _engine.Appearance.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
+        _engine.Graphics.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
         _shutdown = true;
     }
 
@@ -1075,8 +1075,8 @@ public sealed class Product : IEngineProduct
         LookConfig config = new(1.0f, 1.0f, -0.5f, 0.5f, 2.0f, true, false, true);
         LookState initial = new(0.25f, -0.25f);
         LookRequest request = new(initial, new Vector2(0.75f, 1.0f), config);
-        Require(_engine.Look.Diagnose(request) == LookDiagnostic.Accepted, "look rejected a valid request");
-        LookReceipt integrated = _engine.Look.Integrate(request);
+        Require(Look.Diagnose(request) == LookDiagnostic.Accepted, "look rejected a valid request");
+        LookReceipt integrated = Look.Integrate(request);
         Require(integrated.Before == initial, "look receipt omitted the accumulated state before integration");
         Require(MathF.Abs(integrated.After.YawRadians + 0.5f) < 0.0001f, "look horizontal inversion did not reach Engine");
         Require(integrated.After.PitchRadians == config.MaximumPitchRadians, "look pitch clamp did not reach Engine");
@@ -1084,18 +1084,26 @@ public sealed class Product : IEngineProduct
         Require(MathF.Abs(integrated.Right.Length() - 1.0f) < 0.0001f, "look right basis was not normalized");
         Require(MathF.Abs(integrated.Up.Length() - 1.0f) < 0.0001f, "look up basis was not normalized");
 
-        LookReceipt rebased = _engine.Look.Rebase(new LookRebaseRequest(
+        LookReceipt rebased = Look.Rebase(new LookRebaseRequest(
             integrated.After,
             new LookState(MathF.Tau + 0.5f, 2.0f),
             config));
         Require(MathF.Abs(rebased.After.YawRadians - 0.5f) < 0.0001f, "look rebase did not normalize wrapped yaw");
         Require(rebased.After.PitchRadians == config.MaximumPitchRadians, "look rebase did not clamp pitch");
-        LookReceipt reset = _engine.Look.Reset(new LookResetRequest(rebased.After));
+        LookReceipt reset = Look.Reset(new LookResetRequest(rebased.After));
         Require(reset.Before == rebased.After && reset.After == default, "look reset did not preserve receipt or reset state");
 
         LookRequest rejected = new(initial, new Vector2(3.0f, 0.0f), config);
-        Require(_engine.Look.Diagnose(rejected) == LookDiagnostic.DeltaLimitExceeded, "look diagnostic lost delta-limit cause");
-        ExpectEngineFailure(() => _engine.Look.Integrate(rejected));
+        Require(Look.Diagnose(rejected) == LookDiagnostic.DeltaLimitExceeded, "look diagnostic lost delta-limit cause");
+        try
+        {
+            Look.Integrate(rejected);
+            throw new InvalidOperationException("managed look accepted an excessive delta");
+        }
+        catch (ArgumentException)
+        {
+            // Pure managed request validation no longer crosses the native ABI.
+        }
     }
 
     private void ExerciseDynamics()
@@ -1460,12 +1468,12 @@ public sealed class Product : IEngineProduct
     {
         if (_turns >= 2)
         {
-            _engine.Appearance.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
+            _engine.Graphics.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
             return;
         }
-        _engine.Appearance.PublishSnapshot(
+        _engine.Graphics.PublishSnapshot(
         [
-            new AppearanceFact(41, new Transform(new Vector3(_x, 0, 0), Quaternion.Identity, Vector3.One), _appearance, true, RenderLayer.Viewmodel),
+            new AppearanceFact(41, false, 0, new Transform(new Vector3(_x, 0, 0), Quaternion.Identity, Vector3.One), _appearance, true, RenderLayer.Viewmodel),
         ]);
     }
 }

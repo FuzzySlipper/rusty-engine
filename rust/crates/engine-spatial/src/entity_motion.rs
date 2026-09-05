@@ -13,6 +13,22 @@ pub struct EntityMotionCommand {
     pub delta: Vec3,
 }
 
+/// One explicit, call-local collider fact used by a motion resolution.
+///
+/// This is deliberately a spatial view, not an `EntityState` reconstruction.
+/// Callers that already own a retained entity world can continue to use
+/// [`EntityMotionService::resolve`]; bridges which only have copied collision
+/// facts use [`EntityMotionService::resolve_spatial_view`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionSpatialEntity {
+    pub entity: EntityId,
+    pub transform: EntityTransform,
+    pub bounds: BoundsComponent,
+    pub collision_enabled: bool,
+    pub collision_static: bool,
+    pub has_transform_parent: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EntityMotionOutcome {
     Moved { to: Vec3 },
@@ -50,6 +66,7 @@ pub enum EntityMotionError {
     MissingBounds { entity: EntityId },
     ParentedEntity { entity: EntityId },
     InvalidDelta { entity: EntityId },
+    InvalidSpatialView { entity: EntityId },
 }
 
 impl std::fmt::Display for EntityMotionError {
@@ -99,44 +116,66 @@ impl EntityMotionService {
             .transform(entity)
             .expect("transform eligibility checked")
             .translation;
-        let obstacles = active_obstacles(state, entity);
-        let mut position = from;
-        let mut blocked_axes = [false; 3];
-        let mut hit = None;
-        for (axis, blocked) in blocked_axes.iter_mut().enumerate() {
-            let step = axis_component(command.delta, axis);
-            if step == 0.0 {
-                continue;
-            }
-            let mut candidate = position;
-            set_axis(&mut candidate, axis, axis_component(position, axis) + step);
-            let mover_world = offset_bounds(mover_bounds, candidate);
-            if let Some((obstacle, _)) = obstacles
-                .iter()
-                .find(|(_, bounds)| overlaps(mover_world, *bounds))
-            {
-                *blocked = true;
-                hit.get_or_insert(*obstacle);
-            } else {
-                position = candidate;
-            }
-        }
-        let outcome = if !blocked_axes.iter().any(|blocked| *blocked) {
-            EntityMotionOutcome::Moved { to: position }
-        } else if position == from {
-            EntityMotionOutcome::Blocked { at: from }
-        } else {
-            EntityMotionOutcome::Slid {
-                to: position,
-                blocked_axes,
-            }
-        };
-        Ok(EntityMotionResolution {
+        Ok(resolve_spatial_motion(
             entity,
+            mover_bounds,
             from,
-            outcome,
-            hit,
-        })
+            active_obstacles(state, entity),
+            command.delta,
+        ))
+    }
+
+    /// Resolves copied transforms and collider bounds without constructing a
+    /// generic entity world. Collision math and admission remain native.
+    pub fn resolve_spatial_view(
+        self,
+        view: &[MotionSpatialEntity],
+        command: EntityMotionCommand,
+    ) -> Result<EntityMotionResolution, EntityMotionError> {
+        let entity = command.entity;
+        if !is_finite(command.delta) {
+            return Err(EntityMotionError::InvalidDelta { entity });
+        }
+        let mover = view
+            .iter()
+            .find(|candidate| candidate.entity == entity)
+            .copied()
+            .ok_or(EntityMotionError::MissingCollider { entity })?;
+        if !is_valid_spatial_entity(mover) {
+            return Err(EntityMotionError::InvalidSpatialView { entity });
+        }
+        if mover.has_transform_parent {
+            return Err(EntityMotionError::ParentedEntity { entity });
+        }
+        if !mover.collision_enabled {
+            return Err(EntityMotionError::MissingCollider { entity });
+        }
+        if mover.collision_static {
+            return Err(EntityMotionError::Transform(TransformError::Immovable {
+                entity,
+            }));
+        }
+        let mover_bounds = mover.bounds;
+        let from = mover.transform.translation;
+        let obstacles = view
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.entity != entity)
+            .filter(|candidate| is_valid_spatial_entity(*candidate) && candidate.collision_enabled)
+            .map(|candidate| {
+                (
+                    candidate.entity,
+                    offset_bounds(candidate.bounds, candidate.transform.translation),
+                )
+            })
+            .collect::<Vec<_>>();
+        Ok(resolve_spatial_motion(
+            entity,
+            mover_bounds,
+            from,
+            obstacles,
+            command.delta,
+        ))
     }
 
     pub fn apply(
@@ -174,6 +213,61 @@ impl EntityMotionService {
             transform,
         })
     }
+}
+
+fn resolve_spatial_motion(
+    entity: EntityId,
+    mover_bounds: BoundsComponent,
+    from: Vec3,
+    obstacles: Vec<(EntityId, BoundsComponent)>,
+    delta: Vec3,
+) -> EntityMotionResolution {
+    let mut position = from;
+    let mut blocked_axes = [false; 3];
+    let mut hit = None;
+    for (axis, blocked) in blocked_axes.iter_mut().enumerate() {
+        let step = axis_component(delta, axis);
+        if step == 0.0 {
+            continue;
+        }
+        let mut candidate = position;
+        set_axis(&mut candidate, axis, axis_component(position, axis) + step);
+        let mover_world = offset_bounds(mover_bounds, candidate);
+        if let Some((obstacle, _)) = obstacles
+            .iter()
+            .find(|(_, bounds)| overlaps(mover_world, *bounds))
+        {
+            *blocked = true;
+            hit.get_or_insert(*obstacle);
+        } else {
+            position = candidate;
+        }
+    }
+    let outcome = if !blocked_axes.iter().any(|blocked| *blocked) {
+        EntityMotionOutcome::Moved { to: position }
+    } else if position == from {
+        EntityMotionOutcome::Blocked { at: from }
+    } else {
+        EntityMotionOutcome::Slid {
+            to: position,
+            blocked_axes,
+        }
+    };
+    EntityMotionResolution {
+        entity,
+        from,
+        outcome,
+        hit,
+    }
+}
+
+fn is_valid_spatial_entity(entity: MotionSpatialEntity) -> bool {
+    is_finite(entity.transform.translation)
+        && is_finite(entity.bounds.min)
+        && is_finite(entity.bounds.max)
+        && entity.bounds.min.x <= entity.bounds.max.x
+        && entity.bounds.min.y <= entity.bounds.max.y
+        && entity.bounds.min.z <= entity.bounds.max.z
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use render_model::{RenderAssetError, RenderAssetKind, RenderHandle};
+use render_model::{
+    AnimatedMeshClipPose, AnimatedMeshPlaybackCommand, RenderAssetError, RenderAssetKind,
+    RenderHandle,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -29,7 +32,7 @@ impl AnimationProjectionHandle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnimationControllerProjectionState {
     pub entity: u64,
@@ -38,9 +41,30 @@ pub struct AnimationControllerProjectionState {
     pub state_id: String,
     pub revision: u64,
     pub controller_tick: u64,
+    /// The current unscaled controller phase supplied by Rust's admitted
+    /// presentation timeline. A renderer uses it to seed a fresh realization,
+    /// then may interpolate locally until the next Engine publication.
+    #[serde(default, skip_serializing_if = "phase_seconds_is_zero")]
+    pub phase_seconds: f64,
+    /// Per-clip current samples preserve activation semantics across state
+    /// changes and transitions. `phase_seconds` remains a legacy fallback for
+    /// older frames that did not carry explicit clip phases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip_phases: Vec<AnimationControllerClipPhase>,
     pub motion: ResolvedAnimationMotion,
     pub transition: Option<AnimationTransitionState>,
     pub transition_fact: Option<AnimationTransitionFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimationControllerClipPhase {
+    pub clip: String,
+    pub time_seconds: f64,
+}
+
+fn phase_seconds_is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 impl From<&AnimationControllerState> for AnimationControllerProjectionState {
@@ -52,6 +76,8 @@ impl From<&AnimationControllerState> for AnimationControllerProjectionState {
             state_id: state.current_state_id.clone(),
             revision: state.revision,
             controller_tick: state.controller_tick,
+            phase_seconds: 0.0,
+            clip_phases: Vec::new(),
             motion: state.motion.clone(),
             transition: state.transition.clone(),
             transition_fact: state.transition_fact.clone(),
@@ -59,7 +85,147 @@ impl From<&AnimationControllerState> for AnimationControllerProjectionState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl AnimationControllerProjectionState {
+    fn from_state_with_tick_duration(
+        state: &AnimationControllerState,
+        tick_duration_millis: u32,
+    ) -> Self {
+        let mut projection = Self::from(state);
+        projection.phase_seconds =
+            state.controller_tick as f64 * f64::from(tick_duration_millis) / 1_000.0;
+        projection.clip_phases = initial_clip_phases(state);
+        projection
+    }
+
+    /// Converts the current controller state into a renderer-neutral frozen
+    /// pose. `phase_seconds` must come from the Engine presentation timeline
+    /// at capture time; this method neither ticks the controller nor observes
+    /// a browser clock.
+    pub fn frozen_pose(&self, phase_seconds: f64) -> AnimatedMeshPlaybackCommand {
+        let mut clips = BTreeMap::<String, (f64, f32)>::new();
+        let transition_progress = self.transition.as_ref().map_or(0.0, |transition| {
+            if transition.duration_ticks == 0 {
+                1.0
+            } else {
+                (transition.elapsed_ticks as f32 / transition.duration_ticks as f32).clamp(0.0, 1.0)
+            }
+        });
+        append_frozen_motion(
+            &mut clips,
+            &self.motion,
+            self,
+            phase_seconds,
+            1.0 - transition_progress,
+        );
+        if let Some(transition) = &self.transition {
+            append_frozen_motion(
+                &mut clips,
+                &transition.target_motion,
+                self,
+                phase_seconds,
+                transition_progress,
+            );
+        }
+        let clips = clips
+            .into_iter()
+            .filter_map(|(clip, (time_seconds, weight))| {
+                (weight > 0.0).then_some(AnimatedMeshClipPose {
+                    clip,
+                    time_seconds,
+                    weight,
+                })
+            })
+            .collect();
+        AnimatedMeshPlaybackCommand::SamplePose { clips }
+    }
+}
+
+fn append_frozen_motion(
+    samples: &mut BTreeMap<String, (f64, f32)>,
+    motion: &ResolvedAnimationMotion,
+    controller: &AnimationControllerProjectionState,
+    fallback_phase_seconds: f64,
+    multiplier: f32,
+) {
+    let blend_b = motion.blend_weight_milli as f32 / BLEND_WEIGHT_SCALE as f32;
+    let speed = f64::from(motion.speed_milli) / f64::from(BLEND_WEIGHT_SCALE);
+    let mut append = |clip: &str, weight: f32| {
+        if weight <= 0.0 {
+            return;
+        }
+        samples
+            .entry(clip.to_owned())
+            .and_modify(|existing| existing.1 += weight)
+            .or_insert((
+                controller
+                    .clip_phases
+                    .iter()
+                    .find(|phase| phase.clip == clip)
+                    .map(|phase| phase.time_seconds)
+                    .unwrap_or(fallback_phase_seconds * speed),
+                weight,
+            ));
+    };
+    append(&motion.clip_a, multiplier * (1.0 - blend_b));
+    if let Some(clip_b) = &motion.clip_b {
+        append(clip_b, multiplier * blend_b);
+    }
+}
+
+fn initial_clip_phases(state: &AnimationControllerState) -> Vec<AnimationControllerClipPhase> {
+    active_motion_speeds(state)
+        .into_iter()
+        .map(|(clip, _)| AnimationControllerClipPhase {
+            clip,
+            time_seconds: 0.0,
+        })
+        .collect()
+}
+
+fn advance_clip_phases(
+    previous: &AnimationControllerProjectionState,
+    state: &AnimationControllerState,
+    tick_duration_millis: u32,
+) -> Vec<AnimationControllerClipPhase> {
+    let elapsed_ticks = state
+        .controller_tick
+        .saturating_sub(previous.controller_tick);
+    let elapsed_seconds = elapsed_ticks as f64 * f64::from(tick_duration_millis) / 1_000.0;
+    let previous_phases = previous
+        .clip_phases
+        .iter()
+        .map(|phase| (phase.clip.as_str(), phase.time_seconds))
+        .collect::<BTreeMap<_, _>>();
+    active_motion_speeds(state)
+        .into_iter()
+        .map(|(clip, speed)| AnimationControllerClipPhase {
+            time_seconds: previous_phases
+                .get(clip.as_str())
+                .copied()
+                .map_or(0.0, |prior| prior + elapsed_seconds * speed),
+            clip,
+        })
+        .collect()
+}
+
+fn active_motion_speeds(state: &AnimationControllerState) -> Vec<(String, f64)> {
+    let mut clips = BTreeMap::new();
+    append_motion_speeds(&mut clips, &state.motion);
+    if let Some(transition) = &state.transition {
+        append_motion_speeds(&mut clips, &transition.target_motion);
+    }
+    clips.into_iter().collect()
+}
+
+fn append_motion_speeds(clips: &mut BTreeMap<String, f64>, motion: &ResolvedAnimationMotion) {
+    let speed = f64::from(motion.speed_milli) / f64::from(BLEND_WEIGHT_SCALE);
+    clips.insert(motion.clip_a.clone(), speed);
+    if let Some(clip_b) = &motion.clip_b {
+        clips.insert(clip_b.clone(), speed);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnimationProjectionDescriptor {
     pub target: RenderHandle,
@@ -69,6 +235,18 @@ pub struct AnimationProjectionDescriptor {
     pub controller: AnimationControllerProjectionState,
 }
 
+impl AnimationProjectionDescriptor {
+    /// Produces one ordinary retained graphics operation for a frozen capture.
+    /// The caller appends it only to an isolated captured scene, never to the
+    /// live controller-driven world.
+    pub fn frozen_pose_operation(&self, phase_seconds: f64) -> render_model::RenderDiff {
+        render_model::RenderDiff::SetAnimatedMeshPlayback {
+            handle: self.target,
+            playback: self.controller.frozen_pose(phase_seconds),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnimationProjectionTarget {
     pub target: RenderHandle,
@@ -76,7 +254,7 @@ pub struct AnimationProjectionTarget {
     pub tick_duration_millis: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "op",
     rename_all = "camelCase",
@@ -243,7 +421,10 @@ impl AnimationProjector {
                     asset: state.asset_id.clone(),
                     content_hash: projection.content_hash,
                     tick_duration_millis: projection.tick_duration_millis,
-                    controller: state.into(),
+                    controller: AnimationControllerProjectionState::from_state_with_tick_duration(
+                        state,
+                        projection.tick_duration_millis,
+                    ),
                 },
             },
         )?;
@@ -270,14 +451,24 @@ impl AnimationProjector {
             self.retain_diagnostic(diagnostic.clone());
             return Err(diagnostic);
         };
+        let descriptor = self
+            .active
+            .get(&handle)
+            .expect("controller handle was checked above");
+        let mut controller = AnimationControllerProjectionState::from_state_with_tick_duration(
+            state,
+            descriptor.tick_duration_millis,
+        );
+        controller.clip_phases = advance_clip_phases(
+            &descriptor.controller,
+            state,
+            descriptor.tick_duration_millis,
+        );
         self.project(
             assets,
             targets,
             meta,
-            AnimationProjectionOp::Update {
-                handle,
-                controller: state.into(),
-            },
+            AnimationProjectionOp::Update { handle, controller },
         )
     }
 
@@ -432,6 +623,8 @@ fn validate_descriptor(
         || descriptor.controller.graph_id.is_empty()
         || descriptor.controller.graph_version == 0
         || descriptor.controller.state_id.is_empty()
+        || !descriptor.controller.phase_seconds.is_finite()
+        || descriptor.controller.phase_seconds < 0.0
     {
         return Err(AnimationProjectionDiagnosticCode::InvalidDescriptor);
     }
@@ -446,6 +639,18 @@ fn validate_descriptor(
     )
     .map_err(asset_diagnostic)?;
     validate_motion(&descriptor.controller.motion)?;
+    if descriptor.controller.clip_phases.len() > 4
+        || descriptor.controller.clip_phases.iter().any(|phase| {
+            phase.clip.is_empty() || !phase.time_seconds.is_finite() || phase.time_seconds < 0.0
+        })
+        || descriptor
+            .controller
+            .clip_phases
+            .windows(2)
+            .any(|pair| pair[0].clip >= pair[1].clip)
+    {
+        return Err(AnimationProjectionDiagnosticCode::InvalidDescriptor);
+    }
     if let Some(transition) = &descriptor.controller.transition {
         if transition.transition_id.is_empty()
             || transition.from_state_id != descriptor.controller.state_id

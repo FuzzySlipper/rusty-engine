@@ -149,6 +149,28 @@ class FakeContext {
   }
 }
 
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => { resolve = accept; });
+  return { promise, resolve };
+}
+
+class DeferredDecodeContext extends FakeContext {
+  readonly decodeStarted = deferred<void>();
+  readonly decoded = deferred<unknown>();
+
+  override async decodeAudioData(): Promise<unknown> {
+    this.decodeCount += 1;
+    this.decodeStarted.resolve();
+    return this.decoded.promise;
+  }
+}
+
 function descriptor(
   emitter: AudioSourceDescriptor['emitter'] = {
     kind: 'world3d',
@@ -156,7 +178,7 @@ function descriptor(
   },
 ): AudioSourceDescriptor {
   return {
-    clip: { asset: 'audio/primary-fire-pulse', contentHash: FIXTURE_AUDIO_HASH },
+    clip: { asset: 'audio/primary-fire-pulse', contentHash: FIXTURE_AUDIO_HASH, durationSeconds: 2 },
     bus: 'sfx',
     volume: 0.8,
     pitch: 1,
@@ -456,6 +478,68 @@ void test('retained voice controls retain logical state and reconstruct sources 
   assert.equal(retriggered.applied, 1);
   assert.equal(context.sources[1]?.stopped, true);
   assert.deepEqual(context.sources[2]?.starts, [{ when: 0, offset: 0 }]);
+});
+
+void test('restore realizes the Engine cursor without restarting paused or completed voices', async () => {
+  const context = new FakeContext();
+  const audio = host(context);
+  const playing = audioHandle(39);
+  const paused = audioHandle(40);
+  const completed = audioHandle(41);
+  const receipt = await audio.applyPresentation(frame([
+    operation(0, {
+      op: 'restore', handle: playing, descriptor: { ...descriptor(), looping: true },
+      desiredState: 'playing', cursorSeconds: 0.75,
+    }),
+    operation(1, {
+      op: 'restore', handle: paused, descriptor: descriptor(),
+      desiredState: 'paused', cursorSeconds: 2,
+    }),
+    operation(2, {
+      op: 'restore', handle: completed, descriptor: descriptor(),
+      desiredState: 'playing', cursorSeconds: 99,
+    }),
+  ]));
+
+  assert.equal(receipt.applied, 3);
+  assert.equal(receipt.readout.activeSources, 3);
+  assert.equal(context.sources.length, 2, 'only playing and decoded past-end voices allocate graphs');
+  assert.deepEqual(context.sources[0]?.starts, [{ when: 0, offset: 0.75 }]);
+  assert.equal(context.sources[1]?.started, false, 'a past-end restore must not restart');
+  assert.equal(context.sources[1]?.stopped, true, 'the temporary completed graph is disposed');
+  assert.equal(audio.realizedFacts().facts.length, 0, 'restore does not synthesize completion feedback');
+});
+
+void test('reset and disposal fence pending decode before an old graph can enter a new owner', async () => {
+  const resetContext = new DeferredDecodeContext();
+  const resetAudio = host(resetContext);
+  const pendingReset = resetAudio.applyPresentation(frame([
+    operation(0, { op: 'create', handle: audioHandle(61), descriptor: descriptor() }),
+  ]));
+  await resetContext.decodeStarted.promise;
+  resetAudio.reset();
+  resetContext.decoded.resolve({ decoded: true, duration: 2 });
+  const resetReceipt = await pendingReset;
+  assert.equal(resetReceipt.applied, 0);
+  assert.equal(resetContext.sources.length, 0, 'stale decode must not allocate a source graph');
+  assert.deepEqual(resetAudio.readout(), {
+    activeSources: 0, cachedClips: 1, emittedSignals: 0,
+    retainedDiagnosticCount: 0, evictedDiagnosticCount: 0, diagnostics: [],
+  });
+  assert.deepEqual(resetAudio.realizedFacts().facts, []);
+
+  const disposeContext = new DeferredDecodeContext();
+  const disposeAudio = host(disposeContext);
+  const pendingDispose = disposeAudio.applyPresentation(frame([
+    operation(0, { op: 'emit', signalHandle: audioSignalHandle(62), signalId: 'pending:62', descriptor: descriptor() }),
+  ]));
+  await disposeContext.decodeStarted.promise;
+  await disposeAudio.dispose();
+  disposeContext.decoded.resolve({ decoded: true, duration: 2 });
+  const disposeReceipt = await pendingDispose;
+  assert.equal(disposeReceipt.applied, 0);
+  assert.equal(disposeContext.sources.length, 0, 'disposed host must reject its delayed graph');
+  assert.deepEqual(disposeAudio.realizedFacts().facts, []);
 });
 
 void test('fixed bus controls own existing and future graph gain state', async () => {

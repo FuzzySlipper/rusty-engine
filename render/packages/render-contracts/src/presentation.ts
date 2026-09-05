@@ -1,6 +1,7 @@
 import {
   assertJsonSafeUnsignedInteger,
   type RenderHandle,
+  type RenderFrameDiff,
   type Transform,
   type Vec3,
   type Vec4,
@@ -43,6 +44,8 @@ export type AudioEmitter =
 export interface AudioClipRef {
   readonly asset: string;
   readonly contentHash: string;
+  /** Engine-admitted content duration when its playback timeline is known. */
+  readonly durationSeconds?: number;
 }
 
 export interface AudioSourceDescriptor {
@@ -68,6 +71,7 @@ export interface AudioSourcePatch {
 }
 
 export type AudioVoiceControl = 'pause' | 'resume' | 'retrigger';
+export type AudioVoiceDesiredState = 'playing' | 'paused';
 
 export type AudioBusControl =
   | { readonly kind: 'setVolume'; readonly volume: number }
@@ -82,6 +86,13 @@ export type AudioProjectionOp =
     readonly descriptor: AudioSourceDescriptor;
   }
   | { readonly op: 'create'; readonly handle: AudioHandle; readonly descriptor: AudioSourceDescriptor }
+  | {
+    readonly op: 'restore';
+    readonly handle: AudioHandle;
+    readonly descriptor: AudioSourceDescriptor;
+    readonly desiredState: AudioVoiceDesiredState;
+    readonly cursorSeconds: number;
+  }
   | { readonly op: 'update'; readonly handle: AudioHandle; readonly patch: AudioSourcePatch }
   | { readonly op: 'destroy'; readonly handle: AudioHandle }
   | { readonly op: 'voiceControl'; readonly handle: AudioHandle; readonly control: AudioVoiceControl }
@@ -374,9 +385,18 @@ export interface AnimationControllerProjectionState {
   readonly stateId: string;
   readonly revision: number;
   readonly controllerTick: number;
+  /** Current Engine timeline phase used to seed a fresh realization. */
+  readonly phaseSeconds?: number;
+  /** Current retained phase for each active controller clip. */
+  readonly clipPhases?: readonly AnimationControllerClipPhase[];
   readonly motion: ResolvedAnimationMotion;
   readonly transition: AnimationTransitionState | null;
   readonly transitionFact: AnimationTransitionFact | null;
+}
+
+export interface AnimationControllerClipPhase {
+  readonly clip: string;
+  readonly timeSeconds: number;
 }
 
 export interface AnimationProjectionDescriptor {
@@ -426,6 +446,12 @@ export interface GhostPlateConfig {
 export interface GhostPlateDescriptor {
   /** Stable Engine-owned retained appearance/object identity, not a backend handle. */
   readonly source: RenderHandle;
+  /**
+   * Immutable Engine-captured graphics input for this plate's frozen source.
+   * Omitted only for legacy providers, which retain the prior live-source
+   * capture behavior until they publish an explicit captured scene.
+   */
+  readonly capturedScene?: RenderFrameDiff;
   readonly placement: GhostPlatePlacement;
   readonly capture: GhostPlateCaptureSettings;
   readonly config: GhostPlateConfig;
@@ -439,7 +465,13 @@ export interface GhostPlatePatch {
 export type GhostPlateProjectionOp =
   | { readonly op: 'create'; readonly handle: GhostPlateHandle; readonly descriptor: GhostPlateDescriptor }
   | { readonly op: 'update'; readonly handle: GhostPlateHandle; readonly patch: GhostPlatePatch }
-  | { readonly op: 'recapture'; readonly handle: GhostPlateHandle; readonly capture: GhostPlateCaptureSettings | null }
+  | {
+    readonly op: 'recapture';
+    readonly handle: GhostPlateHandle;
+    readonly capture: GhostPlateCaptureSettings | null;
+    /** Replaces the frozen source only when the Engine publishes a new capture. */
+    readonly capturedScene?: RenderFrameDiff;
+  }
   | { readonly op: 'destroy'; readonly handle: GhostPlateHandle };
 
 export type PresentationOp =
@@ -451,6 +483,7 @@ export type PresentationOp =
   | { readonly domain: 'ghostPlate'; readonly meta: PresentationOpMeta; readonly op: GhostPlateProjectionOp };
 
 export interface PresentationFrameDiff {
+  readonly publication?: import('./render.js').RenderFramePublication;
   readonly schemaVersion: 1;
   readonly ops: readonly PresentationOp[];
 }

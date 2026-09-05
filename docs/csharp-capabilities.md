@@ -12,9 +12,15 @@ host, rendering, spatial, content, persistence, and platform mechanisms. The
 boundary is trusted first-party interop; its ceremony is limited to real ABI,
 memory, lifetime, and Engine-invariant concerns.
 
+`Look.Integrate`, `Look.Reset`, `Look.Rebase`, and `Look.Diagnose` are
+ordinary managed helpers. Their radian-based state/configuration and copied
+receipts require no native context service. `Motion` remains native collision
+resolution over a call-local `MotionSpatialEntity` view; it does not construct
+a second product entity world.
+
 ## Generated Engine services
 
-[`IEngineContext`](../csharp/Rusty.Engine) currently exposes 21 generated
+[`IEngineContext`](../csharp/Rusty.Engine) exposes generated named
 service families. The declarations originate in
 [`csharp-engine-abi`](../rust/crates/csharp-engine-abi), their implementations
 live in [`csharp-engine-services`](../rust/crates/csharp-engine-services), and
@@ -23,7 +29,6 @@ the ignored `obj/Generated` output is produced by
 
 | Family | Product-facing purpose |
 | --- | --- |
-| `Look` | Integrate, reset, rebase, and diagnose view rotation facts. |
 | `Dynamics` | Own native dynamics worlds, bodies, contacts, stepping, and collision binding. |
 | `Motion` | Resolve reusable motion requests. |
 | `Kinematic` | Integrate kinematic movement and run bounded motion operations. |
@@ -35,7 +40,7 @@ the ignored `obj/Generated` output is produced by
 | `VoxelScenePresentation` | Project Engine voxel scenes into retained renderer resources, including GreedyCubes face-directed material selection. |
 | `Content` | Read product content admitted by the host. |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
-| `Appearance` | Create and update renderer-owned materials, meshes, atlas sprites, synchronized sprite playback, lights, and appearance state. |
+| `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, synchronized sprite playback, lights, and retained appearance state. |
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
 | `Animation` | Own animation resources, graphs, controllers, parameters, and playback realization. |
 | `Audio` | Own audio clips, voices, control, and presentation feedback. |

@@ -64,7 +64,7 @@ public sealed class MotionEntityWorld
             ValidateGuard(expected, guard);
         }
 
-        MotionEntityRow[] rows = ProjectRows(guard.Components.Span);
+        MotionSpatialEntity[] rows = ProjectRows(guard.Components.Span);
         MotionResolveReceipt resolution = _motion.Resolve(new MotionResolveRequest(target.Value, delta, rows));
 
         // Resolve is pure. Rechecking managed facts after it returns prevents
@@ -108,9 +108,9 @@ public sealed class MotionEntityWorld
         return new MotionEntityWorldGuard(_entities.Revision, guards);
     }
 
-    private MotionEntityRow[] ProjectRows(ReadOnlySpan<MotionEntityWorldComponentGuard> guards)
+    private MotionSpatialEntity[] ProjectRows(ReadOnlySpan<MotionEntityWorldComponentGuard> guards)
     {
-        var rows = new MotionEntityRow[guards.Length];
+        var rows = new MotionSpatialEntity[guards.Length];
         for (int index = 0; index < guards.Length; index++)
         {
             EntityId entity = guards[index].Entity;
@@ -118,15 +118,14 @@ public sealed class MotionEntityWorld
             SpatialCollider collider = _entities.Get(entity, _colliders);
             // EntityWorld deliberately has no transform-parent component today,
             // so this managed projection truthfully supplies unparented roots.
-            rows[index] = new MotionEntityRow(
+            rows[index] = new MotionSpatialEntity(
                 entity.Value,
                 transform,
                 collider.Min,
                 collider.Max,
                 collider.Enabled,
                 collider.StaticCollider,
-                false,
-                default);
+                false);
         }
         return rows;
     }

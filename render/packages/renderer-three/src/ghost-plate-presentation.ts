@@ -1,10 +1,15 @@
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
-import type { GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlatePatch, RenderHandle } from '@rusty-engine/render-contracts';
+import type { GhostPlateCaptureSettings, GhostPlateConfig, GhostPlateDescriptor, GhostPlatePatch, RenderFrameDiff, RenderHandle } from '@rusty-engine/render-contracts';
 import { GhostPlateRuntimeCapture } from './ghost-plate-capture.js';
 import { GhostPlateDirectionalPresentation, GhostPlatePresentation, type GhostPlateConfig as ThreeGhostPlateConfig } from './ghost-plate.js';
+import type { ThreeRendererIsolatedCaptureScene } from './three-renderer.js';
 
-export interface RendererThreeGhostPlateBackend { readonly scene: THREE.Scene; objectFor(handle: RenderHandle): THREE.Object3D | undefined; }
+export interface RendererThreeGhostPlateBackend {
+  readonly scene: THREE.Scene;
+  objectFor(handle: RenderHandle): THREE.Object3D | undefined;
+  createIsolatedCaptureScene?(frame: RenderFrameDiff): ThreeRendererIsolatedCaptureScene;
+}
 export interface RendererThreeGhostPlateReceipt { readonly applied: boolean; readonly diagnostics: readonly { readonly code: string; readonly message: string }[]; }
 export interface RendererThreeGhostPlateReadout {
   readonly source: number; readonly sourceMatch: boolean; readonly currentSector: number; readonly localAzimuthDegrees: number | null;
@@ -41,10 +46,14 @@ export class RendererThreeGhostPlatePresentation {
     if (current === undefined) return rejected('inactive', 'ghost plate presentation is not active');
     return this.#replace(Object.freeze({ ...current, ...(patch.placement === undefined ? {} : { placement: patch.placement }), ...(patch.config === undefined ? {} : { config: patch.config }) }));
   }
-  recapture(capture: GhostPlateCaptureSettings | null): RendererThreeGhostPlateReceipt {
+  recapture(capture: GhostPlateCaptureSettings | null, capturedScene?: RenderFrameDiff): RendererThreeGhostPlateReceipt {
     const current = this.#active?.descriptor;
     if (current === undefined) return rejected('inactive', 'ghost plate presentation is not active');
-    return this.#replace(capture === null ? current : Object.freeze({ ...current, capture }));
+    return this.#replace(Object.freeze({
+      ...current,
+      ...(capture === null ? {} : { capture }),
+      ...(capturedScene === undefined ? {} : { capturedScene }),
+    }));
   }
   /** Called by the browser surface's ordinary render lifecycle. */
   prepare(camera: THREE.Camera): void { this.#active?.presentation.prepare(camera); }
@@ -80,12 +89,13 @@ export class RendererThreeGhostPlatePresentation {
     const previous = this.#active; if (previous !== null) this.#disposeActive(previous); this.#active = candidate; ghostCaptureBytesByRenderer.set(this.#webgl, retainedBytes + candidateBytes - currentBytes); this.#invalidate(); return applied();
   }
   #build(descriptor: GhostPlateDescriptor): ActiveGhostPlate {
-    const retained = this.#backend.objectFor(descriptor.source);
-    if (retained === undefined) throw new Error(`retained handle ${String(descriptor.source)} is unavailable`);
-    retained.updateWorldMatrix(true, true);
-    let appearanceRoot = SkeletonUtils.clone(retained); let frozenGeometries: readonly THREE.BufferGeometry[] = [];
+    const captureSource = this.#captureSource(descriptor);
+    let appearanceRoot: THREE.Object3D | null = null; let frozenGeometries: readonly THREE.BufferGeometry[] = [];
     const captures: GhostPlateRuntimeCapture[] = []; const plates: GhostPlatePresentation[] = []; let directional: GhostPlateDirectionalPresentation | null = null;
     try {
+      const retained = captureSource.object;
+      retained.updateWorldMatrix(true, true);
+      appearanceRoot = SkeletonUtils.clone(retained);
       removeClonedLights(appearanceRoot); appearanceRoot.matrix.copy(retained.matrixWorld); appearanceRoot.matrixAutoUpdate = false; appearanceRoot.visible = true;
       appearanceRoot.traverse((object) => { if (object instanceof THREE.Mesh) object.layers.enable(0); }); appearanceRoot.updateWorldMatrix(true, true);
       const frozen = freezeSkinnedMeshes(appearanceRoot); appearanceRoot = frozen.root; frozenGeometries = frozen.ownedGeometries; appearanceRoot.updateWorldMatrix(true, true);
@@ -95,7 +105,7 @@ export class RendererThreeGhostPlatePresentation {
       for (let sector = 0; sector < config.sectorCount; sector += 1) {
         const sectorAppearance = cloneFrozenAppearance(appearanceRoot); const scene = new THREE.Scene(); scene.add(sectorAppearance.root);
         const settings = Object.freeze({ ...descriptor.capture, azimuthDegrees: normalizedAzimuth(descriptor.capture.azimuthDegrees + sector * 360 / config.sectorCount) });
-        const camera = captureCamera(settings, center, size); const releaseLighting = settings.lighting.mode === 'scene' ? cloneSceneLights(this.#backend.scene, scene) : addStudioRig(scene, camera, center, size, settings.lighting);
+        const camera = captureCamera(settings, center, size); const releaseLighting = settings.lighting.mode === 'scene' ? cloneSceneLights(captureSource.scene, scene) : addStudioRig(scene, camera, center, size, settings.lighting);
         const capture = new GhostPlateRuntimeCapture(this.#webgl); captures.push(capture);
         const receipt = capture.capture({ scene, camera, width: settings.resolution, height: settings.resolution, bounds }); releaseLighting(); scene.remove(sectorAppearance.root);
         if (!receipt.applied || receipt.frame === null) { for (const geometry of sectorAppearance.ownedGeometries) geometry.dispose(); throw new Error(receipt.diagnostics[0]?.message ?? 'runtime capture failed'); }
@@ -107,9 +117,33 @@ export class RendererThreeGhostPlatePresentation {
       applyTransform(directional.object, descriptor.placement.transform);
       return Object.freeze({ descriptor, presentation: directional, captures: Object.freeze(captures), captureCpuSubmissionMilliseconds: captureTimesPresent ? totalCaptureMilliseconds : null });
     } catch (cause) {
-      directional?.dispose(); if (directional === null) { for (const plate of plates) plate.dispose(); disposeClonedSkeletons(appearanceRoot); for (const geometry of frozenGeometries) geometry.dispose(); }
+      directional?.dispose(); if (directional === null) { for (const plate of plates) plate.dispose(); if (appearanceRoot !== null) disposeClonedSkeletons(appearanceRoot); for (const geometry of frozenGeometries) geometry.dispose(); }
       for (const capture of captures) capture.dispose(); throw cause;
+    } finally {
+      // The retained ghost bank owns only its capture textures and cloned
+      // ghost materials. The temporary captured-scene renderer can therefore
+      // release its source geometry, materials, and resource borrows here.
+      captureSource.dispose();
     }
+  }
+
+  #captureSource(descriptor: GhostPlateDescriptor): { readonly scene: THREE.Scene; readonly object: THREE.Object3D; dispose(): void } {
+    if (descriptor.capturedScene === undefined) {
+      const object = this.#backend.objectFor(descriptor.source);
+      if (object === undefined) throw new Error(`retained handle ${String(descriptor.source)} is unavailable`);
+      return Object.freeze({ scene: this.#backend.scene, object, dispose: () => undefined });
+    }
+    const isolated = this.#backend.createIsolatedCaptureScene?.(descriptor.capturedScene);
+    if (isolated === undefined) {
+      throw new Error('backend cannot reconstruct an Engine-captured ghost scene');
+    }
+    const object = isolated.objectFor(descriptor.source);
+    const scene = isolated.sceneFor(descriptor.source);
+    if (object === undefined || scene === undefined) {
+      isolated.dispose();
+      throw new Error(`captured ghost scene does not retain handle ${String(descriptor.source)}`);
+    }
+    return Object.freeze({ scene, object, dispose: () => isolated.dispose() });
   }
   #disposeActive(active: ActiveGhostPlate, releaseAccounting = true): void { active.presentation.object.removeFromParent(); active.presentation.dispose(); for (const capture of active.captures) capture.dispose(); if (releaseAccounting) { const current = ghostCaptureBytesByRenderer.get(this.#webgl) ?? 0; ghostCaptureBytesByRenderer.set(this.#webgl, Math.max(0, current - captureBytes(active.descriptor))); } }
 }

@@ -192,6 +192,7 @@ fn frame_border_rejects_structured_descriptor_bounds_without_projector_state() {
         let mut descriptor = structured_descriptor();
         mutate(&mut descriptor);
         let frame = PresentationFrameDiff {
+            publication: None,
             schema_version: PRESENTATION_FRAME_SCHEMA_VERSION,
             ops: vec![PresentationOp::Billboard {
                 meta: PresentationOpMeta::new(0),
@@ -593,6 +594,7 @@ fn mixed_domain_structured_failure_does_not_commit_earlier_audio() {
                     clip: AudioClipRef {
                         asset: "audio/pulse".into(),
                         content_hash: "audio-hash".into(),
+                        duration_seconds: Some(2.0),
                     },
                     bus: AudioBus::Sfx,
                     volume: 0.8,
@@ -632,6 +634,7 @@ fn frame_rejects_nonfinite_structured_numbers_before_json_encoding() {
         indicator.meters[0].preview = Some(f32::NAN);
     }
     let frame = PresentationFrameDiff {
+        publication: None,
         schema_version: PRESENTATION_FRAME_SCHEMA_VERSION,
         ops: vec![PresentationOp::Billboard {
             meta: PresentationOpMeta::new(0),

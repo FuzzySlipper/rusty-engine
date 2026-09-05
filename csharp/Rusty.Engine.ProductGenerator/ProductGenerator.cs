@@ -115,7 +115,6 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 internal EngineContext(NativeEngineApi native, LeaseReleaseCoordinator leaseReleases)
                 {
                     Diagnostics = new DiagnosticsServiceImplementation(native.diagnostics);
-                    Look = new LookServiceImplementation(native.look);
                     Audio = new AudioServiceImplementation(native.audio);
                     Dynamics = new DynamicsServiceImplementation(native.dynamics, leaseReleases);
                     Motion = new MotionServiceImplementation(native.motion);
@@ -129,7 +128,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Content = new ContentServiceImplementation(native.content);
                     AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
                     ContentStore = new ContentStoreServiceImplementation(native.content_store);
-                    Appearance = new AppearanceServiceImplementation(native.appearance, leaseReleases);
+                    Graphics = new GraphicsServiceImplementation(native.graphics, leaseReleases);
                     Presentation = new PresentationServiceImplementation(native.presentation, leaseReleases);
                     Animation = new AnimationServiceImplementation(native.animation);
                     CameraView = new CameraViewServiceImplementation(native.camera_view, leaseReleases);
@@ -139,7 +138,6 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 }
 
                 public IDiagnosticsService Diagnostics { get; }
-                public ILookService Look { get; }
                 public IAudioService Audio { get; }
                 public IDynamicsService Dynamics { get; }
                 public IMotionService Motion { get; }
@@ -153,7 +151,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IContentService Content { get; }
                 public IAuthoredContentService AuthoredContent { get; }
                 public IContentStoreService ContentStore { get; }
-                public IAppearanceService Appearance { get; }
+                public IGraphicsService Graphics { get; }
                 public IPresentationService Presentation { get; }
                 public IAnimationService Animation { get; }
                 public ICameraViewService CameraView { get; }

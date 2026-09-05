@@ -95,6 +95,50 @@ void test('recovered publication frontiers continue through the Three renderer',
   assert.equal(renderer.objectFor(handle)?.name, 'recovered-voxel');
 });
 
+void test('isolated capture scenes realize a frozen frame without changing the live renderer', () => {
+  const renderer = new ThreeRenderer();
+  const handle = renderHandle(91);
+  const capture = renderer.createIsolatedCaptureScene({
+    schemaVersion: 1,
+    publication: {
+      stream: 'presentation-world', baseRevision: 24, revision: 25, operationCount: 1,
+    },
+    ops: [createDiff(handle, cubeNode('captured-ghost-source'))],
+  });
+
+  assert.equal(capture.objectFor(handle)?.name, 'captured-ghost-source');
+  assert.equal(renderer.objectFor(handle), undefined);
+  capture.dispose();
+  assert.equal(renderer.objectFor(handle), undefined);
+});
+
+void test('isolated capture scenes recreate mounted neutral lighting for world and viewmodel sources', () => {
+  const renderer = new ThreeRenderer({
+    isolatedCaptureLighting: {
+      createWorldLights: () => [new THREE.AmbientLight(0xffffff, 0.5)],
+      createViewmodelLights: () => [new THREE.DirectionalLight(0xffffff, 0.75)],
+    },
+  });
+  const worldHandle = renderHandle(92);
+  const world = renderer.createIsolatedCaptureScene({
+    schemaVersion: 1,
+    ops: [createDiff(worldHandle, cubeNode('captured-world-source'))],
+  });
+  assert.equal(world.sceneFor(worldHandle), world.scene);
+  assert.equal(world.scene.children.filter((child) => child instanceof THREE.Light).length, 1);
+  world.dispose();
+
+  const viewmodelHandle = renderHandle(93);
+  const viewmodelNode = { ...cubeNode('captured-viewmodel-source'), layer: 'viewmodel' as const };
+  const viewmodel = renderer.createIsolatedCaptureScene({
+    schemaVersion: 1,
+    ops: [createDiff(viewmodelHandle, viewmodelNode)],
+  });
+  assert.notEqual(viewmodel.sceneFor(viewmodelHandle), viewmodel.scene);
+  assert.equal(viewmodel.sceneFor(viewmodelHandle)?.children.filter((child) => child instanceof THREE.Light).length, 1);
+  viewmodel.dispose();
+});
+
 void test('a shared projection establishes once, rejects failed realization without advancing, then accepts its next delta', () => {
   const projection = new RenderProjection();
   const renderer = new ThreeRenderer({ projection });
@@ -4144,6 +4188,41 @@ void test('LoopOnce natural completion is mixer-event driven and rejects invalid
   });
   registry.define(asset);
   registry.create(handle, instance);
+
+  // A reconstructed retained direct playback starts at the Engine-selected
+  // cursor and remains paused without replaying the old pause command.
+  registry.setPlayback(handle, {
+    kind: 'play', clip: 'run', loop: 'repeat', speed: 1, weight: 1, restart: true,
+    fadeSeconds: null, startOffsetSeconds: 0.25, startPaused: true,
+  });
+  assert.equal(registry.playback(handle)?.status, 'paused');
+  assert.equal(registry.playback(handle)?.actionTimeSeconds, 0.25);
+  registry.advance(1);
+  assert.equal(registry.playback(handle)?.actionTimeSeconds, 0.25);
+  registry.setPlayback(handle, { kind: 'resume' });
+  registry.advance(0.25);
+  assert.equal(registry.playback(handle)?.actionTimeSeconds, 0.5);
+
+  // A fresh renderer which receives a baseline after an Engine-timed one-shot
+  // elapsed holds the terminal pose. It must not treat installation as a new
+  // natural completion and feed a duplicate event back into the product.
+  const restoredHandle = renderHandle(4811);
+  registry.create(restoredHandle, {
+    ...instance,
+    metadata: { ...instance.metadata, sourceEntity: null },
+    playback: {
+      kind: 'play', clip: 'run', loop: 'once', speed: 1, weight: 1, restart: true,
+      fadeSeconds: null, startOffsetSeconds: 2, startPaused: false,
+    },
+  });
+  const restored = registry.playback(restoredHandle)!;
+  assert.equal(restored.status, 'stopped');
+  assert.equal(
+    restored.actionTimeSeconds,
+    restored.effectiveClips.find((clip) => clip.id === 'run')?.durationSeconds,
+  );
+  registry.advance(1);
+  assert.deepEqual(completions.splice(0), []);
 
   // The actual Three mixer event completes exactly once; no time/status poll
   // can produce another observation after the token has been cleared.

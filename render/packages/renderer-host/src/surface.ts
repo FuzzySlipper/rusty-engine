@@ -1117,8 +1117,16 @@ function mountPreparedRendererSurface(
       backendSurface.sampleAnimatedMesh(handle, clipId, normalizedTime),
     applyFrame,
     applyPresentation: async (presentationFrame) => {
+      if (disposed) throw new Error('renderer surface is disposed');
+      projection.validatePublication(presentationFrame.publication, presentationFrame.ops.length);
       const receipt = await (presentationHosts ?? new RendererPresentationHostSet({}))
         .apply(presentationFrame);
+      if (disposed) throw new Error('renderer surface was disposed during presentation');
+      // An absent optional capability is explicit, but a configured host that
+      // failed to realize its operations needs a fresh committed baseline.
+      if (receipt.domains.every((domain) => !domain.configured || domain.outcome === 'applied')) {
+        projection.commitPublication(presentationFrame.publication, presentationFrame.ops.length);
+      }
       if (receipt.applied > 0) {
         requestAutomaticSubmission();
       }

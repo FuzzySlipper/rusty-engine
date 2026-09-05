@@ -91,12 +91,15 @@ const ROUTES = Object.freeze({
 const MAXIMUM_RUNTIME_RESPONSE_BYTES = 512 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES = 256 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_BYTES = 16 * 1024 * 1024;
+// A fresh, subscriber-private binding-to-completion baseline may carry one
+// complete retained resource set. It is staged until the cursorless baseline
+// completion arrives and never widens steady-state output delivery.
+const MAXIMUM_RUNTIME_BASELINE_BYTES = 64 * 1024 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES = 96 * 1024;
 // Mirrors ProductDevRendererDiagnosticsFeedback::MAX_SNAPSHOT_BYTES. Renderer
 // observations are not direct UI product payloads and have their own closed,
 // versioned transport budget.
 const MAXIMUM_RENDERER_DIAGNOSTICS_SNAPSHOT_BYTES = 256 * 1024;
-const MAXIMUM_RUNTIME_OUTPUT_FRAGMENTS = 256;
 const MAXIMUM_CONNECTION_BASELINE_OUTPUTS = 256;
 const DEFAULT_MAXIMUM_RESPONSE_BYTES = MAXIMUM_RUNTIME_RESPONSE_BYTES;
 const DEFAULT_MAXIMUM_OUTPUT_BYTES = MAXIMUM_RUNTIME_OUTPUT_BYTES;
@@ -383,6 +386,7 @@ export function createProductBrowserLocalHttpAdapter(
   let rejectConnectionReady: ((error: ProductBrowserLocalTransportError) => void) | null = null;
   let connectionBaselineComplete = false;
   let pendingConnectionOutputs: ProductBrowserRuntimeOutput[] = [];
+  let pendingConnectionBaselineBytes = 0;
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
   let nextOutputEpoch = 0;
   let currentOutputEpoch = 0;
@@ -504,6 +508,7 @@ export function createProductBrowserLocalHttpAdapter(
     }
     pendingFragment = null;
     pendingConnectionOutputs = [];
+    pendingConnectionBaselineBytes = 0;
     releaseOutputSequenceWaiters('closed');
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
@@ -544,6 +549,7 @@ export function createProductBrowserLocalHttpAdapter(
     streamBaselineListener = null;
     pendingFragment = null;
     pendingConnectionOutputs = [];
+    pendingConnectionBaselineBytes = 0;
     currentOutputBinding = null;
     connectionBaselineComplete = false;
     observedOutputSequence = 0n;
@@ -924,6 +930,7 @@ export function createProductBrowserLocalHttpAdapter(
   const stageOrPublishOutputBatch = (
     outputs: readonly ProductBrowserRuntimeOutput[],
     epoch: number,
+    encodedBytes: number,
   ): void => {
     if (connectionBaselineComplete) {
       const replacementBinding = outputs.find((output) => output.kind === 'binding');
@@ -944,6 +951,14 @@ export function createProductBrowserLocalHttpAdapter(
       throw new ProductBrowserLocalTransportError(
         'output_decode_failed',
         `Product Browser local runtime connection baseline exceeds ${String(MAXIMUM_CONNECTION_BASELINE_OUTPUTS)} outputs`,
+        { route: ROUTES.freshOutputs },
+      );
+    }
+    pendingConnectionBaselineBytes += encodedBytes;
+    if (pendingConnectionBaselineBytes > MAXIMUM_RUNTIME_BASELINE_BYTES) {
+      throw new ProductBrowserLocalTransportError(
+        'output_decode_failed',
+        `Product Browser local runtime connection baseline exceeds ${String(MAXIMUM_RUNTIME_BASELINE_BYTES)} bytes`,
         { route: ROUTES.freshOutputs },
       );
     }
@@ -1008,6 +1023,7 @@ export function createProductBrowserLocalHttpAdapter(
         void connectionReady.catch(() => undefined);
         connectionBaselineComplete = false;
         pendingConnectionOutputs = [];
+        pendingConnectionBaselineBytes = 0;
         const attachedStream = new eventSourceConstructor(`${basePath}${ROUTES.freshOutputs}`);
         const outputEpoch = nextOutputEpoch + 1;
         nextOutputEpoch = outputEpoch;
@@ -1067,9 +1083,12 @@ export function createProductBrowserLocalHttpAdapter(
         streamFragmentListener = (event) => {
           if (!ownsProjection()) return;
           try {
+            const maximumFragmentBytes = connectionBaselineComplete
+              ? maximumOutputBytes
+              : MAXIMUM_RUNTIME_BASELINE_BYTES;
             const fragment = decodeOutputFragment(
               parseBoundedJson(event.data, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
-              maximumOutputBytes,
+              maximumFragmentBytes,
             );
             if (currentOutputBinding === null && !connectionBaselineComplete) {
               currentOutputBinding = fragment.runtime;
@@ -1103,6 +1122,7 @@ export function createProductBrowserLocalHttpAdapter(
             pending.byteLength += new TextEncoder().encode(fragment.data).byteLength;
             pending.nextIndex += 1;
             let completedOutputs: readonly ProductBrowserRuntimeOutput[] | null = null;
+            let completedAggregateBytes = 0;
             if (pending.byteLength > pending.aggregateBytes) {
               throw new TypeError('output fragments exceed their declared aggregate length');
             }
@@ -1111,13 +1131,16 @@ export function createProductBrowserLocalHttpAdapter(
                 throw new TypeError('output fragment transfer ended before its declared aggregate length');
               }
               const encoded = pending.data.join('');
+              completedAggregateBytes = pending.aggregateBytes;
               pendingFragment = null;
-              completedOutputs = decodeRuntimeOutputBatch(parseBoundedJson(encoded, maximumOutputBytes));
+              completedOutputs = decodeRuntimeOutputBatch(parseBoundedJson(encoded, maximumFragmentBytes));
             }
             if (connectionBaselineComplete) {
               observeOutputSequence(event.lastEventId);
             }
-            if (completedOutputs !== null) stageOrPublishOutputBatch(completedOutputs, outputEpoch);
+            if (completedOutputs !== null) {
+              stageOrPublishOutputBatch(completedOutputs, outputEpoch, completedAggregateBytes);
+            }
           } catch (cause) {
             failFragmentStream(cause);
           }
@@ -1149,6 +1172,7 @@ export function createProductBrowserLocalHttpAdapter(
             connectionBaselineComplete = true;
             const baselineOutputs = pendingConnectionOutputs;
             pendingConnectionOutputs = [];
+            pendingConnectionBaselineBytes = 0;
             publishOutputBatch(baselineOutputs, {
               epoch: outputEpoch,
               baseline: true,
@@ -1190,7 +1214,11 @@ export function createProductBrowserLocalHttpAdapter(
             if (connectionBaselineComplete) {
               observeOutputSequence(event.lastEventId);
             }
-            stageOrPublishOutputBatch(outputs, outputEpoch);
+            stageOrPublishOutputBatch(
+              outputs,
+              outputEpoch,
+              new TextEncoder().encode(event.data).byteLength,
+            );
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
               ? cause
@@ -1207,6 +1235,7 @@ export function createProductBrowserLocalHttpAdapter(
           if (!connectionBaselineComplete) {
             pendingFragment = null;
             pendingConnectionOutputs = [];
+            pendingConnectionBaselineBytes = 0;
             currentOutputBinding = null;
           } else if (observedOutputSequence === 0n) {
             // An unnumbered completed baseline still fences a renderer
@@ -1234,6 +1263,7 @@ export function createProductBrowserLocalHttpAdapter(
         streamBaselineListener = null;
         pendingFragment = null;
         pendingConnectionOutputs = [];
+        pendingConnectionBaselineBytes = 0;
         releaseOutputSequenceWaiters('closed');
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
@@ -1270,6 +1300,7 @@ export function createProductBrowserLocalHttpAdapter(
         stream = null;
         pendingFragment = null;
         pendingConnectionOutputs = [];
+        pendingConnectionBaselineBytes = 0;
         releaseOutputSequenceWaiters('closed');
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
@@ -1382,6 +1413,7 @@ export function createProductBrowserLocalHttpAdapter(
     stream = null;
     pendingFragment = null;
     pendingConnectionOutputs = [];
+    pendingConnectionBaselineBytes = 0;
     releaseOutputSequenceWaiters('closed');
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
@@ -2196,9 +2228,12 @@ function decodeOutputFragment(
     'aggregateBytes', 'data',
   ], 'output fragment');
   if (record['schemaVersion'] !== 1) throw new TypeError('output fragment schemaVersion must equal 1');
+  const maximumFragments = Math.ceil(
+    maximumAggregateBytes / MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES,
+  );
   if (!Number.isSafeInteger(record['fragmentCount'])
     || (record['fragmentCount'] as number) < 2
-    || (record['fragmentCount'] as number) > MAXIMUM_RUNTIME_OUTPUT_FRAGMENTS) {
+    || (record['fragmentCount'] as number) > maximumFragments) {
     throw new TypeError('output fragment count is outside the retained stream bound');
   }
   const fragmentCount = record['fragmentCount'] as number;

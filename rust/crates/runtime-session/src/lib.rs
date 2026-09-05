@@ -1,7 +1,8 @@
 //! Host-neutral runtime-session ownership and recovery facts.
 //!
 //! A runtime session serializes access to one concrete runtime instance. It
-//! does not define operations, callbacks, output subscriptions, registries,
+//! owns logical receipts and prepared replacement boundaries, but does not
+//! define operation dispatch, callbacks, output subscriptions, registries,
 //! scheduling, or transport policy. Hosts retain those responsibilities and
 //! can keep a session lock across an atomic snapshot/cursor handover when
 //! their own publication contract requires it.
@@ -128,6 +129,43 @@ impl<R> RuntimeSession<R> {
     /// host to make a snapshot and output cursor capture one atomic handover.
     pub fn lock(&self) -> LockResult<MutexGuard<'_, R>> {
         self.runtime.lock()
+    }
+}
+
+/// An operation's owned result and logical outputs, independent of transport
+/// encoding, delivery cursors, queue bounds, and host DTOs.
+#[derive(Debug, Clone)]
+pub struct RuntimeReceipt<T, O> {
+    result: T,
+    outputs: Vec<O>,
+}
+
+impl<T, O> RuntimeReceipt<T, O> {
+    pub fn new(result: T, outputs: Vec<O>) -> Self {
+        Self { result, outputs }
+    }
+    pub fn result(&self) -> &T {
+        &self.result
+    }
+    pub fn into_parts(self) -> (T, Vec<O>) {
+        (self.result, self.outputs)
+    }
+}
+
+/// A replacement whose producer has been quiesced before projection install.
+/// Preparation must stop/join the previous publisher under its own session
+/// serialization. Only after that completes may a host acquire projection
+/// write ownership; an old reader may still need a projection read to finish
+/// acknowledging a snapshot boundary during preparation.
+pub struct PreparedRuntimeReplacement<T>(T);
+
+impl<T> PreparedRuntimeReplacement<T> {
+    pub fn prepare<E>(prepare: impl FnOnce() -> Result<T, E>) -> Result<Self, E> {
+        prepare().map(Self)
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
     }
 }
 

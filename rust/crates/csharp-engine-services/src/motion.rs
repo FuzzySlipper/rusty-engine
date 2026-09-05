@@ -2,8 +2,10 @@ use std::ffi::c_void;
 
 use core_ids::EntityId;
 use csharp_engine_abi::*;
-use engine_spatial::{EntityMotionCommand, EntityMotionOutcome, EntityMotionService};
-use entity_state::{EntityDefinition, EntityState, EntityTransform};
+use engine_spatial::{
+    EntityMotionCommand, EntityMotionOutcome, EntityMotionService, MotionSpatialEntity,
+};
+use entity_state::{BoundsComponent, EntityTransform};
 
 use crate::composition::{
     borrowed_slice, native_quat, native_quat_value, native_vec3, native_vec3_value,
@@ -30,21 +32,21 @@ fn resolve_motion(
             format!("motion request exceeded its {MAX_MOTION_ENTITIES}-entity bound"),
         ));
     }
-    let state = EntityState::from_definitions(rows.iter().map(native_entity))
-        .map_err(|error| motion_error("CSHARP_MOTION_ENTITY", error))?;
+    let view = rows.iter().map(native_spatial_entity).collect::<Vec<_>>();
     let resolution = EntityMotionService
-        .resolve(
-            &state,
+        .resolve_spatial_view(
+            &view,
             EntityMotionCommand {
                 entity: EntityId::new(request.target_entity_id),
                 delta: native_vec3_value(request.delta),
             },
         )
         .map_err(|error| motion_error("CSHARP_MOTION_RESOLVE", error))?;
-    let current = state
-        .transform(resolution.entity)
+    let current = view
+        .iter()
+        .find(|entity| entity.entity == resolution.entity)
         .expect("successful motion resolution retains target transform")
-        .transform();
+        .transform;
     let (outcome, blocked_axes) = match resolution.outcome {
         EntityMotionOutcome::Moved { .. } => (NativeMotionOutcome::Moved, [false; 3]),
         EntityMotionOutcome::Blocked { .. } => (
@@ -74,21 +76,18 @@ fn resolve_motion(
     })
 }
 
-fn native_entity(row: &NativeMotionEntityRow) -> EntityDefinition {
-    let mut entity = EntityDefinition::new(
-        EntityId::new(row.entity_id),
-        format!("product-{}", row.entity_id),
-    )
-    .with_full_transform(native_transform_value(row.transform))
-    .with_bounds(
-        native_vec3_value(row.bounds_min),
-        native_vec3_value(row.bounds_max),
-    )
-    .with_collision(row.collision_enabled, row.collision_static);
-    if row.has_transform_parent {
-        entity = entity.with_transform_parent(EntityId::new(row.transform_parent_id));
+fn native_spatial_entity(row: &NativeMotionSpatialEntity) -> MotionSpatialEntity {
+    MotionSpatialEntity {
+        entity: EntityId::new(row.entity_id),
+        transform: native_transform_value(row.transform),
+        bounds: BoundsComponent {
+            min: native_vec3_value(row.bounds_min),
+            max: native_vec3_value(row.bounds_max),
+        },
+        collision_enabled: row.collision_enabled,
+        collision_static: row.collision_static,
+        has_transform_parent: row.has_transform_parent,
     }
-    entity
 }
 
 fn native_transform_value(value: NativeTransform) -> EntityTransform {
@@ -149,8 +148,8 @@ mod tests {
         }
     }
 
-    fn row(entity_id: u64, x: f32, y: f32, static_collider: bool) -> NativeMotionEntityRow {
-        NativeMotionEntityRow {
+    fn row(entity_id: u64, x: f32, y: f32, static_collider: bool) -> NativeMotionSpatialEntity {
+        NativeMotionSpatialEntity {
             entity_id,
             transform: transform(x, y),
             bounds_min: NativeVec3 {
@@ -169,7 +168,10 @@ mod tests {
         }
     }
 
-    fn resolve(rows: &[NativeMotionEntityRow], delta: NativeVec3) -> NativeMotionResolveReceipt {
+    fn resolve(
+        rows: &[NativeMotionSpatialEntity],
+        delta: NativeVec3,
+    ) -> NativeMotionResolveReceipt {
         resolve_motion(&NativeMotionResolveRequest {
             target_entity_id: 1,
             delta,

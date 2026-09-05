@@ -20,9 +20,15 @@ export function decodeRenderFrameDiff(input: unknown): RenderFrameDiff {
     fail('$.schemaVersion', 'must equal 1');
   }
   const ops = list(frame['ops'], '$.ops');
-  if (frame['publication'] !== undefined) {
+  validatePublication(frame['publication'], ops.length);
+  ops.forEach((operation, index) => renderDiff(operation, `$.ops[${String(index)}]`));
+  return input as RenderFrameDiff;
+}
+
+function validatePublication(input: unknown, operationCount: number): void {
+  if (input !== undefined) {
     const publication = record(
-      frame['publication'],
+      input,
       '$.publication',
       ['stream', 'baseRevision', 'revision', 'operationCount'],
     );
@@ -40,12 +46,10 @@ export function decodeRenderFrameDiff(input: unknown): RenderFrameDiff {
       fail('$.publication.revision', 'must immediately follow baseRevision');
     }
     integer(publication['operationCount'], '$.publication.operationCount', 0, 4_294_967_295);
-    if (publication['operationCount'] !== ops.length) {
-      fail('$.publication.operationCount', `must equal ops length ${String(ops.length)}`);
+    if (publication['operationCount'] !== operationCount) {
+      fail('$.publication.operationCount', `must equal ops length ${String(operationCount)}`);
     }
   }
-  ops.forEach((operation, index) => renderDiff(operation, `$.ops[${String(index)}]`));
-  return input as RenderFrameDiff;
 }
 
 export function decodeRenderPublicationFrontiers(input: unknown): readonly RenderPublicationFrontier[] {
@@ -68,11 +72,12 @@ export function decodeRenderPublicationFrontiers(input: unknown): readonly Rende
 }
 
 export function decodePresentationFrameDiff(input: unknown): PresentationFrameDiff {
-  const frame = record(input, '$', ['schemaVersion', 'ops']);
+  const frame = recordOptional(input, '$', ['schemaVersion', 'ops'], ['publication']);
   if (frame['schemaVersion'] !== 1) {
     fail('$.schemaVersion', 'must equal 1');
   }
   const ops = list(frame['ops'], '$.ops');
+  validatePublication(frame['publication'], ops.length);
   ops.forEach((operation, index) => {
     const path = `$.ops[${String(index)}]`;
     const value = record(operation, path, ['domain', 'meta', 'op']);
@@ -762,15 +767,26 @@ function voxelObjectInstance(input: unknown, path: string): void {
 
 function playback(input: unknown, path: string): void {
   const base = looseRecord(input, path);
-  const kind = enumeration(base['kind'], `${path}.kind`, ['play', 'stop', 'sample', 'pause', 'resume'] as const);
+  const kind = enumeration(base['kind'], `${path}.kind`, ['play', 'stop', 'sample', 'samplePose', 'pause', 'resume'] as const);
   if (kind === 'play') {
-    const value = record(input, path, ['kind', 'clip', 'loop', 'speed', 'weight', 'restart', 'fadeSeconds']);
+    const value = recordOptional(
+      input,
+      path,
+      ['kind', 'clip', 'loop', 'speed', 'weight', 'restart', 'fadeSeconds'],
+      ['startOffsetSeconds', 'startPaused'],
+    );
     nonEmptyText(value['clip'], `${path}.clip`);
     enumeration(value['loop'], `${path}.loop`, ['once', 'repeat', 'pingPong'] as const);
     positiveFinite(value['speed'], `${path}.speed`);
     range(value['weight'], `${path}.weight`, 0, 1);
     booleanValue(value['restart'], `${path}.restart`);
     nullable(value['fadeSeconds'], `${path}.fadeSeconds`, nonNegativeFinite);
+    if (Object.hasOwn(value, 'startOffsetSeconds')) {
+      nonNegativeFinite(value['startOffsetSeconds'], `${path}.startOffsetSeconds`);
+    }
+    if (Object.hasOwn(value, 'startPaused')) {
+      booleanValue(value['startPaused'], `${path}.startPaused`);
+    }
   } else if (kind === 'stop') {
     const value = record(input, path, ['kind', 'fadeSeconds']);
     nullable(value['fadeSeconds'], `${path}.fadeSeconds`, nonNegativeFinite);
@@ -778,6 +794,23 @@ function playback(input: unknown, path: string): void {
     const value = record(input, path, ['kind', 'clip', 'normalizedTime']);
     nonEmptyText(value['clip'], `${path}.clip`);
     range(value['normalizedTime'], `${path}.normalizedTime`, 0, 1);
+  } else if (kind === 'samplePose') {
+    const value = record(input, path, ['kind', 'clips']);
+    const clips = list(value['clips'], `${path}.clips`);
+    if (clips.length === 0 || clips.length > 4) {
+      fail(`${path}.clips`, 'must contain one to four clip samples');
+    }
+    const names = new Set<string>();
+    let totalWeight = 0;
+    clips.forEach((sample, index) => {
+      const pose = record(sample, `${path}.clips[${String(index)}]`, ['clip', 'timeSeconds', 'weight']);
+      const clip = nonEmptyText(pose['clip'], `${path}.clips[${String(index)}].clip`);
+      if (names.has(clip)) fail(`${path}.clips[${String(index)}].clip`, 'must be unique');
+      names.add(clip);
+      nonNegativeFinite(pose['timeSeconds'], `${path}.clips[${String(index)}].timeSeconds`);
+      totalWeight += range(pose['weight'], `${path}.clips[${String(index)}].weight`, 0, 1);
+    });
+    if (Math.abs(totalWeight - 1) > 0.001) fail(`${path}.clips`, 'weights must sum to 1');
   } else {
     record(input, path, ['kind']);
   }
@@ -1071,9 +1104,10 @@ function ghostPlateOperation(op: string, input: unknown, path: string): void {
     if (patch['placement'] !== undefined) ghostPlatePlacement(patch['placement'], `${path}.patch.placement`);
     if (patch['config'] !== undefined) ghostPlateConfig(patch['config'], `${path}.patch.config`);
   } else if (op === 'recapture') {
-    const value = record(input, path, ['op', 'handle', 'capture']);
+    const value = recordOptional(input, path, ['op', 'handle', 'capture'], ['capturedScene']);
     handle(value['handle'], `${path}.handle`);
     nullable(value['capture'], `${path}.capture`, ghostPlateCapture);
+    if (value['capturedScene'] !== undefined) ghostPlateCapturedScene(value['capturedScene'], `${path}.capturedScene`);
   } else if (op === 'destroy') {
     const value = record(input, path, ['op', 'handle']);
     handle(value['handle'], `${path}.handle`);
@@ -1081,11 +1115,34 @@ function ghostPlateOperation(op: string, input: unknown, path: string): void {
 }
 
 function ghostPlateDescriptor(input: unknown, path: string): void {
-  const value = record(input, path, ['source', 'placement', 'capture', 'config']);
+  const value = recordOptional(input, path, ['source', 'placement', 'capture', 'config'], ['capturedScene']);
   handle(value['source'], `${path}.source`);
+  if (value['capturedScene'] !== undefined) ghostPlateCapturedScene(value['capturedScene'], `${path}.capturedScene`);
   ghostPlatePlacement(value['placement'], `${path}.placement`);
   ghostPlateCapture(value['capture'], `${path}.capture`);
   ghostPlateConfig(value['config'], `${path}.config`);
+}
+
+function ghostPlateCapturedScene(input: unknown, path: string): void {
+  const frame = recordOptional(input, path, ['schemaVersion', 'ops'], ['publication']);
+  if (frame['schemaVersion'] !== 1) fail(`${path}.schemaVersion`, 'must equal 1');
+  const ops = list(frame['ops'], `${path}.ops`);
+  const publication = frame['publication'];
+  if (publication !== undefined) {
+    const value = record(publication, `${path}.publication`, ['stream', 'baseRevision', 'revision', 'operationCount']);
+    const stream = text(value['stream'], `${path}.publication.stream`);
+    if (stream.trim().length === 0 || stream.length > 256) {
+      fail(`${path}.publication.stream`, 'must contain 1..=256 characters');
+    }
+    const baseRevision = integer(value['baseRevision'], `${path}.publication.baseRevision`, 0, JSON_SAFE_INTEGER_MAX);
+    const revision = integer(value['revision'], `${path}.publication.revision`, 0, JSON_SAFE_INTEGER_MAX);
+    if (revision !== baseRevision + 1) fail(`${path}.publication.revision`, 'must immediately follow baseRevision');
+    integer(value['operationCount'], `${path}.publication.operationCount`, 0, 4_294_967_295);
+    if (value['operationCount'] !== ops.length) {
+      fail(`${path}.publication.operationCount`, `must equal ops length ${String(ops.length)}`);
+    }
+  }
+  ops.forEach((operation, index) => renderDiff(operation, `${path}.ops[${String(index)}]`));
 }
 
 function ghostPlatePlacement(input: unknown, path: string): void {
@@ -1151,6 +1208,12 @@ function audioOperation(op: string, input: unknown, path: string): void {
     const value = record(input, path, ['op', 'handle', 'descriptor']);
     handle(value['handle'], `${path}.handle`);
     audioDescriptor(value['descriptor'], `${path}.descriptor`);
+  } else if (op === 'restore') {
+    const value = record(input, path, ['op', 'handle', 'descriptor', 'desiredState', 'cursorSeconds']);
+    handle(value['handle'], `${path}.handle`);
+    audioDescriptor(value['descriptor'], `${path}.descriptor`);
+    enumeration(value['desiredState'], `${path}.desiredState`, ['playing', 'paused'] as const);
+    nonNegativeFinite(value['cursorSeconds'], `${path}.cursorSeconds`);
   } else if (op === 'update') {
     const value = record(input, path, ['op', 'handle', 'patch']);
     handle(value['handle'], `${path}.handle`);
@@ -1194,9 +1257,12 @@ function audioDescriptor(input: unknown, path: string): void {
   const value = record(input, path, [
     'clip', 'bus', 'volume', 'pitch', 'looping', 'spatialBlend', 'attenuation', 'pan', 'emitter',
   ]);
-  const clip = record(value['clip'], `${path}.clip`, ['asset', 'contentHash']);
+  const clip = recordOptional(value['clip'], `${path}.clip`, ['asset', 'contentHash'], ['durationSeconds']);
   nonEmptyText(clip['asset'], `${path}.clip.asset`);
   nonEmptyText(clip['contentHash'], `${path}.clip.contentHash`);
+  if (clip['durationSeconds'] !== undefined) {
+    positiveFinite(clip['durationSeconds'], `${path}.clip.durationSeconds`);
+  }
   enumeration(value['bus'], `${path}.bus`, ['sfx', 'ambient', 'ui'] as const);
   range(value['volume'], `${path}.volume`, 0, 1);
   range(value['pitch'], `${path}.pitch`, 0.25, 4);
@@ -1658,16 +1724,33 @@ function animationOperation(op: string, input: unknown, path: string): void {
 }
 
 function animationController(input: unknown, path: string): void {
-  const value = record(input, path, [
+  const value = recordOptional(input, path, [
     'entity', 'graphId', 'graphVersion', 'stateId', 'revision', 'controllerTick',
     'motion', 'transition', 'transitionFact',
-  ]);
+  ], ['phaseSeconds', 'clipPhases']);
   safeInteger(value['entity'], `${path}.entity`);
   nonEmptyText(value['graphId'], `${path}.graphId`);
   nonNegativeInteger(value['graphVersion'], `${path}.graphVersion`);
   nonEmptyText(value['stateId'], `${path}.stateId`);
   safeInteger(value['revision'], `${path}.revision`);
   safeInteger(value['controllerTick'], `${path}.controllerTick`);
+  if (Object.hasOwn(value, 'phaseSeconds')) {
+    nonNegativeFinite(value['phaseSeconds'], `${path}.phaseSeconds`);
+  }
+  if (Object.hasOwn(value, 'clipPhases')) {
+    const clips = list(value['clipPhases'], `${path}.clipPhases`);
+    if (clips.length === 0 || clips.length > 4) {
+      fail(`${path}.clipPhases`, 'must contain one to four active clip phases');
+    }
+    const names = new Set<string>();
+    clips.forEach((candidate, index) => {
+      const phase = record(candidate, `${path}.clipPhases[${String(index)}]`, ['clip', 'timeSeconds']);
+      const clip = nonEmptyText(phase['clip'], `${path}.clipPhases[${String(index)}].clip`);
+      if (names.has(clip)) fail(`${path}.clipPhases[${String(index)}].clip`, 'must be unique');
+      names.add(clip);
+      nonNegativeFinite(phase['timeSeconds'], `${path}.clipPhases[${String(index)}].timeSeconds`);
+    });
+  }
   animationMotion(value['motion'], `${path}.motion`);
   nullable(value['transition'], `${path}.transition`, (candidate, candidatePath) => {
     const transition = record(candidate, candidatePath, [

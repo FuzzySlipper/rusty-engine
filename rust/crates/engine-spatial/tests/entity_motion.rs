@@ -2,9 +2,9 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use engine_spatial::{
     EntityMotionCommand, EntityMotionOutcome, EntityMotionService, FirstPersonMotionCommand,
-    FirstPersonMotionInput, FirstPersonMotionService,
+    FirstPersonMotionInput, FirstPersonMotionService, MotionSpatialEntity,
 };
-use entity_state::{EntityDefinition, EntityState};
+use entity_state::{BoundsComponent, EntityDefinition, EntityState, EntityTransform};
 
 fn collision_fixture() -> EntityState {
     EntityState::from_definitions([
@@ -42,6 +42,46 @@ fn entity_aabb_motion_slides_and_commits_once() {
     );
     assert_eq!(receipt.resolution.hit, Some(EntityId::new(2)));
     assert_eq!(receipt.transform.revision_after, 1);
+}
+
+#[test]
+fn typed_spatial_view_matches_retained_entity_motion_resolution() {
+    let state = collision_fixture();
+    let command = EntityMotionCommand {
+        entity: EntityId::new(1),
+        delta: Vec3::new(2.0, 1.0, 0.0),
+    };
+    let retained = EntityMotionService
+        .resolve(&state, command)
+        .expect("retained resolution");
+    let view = [
+        MotionSpatialEntity {
+            entity: EntityId::new(1),
+            transform: EntityTransform::at(Vec3::ZERO),
+            bounds: BoundsComponent {
+                min: Vec3::splat(-0.5),
+                max: Vec3::splat(0.5),
+            },
+            collision_enabled: true,
+            collision_static: false,
+            has_transform_parent: false,
+        },
+        MotionSpatialEntity {
+            entity: EntityId::new(2),
+            transform: EntityTransform::at(Vec3::new(2.0, 0.0, 0.0)),
+            bounds: BoundsComponent {
+                min: Vec3::splat(-0.5),
+                max: Vec3::splat(0.5),
+            },
+            collision_enabled: true,
+            collision_static: true,
+            has_transform_parent: false,
+        },
+    ];
+    let copied = EntityMotionService
+        .resolve_spatial_view(&view, command)
+        .expect("copied view resolution");
+    assert_eq!(copied, retained);
 }
 
 #[test]

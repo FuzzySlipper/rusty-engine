@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::PresentationFrameDiff;
 use render_model::*;
 
 pub const PRESENTATION_WORLD_STREAM: &str = "presentation-world";
@@ -28,6 +29,7 @@ struct PresentationNode {
     mesh_payload: Option<MeshPayloadDescriptor>,
     material_override: Option<Material>,
     material_parameters: BTreeMap<u16, MaterialInstanceParameters>,
+    playback: AnimatedMeshPlaybackTimeline,
 }
 
 /// A complete graphics baseline and the exact continuation point it represents.
@@ -41,6 +43,9 @@ pub struct PresentationSnapshot {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PresentationWorld {
     revision: u64,
+    elapsed_seconds: f64,
+    ghost_captures: BTreeMap<crate::GhostPlateHandle, Arc<RenderFrameDiff>>,
+    ghost_sources: BTreeMap<crate::GhostPlateHandle, RenderHandle>,
     nodes: BTreeMap<RenderHandle, Arc<PresentationNode>>,
     textures: BTreeMap<String, Arc<TextureDescriptor>>,
     materials: BTreeMap<String, Arc<RenderMaterialDescriptor>>,
@@ -49,12 +54,16 @@ pub struct PresentationWorld {
     animated_meshes: BTreeMap<String, Arc<AnimatedMeshAsset>>,
     voxel_objects: BTreeMap<String, Arc<VoxelObjectRenderAsset>>,
     sky: Option<SkyBackgroundDescriptor>,
+    effects: Vec<PresentationFrameDiff>,
+    controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PresentationWorldError {
     Frame(RenderFrameError),
+    Presentation(crate::PresentationFrameError),
     RevisionExhausted,
+    InvalidPlayback,
     UnknownNode(RenderHandle),
     DuplicateNode(RenderHandle),
     WrongNodeKind(RenderHandle),
@@ -70,6 +79,12 @@ impl std::fmt::Display for PresentationWorldError {
 impl std::error::Error for PresentationWorldError {}
 
 impl PresentationWorld {
+    pub fn advance_elapsed(&mut self, seconds: f64) {
+        if seconds.is_finite() && seconds >= 0.0 {
+            self.elapsed_seconds += seconds;
+        }
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -118,6 +133,257 @@ impl PresentationWorld {
         candidate.revision = revision;
         *self = candidate;
         Ok(delta)
+    }
+
+    /// Named mechanisms supply their complete retained state, never historical signals.
+    /// The common world commits this alongside graphics and owns its publication frontier.
+    pub fn retain_effects(&mut self, mut frames: Vec<PresentationFrameDiff>) {
+        for frame in &mut frames {
+            for op in &mut frame.ops {
+                if let crate::PresentationOp::GhostPlate {
+                    op: crate::GhostPlateProjectionOp::Create { handle, descriptor },
+                    ..
+                } = op
+                {
+                    descriptor.captured_scene = self.ghost_captures.get(handle).cloned();
+                }
+            }
+        }
+        self.effects = frames;
+    }
+
+    pub fn effects_snapshot(&self) -> Vec<PresentationFrameDiff> {
+        self.effects.clone()
+    }
+
+    pub fn apply_presentation(
+        &mut self,
+        frame: &PresentationFrameDiff,
+    ) -> Result<PresentationFrameDiff, PresentationWorldError> {
+        let mut candidate = self.clone();
+        let output = candidate.apply_presentation_inner(frame)?;
+        *self = candidate;
+        Ok(output)
+    }
+
+    fn apply_presentation_inner(
+        &mut self,
+        frame: &PresentationFrameDiff,
+    ) -> Result<PresentationFrameDiff, PresentationWorldError> {
+        frame
+            .validate()
+            .map_err(PresentationWorldError::Presentation)?;
+        if frame.ops.is_empty() {
+            return Ok(frame.clone());
+        }
+        let revision = self
+            .revision
+            .checked_add(1)
+            .filter(|revision| *revision <= JSON_SAFE_U64_MAX)
+            .ok_or(PresentationWorldError::RevisionExhausted)?;
+        let mut output = frame.clone();
+        for operation in &mut output.ops {
+            if let crate::PresentationOp::Animation { op, .. } = operation {
+                match op {
+                    crate::AnimationProjectionOp::Create { handle, descriptor } => {
+                        self.controllers.insert(*handle, descriptor.clone());
+                    }
+                    crate::AnimationProjectionOp::Update { handle, controller } => {
+                        if let Some(descriptor) = self.controllers.get_mut(handle) {
+                            descriptor.controller = controller.clone();
+                        }
+                    }
+                    crate::AnimationProjectionOp::Destroy { handle } => {
+                        self.controllers.remove(handle);
+                    }
+                }
+            }
+            if let crate::PresentationOp::GhostPlate { op, .. } = operation {
+                match op {
+                    crate::GhostPlateProjectionOp::Create { handle, descriptor } => {
+                        let capture = Arc::new(self.capture_scene(descriptor.source)?);
+                        descriptor.captured_scene = Some(capture.clone());
+                        self.ghost_sources.insert(*handle, descriptor.source);
+                        self.ghost_captures.insert(*handle, capture);
+                    }
+                    crate::GhostPlateProjectionOp::Recapture {
+                        handle,
+                        captured_scene,
+                        ..
+                    } => {
+                        let source = *self
+                            .ghost_sources
+                            .get(handle)
+                            .ok_or(PresentationWorldError::InvalidPlayback)?;
+                        let capture = Arc::new(self.capture_scene(source)?);
+                        *captured_scene = Some(capture.clone());
+                        self.ghost_captures.insert(*handle, capture);
+                    }
+                    crate::GhostPlateProjectionOp::Destroy { handle } => {
+                        self.ghost_captures.remove(handle);
+                        self.ghost_sources.remove(handle);
+                    }
+                    crate::GhostPlateProjectionOp::Update { .. } => {}
+                }
+            }
+        }
+        output.publication = Some(RenderFramePublication {
+            stream: PRESENTATION_WORLD_STREAM.to_owned(),
+            base_revision: self.revision,
+            revision,
+            operation_count: frame
+                .ops
+                .len()
+                .try_into()
+                .map_err(|_| PresentationWorldError::RevisionExhausted)?,
+        });
+        self.revision = revision;
+        Ok(output)
+    }
+
+    /// Capture only the retained source hierarchy and scene lights. Resource
+    /// definitions are immutable and shared by the stored capture frame.
+    fn capture_scene(
+        &self,
+        source: RenderHandle,
+    ) -> Result<RenderFrameDiff, PresentationWorldError> {
+        if !self.nodes.contains_key(&source) {
+            return Err(PresentationWorldError::UnknownNode(source));
+        }
+        let mut selected = BTreeSet::new();
+        selected.insert(source);
+        loop {
+            let before = selected.len();
+            for (handle, node) in &self.nodes {
+                if node.parent.is_some_and(|parent| selected.contains(&parent)) {
+                    selected.insert(*handle);
+                }
+            }
+            if before == selected.len() {
+                break;
+            }
+        }
+        // Ancestors preserve the capture's original world-space transform.
+        let mut parent = self.nodes[&source].parent;
+        while let Some(handle) = parent {
+            selected.insert(handle);
+            parent = self.nodes[&handle].parent;
+        }
+        for (handle, node) in &self.nodes {
+            if matches!(node.kind, NodeKind::Light(_)) {
+                selected.insert(*handle);
+                let mut parent = node.parent;
+                while let Some(handle) = parent {
+                    selected.insert(handle);
+                    parent = self.nodes[&handle].parent;
+                }
+            }
+        }
+        let mut captured = self.clone();
+        captured.nodes.retain(|handle, _| selected.contains(handle));
+        captured.sky = None;
+        // Capture dependencies are a subset of the live world. In particular,
+        // one small plate must not copy or realize every unrelated mesh.
+        let mut meshes = BTreeSet::new();
+        let mut animated = BTreeSet::new();
+        let mut voxels = BTreeSet::new();
+        let mut atlases = BTreeSet::new();
+        let mut materials = BTreeSet::new();
+        let mut textures = BTreeSet::new();
+        for node in captured.nodes.values() {
+            match &node.kind {
+                NodeKind::StaticMesh(instance) => {
+                    meshes.insert(instance.asset.clone());
+                    materials.extend(
+                        instance
+                            .material_overrides
+                            .iter()
+                            .map(|slot| slot.material.clone()),
+                    );
+                }
+                NodeKind::AnimatedMesh(instance) => {
+                    animated.insert(instance.asset.clone());
+                    materials.extend(
+                        instance
+                            .material_overrides
+                            .iter()
+                            .map(|slot| slot.material.clone()),
+                    );
+                }
+                NodeKind::VoxelObject(instance) => {
+                    voxels.insert(instance.asset.clone());
+                    materials.extend(
+                        instance
+                            .material_overrides
+                            .iter()
+                            .map(|slot| slot.material.clone()),
+                    );
+                }
+                NodeKind::Sprite(sprite) => {
+                    atlases.insert(sprite.asset.clone());
+                    textures.extend(sprite.material.normal_texture.iter().cloned());
+                    textures.extend(sprite.material.depth_texture.iter().cloned());
+                }
+                _ => {}
+            }
+        }
+        captured.static_meshes.retain(|id, _| meshes.contains(id));
+        captured
+            .animated_meshes
+            .retain(|id, _| animated.contains(id));
+        captured.voxel_objects.retain(|id, _| voxels.contains(id));
+        captured.atlases.retain(|id, _| atlases.contains(id));
+        for asset in captured.static_meshes.values() {
+            materials.extend(
+                asset
+                    .material_slots
+                    .iter()
+                    .map(|slot| slot.material.clone()),
+            );
+        }
+        for asset in captured.animated_meshes.values() {
+            materials.extend(
+                asset
+                    .material_slots
+                    .iter()
+                    .map(|slot| slot.material.clone()),
+            );
+        }
+        for asset in captured.voxel_objects.values() {
+            materials.extend(
+                asset
+                    .material_slots
+                    .iter()
+                    .map(|slot| slot.material.clone()),
+            );
+        }
+        captured.materials.retain(|id, _| materials.contains(id));
+        for material in captured.materials.values() {
+            textures.extend(material.texture.iter().cloned());
+            if let Some(surface) = &material.voxel_surface {
+                match &surface.mapping {
+                    VoxelSurfaceMappingDescriptor::Repeat { texture, .. }
+                    | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => {
+                        textures.insert(texture.clone());
+                    }
+                }
+            }
+        }
+        for atlas in captured.atlases.values() {
+            textures.insert(atlas.texture.clone());
+        }
+        captured.textures.retain(|id, _| textures.contains(id));
+        let mut frame = captured.snapshot().frame;
+        for controller in self
+            .controllers
+            .values()
+            .filter(|controller| selected.contains(&controller.target))
+        {
+            frame
+                .ops
+                .push(controller.frozen_pose_operation(controller.controller.phase_seconds));
+        }
+        Ok(frame)
     }
 
     /// Resource definitions precede uses; parents precede children. Handles
@@ -206,7 +472,14 @@ impl PresentationWorld {
             NodeKind::AnimatedMesh(instance) => RenderDiff::CreateAnimatedMeshInstance {
                 handle,
                 parent,
-                instance: instance.clone(),
+                instance: {
+                    let mut instance = instance.clone();
+                    instance.playback = node
+                        .playback
+                        .snapshot_command(self.elapsed_seconds)
+                        .expect("admitted playback timeline");
+                    instance
+                },
             },
             NodeKind::VoxelObject(instance) => RenderDiff::CreateVoxelObjectInstance {
                 handle,
@@ -263,9 +536,18 @@ impl PresentationWorld {
                 return Err(PresentationWorldError::UnknownNode(parent));
             }
         }
+        let mut playback = AnimatedMeshPlaybackTimeline::default();
+        if let NodeKind::AnimatedMesh(instance) = &kind {
+            if let Some(command) = &instance.playback {
+                playback
+                    .apply_command(command, self.elapsed_seconds)
+                    .map_err(|_| PresentationWorldError::InvalidPlayback)?;
+            }
+        }
         self.nodes.insert(
             handle,
             Arc::new(PresentationNode {
+                playback,
                 parent,
                 kind,
                 mesh_payload: None,
@@ -409,7 +691,12 @@ impl PresentationWorld {
                 }
             }
             RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
-                match &mut self.node_mut(*handle)?.kind {
+                let now = self.elapsed_seconds;
+                let node = self.node_mut(*handle)?;
+                node.playback
+                    .apply_command(playback, now)
+                    .map_err(|_| PresentationWorldError::InvalidPlayback)?;
+                match &mut node.kind {
                     NodeKind::AnimatedMesh(value) => value.playback = Some(playback.clone()),
                     _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
                 }
@@ -547,6 +834,43 @@ mod tests {
             world.nodes.is_empty(),
             "parent destruction removes retained descendants"
         );
+    }
+
+    #[test]
+    fn graphics_and_effects_share_one_reconstructible_frontier() {
+        use crate::{
+            AudioBus, AudioBusControl, AudioProjectionOp, PresentationOp, PresentationOpMeta,
+        };
+        let mut world = PresentationWorld::default();
+        let graphics = world
+            .apply(&frame(vec![RenderDiff::Create {
+                handle: RenderHandle::new(1),
+                parent: None,
+                node: RenderNode::new(Geometry::Cube),
+            }]))
+            .unwrap();
+        let retained = PresentationFrameDiff::try_from_ops(vec![PresentationOp::Audio {
+            meta: PresentationOpMeta::new(0),
+            op: AudioProjectionOp::BusControl {
+                bus: AudioBus::Sfx,
+                control: AudioBusControl::SetMuted { muted: true },
+            },
+        }])
+        .unwrap();
+        let effect_delta = world.apply_presentation(&retained).unwrap();
+        assert_eq!(
+            effect_delta.publication.as_ref().unwrap().base_revision,
+            graphics.publication.unwrap().revision
+        );
+        world.retain_effects(vec![retained.clone()]);
+        assert_eq!(world.effects_snapshot(), vec![retained]);
+        assert_eq!(world.snapshot().revision, 2);
+        let next = world
+            .apply(&frame(vec![RenderDiff::Destroy {
+                handle: RenderHandle::new(1),
+            }]))
+            .unwrap();
+        assert_eq!(next.publication.unwrap().base_revision, 2);
     }
 
     #[test]

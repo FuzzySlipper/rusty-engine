@@ -46,6 +46,7 @@ impl RuntimeAppearanceCatalog {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeAppearanceFact {
     pub object_id: u64,
+    pub parent_object_id: Option<u64>,
     pub appearance: String,
     pub transform: Transform,
     pub visible: bool,
@@ -174,7 +175,7 @@ impl RuntimeAppearanceProjector {
                 })?;
             nodes.push(AppearanceNode {
                 id: fact.object_id,
-                parent: None,
+                parent: fact.parent_object_id,
                 transform: fact.transform,
                 visible: fact.visible,
                 layer: fact.layer,
@@ -270,6 +271,7 @@ mod tests {
     fn fact(id: u64) -> RuntimeAppearanceFact {
         RuntimeAppearanceFact {
             object_id: id,
+            parent_object_id: None,
             appearance: "appearance/trial".to_owned(),
             transform: Transform::IDENTITY,
             visible: true,
@@ -311,6 +313,58 @@ mod tests {
         assert!(
             matches!(removed.frame.ops.as_slice(), [RenderDiff::Destroy { handle: destroyed }] if *destroyed == handle)
         );
+    }
+
+    #[test]
+    fn appearance_parents_create_in_order_and_recreate_descendants() {
+        let mut projector = RuntimeAppearanceProjector::new(catalog());
+        let parent = fact(7);
+        let child = RuntimeAppearanceFact {
+            object_id: 8,
+            parent_object_id: Some(parent.object_id),
+            ..fact(8)
+        };
+        let initial = projector.project(&[child.clone(), parent.clone()]).unwrap();
+        assert!(matches!(
+            initial.frame.ops.as_slice(),
+            [
+                RenderDiff::Create { .. },
+                RenderDiff::Create {
+                    parent: Some(_),
+                    ..
+                },
+            ]
+        ));
+
+        let reparented = RuntimeAppearanceFact {
+            parent_object_id: None,
+            ..child
+        };
+        let moved = projector.project(&[parent, reparented]).unwrap();
+        assert!(matches!(
+            moved.frame.ops.as_slice(),
+            [
+                RenderDiff::Destroy { .. },
+                RenderDiff::Create { parent: None, .. },
+            ]
+        ));
+    }
+
+    #[test]
+    fn invalid_appearance_parent_does_not_commit_prior_snapshot() {
+        let mut projector = RuntimeAppearanceProjector::new(catalog());
+        projector.project(&[fact(7)]).unwrap();
+        let invalid = RuntimeAppearanceFact {
+            parent_object_id: Some(99),
+            ..fact(7)
+        };
+        assert!(matches!(
+            projector.project(&[invalid]),
+            Err(RuntimeAppearanceProjectionError::Scene(
+                SceneProjectionError::MissingParent { .. }
+            ))
+        ));
+        assert!(projector.project(&[fact(7)]).unwrap().frame.is_empty());
     }
 
     #[test]

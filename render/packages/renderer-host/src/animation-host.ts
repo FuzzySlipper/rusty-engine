@@ -389,9 +389,12 @@ export class RendererAnimationHost {
         lastPlaybackObservation: null,
         tickDurationSeconds: op.descriptor.tickDurationMillis / 1_000,
         controller: op.descriptor.controller,
-        presented: weights,
+        presented: weights.map(withoutPhaseAnchor),
         interpolation: null,
-        clipSampleSeconds: new Map(),
+        // A baseline begins at the Engine-retained clip samples. Marker
+        // crossing starts from those samples so reconnecting never replays
+        // historical audio/particle cues.
+        clipSampleSeconds: new Map(weights.map((clip) => [clip.clip, clip.timeSeconds ?? 0])),
         emittedCueKeys: new Set(),
       });
       this.#appendPlaybackObservation(this.#controllers.get(op.handle)!, meta.sequence, true);
@@ -430,7 +433,10 @@ export class RendererAnimationHost {
     ) {
       return animationDiagnostic('staleRevision', meta.sequence, op.handle, realization.target, 'controller state or transition progress moved backward without a new revision');
     }
-    const target = controllerWeights(op.controller);
+    // Phase anchors seed a newly reconstructed mixer once. An attached mixer
+    // and its cue cursor advance together on display time; ordinary weight
+    // updates must not repeatedly seek one while leaving the other untouched.
+    const target = controllerWeights(op.controller).map(withoutPhaseAnchor);
     if (!this.#projection.hasAnimationClips(realization.target, target.map((clip) => clip.clip))) {
       return animationDiagnostic('clipMissing', meta.sequence, op.handle, realization.target, 'controller references an unavailable clip');
     }
@@ -544,6 +550,10 @@ function validateCueDefinitions(
     keys.add(key);
     return definition;
   });
+}
+
+function withoutPhaseAnchor(clip: RendererAnimationControllerClip): RendererAnimationControllerClip {
+  return { clip: clip.clip, weight: clip.weight, speed: clip.speed };
 }
 
 function sampleAnimationCues(
@@ -660,24 +670,45 @@ function controllerWeights(
 ): readonly RendererAnimationControllerClip[] {
   const transition = controller.transition;
   if (transition === null) {
-    return motionWeights(controller.motion);
+    return motionWeights(
+      controller.motion,
+      controller.phaseSeconds ?? 0,
+      controller.clipPhases ?? [],
+    );
   }
   const progress = transition.elapsedTicks / transition.durationTicks;
   return mergeWeights([
-    ...motionWeights(controller.motion).map((clip) => ({ ...clip, weight: clip.weight * (1 - progress) })),
-    ...motionWeights(transition.targetMotion).map((clip) => ({ ...clip, weight: clip.weight * progress })),
+    ...motionWeights(controller.motion, controller.phaseSeconds ?? 0, controller.clipPhases ?? [])
+      .map((clip) => ({ ...clip, weight: clip.weight * (1 - progress) })),
+    ...motionWeights(transition.targetMotion, controller.phaseSeconds ?? 0, controller.clipPhases ?? [])
+      .map((clip) => ({ ...clip, weight: clip.weight * progress })),
   ]);
 }
 
-function motionWeights(motion: ResolvedAnimationMotion): readonly RendererAnimationControllerClip[] {
+function motionWeights(
+  motion: ResolvedAnimationMotion,
+  phaseSeconds: number,
+  clipPhases: readonly { readonly clip: string; readonly timeSeconds: number }[] = [],
+): readonly RendererAnimationControllerClip[] {
   const highWeight = motion.clipB === null ? 0 : motion.blendWeightMilli / 1_000;
+  const timingFor = (clip: string) => {
+    const timeSeconds = clipPhases.find((phase) => phase.clip === clip)?.timeSeconds
+      ?? phaseSeconds * motion.speedMilli / 1_000;
+    return timeSeconds === 0 ? {} : { timeSeconds };
+  };
   const clips: RendererAnimationControllerClip[] = [{
     clip: motion.clipA,
     weight: 1 - highWeight,
     speed: motion.speedMilli / 1_000,
+    ...timingFor(motion.clipA),
   }];
   if (motion.clipB !== null && highWeight > 0) {
-    clips.push({ clip: motion.clipB, weight: highWeight, speed: motion.speedMilli / 1_000 });
+    clips.push({
+      clip: motion.clipB,
+      weight: highWeight,
+      speed: motion.speedMilli / 1_000,
+      ...timingFor(motion.clipB),
+    });
   }
   return clips;
 }
@@ -691,10 +722,12 @@ function mergeWeights(
       continue;
     }
     const prior = merged.get(clip.clip);
+    const timeSeconds = clip.timeSeconds ?? prior?.timeSeconds;
     merged.set(clip.clip, {
       clip: clip.clip,
       weight: (prior?.weight ?? 0) + clip.weight,
       speed: clip.speed,
+      ...(timeSeconds === undefined || timeSeconds === 0 ? {} : { timeSeconds }),
     });
   }
   return [...merged.values()].sort((left, right) => left.clip.localeCompare(right.clip));
@@ -709,10 +742,12 @@ function interpolateWeights(
   return mergeWeights([...clips].map((clip) => {
     const prior = from.find((value) => value.clip === clip);
     const next = to.find((value) => value.clip === clip);
+    const timeSeconds = next?.timeSeconds ?? prior?.timeSeconds;
     return {
       clip,
       weight: (prior?.weight ?? 0) + ((next?.weight ?? 0) - (prior?.weight ?? 0)) * progress,
       speed: next?.speed ?? prior?.speed ?? 1,
+      ...(timeSeconds === undefined || timeSeconds === 0 ? {} : { timeSeconds }),
     };
   }));
 }

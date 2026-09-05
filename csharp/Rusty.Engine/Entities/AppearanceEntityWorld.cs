@@ -10,7 +10,8 @@ public readonly record struct AppearanceEntityWorldEntry(
     EntityId Entity,
     Appearance Appearance,
     bool Visible,
-    RenderLayer Layer);
+    RenderLayer Layer,
+    EntityId? Parent = null);
 
 /// <summary>Exact managed and caller-supplied facts captured for one Appearance snapshot.</summary>
 public readonly record struct AppearanceEntityWorldEntryGuard(
@@ -18,31 +19,32 @@ public readonly record struct AppearanceEntityWorldEntryGuard(
     ComponentRevision TransformRevision,
     AppearanceHandle Appearance,
     bool Visible,
-    RenderLayer Layer);
+    RenderLayer Layer,
+    EntityId? Parent);
 
 /// <summary>Copied evidence used to reject a stale Appearance projection before publishing.</summary>
 public readonly record struct AppearanceEntityWorldGuard(
     ulong WorldRevision,
     ReadOnlyMemory<AppearanceEntityWorldEntryGuard> Entries);
 
-/// <summary>A copied deterministic snapshot published through the generated Appearance family.</summary>
+/// <summary>A copied deterministic snapshot published through the generated Graphics family.</summary>
 public readonly record struct AppearanceEntityWorldReceipt(
     AppearanceEntityWorldGuard Guard,
     ReadOnlyMemory<AppearanceFact> Facts);
 
 /// <summary>
 /// Projects active managed Transform values and caller-owned Appearance handles into one
-/// generated snapshot. It retains neither an Appearance component nor a handle ownership mirror.
+/// generated Graphics snapshot. It retains neither an Appearance component nor a handle ownership mirror.
 /// </summary>
 public sealed class AppearanceEntityWorld
 {
     private readonly EntityWorld _entities;
-    private readonly IAppearanceService _appearance;
+    private readonly IGraphicsService _graphics;
 
-    public AppearanceEntityWorld(EntityWorld entities, IAppearanceService appearance)
+    public AppearanceEntityWorld(EntityWorld entities, IGraphicsService graphics)
     {
         _entities = entities ?? throw new ArgumentNullException(nameof(entities));
-        _appearance = appearance ?? throw new ArgumentNullException(nameof(appearance));
+        _graphics = graphics ?? throw new ArgumentNullException(nameof(graphics));
     }
 
     /// <summary>
@@ -74,7 +76,7 @@ public sealed class AppearanceEntityWorld
 
         AppearanceFact[] facts = ProjectFacts(ordered);
         ValidateGuard(guard, CaptureGuard(ordered));
-        _appearance.PublishSnapshot(facts);
+        _graphics.PublishSnapshot(facts);
         return new AppearanceEntityWorldReceipt(guard, facts);
     }
 
@@ -104,7 +106,8 @@ public sealed class AppearanceEntityWorld
                 _entities.GetComponentRevision(entry.Entity, EngineComponentTypes.Transform),
                 entry.Appearance.Handle,
                 entry.Visible,
-                entry.Layer);
+                entry.Layer,
+                entry.Parent);
         }
 
         return new AppearanceEntityWorldGuard(_entities.Revision, guards);
@@ -118,6 +121,8 @@ public sealed class AppearanceEntityWorld
             AppearanceEntityWorldEntry entry = entries[index];
             facts[index] = new AppearanceFact(
                 entry.Entity.Value,
+                entry.Parent is not null,
+                entry.Parent?.Value ?? 0,
                 _entities.Get(entry.Entity, EngineComponentTypes.Transform),
                 entry.Appearance,
                 entry.Visible,
@@ -139,7 +144,52 @@ public sealed class AppearanceEntityWorld
                     nameof(entries));
             }
         }
+        var positions = new Dictionary<EntityId, int>(ordered.Length);
+        for (int index = 0; index < ordered.Length; index++)
+        {
+            positions.Add(ordered[index].Entity, index);
+        }
+        var depths = new Dictionary<EntityId, int>(ordered.Length);
+        var visiting = new HashSet<EntityId>();
+        foreach (AppearanceEntityWorldEntry entry in ordered)
+        {
+            GetDepth(entry.Entity, ordered, positions, depths, visiting);
+        }
+        Array.Sort(ordered, (left, right) =>
+        {
+            int depth = depths[left.Entity].CompareTo(depths[right.Entity]);
+            return depth != 0 ? depth : left.Entity.CompareTo(right.Entity);
+        });
         return ordered;
+    }
+
+    private static int GetDepth(
+        EntityId entity,
+        ReadOnlySpan<AppearanceEntityWorldEntry> entries,
+        IReadOnlyDictionary<EntityId, int> positions,
+        IDictionary<EntityId, int> depths,
+        ISet<EntityId> visiting)
+    {
+        if (depths.TryGetValue(entity, out int known)) return known;
+        if (!visiting.Add(entity))
+        {
+            throw new ArgumentException($"Appearance snapshot has a parent cycle at entity {entity.Value}.", nameof(entries));
+        }
+        AppearanceEntityWorldEntry entry = entries[positions[entity]];
+        int depth = 0;
+        if (entry.Parent is EntityId parent)
+        {
+            if (!positions.ContainsKey(parent))
+            {
+                throw new ArgumentException(
+                    $"Appearance entity {entity.Value} names parent {parent.Value}, which is not in this snapshot.",
+                    nameof(entries));
+            }
+            depth = GetDepth(parent, entries, positions, depths, visiting) + 1;
+        }
+        visiting.Remove(entity);
+        depths.Add(entity, depth);
+        return depth;
     }
 
     private static void ValidateGuard(AppearanceEntityWorldGuard expected, AppearanceEntityWorldGuard observed)
