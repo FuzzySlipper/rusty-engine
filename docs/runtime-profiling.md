@@ -74,7 +74,7 @@ Use a standard Linux `perf` installation. On the tested host,
 
 ```bash
 # Start a disposable investigation session. Enable JIT symbol export only here.
-DOTNET_PerfMapEnabled=1 /path/to/runtime-pack/bin/rusty dev \
+DOTNET_PerfMapEnabled=3 /path/to/runtime-pack/bin/rusty dev \
   --project /path/to/Game.csproj --runtime /path/to/runtime-pack --live-debug
 
 # In another terminal, rediscover the current managed/native product worker.
@@ -87,9 +87,9 @@ mkdir -p /tmp/runtime-profile
 cd /tmp/runtime-profile
 perf record -F 500 -e cpu-clock:u --call-graph dwarf,4096 \
   -p "$managed_pid" -o perf.data -- sleep 8
-perf inject --jit -i perf.data -o perf-jit.data
 perf report --stdio --no-children -g none --full-source-path \
-  --sort dso,symbol,srcline -i perf-jit.data > hotspots.txt
+  --sort dso,symbol,srcline -i perf.data > hotspots.txt
+perf script --no-inline -G -i perf.data -F ip,sym,dso > leaf-addresses.txt
 ```
 
 `--call-graph dwarf` supports optimized Rust which may omit frame pointers.
@@ -99,13 +99,16 @@ Use child/inclusive views deliberately: summing parent and leaf percentages
 counts the same samples repeatedly. See [perf record](https://man7.org/linux/man-pages/man1/perf-record.1.html)
 and [kernel perf permissions](https://docs.kernel.org/admin-guide/perf-security.html).
 
-CoreCLR's [perf map/JIT dump export](https://learn.microsoft.com/en-us/dotnet/core/runtime-config/debugging-profiling#export-perf-maps-and-jit-dumps)
-provides managed code names to native tools. Keep the `/tmp/perf-PID.map` and
-`/tmp/jit-PID.dump`, injected `jitted-*.so` files, raw/injected data, and rendered
-report with the capture. JIT export has overhead while code is compiled, so keep
-it opt-in. An unresolved JIT address is not evidence of expensive Rust; consult
-the managed EventPipe capture for method attribution when native resolution is
-incomplete.
+CoreCLR's [perf map export](https://learn.microsoft.com/en-us/dotnet/core/runtime-config/debugging-profiling#export-perf-maps-and-jit-dumps)
+records managed code address ranges and names. Keep `/tmp/perf-PID.map` with the
+raw data and rendered report. Export has overhead while code is compiled, so
+keep it opt-in. In the tested attach workflow, `perf report` resolved Rust but
+left managed `memfd:doublemapper` addresses unnamed. Exported maps identified
+those leaf PCs as product/generated managed code; the ordinary EventPipe trace
+provided a directly named managed report. Use both views rather than attributing
+unresolved JIT samples to Rust. `perf inject --jit` was also tried with JIT dump
+export enabled and did not improve this attach capture, so it is not required
+by this recipe. Complete automatic mixed-stack symbolization is not claimed.
 
 Record diagnostics immediately before and after sampling. `worker.json` includes
 `runtimeInstanceId`; compare it to `workerUpdate.readout.runtime.instanceId` and
