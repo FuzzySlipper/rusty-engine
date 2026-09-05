@@ -21209,10 +21209,11 @@ var ky = Object.freeze([
 	#n;
 	#r;
 	#i = 0;
-	#a = null;
+	#a = /* @__PURE__ */ new WeakMap();
 	#o = null;
 	#s = null;
-	#c = !1;
+	#c = null;
+	#l = !1;
 	constructor(e) {
 		if (this.#r = Hy(e.config), e.plates.length !== this.#r.sectorCount) throw RangeError("ghost plate bank must match the configured sector count");
 		if (!Number.isFinite(e.baseAzimuthDegrees)) throw TypeError("ghost base azimuth must be finite");
@@ -21220,7 +21221,7 @@ var ky = Object.freeze([
 		for (let [e, t] of this.#e.entries()) this.object.add(t.object), t.setVisible(e === 0);
 	}
 	configure(e) {
-		this.#u();
+		this.#d();
 		let t = Hy({
 			...this.#r,
 			...e
@@ -21230,54 +21231,54 @@ var ky = Object.freeze([
 		for (let e of this.#e) e.configure(t);
 		return this.readout();
 	}
-	prepare(e, t = Ly()) {
-		if (!this.#c) try {
+	prepare(e, t = Ly(), n = e) {
+		if (!this.#l) try {
 			for (let t of this.#e) t.prepare(e);
-			this.#a = Py(e, this.#e[this.#i].object);
-			let t = Ny(this.#a, this.#t, this.#r.sectorCount, this.#i, this.#r.sectorHysteresisDegrees);
-			t !== this.#i && this.#l(t);
+			this.#o = Py(e, this.#e[this.#i].object);
+			let t = Ny(this.#o, this.#t, this.#r.sectorCount, this.#a.get(n) ?? 0, this.#r.sectorHysteresisDegrees);
+			this.#a.set(n, t), t !== this.#i && this.#u(t);
 		} catch (e) {
-			this.#o = "sector-selection-failed", this.#s = e instanceof Error ? e.message : String(e), this.#l(this.#i);
+			this.#s = "sector-selection-failed", this.#c = e instanceof Error ? e.message : String(e), this.#u(this.#i);
 		}
 	}
 	readout() {
 		let e = this.#e[this.#i].readout();
 		return Object.freeze({
 			...e,
-			fallbackActive: this.#o !== null,
-			fallbackReason: this.#o,
-			angularOffsetDegrees: this.#a === null ? null : Math.abs(Fy(this.#a, this.#t + this.#i * 360 / this.#r.sectorCount)),
+			fallbackActive: this.#s !== null,
+			fallbackReason: this.#s,
+			angularOffsetDegrees: this.#o === null ? null : Math.abs(Fy(this.#o, this.#t + this.#i * 360 / this.#r.sectorCount)),
 			sectorCount: this.#r.sectorCount,
 			selectedSector: this.#i,
 			pendingSector: null,
 			previousSector: null,
-			localAzimuthDegrees: this.#a,
+			localAzimuthDegrees: this.#o,
 			sectorHysteresisDegrees: this.#r.sectorHysteresisDegrees,
-			residentSectorCount: this.#c ? 0 : this.#e.length,
-			currentResourceResident: !this.#c,
+			residentSectorCount: this.#l ? 0 : this.#e.length,
+			currentResourceResident: !this.#l,
 			previousResourceResident: !1,
 			preparationCpuMilliseconds: this.#n,
-			invalidationReason: this.#s,
+			invalidationReason: this.#c,
 			expectedDrawCalls: e.expectedDrawCalls,
 			meshCount: this.#e.reduce((e, t) => e + t.readout().meshCount, 0),
 			materialResourceCount: this.#e.reduce((e, t) => e + t.readout().materialResourceCount, 0),
 			borrowedTextureCount: this.#e.reduce((e, t) => e + t.readout().borrowedTextureCount, 0),
-			disposed: this.#c,
+			disposed: this.#l,
 			limitations: Object.freeze(e.limitations.filter((e) => e !== "single-capture-view"))
 		});
 	}
 	dispose() {
-		if (!this.#c) {
+		if (!this.#l) {
 			for (let e of this.#e) this.object.remove(e.object), e.dispose();
-			this.#c = !0;
+			this.#l = !0;
 		}
 	}
-	#l(e) {
+	#u(e) {
 		this.#i = e;
 		for (let [t, n] of this.#e.entries()) n.setVisible(t === e);
 	}
-	#u() {
-		if (this.#c) throw Error("directional ghost plate presentation is disposed");
+	#d() {
+		if (this.#l) throw Error("directional ghost plate presentation is disposed");
 	}
 };
 function Ny(e, t, n, r, i) {
@@ -21434,8 +21435,8 @@ var Yy = 256 * 1024 * 1024, Xy = 20, Zy = /* @__PURE__ */ new WeakMap(), Qy = cl
 			...t === void 0 ? {} : { capturedScene: t }
 		}));
 	}
-	prepare(e) {
-		this.#i?.presentation.prepare(e);
+	prepare(e, t = e) {
+		this.#i?.presentation.prepare(e, void 0, t);
 	}
 	readout() {
 		let e = this.#i, t = e?.presentation.readout();
@@ -21802,35 +21803,36 @@ var gb = class extends Error {
 	#r;
 	#i;
 	#a = /* @__PURE__ */ new Map();
-	#o = _b;
-	#s = !1;
+	#o = /* @__PURE__ */ new Map();
+	#s = _b;
 	#c = !1;
-	#l = /* @__PURE__ */ new Map();
-	#u = 0;
-	#d = /* @__PURE__ */ new Map();
+	#l = !1;
+	#u = /* @__PURE__ */ new Map();
+	#d = 0;
+	#f = /* @__PURE__ */ new Map();
 	constructor(e, t, n = new nu(), r = () => void 0) {
 		this.#r = e, this.#t = t, this.#n = n, this.#i = r;
 	}
 	configure(e) {
-		if (this.#s || this.#c) return this.#m("surface_disposed", "renderer view composition is disposed");
+		if (this.#c || this.#l) return this.#h("surface_disposed", "renderer view composition is disposed");
 		let t = null;
 		try {
 			let n = Sb(e);
-			return St(n), this.#_(n), t = this.#f(n), this.#p(t), Object.freeze({
+			return St(n), this.#v(n), t = this.#p(n), this.#m(t), Object.freeze({
 				applied: !0,
 				outcome: "applied",
 				diagnostics: Object.freeze([]),
-				revision: this.#u
+				revision: this.#d
 			});
 		} catch (e) {
-			t !== null && kb(t, this.#d);
+			t !== null && kb(t, this.#f);
 			let n = Pb(e);
-			return n.code === "target_allocation_failed" && (this.#c = !0), this.#m(n.code, n.message);
+			return n.code === "target_allocation_failed" && (this.#l = !0), this.#h(n.code, n.message);
 		}
 	}
 	readout() {
-		let e = this.#o.targets.map((e) => {
-			let t = this.#d.get(e.id), n = t?.lastRefreshedSubmission ?? null;
+		let e = this.#s.targets.map((e) => {
+			let t = this.#f.get(e.id), n = t?.lastRefreshedSubmission ?? null;
 			return Object.freeze({
 				...e,
 				lastRefreshedSubmission: n,
@@ -21839,20 +21841,20 @@ var gb = class extends Error {
 		});
 		return Object.freeze({
 			schemaVersion: 1,
-			revision: this.#u,
-			cameras: this.#o.cameras,
+			revision: this.#d,
+			cameras: this.#s.cameras,
 			targets: Object.freeze(e),
-			views: this.#o.views,
-			presentations: this.#o.presentations,
+			views: this.#s.views,
+			presentations: this.#s.presentations,
 			resources: Object.freeze({
-				presentationCount: this.#l.size,
-				targetCount: this.#d.size
+				presentationCount: this.#u.size,
+				targetCount: this.#f.size
 			})
 		});
 	}
 	visibilityReadout() {
-		let e = this.#o.views.map((e) => {
-			let t = this.#a.get(e.cameraId);
+		let e = this.#s.views.map((e) => {
+			let t = this.#o.get(e.cameraId);
 			return t === void 0 ? null : Object.freeze({
 				viewId: e.id,
 				cameraId: e.cameraId,
@@ -21866,14 +21868,14 @@ var gb = class extends Error {
 		});
 	}
 	render(e, t, n) {
-		if (this.#s || this.#o.views.length === 0) return;
-		let r = this.#o.views.filter((e) => e.target.kind === "offscreen").sort(jb);
-		for (let t of r) this.#h(t, e);
-		let i = [...this.#o.views.filter((e) => e.target.kind === "primary").map((e) => ({
+		if (this.#c || this.#s.views.length === 0) return;
+		let r = this.#s.views.filter((e) => e.target.kind === "offscreen").sort(jb);
+		for (let t of r) this.#g(t, e);
+		let i = [...this.#s.views.filter((e) => e.target.kind === "primary").map((e) => ({
 			id: e.id,
 			kind: "view",
 			order: e.order
-		})), ...this.#o.presentations.map((e) => ({
+		})), ...this.#s.presentations.map((e) => ({
 			id: e.id,
 			kind: "presentation",
 			order: e.order
@@ -21881,10 +21883,10 @@ var gb = class extends Error {
 		this.#r.setRenderTarget(null), this.#r.setScissorTest(!0);
 		try {
 			for (let e of i) if (e.kind === "view") {
-				let r = this.#o.views.find((t) => t.id === e.id);
-				r !== void 0 && this.#g(r, t, n);
+				let r = this.#s.views.find((t) => t.id === e.id);
+				r !== void 0 && this.#_(r, t, n);
 			} else {
-				let r = this.#o.presentations.find((t) => t.id === e.id), i = this.#l.get(e.id);
+				let r = this.#s.presentations.find((t) => t.id === e.id), i = this.#u.get(e.id);
 				if (r !== void 0 && i !== void 0) {
 					let e = Mb(r.destination.viewport, t, n);
 					Nb(this.#r, e), this.#r.clear(!1, !0, !1), this.#r.render(i.scene, xb);
@@ -21900,20 +21902,20 @@ var gb = class extends Error {
 		}
 	}
 	invalidate() {
-		if (!this.#s) for (let e of this.#d.values()) e.stale = !0;
+		if (!this.#c) for (let e of this.#f.values()) e.stale = !0;
 	}
 	dispose() {
-		if (!this.#s) {
-			Ob(this.#l);
-			for (let e of this.#d.values()) e.target.dispose();
-			this.#a = /* @__PURE__ */ new Map(), this.#o = _b, this.#l = /* @__PURE__ */ new Map(), this.#d = /* @__PURE__ */ new Map(), this.#s = !0;
+		if (!this.#c) {
+			Ob(this.#u);
+			for (let e of this.#f.values()) e.target.dispose();
+			this.#o = /* @__PURE__ */ new Map(), this.#s = _b, this.#a.clear(), this.#u = /* @__PURE__ */ new Map(), this.#f = /* @__PURE__ */ new Map(), this.#c = !0;
 		}
 	}
-	#f(e) {
+	#p(e) {
 		let t = new Map(e.cameras.map((e) => [e.id, wb(e)])), n = /* @__PURE__ */ new Map(), r = [], i = /* @__PURE__ */ new Map();
 		try {
 			for (let t of e.targets) {
-				let e = this.#d.get(t.id);
+				let e = this.#f.get(t.id);
 				if (e !== void 0 && e.descriptor.revision === t.revision && Ab(e.descriptor, t)) {
 					n.set(t.id, e);
 					continue;
@@ -21944,14 +21946,14 @@ var gb = class extends Error {
 			throw new bb(e instanceof Error ? e.message : String(e));
 		}
 	}
-	#p(e) {
-		let t = this.#d, n = this.#l;
-		this.#a = e.cameras, this.#o = e.composition, this.#l = e.presentations, this.#d = e.targets, this.invalidate(), this.#u += 1;
+	#m(e) {
+		let t = this.#f, n = this.#u;
+		this.#a = new Map(e.composition.views.map((e) => [e.id, this.#a.get(e.id) ?? {}])), this.#o = e.cameras, this.#s = e.composition, this.#u = e.presentations, this.#f = e.targets, this.invalidate(), this.#d += 1;
 		for (let t of e.composition.targets) this.#e.set(t.id, t.revision);
 		Ob(n);
 		for (let [n, r] of t) e.targets.get(n) !== r && r.target.dispose();
 	}
-	#m(e, t) {
+	#h(e, t) {
 		return Object.freeze({
 			applied: !1,
 			outcome: e === "invalid_view_composition" || e === "stale_target_revision" ? "rejected_atomic" : "terminal",
@@ -21959,25 +21961,25 @@ var gb = class extends Error {
 				code: e,
 				message: t
 			})]),
-			revision: this.#u
+			revision: this.#d
 		});
 	}
-	#h(e, t) {
+	#g(e, t) {
 		if (e.target.kind !== "offscreen") return;
-		let n = this.#d.get(e.target.targetId), r = this.#a.get(e.cameraId);
+		let n = this.#f.get(e.target.targetId), r = this.#o.get(e.cameraId);
 		if (n === void 0 || r === void 0) return;
 		let i = Mb(e.viewport, n.descriptor.width, n.descriptor.height);
-		Tb(r, i.width / i.height), r.updateMatrixWorld(!0), this.#t.scene.updateMatrixWorld(!0), this.#r.setRenderTarget(n.target), this.#r.setScissorTest(!1), Nb(this.#r, i), this.#r.setScissorTest(!0), this.#r.clear(!0, !0, !0), this.#t.prepareSpritesForCamera(r, this.#t.scene), this.#t.prepareStaticInstanceBatches(r), this.#i(r), this.#r.render(this.#t.scene, r), n.lastRefreshedSubmission = t, n.stale = !1;
+		Tb(r, i.width / i.height), r.updateMatrixWorld(!0), this.#t.scene.updateMatrixWorld(!0), this.#r.setRenderTarget(n.target), this.#r.setScissorTest(!1), Nb(this.#r, i), this.#r.setScissorTest(!0), this.#r.clear(!0, !0, !0), this.#t.prepareSpritesForCamera(r, this.#t.scene), this.#t.prepareStaticInstanceBatches(r), this.#i(r, this.#a.get(e.id)), this.#r.render(this.#t.scene, r), n.lastRefreshedSubmission = t, n.stale = !1;
 	}
-	#g(e, t, n) {
-		let r = this.#a.get(e.cameraId);
+	#_(e, t, n) {
+		let r = this.#o.get(e.cameraId);
 		if (r === void 0) return;
 		let i = Mb(e.viewport, t, n);
-		Tb(r, i.width / i.height), Nv(r, this.#n, i.width / i.height), Nb(this.#r, i), this.#r.clear(!0, !0, !0), this.#t.prepareSpritesForCamera(r, this.#t.scene), this.#t.prepareStaticInstanceBatches(r), this.#i(r), this.#r.render(this.#t.scene, r), this.#r.clearDepth(), this.#t.prepareSpritesForCamera(this.#n, this.#t.viewmodelScene), this.#r.render(this.#t.viewmodelScene, this.#n);
+		Tb(r, i.width / i.height), Nv(r, this.#n, i.width / i.height), Nb(this.#r, i), this.#r.clear(!0, !0, !0), this.#t.prepareSpritesForCamera(r, this.#t.scene), this.#t.prepareStaticInstanceBatches(r), this.#i(r, this.#a.get(e.id)), this.#r.render(this.#t.scene, r), this.#r.clearDepth(), this.#t.prepareSpritesForCamera(this.#n, this.#t.viewmodelScene), this.#r.render(this.#t.viewmodelScene, this.#n);
 	}
-	#_(e) {
+	#v(e) {
 		for (let t of e.targets) {
-			let e = this.#d.get(t.id)?.descriptor, n = this.#e.get(t.id);
+			let e = this.#f.get(t.id)?.descriptor, n = this.#e.get(t.id);
 			if (e !== void 0 && t.revision === e.revision) {
 				if (!Ab(e, t)) throw new yb(`${t.id} revision ${String(t.revision)} cannot change target facts`);
 				continue;
@@ -22162,8 +22164,8 @@ function Ib(e, t = {}) {
 		}, T = t.camera?.initialBasis ?? null, E = null, D = null, O = null, k = {
 			width: 0,
 			height: 0
-		}, A = 0, ee = !1, te = /* @__PURE__ */ new Set(), j = (e) => {
-			for (let t of te) t.prepare(e);
+		}, A = 0, ee = !1, te = /* @__PURE__ */ new Set(), j = (e, t = e) => {
+			for (let n of te) n.prepare(e, t);
 		}, ne = new vb(c, r, b, j);
 		if (i.push(() => ne.dispose()), t.viewComposition !== void 0) {
 			let e = ne.configure(t.viewComposition);

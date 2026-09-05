@@ -441,6 +441,7 @@ export class GhostPlateDirectionalPresentation {
   readonly #preparationCpuMilliseconds: number | null;
   #config: GhostPlateConfig;
   #selectedSector = 0;
+  readonly #sectorByView = new WeakMap<object, number>();
   #localAzimuthDegrees: number | null = null;
   #fallbackReason: GhostPlateReadout['fallbackReason'] = null;
   #invalidationReason: string | null = null;
@@ -480,7 +481,7 @@ export class GhostPlateDirectionalPresentation {
     return this.readout();
   }
 
-  prepare(realCamera: THREE.Camera, now = nowMilliseconds()): void {
+  prepare(realCamera: THREE.Camera, now = nowMilliseconds(), view: object = realCamera): void {
     if (this.#disposed) return;
     try {
       for (const plate of this.#plates) plate.prepare(realCamera);
@@ -489,9 +490,10 @@ export class GhostPlateDirectionalPresentation {
         this.#localAzimuthDegrees,
         this.#baseAzimuthDegrees,
         this.#config.sectorCount,
-        this.#selectedSector,
+        this.#sectorByView.get(view) ?? 0,
         this.#config.sectorHysteresisDegrees,
       );
+      this.#sectorByView.set(view, nextSector);
       if (nextSector !== this.#selectedSector) this.#selectSector(nextSector);
     } catch (cause) {
       this.#fallbackReason = 'sector-selection-failed';

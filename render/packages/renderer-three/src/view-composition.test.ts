@@ -179,6 +179,7 @@ void test('composed primary views keep viewmodel transforms camera-relative acro
 void test('camera-dependent realization is prepared for each actual primary and offscreen draw', () => {
   const scene = new THREE.Scene();
   const prepared: THREE.Camera[] = [];
+  const viewTokens: object[] = [];
   const drawn: THREE.Camera[] = [];
   const webgl = {
     initRenderTarget: () => undefined,
@@ -201,7 +202,7 @@ void test('camera-dependent realization is prepared for each actual primary and 
     prepareStaticInstanceBatches: () => undefined,
   } as unknown as ThreeRenderer;
   const manager = new RendererViewCompositionBackend(webgl, projection, new THREE.PerspectiveCamera(),
-    (camera) => prepared.push(camera));
+    (camera, view) => { prepared.push(camera); viewTokens.push(view); });
   try {
     const primary = primaryComposition([9.5, 5.55, 11.7], 0);
     const offscreen = composition();
@@ -217,6 +218,12 @@ void test('camera-dependent realization is prepared for each actual primary and 
     manager.render(2, 800, 600);
     assert.deepEqual(prepared.at(-1)?.position.toArray(), [11.7, 5.55, 9.5]);
     assert.equal(drawn.length, 3);
+    assert.notEqual(viewTokens[0], viewTokens[1]);
+    assert.equal(viewTokens[1], viewTokens[2], 'pose updates preserve the retained view identity');
+    assert.equal(manager.configure({ ...primary, cameras: [], views: [] }).applied, true);
+    assert.equal(manager.configure(primary).applied, true);
+    manager.render(3, 800, 600);
+    assert.notEqual(viewTokens[2], viewTokens[3], 'removed views release their selection history');
   } finally { manager.dispose(); }
 });
 

@@ -467,8 +467,8 @@ export function mountRendererBrowserSurface(
   const ghostPlatePresentations = new Set<RendererThreeGhostPlatePresentation>();
   // Camera-dependent retained realization must use the camera of each draw,
   // including C# CameraView compositions rather than only the surface fallback.
-  const prepareGhostPlates = (viewCamera: THREE.Camera): void => {
-    for (const presentation of ghostPlatePresentations) presentation.prepare(viewCamera);
+  const prepareGhostPlates = (viewCamera: THREE.Camera, view: object = viewCamera): void => {
+    for (const presentation of ghostPlatePresentations) presentation.prepare(viewCamera, view);
   };
   const viewComposition = new RendererViewCompositionBackend(webgl, renderer, viewmodelCamera, prepareGhostPlates);
   constructionCleanup.push(() => viewComposition.dispose());

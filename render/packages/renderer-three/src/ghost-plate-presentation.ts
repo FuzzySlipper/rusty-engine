@@ -56,7 +56,7 @@ export class RendererThreeGhostPlatePresentation {
     }));
   }
   /** Called by the browser surface's ordinary render lifecycle. */
-  prepare(camera: THREE.Camera): void { this.#active?.presentation.prepare(camera); }
+  prepare(camera: THREE.Camera, view: object = camera): void { this.#active?.presentation.prepare(camera, undefined, view); }
   readout(): RendererThreeGhostPlateReadout {
     const active = this.#active; const ghost = active?.presentation.readout();
     return Object.freeze({

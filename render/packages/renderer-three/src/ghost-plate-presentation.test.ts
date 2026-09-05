@@ -171,6 +171,41 @@ void test('captured ghost scenes stay isolated across placement updates and chan
   }
 });
 
+void test('ghost sectors and hysteresis follow independent view positions, not camera yaw or fallback passes', () => {
+  const backend = new FakeBackend();
+  const presentation = createPresentation(new FakeRenderer(), backend);
+  const playerView = {};
+  const fallbackView = {};
+  const cameraAt = (azimuth: number) => {
+    const camera = new THREE.PerspectiveCamera();
+    const angle = THREE.MathUtils.degToRad(azimuth);
+    camera.position.set(Math.sin(angle) * 5, 0, Math.cos(angle) * 5);
+    return camera;
+  };
+  const prepare = (azimuth: number, view: object) => {
+    presentation.prepare(cameraAt(azimuth), view);
+    return presentation.readout().currentSector;
+  };
+  try {
+    const initial = descriptor(8);
+    assert.equal(presentation.create({ ...initial,
+      config: { ...initial.config, sectorCount: 8, sectorHysteresisDegrees: 3 },
+    }).applied, true);
+    assert.equal(prepare(0, playerView), 0);
+    assert.equal(prepare(270, fallbackView), 6);
+    assert.equal(prepare(24, playerView), 0, 'another view must not erase the hold zone');
+    assert.equal(prepare(26, playerView), 1);
+    assert.equal(prepare(270, fallbackView), 6);
+    assert.equal(prepare(24, playerView), 1, 'replacement camera objects retain the same view history');
+    const rotated = cameraAt(24);
+    rotated.rotation.y = Math.PI;
+    presentation.prepare(rotated, playerView);
+    assert.equal(presentation.readout().currentSector, 1, 'mouse-look at the same position keeps its sector');
+    assert.equal(prepare(90, playerView), 2);
+    assert.equal(prepare(180, playerView), 4);
+  } finally { presentation.dispose(); backend.dispose(); }
+});
+
 void test('ghost capture keeps the baked skinned pose instead of restoring bind geometry', () => {
   const renderer = new FakeRenderer();
   const scene = new THREE.Scene();

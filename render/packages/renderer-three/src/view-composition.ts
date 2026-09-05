@@ -105,7 +105,8 @@ export class RendererViewCompositionBackend {
   readonly #projection: ThreeRenderer;
   readonly #viewmodelCamera: THREE.PerspectiveCamera;
   readonly #webgl: THREE.WebGLRenderer;
-  readonly #prepareSceneForCamera: (camera: THREE.Camera) => void;
+  readonly #prepareSceneForCamera: (camera: THREE.Camera, view: object) => void;
+  #viewIdentities = new Map<string, object>();
   #cameras: ReadonlyMap<string, THREE.Camera> = new Map();
   #composition = EMPTY_COMPOSITION;
   #disposed = false;
@@ -118,7 +119,7 @@ export class RendererViewCompositionBackend {
     webgl: THREE.WebGLRenderer,
     projection: ThreeRenderer,
     viewmodelCamera = new THREE.PerspectiveCamera(),
-    prepareSceneForCamera: (camera: THREE.Camera) => void = () => undefined,
+    prepareSceneForCamera: (camera: THREE.Camera, view: object) => void = () => undefined,
   ) {
     this.#webgl = webgl;
     this.#projection = projection;
@@ -268,6 +269,7 @@ export class RendererViewCompositionBackend {
     for (const resource of this.#targets.values()) resource.target.dispose();
     this.#cameras = new Map();
     this.#composition = EMPTY_COMPOSITION;
+    this.#viewIdentities.clear();
     this.#presentations = new Map();
     this.#targets = new Map();
     this.#disposed = true;
@@ -311,6 +313,10 @@ export class RendererViewCompositionBackend {
   #publish(prepared: PreparedComposition): void {
     const priorTargets = this.#targets;
     const priorPresentations = this.#presentations;
+    // Camera objects are rebuilt with descriptor changes. Keep a bounded view
+    // identity so camera-dependent realization can retain per-view hysteresis.
+    this.#viewIdentities = new Map(prepared.composition.views.map(view =>
+      [view.id, this.#viewIdentities.get(view.id) ?? {}]));
     this.#cameras = prepared.cameras;
     this.#composition = prepared.composition;
     this.#presentations = prepared.presentations;
@@ -356,7 +362,7 @@ export class RendererViewCompositionBackend {
     this.#webgl.clear(true, true, true);
     this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
     this.#projection.prepareStaticInstanceBatches(camera);
-    this.#prepareSceneForCamera(camera);
+    this.#prepareSceneForCamera(camera, this.#viewIdentities.get(view.id)!);
     this.#webgl.render(this.#projection.scene, camera);
     target.lastRefreshedSubmission = submission;
     target.stale = false;
@@ -380,7 +386,7 @@ export class RendererViewCompositionBackend {
     this.#webgl.clear(true, true, true);
     this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
     this.#projection.prepareStaticInstanceBatches(camera);
-    this.#prepareSceneForCamera(camera);
+    this.#prepareSceneForCamera(camera, this.#viewIdentities.get(view.id)!);
     this.#webgl.render(this.#projection.scene, camera);
     // Camera-relative retained content belongs to the Engine-owned viewmodel
     // pass. Reapply its depth break after each configured primary view so the
