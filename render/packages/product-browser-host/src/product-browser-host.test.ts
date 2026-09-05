@@ -1022,6 +1022,8 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     const replacements: unknown[] = [];
     const applied: unknown[] = [];
     const confirmations: Array<{epoch: number; applied: number; replacements: number}> = [];
+    const diagnosticConfirmations: number[] = [];
+    let acknowledgeInitialReport: (() => void) | undefined;
     const transport = {
       lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
         accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
@@ -1034,6 +1036,13 @@ test('a normal fresh attachment installs its complete frontier baseline before t
       admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
       recoverOutputProjection: async () => { recoveries += 1; },
       confirmOutputBaseline: (epoch: number) => { if (epoch > 0) confirmations.push({epoch, applied: applied.length, replacements: replacements.length}); },
+      reportBrowserDiagnostics: async () => {
+        diagnosticConfirmations.push(confirmations.length);
+        if (diagnosticConfirmations.length === 1) {
+          await new Promise<void>((resolve) => { acknowledgeInitialReport = resolve; });
+        }
+        return { accepted: true as const };
+      },
       subscribeOutputs: () => () => undefined,
       subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
         emit = listener;
@@ -1103,6 +1112,12 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     assert.equal(applied.length, 1);
     assert.equal(recoveries, 0);
     assert.deepEqual(confirmations, [{ epoch: 1, applied: 1, replacements: 1 }]);
+    // The first ready report began before the baseline was realized. Its late
+    // acknowledgement must still trigger a report with confirmed evidence.
+    assert.deepEqual(diagnosticConfirmations, [0]);
+    acknowledgeInitialReport?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(diagnosticConfirmations, [0, 1]);
     assert.equal(host.readout().state, 'ready');
     await host.dispose();
   } finally {

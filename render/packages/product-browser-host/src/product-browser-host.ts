@@ -1327,6 +1327,7 @@ export async function mountProductBrowserHostWithApplication(
   let lastRendererSequence: string | null = null;
   let lastRendererObservationAtMs: number | null = null;
   let lastDiagnosticsStatusKey: string | null = null;
+  let baselineConfirmationRevision = 0;
   let terminalDiagnosticsReported = false;
   let recoverableClockDiagnosticPending = false;
   let recoverableClockDiagnosticReported = false;
@@ -1428,7 +1429,7 @@ export async function mountProductBrowserHostWithApplication(
       });
     const includeTerminal = terminal !== undefined && !terminalDiagnosticsReported;
     const hostState = state === 'starting' ? 'loading' : state;
-    const statusKey = `${hostState}/${transportClosed ? 'closed' : 'open'}/${transportClosed ? 'closed' : 'open'}`;
+    const statusKey = `${hostState}/${transportClosed ? 'closed' : 'open'}/${transportClosed ? 'closed' : 'open'}/${baselineConfirmationRevision}`;
     const recoverableEvent = recoverableClockDiagnosticPending && !recoverableClockDiagnosticReported
       ? Object.freeze({
           code: 'CSHARP_LIFECYCLE_CLOCK_REGRESSION' as const,
@@ -2093,7 +2094,8 @@ export async function mountProductBrowserHostWithApplication(
         // replacement. Report recovery only after that realization tail drains.
         enqueueRendererOutput(() => {
           transport.confirmOutputBaseline?.(epoch);
-          lastDiagnosticsStatusKey = null;
+          // A prior in-flight report must not acknowledge this new baseline.
+          baselineConfirmationRevision += 1;
           publishHealth();
         }, replacementEpoch);
         restoreReadyAfterHealthyTransport();
@@ -2545,6 +2547,7 @@ export async function mountProductBrowserHostWithApplication(
     await rendererOutputTail;
     if (failure !== null) throw failure;
     transport.confirmOutputBaseline?.(acceptedProjectionEpoch);
+    baselineConfirmationRevision += 1;
     if (options.autoStart !== false && !runtimeStartedBeforeMount) {
       await transport.waitUntilOutputSubscriptionReady?.();
       if (failure !== null) throw failure;
