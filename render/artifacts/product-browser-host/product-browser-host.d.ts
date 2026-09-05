@@ -455,11 +455,16 @@ export interface ProductBrowserHostOptions {
 /** @internal Reports whether admitted animation bytes still need their first semantic frame. */
 export declare function productBrowserInitialRendererFrameRequired(renderer: ProductBrowserHostOptions['renderer']): boolean;
 /** @internal Binds admitted preload bytes to one retained frame without mutating caller state. */
-export declare function bindProductBrowserInitialRendererFrame(renderer: NonNullable<ProductBrowserHostOptions['renderer']>, frame: RustyApplicationFrame): NonNullable<ProductBrowserHostOptions['renderer']>;
-/** @internal Folds only the pre-publication retained diffs into the mount frame. */
-export declare function prepareProductBrowserInitialRendererBaseline(outputs: readonly ProductBrowserRuntimeOutput[], requiredFrame: RustyApplicationFrame): {
+export declare function bindProductBrowserInitialRendererFrame(renderer: NonNullable<ProductBrowserHostOptions['renderer']>, frame: RustyApplicationFrame, publicationFrontiers?: readonly RenderPublicationFrontier[]): NonNullable<ProductBrowserHostOptions['renderer']>;
+/** @internal Folds one completed transport baseline into the mount frame. */
+export declare function prepareProductBrowserInitialRendererBaseline(outputs: readonly ProductBrowserRuntimeOutput[], requiredFrame: RustyApplicationFrame, options?: {
+    /** `true` only for a transport batch marked as one complete baseline. */
+    readonly complete: boolean;
+    readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
+}): {
     readonly frame: RustyApplicationFrame;
     readonly remainingOutputs: readonly ProductBrowserRuntimeOutput[];
+    readonly publicationFrontiers: readonly RenderPublicationFrontier[];
 };
 export interface ProductBrowserUiProjectionOptions {
     readonly expectedStream?: string;

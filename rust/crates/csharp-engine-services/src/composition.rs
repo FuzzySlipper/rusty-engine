@@ -232,6 +232,7 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 /// The runtime drives call boundaries; this owner stages and commits only
 /// Engine-facing effects created through the generated function tables.
 pub struct EngineServiceSet {
+    presentation_world: render_presentation::PresentationWorld,
     diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance: RuntimeAppearanceBridge,
     content: Box<RuntimeContentBridge>,
@@ -250,6 +251,8 @@ pub struct EngineServiceSet {
 }
 
 pub struct CsharpEngineCall {
+    presentation_world: render_presentation::PresentationWorld,
+    output: CsharpEngineCallOutput,
     appearance: Option<RuntimeAppearanceCall>,
     audio: RuntimeAudioCall,
     camera_view: crate::camera_view::RuntimeCameraViewCall,
@@ -260,6 +263,7 @@ pub struct CsharpEngineCall {
 }
 
 /// Staged Engine observations from one successful product call.
+#[derive(Clone, Default)]
 pub struct CsharpEngineCallOutput {
     pub appearance: Vec<CsharpAppearanceCallOutput>,
     pub frames: Vec<render_model::RenderFrameDiff>,
@@ -270,6 +274,7 @@ pub struct CsharpEngineCallOutput {
 
 /// Ordered renderer realization work emitted by the existing Appearance API
 /// during one product callback.
+#[derive(Clone)]
 pub enum CsharpAppearanceCallOutput {
     Frame(render_model::RenderFrameDiff),
     Presentation(render_presentation::PresentationFrameDiff),
@@ -307,6 +312,7 @@ impl EngineServiceSet {
         let mut audio = RuntimeAudioBridge::new(content_resources);
         audio.bind_diagnostics_sink(diagnostics_sink.clone());
         Ok(Self {
+            presentation_world: render_presentation::PresentationWorld::default(),
             diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::new(diagnostics_sink),
             appearance,
             content,
@@ -399,7 +405,10 @@ impl EngineServiceSet {
     /// only describes the fresh baseline construction, not the active product
     /// publication frontier that the replacement renderer must continue.
     pub fn renderer_publication_frontiers(&self) -> Vec<(String, u64)> {
-        self.voxel_scene_presentation.publication_frontiers()
+        vec![(
+            render_presentation::PRESENTATION_WORLD_STREAM.to_owned(),
+            self.presentation_world.revision(),
+        )]
     }
 
     /// Returns one completed update sample after the C# callback has returned.
@@ -507,7 +516,9 @@ impl EngineServiceSet {
         let ui = self.ui.take_staged_call()?;
         let voxel_content = self.voxel_content.take_staged_call()?;
         let voxel_scene_presentation = self.voxel_scene_presentation.take_staged_call()?;
-        Ok(CsharpEngineCall {
+        let mut call = CsharpEngineCall {
+            presentation_world: self.presentation_world.clone(),
+            output: CsharpEngineCallOutput::default(),
             appearance,
             audio,
             camera_view,
@@ -515,10 +526,28 @@ impl EngineServiceSet {
             ui,
             voxel_content,
             voxel_scene_presentation,
-        })
+        };
+        let mut output = self.raw_outputs(&call);
+        for item in &mut output.appearance {
+            if let CsharpAppearanceCallOutput::Frame(frame) = item {
+                *frame = call
+                    .presentation_world
+                    .apply(frame)
+                    .map_err(presentation_world_error)?;
+            }
+        }
+        for frame in &mut output.frames {
+            *frame = call
+                .presentation_world
+                .apply(frame)
+                .map_err(presentation_world_error)?;
+        }
+        call.output = output;
+        Ok(call)
     }
 
     pub fn commit_call(&mut self, call: CsharpEngineCall) {
+        self.presentation_world = call.presentation_world;
         self.appearance.commit(call.appearance);
         self.audio.commit(call.audio);
         self.camera_view.commit(call.camera_view);
@@ -545,6 +574,36 @@ impl EngineServiceSet {
     }
 
     pub fn outputs(&self, call: &CsharpEngineCall) -> CsharpEngineCallOutput {
+        call.output.clone()
+    }
+
+    /// Complete committed state for a fresh renderer. No product callback,
+    /// projector reset, resource admission, or active publication occurs.
+    pub fn snapshot_outputs(
+        &self,
+        binding: RuntimeUiRuntimeBinding,
+    ) -> Result<CsharpEngineCallOutput, CsharpEngineServicesError> {
+        let snapshot = self.presentation_world.snapshot();
+        let mut presentation = self.appearance.snapshot_presentation_frames()?;
+        let audio = self.audio.snapshot_frame()?;
+        if !audio.ops.is_empty() {
+            presentation.push(audio);
+        }
+        Ok(CsharpEngineCallOutput {
+            appearance: vec![
+                CsharpAppearanceCallOutput::Frame(snapshot.frame),
+                CsharpAppearanceCallOutput::AnimationCueDefinitions(
+                    self.appearance.snapshot_animation_cue_definitions(),
+                ),
+            ],
+            frames: Vec::new(),
+            view_composition: Some(self.camera_view.snapshot_composition()?),
+            ui: self.ui.snapshot_projections(binding),
+            presentation,
+        })
+    }
+
+    fn raw_outputs(&self, call: &CsharpEngineCall) -> CsharpEngineCallOutput {
         let appearance = call
             .appearance
             .as_ref()
@@ -587,11 +646,21 @@ impl EngineServiceSet {
     /// tainted and normal interaction still follows the existing replacement
     /// policy.
     pub fn recover_voxel_presentation_outputs(
-        &self,
+        &mut self,
     ) -> Result<CsharpEngineCallOutput, CsharpEngineServicesError> {
+        let mut world = self.presentation_world.clone();
+        let frames = self
+            .voxel_scene_presentation
+            .recover_from_canonical()?
+            .iter()
+            .map(|frame| world.apply(frame).map_err(presentation_world_error))
+            .collect::<Result<Vec<_>, _>>()?;
+        // The spatial edit is already canonical. Repair presentation intent
+        // without adopting any failed product-call staging or replaying input.
+        self.presentation_world = world;
         Ok(CsharpEngineCallOutput {
             appearance: Vec::new(),
-            frames: self.voxel_scene_presentation.recover_from_canonical()?,
+            frames,
             view_composition: None,
             ui: Vec::new(),
             presentation: Vec::new(),
@@ -604,7 +673,14 @@ impl CsharpEngineCall {
     /// actually succeeded. Other Engine service state stays staged unchanged.
     pub fn rebind_ui_runtime(&mut self, binding: RuntimeUiRuntimeBinding) {
         self.ui.rebind_runtime(binding);
+        self.output.ui = self.ui.projections.clone();
     }
+}
+
+fn presentation_world_error(
+    error: render_presentation::PresentationWorldError,
+) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new("CSHARP_PRESENTATION_WORLD", error.to_string())
 }
 
 /// Admits the optional retained-appearance catalog carried by product content.
@@ -728,19 +804,39 @@ mod tests {
         ));
         services.commit_call(staged);
 
-        services
-            .begin_attach_call(binding())
-            .expect("fresh attachment stage");
-        let attachment = services.take_call().expect("fresh attachment");
-        let attachment_output = services.outputs(&attachment);
+        let attachment_output = services
+            .snapshot_outputs(binding())
+            .expect("fresh attachment");
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment_output.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
         assert!(matches!(
-            attachment_output.frames[0].ops.as_slice(),
+            frame.ops.as_slice(),
             [
                 render_model::RenderDiff::DefineTexture { texture: defined },
                 render_model::RenderDiff::SetSkyBackground { background: Some(background) },
             ] if defined.id == background.texture
         ));
-        services.discard_call();
+
+        // Re-selecting the same retained texture cannot emit a stale version
+        // update or advance the canonical graphics frontier.
+        let frontier = services.renderer_publication_frontiers();
+        services.begin_call(binding());
+        let api = services.api();
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_sky_background)(api.camera_view.context, texture.handle)
+            },
+            ABI_OK
+        );
+        let call = services.take_call().unwrap();
+        assert!(services
+            .outputs(&call)
+            .frames
+            .iter()
+            .all(|frame| frame.ops.is_empty()));
+        services.commit_call(call);
+        assert_eq!(services.renderer_publication_frontiers(), frontier);
 
         services.begin_call(binding());
         let api = services.api();

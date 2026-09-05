@@ -129,6 +129,15 @@ and make retry behavior explicit. Use a named prepared/commit API when a
 multi-owner change genuinely requires coordination; do not assume an exception
 rewinds an Engine world.
 
+Fresh browser attachment reconstructs presentation from committed Engine
+snapshots; the host no longer invokes `IEngineProduct.Attach` to rebuild a
+renderer. Publish current presentation during ordinary product lifecycle and
+updates. The generated `Attach` member remains as an optional default method for
+source continuity, but placing required initialization only there has no effect on a
+fresh attachment. Graphics/voxel handles and publication frontiers survive the
+baseline; exact audio/animation time and frozen ghost-capture recovery remain
+tracked in Engine #7779.
+
 Current `IEngineContext` properties are named service families generated from
 the ABI: look, dynamics, motion, kinematic, spatial, perception, world origin,
 voxel, voxel content and presentation, content, authored content, appearance,

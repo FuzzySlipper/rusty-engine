@@ -24,7 +24,7 @@ use render_presentation::{
     ParticleCollisionLimitBehavior, ParticleCollisionVolume, ParticleEmissionAdmissionOutcome,
     ParticleEmitterDescriptor, ParticleEmitterHandle, ParticleEmitterPatch,
     ParticleProjectionDiagnosticCode, ParticleProjectionOp, ParticleProjector, ParticleSpriteRef,
-    ParticleVisual, PresentationFrameDiff, PresentationOpMeta,
+    ParticleVisual, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 use render_projection::{
     Appearance, RuntimeAppearanceCatalog, RuntimeAppearanceFact, RuntimeAppearanceProjector,
@@ -1750,6 +1750,75 @@ impl RuntimeAppearanceBridge {
     pub(crate) fn seal_resource_selection(&mut self) {
         self.selection_sealed = true;
         self.content_resources.clear();
+    }
+
+    /// Reconstructs retained non-graphics presentation state for a fresh
+    /// realization. Ordinary appearance `RenderFrameDiff` state belongs to
+    /// the canonical graphics world and is intentionally not regenerated
+    /// here, preserving its stable renderer identities.
+    ///
+    /// The result contains only retained creates. Direct particle emissions
+    /// and animation realization/cue events are historical signals and are
+    /// deliberately excluded.
+    pub(crate) fn snapshot_presentation_frames(
+        &self,
+    ) -> Result<Vec<PresentationFrameDiff>, CsharpEngineServicesError> {
+        let mut ops = Vec::new();
+        for (handle, descriptor) in self.state.billboard_projector.active_billboards() {
+            ops.push(PresentationOp::Billboard {
+                meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                op: BillboardProjectionOp::Create {
+                    handle,
+                    descriptor: descriptor.clone(),
+                },
+            });
+        }
+        for (handle, descriptor) in self.state.particle_projector.active_emitters() {
+            ops.push(PresentationOp::Particle {
+                meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                op: ParticleProjectionOp::Create {
+                    handle,
+                    descriptor: descriptor.clone(),
+                },
+            });
+        }
+        for (handle, descriptor) in self.state.ghost_plate_projector.active_plates() {
+            ops.push(PresentationOp::GhostPlate {
+                meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                op: GhostPlateProjectionOp::Create {
+                    handle,
+                    descriptor: descriptor.clone(),
+                },
+            });
+        }
+        for controller in self.state.animation_controllers.values() {
+            for (handle, descriptor) in controller.projector.active_projections() {
+                ops.push(PresentationOp::Animation {
+                    meta: PresentationOpMeta::new(snapshot_presentation_sequence(ops.len())?),
+                    op: render_presentation::AnimationProjectionOp::Create {
+                        handle,
+                        descriptor: descriptor.clone(),
+                    },
+                });
+            }
+        }
+        if ops.is_empty() {
+            return Ok(Vec::new());
+        }
+        PresentationFrameDiff::try_from_ops(ops)
+            .map(|frame| vec![frame])
+            .map_err(|error| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_PRESENTATION_BASELINE",
+                    format!("retained presentation baseline is invalid: {error:?}"),
+                )
+            })
+    }
+
+    /// Copies the current retained cue definitions for a baseline. Cue
+    /// delivery itself remains event-like and is not replayed by this read.
+    pub(crate) fn snapshot_animation_cue_definitions(&self) -> Vec<AnimationCueDefinition> {
+        self.state.animation_cue_definitions.clone()
     }
 
     pub(crate) fn presentation_create_billboard(
@@ -6838,6 +6907,15 @@ fn push_presentation_frame(staged: &mut RuntimeAppearanceCall, frame: Presentati
         .push(RuntimeAppearanceCallOutput::Presentation(frame));
 }
 
+fn snapshot_presentation_sequence(length: usize) -> Result<u32, CsharpEngineServicesError> {
+    u32::try_from(length).map_err(|_| {
+        CsharpEngineServicesError::new(
+            "CSHARP_PRESENTATION_BASELINE",
+            "retained presentation baseline has too many operations",
+        )
+    })
+}
+
 fn narrow_retained_count(
     value: usize,
     message: &'static str,
@@ -10320,6 +10398,52 @@ pub(super) mod tests {
             .presentation
             .iter()
             .all(|frame| frame.validate().is_ok()));
+        bridge.commit(Some(call));
+
+        let before = bridge.presentation_readout();
+        let baseline = bridge
+            .snapshot_presentation_frames()
+            .expect("retained presentation baseline");
+        assert_eq!(baseline.len(), 1);
+        assert!(baseline[0].ops.iter().all(|op| !matches!(
+            op,
+            PresentationOp::Particle {
+                op: ParticleProjectionOp::Emit { .. },
+                ..
+            }
+        )));
+        assert_eq!(
+            baseline[0].ops.len(),
+            2,
+            "retained billboard and emitter only"
+        );
+        assert!(matches!(
+            baseline[0].ops[0],
+            PresentationOp::Billboard {
+                op: BillboardProjectionOp::Create { .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            baseline[0].ops[1],
+            PresentationOp::Particle {
+                op: ParticleProjectionOp::Create { .. },
+                ..
+            }
+        ));
+        let after = bridge.presentation_readout();
+        assert_eq!(after.active_billboards, before.active_billboards);
+        assert_eq!(after.active_emitters, before.active_emitters);
+        assert_eq!(after.reserved_particles, before.reserved_particles);
+        assert_eq!(after.emitted_bursts, before.emitted_bursts);
+        assert_eq!(
+            after.billboard_diagnostic_count,
+            before.billboard_diagnostic_count
+        );
+        assert_eq!(
+            after.particle_diagnostic_count,
+            before.particle_diagnostic_count
+        );
         let _ = emitter;
     }
 

@@ -443,6 +443,55 @@ void test('complete replacement frontiers continue independent published streams
   assert.equal(projection.node(renderHandle(42))?.visible, false);
 });
 
+void test('baseline installs retained graphics and its presentation-world frontier together', () => {
+  const projection = new RenderProjection();
+  const handle = renderHandle(43);
+  projection.establishBaseline({
+    schemaVersion: 1,
+    ops: [createPrimitive(43, 'baseline-graphics')],
+  }, [{ stream: 'presentation-world', revision: 9 }]);
+
+  projection.applyFrame({
+    schemaVersion: 1,
+    publication: {
+      stream: 'presentation-world', baseRevision: 9, revision: 10, operationCount: 1,
+    },
+    ops: [{ op: 'replaceMeshPayload', handle, payload: quadPayload() }],
+  });
+
+  assert.deepEqual(projection.node(handle)?.meshPayload, quadPayload());
+});
+
+void test('a rejected baseline does not replace retained topology or publication frontiers', () => {
+  const projection = new RenderProjection();
+  projection.establishBaseline({
+    schemaVersion: 1,
+    ops: [createPrimitive(44, 'stable-baseline')],
+  }, [{ stream: 'presentation-world', revision: 3 }]);
+  const before = projection.snapshot();
+
+  assert.throws(() => projection.establishBaseline({
+    schemaVersion: 1,
+    ops: [createPrimitive(45, 'bad-baseline')],
+  }, [
+    { stream: 'presentation-world', revision: 4 },
+    { stream: 'presentation-world', revision: 5 },
+  ]), /duplicate publication frontier/u);
+
+  assert.deepEqual(projection.snapshot(), before);
+  projection.applyFrame({
+    schemaVersion: 1,
+    publication: {
+      stream: 'presentation-world', baseRevision: 3, revision: 4, operationCount: 1,
+    },
+    ops: [{
+      op: 'update', handle: renderHandle(44), transform: null, material: null,
+      visible: false, metadata: null,
+    }],
+  });
+  assert.equal(projection.node(renderHandle(44))?.visible, false);
+});
+
 void test('small atomic frames structurally share unrelated retained definitions', () => {
   const projection = new RenderProjection();
   projection.applyFrame({

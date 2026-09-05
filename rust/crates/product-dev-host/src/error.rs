@@ -1,101 +1,13 @@
-use serde::{Deserialize, Serialize};
 use std::{fmt, io};
 
-/// The small semantic recovery vocabulary shared by a runtime owner and its
-/// development host.  This is deliberately not a generic operation-result
-/// hierarchy: it only says whether an operation changed authoritative state,
-/// which host-owned scope can no longer be trusted, and what the host may do
-/// next.  The diagnostic code and text remain separate for observability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProductDevMutationCertainty {
-    /// The condition was discovered before the operation could mutate state.
-    NotApplied,
-    /// The operation and its owned effects were committed.
-    Committed,
-    /// The operation crossed an ownership boundary and its effect is unknown.
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProductDevInvalidatedScope {
-    /// No host-visible state needs to be re-established.
-    None,
-    /// The input cursor or held-input projection is no longer authoritative.
-    Input,
-    /// Retained output/projection state needs a fresh baseline.
-    Outputs,
-    /// The loaded runtime incarnation cannot be trusted to continue.
-    Incarnation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProductDevNextAction {
-    /// Continue using the current runtime and its current binding.
-    Continue,
-    /// Re-establish the invalidated scope before issuing dependent work.
-    Rebaseline,
-    /// Replace the runtime incarnation; the developer session may remain.
-    ReplaceIncarnation,
-}
-
-/// Source-owned facts that let a host choose recovery without parsing a
-/// diagnostic code or message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProductDevRuntimeRecovery {
-    pub mutation: ProductDevMutationCertainty,
-    pub invalidated_scope: ProductDevInvalidatedScope,
-    pub next_action: ProductDevNextAction,
-}
-
-impl ProductDevRuntimeRecovery {
-    pub const fn committed() -> Self {
-        Self {
-            mutation: ProductDevMutationCertainty::Committed,
-            invalidated_scope: ProductDevInvalidatedScope::None,
-            next_action: ProductDevNextAction::Continue,
-        }
-    }
-
-    pub const fn not_applied() -> Self {
-        Self {
-            mutation: ProductDevMutationCertainty::NotApplied,
-            invalidated_scope: ProductDevInvalidatedScope::None,
-            next_action: ProductDevNextAction::Continue,
-        }
-    }
-
-    pub const fn output_rebaseline() -> Self {
-        Self {
-            mutation: ProductDevMutationCertainty::Unknown,
-            invalidated_scope: ProductDevInvalidatedScope::Outputs,
-            next_action: ProductDevNextAction::Rebaseline,
-        }
-    }
-
-    pub const fn incarnation_tainted() -> Self {
-        Self {
-            mutation: ProductDevMutationCertainty::Unknown,
-            invalidated_scope: ProductDevInvalidatedScope::Incarnation,
-            next_action: ProductDevNextAction::ReplaceIncarnation,
-        }
-    }
-
-    pub const fn mutation(self) -> ProductDevMutationCertainty {
-        self.mutation
-    }
-
-    pub const fn invalidated_scope(self) -> ProductDevInvalidatedScope {
-        self.invalidated_scope
-    }
-
-    pub const fn next_action(self) -> ProductDevNextAction {
-        self.next_action
-    }
-}
+/// Product-dev spellings remain public for transport and API continuity. The
+/// host-neutral runtime/session vocabulary owns their representation and wire
+/// names.
+pub use runtime_session::{
+    RuntimeInvalidatedScope as ProductDevInvalidatedScope,
+    RuntimeMutationCertainty as ProductDevMutationCertainty,
+    RuntimeNextAction as ProductDevNextAction, RuntimeRecovery as ProductDevRuntimeRecovery,
+};
 
 /// A stable, bounded diagnostic emitted by the development host.
 #[derive(Debug, Clone, PartialEq, Eq)]

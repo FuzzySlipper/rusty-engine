@@ -27,6 +27,10 @@ struct RuntimeUiStream {
     stream: String,
     contract: String,
     last_sequence: Option<u64>,
+    /// The last committed product projection for this live stream. Delivery is
+    /// deliberately separate: a new renderer attachment gets this copied
+    /// baseline without asking the product to publish again.
+    latest: Option<RuntimeUiProjectionEnvelope>,
 }
 
 struct RuntimeUiDiagnosticLease {
@@ -199,6 +203,7 @@ impl RuntimeUiBridge {
                 stream,
                 contract,
                 last_sequence: None,
+                latest: None,
             },
         );
         // SAFETY: result pointer was checked above and belongs to the immediate direct call.
@@ -282,8 +287,23 @@ impl RuntimeUiBridge {
             CsharpEngineServicesError::new("CSHARP_UI_PROJECTION", error.to_string())
         })?;
         stream.last_sequence = Some(projection.sequence);
+        stream.latest = Some(envelope.clone());
         self.staged.push(envelope);
         Ok(())
+    }
+
+    /// Copies the current projection of every live UI stream for a fresh host
+    /// attachment. Rebinding changes only the Engine-owned lifecycle fence;
+    /// it never advances product stream sequences or mutates retained state.
+    pub(crate) fn snapshot_projections(
+        &self,
+        binding: RuntimeUiRuntimeBinding,
+    ) -> Vec<RuntimeUiProjectionEnvelope> {
+        self.streams
+            .values()
+            .filter_map(|stream| stream.latest.clone())
+            .map(|projection| projection.with_runtime(binding))
+            .collect()
     }
 }
 
@@ -750,5 +770,73 @@ mod tests {
             bridge.take_staged_call().is_err(),
             "stale publish prevents the call from committing"
         );
+    }
+
+    #[test]
+    fn snapshot_retags_only_the_last_committed_projection() {
+        let mut bridge = RuntimeUiBridge::new();
+        let api = api(&mut bridge);
+        let mut stream = NativeUiStreamHandle::default();
+        bridge.begin_call(binding(13));
+        assert_eq!(
+            unsafe { (api.open_stream)(api.context, &stream_request(), &mut stream) },
+            ABI_OK
+        );
+        let staged_stream = bridge.take_staged_call().expect("committed stream");
+        bridge.commit(staged_stream);
+
+        let nodes = [NativeStructuredValueNode {
+            kind: NativeStructuredValueKind::Null,
+            bool_value: 0,
+            number_value: 0.0,
+            key_offset: 0,
+            key_len: 0,
+            text_offset: 0,
+            text_len: 0,
+            first_edge: 0,
+            child_count: 0,
+        }];
+        let mut projection = NativeUiProjection {
+            stream,
+            sequence: 1,
+            value: NativeStructuredValue {
+                nodes: nodes.as_ptr(),
+                node_count: nodes.len(),
+                edges: std::ptr::null(),
+                edge_count: 0,
+                root: 0,
+                utf8: std::ptr::null(),
+                utf8_len: 0,
+            },
+        };
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        bridge.begin_call(binding(13));
+        assert_eq!(
+            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
+            ABI_OK
+        );
+        let staged_projection = bridge.take_staged_call().expect("committed projection");
+        bridge.commit(staged_projection);
+
+        projection.sequence = 2;
+        bridge.begin_call(binding(14));
+        assert_eq!(
+            unsafe { (api.publish_projection)(api.context, &projection, &mut receipt) },
+            ABI_OK
+        );
+
+        let snapshot = bridge.snapshot_projections(binding(99));
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].runtime(), binding(99));
+        assert_eq!(snapshot[0].sequence(), 1);
+        assert_eq!(
+            bridge
+                .streams
+                .get(&stream.value)
+                .and_then(|state| state.last_sequence),
+            Some(1),
+            "the staged publication remains invisible until its call commits"
+        );
+        bridge.discard_call();
     }
 }

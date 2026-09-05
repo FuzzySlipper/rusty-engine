@@ -319,6 +319,17 @@ impl AnimationProjector {
         self.active.get(&handle)
     }
 
+    /// Iterates retained controller projections in stable handle order for a
+    /// fresh realization baseline.
+    pub fn active_projections(
+        &self,
+    ) -> impl Iterator<Item = (AnimationProjectionHandle, &AnimationProjectionDescriptor)> + '_
+    {
+        self.active
+            .iter()
+            .map(|(&handle, descriptor)| (handle, descriptor))
+    }
+
     pub fn readout(&self) -> AnimationProjectionReadout {
         AnimationProjectionReadout {
             active_controllers: self.active.len() as u32,

@@ -154,10 +154,10 @@ at a time.
 
 ## TypeScript boundary
 
-TypeScript remains appropriate for DOM UI, accessibility, and explicit Engine
-host/backend implementation. It does not own product state, gameplay logic, or
-non-UI rendering. Engine renderer resources, canvas/backend lifecycle, and
-frame realization stay in the Engine path.
+Downstream TypeScript owns DOM UI and accessibility, never gameplay state or
+non-UI rendering. Engine TypeScript owns browser realization, including Three.js,
+GPU resources, audio, interpolation, and canvas/backend lifecycle. Canonical
+presentation intent remains in Rust; gameplay decisions remain in C#.
 
 ## Retired lanes
 

@@ -294,6 +294,29 @@ impl AudioProjector {
         })
     }
 
+    /// Iterates the retained voices in stable handle order. This is a
+    /// read-only projection view for a fresh host baseline; one-shot signals
+    /// are intentionally absent because they are not retained state.
+    pub fn active_voices(&self) -> impl Iterator<Item = AudioVoiceReadout> + '_ {
+        self.active
+            .iter()
+            .map(|(&handle, voice)| AudioVoiceReadout {
+                handle,
+                descriptor: voice.descriptor.clone(),
+                desired_state: voice.desired_state,
+            })
+    }
+
+    /// Returns the complete closed bus state, including buses that retain
+    /// their default values and therefore have no explicit map entry.
+    pub fn buses(&self) -> [AudioBusReadout; 3] {
+        [
+            self.bus(AudioBus::Sfx),
+            self.bus(AudioBus::Ambient),
+            self.bus(AudioBus::Ui),
+        ]
+    }
+
     pub fn bus(&self, bus: AudioBus) -> AudioBusReadout {
         let state = self.buses.get(&bus).copied().unwrap_or_default();
         AudioBusReadout {

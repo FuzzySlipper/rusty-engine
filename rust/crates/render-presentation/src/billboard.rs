@@ -403,6 +403,15 @@ impl BillboardProjector {
         self.active.get(&handle)
     }
 
+    /// Iterates retained billboards in stable handle order for a baseline.
+    pub fn active_billboards(
+        &self,
+    ) -> impl Iterator<Item = (BillboardHandle, &BillboardDescriptor)> + '_ {
+        self.active
+            .iter()
+            .map(|(&handle, descriptor)| (handle, descriptor))
+    }
+
     pub fn readout(&self) -> BillboardProjectionReadout {
         BillboardProjectionReadout {
             active_billboards: self.active.len() as u32,

@@ -467,6 +467,16 @@ impl ParticleProjector {
         self.active.get(&handle)
     }
 
+    /// Iterates retained emitters in stable handle order for a baseline.
+    /// Direct `Emit` signals are deliberately not retained and do not appear.
+    pub fn active_emitters(
+        &self,
+    ) -> impl Iterator<Item = (ParticleEmitterHandle, &ParticleEmitterDescriptor)> + '_ {
+        self.active
+            .iter()
+            .map(|(&handle, descriptor)| (handle, descriptor))
+    }
+
     pub fn readout(&self) -> ParticleProjectionReadout {
         ParticleProjectionReadout {
             active_emitters: self.active.len() as u32,

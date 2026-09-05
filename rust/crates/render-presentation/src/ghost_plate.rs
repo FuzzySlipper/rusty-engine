@@ -212,6 +212,15 @@ impl GhostPlateProjector {
     pub fn descriptor(&self, handle: GhostPlateHandle) -> Option<&GhostPlateDescriptor> {
         self.active.get(&handle)
     }
+
+    /// Iterates retained plates in stable handle order for a baseline.
+    pub fn active_plates(
+        &self,
+    ) -> impl Iterator<Item = (GhostPlateHandle, &GhostPlateDescriptor)> + '_ {
+        self.active
+            .iter()
+            .map(|(&handle, descriptor)| (handle, descriptor))
+    }
     pub fn readout(&self) -> GhostPlateProjectionReadout {
         GhostPlateProjectionReadout {
             active_plates: self.active.len() as u32,

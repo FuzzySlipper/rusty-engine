@@ -775,6 +775,143 @@ test('initial renderer baseline folds pre-publication diffs and removes only rep
   });
 });
 
+test('a completed initial baseline consumes a published first renderer frame and carries its frontier', () => {
+  const animatedDefinition = { op: 'defineAnimatedMesh', asset: { asset: 'mesh/test' } };
+  const published = {
+    schemaVersion: 1,
+    publication: {
+      stream: 'presentation-world', baseRevision: 6, revision: 7, operationCount: 1,
+    },
+    ops: [animatedDefinition],
+  } as unknown as RustyApplicationFrame;
+  const retainedPresentation = {
+    kind: 'presentation' as const,
+    frame: { schemaVersion: 1, ops: [{ kind: 'retainedVoice', handle: 'voice/ambient' }] },
+  };
+  const baseline = prepareProductBrowserInitialRendererBaseline([
+    { kind: 'frame', frame: published },
+    retainedPresentation,
+  ], published, {
+    complete: true,
+    publicationFrontiers: [{ stream: 'presentation-world', revision: 7 }],
+  });
+
+  assert.deepEqual(baseline.frame['ops'], [animatedDefinition]);
+  assert.deepEqual(baseline.publicationFrontiers, [{ stream: 'presentation-world', revision: 7 }]);
+  assert.deepEqual(baseline.remainingOutputs, [retainedPresentation]);
+});
+
+test('a normal fresh attachment installs its complete frontier baseline before the next presentation-world delta', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const runtime = { instanceId: 'fresh', generation: '1', controlRevision: '1' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let recoveries = 0;
+    let activeRevision = 0;
+    const replacements: unknown[] = [];
+    const applied: unknown[] = [];
+    const transport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportAnimationFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportGhostPlateFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+      recoverOutputProjection: async () => { recoveries += 1; },
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => true,
+        resetAnimationRealizationOwner: () => true,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => true,
+        acknowledgeAnimationRealizedFacts: () => true,
+        replaceFrame: async (frame: unknown, frontiers: readonly { readonly revision: number }[] = []) => {
+          replacements.push({ frame, frontiers });
+          activeRevision = frontiers[0]?.revision ?? 0;
+          return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+        },
+        applyFrame: (frame: { readonly publication?: { readonly baseRevision: number; readonly revision: number } }) => {
+          applied.push(frame);
+          const publication = frame.publication;
+          if (publication === undefined || publication.baseRevision === activeRevision) {
+            if (publication !== undefined) activeRevision = publication.revision;
+            return { outcome: 'applied' as const, diagnostics: [] };
+          }
+          return {
+            outcome: 'rejected_atomic' as const,
+            diagnostics: [{ code: 'publication_gap', message: 'frontier was not installed' }],
+          };
+        },
+      },
+      input: { sampleController: () => 0, drain: () => [], bindRuntime: () => undefined },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport: transport as never,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => fakeApplication as never);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publish([
+      {
+        kind: 'binding', runtime, nextInputSequence: '1',
+        publicationFrontiers: [{ stream: 'presentation-world', revision: 7 }],
+      },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'create', handle: 1 }] } },
+    ], { epoch: 1, baseline: true, recovery: 'none' });
+    publish([{
+      kind: 'frame',
+      frame: {
+        schemaVersion: 1,
+        publication: {
+          stream: 'presentation-world', baseRevision: 7, revision: 8, operationCount: 1,
+        },
+        ops: [{ op: 'update', handle: 1 }],
+      },
+    }], { epoch: 1, baseline: false, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(replacements.length, 1);
+    assert.equal(applied.length, 1);
+    assert.equal(recoveries, 0);
+    assert.equal(host.readout().state, 'ready');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
 test('audio feedback claims the initial owner, retries without loss, and acknowledges only the submitted range', async () => {
   const reports: Array<Record<string, unknown>> = [];
   const acknowledgements: number[] = [];

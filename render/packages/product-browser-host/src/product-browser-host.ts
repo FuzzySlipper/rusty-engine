@@ -633,6 +633,7 @@ export function productBrowserInitialRendererFrameRequired(
 export function bindProductBrowserInitialRendererFrame(
   renderer: NonNullable<ProductBrowserHostOptions['renderer']>,
   frame: RustyApplicationFrame,
+  publicationFrontiers?: readonly RenderPublicationFrontier[],
 ): NonNullable<ProductBrowserHostOptions['renderer']> {
   if (renderer.initialContent === undefined) {
     throw new ProductBrowserHostError(
@@ -645,21 +646,30 @@ export function bindProductBrowserInitialRendererFrame(
     initialContent: Object.freeze({
       ...renderer.initialContent,
       frame,
+      ...(publicationFrontiers === undefined ? {} : { publicationFrontiers }),
     }),
   });
 }
 
-/** @internal Folds only the pre-publication retained diffs into the mount frame. */
+/** @internal Folds one completed transport baseline into the mount frame. */
 export function prepareProductBrowserInitialRendererBaseline(
   outputs: readonly ProductBrowserRuntimeOutput[],
   requiredFrame: RustyApplicationFrame,
+  options: {
+    /** `true` only for a transport batch marked as one complete baseline. */
+    readonly complete: boolean;
+    readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
+  } = { complete: false },
 ): {
   readonly frame: RustyApplicationFrame;
   readonly remainingOutputs: readonly ProductBrowserRuntimeOutput[];
+  readonly publicationFrontiers: readonly RenderPublicationFrontier[];
 } {
   const firstPublishedFrameIndex = outputs.findIndex((output) => output.kind === 'frame'
     && output.frame['publication'] !== undefined);
-  const seedLimit = firstPublishedFrameIndex < 0 ? outputs.length : firstPublishedFrameIndex;
+  const seedLimit = options.complete
+    ? outputs.length
+    : firstPublishedFrameIndex < 0 ? outputs.length : firstPublishedFrameIndex;
   const seedIndexes = new Set<number>();
   const seedFrames: RustyApplicationFrame[] = [];
   for (let index = 0; index < seedLimit; index += 1) {
@@ -671,7 +681,7 @@ export function prepareProductBrowserInitialRendererBaseline(
   if (!seedFrames.some((frame) => frame === requiredFrame)) {
     throw new ProductBrowserHostError(
       'startup_failed',
-      'initial retained renderer frame was not preserved before published frame diffs',
+      'initial retained renderer frame was not preserved by the completed transport baseline',
     );
   }
   const seedOps = seedFrames.flatMap((frame) => [...(frame['ops'] as readonly unknown[])]);
@@ -709,7 +719,11 @@ export function prepareProductBrowserInitialRendererBaseline(
       }),
     }];
   });
-  return Object.freeze({ frame, remainingOutputs: Object.freeze(remainingOutputs) });
+  return Object.freeze({
+    frame,
+    remainingOutputs: Object.freeze(remainingOutputs),
+    publicationFrontiers: Object.freeze([...(options.publicationFrontiers ?? [])]),
+  });
 }
 
 function retainedDefinitionSignature(operation: unknown): string | null {
@@ -1314,6 +1328,14 @@ export async function mountProductBrowserHostWithApplication(
   let rendererOutputTail: Promise<void> = Promise.resolve();
   let rendererProjectionEpoch = 0;
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
+  // A transport-marked connection baseline is a complete retained graph. Keep
+  // its envelope while animated resources wait for their initial definitions;
+  // an arbitrary binding is never treated as a replacement on its own.
+  let pendingInitialRendererBaseline: {
+    readonly epoch: number;
+    readonly outputs: readonly ProductBrowserRuntimeOutput[];
+    readonly publicationFrontiers: readonly RenderPublicationFrontier[];
+  } | null = null;
   const maximumPendingOutputs = 64;
   const requiresInitialRendererFrame = productBrowserInitialRendererFrameRequired(options.renderer);
   let initialRendererFrameGate: Promise<
@@ -1919,7 +1941,9 @@ export async function mountProductBrowserHostWithApplication(
     epoch: number,
   ): void => {
     const pending = projectionRecovery;
-    if (pending === null || epoch <= pending.fromEpoch || application === null) return;
+    if (application === null) return;
+    if (pending !== null && epoch <= pending.fromEpoch) return;
+    if (pending === null && epoch <= acceptedProjectionEpoch) return;
     if (selectedProjectionBaselineEpoch !== null) {
       if (epoch <= selectedProjectionBaselineEpoch) return;
       // A newer retained replacement supersedes one that was selected but has
@@ -1949,8 +1973,7 @@ export async function mountProductBrowserHostWithApplication(
     }) as RustyApplicationFrame;
     const retainedOutputs = outputs.filter((output) => output.kind !== 'frame'
       && output.kind !== 'runtime-progress'
-      && output.kind !== 'runtime-input-result'
-      && output.kind !== 'presentation');
+      && output.kind !== 'runtime-input-result');
 
     const replacementEpoch = rendererProjectionEpoch;
     // Rust attaches complete-baseline frontiers to its binding in one ordered
@@ -1958,7 +1981,8 @@ export async function mountProductBrowserHostWithApplication(
     // replaceable scenes; preserving every operation in that order is the
     // existing complete-frame representation accepted by replaceFrame.
     rendererOutputTail = rendererOutputTail.then(async () => {
-      if (projectionRecovery?.fromEpoch !== pending.fromEpoch
+      if ((pending !== null && projectionRecovery?.fromEpoch !== pending.fromEpoch)
+        || (pending === null && epoch <= acceptedProjectionEpoch)
         || rendererProjectionEpoch !== replacementEpoch
         || state === 'failed'
         || state === 'disposed') return;
@@ -1980,7 +2004,8 @@ export async function mountProductBrowserHostWithApplication(
 
         // Replacement is now visible. Recreate only the fixed realization
         // reporters and then switch the other retained facets in original
-        // baseline order. Presentation/progress/input receipts stay dropped.
+        // baseline order. The Rust snapshot omits expired one-shots, while
+        // retained presentation state must be realized with the replacement.
         host.renderer.resetAudioRealizationOwner();
         host.renderer.resetAnimationRealizationOwner();
         audioFeedbackReporter = createProductBrowserAudioFeedbackReporter({
@@ -2010,12 +2035,13 @@ export async function mountProductBrowserHostWithApplication(
             applyOutput(output, epoch);
           }
         }
-        if (projectionRecovery?.fromEpoch !== pending.fromEpoch
+        if ((pending !== null && projectionRecovery?.fromEpoch !== pending.fromEpoch)
+          || (pending === null && epoch <= acceptedProjectionEpoch)
           || rendererProjectionEpoch !== replacementEpoch
           || failure !== null
           || transportClosed) return;
         acceptedProjectionEpoch = epoch;
-        projectionRecovery = null;
+        if (pending !== null) projectionRecovery = null;
         selectedProjectionBaselineEpoch = null;
         const trailingOutputs = pendingProjectionIncrementals?.epoch === epoch
           ? pendingProjectionIncrementals.outputs
@@ -2051,6 +2077,25 @@ export async function mountProductBrowserHostWithApplication(
       beginProjectionRecovery(metadata.epoch);
       return;
     }
+    if (application === null && requiresInitialRendererFrame && metadata?.baseline === true) {
+      const frontierBindings = outputs.filter((output): output is ProductBrowserRuntimeBindingOutput => (
+        output.kind === 'binding' && output.publicationFrontiers !== undefined
+      ));
+      if (frontierBindings.length > 1) {
+        failAndClose(new ProductBrowserHostError(
+          'output_failed',
+          'initial retained projection contained multiple publication frontier bindings',
+        ), 'output_failed');
+        return;
+      }
+      if (pendingInitialRendererBaseline === null || metadata.epoch > pendingInitialRendererBaseline.epoch) {
+        pendingInitialRendererBaseline = Object.freeze({
+          epoch: metadata.epoch,
+          outputs: Object.freeze([...outputs]),
+          publicationFrontiers: Object.freeze([...(frontierBindings[0]?.publicationFrontiers ?? [])]),
+        });
+      }
+    }
     if (metadata !== undefined && metadata.epoch < acceptedProjectionEpoch) return;
     if (projectionRecovery !== null) {
       if (metadata?.baseline === true && metadata.epoch > projectionRecovery.fromEpoch) {
@@ -2080,6 +2125,26 @@ export async function mountProductBrowserHostWithApplication(
           ]),
         });
       }
+      return;
+    }
+    // A normal fresh attachment also replaces asynchronously. Do not let a
+    // same-epoch delta advance the observed frontier while that replacement is
+    // still queued; it belongs immediately after the complete baseline.
+    if (metadata !== undefined
+      && metadata.baseline !== true
+      && selectedProjectionBaselineEpoch === metadata.epoch) {
+      const trailing = pendingProjectionIncrementals;
+      pendingProjectionIncrementals = Object.freeze({
+        epoch: metadata.epoch,
+        outputs: Object.freeze([
+          ...(trailing?.epoch === metadata.epoch ? trailing.outputs : []),
+          ...outputs,
+        ]),
+      });
+      return;
+    }
+    if (metadata?.baseline === true && application !== null) {
+      applyProjectionBaseline(outputs, metadata.epoch);
       return;
     }
     if (metadata !== undefined) acceptedProjectionEpoch = Math.max(acceptedProjectionEpoch, metadata.epoch);
@@ -2283,14 +2348,39 @@ export async function mountProductBrowserHostWithApplication(
       }
       const initialFrameResult = await initialFrameGate;
       if (initialFrameResult.accepted === false) throw initialFrameResult.error;
+      // Assignment happens in the subscribed output callback, which TypeScript
+      // cannot model through local flow analysis.
+      const completeBaseline = pendingInitialRendererBaseline as {
+        readonly epoch: number;
+        readonly outputs: readonly ProductBrowserRuntimeOutput[];
+        readonly publicationFrontiers: readonly RenderPublicationFrontier[];
+      } | null;
       const baseline = prepareProductBrowserInitialRendererBaseline(
-        pendingOutputs,
+        completeBaseline?.outputs ?? pendingOutputs,
         initialFrameResult.frame,
+        completeBaseline === null
+          ? undefined
+          : {
+              complete: true,
+              publicationFrontiers: completeBaseline.publicationFrontiers,
+            },
       );
-      pendingOutputs.splice(0, pendingOutputs.length, ...baseline.remainingOutputs);
+      if (completeBaseline === null) {
+        pendingOutputs.splice(0, pendingOutputs.length, ...baseline.remainingOutputs);
+      } else {
+        // Connection baselines arrive before later live output in their epoch.
+        // Replace just that envelope, leaving any trailing deltas queued for
+        // ordinary post-mount delivery.
+        pendingOutputs.splice(
+          0,
+          completeBaseline.outputs.length,
+          ...baseline.remainingOutputs,
+        );
+      }
       renderer = bindProductBrowserInitialRendererFrame(
         options.renderer as NonNullable<ProductBrowserHostOptions['renderer']>,
         baseline.frame,
+        baseline.publicationFrontiers,
       );
       runtimeStartedBeforeMount = true;
     }

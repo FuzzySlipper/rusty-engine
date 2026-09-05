@@ -11,6 +11,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { zlibSync } from 'fflate';
 
 import { renderHandle, type AnimatedMeshAsset, type RenderDiff, type RenderNode } from '@rusty-engine/render-contracts';
+import { RenderProjection } from '@rusty-engine/render-projection';
 import {
   MapAnimatedMeshAssetSource,
   AnimatedMeshRegistry,
@@ -92,6 +93,56 @@ void test('recovered publication frontiers continue through the Three renderer',
   });
 
   assert.equal(renderer.objectFor(handle)?.name, 'recovered-voxel');
+});
+
+void test('a shared projection establishes once, rejects failed realization without advancing, then accepts its next delta', () => {
+  const projection = new RenderProjection();
+  const renderer = new ThreeRenderer({ projection });
+  const handle = renderHandle(78);
+  renderer.establishBaseline({
+    schemaVersion: 1,
+    ops: [createDiff(handle, cubeNode('shared-baseline'))],
+  }, [{ stream: 'presentation-world', revision: 12 }]);
+
+  const before = projection.snapshot();
+  assert.throws(() => renderer.applyFrame({
+    schemaVersion: 1,
+    publication: {
+      stream: 'presentation-world', baseRevision: 12, revision: 13, operationCount: 1,
+    },
+    ops: [{ op: 'defineAnimatedMesh', asset: animatedMeshAsset() }],
+  }), /missing animated mesh resource/u);
+  assert.deepEqual(projection.snapshot(), before);
+
+  renderer.applyFrame({
+    schemaVersion: 1,
+    publication: {
+      stream: 'presentation-world', baseRevision: 12, revision: 13, operationCount: 1,
+    },
+    ops: [{
+      op: 'update', handle, transform: null, material: null, visible: false, metadata: null,
+    }],
+  });
+  assert.equal(projection.node(handle)?.visible, false);
+  assert.equal(renderer.objectFor(handle)?.visible, false);
+});
+
+void test('standalone ThreeRenderer retains and advances its private projection', () => {
+  const renderer = new ThreeRenderer({
+    publicationFrontiers: [{ stream: 'presentation-world', revision: 2 }],
+  });
+  const handle = renderHandle(79);
+  renderer.applyFrame({ schemaVersion: 1, ops: [createDiff(handle, cubeNode('standalone'))] });
+  renderer.applyFrame({
+    schemaVersion: 1,
+    publication: {
+      stream: 'presentation-world', baseRevision: 2, revision: 3, operationCount: 1,
+    },
+    ops: [{
+      op: 'update', handle, transform: null, material: null, visible: false, metadata: null,
+    }],
+  });
+  assert.equal(renderer.objectFor(handle)?.visible, false);
 });
 
 void test('destroy removes the node and frees the handle', () => {

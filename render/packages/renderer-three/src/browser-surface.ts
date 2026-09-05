@@ -75,6 +75,11 @@ export interface RendererBrowserSurfaceOptions {
   readonly meshResourceSource?: MeshResourceSource;
   /** Active stream continuation points supplied with one complete replacement. */
   readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
+  /**
+   * Shared neutral retained state for a mounted renderer-host surface. Its
+   * initial `frame` is installed as one atomic baseline after realization.
+   */
+  readonly projection?: RenderProjection;
   readonly textureResourceSource?: TextureResourceSource;
   readonly pixelRatio?: number;
   readonly lighting?: RendererBrowserSurfaceLightingOptions;
@@ -341,8 +346,9 @@ export function mountRendererBrowserSurface(
         ? {} : { meshResourceSource: options.meshResourceSource }),
       ...(options.textureResourceSource === undefined
         ? {} : { textureResourceSource: options.textureResourceSource }),
-      ...(options.publicationFrontiers === undefined
-        ? {} : { publicationFrontiers: options.publicationFrontiers }),
+      ...(options.projection === undefined && options.publicationFrontiers !== undefined
+        ? { publicationFrontiers: options.publicationFrontiers } : {}),
+      ...(options.projection === undefined ? {} : { projection: options.projection }),
       shadowsEnabled: lighting.shadows.enabled,
       maximumActiveShadowLights: lighting.shadows.maximumActiveLights,
     },
@@ -372,7 +378,11 @@ export function mountRendererBrowserSurface(
   if (viewmodelNeutralLights.length > 0) renderer.viewmodelScene.add(...viewmodelNeutralLights);
   const frame = options.frame ?? createRendererBrowserSurfaceFrame();
   try {
-    renderer.applyFrame(frame);
+    if (options.projection === undefined) {
+      renderer.applyFrame(frame);
+    } else {
+      renderer.establishBaseline(frame, options.publicationFrontiers ?? []);
+    }
   } catch (cause) {
     throw cause;
   }

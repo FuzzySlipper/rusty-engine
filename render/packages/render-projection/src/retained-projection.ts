@@ -264,6 +264,31 @@ export class RenderProjection {
   }
 
   /**
+   * Atomically replace this disposable projection from one complete retained
+   * baseline and install the continuation points for every publisher stream.
+   *
+   * A baseline is a complete state description, not another incremental
+   * publication. Callers must put its continuation revisions in `frontiers`;
+   * the next delta then begins at that exact frontier. Nothing is committed if
+   * either the retained topology/resources or a frontier is invalid.
+   */
+  establishBaseline(
+    frame: RenderFrameDiff,
+    frontiers: readonly RenderPublicationFrontier[],
+  ): readonly RenderProjectionInstruction[] {
+    if (frame.publication !== undefined) {
+      throw new RenderProjectionError(
+        'baseline frames must install publication frontiers instead of carrying an incremental publication',
+      );
+    }
+    const baseline = new RenderProjection();
+    baseline.replacePublicationFrontiers(frontiers);
+    const { staged, instructions } = baseline.#stageFrame(frame);
+    this.#replaceWith(staged);
+    return instructions;
+  }
+
+  /**
    * Validate and project a complete frame against a private clone without
    * committing it. Backends use this as the first phase of a composed
    * transaction so a bad later operation cannot partially mutate rendering.

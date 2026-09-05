@@ -90,6 +90,23 @@ impl RuntimeCameraViewBridge {
         self.state = staged.state;
     }
 
+    /// Rebuilds the current retained camera composition without entering a
+    /// product callback or changing camera handles. Sky is retained by the
+    /// presentation world alongside graphics resources.
+    pub(crate) fn snapshot_composition(
+        &self,
+    ) -> Result<RendererViewComposition, CsharpEngineServicesError> {
+        let mut snapshot = RuntimeCameraViewCall {
+            state: self.state.clone(),
+            composition: None,
+            sky_texture: None,
+        };
+        stage_composition(&mut snapshot)?;
+        Ok(snapshot
+            .composition
+            .expect("camera composition staging always produces a composition"))
+    }
+
     fn staged_mut(&mut self) -> Result<&mut RuntimeCameraViewCall, CsharpEngineServicesError> {
         self.staged.as_mut().ok_or_else(|| {
             CsharpEngineServicesError::new(

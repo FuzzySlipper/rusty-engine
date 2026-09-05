@@ -5,6 +5,7 @@ import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   RenderProjection,
   RenderProjectionError,
+  type RenderProjectionInstruction,
 } from '@rusty-engine/render-projection';
 import type {
   AnimatedMeshAsset,
@@ -393,7 +394,12 @@ export class ThreeRenderer {
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
   readonly #maximumActiveShadowLights: number;
-  readonly #projection = new RenderProjection();
+  /**
+   * The renderer realizes this neutral retained model. Mounted surfaces inject
+   * their projection so the host and backend cannot advance independent
+   * semantic histories; standalone renderers retain a private one.
+   */
+  readonly #projection: RenderProjection;
   readonly #geometryResources = new Set<THREE.BufferGeometry>();
   readonly #materialResources = new Set<THREE.Material>();
   readonly #textureResourceReferences = new Map<THREE.Texture, number>();
@@ -421,6 +427,8 @@ export class ThreeRenderer {
     maximumActiveShadowLights?: number;
     /** Complete-replacement stream continuation points installed before the recovered frame. */
     publicationFrontiers?: readonly RenderPublicationFrontier[];
+    /** Shared renderer-neutral retained state for one mounted surface. */
+    projection?: RenderProjection;
   } = {}) {
     this.#meshBufferSource = options.meshBufferSource;
     this.#meshResourceSource = options.meshResourceSource;
@@ -438,7 +446,14 @@ export class ThreeRenderer {
         `maximumActiveShadowLights must be an integer in 0..=${String(RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS)}`,
       );
     }
-    this.#projection.replacePublicationFrontiers(options.publicationFrontiers ?? []);
+    this.#projection = options.projection ?? new RenderProjection();
+    if (options.projection === undefined) {
+      this.#projection.replacePublicationFrontiers(options.publicationFrontiers ?? []);
+    } else if (options.publicationFrontiers !== undefined) {
+      throw new RangeError(
+        'a shared projection establishes publication frontiers with its baseline',
+      );
+    }
     this.#sceneGroup.name = 'scene';
     this.#debugGroup.name = 'debug';
     this.#uiGroup.name = 'ui';
@@ -471,8 +486,9 @@ export class ThreeRenderer {
     if (this.#terminalError !== null) {
       throw this.#terminalError;
     }
+    let instructions: readonly RenderProjectionInstruction[];
     try {
-      const instructions = this.#projection.validateFrame(frame);
+      instructions = this.#projection.validateFrame(frame);
       this.#validateShadowBudget(instructions);
     } catch (cause) {
       if (cause instanceof RenderProjectionError) {
@@ -480,6 +496,54 @@ export class ThreeRenderer {
       }
       throw cause;
     }
+    this.#applyValidatedFrame(frame, instructions, () => this.#projection.applyFrame(frame));
+  }
+
+  /**
+   * Realize a complete baseline on a fresh Three renderer without publishing
+   * its frontiers until realization succeeds. A failed realization leaves the
+   * caller-owned projection at its prior revision so the surface can be
+   * discarded and recovered from a fresh renderer and baseline.
+   */
+  establishBaseline(
+    frame: RenderFrameDiff,
+    frontiers: readonly RenderPublicationFrontier[],
+  ): void {
+    if (this.#disposed) {
+      throw new RendererDisposedError();
+    }
+    if (this.#terminalError !== null) {
+      throw this.#terminalError;
+    }
+    if (
+      this.#handles.size !== 0
+      || this.#staticMeshes.size !== 0
+      || this.#voxelObjects.size !== 0
+      || this.#materials.size !== 0
+      || this.#textures.size !== 0
+      || this.#atlases.size !== 0
+    ) {
+      throw new RenderApplyError('baseline realization requires a fresh ThreeRenderer');
+    }
+    const baseline = new RenderProjection();
+    let instructions: readonly RenderProjectionInstruction[];
+    try {
+      instructions = baseline.establishBaseline(frame, frontiers);
+      this.#validateShadowBudget(instructions, baseline);
+    } catch (cause) {
+      if (cause instanceof RenderProjectionError) {
+        throw new RenderApplyError(cause.message);
+      }
+      throw cause;
+    }
+    this.#applyValidatedFrame(frame, instructions, () => this.#projection.establishBaseline(frame, frontiers));
+  }
+
+  #applyValidatedFrame(
+    frame: RenderFrameDiff,
+    instructions: readonly RenderProjectionInstruction[],
+    commitProjection: () => void,
+  ): void {
     const prepared = this.#prepareFrame(frame);
     try {
       this.#preflightSpriteMaterials(frame, prepared);
@@ -547,7 +611,6 @@ export class ThreeRenderer {
       throw this.#enterTerminal('frame_mutation', cause);
     }
     disposePreparedFrame(prepared);
-    this.#projection.applyFrame(frame);
     if (staticInstanceBatchesChanged) {
       try {
         this.#syncStaticInstanceBatches();
@@ -567,6 +630,11 @@ export class ThreeRenderer {
         throw this.#enterTerminal('shadow_realization', cause);
       }
     }
+    // The neutral publication is the success marker. Keep it at the prior
+    // revision until every fallible Three realization phase has completed;
+    // terminal backends are then rebaselined instead of claiming a delta they
+    // may only have partially realized.
+    commitProjection();
   }
 
   #enterTerminal(
@@ -661,10 +729,11 @@ export class ThreeRenderer {
 
   #validateShadowBudget(
     instructions: ReturnType<RenderProjection['validateFrame']>,
+    projection = this.#projection,
   ): void {
     if (!this.#shadowsEnabled) return;
     const active = new Set(
-      this.#projection.snapshot().lights
+      projection.snapshot().lights
         .filter(({ light }) => activeShadowRequest(light))
         .map(({ handle }) => handle),
     );

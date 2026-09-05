@@ -31,6 +31,8 @@ does not grow its own renderer, platform host, resource loader, or native ABI.
 | --- | --- | --- |
 | ABI declarations | Rust | [`csharp-engine-abi`](../rust/crates/csharp-engine-abi) defines the C ABI and named function tables. |
 | Concrete Engine bridges | Rust | [`csharp-engine-services`](../rust/crates/csharp-engine-services) implements ABI-backed named capabilities. |
+| Retained graphics intent | Rust | `render-presentation::PresentationWorld` owns the committed graphics graph, snapshots, and publication revision. Existing appearance and voxel projectors feed typed changes into it. |
+| Session serialization and recovery facts | Rust | `runtime-session` owns the serialized runtime guard and mutation/scope/recovery vocabulary; `product-dev-host` adapts these to its development transport. |
 | Binding generation | Engine tooling | [`generate-csharp-native-bindings.sh`](../scripts/generate-csharp-native-bindings.sh) runs cbindgen, ClangSharp, and the binding generator. |
 | Safe C# contracts | Generated C# | [`Rusty.Engine`](../csharp/Rusty.Engine) compiles generated contracts and values from ignored `obj/Generated` output. |
 | Product bootstrap | Generated C# | [`Rusty.Engine.ProductGenerator`](../csharp/Rusty.Engine.ProductGenerator) produces the internal versioned bind path and service implementations for CoreCLR and NativeAOT. |
@@ -74,6 +76,30 @@ voxel shader, browser renderer, or TypeScript game implementation.
 
 The Engine fixtures exercise provider generation, ABI, lifecycle, and both
 loaders. They are not downstream product architecture or launch templates.
+
+## Reconstructible presentation
+
+C# selects presentation facts through named services. Rust commits the resulting
+graphics intent into `PresentationWorld`; TypeScript realizes that intent in
+browser/GPU objects. Fresh browser attachment reads committed Rust snapshots
+without calling the product's `Attach` callback. Graphics snapshots preserve
+active handles and resource dependencies, with a `presentation-world`
+continuation revision. The runtime session guard covers snapshot capture and
+the output cursor handover, so subsequent deltas follow that snapshot.
+
+The TS `render-projection` model has no Three or DOM dependency. A mounted
+`renderer-host` surface and its `renderer-three` backend share one neutral
+projection, installing a baseline or advancing a delta only after successful
+realization. `product-browser-host` owns connection and attachment epochs;
+uncertain derived state uses a fresh baseline. This does not undo spatial
+mutations or make an uncertain C# callback safe to replay.
+
+The initial common world covers ordinary graphics and voxel render output.
+Camera, UI, and retained effects have read-only Engine snapshots alongside it.
+Exact audio/animation time anchoring and frozen ghost-capture reconstruction
+remain task #7779: current snapshots preserve retained intent, not elapsed GPU
+or browser playback history. Further ABI-owner extraction and TS cleanup are
+#7782; composition and the C# `Appearance` to `Graphics` rename are #7780.
 
 ## Packaging and development
 

@@ -10,7 +10,7 @@ use render_model::{RenderAssetKind, ResolvedRenderAsset, JSON_SAFE_U64_MAX};
 use render_presentation::{
     AudioBus, AudioBusControl, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode,
     AudioProjectionOp, AudioProjector, AudioSourceDescriptor, AudioVoiceControl,
-    AudioVoiceDesiredState, PresentationOpMeta,
+    AudioVoiceDesiredState, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 
 #[cfg(test)]
@@ -264,6 +264,59 @@ impl RuntimeAudioBridge {
 
     pub(crate) fn render_resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         self.state.clips.values().map(|clip| &clip.resource)
+    }
+
+    /// Reconstructs the retained audio intent on a fresh realization. This
+    /// copies only voices and closed-bus state: historical one-shot signals
+    /// and realization feedback intentionally never cross a baseline.
+    ///
+    /// A playing voice is recreated in its normal start state. Restoring an
+    /// elapsed playback cursor or reanchoring it is a later recovery policy,
+    /// not a fact this bridge currently owns.
+    pub(crate) fn snapshot_frame(
+        &self,
+    ) -> Result<PresentationFrameDiff, CsharpEngineServicesError> {
+        let mut ops = Vec::new();
+        for voice in self.state.projector.active_voices() {
+            ops.push(PresentationOp::Audio {
+                meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
+                op: AudioProjectionOp::Create {
+                    handle: voice.handle,
+                    descriptor: voice.descriptor,
+                },
+            });
+            if voice.desired_state == AudioVoiceDesiredState::Paused {
+                ops.push(PresentationOp::Audio {
+                    meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
+                    op: AudioProjectionOp::VoiceControl {
+                        handle: voice.handle,
+                        control: AudioVoiceControl::Pause,
+                    },
+                });
+            }
+        }
+        for bus in self.state.projector.buses() {
+            ops.push(PresentationOp::Audio {
+                meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
+                op: AudioProjectionOp::BusControl {
+                    bus: bus.bus,
+                    control: AudioBusControl::SetVolume { volume: bus.volume },
+                },
+            });
+            ops.push(PresentationOp::Audio {
+                meta: PresentationOpMeta::new(next_presentation_sequence(ops.len())?),
+                op: AudioProjectionOp::BusControl {
+                    bus: bus.bus,
+                    control: AudioBusControl::SetMuted { muted: bus.muted },
+                },
+            });
+        }
+        PresentationFrameDiff::try_from_ops(ops).map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_BASELINE",
+                format!("retained audio baseline is invalid: {error:?}"),
+            )
+        })
     }
 
     fn staged_mut(&mut self) -> Result<&mut RuntimeAudioCall, CsharpEngineServicesError> {
@@ -910,6 +963,15 @@ impl RuntimeAudioBridge {
             voice_value: diagnostic.handle.map_or(0, AudioHandle::raw),
         })
     }
+}
+
+fn next_presentation_sequence(length: usize) -> Result<u32, CsharpEngineServicesError> {
+    u32::try_from(length).map_err(|_| {
+        CsharpEngineServicesError::new(
+            "CSHARP_AUDIO_BASELINE",
+            "retained audio baseline has too many operations",
+        )
+    })
 }
 
 fn audio_bus(bus: NativeAudioBus) -> AudioBus {
@@ -1609,6 +1671,76 @@ mod tests {
 
         let staged = bridge.take_staged_call().expect("staged controls");
         assert_eq!(staged.frame.expect("audio frame").ops.len(), 6);
+    }
+
+    #[test]
+    fn baseline_recreates_retained_audio_without_replaying_one_shots() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted clip");
+        let voice = bridge
+            .create_voice(descriptor(clip, NativeAudioBus::Sfx))
+            .expect("retained voice");
+        bridge
+            .control_voice(voice, NativeAudioVoiceControl::Pause)
+            .expect("paused retained voice");
+        bridge
+            .set_bus_muted(NativeAudioBus::Ui, true)
+            .expect("muted UI bus");
+        bridge
+            .emit(NativeAudioEmitRequest {
+                signal_id: NativeUtf8Slice {
+                    bytes: b"historical-one-shot".as_ptr(),
+                    len: b"historical-one-shot".len(),
+                },
+                descriptor: descriptor(clip, NativeAudioBus::Ui),
+            })
+            .expect("one-shot remains historical");
+        let call = bridge.take_staged_call().expect("committed audio call");
+        bridge.commit(call);
+
+        let before = bridge.state.projector.readout();
+        let baseline = bridge.snapshot_frame().expect("retained baseline");
+        assert!(baseline.ops.iter().all(|op| !matches!(
+            op,
+            PresentationOp::Audio {
+                op: AudioProjectionOp::Emit { .. },
+                ..
+            }
+        )));
+        assert!(matches!(
+            baseline.ops.first(),
+            Some(PresentationOp::Audio {
+                op: AudioProjectionOp::Create { .. },
+                ..
+            })
+        ));
+        assert!(baseline.ops.iter().any(|op| matches!(
+            op,
+            PresentationOp::Audio {
+                op: AudioProjectionOp::VoiceControl {
+                    control: AudioVoiceControl::Pause,
+                    ..
+                },
+                ..
+            }
+        )));
+        assert_eq!(
+            baseline.ops.len(),
+            8,
+            "one voice, its pause, and three bus states"
+        );
+        assert_eq!(bridge.state.projector.readout(), before);
     }
 
     #[test]

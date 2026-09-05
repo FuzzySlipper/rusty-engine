@@ -1,7 +1,7 @@
-use std::sync::Mutex;
-
 #[cfg(test)]
 use std::sync::MutexGuard;
+
+use runtime_session::RuntimeSession;
 
 use crate::{
     CanonicalU64, ProductDevDebugResult, ProductDevHostError, ProductDevInputBatch,
@@ -16,13 +16,13 @@ use crate::{
 /// product state; each operation directly returns the runtime owner's bounded
 /// result and output batch.
 pub struct ProductDevOperationOwner<R> {
-    runtime: Mutex<R>,
+    session: RuntimeSession<R>,
 }
 
 impl<R> ProductDevOperationOwner<R> {
     pub fn new(runtime: R) -> Self {
         Self {
-            runtime: Mutex::new(runtime),
+            session: RuntimeSession::new(runtime),
         }
     }
 }
@@ -33,7 +33,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     pub fn realtime_schedule_state(
         &self,
     ) -> Result<ProductDevRuntimeScheduleState, ProductDevRuntimeError> {
-        let runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        let runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
         Ok(runtime.realtime_schedule_state())
     }
 
@@ -42,7 +42,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     pub fn realtime_schedule_interval(
         &self,
     ) -> Result<Option<std::time::Duration>, ProductDevRuntimeError> {
-        let runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        let runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
         Ok(runtime.realtime_schedule_interval())
     }
 
@@ -192,7 +192,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         B: FnOnce(),
         E: FnOnce(),
     {
-        let mut runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        let mut runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
         begin();
         let (batches, overflowed) = drain();
         let mut input_errors = Vec::new();
@@ -293,7 +293,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
     where
         F: FnOnce(&mut R) -> Result<T, ProductDevRuntimeError>,
     {
-        let mut runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        let mut runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
         call(&mut runtime)
     }
 
@@ -311,7 +311,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         B: FnOnce(),
         E: FnOnce(),
     {
-        let mut runtime = self.runtime.lock().map_err(|_| runtime_poisoned())?;
+        let mut runtime = self.session.lock().map_err(|_| runtime_poisoned())?;
         begin();
         let result = call(&mut runtime);
         finish();
@@ -320,7 +320,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
 
     #[cfg(test)]
     fn lock_for_test(&self) -> MutexGuard<'_, R> {
-        self.runtime.lock().expect("fixture session lock")
+        self.session.lock().expect("fixture session lock")
     }
 }
 
@@ -340,7 +340,7 @@ fn host_error_to_runtime(error: ProductDevHostError) -> ProductDevRuntimeError {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{mpsc, Arc},
+        sync::{mpsc, Arc, Mutex},
         thread,
         time::Duration,
     };

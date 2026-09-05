@@ -626,7 +626,6 @@ struct LoadedProductApi {
     debug: Option<(NativeProductExecuteDebug, NativeProductReleaseDebugResult)>,
     debug_describe: Option<(NativeProductDescribeDebug, NativeProductReleaseDebugResult)>,
     observe_runtime: Option<NativeProductObserveRuntime>,
-    attach: Option<NativeProductAction>,
     call_error: Option<(NativeProductReadCallError, NativeProductReleaseCallError)>,
 }
 
@@ -797,7 +796,6 @@ impl LoadedProductApi {
                 product.release_debug_result,
             )?,
             observe_runtime: product.observe_runtime,
-            attach: product.attach,
             call_error,
             host,
         })
@@ -2258,43 +2256,11 @@ impl CsharpProductRuntime {
         Ok(outputs)
     }
 
-    fn attach_outputs(
-        &mut self,
-        attach: NativeProductAction,
-    ) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
-        if let Err(error) = self.services.begin_attach_call(ui_binding(&self.lifecycle)) {
-            self.services.discard_call();
-            return Err(error.into());
-        }
-        if let Err(error) = call_action(
-            &self.api,
-            attach,
-            self.handle,
-            ProductDevOperationKind::Connect,
-        ) {
-            let error = prefer_engine_call_error(&mut self.services, error);
-            self.discard_staged_call();
-            return Err(error);
-        }
-        let staged = match self.services.take_call() {
-            Ok(staged) => staged,
-            Err(error) => {
-                self.discard_staged_call();
-                return Err(error.into());
-            }
-        };
-        let outputs = match service_outputs(self.services.outputs(&staged)) {
-            Ok(outputs) => outputs,
-            Err(error) => {
-                self.discard_staged_call();
-                return Err(error);
-            }
-        };
-        // Attachment is a detached publication for one fresh browser. Keep
-        // the active runtime's retained projectors and service state intact.
-        self.services.discard_call();
-        complete_product_call(&self.api, self.handle, false, false);
-        Ok(outputs)
+    fn snapshot_outputs(&self) -> Result<Vec<ProductDevRuntimeOutput>, CsharpProductRuntimeError> {
+        service_outputs(
+            self.services
+                .snapshot_outputs(ui_binding(&self.lifecycle))?,
+        )
     }
 
     fn receipt(
@@ -2699,15 +2665,8 @@ impl ProductDevRuntime for CsharpProductRuntime {
             )
             .expect("fixed connect-state diagnostic"));
         }
-        let attach = self.api.attach.ok_or_else(|| {
-            ProductDevRuntimeError::new_not_applied(
-                "CSHARP_ATTACH_UNSUPPORTED",
-                "this product predates generated browser attachment support",
-            )
-            .expect("fixed attach-unsupported diagnostic")
-        })?;
         let outputs = self
-            .attach_outputs(attach)
+            .snapshot_outputs()
             .map_err(|error| self.runtime_error(error))?;
         self.receipt(
             ProductDevOperationKind::Connect,
@@ -5414,14 +5373,6 @@ fn complete_voxel_baseline(
         let Some(frame) = encoded.get("frame") else {
             continue;
         };
-        let is_voxel = frame
-            .get("publication")
-            .and_then(|publication| publication.get("stream"))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|stream| stream.starts_with("voxel:"));
-        if !is_voxel {
-            continue;
-        }
         let operations = frame
             .get("ops")
             .and_then(serde_json::Value::as_array)
@@ -5997,7 +5948,6 @@ mod tests {
             debug: None,
             debug_describe: None,
             observe_runtime: None,
-            attach: None,
             call_error: None,
         }
     }
@@ -6215,6 +6165,153 @@ mod tests {
             ));
         runtime.services.commit_call(staged);
         (session, presentation)
+    }
+
+    #[test]
+    fn fresh_graphics_and_voxel_baseline_uses_committed_world_without_product_callbacks() {
+        let _guard = DROP_FIXTURE_GATE.lock().unwrap();
+        DROP_CALLBACK_STATUS.store(ABI_OK, Ordering::SeqCst);
+        let (mut runtime, root) = drop_fixture_runtime_with_diagnostics(
+            "presentation-world-baseline",
+            ProductDevLog::new(Default::default()).unwrap(),
+        );
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .unwrap();
+        let (session, presentation) = commit_voxel_presentation_for_recovery(&mut runtime);
+        runtime.services.begin_call(ui_binding(&runtime.lifecycle));
+        let api = runtime.services.api();
+        let mut appearance = NativeAppearanceHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.appearance.create_primitive)(
+                    api.appearance.context,
+                    NativePrimitiveAppearanceRequest {
+                        geometry: NativePrimitiveGeometry::Cube,
+                        wireframe: false,
+                        color: NativeColor {
+                            r: 1.0,
+                            g: 0.5,
+                            b: 0.25,
+                            a: 1.0,
+                        },
+                    },
+                    &mut appearance,
+                )
+            },
+            ABI_OK
+        );
+        let fact = NativeAppearanceFact {
+            object_id: 42,
+            appearance,
+            visible: true,
+            layer: NativeRenderLayer::Scene,
+            transform: NativeTransform {
+                translation: NativeVec3 {
+                    x: 3.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                rotation: NativeQuat {
+                    w: 1.0,
+                    ..Default::default()
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            },
+        };
+        assert_eq!(
+            unsafe { (api.appearance.publish_snapshot)(api.appearance.context, &fact, 1) },
+            ABI_OK
+        );
+        let call = runtime.services.take_call().unwrap();
+        runtime.services.commit_call(call);
+        let callbacks = DROP_EVENTS.lock().unwrap().clone();
+        let binding = runtime.binding();
+        let frontier = runtime.services.renderer_publication_frontiers();
+        let (_, first) = runtime.connect().unwrap().into_parts();
+        let (_, second) = runtime.connect().unwrap().into_parts();
+        assert_eq!(
+            *DROP_EVENTS.lock().unwrap(),
+            callbacks,
+            "attachment invokes no product code"
+        );
+        assert_eq!(runtime.binding(), binding);
+        assert_eq!(runtime.services.renderer_publication_frontiers(), frontier);
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
+        );
+        let baseline = complete_voxel_baseline(&first).unwrap();
+        assert!(
+            baseline["ops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|op| op["node"]["metadata"]["sourceEntity"] == 42),
+            "ordinary graphics joins voxel baseline"
+        );
+
+        runtime.services.begin_call(ui_binding(&runtime.lifecycle));
+        let api = runtime.services.api();
+        let edit = NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Set,
+            address: NativeVoxelAddress { x: 1, y: 0, z: 0 },
+            material_slot: 1,
+        };
+        let mut receipt = NativeVoxelEditReceipt::default();
+        let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe {
+                (api.voxel.apply_edits)(
+                    api.voxel.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        expected_revision: 1,
+                        edits: &edit,
+                        edits_len: 1,
+                    },
+                    &mut receipt,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        let mut readout = NativeVoxelScenePresentationReadout::default();
+        assert_eq!(
+            unsafe {
+                (api.voxel_scene_presentation.refresh_scene)(
+                    api.voxel_scene_presentation.context,
+                    presentation,
+                    &mut readout,
+                )
+            },
+            ABI_OK
+        );
+        let call = runtime.services.take_call().unwrap();
+        let output = runtime.services.outputs(&call);
+        let delta = output
+            .frames
+            .iter()
+            .find(|frame| !frame.ops.is_empty())
+            .unwrap();
+        let publication = delta.publication.as_ref().unwrap();
+        assert_eq!(publication.stream, "presentation-world");
+        assert_eq!(publication.base_revision, frontier[0].1);
+        assert!(serde_json::to_value(delta).unwrap()["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["op"] == "replaceMeshPayload"));
+        runtime.services.commit_call(call);
+        let (_, latest) = runtime.connect().unwrap().into_parts();
+        assert_ne!(complete_voxel_baseline(&latest).unwrap(), baseline);
+        assert_eq!(*DROP_EVENTS.lock().unwrap(), callbacks);
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

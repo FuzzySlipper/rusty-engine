@@ -715,8 +715,6 @@ function mountPreparedRendererSurface(
   const lighting = normalizeSurfaceLighting(options.lighting);
   const frame = options.frame ?? createRendererDefaultSurfaceFrame();
   const projection = new RenderProjection();
-  projection.replacePublicationFrontiers(options.publicationFrontiers ?? []);
-  projection.applyFrame(frame);
   const controls = createRendererSurfaceFirstPersonControls(canvas, options.controls);
   let backendSurface: RendererBrowserSurface;
   try {
@@ -729,6 +727,7 @@ function mountPreparedRendererSurface(
         ? {} : { meshResourceSource: resources.meshResourceSource }),
       ...(resources.textureResourceSource === undefined
         ? {} : { textureResourceSource: resources.textureResourceSource }),
+      projection,
       ...(options.publicationFrontiers === undefined
         ? {} : { publicationFrontiers: options.publicationFrontiers }),
       camera: {
@@ -1069,7 +1068,6 @@ function mountPreparedRendererSurface(
       return terminalFrameReceipt('renderer_backend_failure', errorMessage(cause));
     }
     try {
-      projection.applyFrame(nextFrame);
       requestAutomaticSubmission();
       return { applied: true, outcome: 'applied', diagnostics: [] };
     } catch (cause) {
