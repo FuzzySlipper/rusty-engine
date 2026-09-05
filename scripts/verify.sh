@@ -8,7 +8,9 @@ cargo fmt --all --check
 ./scripts/audit-standalone.sh
 python3 ./scripts/dependency_boundary_check.py
 PYTHONDONTWRITEBYTECODE=1 python3 ./scripts/test_architecture_checks.py
-if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|RuntimeSession|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust; then
+# The host-neutral runtime-session guard is current Engine infrastructure;
+# its name is not evidence of the removed gameplay runtime spine.
+if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust; then
   echo "forbidden old runtime spine surfaced in active source" >&2
   exit 1
 fi
