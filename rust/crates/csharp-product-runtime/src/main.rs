@@ -1340,6 +1340,12 @@ impl ProductDevRuntime for WorkerRuntime {
         })
     }
 
+    fn recover_input_overflow(
+        &mut self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.invoke(|request_id| ProductDevWorkerRequest::RecoverInput { request_id })
+    }
+
     fn input(
         &mut self,
         batch: ProductDevInputBatch,
@@ -2053,6 +2059,10 @@ fn worker_request(
                 owner.control(worker_control(operation), binding),
             )
         }
+        ProductDevWorkerRequest::RecoverInput { .. } => {
+            mailbox.clear();
+            worker_receipt(request_id, owner.recover_input_overflow())
+        }
         ProductDevWorkerRequest::Input { payload, .. } => {
             let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_INPUT")
                 .and_then(|bytes| {
@@ -2188,6 +2198,7 @@ fn worker_request_id(request: &ProductDevWorkerRequest) -> u64 {
     match request {
         ProductDevWorkerRequest::Lifecycle { request_id, .. }
         | ProductDevWorkerRequest::Control { request_id, .. }
+        | ProductDevWorkerRequest::RecoverInput { request_id, .. }
         | ProductDevWorkerRequest::Input { request_id, .. }
         | ProductDevWorkerRequest::Update { request_id, .. }
         | ProductDevWorkerRequest::Debug { request_id, .. }
@@ -3306,7 +3317,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn worker_proxy_forwards_control_fences_and_their_fresh_binding() {
+    fn worker_proxy_forwards_input_recovery_fences_and_their_fresh_binding() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut worker = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (writer, _) = listener.accept().unwrap();
@@ -3340,8 +3351,9 @@ mod tests {
             control_revision: CanonicalU64::new(1),
         };
         for (index, operation) in [
-            ProductDevControlOperation::Replace,
-            ProductDevControlOperation::Release,
+            Some(ProductDevControlOperation::Replace),
+            Some(ProductDevControlOperation::Release),
+            None, // Shell recovery uses the child's current binding, not a caller's stale one.
         ]
         .into_iter()
         .enumerate()
@@ -3356,7 +3368,7 @@ mod tests {
                     attribution: None,
                     result: Some(serde_json::json!({
                         "accepted": true, "code": "DEV_HOST_ACCEPTED", "disposition": "accepted",
-                        "operation": operation.operation_kind(), "binding": fresh, "nextInputSequence": "1",
+                        "operation": operation.unwrap_or(ProductDevControlOperation::Replace).operation_kind(), "binding": fresh, "nextInputSequence": "1",
                     })),
                     outputs: vec![serde_json::json!({
                         "kind": "binding", "runtime": fresh, "nextInputSequence": "1",
@@ -3365,21 +3377,30 @@ mod tests {
                 },
                 connection_output_cursor: None,
             })).unwrap();
-            let receipt = proxy
-                .control(operation, binding)
-                .expect("worker control fence is supported");
+            let receipt = match operation {
+                Some(operation) => proxy.control(operation, binding),
+                None => proxy.recover_input_overflow(),
+            }
+            .expect("worker input recovery fence is supported");
             let request: ProductDevWorkerRequest = read_worker_frame(&mut worker).unwrap();
-            let ProductDevWorkerRequest::Control {
-                request_id,
-                operation: forwarded,
-                binding: observed,
-            } = request
-            else {
-                panic!("the proxy must send control rather than restarting the product");
-            };
-            assert_eq!(request_id, index as u64 + 1);
-            assert_eq!(worker_control(forwarded), operation);
-            assert_eq!(observed, binding);
+            assert_eq!(worker_request_id(&request), index as u64 + 1);
+            match (operation, request) {
+                (
+                    Some(expected),
+                    ProductDevWorkerRequest::Control {
+                        operation,
+                        binding: observed,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(worker_control(operation), expected);
+                    assert_eq!(observed, binding);
+                }
+                (None, ProductDevWorkerRequest::RecoverInput { .. }) => {}
+                _ => panic!(
+                    "the proxy must forward input recovery rather than restarting the product"
+                ),
+            }
             assert!(receipt.result().is_accepted());
             assert_eq!(receipt.result().binding(), Some(fresh));
             assert_eq!(

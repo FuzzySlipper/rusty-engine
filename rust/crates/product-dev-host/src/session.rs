@@ -92,6 +92,13 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.with_runtime(|runtime| runtime.control(operation, binding))
     }
 
+    /// Reestablishes input from the loaded runtime's current authoritative binding.
+    pub fn recover_input_overflow(
+        &self,
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.with_runtime(|runtime| runtime.recover_input_overflow())
+    }
+
     /// Admits one already validated input batch through the runtime owner.
     pub fn input(
         &self,

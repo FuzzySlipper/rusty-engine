@@ -97,6 +97,9 @@ pub enum ProductDevWorkerRequest {
         operation: ProductDevWorkerControlOperation,
         binding: ProductDevRuntimeBinding,
     },
+    RecoverInput {
+        request_id: u64,
+    },
     Input {
         request_id: u64,
         payload: Value,
