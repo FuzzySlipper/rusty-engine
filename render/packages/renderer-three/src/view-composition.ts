@@ -105,6 +105,7 @@ export class RendererViewCompositionBackend {
   readonly #projection: ThreeRenderer;
   readonly #viewmodelCamera: THREE.PerspectiveCamera;
   readonly #webgl: THREE.WebGLRenderer;
+  readonly #prepareSceneForCamera: (camera: THREE.Camera) => void;
   #cameras: ReadonlyMap<string, THREE.Camera> = new Map();
   #composition = EMPTY_COMPOSITION;
   #disposed = false;
@@ -117,10 +118,12 @@ export class RendererViewCompositionBackend {
     webgl: THREE.WebGLRenderer,
     projection: ThreeRenderer,
     viewmodelCamera = new THREE.PerspectiveCamera(),
+    prepareSceneForCamera: (camera: THREE.Camera) => void = () => undefined,
   ) {
     this.#webgl = webgl;
     this.#projection = projection;
     this.#viewmodelCamera = viewmodelCamera;
+    this.#prepareSceneForCamera = prepareSceneForCamera;
   }
 
   configure(input: RendererViewComposition): RendererViewCompositionReceipt {
@@ -353,6 +356,7 @@ export class RendererViewCompositionBackend {
     this.#webgl.clear(true, true, true);
     this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
     this.#projection.prepareStaticInstanceBatches(camera);
+    this.#prepareSceneForCamera(camera);
     this.#webgl.render(this.#projection.scene, camera);
     target.lastRefreshedSubmission = submission;
     target.stale = false;
@@ -376,6 +380,7 @@ export class RendererViewCompositionBackend {
     this.#webgl.clear(true, true, true);
     this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
     this.#projection.prepareStaticInstanceBatches(camera);
+    this.#prepareSceneForCamera(camera);
     this.#webgl.render(this.#projection.scene, camera);
     // Camera-relative retained content belongs to the Engine-owned viewmodel
     // pass. Reapply its depth break after each configured primary view so the

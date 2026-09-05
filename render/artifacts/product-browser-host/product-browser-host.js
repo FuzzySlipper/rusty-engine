@@ -21800,36 +21800,37 @@ var gb = class extends Error {
 	#t;
 	#n;
 	#r;
-	#i = /* @__PURE__ */ new Map();
-	#a = _b;
-	#o = !1;
+	#i;
+	#a = /* @__PURE__ */ new Map();
+	#o = _b;
 	#s = !1;
-	#c = /* @__PURE__ */ new Map();
-	#l = 0;
-	#u = /* @__PURE__ */ new Map();
-	constructor(e, t, n = new nu()) {
-		this.#r = e, this.#t = t, this.#n = n;
+	#c = !1;
+	#l = /* @__PURE__ */ new Map();
+	#u = 0;
+	#d = /* @__PURE__ */ new Map();
+	constructor(e, t, n = new nu(), r = () => void 0) {
+		this.#r = e, this.#t = t, this.#n = n, this.#i = r;
 	}
 	configure(e) {
-		if (this.#o || this.#s) return this.#p("surface_disposed", "renderer view composition is disposed");
+		if (this.#s || this.#c) return this.#m("surface_disposed", "renderer view composition is disposed");
 		let t = null;
 		try {
 			let n = Sb(e);
-			return St(n), this.#g(n), t = this.#d(n), this.#f(t), Object.freeze({
+			return St(n), this.#_(n), t = this.#f(n), this.#p(t), Object.freeze({
 				applied: !0,
 				outcome: "applied",
 				diagnostics: Object.freeze([]),
-				revision: this.#l
+				revision: this.#u
 			});
 		} catch (e) {
-			t !== null && kb(t, this.#u);
+			t !== null && kb(t, this.#d);
 			let n = Pb(e);
-			return n.code === "target_allocation_failed" && (this.#s = !0), this.#p(n.code, n.message);
+			return n.code === "target_allocation_failed" && (this.#c = !0), this.#m(n.code, n.message);
 		}
 	}
 	readout() {
-		let e = this.#a.targets.map((e) => {
-			let t = this.#u.get(e.id), n = t?.lastRefreshedSubmission ?? null;
+		let e = this.#o.targets.map((e) => {
+			let t = this.#d.get(e.id), n = t?.lastRefreshedSubmission ?? null;
 			return Object.freeze({
 				...e,
 				lastRefreshedSubmission: n,
@@ -21838,20 +21839,20 @@ var gb = class extends Error {
 		});
 		return Object.freeze({
 			schemaVersion: 1,
-			revision: this.#l,
-			cameras: this.#a.cameras,
+			revision: this.#u,
+			cameras: this.#o.cameras,
 			targets: Object.freeze(e),
-			views: this.#a.views,
-			presentations: this.#a.presentations,
+			views: this.#o.views,
+			presentations: this.#o.presentations,
 			resources: Object.freeze({
-				presentationCount: this.#c.size,
-				targetCount: this.#u.size
+				presentationCount: this.#l.size,
+				targetCount: this.#d.size
 			})
 		});
 	}
 	visibilityReadout() {
-		let e = this.#a.views.map((e) => {
-			let t = this.#i.get(e.cameraId);
+		let e = this.#o.views.map((e) => {
+			let t = this.#a.get(e.cameraId);
 			return t === void 0 ? null : Object.freeze({
 				viewId: e.id,
 				cameraId: e.cameraId,
@@ -21865,14 +21866,14 @@ var gb = class extends Error {
 		});
 	}
 	render(e, t, n) {
-		if (this.#o || this.#a.views.length === 0) return;
-		let r = this.#a.views.filter((e) => e.target.kind === "offscreen").sort(jb);
-		for (let t of r) this.#m(t, e);
-		let i = [...this.#a.views.filter((e) => e.target.kind === "primary").map((e) => ({
+		if (this.#s || this.#o.views.length === 0) return;
+		let r = this.#o.views.filter((e) => e.target.kind === "offscreen").sort(jb);
+		for (let t of r) this.#h(t, e);
+		let i = [...this.#o.views.filter((e) => e.target.kind === "primary").map((e) => ({
 			id: e.id,
 			kind: "view",
 			order: e.order
-		})), ...this.#a.presentations.map((e) => ({
+		})), ...this.#o.presentations.map((e) => ({
 			id: e.id,
 			kind: "presentation",
 			order: e.order
@@ -21880,10 +21881,10 @@ var gb = class extends Error {
 		this.#r.setRenderTarget(null), this.#r.setScissorTest(!0);
 		try {
 			for (let e of i) if (e.kind === "view") {
-				let r = this.#a.views.find((t) => t.id === e.id);
-				r !== void 0 && this.#h(r, t, n);
+				let r = this.#o.views.find((t) => t.id === e.id);
+				r !== void 0 && this.#g(r, t, n);
 			} else {
-				let r = this.#a.presentations.find((t) => t.id === e.id), i = this.#c.get(e.id);
+				let r = this.#o.presentations.find((t) => t.id === e.id), i = this.#l.get(e.id);
 				if (r !== void 0 && i !== void 0) {
 					let e = Mb(r.destination.viewport, t, n);
 					Nb(this.#r, e), this.#r.clear(!1, !0, !1), this.#r.render(i.scene, xb);
@@ -21899,20 +21900,20 @@ var gb = class extends Error {
 		}
 	}
 	invalidate() {
-		if (!this.#o) for (let e of this.#u.values()) e.stale = !0;
+		if (!this.#s) for (let e of this.#d.values()) e.stale = !0;
 	}
 	dispose() {
-		if (!this.#o) {
-			Ob(this.#c);
-			for (let e of this.#u.values()) e.target.dispose();
-			this.#i = /* @__PURE__ */ new Map(), this.#a = _b, this.#c = /* @__PURE__ */ new Map(), this.#u = /* @__PURE__ */ new Map(), this.#o = !0;
+		if (!this.#s) {
+			Ob(this.#l);
+			for (let e of this.#d.values()) e.target.dispose();
+			this.#a = /* @__PURE__ */ new Map(), this.#o = _b, this.#l = /* @__PURE__ */ new Map(), this.#d = /* @__PURE__ */ new Map(), this.#s = !0;
 		}
 	}
-	#d(e) {
+	#f(e) {
 		let t = new Map(e.cameras.map((e) => [e.id, wb(e)])), n = /* @__PURE__ */ new Map(), r = [], i = /* @__PURE__ */ new Map();
 		try {
 			for (let t of e.targets) {
-				let e = this.#u.get(t.id);
+				let e = this.#d.get(t.id);
 				if (e !== void 0 && e.descriptor.revision === t.revision && Ab(e.descriptor, t)) {
 					n.set(t.id, e);
 					continue;
@@ -21943,14 +21944,14 @@ var gb = class extends Error {
 			throw new bb(e instanceof Error ? e.message : String(e));
 		}
 	}
-	#f(e) {
-		let t = this.#u, n = this.#c;
-		this.#i = e.cameras, this.#a = e.composition, this.#c = e.presentations, this.#u = e.targets, this.invalidate(), this.#l += 1;
+	#p(e) {
+		let t = this.#d, n = this.#l;
+		this.#a = e.cameras, this.#o = e.composition, this.#l = e.presentations, this.#d = e.targets, this.invalidate(), this.#u += 1;
 		for (let t of e.composition.targets) this.#e.set(t.id, t.revision);
 		Ob(n);
 		for (let [n, r] of t) e.targets.get(n) !== r && r.target.dispose();
 	}
-	#p(e, t) {
+	#m(e, t) {
 		return Object.freeze({
 			applied: !1,
 			outcome: e === "invalid_view_composition" || e === "stale_target_revision" ? "rejected_atomic" : "terminal",
@@ -21958,25 +21959,25 @@ var gb = class extends Error {
 				code: e,
 				message: t
 			})]),
-			revision: this.#l
+			revision: this.#u
 		});
 	}
-	#m(e, t) {
+	#h(e, t) {
 		if (e.target.kind !== "offscreen") return;
-		let n = this.#u.get(e.target.targetId), r = this.#i.get(e.cameraId);
+		let n = this.#d.get(e.target.targetId), r = this.#a.get(e.cameraId);
 		if (n === void 0 || r === void 0) return;
 		let i = Mb(e.viewport, n.descriptor.width, n.descriptor.height);
-		Tb(r, i.width / i.height), r.updateMatrixWorld(!0), this.#t.scene.updateMatrixWorld(!0), this.#r.setRenderTarget(n.target), this.#r.setScissorTest(!1), Nb(this.#r, i), this.#r.setScissorTest(!0), this.#r.clear(!0, !0, !0), this.#t.prepareSpritesForCamera(r, this.#t.scene), this.#t.prepareStaticInstanceBatches(r), this.#r.render(this.#t.scene, r), n.lastRefreshedSubmission = t, n.stale = !1;
+		Tb(r, i.width / i.height), r.updateMatrixWorld(!0), this.#t.scene.updateMatrixWorld(!0), this.#r.setRenderTarget(n.target), this.#r.setScissorTest(!1), Nb(this.#r, i), this.#r.setScissorTest(!0), this.#r.clear(!0, !0, !0), this.#t.prepareSpritesForCamera(r, this.#t.scene), this.#t.prepareStaticInstanceBatches(r), this.#i(r), this.#r.render(this.#t.scene, r), n.lastRefreshedSubmission = t, n.stale = !1;
 	}
-	#h(e, t, n) {
-		let r = this.#i.get(e.cameraId);
+	#g(e, t, n) {
+		let r = this.#a.get(e.cameraId);
 		if (r === void 0) return;
 		let i = Mb(e.viewport, t, n);
-		Tb(r, i.width / i.height), Nv(r, this.#n, i.width / i.height), Nb(this.#r, i), this.#r.clear(!0, !0, !0), this.#t.prepareSpritesForCamera(r, this.#t.scene), this.#t.prepareStaticInstanceBatches(r), this.#r.render(this.#t.scene, r), this.#r.clearDepth(), this.#t.prepareSpritesForCamera(this.#n, this.#t.viewmodelScene), this.#r.render(this.#t.viewmodelScene, this.#n);
+		Tb(r, i.width / i.height), Nv(r, this.#n, i.width / i.height), Nb(this.#r, i), this.#r.clear(!0, !0, !0), this.#t.prepareSpritesForCamera(r, this.#t.scene), this.#t.prepareStaticInstanceBatches(r), this.#i(r), this.#r.render(this.#t.scene, r), this.#r.clearDepth(), this.#t.prepareSpritesForCamera(this.#n, this.#t.viewmodelScene), this.#r.render(this.#t.viewmodelScene, this.#n);
 	}
-	#g(e) {
+	#_(e) {
 		for (let t of e.targets) {
-			let e = this.#u.get(t.id)?.descriptor, n = this.#e.get(t.id);
+			let e = this.#d.get(t.id)?.descriptor, n = this.#e.get(t.id);
 			if (e !== void 0 && t.revision === e.revision) {
 				if (!Ab(e, t)) throw new yb(`${t.id} revision ${String(t.revision)} cannot change target facts`);
 				continue;
@@ -22161,33 +22162,33 @@ function Ib(e, t = {}) {
 		}, T = t.camera?.initialBasis ?? null, E = null, D = null, O = null, k = {
 			width: 0,
 			height: 0
-		}, A = 0, ee = !1, te = /* @__PURE__ */ new Set(), j = new vb(c, r, b);
-		if (i.push(() => j.dispose()), t.viewComposition !== void 0) {
-			let e = j.configure(t.viewComposition);
+		}, A = 0, ee = !1, te = /* @__PURE__ */ new Set(), j = (e) => {
+			for (let t of te) t.prepare(e);
+		}, ne = new vb(c, r, b, j);
+		if (i.push(() => ne.dispose()), t.viewComposition !== void 0) {
+			let e = ne.configure(t.viewComposition);
 			if (!e.applied) throw new gb(e.diagnostics[0]?.message ?? "view composition was rejected");
 		}
-		let ne = (e, t) => {
+		let re = (e, t) => {
 			if (w = e, T = t ?? null, T === null) {
 				$v(y, e);
 				return;
 			}
 			y.position.set(e.position[0], e.position[1], e.position[2]), y.up.set(T.up[0], T.up[1], T.up[2]), C.set(y.position.x + T.forward[0], y.position.y + T.forward[1], y.position.z + T.forward[2]), y.lookAt(C);
-		}, re = () => {
+		}, ie = () => {
 			let { width: t, height: n } = Fb(e.clientWidth, e.clientHeight, e.width, e.height, g, k.width, k.height);
 			(k.width !== t || k.height !== n) && (c.setSize(t, n, !1), k = {
 				width: t,
 				height: n
 			}), y.aspect = t / n, y.updateProjectionMatrix(), b.aspect = t / n, b.updateProjectionMatrix();
-		}, ie = (t = globalThis.performance?.now() ?? 0) => {
+		}, ae = (t = globalThis.performance?.now() ?? 0) => {
 			if (ee) throw Error("renderer browser surface is disposed");
 			let n = D;
-			D = null, re();
+			D = null, ie();
 			let i = O === null ? 0 : Math.min(.05, Math.max(0, (t - O) / 1e3));
-			O = t, c.info.reset();
-			for (let e of te) e.prepare(y);
-			h.begin(n ?? void 0);
+			O = t, c.info.reset(), j(y), h.begin(n ?? void 0);
 			try {
-				Pv(c, y, b, r, i), A += 1, j.render(A, e.width, e.height);
+				Pv(c, y, b, r, i), A += 1, ne.render(A, e.width, e.height);
 			} catch (e) {
 				throw h.aborted(), e;
 			}
@@ -22197,19 +22198,19 @@ function Ib(e, t = {}) {
 				triangleCount: c.info.render.triangles,
 				...r.resourceStatistics()
 			});
-		}, ae = (e) => {
+		}, oe = (e) => {
 			D = null;
 			let t = h.ready(e), n = m.ready(h.sample().mode === "timerQuery" ? p : 1) && t;
 			return n && e !== void 0 && Number.isFinite(e) && e >= 0 && (D = e), n;
-		}, oe = (e) => (re(), y.updateMatrixWorld(!0), Hb(y, k, e)), se = (e) => {
-			E = globalThis.requestAnimationFrame(se), ae(e) && ie(e);
-		}, ce = () => {
-			if (ee) throw Error("renderer browser surface is disposed");
-			E === null && (E = globalThis.requestAnimationFrame(se));
+		}, se = (e) => (ie(), y.updateMatrixWorld(!0), Hb(y, k, e)), ce = (e) => {
+			E = globalThis.requestAnimationFrame(ce), oe(e) && ae(e);
 		}, le = () => {
+			if (ee) throw Error("renderer browser surface is disposed");
+			E === null && (E = globalThis.requestAnimationFrame(ce));
+		}, ue = () => {
 			D = null, E !== null && (globalThis.cancelAnimationFrame(E), E = null);
 		};
-		return ne(w, T ?? void 0), ie(0), t.autoStart !== !1 && ce(), {
+		return re(w, T ?? void 0), ae(0), t.autoStart !== !1 && le(), {
 			kind: "rusty_renderer_browser_surface.v1",
 			canvas: e,
 			renderer: r,
@@ -22218,7 +22219,7 @@ function Ib(e, t = {}) {
 				let t = new Qy({
 					webgl: c,
 					backend: r,
-					invalidate: () => j.invalidate(),
+					invalidate: () => ne.invalidate(),
 					onDispose: () => te.delete(t)
 				});
 				return te.add(t), t;
@@ -22235,13 +22236,13 @@ function Ib(e, t = {}) {
 					pendingSubmissionCount: t.pendingSubmissionCount
 				});
 			},
-			automaticSubmissionReady: ae,
+			automaticSubmissionReady: oe,
 			animatedMeshPlayback: (e) => r.animatedMeshPlayback(e),
 			sampleAnimatedMesh: (e, t, n) => r.sampleAnimatedMesh(e, t, n),
 			applyFrame: (e) => {
-				r.applyFrame(e), j.invalidate();
+				r.applyFrame(e), ne.invalidate();
 			},
-			configureViews: (e) => j.configure(e),
+			configureViews: (e) => ne.configure(e),
 			cameraPose: () => w,
 			cameraProjection: () => v,
 			lightingReadout: () => {
@@ -22266,16 +22267,16 @@ function Ib(e, t = {}) {
 				schemaVersion: 1,
 				world: r.visibilityReadout(y, r.scene),
 				viewmodel: r.visibilityReadout(b, r.viewmodelScene),
-				views: j.visibilityReadout().views
+				views: ne.visibilityReadout().views
 			}),
-			viewCompositionReadout: () => j.readout(),
-			projectWorldPoint: oe,
+			viewCompositionReadout: () => ne.readout(),
+			projectWorldPoint: se,
 			pick: (e) => Kb(r, y, x, S, e),
 			snapshot: () => r.snapshot(),
-			renderOnce: ie,
-			setCameraPose: ne,
-			start: ce,
-			stop: le,
+			renderOnce: ae,
+			setCameraPose: re,
+			start: le,
+			stop: ue,
 			dispose: () => {
 				if (ee) return;
 				let e = [], t = (t) => {
@@ -22285,9 +22286,9 @@ function Ib(e, t = {}) {
 						e.push(t);
 					}
 				};
-				t(le);
+				t(ue);
 				for (let e of te) t(() => e.dispose());
-				if (te.clear(), t(() => m.dispose()), t(() => h.dispose()), t(() => j.dispose()), t(() => c.dispose()), t(() => r.dispose()), ee = !0, e.length > 0) throw AggregateError(e, "renderer browser surface disposal failed");
+				if (te.clear(), t(() => m.dispose()), t(() => h.dispose()), t(() => ne.dispose()), t(() => c.dispose()), t(() => r.dispose()), ee = !0, e.length > 0) throw AggregateError(e, "renderer browser surface disposal failed");
 			}
 		};
 	} catch (e) {

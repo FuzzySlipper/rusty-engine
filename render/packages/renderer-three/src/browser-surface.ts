@@ -465,7 +465,12 @@ export function mountRendererBrowserSurface(
   let submissionSequence = 0;
   let disposed = false;
   const ghostPlatePresentations = new Set<RendererThreeGhostPlatePresentation>();
-  const viewComposition = new RendererViewCompositionBackend(webgl, renderer, viewmodelCamera);
+  // Camera-dependent retained realization must use the camera of each draw,
+  // including C# CameraView compositions rather than only the surface fallback.
+  const prepareGhostPlates = (viewCamera: THREE.Camera): void => {
+    for (const presentation of ghostPlatePresentations) presentation.prepare(viewCamera);
+  };
+  const viewComposition = new RendererViewCompositionBackend(webgl, renderer, viewmodelCamera, prepareGhostPlates);
   constructionCleanup.push(() => viewComposition.dispose());
   if (options.viewComposition !== undefined) {
     const receipt = viewComposition.configure(options.viewComposition);
@@ -529,7 +534,7 @@ export function mountRendererBrowserSurface(
         : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
     lastRenderTimeMs = timeMs;
     webgl.info.reset();
-    for (const ghostPlatePresentation of ghostPlatePresentations) ghostPlatePresentation.prepare(camera);
+    prepareGhostPlates(camera);
     gpuSubmissionDuty.begin(submissionSourceTimeMs ?? undefined);
     try {
       renderBrowserSurfaceFrame(

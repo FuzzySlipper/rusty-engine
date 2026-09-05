@@ -176,6 +176,50 @@ void test('composed primary views keep viewmodel transforms camera-relative acro
   assert.ok(viewmodelCamera.quaternion.angleTo(new THREE.Quaternion()) < 1e-12);
 });
 
+void test('camera-dependent realization is prepared for each actual primary and offscreen draw', () => {
+  const scene = new THREE.Scene();
+  const prepared: THREE.Camera[] = [];
+  const drawn: THREE.Camera[] = [];
+  const webgl = {
+    initRenderTarget: () => undefined,
+    getPixelRatio: () => 1,
+    setRenderTarget: () => undefined,
+    setScissorTest: () => undefined,
+    setViewport: () => undefined,
+    setScissor: () => undefined,
+    clear: () => undefined,
+    clearDepth: () => undefined,
+    render: (drawScene: THREE.Scene, camera: THREE.Camera) => {
+      if (drawScene !== scene) return;
+      assert.equal(prepared.at(-1), camera, 'a fallback or previous view camera was used');
+      drawn.push(camera);
+    },
+  } as unknown as THREE.WebGLRenderer;
+  const projection = {
+    scene, viewmodelScene: new THREE.Scene(),
+    prepareSpritesForCamera: () => undefined,
+    prepareStaticInstanceBatches: () => undefined,
+  } as unknown as ThreeRenderer;
+  const manager = new RendererViewCompositionBackend(webgl, projection, new THREE.PerspectiveCamera(),
+    (camera) => prepared.push(camera));
+  try {
+    const primary = primaryComposition([9.5, 5.55, 11.7], 0);
+    const offscreen = composition();
+    assert.equal(manager.configure({ ...primary,
+      cameras: [...primary.cameras, ...offscreen.cameras],
+      targets: offscreen.targets,
+      views: [...primary.views, ...offscreen.views],
+    }).applied, true);
+    manager.render(1, 800, 600);
+    assert.deepEqual(prepared.map(camera => camera.position.toArray()), [[0, 12, 0], [9.5, 5.55, 11.7]]);
+    assert.deepEqual(drawn, prepared);
+    assert.equal(manager.configure(primaryComposition([11.7, 5.55, 9.5], -90)).applied, true);
+    manager.render(2, 800, 600);
+    assert.deepEqual(prepared.at(-1)?.position.toArray(), [11.7, 5.55, 9.5]);
+    assert.equal(drawn.length, 3);
+  } finally { manager.dispose(); }
+});
+
 void test('changed target facts require a higher revision and publish exactly once', () => {
   const initialized: THREE.WebGLRenderTarget[] = [];
   let disposed = 0;
