@@ -509,7 +509,7 @@ internal static class Emit
             }
             else
             {
-                output.Append($"public readonly record struct {safeName}(").Append(string.Join(", ", fields.Select(field => $"{field.Type} {Pascal(field.Field.Name)}"))).AppendLine(");").AppendLine();
+                output.Append($"public readonly partial record struct {safeName}(").Append(string.Join(", ", fields.Select(field => $"{field.Type} {Pascal(field.Field.Name)}"))).AppendLine(");").AppendLine();
             }
         }
         foreach (Struct lease in model.Structs.Values.Where(lease => UsesLeaseReceipt(model, lease)).OrderBy(value => value.Name, StringComparer.Ordinal))

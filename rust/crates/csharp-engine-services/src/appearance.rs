@@ -149,13 +149,24 @@ pub enum CsharpRenderResourceKind {
 }
 
 impl CsharpRenderResource {
-    fn admit_texture(path: String, bytes: Vec<u8>) -> Result<Self, CsharpEngineServicesError> {
+    fn admit_texture(
+        path: String,
+        bytes: Arc<[u8]>,
+        filter: NativeTextureFilter,
+        wrap: NativeTextureWrap,
+    ) -> Result<Self, CsharpEngineServicesError> {
         let path = renderer_path(path, ".png")?;
         let mut descriptor = TextureDescriptor::admit_png_rgba8_resource(
             "texture/csharp-product".to_owned(),
             &bytes,
-            TextureFilter::Nearest,
-            TextureWrap::Clamp,
+            match filter {
+                NativeTextureFilter::Nearest => TextureFilter::Nearest,
+                NativeTextureFilter::Linear => TextureFilter::Linear,
+            },
+            match wrap {
+                NativeTextureWrap::Clamp => TextureWrap::Clamp,
+                NativeTextureWrap::Repeat => TextureWrap::Repeat,
+            },
             1,
         )
         .map_err(|error| {
@@ -168,12 +179,15 @@ impl CsharpRenderResource {
             .content_hash
             .clone()
             .expect("resource-backed texture has a content hash");
-        let identity = format!(
+        let mut identity = format!(
             "texture/csharp-product-{}",
             content_hash
                 .strip_prefix("sha256:")
                 .expect("Engine texture hash uses SHA-256")
         );
+        if filter != NativeTextureFilter::Nearest || wrap != NativeTextureWrap::Clamp {
+            identity.push_str(&format!("-f{}-w{}", filter as u32, wrap as u32));
+        }
         descriptor.id = identity.clone();
         descriptor.validate().map_err(|error| {
             CsharpEngineServicesError::new(
@@ -196,7 +210,7 @@ impl CsharpRenderResource {
             identity: resource_identity,
             content_hash,
             path,
-            bytes: Arc::from(bytes),
+            bytes,
             texture: Some(descriptor),
             animated_mesh: None,
         })
@@ -1375,7 +1389,7 @@ pub(crate) struct RuntimeAppearanceState {
     retained_object_count: u32,
     retained_light_count: u32,
     pub(crate) render_resources: Vec<CsharpRenderResource>,
-    resource_paths: BTreeMap<String, u64>,
+    resource_paths: BTreeMap<(String, NativeTextureFilter, NativeTextureWrap), u64>,
     resource_identities: BTreeMap<String, u64>,
     sprite_atlases: BTreeMap<u64, RuntimeSpriteAtlas>,
     sprite_atlas_appearances: BTreeMap<u64, BTreeSet<u64>>,
@@ -2969,10 +2983,20 @@ impl RuntimeAppearanceBridge {
         let requested_path = unsafe {
             borrowed_utf8(request.path.bytes, request.path.len, "resource path")?.to_owned()
         };
+        let (filter, wrap) = if requested_path.ends_with(".png") {
+            (request.filter, request.wrap)
+        } else {
+            (NativeTextureFilter::Nearest, NativeTextureWrap::Clamp)
+        };
         if let Some(handle) = self
             .staged
             .as_ref()
-            .and_then(|staged| staged.state.resource_paths.get(&requested_path))
+            .and_then(|staged| {
+                staged
+                    .state
+                    .resource_paths
+                    .get(&(requested_path.clone(), filter, wrap))
+            })
             .copied()
         {
             return self.resource_info(handle);
@@ -3002,7 +3026,7 @@ impl RuntimeAppearanceBridge {
         let browser_path = format!("content/{relative_path}");
         let resource = match () {
             _ if relative_path.ends_with(".png") => {
-                CsharpRenderResource::admit_texture(browser_path.clone(), bytes.to_vec())
+                CsharpRenderResource::admit_texture(browser_path.clone(), bytes, filter, wrap)
             }
             _ if relative_path.ends_with(".rmesh") => {
                 CsharpRenderResource::admit_mesh(browser_path.clone(), bytes.to_vec())
@@ -3029,11 +3053,26 @@ impl RuntimeAppearanceBridge {
         resource: CsharpRenderResource,
         paths: impl IntoIterator<Item = String>,
     ) -> Result<u64, CsharpEngineServicesError> {
+        let (filter, wrap) = resource.texture().map_or(
+            (NativeTextureFilter::Nearest, NativeTextureWrap::Clamp),
+            |texture| {
+                (
+                    match texture.filter {
+                        TextureFilter::Nearest => NativeTextureFilter::Nearest,
+                        TextureFilter::Linear => NativeTextureFilter::Linear,
+                    },
+                    match texture.wrap {
+                        TextureWrap::Clamp => NativeTextureWrap::Clamp,
+                        TextureWrap::Repeat => NativeTextureWrap::Repeat,
+                    },
+                )
+            },
+        );
         let staged = self.staged_mut()?;
         let handle = if let Some(handle) = staged
             .state
             .resource_identities
-            .get(resource.identity())
+            .get(resource.asset_identity())
             .copied()
         {
             handle
@@ -3052,13 +3091,16 @@ impl RuntimeAppearanceBridge {
                         "renderer resource handle overflowed",
                     )
                 })?;
-            let identity = resource.identity().to_owned();
+            let identity = resource.asset_identity().to_owned();
             staged.state.render_resources.push(resource);
             staged.state.resource_identities.insert(identity, handle);
             handle
         };
         for path in paths {
-            staged.state.resource_paths.insert(path, handle);
+            staged
+                .state
+                .resource_paths
+                .insert((path, filter, wrap), handle);
         }
         Ok(handle)
     }
@@ -5089,7 +5131,13 @@ impl RuntimeAppearanceBridge {
         if let Some(handle) = self
             .staged
             .as_ref()
-            .and_then(|staged| staged.state.resource_paths.get(&requested_path))
+            .and_then(|staged| {
+                staged.state.resource_paths.get(&(
+                    requested_path.clone(),
+                    NativeTextureFilter::Nearest,
+                    NativeTextureWrap::Clamp,
+                ))
+            })
             .copied()
         {
             if self.resource(handle)?.kind() == CsharpRenderResourceKind::AnimatedMesh {
@@ -5144,7 +5192,13 @@ impl RuntimeAppearanceBridge {
         if let Some(handle) = self
             .staged
             .as_ref()
-            .and_then(|staged| staged.state.resource_paths.get(&requested_path))
+            .and_then(|staged| {
+                staged.state.resource_paths.get(&(
+                    requested_path.clone(),
+                    NativeTextureFilter::Nearest,
+                    NativeTextureWrap::Clamp,
+                ))
+            })
             .copied()
         {
             if self.resource(handle)?.kind() == CsharpRenderResourceKind::AnimationClipPack {
@@ -9049,6 +9103,8 @@ pub(super) mod tests {
                 bytes: path.as_ptr(),
                 len: path.len(),
             },
+            filter: NativeTextureFilter::Nearest,
+            wrap: NativeTextureWrap::Clamp,
         }
     }
 
@@ -9845,6 +9901,107 @@ pub(super) mod tests {
         bridge.begin_call();
         bridge.destroy_light(light).unwrap();
         assert!(bridge.take_staged_call().unwrap().unwrap().frame.is_none());
+    }
+
+    #[test]
+    fn texture_sampling_variants_share_pixels_but_retain_distinct_handles_and_materials() {
+        let mut content = BTreeMap::new();
+        content.insert("tiles.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("alias.png".to_owned(), Arc::from(RGBA_PNG));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        bridge.begin_call();
+        let clamp = bridge
+            .open_resource(&resource_request("tiles.png"))
+            .unwrap();
+        let mut repeat_request = resource_request("tiles.png");
+        repeat_request.wrap = NativeTextureWrap::Repeat;
+        let repeat = bridge.open_resource(&repeat_request).unwrap();
+        let mut linear_request = repeat_request;
+        linear_request.filter = NativeTextureFilter::Linear;
+        let linear = bridge.open_resource(&linear_request).unwrap();
+        assert_ne!(clamp.handle, repeat.handle);
+        assert_ne!(repeat.handle, linear.handle);
+        for path in ["tiles.png", "content/tiles.png", "alias.png"] {
+            let mut alias = resource_request(path);
+            alias.wrap = NativeTextureWrap::Repeat;
+            assert_eq!(bridge.open_resource(&alias).unwrap().handle, repeat.handle);
+            assert_eq!(
+                bridge
+                    .open_resource(&resource_request(path))
+                    .unwrap()
+                    .handle,
+                clamp.handle
+            );
+        }
+        let clamp_resource = bridge.resource(clamp.handle.value).unwrap();
+        let repeat_resource = bridge.resource(repeat.handle.value).unwrap();
+        assert_eq!(clamp_resource.identity(), repeat_resource.identity());
+        assert_eq!(
+            clamp_resource.content_hash(),
+            repeat_resource.content_hash()
+        );
+        assert_ne!(
+            clamp_resource.asset_identity(),
+            repeat_resource.asset_identity()
+        );
+        assert_eq!(clamp_resource.texture().unwrap().wrap, TextureWrap::Clamp);
+        assert_eq!(repeat_resource.texture().unwrap().wrap, TextureWrap::Repeat);
+        assert_eq!(
+            bridge
+                .resource(linear.handle.value)
+                .unwrap()
+                .texture()
+                .unwrap()
+                .filter,
+            TextureFilter::Linear
+        );
+        for resource in [clamp, repeat, linear] {
+            bridge
+                .create_material(NativeMaterialRequest {
+                    color: NativeColor {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 1.0,
+                    },
+                    texture: resource.handle,
+                    roughness: 1.0,
+                    texture_tint: NativeColor {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 1.0,
+                    },
+                    emission_color: NativeVec3::default(),
+                    emission_intensity: 0.0,
+                    double_sided: false,
+                })
+                .unwrap();
+        }
+        let resources = bridge
+            .staged
+            .as_mut()
+            .unwrap()
+            .state
+            .projector
+            .resources_mut();
+        assert_eq!(resources.textures.len(), 3);
+        assert_eq!(
+            resources
+                .textures
+                .iter()
+                .filter(|texture| texture.wrap == TextureWrap::Clamp)
+                .count(),
+            1
+        );
+        assert_eq!(
+            resources
+                .textures
+                .iter()
+                .filter(|texture| texture.wrap == TextureWrap::Repeat)
+                .count(),
+            2
+        );
     }
 
     #[test]

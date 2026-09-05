@@ -328,6 +328,8 @@ include = [
     "NativeProductUpdateArgs",
     "NativeProductCallError",
     "NativeRenderResourceRequest",
+    "NativeTextureFilter",
+    "NativeTextureWrap",
     "NativeRenderResourceInfo",
     "NativeSpriteAtlasHandle",
     "NativeSpriteAtlasReference",

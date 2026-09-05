@@ -176,10 +176,17 @@ public sealed class Product : IEngineProduct
                 reference.Path,
                 reference.Sha256 with { Word3 = reference.Sha256.Word3 ^ 1 })));
         }
+        RenderResourceInfo clampedTexture = _engine.Graphics.OpenResource(new RenderResourceRequest("trial.png"));
+        RenderResourceInfo repeatedTexture = _engine.Graphics.OpenResource(new RenderResourceRequest(
+            "trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
+        RenderResourceInfo repeatedAlias = _engine.Graphics.OpenResource(new RenderResourceRequest(
+            "content/trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
+        Require(clampedTexture.Handle != repeatedTexture.Handle && repeatedTexture.Handle == repeatedAlias.Handle,
+            "texture sampler variants must retain distinct assets over shared content");
         _appearance = _engine.Graphics.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
         Material createdMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
             new Color(0.25f, 0.75f, 1.0f, 1.0f),
-            new RenderResourceHandle(0),
+            repeatedTexture.Handle,
             0.5f,
             new Color(1, 1, 1, 1),
             Vector3.Zero,

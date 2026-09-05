@@ -2169,6 +2169,8 @@ mod tests {
                             bytes: path.as_ptr(),
                             len: path.len(),
                         },
+                        filter: csharp_engine_abi::NativeTextureFilter::Nearest,
+                        wrap: csharp_engine_abi::NativeTextureWrap::Clamp,
                     },
                     &mut resource,
                 )

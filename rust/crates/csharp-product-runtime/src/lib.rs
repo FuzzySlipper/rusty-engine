@@ -1207,12 +1207,7 @@ impl CsharpProductRuntime {
         complete_product_call(&api, handle, true, false);
         observe_product_runtime(&api, handle, lifecycle.readout());
         services.seal_resource_selection();
-        let render_resources = match services
-            .render_resources()
-            .iter()
-            .map(admit_renderer_resource)
-            .collect()
-        {
+        let render_resources = match admit_renderer_resources(&services.render_resources()) {
             Ok(resources) => resources,
             Err(error) => {
                 complete_product_call(&api, handle, false, true);
@@ -5227,6 +5222,19 @@ fn clear_reason(value: runtime_input::InputClearReason) -> NativeInputClearReaso
         runtime_input::InputClearReason::Dispose => NativeInputClearReason::Dispose,
         runtime_input::InputClearReason::IngressOverflow => NativeInputClearReason::IngressOverflow,
     }
+}
+
+fn admit_renderer_resources(
+    resources: &[CsharpRenderResource],
+) -> Result<Vec<ProductDevRendererResource>, CsharpProductRuntimeError> {
+    // Sampler variants are distinct retained texture assets but share one
+    // immutable pixel payload and one browser preload entry.
+    let mut identities = BTreeSet::new();
+    resources
+        .iter()
+        .filter(|resource| identities.insert(resource.identity()))
+        .map(admit_renderer_resource)
+        .collect()
 }
 
 fn admit_renderer_resource(

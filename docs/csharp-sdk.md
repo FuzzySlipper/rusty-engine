@@ -214,6 +214,23 @@ marker crossings because it does not traverse time. A later
 `AdvanceSpritePlayback` continues from the selected cursor through the ordinary
 Engine-admitted update facts.
 
+### Texture sampling
+
+`Graphics.OpenResource(new RenderResourceRequest(path))` keeps nearest filtering
+and clamp wrapping for PNG textures. Ordinary tiled meshes can select sampling
+explicitly:
+
+```csharp
+var texture = engine.Graphics.OpenResource(new RenderResourceRequest(
+    "textures/stone.png", TextureFilter.Nearest, TextureWrap.Repeat));
+```
+
+`TextureFilter.Linear` is also available. Sampling applies to PNG resources;
+mesh and font resource requests keep their existing behavior. The same PNG can
+be selected with different samplers: pixel content remains shared, while each
+sampler has its own retained texture identity. Keep sprite/atlas resources
+clamped unless their authored usage calls for something else.
+
 ### Ghost plates
 
 `IEngineContext.Presentation` provides the retained ghost-plate path. Create a

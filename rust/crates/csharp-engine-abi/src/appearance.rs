@@ -160,11 +160,30 @@ pub enum NativeSpriteDepthPolicy {
     DepthWriteOff = 2,
 }
 
+/// Sampling of an ordinary PNG renderer resource.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NativeTextureFilter {
+    #[default]
+    Nearest = 0,
+    Linear = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NativeTextureWrap {
+    #[default]
+    Clamp = 0,
+    Repeat = 1,
+}
+
 /// One admitted immutable renderer resource selected by its product content path.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeRenderResourceRequest {
     pub path: NativeUtf8Slice,
+    pub filter: NativeTextureFilter,
+    pub wrap: NativeTextureWrap,
 }
 
 #[repr(C)]
