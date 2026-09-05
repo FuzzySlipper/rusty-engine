@@ -41,6 +41,13 @@ product_generator_output_dir="$product_generator_build_dir/bin"
 product_generator_intermediate_dir="$product_generator_build_dir/obj"
 product_generator_path="$product_generator_output_dir/Rusty.Engine.ProductGenerator.dll"
 
+# This script owns the generated SDK build. Restore every managed project it
+# invokes so a clean checkout does not depend on ignored obj state or a prior
+# CI step; later build/pack operations deliberately reuse these restores.
+dotnet restore "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj"
+dotnet restore "$repo_root/csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj"
+dotnet restore "$repo_root/csharp/Rusty.Engine/Rusty.Engine.csproj"
+
 dotnet build "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj" --no-restore
 "$repo_root/scripts/generate-csharp-native-bindings.sh" "$generated_dir" "$generated_inputs_dir"
 

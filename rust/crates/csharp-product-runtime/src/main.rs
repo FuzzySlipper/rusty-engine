@@ -504,6 +504,15 @@ struct WorkerRuntime {
     scheduler_inflight: Arc<Mutex<Option<(u64, Instant)>>>,
 }
 
+type WorkerStart = (
+    WorkerRuntime,
+    ProductDevBundle,
+    Vec<ProductDevRuntimeOutput>,
+    mpsc::Receiver<ProductDevWorkerPublication>,
+    mpsc::Receiver<ProductDevWorkerDiagnostic>,
+    mpsc::Receiver<u64>,
+);
+
 struct PendingWorker {
     connection: WorkerConnection,
     generation: u64,
@@ -564,19 +573,7 @@ impl WorkerRuntime {
         Ok(())
     }
 
-    fn start(
-        args: &Arguments,
-    ) -> Result<
-        (
-            Self,
-            ProductDevBundle,
-            Vec<ProductDevRuntimeOutput>,
-            mpsc::Receiver<ProductDevWorkerPublication>,
-            mpsc::Receiver<ProductDevWorkerDiagnostic>,
-            mpsc::Receiver<u64>,
-        ),
-        String,
-    > {
+    fn start(args: &Arguments) -> Result<WorkerStart, String> {
         let (output_tx, output_rx) = mpsc::sync_channel(16);
         // Output remains fenced until the stable shell atomically publishes
         // the worker's ready bundle and complete baseline.
@@ -1490,9 +1487,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
                     write_worker_frame(&mut *writer, &ProductDevWorkerEvent::Response(result))
                         .map_err(|error| error.to_string())
                 });
-            if let Err(error) = write {
-                return Err(error);
-            }
+            write?;
             continue;
         }
         let connection = matches!(
@@ -2047,6 +2042,10 @@ where
     worker_receipt(request_id, result)
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the parsed launch arguments remain inline so command dispatch transfers one owned parse result without another allocation"
+)]
 enum Invocation {
     Identity { machine_readable: bool },
     Launch(Arguments),
@@ -2935,11 +2934,9 @@ fn parse_controller_button(value: &str) -> Result<ControllerButton, String> {
         "button-13" => Ok(ControllerButton::Button13),
         "button-14" => Ok(ControllerButton::Button14),
         "button-15" => Ok(ControllerButton::Button15),
-        _ => {
-            return Err(format!(
-                "--physical-mapping controller button `{value}` is unsupported"
-            ));
-        }
+        _ => Err(format!(
+            "--physical-mapping controller button `{value}` is unsupported"
+        )),
     }
 }
 

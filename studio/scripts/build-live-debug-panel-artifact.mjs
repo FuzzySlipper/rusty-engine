@@ -17,7 +17,7 @@ const angularLinker = createEs2015LinkerPlugin({
     resolve: path.resolve,
   },
   linkerJitMode: false,
-  logger: { debug() {}, error() {}, info() {}, level: 1, warn() {} },
+  logger: { debug: console.debug, error: console.error, info: console.info, level: 1, warn: console.warn },
   sourceMapping: false,
 });
 

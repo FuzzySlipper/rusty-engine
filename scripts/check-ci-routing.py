@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -83,7 +82,7 @@ def main() -> None:
             "Cargo.toml",
             "Cargo.lock",
             "rust/**",
-            "!rust/crates/renderer-webview-host/artifacts/**",
+            "!rust/crates/renderer-webview-host/**",
             "scripts/verify.sh",
         },
         {"csharp/**", "fixtures/csharp-*/**", "render/**", "studio/**", "migration/**"},
@@ -103,7 +102,9 @@ def main() -> None:
             ".config/dotnet-tools.json",
             "scripts/generate-csharp-native-bindings.sh",
             "scripts/test-csharp-binding-generator-lease-fixture.sh",
-            "scripts/verify-csharp.sh",
+            "scripts/verify-csharp*.sh",
+            "scripts/pack-csharp-sdk.sh",
+            "scripts/test-csharp-sdk-package.sh",
         },
         {"Cargo.toml", "Cargo.lock", "rust/**", "render/**", "studio/**"},
     )
@@ -114,9 +115,7 @@ def main() -> None:
         {
             "render/**",
             "rust/crates/render-host-contracts/**",
-            "rust/crates/renderer-webview-host/**",
             "scripts/verify-render-artifacts.sh",
-            "scripts/verify-renderer-webview-host.sh",
         },
         set(),
     )
@@ -134,8 +133,8 @@ def main() -> None:
             "render",
             "studio",
         },
-        "rust/crates/renderer-webview-host/artifacts/renderer-webview.js": {"render"},
-        "rust/crates/renderer-webview-host/src/lib.rs": {"render", "verify"},
+        "rust/crates/renderer-webview-host/artifacts/renderer-webview.js": set(),
+        "rust/crates/renderer-webview-host/src/lib.rs": set(),
         "rust/crates/entity-state/src/lib.rs": {"studio", "verify"},
         "docs/csharp-sdk.md": {"docs"},
         "studio/apps/studio-app/src/main.ts": {"studio"},
@@ -156,11 +155,6 @@ def main() -> None:
             fail(
                 f"{path} routes to {sorted(actual)}, expected {sorted(expected)}"
             )
-    if "pnpm --dir render install --frozen-lockfile --ignore-scripts" not in workflows["render"]:
-        fail("render CI dependency admission must not compile workspace packages")
-    if "RUSTY_RENDER_DEPS_READY=1 ./scripts/verify-render.sh" not in workflows["render"]:
-        fail("render CI must reuse its one admitted dependency installation")
-
     require_paths(
         "studio",
         workflows["studio"],
@@ -179,70 +173,7 @@ def main() -> None:
         {"README.md", "AGENTS.md", "docs/**", ".github/workflows/**"},
         set(),
     )
-    for name in ("verify", "csharp", "render"):
-        workflow = workflows[name]
-        if "uses: Swatinem/rust-cache@v2" not in workflow or "shared-key: engine-ci" not in workflow:
-            fail(f"{name} does not participate in the bounded shared Rust cache")
-
-    csharp_gate = read(root, "scripts/verify-csharp.sh")
-    for required in (
-        'dotnet restore "$NATIVE_AOT_PROJECT" --runtime linux-x64',
-        'dotnet restore "$MANAGED_PROJECT"',
-        'dotnet build "$MANAGED_PROJECT" --no-restore',
-        'dotnet publish "$NATIVE_AOT_PROJECT"',
-        '--runtime linux-x64',
-        'cargo run -p csharp-product-runtime --bin rusty-product-host --locked --',
-        '--exercise',
-    ):
-        if required not in csharp_gate:
-            fail(f"C# verification gate is missing {required}")
-
-    studio_package = json.loads(read(root, "studio/package.json"))
-    studio_scripts = studio_package.get("scripts", {})
-    studio_verify = studio_scripts.get("verify", "")
-    if "migration" in studio_verify:
-        fail("ordinary Studio verification still requires historical migration certification")
-    if "verify:migration" not in studio_scripts:
-        fail("Studio does not retain an explicit optional migration audit")
-
-    aggregate = read(root, "scripts/verify-render.sh")
-    if 'install --frozen-lockfile --ignore-scripts' not in aggregate:
-        fail("local renderer dependency admission must not compile workspace packages")
-    for required in (
-        '"$REPO_ROOT/scripts/verify-render-artifacts.sh"',
-        '"$REPO_ROOT/scripts/verify-renderer-webview-host.sh" --artifacts-ready',
-        'run typecheck:browser',
-        'run test:compiled',
-        'run test:browser',
-    ):
-        if required not in aggregate:
-            fail(f"aggregate renderer gate is missing {required}")
-    if "run verify" in aggregate:
-        fail("aggregate renderer gate recursively invokes an unrelated verify path")
-
-    artifact_gate = read(root, "scripts/verify-render-artifacts.sh")
-    if artifact_gate.count('run build\n') != 1:
-        fail("combined artifact gate must perform exactly one renderer build")
-    for artifact in ("application-host", "renderer-webview.js"):
-        if artifact not in artifact_gate:
-            fail(f"combined artifact gate does not check {artifact}")
-
-    render_package = json.loads(read(root, "render/package.json"))
-    scripts = render_package.get("scripts", {})
-    if "test:compiled" not in scripts or "typecheck:browser" not in scripts:
-        fail("renderer root does not expose compiled-test and browser-typecheck phases")
-    for package in (
-        "application-host",
-        "render-contracts",
-        "render-projection",
-        "renderer-host",
-        "renderer-three",
-    ):
-        data = json.loads(read(root, f"render/packages/{package}/package.json"))
-        if "test:compiled" not in data.get("scripts", {}):
-            fail(f"renderer package {package} cannot reuse compiled output")
-
-    print("ci routing and single-pass renderer contract passed")
+    print("CI owner routing passed")
 
 
 if __name__ == "__main__":

@@ -5,18 +5,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROBE_ROOT="$(mktemp -d -t rusty-engine-ci-routing.XXXXXX)"
 trap 'rm -rf "$PROBE_ROOT"' EXIT
 
-mkdir -p "$PROBE_ROOT/.github" "$PROBE_ROOT/scripts" "$PROBE_ROOT/render/packages"
-mkdir -p "$PROBE_ROOT/studio"
+mkdir -p "$PROBE_ROOT/.github"
 cp -a "$REPO_ROOT/.github/workflows" "$PROBE_ROOT/.github/workflows"
-cp "$REPO_ROOT/scripts/verify-render.sh" "$PROBE_ROOT/scripts/verify-render.sh"
-cp "$REPO_ROOT/scripts/verify-render-artifacts.sh" "$PROBE_ROOT/scripts/verify-render-artifacts.sh"
-cp "$REPO_ROOT/scripts/verify-csharp.sh" "$PROBE_ROOT/scripts/verify-csharp.sh"
-cp "$REPO_ROOT/render/package.json" "$PROBE_ROOT/render/package.json"
-cp "$REPO_ROOT/studio/package.json" "$PROBE_ROOT/studio/package.json"
-for package in application-host render-contracts render-projection renderer-host renderer-three; do
-  mkdir -p "$PROBE_ROOT/render/packages/$package"
-  cp "$REPO_ROOT/render/packages/$package/package.json" "$PROBE_ROOT/render/packages/$package/package.json"
-done
 
 python3 "$REPO_ROOT/scripts/check-ci-routing.py" --root "$PROBE_ROOT" >/dev/null
 
@@ -29,8 +19,8 @@ expect_rejection() {
 }
 
 cp -a "$PROBE_ROOT" "$PROBE_ROOT.missing-host"
-sed -i "/rust\/crates\/renderer-webview-host/d" "$PROBE_ROOT.missing-host/.github/workflows/render.yml"
-PROBE_ROOT="$PROBE_ROOT.missing-host" expect_rejection "missing renderer webview owner"
+sed -i "/rust\/crates\/render-host-contracts/d" "$PROBE_ROOT.missing-host/.github/workflows/render.yml"
+PROBE_ROOT="$PROBE_ROOT.missing-host" expect_rejection "missing render contract owner"
 rm -rf "$PROBE_ROOT.missing-host"
 
 cp -a "$PROBE_ROOT" "$PROBE_ROOT.broad-studio"
@@ -51,7 +41,7 @@ PROBE_ROOT="$PROBE_ROOT.no-cancel" expect_rejection "missing superseded-run canc
 rm -rf "$PROBE_ROOT.no-cancel"
 
 cp -a "$PROBE_ROOT" "$PROBE_ROOT.missing-csharp"
-sed -i '/scripts\/verify-csharp.sh/d' "$PROBE_ROOT.missing-csharp/.github/workflows/csharp.yml"
+sed -i '/scripts\/verify-csharp/d' "$PROBE_ROOT.missing-csharp/.github/workflows/csharp.yml"
 PROBE_ROOT="$PROBE_ROOT.missing-csharp" expect_rejection "missing C# verification routing"
 rm -rf "$PROBE_ROOT.missing-csharp"
 

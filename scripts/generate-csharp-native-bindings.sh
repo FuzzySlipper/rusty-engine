@@ -51,6 +51,8 @@ rm -f -- "$output_dir/NativeBindings.g.cs"
         --output "$header"
 )
 
+dotnet restore "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj"
+
 dotnet run \
     --project "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj" \
     --no-restore \

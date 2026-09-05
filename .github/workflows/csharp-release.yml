@@ -47,7 +47,7 @@ jobs:
       - name: Install pair build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang libclang-dev jq unzip
+          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep
           libclang_path="$(find /usr/lib/llvm-* -name libclang.so -print -quit)"
           test -n "$libclang_path"
           libclang_dir="$(dirname "$libclang_path")"
@@ -57,6 +57,9 @@ jobs:
           dotnet restore csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj
           dotnet restore csharp/Rusty.Engine.ProductGenerator/Rusty.Engine.ProductGenerator.csproj
           dotnet restore csharp/Rusty.Engine/Rusty.Engine.csproj
+
+      - name: Verify NativeAOT fidelity
+        run: ./scripts/verify-csharp.sh --aot
 
       - name: Build and verify the exact pair
         shell: bash

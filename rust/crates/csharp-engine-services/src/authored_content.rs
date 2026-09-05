@@ -805,6 +805,10 @@ impl RuntimeAuthoredContentBridge {
         self.prefab_registries.insert(value, registry);
         Ok(NativeAuthoredPrefabRegistryHandle { value })
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fixed C ABI supplies each copied prefab row family as a separate borrowed slice"
+    )]
     fn admit_prefab_rows(
         &mut self,
         request: NativeAuthoredPrefabRegistryAdmitRequest,
@@ -1101,48 +1105,53 @@ impl RuntimeAuthoredContentBridge {
             .prefab_registries
             .get(&prefab_registry_handle.value)
             .ok_or_else(|| AuthoredError::simple("unknown scene prefab registry handle"))?;
-        let mut context = SceneResolutionContext::default();
-        context.available_assets = catalog
-            .catalog()
-            .iter()
-            .map(|entry| {
-                (
-                    entry.id.clone(),
-                    AvailableSceneAsset {
-                        version: entry.version,
-                        hash: entry.hash.clone(),
-                    },
-                )
-            })
-            .collect();
-        context.prefab_ids = registry
-            .as_registry()
-            .definitions
-            .iter()
-            .map(|definition| definition.id)
-            .collect();
-        context.entity_definition_ids = entity_definition_ids
-            .iter()
-            .map(|row| parse_text(row.stable_id, "scene entity definition id"))
-            .collect::<Result<_, _>>()
-            .map_err(AuthoredError::simple)?;
-        context.generator_presets = generator_presets
-            .iter()
-            .map(|row| {
-                Ok((
-                    parse_text(row.provider_id, "scene generator provider id")?,
-                    parse_text(row.preset_id, "scene generator preset id")?,
-                ))
-            })
-            .collect::<Result<_, String>>()
-            .map_err(AuthoredError::simple)?;
-        context.catalog_ids = catalog_ids
-            .iter()
-            .map(|row| parse_text(row.catalog_id, "scene logical catalog id"))
-            .collect::<Result<_, _>>()
-            .map_err(AuthoredError::simple)?;
+        let context = SceneResolutionContext {
+            available_assets: catalog
+                .catalog()
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.id.clone(),
+                        AvailableSceneAsset {
+                            version: entry.version,
+                            hash: entry.hash.clone(),
+                        },
+                    )
+                })
+                .collect(),
+            prefab_ids: registry
+                .as_registry()
+                .definitions
+                .iter()
+                .map(|definition| definition.id)
+                .collect(),
+            entity_definition_ids: entity_definition_ids
+                .iter()
+                .map(|row| parse_text(row.stable_id, "scene entity definition id"))
+                .collect::<Result<_, _>>()
+                .map_err(AuthoredError::simple)?,
+            generator_presets: generator_presets
+                .iter()
+                .map(|row| {
+                    Ok((
+                        parse_text(row.provider_id, "scene generator provider id")?,
+                        parse_text(row.preset_id, "scene generator preset id")?,
+                    ))
+                })
+                .collect::<Result<_, String>>()
+                .map_err(AuthoredError::simple)?,
+            catalog_ids: catalog_ids
+                .iter()
+                .map(|row| parse_text(row.catalog_id, "scene logical catalog id"))
+                .collect::<Result<_, _>>()
+                .map_err(AuthoredError::simple)?,
+        };
         Ok(context)
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fixed C ABI supplies each copied scene row family as a separate borrowed slice"
+    )]
     fn prepare_scene_rows(
         &mut self,
         request: NativeAuthoredScenePrepareRequest,
@@ -2585,6 +2594,10 @@ fn resolved_prefab_part_row(
         active: part.active,
     }
 }
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the scene document preserves every copied C ABI row family without a second adapter shape"
+)]
 fn scene_document_from_rows(
     request: NativeAuthoredScenePrepareRequest,
     dependencies: &[NativeAuthoredSceneDependencyInput],
@@ -4903,8 +4916,8 @@ mod tests {
             },
             ABI_OK
         );
-        assert_eq!(unsafe { (*surface.surfaces).has_resolved_mapping }, true);
-        assert_eq!(unsafe { (*surface.surfaces).has_resolved_region }, true);
+        assert!(unsafe { (*surface.surfaces).has_resolved_mapping });
+        assert!(unsafe { (*surface.surfaces).has_resolved_region });
         assert_eq!(unsafe { (*surface.surfaces).resolved_texture_version }, 1);
         assert_eq!(unsafe { (*surface.surfaces).resolved_atlas_version }, 1);
         assert_eq!(

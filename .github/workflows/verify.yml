@@ -7,7 +7,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust/**'
-      - '!rust/crates/renderer-webview-host/artifacts/**'
+      - '!rust/crates/renderer-webview-host/**'
       - 'scripts/audit-standalone.sh'
       - 'scripts/dependency_boundary_check.py'
       - 'scripts/verify.sh'
@@ -17,7 +17,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust/**'
-      - '!rust/crates/renderer-webview-host/artifacts/**'
+      - '!rust/crates/renderer-webview-host/**'
       - 'scripts/audit-standalone.sh'
       - 'scripts/dependency_boundary_check.py'
       - 'scripts/verify.sh'
@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  verify-rust:
     runs-on: ubuntu-latest
     steps:
       - name: Check out Rusty Engine
@@ -49,14 +49,8 @@ jobs:
           shared-key: engine-ci
           workspaces: . -> target
 
-      - name: Install Linux webview build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            clang \
-            ripgrep
+      - name: Install architecture audit dependency
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
 
       - name: Verify
         run: ./scripts/verify.sh

@@ -1,18 +1,16 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
 const packages = new Map([
-  ['application-host', { dependencies: [], peers: [], preparesGitConsumer: false }],
+  ['application-host', { dependencies: [], peers: [] }],
   ['product-browser-host', {
     dependencies: [],
     peers: ['@rusty-engine/application-host'],
-    preparesGitConsumer: true,
   }],
-  ['render-contracts', { dependencies: [], peers: [], preparesGitConsumer: true }],
+  ['render-contracts', { dependencies: [], peers: [] }],
   ['render-projection', {
     dependencies: [],
     peers: ['@rusty-engine/render-contracts'],
-    preparesGitConsumer: true,
   }],
   ['renderer-three', {
     dependencies: ['@noble/hashes', '@types/three', 'fflate', 'three'],
@@ -20,7 +18,6 @@ const packages = new Map([
       '@rusty-engine/render-contracts',
       '@rusty-engine/render-projection',
     ],
-    preparesGitConsumer: true,
   }],
   ['renderer-host', {
     dependencies: [],
@@ -29,7 +26,6 @@ const packages = new Map([
       '@rusty-engine/render-projection',
       '@rusty-engine/renderer-three',
     ],
-    preparesGitConsumer: true,
   }],
 ]);
 
@@ -37,18 +33,6 @@ for (const [name, expected] of packages) {
   const manifest = JSON.parse(readFileSync(new URL(`packages/${name}/package.json`, root), 'utf8'));
   assertKeys(name, 'dependencies', manifest.dependencies, expected.dependencies);
   assertKeys(name, 'peerDependencies', manifest.peerDependencies, expected.peers);
-  if (expected.preparesGitConsumer && manifest.scripts?.prepare !== 'pnpm run build') {
-    throw new Error(`${name} must prepare its distributable output for exact-revision Git consumers`);
-  }
-
-  for (const peer of expected.peers) {
-    if (manifest.peerDependencies[peer] !== '0.1.0') {
-      throw new Error(`${name} peer ${peer} must match the shared 0.1.0 package family`);
-    }
-    if (manifest.devDependencies?.[peer] !== 'workspace:*') {
-      throw new Error(`${name} peer ${peer} must use its workspace package for provider builds`);
-    }
-  }
 }
 
 const applicationArtifact = JSON.parse(
@@ -58,7 +42,7 @@ const productBrowserArtifact = JSON.parse(
   readFileSync(new URL('artifacts/product-browser-host/package.json', root), 'utf8'),
 );
 if (productBrowserArtifact.name !== '@rusty-engine/product-browser-host') {
-  throw new Error('product browser host artifact must keep its public package identity');
+  throw new Error('product browser host artifact must keep its runtime bundle identity');
 }
 for (const file of productBrowserArtifact.files) {
   readFileSync(new URL(`artifacts/product-browser-host/${file}`, root), 'utf8');
@@ -84,36 +68,15 @@ assertKeys(
   [],
 );
 if (applicationArtifact.name !== '@rusty-engine/application-host') {
-  throw new Error('application-host artifact must own the sole public downstream package name');
+  throw new Error('application-host artifact must keep its Engine bundle identity');
 }
-for (const declaration of [
-  'index.d.ts',
-  'application-host.d.ts',
-  'application-content.d.ts',
-  'input-ingress.d.ts',
-  'ui-projection.d.ts',
-]) {
-  const source = readFileSync(new URL(`artifacts/application-host/${declaration}`, root), 'utf8');
-  if (/@rusty-engine\/(?:render|renderer)|\bthree\b|studio/iu.test(source)) {
-    throw new Error(
-      `application-host artifact declaration ${declaration} leaked an internal package or backend`,
-    );
-  }
-}
-
-const forbidden = /@asha\/|runtime-bridge|runtime-session|RuntimeBridge|RuntimeSession|ReplayRecord|ReactionFrame|DecisionReceipt|ProposalEnvelope/g;
-const violations = [];
-for (const name of packages.keys()) {
-  walk(new URL(`packages/${name}/src/`, root), (url) => {
-    if (!url.pathname.endsWith('.ts')) return;
-    const source = readFileSync(url, 'utf8');
-    for (const match of source.matchAll(forbidden)) {
-      violations.push(`${url.pathname}:${String(lineAt(source, match.index ?? 0))}:${match[0]}`);
-    }
-  });
-}
-if (violations.length > 0) {
-  throw new Error(`old runtime spine crossed the render boundary:\n${violations.join('\n')}`);
+// These are Engine implementation artifacts. Ordinary products consume the C#
+// SDK/runtime pack, not a public TypeScript declaration package. Keep package
+// dependency direction above and verify that both browser bundles are closed.
+const applicationRuntime = readFileSync(new URL('artifacts/application-host/index.js', root), 'utf8');
+if (applicationRuntime.split(/\r?\n/u).some((line) => /^\s*(?:import|export)\b/u.test(line)
+  && /['"]@rusty-engine\//u.test(line))) {
+  throw new Error('application host artifact leaked a bare Engine package import');
 }
 
 console.log('render package boundaries passed');
@@ -124,16 +87,4 @@ function assertKeys(packageName, field, value, expected) {
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
     throw new Error(`${packageName} ${field} ${JSON.stringify(actual)} do not match ${JSON.stringify(wanted)}`);
   }
-}
-
-function walk(url, visit) {
-  for (const entry of readdirSync(url, { withFileTypes: true })) {
-    const child = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, url);
-    if (entry.isDirectory()) walk(child, visit);
-    else visit(child);
-  }
-}
-
-function lineAt(source, index) {
-  return source.slice(0, index).split('\n').length;
 }

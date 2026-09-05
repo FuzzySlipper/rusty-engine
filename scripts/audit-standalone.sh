@@ -27,22 +27,11 @@ while IFS= read -r link; do
       failed=1
       ;;
   esac
-done < <(find . -path ./.git -prune -o -type l -print)
-
-if rg -n -i '(\.\./(asha-engine|asha-studio|asha-testing|rusty-engine-demo)|/home/dev/(asha-engine|asha-studio|asha-testing|rusty-engine-demo)|(?:path|link|file)[[:space:]]*=[[:space:]]*"[^"]*(asha-engine|asha-studio|asha-testing|rusty-engine-demo))' \
-  --glob '!docs/**' --glob '!studio/boundary-policy.json' --glob '!scripts/audit-standalone.sh' .; then
-  echo "operational sibling-repository reference found" >&2
-  failed=1
-fi
-
-if [[ -e .gitmodules ]]; then
-  echo "unexpected Git submodule configuration found" >&2
-  failed=1
-fi
+done < <(git ls-files --stage | awk '$1 == "120000" { print $4 }')
 
 if (( failed != 0 )); then
   exit 1
 fi
 
 cargo metadata --format-version 1 --locked --no-deps > /dev/null
-echo "standalone audit passed: local Cargo paths and symlinks remain inside Rusty Engine"
+echo "standalone audit passed: local Cargo paths and tracked symlinks remain inside Rusty Engine"

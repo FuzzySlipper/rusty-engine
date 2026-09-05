@@ -4,6 +4,7 @@ import {
   type RustyApplicationHost,
   type RustyApplicationPresentationAspectBounds,
 } from '@rusty-engine/application-host';
+import { audioSignalHandle } from '@rusty-engine/render-contracts';
 import characterUrl from '../../fixtures/render/assets/kenney-retro-character/character-medium.glb?url';
 
 declare global {
@@ -187,6 +188,7 @@ window.__rustyApplicationMount = (presentationAspectBounds, includeRuntimeInput 
             meta: { sequence: 0 },
             op: {
               op: 'emit',
+              signalHandle: audioSignalHandle(1),
               signalId: 'application-host-browser-proof',
               descriptor: {
                 clip: { asset: 'audio/application-host-proof', contentHash: AUDIO_CONTENT_HASH },

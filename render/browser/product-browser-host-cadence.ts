@@ -99,7 +99,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
           ? {
               accepted: false,
               code: 'DEV_HOST_FIXTURE_REALTIME_REJECTED',
-              disposition: 'rejected-recoverable',
+              disposition: 'terminal',
               operation: 'advance-realtime',
               diagnostic: 'fixture realtime advancement was rejected',
             }

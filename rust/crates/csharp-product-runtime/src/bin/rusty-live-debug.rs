@@ -145,7 +145,7 @@ fn run_repl(transport: &impl LiveDebugTransport) -> Result<i32, String> {
             writeln!(stdout, "{}", response.body).map_err(|error| error.to_string())?;
             continue;
         }
-        if command.as_bytes().len() > MAX_COMMAND_BYTES {
+        if command.len() > MAX_COMMAND_BYTES {
             eprintln!("command exceeds {MAX_COMMAND_BYTES} byte bound");
             continue;
         }

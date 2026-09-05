@@ -1557,7 +1557,7 @@ fn invoke_input<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8]) -> Http
         state,
         ProductDevOperationKind::Input,
         |runtime| runtime.input(batch),
-        |error| crate::ProductDevInputResult::rejected_runtime(error),
+        crate::ProductDevInputResult::rejected_runtime,
     )
 }
 

@@ -75,7 +75,7 @@ test('scheduled input receipts apply accepted and recovery cursors to later prod
   await expectClaimSequence('9');
 });
 
-test('a transient local input request degrades once, drops its uncertain batch, and accepts fresh input', async ({ page }) => {
+test('an uncertain input request replaces its control binding before accepting fresh input', async ({ page }) => {
   await page.goto('/browser/product-browser-host.html?transientInputFailure=1&rejectRecoveryDiagnostic=1');
   const canvas = page.locator('canvas[data-rusty-application-renderer="engine-owned"]');
   await canvas.focus();
@@ -83,8 +83,10 @@ test('a transient local input request degrades once, drops its uncertain batch, 
   await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserDiagnosticReports ?? []).some((report) =>
     report.hostState === 'degraded' && report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
   ))).toBe(true);
-  await page.keyboard.up('KeyW');
   await expect.poll(() => page.evaluate(() => window.__rustyProductBrowserHost?.readout().state)).toBe('ready');
+  await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? []).flat().some((input) => 'fact' in input && input.fact.kind === 'key' && input.fact.edge === 'pressed'))).toBe(true);
+  await page.keyboard.up('KeyW');
+  await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserInputBatches ?? []).flat().some((input) => 'fact' in input && input.fact.kind === 'key' && input.fact.edge === 'released'))).toBe(true);
   await expect.poll(() => page.evaluate(() => (window.__rustyProductBrowserAcceptedDiagnosticReports ?? []).some((report) =>
     report.hostState === 'ready' && report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
   ))).toBe(true);
@@ -95,11 +97,15 @@ test('a transient local input request degrades once, drops its uncertain batch, 
     maximumActiveDiagnostics: window.__rustyProductBrowserMaximumActiveDiagnostics ?? 0,
     failure: document.body.dataset['rustyProductRuntimeFailure'] ?? null,
   }));
-  expect(evidence.attempts).toHaveLength(2);
-  expect(evidence.accepted).toHaveLength(1);
+  expect(evidence.attempts.flat().filter((input) => input.runtime.controlRevision === '1')).toHaveLength(1);
+  expect(evidence.accepted.flat().map((input) => ({ revision: input.runtime.controlRevision, sequence: input.sequence }))).toEqual([
+    { revision: '2', sequence: '10' },
+    { revision: '2', sequence: '11' },
+  ]);
   expect(evidence.accepted[0]?.map((input) => input.sequence)).not.toEqual(
     evidence.attempts[0]?.map((input) => input.sequence),
   );
+  expect(evidence.accepted[0]?.[0]?.runtime.controlRevision).toBe('2');
   expect(evidence.failure).toContain('transiently unavailable');
   expect(evidence.diagnostics.filter((report) =>
     report.recoverableEvent?.code === 'BROWSER_LOCAL_REQUEST_UNAVAILABLE',
@@ -108,7 +114,7 @@ test('a transient local input request degrades once, drops its uncertain batch, 
 });
 
 test('a delayed degraded report flushes the later terminal transition with its first cause', async ({ page }) => {
-  await page.goto('/browser/product-browser-host.html?transientInputFailure=1&delayRecoveryDiagnostic=1&repeatRetryableFailure=1');
+  await page.goto('/browser/product-browser-host.html?transientInputFailure=1&delayRecoveryDiagnostic=1&rejectNextAdvance=1');
   const canvas = page.locator('canvas[data-rusty-application-renderer="engine-owned"]');
   await canvas.focus();
   await page.keyboard.down('KeyW');

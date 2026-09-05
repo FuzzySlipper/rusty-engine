@@ -5,6 +5,7 @@ const port = Number(process.env['PLAYWRIGHT_RENDER_PORT'] ?? '4173');
 
 export default defineConfig({
   testDir: './browser',
+  testMatch: '**/*.browser.spec.ts',
   timeout: 30_000,
   use: {
     baseURL: `http://127.0.0.1:${String(port)}`,

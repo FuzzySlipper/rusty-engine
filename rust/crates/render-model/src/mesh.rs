@@ -1403,8 +1403,9 @@ pub enum AnimatedMeshPlaybackError {
 /// Canonical retained state for direct animated-mesh playback. It turns
 /// commands into a reconstructible position on an Engine-owned timeline;
 /// browser hosts receive one current command and do not replay history.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum AnimatedMeshPlaybackTimeline {
+    #[default]
     Unset,
     Playing {
         clip: String,
@@ -1426,12 +1427,6 @@ pub enum AnimatedMeshPlaybackTimeline {
         normalized_time: f32,
     },
     Stopped,
-}
-
-impl Default for AnimatedMeshPlaybackTimeline {
-    fn default() -> Self {
-        Self::Unset
-    }
 }
 
 impl AnimatedMeshPlaybackTimeline {
@@ -1744,9 +1739,9 @@ mod tests {
         ];
         let mut root_a_rest = identity;
         root_a_rest[12] = 0.123_456_74_f32 as f64;
-        root_a_rest[13] = -0.765_432_18_f32 as f64;
+        root_a_rest[13] = -0.765_432_2_f32 as f64;
         let mut root_b_inverse_bind = identity;
-        root_b_inverse_bind[12] = -1.234_567_76_f32 as f64;
+        root_b_inverse_bind[12] = -1.234_567_8_f32 as f64;
         root_b_inverse_bind[13] = 0.333_333_34_f32 as f64;
         let fingerprint = animation_rig_fingerprint(&[
             AnimationRigFingerprintJoint {

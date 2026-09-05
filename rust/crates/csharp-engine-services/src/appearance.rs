@@ -8552,6 +8552,10 @@ fn native_ghost_plate_config_readout(value: &GhostPlateConfig) -> NativeGhostPla
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the descriptor maps the fixed copied C ABI sprite fields directly into Engine facts"
+)]
 fn sprite_instance_descriptor(
     asset: String,
     frame: u32,

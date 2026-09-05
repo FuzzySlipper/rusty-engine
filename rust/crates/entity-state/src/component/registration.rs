@@ -85,6 +85,8 @@ impl ComponentPersistence {
     }
 }
 
+type ComponentMigration<T> = fn(u32, Value) -> Result<T, String>;
+
 #[derive(Clone, Copy)]
 pub struct ComponentCodec<T: EntityComponent> {
     pub(super) identity: &'static str,
@@ -94,7 +96,7 @@ pub struct ComponentCodec<T: EntityComponent> {
     /// Optional narrow compatibility hook for older versions of this same
     /// codec. Newer snapshots are never accepted, and a codec without this
     /// hook remains exact-version only.
-    pub(super) migrate: Option<fn(u32, Value) -> Result<T, String>>,
+    pub(super) migrate: Option<ComponentMigration<T>>,
 }
 
 impl<T: EntityComponent> fmt::Debug for ComponentCodec<T> {

@@ -1,6 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+    echo "usage: $(basename "$0") [--coreclr-smoke] [--aot]" >&2
+}
+
+# The default remains the broad package-consumer proof.  CI's ordinary C# path
+# uses --coreclr-smoke, which keeps the package → generated composition → host
+# lifecycle seam without also paying for source-override and NativeAOT fidelity
+# coverage.  --aot adds the generated NativeAOT composition to that smoke.
+coreclr_smoke=false
+aot_requested=false
+while (($#)); do
+    case "$1" in
+        --coreclr-smoke)
+            coreclr_smoke=true
+            shift
+            ;;
+        --aot)
+            aot_requested=true
+            shift
+            ;;
+        --help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
+done
+
+run_aot=true
+if [[ "$coreclr_smoke" == true && "$aot_requested" != true ]]; then
+    run_aot=false
+fi
+
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/rusty-engine-sdk-consumer.XXXXXX")
@@ -79,8 +115,9 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$package_version" />
-    <RustyEngineProductInputIntent Include="fixture.move" Value="digital" />
-    <RustyEngineProductInputMapping Include="fixture.move" Intent="fixture.move" Trigger="key:key-w:held" />
+    <RustyEngineProductInputIntent Include="runtime.exercise" Value="payload:runtime.exercise.payload" />
+    <RustyEngineProductInputIntent Include="runtime.exercise.move" Value="digital" />
+    <RustyEngineProductInputMapping Include="runtime.exercise.move" Intent="runtime.exercise.move" Trigger="key:key-w:held" />
   </ItemGroup>
 </Project>
 EOF
@@ -120,15 +157,63 @@ namespace SdkPackageConsumer;
 
 public sealed class Product : IEngineProduct
 {
-    public Product(ProductCreateContext context) { }
-    public void Start() { }
+    private readonly IEngineContext _engine;
+    private readonly UiStream _stream;
+    private readonly Material _voxelMaterial;
+    private readonly SpatialSession _spatial;
+    private readonly VoxelScenePresentation _voxelPresentation;
+    private ulong _sequence;
+
+    public Product(ProductCreateContext context)
+    {
+        _engine = context.Engine;
+        _stream = _engine.Ui.OpenStream(new UiStreamRequest("sdk-package", "sdk.package.smoke"));
+        _voxelMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
+            new Color(0.3f, 0.6f, 0.9f, 1), default, 1, new Color(1, 1, 1, 1), default, 0, false));
+        _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1, 8, VoxelSurfaceMode.GreedyCubes));
+        VoxelSceneReadout scene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(_spatial));
+        _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
+            _spatial, scene.SourceRevision, new[] { new VoxelEdit(VoxelEditKind.Set, new VoxelAddress(0, 0, 0), 3) }));
+        _voxelPresentation = _engine.VoxelScenePresentation.ProjectScene(
+            new ProjectVoxelSceneRequest(_spatial, new[] { new VoxelSceneMaterialBinding(3, _voxelMaterial) }));
+        PublishUi();
+    }
+
+    public void Start() => PublishUi();
     public void Attach() { }
-    public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
+    public ProductUpdateResult Update(ProductUpdate update)
+    {
+        PublishUi();
+        foreach (ProductInputEvent input in update.Input)
+        {
+            if (input.Kind == InputEventKind.Key
+                && input.Keyboard == KeyboardControl.KeyF
+                && input.Edge == InputEdge.Pressed)
+            {
+                return ProductUpdateResult.ReportFault;
+            }
+        }
+
+        return ProductUpdateResult.None;
+    }
     public void Pause() { }
     public void Resume() { }
-    public void Restart() { }
+    public void Restart() => PublishUi();
     public void Shutdown() { }
-    public void Dispose() { }
+    public bool CompleteTimeline(ProductTimelineCompletion completion) => completion.Ticket == 7;
+    public void Dispose()
+    {
+        _voxelPresentation.Dispose();
+        _spatial.Dispose();
+        _voxelMaterial.Dispose();
+        _stream.Dispose();
+    }
+
+    private void PublishUi()
+    {
+        StructuredValueNode[] nodes = [new(StructuredValueKind.Null, 0, 0, 0, 0, 0, 0, 0, 0)];
+        _engine.Ui.PublishProjection(new UiProjection(_stream, ++_sequence, new UiValue(nodes, System.Array.Empty<uint>(), 0, System.Array.Empty<byte>())));
+    }
 }
 EOF
 mkdir -p "$consumer_dir/product-ui/assets" "$consumer_dir/content"
@@ -159,19 +244,21 @@ mkdir -p "$consumer_home" "$consumer_packages"
             -p:RustyEngineProductLiveDebug=true \
             > "$work_dir/coreclr-staging.log" 2>&1
 )
-(
-    cd "$source_override_dir"
-    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-        dotnet restore SourceOverride.csproj --configfile "$consumer_dir/NuGet.Config" --ignore-failed-sources
-    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-        dotnet build SourceOverride.csproj --no-restore
-)
-jq -e --arg package "Rusty.Engine/$package_version" \
-    '.targets["net10.0"][$package] | ((.compile // {} | keys | all(.[]; endswith("/_._"))) and (.runtime // {} | keys | all(.[]; endswith("/_._"))))' \
-    "$source_override_dir/obj/project.assets.json" >/dev/null || {
-    echo "test-csharp-sdk-package: source override retained package compile/runtime assets." >&2
-    exit 1
-}
+if [[ "$coreclr_smoke" != true ]]; then
+    (
+        cd "$source_override_dir"
+        DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+            dotnet restore SourceOverride.csproj --configfile "$consumer_dir/NuGet.Config" --ignore-failed-sources
+        DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+            dotnet build SourceOverride.csproj --no-restore
+    )
+    jq -e --arg package "Rusty.Engine/$package_version" \
+        '.targets["net10.0"][$package] | ((.compile // {} | keys | all(.[]; endswith("/_._"))) and (.runtime // {} | keys | all(.[]; endswith("/_._"))))' \
+        "$source_override_dir/obj/project.assets.json" >/dev/null || {
+        echo "test-csharp-sdk-package: source override retained package compile/runtime assets." >&2
+        exit 1
+    }
+fi
 
 staged_product_directory=$(cd "$consumer_dir" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
     dotnet msbuild Consumer.csproj -getProperty:RustyEngineStagedProductDirectory | tail -n 1)
@@ -213,32 +300,9 @@ jq -e '.server == {"bindHost":"127.0.0.1","port":40821,"liveDebug":true}' \
     echo "test-csharp-sdk-package: SDK staging did not apply the server override properties." >&2
     exit 1
 }
-jq -e '.lifecycle == {"mode":"realtime","fixedStep":{"hz":60,"maxCatchUpSteps":4}} and .input.intents == [{"id":"fixture.move","value":"digital"}] and .input.mappings == [{"id":"fixture.move","intent":"fixture.move","trigger":"key:key-w:held"}]' \
+jq -e '.lifecycle == {"mode":"realtime","fixedStep":{"hz":60,"maxCatchUpSteps":4}} and .input.intents == [{"id":"runtime.exercise","value":"payload:runtime.exercise.payload"},{"id":"runtime.exercise.move","value":"digital"}] and .input.mappings == [{"id":"runtime.exercise.move","intent":"runtime.exercise.move","trigger":"key:key-w:held"}]' \
     "$staged_product_directory/product.json" >/dev/null || {
     echo "test-csharp-sdk-package: SDK staging did not emit the declared lifecycle/input metadata." >&2
-    exit 1
-}
-(
-    cd "$consumer_dir"
-    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-        dotnet msbuild Consumer.csproj -t:VerifyRustyEngineAot \
-            -p:RustyEngineProductBindHost=127.0.0.1 \
-            -p:RustyEngineProductPort=40821 \
-            -p:RustyEngineProductLiveDebug=true \
-            > "$work_dir/nativeaot-staging.log" 2>&1
-)
-if grep -Eiq 'warning (CS|RS)[0-9]+:' "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log"; then
-    echo "test-csharp-sdk-package: generated CoreCLR/NativeAOT composition emitted compiler or analyzer warnings." >&2
-    cat "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log" >&2
-    exit 1
-fi
-[[ -f "$staged_product_directory/native/Rusty.Engine.Product.so" ]] || {
-    echo "test-csharp-sdk-package: explicit linux-x64 NativeAOT verification did not stage its module." >&2
-    exit 1
-}
-jq -e '.nativeAot.module == "native/Rusty.Engine.Product.so" and .coreclr.assembly == "coreclr/Rusty.Engine.Product.dll"' \
-    "$staged_product_directory/product.json" >/dev/null || {
-    echo "test-csharp-sdk-package: NativeAOT staging did not preserve the same Product bundle." >&2
     exit 1
 }
 if find "$consumer_dir" -path '*/NativeProduct.cs' -o -path '*/NativeProduct.csproj' | grep -q .; then
@@ -250,8 +314,61 @@ if rg -F -q "$repo_root" "$consumer_dir/obj" "$consumer_packages"; then
     exit 1
 fi
 
+if [[ "$coreclr_smoke" == true ]]; then
+    host_bundle_dir="$work_dir/host-bundle"
+    mkdir -p "$host_bundle_dir"
+    printf '<!doctype html><title>Rusty Engine C# package smoke</title>\n' > "$host_bundle_dir/index.html"
+    cargo run --manifest-path "$repo_root/Cargo.toml" -p csharp-product-runtime --bin rusty-product-host --locked -- \
+        --loader coreclr \
+        --library "$staged_product_directory/coreclr/Rusty.Engine.Product.dll" \
+        --runtimeconfig "$staged_product_directory/coreclr/Rusty.Engine.Product.runtimeconfig.json" \
+        --bundle-dir "$host_bundle_dir" \
+        --content-dir "$staged_product_directory/content" \
+        --mode realtime \
+        --persistence-root "$work_dir/persistence" \
+        --content-store-root "$work_dir/content-store" \
+        --direct-intent runtime.exercise=payload:runtime.exercise.payload \
+        --port 0 \
+        --exercise
+fi
+
+if [[ "$run_aot" == true ]]; then
+    (
+        cd "$consumer_dir"
+        DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+            dotnet msbuild Consumer.csproj -t:VerifyRustyEngineAot \
+                -p:RustyEngineProductBindHost=127.0.0.1 \
+                -p:RustyEngineProductPort=40821 \
+                -p:RustyEngineProductLiveDebug=true \
+                > "$work_dir/nativeaot-staging.log" 2>&1
+    )
+    if grep -Eiq 'warning (CS|RS)[0-9]+:' "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log"; then
+        echo "test-csharp-sdk-package: generated CoreCLR/NativeAOT composition emitted compiler or analyzer warnings." >&2
+        cat "$work_dir/coreclr-staging.log" "$work_dir/nativeaot-staging.log" >&2
+        exit 1
+    fi
+    [[ -f "$staged_product_directory/native/Rusty.Engine.Product.so" ]] || {
+        echo "test-csharp-sdk-package: explicit linux-x64 NativeAOT verification did not stage its module." >&2
+        exit 1
+    }
+    jq -e '.nativeAot.module == "native/Rusty.Engine.Product.so" and .coreclr.assembly == "coreclr/Rusty.Engine.Product.dll"' \
+        "$staged_product_directory/product.json" >/dev/null || {
+        echo "test-csharp-sdk-package: NativeAOT staging did not preserve the same Product bundle." >&2
+        exit 1
+    }
+elif grep -Eiq 'warning (CS|RS)[0-9]+:' "$work_dir/coreclr-staging.log"; then
+    echo "test-csharp-sdk-package: generated CoreCLR composition emitted compiler or analyzer warnings." >&2
+    cat "$work_dir/coreclr-staging.log" >&2
+    exit 1
+fi
+
 # The generated composition owns its interop warning baseline. It must not
 # become a package-wide NoWarn that hides an ordinary product warning.
+if [[ "$coreclr_smoke" == true ]]; then
+    echo "csharp SDK CoreCLR package smoke passed"
+    exit 0
+fi
+
 warning_dir="$work_dir/warning-consumer"
 mkdir -p "$warning_dir"
 cat > "$warning_dir/WarningConsumer.csproj" <<EOF

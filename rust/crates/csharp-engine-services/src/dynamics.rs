@@ -51,6 +51,10 @@ pub(crate) struct RuntimeDynamicsCall {
     bodies: BTreeSet<u64>,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "world slots retain live Engine world state inline so lifecycle transitions do not add allocation ownership"
+)]
 enum WorldSlot {
     Active(DynamicsWorld),
     Tombstoned,
@@ -66,6 +70,14 @@ struct DynamicsWorld {
     last_contacts: BTreeMap<EntityId, BodyContactSummary>,
     last_contact_receipts: Vec<RigidBodyContactReadout>,
 }
+
+type DynamicsRebaseSnapshot = (
+    Option<NativeSpatialSessionHandle>,
+    Arc<VoxelCollisionScene>,
+    BTreeMap<u64, EntityId>,
+    u64,
+    u64,
+);
 
 #[derive(Clone, Copy, Default)]
 struct BodyContactSummary {
@@ -908,16 +920,7 @@ impl RuntimeDynamicsBridge {
     fn rebase_snapshot(
         &self,
         handle: u64,
-    ) -> Result<
-        (
-            Option<NativeSpatialSessionHandle>,
-            Arc<VoxelCollisionScene>,
-            BTreeMap<u64, EntityId>,
-            u64,
-            u64,
-        ),
-        CsharpEngineServicesError,
-    > {
+    ) -> Result<DynamicsRebaseSnapshot, CsharpEngineServicesError> {
         let world = self.active_world(handle)?;
         Ok((
             world.bound_spatial_session,

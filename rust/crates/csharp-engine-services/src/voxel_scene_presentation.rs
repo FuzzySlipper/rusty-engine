@@ -641,11 +641,10 @@ impl RuntimeVoxelScenePresentationBridge {
         let appearance = self.appearance_mut()?;
         let mut resolved_by_handle = BTreeMap::new();
         for material in slots.values().copied().chain(overrides.values().copied()) {
-            if !resolved_by_handle.contains_key(&material.value) {
-                resolved_by_handle.insert(
-                    material.value,
-                    appearance.voxel_material_projection(material)?,
-                );
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                resolved_by_handle.entry(material.value)
+            {
+                entry.insert(appearance.voxel_material_projection(material)?);
             }
         }
         let base_materials = slots

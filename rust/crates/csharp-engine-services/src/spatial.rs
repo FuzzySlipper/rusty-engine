@@ -261,6 +261,10 @@ impl SpatialTriggerDiagnosticLease {
 /// A retained navigation source is Engine-owned state. C# only borrows typed
 /// cells for replacement calls and observes bounded query facts; it never owns
 /// a pathfinding graph or a voxel world.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "navigation source retains the live voxel scene inline so source replacement has no extra allocation boundary"
+)]
 enum NavigationSource {
     HostWalkableCells,
     VoxelDerived(VoxelCollisionScene),
@@ -4681,8 +4685,8 @@ fn filter_matches(value: NativeSpatialEntityCollider, filter: NativeSpatialQuery
     groups_match && masks_match
 }
 
-fn filtered_entities<'a>(
-    values: &'a [NativeSpatialEntityCollider],
+fn filtered_entities(
+    values: &[NativeSpatialEntityCollider],
     filter: NativeSpatialQueryFilter,
     ignored: &[EntityId],
 ) -> Result<Vec<NativeSpatialEntityCollider>, CsharpEngineServicesError> {
@@ -4779,6 +4783,10 @@ fn swept_aabb_overlaps(
     aabb_overlaps(swept_min, swept_max, obstacle_min, obstacle_max)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the query keeps copied ray fields and separately borrowed collider input families explicit"
+)]
 fn cast_ray_parts(
     scene: &VoxelCollisionScene,
     origin: NativeVec3,

@@ -12,7 +12,9 @@ on:
       - '.config/dotnet-tools.json'
       - 'scripts/generate-csharp-native-bindings.sh'
       - 'scripts/test-csharp-binding-generator-lease-fixture.sh'
-      - 'scripts/verify-csharp.sh'
+      - 'scripts/verify-csharp*.sh'
+      - 'scripts/pack-csharp-sdk.sh'
+      - 'scripts/test-csharp-sdk-package.sh'
       - '.github/workflows/csharp.yml'
   pull_request:
     paths:
@@ -24,9 +26,16 @@ on:
       - '.config/dotnet-tools.json'
       - 'scripts/generate-csharp-native-bindings.sh'
       - 'scripts/test-csharp-binding-generator-lease-fixture.sh'
-      - 'scripts/verify-csharp.sh'
+      - 'scripts/verify-csharp*.sh'
+      - 'scripts/pack-csharp-sdk.sh'
+      - 'scripts/test-csharp-sdk-package.sh'
       - '.github/workflows/csharp.yml'
   workflow_dispatch:
+    inputs:
+      nativeaot:
+        description: Also run the explicit NativeAOT fidelity exercise
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,7 +45,7 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  verify-csharp:
     runs-on: ubuntu-latest
     steps:
       - name: Check out Rusty Engine
@@ -56,10 +65,17 @@ jobs:
           shared-key: engine-ci
           workspaces: . -> target
 
-      - name: Install binding generator dependency
+      - name: Install C# verification dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang
+          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep
+          libclang_path="$(find /usr/lib/llvm-* -name libclang.so -print -quit)"
+          test -n "$libclang_path"
+          echo "LD_LIBRARY_PATH=$(dirname "$libclang_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
-      - name: Verify generated C# SDK and NativeAOT fixture
+      - name: Verify packaged C# SDK and CoreCLR lifecycle
         run: ./scripts/verify-csharp.sh
+
+      - name: Verify NativeAOT fidelity on request
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.nativeaot }}
+        run: ./scripts/verify-csharp.sh --aot

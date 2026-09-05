@@ -537,8 +537,8 @@ mod tests {
             b"wOF2font-body".to_vec(),
         )
         .expect("WOFF2 font resource");
-        let entries =
-            product_dev_renderer_preload_entries(&[font.clone()]).expect("font preload entries");
+        let entries = product_dev_renderer_preload_entries(std::slice::from_ref(&font))
+            .expect("font preload entries");
         let body = entries
             .iter()
             .find(|entry| entry.path() == font.path())

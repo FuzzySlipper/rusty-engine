@@ -455,8 +455,8 @@ fn decode_f32_stream(
         })?;
     let range = decode_stream_range(bytes, offset, value_count, stream, byte_length)?;
     let mut values = Vec::with_capacity(value_count);
-    for (index, chunk) in bytes[range].chunks_exact(4).enumerate() {
-        let value = f32::from_le_bytes(chunk.try_into().expect("chunks_exact guarantees width"));
+    for (index, chunk) in bytes[range].as_chunks::<4>().0.iter().enumerate() {
+        let value = f32::from_le_bytes(*chunk);
         if !value.is_finite() {
             return Err(MeshResourceError::NonFiniteStreamValue { stream, index });
         }
@@ -480,10 +480,8 @@ fn decode_u32_stream(
         })?;
     let range = decode_stream_range(bytes, offset, value_count, stream, byte_length)?;
     let mut values = Vec::with_capacity(value_count);
-    for chunk in bytes[range].chunks_exact(4) {
-        values.push(u32::from_le_bytes(
-            chunk.try_into().expect("chunks_exact guarantees width"),
-        ));
+    for chunk in bytes[range].as_chunks::<4>().0 {
+        values.push(u32::from_le_bytes(*chunk));
     }
     Ok(values)
 }

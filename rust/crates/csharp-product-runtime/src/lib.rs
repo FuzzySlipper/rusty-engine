@@ -2793,11 +2793,10 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 // have both committed, Drop must not replay Shutdown merely
                 // because serializing the host receipt later fails.
                 self.shutdown_called = true;
-                let receipt = self.receipt(
+                self.receipt(
                     ProductDevOperationKind::Shutdown,
                     self.tag_complete_baseline(outputs)?,
-                );
-                receipt
+                )
             }
         }
     }
@@ -4078,9 +4077,7 @@ fn read_product_call_error(
     api: &LoadedProductApi,
     handle: *mut c_void,
 ) -> Option<CsharpProductRuntimeError> {
-    let Some((read, release)) = api.call_error else {
-        return None;
-    };
+    let (read, release) = api.call_error?;
     let mut native_error = NativeProductCallError::default();
     // SAFETY: the product handle remains live for this immediate read and the
     // generated callback writes only the supplied result storage.
@@ -7028,8 +7025,10 @@ mod tests {
 
     #[test]
     fn v1_handshake_rejects_version_table_size_and_fingerprint_without_writing_a_sentinel() {
-        let mut sentinel = NativeProductApi::default();
-        sentinel.create = Some(drop_fixture_create);
+        let sentinel = NativeProductApi {
+            create: Some(drop_fixture_create),
+            ..NativeProductApi::default()
+        };
         let before = sentinel.create.expect("sentinel callback") as usize;
         assert_handshake_rejection(version_mismatch_bind);
         assert_handshake_rejection(table_size_mismatch_bind);

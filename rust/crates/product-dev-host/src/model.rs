@@ -1502,6 +1502,10 @@ impl ProductDevOperationResult {
     /// counters but could not safely claim completion of the downstream
     /// callback. The current binding/readout and admitted frontier let the
     /// host resynchronize without replaying the operation.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the direct runtime receipt preserves each typed recovery fact at the host boundary"
+    )]
     pub fn resync_required(
         operation: ProductDevOperationKind,
         binding: ProductDevRuntimeBinding,
@@ -1781,6 +1785,10 @@ impl ProductDevInputResult {
     /// `accepted` is true only when every submitted event was admitted. A
     /// stale/duplicate drop is recoverable, names the current cursor, and is
     /// never an invitation to replay the original batch.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the direct runtime receipt preserves the input admission and cursor facts separately"
+    )]
     pub fn with_progress(
         count: usize,
         accepted_count: usize,
@@ -3107,7 +3115,7 @@ mod tests {
         let large = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({
             "payload": "x".repeat(MAX_OUTPUT_AGGREGATE_BYTES + 1),
         }));
-        let ordinary = ProductDevRuntimeOutput::validate_output_group(&[large.clone()])
+        let ordinary = ProductDevRuntimeOutput::validate_output_group(std::slice::from_ref(&large))
             .expect_err("ordinary output keeps the 16 MiB limit");
         assert_eq!(ordinary.code(), "DEV_HOST_OUTPUT_BOUNDS");
 

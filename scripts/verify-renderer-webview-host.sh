@@ -21,6 +21,8 @@ if [[ "${1:-}" != "--artifacts-ready" ]]; then
   fi
 fi
 
+pnpm --dir "$REPO_ROOT/render" exec playwright test --config playwright.webview.config.ts
+
 cargo test -p render-host-contracts -p renderer-webview-host --locked
 cargo clippy -p render-host-contracts -p renderer-webview-host --all-targets --locked -- -D warnings
 

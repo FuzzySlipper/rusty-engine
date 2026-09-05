@@ -1,5 +1,37 @@
 # Verification notes
 
+## CI lanes
+
+CI follows the current C# product, Rust Engine, and browser renderer ownership.
+Changes route to their owning lanes; superseded runs are cancelled.
+
+| Lane | Default evidence |
+| --- | --- |
+| Rust | Formatting, Cargo dependency boundaries, mechanism tests, Clippy with warnings as errors |
+| C# | Binding generation and a disposable packaged SDK consumer staged and exercised through the Rust CoreCLR host |
+| Render | TypeScript package boundaries, current browser artifact freshness, compiled unit tests and Chromium behavior |
+| Studio | Studio boundaries, lint, types, tests and build |
+| Docs | Local links and CI owner routing |
+
+Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
+`scripts/verify-render.sh`, `scripts/verify-studio.sh`, or
+`scripts/verify-docs.sh` locally. Renderer and Studio checks require their pnpm
+dependencies; C# requires .NET, Clang/libclang and the pinned binding tools.
+
+NativeAOT is a separate fidelity path: `scripts/verify-csharp.sh --aot`, the
+C# workflow dispatch option, and SDK release verification. The optional native
+webview remains available through `scripts/verify-renderer-webview-host.sh`
+with its platform dependencies and Playwright Chromium; ordinary browser CI
+does not install GTK or
+WebKit or certify that host.
+
+Boundary checks inspect current dependencies and artifacts. Historical symbol
+blacklists, obsolete TypeScript product-authoring restrictions, public TypeScript
+package declaration isolation, and exact build
+command text are not architecture contracts. Browser artifacts are Engine build
+inputs; ordinary products do not consume their TypeScript declarations. Deliberate ABI adapter signatures
+may carry a local, reasoned Clippy exception; warnings-as-errors remains active.
+
 ## Playtest warning deltas
 
 `scripts/capture-playtest-warning-delta.mjs` is a small report writer for one

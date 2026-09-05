@@ -430,7 +430,7 @@ fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
             radius,
         } => positive(half_height) && positive(radius),
     };
-    let mass_properties_valid = body.mass_properties.map_or(true, valid_mass_properties);
+    let mass_properties_valid = body.mass_properties.is_none_or(valid_mass_properties);
     let rotation_norm = body
         .rotation
         .into_iter()
@@ -460,10 +460,7 @@ fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
 
 fn valid_mass_properties(properties: DynamicsMassProperties) -> bool {
     let center_of_mass_valid = properties.center_of_mass.into_iter().all(f64::is_finite);
-    let principal_inertia_valid = properties
-        .principal_inertia
-        .into_iter()
-        .all(|value| positive(value));
+    let principal_inertia_valid = properties.principal_inertia.into_iter().all(positive);
     let frame_norm = properties
         .principal_inertia_local_frame
         .into_iter()

@@ -23,15 +23,11 @@ for (const file of [
 ]) {
   copyFileSync(new URL(file, declarations), new URL(file, artifact));
 }
-const applicationContentDeclaration = new URL('application-content.d.ts', artifact);
-writeFileSync(
-  applicationContentDeclaration,
-  publicApplicationContentDeclaration(readFileSync(applicationContentDeclaration, 'utf8')),
-);
 writeFileSync(
   new URL('package.json', artifact),
   `${JSON.stringify({
     name: '@rusty-engine/application-host',
+    private: true,
     version: '0.1.0',
     type: 'module',
     main: './index.js',
@@ -45,19 +41,3 @@ writeFileSync(
     files: ['application-content.d.ts', 'application-host.d.ts', 'index.d.ts', 'index.js', 'input-ingress.d.ts', 'presentation-frame.d.ts', 'ui-projection.d.ts'],
   }, null, 2)}\n`,
 );
-function publicApplicationContentDeclaration(source) {
-  const withoutRendererImport = source.replace(
-    /^import \{[^\n]*\} from '@rusty-engine\/renderer-host';\n/u,
-    '',
-  );
-  const privateDeclarationStart = '\nexport interface PreparedRustyApplicationResource';
-  const privateDeclarationOffset = withoutRendererImport.indexOf(privateDeclarationStart);
-  if (privateDeclarationOffset < 0) {
-    throw new Error('application-content declaration public/private boundary is missing');
-  }
-  const publicDeclaration = `${withoutRendererImport.slice(0, privateDeclarationOffset).trimEnd()}\n`;
-  if (publicDeclaration.includes('@rusty-engine/renderer-host')) {
-    throw new Error('application-content declaration leaked renderer-host types');
-  }
-  return publicDeclaration;
-}

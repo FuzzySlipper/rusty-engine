@@ -11,11 +11,8 @@ on:
       - 'rust/crates/render-host-contracts/**'
       - 'rust/crates/render-projection/**'
       - 'rust/crates/render-presentation/**'
-      - 'rust/crates/renderer-webview-host/**'
-      - 'scripts/audit-render-isolation.sh'
       - 'scripts/verify-render.sh'
       - 'scripts/verify-render-artifacts.sh'
-      - 'scripts/verify-renderer-webview-host.sh'
       - '.github/workflows/render.yml'
   pull_request:
     paths:
@@ -25,11 +22,8 @@ on:
       - 'rust/crates/render-host-contracts/**'
       - 'rust/crates/render-projection/**'
       - 'rust/crates/render-presentation/**'
-      - 'rust/crates/renderer-webview-host/**'
-      - 'scripts/audit-render-isolation.sh'
       - 'scripts/verify-render.sh'
       - 'scripts/verify-render-artifacts.sh'
-      - 'scripts/verify-renderer-webview-host.sh'
       - '.github/workflows/render.yml'
 
 concurrency:
@@ -57,27 +51,6 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: render/pnpm-lock.yaml
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: engine-ci
-          workspaces: . -> target
-
-      - name: Install Linux webview host dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libxkbcommon-x11-0 \
-            ripgrep \
-            xvfb
 
       - name: Install renderer dependencies
         run: pnpm --dir render install --frozen-lockfile --ignore-scripts

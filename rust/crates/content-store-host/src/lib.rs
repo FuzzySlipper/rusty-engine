@@ -62,6 +62,7 @@ impl ContentStoreExecutor {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(state.join(LOCK_FILE))?;
         lock.lock_exclusive()?;
         let snapshot = (|| {

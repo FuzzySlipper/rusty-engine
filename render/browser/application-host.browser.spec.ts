@@ -193,7 +193,7 @@ test('application host owns composition, input arbitration, and disposal', async
     presentation: window.__rustyApplicationAudioReceipt,
     resume: window.__rustyApplicationAudioResume,
   }))).toEqual({
-    presentation: { applied: 1, diagnostics: [] },
+    presentation: { applied: 1, outcome: 'applied', diagnostics: [] },
     resume: { resumed: true, diagnostics: [] },
   });
 
@@ -222,7 +222,8 @@ test('application host owns composition, input arbitration, and disposal', async
   });
   expect(corruptContent).toMatchObject({
     applied: false,
-    diagnostics: [{ code: 'resource_admission_failed' }],
+    outcome: 'rejected_atomic',
+    diagnostics: [{ code: 'retained_frame_replacement_failed' }],
   });
   expect(await page.evaluate(() => window.__rustyApplicationCanvasMutationCount)).toBe(0);
   await expect(page.locator('canvas#resource-backed-renderer')).toHaveCount(1);
@@ -238,7 +239,8 @@ test('application host owns composition, input arbitration, and disposal', async
   });
   expect(missingResource).toMatchObject({
     applied: false,
-    diagnostics: [{ code: 'resource_admission_failed' }],
+    outcome: 'rejected_atomic',
+    diagnostics: [{ code: 'retained_frame_replacement_failed' }],
   });
   await expect(page.locator('canvas#resource-backed-renderer')).toHaveCount(1);
 
@@ -274,12 +276,13 @@ test('application host owns composition, input arbitration, and disposal', async
   expect(restoredContent).toEqual({
     incremental: {
       applied: false,
+      outcome: 'rejected_atomic',
       diagnostics: [{
         code: 'content_replacement_in_progress',
         message: 'incremental frames are rejected while complete content replacement is pending',
       }],
     },
-    replacement: { applied: true, diagnostics: [] },
+    replacement: { applied: true, outcome: 'applied', diagnostics: [] },
   });
   await expect.poll(() => page.evaluate(() =>
     window.__rustyApplicationCanvasMutationCount,
@@ -298,7 +301,7 @@ test('application host owns composition, input arbitration, and disposal', async
     window.__rustyApplicationHost?.ui.interactionMode(),
   )).toBe('interface');
   await page.evaluate(() => window.__rustyApplicationHost?.ui.setInteractionMode('gameplay'));
-  await page.locator('#gameplay-zone').click();
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').click();
   expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
   await page.evaluate(() => {
     const nativeModal = document.querySelector<HTMLElement>('#native-modal');
@@ -335,7 +338,7 @@ test('application host owns composition, input arbitration, and disposal', async
   const replacement = await page.evaluate(() =>
     window.__rustyApplicationHost?.renderer.replaceFrame({ schemaVersion: 1, ops: [] }),
   );
-  expect(replacement).toEqual({ applied: true, diagnostics: [] });
+  expect(replacement).toEqual({ applied: true, outcome: 'applied', diagnostics: [] });
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
   await page.locator('canvas').evaluate((canvas) => { canvas.id = 'accepted-renderer'; });
   const rejectedReplacement = await page.evaluate(() =>
@@ -345,7 +348,7 @@ test('application host owns composition, input arbitration, and disposal', async
   await expect(page.locator('canvas#accepted-renderer')).toHaveCount(1);
   await expect(page.locator('canvas')).toHaveCount(1);
 
-  await page.locator('#gameplay-zone').click();
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').click();
   await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null))
     .toBe('CANVAS');
 
@@ -423,12 +426,12 @@ test('application-host public frames hold an admitted skinned mesh at exact norm
         ],
       },
       resources: [{
-        identity: `mesh-resource/${contentHash.slice('sha256:'.length)}`,
-        contentHash, mediaType: 'application/octet-stream', bytes,
+        identity: `animated-mesh-resource/${contentHash.slice('sha256:'.length)}`,
+        contentHash, mediaType: 'model/gltf-binary', bytes,
       }],
     } as never);
   });
-  expect(admitted).toEqual({ applied: true, diagnostics: [] });
+  expect(admitted).toEqual({ applied: true, outcome: 'applied', diagnostics: [] });
 
   const samples = await page.evaluate(async () => {
     const host = window.__rustyApplicationHost;
@@ -465,10 +468,10 @@ test('application-host public frames hold an admitted skinned mesh at exact norm
   expect(samples.heldAfterAdvance).toBe(samples.atEnd);
 });
 
-test('public application host realizes and refreshes structured world indicators', async ({ page }) => {
+test('Engine application host realizes and refreshes structured world indicators', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   await expect.poll(() => page.evaluate(() => window.__rustyApplicationIndicatorReceipt))
-    .toEqual({ applied: 1, diagnostics: [] });
+    .toEqual({ applied: 1, outcome: 'applied', diagnostics: [] });
 
   const indicator = page.locator('[data-rusty-billboard-handle="41"]');
   await expect(indicator).toBeVisible();
@@ -564,7 +567,7 @@ test('public application host realizes and refreshes structured world indicators
       }],
     }),
   );
-  expect(update).toEqual({ applied: 1, diagnostics: [] });
+  expect(update).toEqual({ applied: 1, outcome: 'applied', diagnostics: [] });
   await expect(meter).toHaveAttribute('aria-valuenow', '58');
   expect(await page.evaluate(() =>
     window.__rustyIndicatorMeterNode ===
@@ -602,7 +605,7 @@ test('public application host realizes and refreshes structured world indicators
         },
       }],
     }),
-  )).toEqual({ applied: 1, diagnostics: [] });
+  )).toEqual({ applied: 1, outcome: 'applied', diagnostics: [] });
   await expect(indicator).toHaveAttribute('role', 'status');
   await expect(indicator).not.toHaveAttribute('aria-label');
   await expect(indicator).toHaveText('Legacy indicator');
@@ -616,11 +619,11 @@ test('public application host realizes and refreshes structured world indicators
         op: { op: 'destroy', handle: 41 },
       }],
     }),
-  )).toEqual({ applied: 1, diagnostics: [] });
+  )).toEqual({ applied: 1, outcome: 'applied', diagnostics: [] });
   await expect(indicator).toHaveCount(0);
 });
 
-test('public application host realizes and advances Three particle bursts', async ({ page }) => {
+test('Engine application host realizes and advances Three particle bursts', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const receipt = await page.evaluate(() =>
     window.__rustyApplicationHost?.renderer.applyPresentation({
@@ -654,7 +657,7 @@ test('public application host realizes and advances Three particle bursts', asyn
       }],
     }),
   );
-  expect(receipt).toEqual({ applied: 1, diagnostics: [] });
+  expect(receipt).toEqual({ applied: 1, outcome: 'applied', diagnostics: [] });
 
   await page.evaluate(() => new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -802,7 +805,7 @@ test('disposal waits for an admitted replacement and still releases every owner'
     };
   });
   expect(result).toEqual({
-    replacement: { applied: true, diagnostics: [] },
+    replacement: { applied: true, outcome: 'applied', diagnostics: [] },
     disposal: 'complete',
   });
   await expect(page.locator('canvas')).toHaveCount(0);
@@ -822,8 +825,8 @@ test('queued complete content replacements publish in call order', async ({ page
     ]);
   });
   expect(receipts).toEqual([
-    { applied: true, diagnostics: [] },
-    { applied: true, diagnostics: [] },
+    { applied: true, outcome: 'applied', diagnostics: [] },
+    { applied: true, outcome: 'applied', diagnostics: [] },
   ]);
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout())).toMatchObject({
     contentRevision: 3,
@@ -833,9 +836,10 @@ test('queued complete content replacements publish in call order', async ({ page
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
 });
 
-test('public application-host input ingress observes bounded physical facts and ordered UI claims', async ({ page }) => {
+test('Engine application-host input ingress observes bounded physical facts and ordered UI claims', async ({ page }) => {
   await page.goto('/browser/application-host.html');
-  await page.locator('#gameplay-zone').click({ position: { x: 40, y: 40 } });
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]')
+    .click({ position: { x: 40, y: 40 } });
   await expect.poll(() => page.evaluate(() => document.pointerLockElement instanceof HTMLCanvasElement)).toBe(true);
   await page.mouse.move(120, 120);
   await page.mouse.move(156, 108);
@@ -881,7 +885,7 @@ test('public application-host input ingress observes bounded physical facts and 
   expect(disposalInput).toMatchObject([{ fact: { kind: 'clear', reason: 'dispose' } }]);
 });
 
-test('public application-host UI projection is read-only in the mounted DOM lane and rebinds cleanly', async ({ page }) => {
+test('Engine application-host UI projection is read-only in the mounted DOM lane and rebinds cleanly', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const result = await page.evaluate(() => {
     const host = window.__rustyApplicationHost;
@@ -1068,9 +1072,10 @@ test('application-host input ingress clears held gameplay keys when a text entry
   await page.keyboard.up('w');
 });
 
-test('public application-host samples only the selected controller on caller demand', async ({ page }) => {
+test('Engine application-host samples only the selected controller on caller demand', async ({ page }) => {
   await page.goto('/browser/application-host.html');
-  await page.locator('#gameplay-zone').click({ position: { x: 40, y: 40 } });
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]')
+    .click({ position: { x: 40, y: 40 } });
   await expect.poll(() => page.evaluate(() => document.pointerLockElement instanceof HTMLCanvasElement)).toBe(true);
   const controller = await page.evaluate(() => {
     window.__rustyApplicationHost?.input?.drain();
@@ -1103,7 +1108,7 @@ test('application-host input ingress clears against the replacement canvas witho
     const replacement = await host.renderer.replaceFrame({ schemaVersion: 1, ops: [] });
     return { replacement, entries: host.input.drain() };
   });
-  expect(result.replacement).toEqual({ applied: true, diagnostics: [] });
+  expect(result.replacement).toEqual({ applied: true, outcome: 'applied', diagnostics: [] });
   expect(result.entries).toEqual([{
     runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
     sequence: '0',
@@ -1235,7 +1240,7 @@ test('bounded presentation frame contains every layer, survives replacement and 
     };
   });
 
-  expect(snapshots.replacement).toEqual({ applied: true, diagnostics: [] });
+  expect(snapshots.replacement).toEqual({ applied: true, outcome: 'applied', diagnostics: [] });
   for (const state of [
     snapshots.narrow,
     snapshots.afterReplacement,
@@ -1309,7 +1314,7 @@ test('bounded gameplay input rejects gutters and accepts frame-local non-interac
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   });
-  await page.locator('#gameplay-zone').click();
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').click();
   expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
   await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null))
     .toBe('CANVAS');
@@ -1424,11 +1429,10 @@ test('invalid bounds do not publish partial DOM and bounded mount failure retain
 
 test('bounded loading presentation shares the live frame while unbounded mounting keeps its legacy direct layout', async ({ page }) => {
   await page.goto('/browser/application-host.html');
-  const unbounded = await page.evaluate(() => ({
-    frameCount: document.querySelectorAll('[data-rusty-application-presentation-frame]').length,
-    hostChildren: document.querySelector('[data-rusty-application-host]')?.children.length,
-  }));
-  expect(unbounded).toEqual({ frameCount: 0, hostChildren: 3 });
+  const unboundedFrameCount = await page.evaluate(() =>
+    document.querySelectorAll('[data-rusty-application-presentation-frame]').length,
+  );
+  expect(unboundedFrameCount).toBe(0);
 
   await page.evaluate(async () => {
     await window.__rustyApplicationHost?.dispose();

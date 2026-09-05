@@ -11,7 +11,7 @@
     "product-playtest/**/*.ts",
     "voxel-vignette-playtest/**/*.ts",
     "private/**/*.ts",
-    "playwright.config.ts",
+    "playwright*.config.ts",
     "vite.config.ts",
     "vite.webview.config.ts"
   ]

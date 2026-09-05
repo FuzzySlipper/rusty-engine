@@ -339,10 +339,12 @@ fn validate_options(options: MagicaVoxelAdmissionOptions) -> Result<(), MagicaVo
     Ok(())
 }
 
+type ParsedChunk<'a> = ([u8; 4], &'a [u8], &'a [u8]);
+
 fn parse_chunk<'a>(
     bytes: &'a [u8],
     cursor: &mut usize,
-) -> Result<([u8; 4], &'a [u8], &'a [u8]), MagicaVoxelError> {
+) -> Result<ParsedChunk<'a>, MagicaVoxelError> {
     let header_end = cursor.checked_add(12).ok_or(MagicaVoxelError::Truncated)?;
     let header = bytes
         .get(*cursor..header_end)
@@ -400,10 +402,7 @@ fn parse_voxels(content: &[u8], max_voxels: u64) -> Result<Vec<[u8; 4]>, MagicaV
     if expected != Some(content.len()) {
         return Err(MagicaVoxelError::InvalidVoxelPayload);
     }
-    Ok(content[4..]
-        .chunks_exact(4)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
-        .collect())
+    Ok(content[4..].as_chunks::<4>().0.to_vec())
 }
 
 fn parse_palette(content: &[u8]) -> Result<[[u8; 4]; 256], MagicaVoxelError> {
@@ -411,8 +410,8 @@ fn parse_palette(content: &[u8]) -> Result<[[u8; 4]; 256], MagicaVoxelError> {
         return Err(MagicaVoxelError::InvalidPalettePayload);
     }
     let mut colors = [[0; 4]; 256];
-    for (index, chunk) in content.chunks_exact(4).enumerate() {
-        colors[index] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+    for (index, chunk) in content.as_chunks::<4>().0.iter().enumerate() {
+        colors[index] = *chunk;
     }
     Ok(colors)
 }

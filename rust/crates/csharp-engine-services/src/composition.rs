@@ -43,6 +43,10 @@ use crate::appearance::{
     RuntimeAppearanceBridge, RuntimeAppearanceCall,
 };
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the generated ABI table needs independent mutable borrows of each named Engine bridge"
+)]
 fn engine_api(
     diagnostics_bridge: &mut crate::diagnostics::RuntimeDiagnosticsBridge,
     appearance_bridge: &mut RuntimeAppearanceBridge,

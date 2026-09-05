@@ -399,6 +399,8 @@ async function handleRequest(
           ? { accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', runtime: RUNTIME }
           : {
             accepted: true,
+            code: 'DEV_HOST_ACCEPTED',
+            disposition: 'accepted',
             operation: operation === 'lifecycle/start' ? 'start' : operation,
             binding: RUNTIME,
             nextInputSequence: '1',
@@ -605,6 +607,7 @@ function sendJson(response: ServerResponse, value: unknown, outputThrough: numbe
   const body = JSON.stringify(value);
   response.writeHead(200, {
     'content-type': 'application/json; charset=utf-8',
+    'x-rusty-commit-disposition': 'committed',
     ...(outputThrough === null ? {} : { 'x-rusty-output-through': String(outputThrough) }),
   });
   response.end(body);

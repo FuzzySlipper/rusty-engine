@@ -16,7 +16,7 @@ import type {
   RustyApplicationUiMount,
 } from '@rusty-engine/application-host';
 
-const RUNTIME: RustyApplicationRuntimeIdentity = {
+let runtime: RustyApplicationRuntimeIdentity = {
   instanceId: '7',
   generation: '1',
   controlRevision: '1',
@@ -59,7 +59,7 @@ const inputBatches: (readonly RustyApplicationRuntimeInputEnvelope[])[] = [];
 const inputAttempts: (readonly RustyApplicationRuntimeInputEnvelope[])[] = [];
 let transientInputFailuresRemaining = new URLSearchParams(window.location.search).has('transientInputFailure') ? 1 : 0;
 let transientInputFailureObserved = false;
-let repeatedRetryableFailureRemaining = new URLSearchParams(window.location.search).has('repeatRetryableFailure') ? 1 : 0;
+let advanceRejectionsRemaining = new URLSearchParams(window.location.search).has('rejectNextAdvance') ? 1 : 0;
 const realtimeTicks: string[] = [];
 const outputs: ProductBrowserRuntimeOutput[] = [];
 const diagnosticReports: ProductBrowserDiagnosticsReport[] = [];
@@ -82,7 +82,7 @@ function emit(output: ProductBrowserRuntimeOutput): void {
 
 const runtimeReadout = (state: ProductBrowserRuntimeReadout['state']): ProductBrowserRuntimeReadout => ({
   artifact: 'rusty.product.runtime-readout',
-  runtime: RUNTIME,
+  runtime,
   mode: 'realtime',
   state,
   admittedSimulationSteps: String(realtimeTicks.length),
@@ -97,7 +97,7 @@ const runtimeReadout = (state: ProductBrowserRuntimeReadout['state']): ProductBr
 const adapter: ProductBrowserRuntimeAdapter = {
   lifecycle: async (operation) => {
     if (operation.kind === 'start') {
-      emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+      emit({ kind: 'binding', runtime, nextInputSequence: '1' });
       emit({ kind: 'runtime-readout', readout: runtimeReadout('running') });
     }
     return {
@@ -105,8 +105,16 @@ const adapter: ProductBrowserRuntimeAdapter = {
       code: 'DEV_HOST_ACCEPTED',
       disposition: 'accepted',
       operation: operation.kind,
-      binding: RUNTIME,
+      binding: runtime,
       nextInputSequence: '1',
+      readout: runtimeReadout('running'),
+    };
+  },
+  replaceControl: async () => {
+    runtime = { ...runtime, controlRevision: String(BigInt(runtime.controlRevision) + 1n) };
+    return {
+      accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted',
+      operation: 'replace-control', binding: runtime, nextInputSequence: '10',
       readout: runtimeReadout('running'),
     };
   },
@@ -118,11 +126,11 @@ const adapter: ProductBrowserRuntimeAdapter = {
       throw new ProductBrowserLocalTransportError(
         'request_failed',
         'fixture same-origin input request was transiently unavailable',
-        { retryable: true, route: '/__rusty/product/runtime/input' },
+        { mutation: { certainty: 'outcome-unknown', outputRecovery: 'none', outputThrough: null }, route: '/__rusty/product/runtime/input' },
       );
     }
     inputBatches.push(batch);
-    return { accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', count: batch.length, binding: RUNTIME, readout: runtimeReadout('running') };
+    return { accepted: true, code: 'DEV_HOST_ACCEPTED', disposition: 'accepted', count: batch.length, binding: runtime, readout: runtimeReadout('running') };
   },
   reportAudioFeedback: async (feedback) => ({
     accepted: true,
@@ -167,12 +175,12 @@ const adapter: ProductBrowserRuntimeAdapter = {
     }
   },
   advanceRealtime: async (observedTimeNs) => {
-    if (transientInputFailureObserved && repeatedRetryableFailureRemaining > 0) {
-      repeatedRetryableFailureRemaining -= 1;
+    if (transientInputFailureObserved && advanceRejectionsRemaining > 0) {
+      advanceRejectionsRemaining -= 1;
       throw new ProductBrowserLocalTransportError(
         'request_failed',
-        'fixture repeated same-origin advance request was transiently unavailable',
-        { retryable: true, route: '/__rusty/product/runtime/advance-realtime' },
+        'fixture rejected the next realtime advance before admission',
+        { mutation: { certainty: 'not-applied', outputRecovery: 'none', outputThrough: null }, route: '/__rusty/product/runtime/advance-realtime' },
       );
     }
     realtimeTicks.push(observedTimeNs);
@@ -182,7 +190,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
       code: 'DEV_HOST_ACCEPTED',
       disposition: 'accepted',
       operation: 'advance-realtime',
-      binding: RUNTIME,
+      binding: runtime,
       nextInputSequence: '1',
       readout: runtimeReadout('running'),
     };
@@ -192,7 +200,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
     // Adversarially emit a binding before application-host mount. Product
     // Browser Host must retain it in its bounded pre-mount buffer and apply it
     // only after the public input/projection ports exist.
-    listener({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' });
+    listener({ kind: 'binding', runtime, nextInputSequence: '1' });
     return () => { outputListeners.delete(listener); };
   },
   subscribeTerminalFailures: (listener) => {
@@ -291,7 +299,7 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
           acceptedThrough: '4',
           consumedThrough: '4',
           nextInputSequence: '5',
-          binding: RUNTIME,
+          binding: runtime,
           readout: runtimeReadout('running'),
         },
       },
@@ -307,7 +315,7 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
           acceptedThrough: '6',
           consumedThrough: '7',
           nextInputSequence: '8',
-          binding: RUNTIME,
+          binding: runtime,
           readout: runtimeReadout('running'),
           diagnostic: 'dropped one stale input event',
         },
@@ -322,7 +330,7 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
           acceptedCount: 0,
           droppedCount: 2,
           nextInputSequence: '9',
-          binding: RUNTIME,
+          binding: runtime,
           readout: runtimeReadout('running'),
           diagnostic: 'input mailbox requires a fresh binding',
         },
@@ -366,7 +374,7 @@ void mountProductBrowserHost({
     kind: 'ui-projection',
     envelope: {
       artifact: 'rusty.product.ui-projection',
-      runtime: RUNTIME,
+      runtime,
       sequence: '0',
       stream: 'product.ui',
       contract: 'product.ui.v1',
