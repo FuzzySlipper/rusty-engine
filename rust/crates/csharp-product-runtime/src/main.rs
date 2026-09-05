@@ -1090,7 +1090,60 @@ fn worker_reader(
                     return;
                 }
             }
-            Ok(ProductDevWorkerEvent::Response(response)) => {
+            Ok(ProductDevWorkerEvent::Response(mut response)) => {
+                // Command publications and autonomous ticks share the child's
+                // publication gate. Preserve that order in the shell too: a
+                // recovery binding must arrive before the next UI update, and
+                // older ticks must arrive before that binding. Returning these
+                // outputs through the HTTP thread would race the output reader.
+                if !response.outputs.is_empty() {
+                    let received_at = Instant::now();
+                    let published =
+                        worker_outputs(std::mem::take(&mut response.outputs)).and_then(|decoded| {
+                            outputs
+                                .try_send(ProductDevWorkerPublication::Outputs(
+                                    ProductDevWorkerOutputBatch {
+                                        generation,
+                                        outputs: decoded,
+                                        received_at,
+                                        decode_duration_us: elapsed_us(received_at),
+                                    },
+                                ))
+                                .map_err(|_| {
+                                    worker_runtime_error(
+                                        "DEV_HOST_WORKER_OUTPUT_BACKPRESSURE",
+                                        "shell could not queue the worker command publication",
+                                    )
+                                })?;
+                            let (acknowledged, acknowledgement) = mpsc::sync_channel(1);
+                            outputs
+                                .try_send(ProductDevWorkerPublication::ConnectionBoundary {
+                                    generation,
+                                    acknowledged,
+                                })
+                                .map_err(|_| {
+                                    worker_runtime_error(
+                                        "DEV_HOST_WORKER_PUBLICATION_BOUNDARY",
+                                        "shell could not queue the command output boundary",
+                                    )
+                                })?;
+                            acknowledgement
+                                .recv_timeout(WORKER_OPERATION_TIMEOUT)
+                                .ok()
+                                .flatten()
+                                .ok_or_else(|| {
+                                    worker_runtime_error(
+                                        "DEV_HOST_WORKER_PUBLICATION_BOUNDARY",
+                                        "worker command publication was not acknowledged",
+                                    )
+                                })
+                        });
+                    if let Err(error) = published {
+                        let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
+                        let _ = failures.try_send(generation);
+                        return;
+                    }
+                }
                 if responses
                     .send(Ok(WorkerResponse {
                         response,
@@ -3537,6 +3590,56 @@ mod tests {
             .unwrap();
         assert_eq!(response.response.request_id, 7);
         assert_eq!(response.connection_output_cursor, Some(41));
+        assert!(matches!(
+            output_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ProductDevWorkerPublication::Outputs(_)
+        ));
+        // A control/input recovery response must publish through this same
+        // queue. Simulate a shell HTTP handler that has not consumed its result
+        // while the child immediately emits the next autonomous update.
+        let runtime = serde_json::json!({
+            "instanceId": "7", "generation": "1", "controlRevision": "2",
+        });
+        write_worker_frame(&mut child, &ProductDevWorkerEvent::Response(ProductDevWorkerResponse {
+            attribution: None,
+            request_id: 8,
+            result: Some(serde_json::json!({ "accepted": true })),
+            outputs: vec![
+                serde_json::json!({ "kind": "binding", "runtime": runtime, "nextInputSequence": "1" }),
+                serde_json::json!({ "kind": "complete-baseline", "runtime": runtime, "publicationFrontiers": [] }),
+            ],
+            error: None,
+        })).unwrap();
+        write_worker_frame(&mut child, &output).unwrap();
+        let ProductDevWorkerPublication::Outputs(baseline) =
+            output_rx.recv_timeout(Duration::from_secs(2)).unwrap()
+        else {
+            panic!("command baseline must precede both its response and the next tick");
+        };
+        assert_eq!(baseline.outputs.len(), 2);
+        let ProductDevWorkerPublication::ConnectionBoundary { acknowledged, .. } =
+            output_rx.recv_timeout(Duration::from_secs(2)).unwrap()
+        else {
+            panic!("command response must await publication");
+        };
+        assert!(matches!(
+            response_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            output_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        acknowledged.send(Some(43)).unwrap();
+        let response = response_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.response.request_id, 8);
+        assert!(
+            response.response.outputs.is_empty(),
+            "HTTP must not republish the baseline"
+        );
         assert!(matches!(
             output_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
             ProductDevWorkerPublication::Outputs(_)

@@ -186,9 +186,10 @@ pub struct ProductDevWorkerOutputBatch {
 /// One ordered shell-side publication item from a disposable worker.
 ///
 /// A connection boundary follows every output frame that the worker emitted
-/// before a connection snapshot response. The browser host acknowledges the
-/// exact retained output cursor after it has committed that prefix; it does
-/// not cross the worker wire or become a product callback.
+/// before a connection snapshot or command response. Command output uses the
+/// same queue as autonomous updates before its response is released. The host
+/// acknowledges the retained output cursor after committing that prefix; the
+/// boundary does not cross the worker wire or become a product callback.
 pub enum ProductDevWorkerPublication {
     Outputs(ProductDevWorkerOutputBatch),
     UpdateTelemetry {
