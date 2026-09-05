@@ -171,6 +171,51 @@ void test('captured ghost scenes stay isolated across placement updates and chan
   }
 });
 
+void test('ghost capture keeps the baked skinned pose instead of restoring bind geometry', () => {
+  const renderer = new FakeRenderer();
+  const scene = new THREE.Scene();
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const count = geometry.getAttribute('position').count;
+  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+  const weights = new Float32Array(count * 4);
+  for (let i = 0; i < count; i += 1) weights[i * 4] = 1;
+  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(weights, 4));
+  const source = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+  source.name = 'posed-source';
+  const bone = new THREE.Bone();
+  source.add(bone);
+  source.bind(new THREE.Skeleton([bone]));
+  bone.scale.set(1, 2, 1);
+  source.updateMatrixWorld(true);
+  source.skeleton.update();
+  scene.add(source);
+  const expected = Array.from({ length: count }, (_, i) => source.getVertexPosition(i, new THREE.Vector3()).toArray());
+  const captured: number[][][] = [];
+  renderer.render = (captureScene) => {
+    captureScene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || object.name !== 'posed-source') return;
+      assert.equal(object instanceof THREE.SkinnedMesh, false);
+      assert.equal(object.geometry.hasAttribute('skinIndex'), false);
+      const positions = object.geometry.getAttribute('position');
+      captured.push(Array.from({ length: positions.count }, (_, i) => [positions.getX(i), positions.getY(i), positions.getZ(i)]));
+    });
+  };
+  const backend: RendererThreeGhostPlateBackend = { scene, objectFor: () => source };
+  const presentation = createPresentation(renderer, backend);
+  try {
+    assert.equal(presentation.create(descriptor(8)).applied, true);
+    assert.ok(captured.length > 0);
+    for (const positions of captured) assert.deepEqual(positions, expected);
+    assert.equal(source.geometry, geometry);
+    assert.equal(geometry.hasAttribute('skinIndex'), true);
+  } finally {
+    presentation.dispose();
+    geometry.dispose();
+    source.material.dispose();
+    source.skeleton.dispose();
+  }
+});
+
 function createPresentation(
   renderer: FakeRenderer,
   backend: RendererThreeGhostPlateBackend,

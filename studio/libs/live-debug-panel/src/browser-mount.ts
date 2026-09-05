@@ -11,6 +11,18 @@ export {
   type RendererMetricsWidgetMountOptions,
 } from './renderer-metrics-widget.js';
 
+// Browser products occasionally need the same fixed command transport as the
+// optional panel for a compact product-specific DOM control. Keep that
+// convenience on the packaged browser entry rather than teaching products the
+// debug endpoint paths.
+export {
+  createLiveDebugHttpTransport,
+  type LiveDebugCatalog,
+  type LiveDebugHttpTransportOptions,
+  type LiveDebugResult,
+  type LiveDebugTransport,
+} from '@rusty-engine/live-debug-client';
+
 /** Explicit, product-owned configuration for one optional live-debug panel. */
 export interface LiveDebugPanelMountOptions {
   /** False keeps the mounted panel inert: it does not contact a debug host. */
