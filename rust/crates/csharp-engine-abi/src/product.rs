@@ -1178,6 +1178,7 @@ pub struct NativeContentStoreApi {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeEngineApi {
+    pub implicit_surfaces: NativeImplicitSurfacesApi,
     pub diagnostics: NativeDiagnosticsApi,
     pub dynamics: NativeDynamicsApi,
     pub motion: NativeMotionApi,

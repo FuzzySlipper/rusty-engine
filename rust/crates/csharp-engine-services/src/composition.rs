@@ -60,12 +60,15 @@ fn engine_api(
     perception_bridge: &mut crate::perception::RuntimePerceptionBridge,
     voxel_content_bridge: &mut RuntimeVoxelContentBridge,
     voxel_scene_presentation_bridge: &mut RuntimeVoxelScenePresentationBridge,
+    implicit_bridge: &mut crate::implicit_surfaces::RuntimeImplicitBridge,
     rng_bridge: &mut RuntimeRngBridge,
     persistence_bridge: &mut RuntimePersistenceBridge,
     ui_bridge: &mut RuntimeUiBridge,
 ) -> NativeEngineApi {
     appearance_bridge.bind_authored_content(authored_content_bridge);
+    spatial_bridge.bind_appearance(appearance_bridge);
     NativeEngineApi {
+        implicit_surfaces: crate::implicit_surfaces::api(implicit_bridge, appearance_bridge),
         diagnostics: crate::diagnostics::api(diagnostics_bridge),
         dynamics: crate::dynamics::api(dynamics_bridge),
         motion: crate::motion::api(),
@@ -257,12 +260,14 @@ pub struct EngineServiceSet {
     perception: crate::perception::RuntimePerceptionBridge,
     voxel_content: RuntimeVoxelContentBridge,
     voxel_scene_presentation: RuntimeVoxelScenePresentationBridge,
+    implicit: crate::implicit_surfaces::RuntimeImplicitBridge,
     rng: RuntimeRngBridge,
     persistence: RuntimePersistenceBridge,
     ui: RuntimeUiBridge,
 }
 
 pub struct CsharpEngineCall {
+    implicit: crate::implicit_surfaces::RuntimeImplicitCall,
     presentation_world: render_presentation::PresentationWorld,
     output: CsharpEngineCallOutput,
     appearance: Option<RuntimeAppearanceCall>,
@@ -338,6 +343,7 @@ impl EngineServiceSet {
             perception,
             voxel_content: RuntimeVoxelContentBridge::new(),
             voxel_scene_presentation,
+            implicit: crate::implicit_surfaces::RuntimeImplicitBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
             persistence: crate::persistence::RuntimePersistenceBridge::new(persistence_root),
             ui: crate::ui::RuntimeUiBridge::new(),
@@ -358,6 +364,7 @@ impl EngineServiceSet {
             &mut self.perception,
             &mut self.voxel_content,
             &mut self.voxel_scene_presentation,
+            &mut self.implicit,
             &mut self.rng,
             &mut self.persistence,
             &mut self.ui,
@@ -401,6 +408,7 @@ impl EngineServiceSet {
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_attach_call();
         self.voxel_scene_presentation.begin_attach_call();
+        self.implicit.begin_call();
         Ok(())
     }
 
@@ -460,6 +468,7 @@ impl EngineServiceSet {
         self.ui.begin_call(ui_binding);
         self.voxel_content.begin_call();
         self.voxel_scene_presentation.begin_call();
+        self.implicit.begin_call();
     }
 
     /// Copies browser-host realization facts while C# is not executing. The
@@ -520,6 +529,7 @@ impl EngineServiceSet {
         self.ui.discard_call();
         self.voxel_content.discard_call();
         self.voxel_scene_presentation.discard_call();
+        self.implicit.discard_call();
     }
 
     pub fn take_call(&mut self) -> Result<CsharpEngineCall, CsharpEngineServicesError> {
@@ -535,7 +545,9 @@ impl EngineServiceSet {
         let ui = self.ui.take_staged_call()?;
         let voxel_content = self.voxel_content.take_staged_call()?;
         let voxel_scene_presentation = self.voxel_scene_presentation.take_staged_call()?;
+        let implicit = self.implicit.take_call()?;
         let mut call = CsharpEngineCall {
+            implicit,
             presentation_world: self.presentation_world.clone(),
             output: CsharpEngineCallOutput::default(),
             appearance,
@@ -594,6 +606,7 @@ impl EngineServiceSet {
     pub fn commit_call(&mut self, call: CsharpEngineCall) {
         self.presentation_world = call.presentation_world;
         self.appearance.commit(call.appearance);
+        self.implicit.commit_call(call.implicit);
         self.audio.commit(call.audio);
         self.camera_view.commit(call.camera_view);
         self.dynamics.commit_call();

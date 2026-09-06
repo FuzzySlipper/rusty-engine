@@ -142,6 +142,7 @@ pub(crate) struct RuntimeSpatialBridge {
     trigger_diagnostic_leases: BTreeMap<u64, SpatialTriggerDiagnosticLease>,
     trigger_overlap_page_leases: BTreeMap<u64, TriggerOverlapPageLease>,
     collision_source: SpatialCollisionSource,
+    sibling_appearance: Option<*mut crate::appearance::RuntimeAppearanceBridge>,
     content: Option<*const crate::content::RuntimeContentBridge>,
     next_session: u64,
     pub(crate) next_voxel_history_export: u64,
@@ -419,6 +420,7 @@ impl RuntimeSpatialBridge {
             trigger_diagnostic_leases: BTreeMap::new(),
             trigger_overlap_page_leases: BTreeMap::new(),
             collision_source: SpatialCollisionSource::new(),
+            sibling_appearance: None,
             content: None,
             next_session: 1,
             next_voxel_history_export: 1,
@@ -436,6 +438,17 @@ impl RuntimeSpatialBridge {
 
     pub(crate) fn collision_source(&self) -> SpatialCollisionSource {
         self.collision_source.clone()
+    }
+
+    pub(crate) fn bind_appearance(
+        &mut self,
+        appearance: &mut crate::appearance::RuntimeAppearanceBridge,
+    ) {
+        // The sibling bridge is retained by EngineServiceSet. This pointer is
+        // refreshed while the NativeEngineApi is assembled and used only for
+        // synchronous, copy-on-admission collision replacement.
+        self.sibling_appearance =
+            Some(appearance as *mut crate::appearance::RuntimeAppearanceBridge);
     }
 
     pub(crate) fn reset_update_attribution(&mut self) {
@@ -687,24 +700,29 @@ impl RuntimeSpatialBridge {
         }?;
         let mut admitted = Vec::with_capacity(assets.len());
         for asset in assets {
-            let positions = range_slice(
-                vertices,
-                asset.first_vertex,
-                asset.vertex_count,
-                "asset vertices",
-            )?
-            .iter()
-            .map(|value| [f64::from(value.x), f64::from(value.y), f64::from(value.z)])
-            .collect::<Vec<_>>();
-            let triangles = range_slice(
-                triangles,
-                asset.first_triangle,
-                asset.triangle_count,
-                "asset triangles",
-            )?
-            .iter()
-            .map(|value| [value.a, value.b, value.c])
-            .collect::<Vec<_>>();
+            let (positions, triangles) = if asset.mesh_resource.value == 0 {
+                let positions = range_slice(
+                    vertices,
+                    asset.first_vertex,
+                    asset.vertex_count,
+                    "asset vertices",
+                )?
+                .iter()
+                .map(|value| [f64::from(value.x), f64::from(value.y), f64::from(value.z)])
+                .collect::<Vec<_>>();
+                let triangles = range_slice(
+                    triangles,
+                    asset.first_triangle,
+                    asset.triangle_count,
+                    "asset triangles",
+                )?
+                .iter()
+                .map(|value| [value.a, value.b, value.c])
+                .collect::<Vec<_>>();
+                (positions, triangles)
+            } else {
+                self.copy_inline_mesh_collision(asset.mesh_resource)?
+            };
             admitted.push(
                 StaticMeshColliderAsset::new(StaticMeshAssetId(asset.id), positions, triangles)
                     .map_err(|error| {
@@ -761,6 +779,24 @@ impl RuntimeSpatialBridge {
             asset_count: receipt.asset_count as u64,
             instance_count: receipt.instance_count as u64,
             projection_hash: receipt.projection_hash,
+        })
+    }
+
+    fn copy_inline_mesh_collision(
+        &mut self,
+        resource: NativeMeshResourceReference,
+    ) -> Result<crate::appearance::CollisionMeshGeometry, CsharpEngineServicesError> {
+        let appearance = self.sibling_appearance.ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_MESH_UNBOUND",
+                "collision mesh references require the current Graphics owner",
+            )
+        })?;
+        // SAFETY: bind_appearance points at the sibling owner retained by
+        // EngineServiceSet. The Geometry helper copies the staged inline
+        // payload before this Spatial call returns.
+        unsafe { &mut *appearance }.copy_inline_mesh_collision(NativeMeshResourceHandle {
+            value: resource.value,
         })
     }
 
@@ -5153,6 +5189,202 @@ mod tests {
             },
             ABI_OK
         );
+    }
+
+    #[test]
+    fn mesh_resource_collision_is_copied_before_graphics_release() {
+        let mut appearance = crate::appearance::RuntimeAppearanceBridge::new(
+            render_projection::RuntimeAppearanceCatalog::default(),
+            BTreeMap::new(),
+        );
+        appearance.begin_call();
+        let appearance_context =
+            (&mut appearance as *mut crate::appearance::RuntimeAppearanceBridge).cast();
+        let mut material = NativeMaterialHandle::default();
+        assert_eq!(
+            unsafe {
+                crate::appearance::create_material(
+                    appearance_context,
+                    NativeMaterialRequest {
+                        color: NativeColor {
+                            r: 0.8,
+                            g: 0.8,
+                            b: 0.8,
+                            a: 1.0,
+                        },
+                        texture: NativeRenderResourceHandle::default(),
+                        roughness: 1.0,
+                        texture_tint: NativeColor {
+                            r: 1.0,
+                            g: 1.0,
+                            b: 1.0,
+                            a: 1.0,
+                        },
+                        emission_color: NativeVec3::default(),
+                        emission_intensity: 0.0,
+                        double_sided: false,
+                        alpha_mode: NativeMaterialAlphaMode::Opaque,
+                        alpha_cutoff: 0.5,
+                    },
+                    &mut material,
+                )
+            },
+            ABI_OK
+        );
+        let positions = [
+            NativeVec3 {
+                x: -1.0,
+                y: 0.0,
+                z: -1.0,
+            },
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: -1.0,
+            },
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: -1.0,
+                y: 0.0,
+                z: 1.0,
+            },
+        ];
+        let normals = [NativeVec3 {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+        }; 4];
+        let indices = [0, 2, 1, 0, 3, 2];
+        let groups = [NativeMeshGroup {
+            material_slot: 0,
+            start: 0,
+            count: indices.len() as u32,
+        }];
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 0,
+            material,
+        }];
+        let mut mesh = NativeMeshResourceHandle::default();
+        assert_eq!(
+            unsafe {
+                crate::appearance::create_mesh_resource(
+                    appearance_context,
+                    &NativeMeshResourceCreateRequest {
+                        positions: positions.as_ptr(),
+                        positions_len: positions.len(),
+                        normals: normals.as_ptr(),
+                        normals_len: normals.len(),
+                        uvs: std::ptr::null(),
+                        uvs_len: 0,
+                        colors: std::ptr::null(),
+                        colors_len: 0,
+                        indices: indices.as_ptr(),
+                        indices_len: indices.len(),
+                        groups: groups.as_ptr(),
+                        groups_len: groups.len(),
+                        bindings: bindings.as_ptr(),
+                        bindings_len: bindings.len(),
+                    },
+                    &mut mesh,
+                )
+            },
+            ABI_OK
+        );
+
+        let mut bridge = RuntimeSpatialBridge::new();
+        bridge.bind_appearance(&mut appearance);
+        let spatial_api = api(&mut bridge);
+        let session = create_session(&spatial_api);
+        let assets = [NativeStaticMeshAsset {
+            id: 7,
+            mesh_resource: NativeMeshResourceReference { value: mesh.value },
+            first_vertex: 0,
+            vertex_count: 0,
+            first_triangle: 0,
+            triangle_count: 0,
+        }];
+        let instances = [NativeStaticMeshInstance {
+            id: 9,
+            asset: 7,
+            transform: NativeTransform {
+                translation: NativeVec3::default(),
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            },
+        }];
+        let mut receipt = NativeCollisionReplaceReceipt::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.replace_collision)(
+                    spatial_api.context,
+                    &NativeCollisionReplaceRequest {
+                        session,
+                        assets: assets.as_ptr(),
+                        assets_len: assets.len(),
+                        vertices: std::ptr::null(),
+                        vertices_len: 0,
+                        triangles: std::ptr::null(),
+                        triangles_len: 0,
+                        instances: instances.as_ptr(),
+                        instances_len: instances.len(),
+                    },
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { crate::appearance::destroy_mesh_resource(appearance_context, mesh) },
+            ABI_OK
+        );
+
+        let mut hit = NativeSpatialHit::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.cast_ray)(
+                    spatial_api.context,
+                    &NativeSpatialRaycastRequest {
+                        session,
+                        origin: NativeVec3 {
+                            x: 0.0,
+                            y: 1.0,
+                            z: 0.0,
+                        },
+                        direction: NativeVec3 {
+                            x: 0.0,
+                            y: -1.0,
+                            z: 0.0,
+                        },
+                        max_distance: 2.0,
+                        filter: NativeSpatialQueryFilter::default(),
+                        entities: std::ptr::null(),
+                        entities_len: 0,
+                        ignored_entities: std::ptr::null(),
+                        ignored_entities_len: 0,
+                        hitbox_overrides: std::ptr::null(),
+                        hitbox_overrides_len: 0,
+                    },
+                    &mut hit,
+                )
+            },
+            ABI_OK
+        );
+        assert!(hit.present);
+        assert_eq!(hit.kind, NativeSpatialHitKind::StaticMesh);
+        assert_eq!(hit.asset, 7);
     }
 
     fn navigation_step_request(

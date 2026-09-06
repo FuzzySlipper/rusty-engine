@@ -28,6 +28,7 @@ serde_json.workspace = true
 svc-pathfinding.workspace = true
 svc-spatial.workspace = true
 svc-rng.workspace = true
+svc-implicit.workspace = true
 content-store-host.workspace = true
 sha2.workspace = true
 voxel-asset.workspace = true

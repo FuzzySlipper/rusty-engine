@@ -39,6 +39,7 @@ members = [
     "rust/crates/core-voxel",
     "rust/crates/svc-collision",
     "rust/crates/svc-mesh",
+    "rust/crates/svc-implicit",
     "rust/crates/svc-pathfinding",
     "rust/crates/svc-rng",
     "rust/crates/svc-spatial",
@@ -89,6 +90,7 @@ svc-collision = { path = "rust/crates/svc-collision" }
 svc-pathfinding = { path = "rust/crates/svc-pathfinding" }
 svc-rng = { path = "rust/crates/svc-rng" }
 svc-mesh = { path = "rust/crates/svc-mesh" }
+svc-implicit = { path = "rust/crates/svc-implicit" }
 svc-spatial = { path = "rust/crates/svc-spatial" }
 svc-volume = { path = "rust/crates/svc-volume" }
 ryu-js = "1"

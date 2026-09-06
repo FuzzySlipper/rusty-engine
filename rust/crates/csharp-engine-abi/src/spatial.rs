@@ -417,8 +417,17 @@ pub struct NativeSpatialTriggerFactAtReceipt {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeMeshResourceReference {
+    /// Zero preserves the borrowed raw-range collision input path.
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeStaticMeshAsset {
     pub id: u64,
+    /// A live inline Graphics mesh copied into Spatial during this call.
+    pub mesh_resource: NativeMeshResourceReference,
     pub first_vertex: u32,
     pub vertex_count: u32,
     pub first_triangle: u32,

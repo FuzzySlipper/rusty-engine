@@ -9,6 +9,7 @@ mod content;
 mod content_store;
 mod diagnostics;
 mod dynamics;
+mod implicit_surfaces;
 mod kinematic;
 mod magica_vox;
 mod motion;

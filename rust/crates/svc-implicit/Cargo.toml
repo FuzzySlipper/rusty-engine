@@ -1,0 +1,11 @@
+[package]
+name = "svc-implicit"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fidget = { version = "0.5", default-features = false, features = ["mesh", "jit"] }
+nalgebra = "0.35"

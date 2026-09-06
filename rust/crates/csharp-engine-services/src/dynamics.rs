@@ -2439,6 +2439,7 @@ mod tests {
         ];
         let assets = [NativeStaticMeshAsset {
             id: 1,
+            mesh_resource: NativeMeshResourceReference { value: 0 },
             first_vertex: 0,
             vertex_count: vertices.len() as u32,
             first_triangle: 0,
@@ -2613,6 +2614,7 @@ mod tests {
         ];
         let assets = [NativeStaticMeshAsset {
             id: 1,
+            mesh_resource: NativeMeshResourceReference { value: 0 },
             first_vertex: 0,
             vertex_count: vertices.len() as u32,
             first_triangle: 0,

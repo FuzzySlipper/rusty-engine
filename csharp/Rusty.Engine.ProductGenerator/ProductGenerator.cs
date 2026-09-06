@@ -129,6 +129,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     AuthoredContent = new AuthoredContentServiceImplementation(native.authored_content);
                     ContentStore = new ContentStoreServiceImplementation(native.content_store);
                     Graphics = new GraphicsServiceImplementation(native.graphics, leaseReleases);
+                    ImplicitSurfaces = new ImplicitSurfacesServiceImplementation(native.implicit_surfaces, native.graphics, leaseReleases);
                     Presentation = new PresentationServiceImplementation(native.presentation, leaseReleases);
                     Animation = new AnimationServiceImplementation(native.animation);
                     CameraView = new CameraViewServiceImplementation(native.camera_view, leaseReleases);
@@ -152,6 +153,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 public IAuthoredContentService AuthoredContent { get; }
                 public IContentStoreService ContentStore { get; }
                 public IGraphicsService Graphics { get; }
+                public IImplicitSurfacesService ImplicitSurfaces { get; }
                 public IPresentationService Presentation { get; }
                 public IAnimationService Animation { get; }
                 public ICameraViewService CameraView { get; }

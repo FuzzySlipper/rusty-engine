@@ -423,3 +423,67 @@ Do not bypass the gap with a browser renderer, TypeScript gameplay path,
 handwritten interop, JSON bridge, or a parallel Rust implementation in the
 product repository. The inability to proceed is useful evidence for the
 upstream capability work.
+
+## Runtime implicit surfaces
+
+`engine.ImplicitSurfaces` constructs general-purpose scalar fields and generates
+ordinary retained `MeshResource` objects. This is independent of the existing
+voxel residency service and its cubic surface modes. C# owns the shape recipe,
+material selection, and regeneration intent; Rust owns evaluation, dual
+contouring, mesh attributes, and renderer admission. No retro style is built
+into this service.
+
+Create an `ImplicitField`, add boxes, spheres, ellipsoids, capsules or planes,
+and compose their returned `ImplicitNode` values with union, intersection,
+difference, smooth union, offset and affine TRS placement. Nodes belong to that
+field. Values are negative inside; these constructive fields preserve a zero
+surface but are not necessarily Euclidean distances. Smooth-union radii and
+level-set offsets are in field-value units, especially after nonuniform scale.
+
+`Generate(ImplicitGenerateRequest)` takes an enclosure, sample spacing, crease
+angle, UV scale, default material, and optional ordered material regions:
+
+- The enclosure expands about its center into a cube with its longest side,
+  preserving uniform world-space samples. To clip to a rectangular volume,
+  explicitly intersect a box. Domain boundaries are not automatic caps.
+- Cell size is a maximum leaf sample spacing, not a minimum-feature guarantee.
+  Thin features can disappear. Keep enough empty margin around closed shapes.
+- Zero crease angle gives flat facets; larger angles admit incident faces into
+  area-weighted normals. Major-axis planar UV charts use world coordinates;
+  UV scale is repeats per world unit, independent of extraction density.
+- Each triangle uses the first material region containing its centroid, or the
+  default material. Regions classify triangles; they do not split triangles at
+  exact material boundaries. Texture filtering/wrapping comes from ordinary
+  authored materials. Materials are grouped into indexed ranges, not one
+  submission per stone or sample.
+
+Create an appearance with `engine.Graphics.CreateMeshAppearance(mesh)` and
+include it in the product's complete appearance snapshot. A mesh may have
+multiple appearances. Dispose appearances before their mesh, and materials
+only after meshes using them have been released. The field may be disposed as
+soon as generation completes: the mesh owns its copied result. Generate a new
+mesh for explicit whole-region replacement.
+
+For collision, `StaticMeshAsset` accepts `new MeshResourceReference(mesh)` in
+its `MeshResource` field. Pass that asset and its instances to the existing
+`Spatial.ReplaceCollision`, with empty raw vertex/triangle arrays when every
+asset uses a reference. Spatial copies the geometry during admission; its
+collider remains valid after the source graphics resource is released. Visual
+and collision replacement are explicit independent product actions. A zero
+reference retains the existing borrowed-array collision path.
+
+`ReadGeneration(field)` reports the most recent successful generation's vertex,
+triangle and material-group counts, actual sample spacing, octree depth,
+elapsed service time, and corrected/degenerate facet counts. Generation is
+synchronous in the normal product callback; use load-time or explicit bounded
+regeneration, not every frame. Partition large authored compositions and give
+simple planar solids coarser sampling. Existing inline mesh admission budgets
+still apply after normal/UV seam splitting. Output limits are checked after
+extraction and do not bound peak memory or guarantee a latency deadline.
+
+The initial backend is Fidget 0.5 evaluation and dual contouring. Facets are
+oriented against source gradients and zero-area triangles omitted. These
+corrections are reported; they do not repair self-intersections or establish a
+watertight/manifold guarantee. This is currently a bounded constructive-shape
+surface service, not a dense-grid importer, adaptive scene streamer, runtime
+editing system, or texture baker.

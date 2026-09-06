@@ -1580,6 +1580,8 @@ impl RuntimeAppearanceCall {
     }
 }
 
+pub(crate) type CollisionMeshGeometry = (Vec<[f64; 3]>, Vec<[u32; 3]>);
+
 /// Engine-owned appearance admission and retained projection for trusted C# products.
 /// `Create` selects the immutable renderer resources the browser host will serve; calls stage
 /// both resource selection, newly admitted appearances, and snapshots so a failure cannot partly
@@ -3749,7 +3751,7 @@ impl RuntimeAppearanceBridge {
         })
     }
 
-    unsafe fn create_mesh_resource(
+    pub(crate) unsafe fn create_mesh_resource(
         &mut self,
         request: &NativeMeshResourceCreateRequest,
     ) -> Result<NativeMeshResourceHandle, CsharpEngineServicesError> {
@@ -3997,6 +3999,74 @@ impl RuntimeAppearanceBridge {
         staged.state.mesh_resources.remove(&resource.value);
         push_extra_frame(staged, projection.frame);
         Ok(())
+    }
+
+    /// Copies the current staged inline mesh into a Spatial-owned collision
+    /// asset. The Graphics resource itself remains borrowed for this call and
+    /// may be released as soon as the copy completes.
+    pub(crate) fn copy_inline_mesh_collision(
+        &mut self,
+        resource: NativeMeshResourceHandle,
+    ) -> Result<CollisionMeshGeometry, CsharpEngineServicesError> {
+        let staged = self.staged.as_mut().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_MESH_UNBOUND",
+                "collision mesh references require a current staged Graphics call",
+            )
+        })?;
+        let mesh = staged
+            .state
+            .mesh_resources
+            .get(&resource.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_COLLISION_MESH_STALE",
+                    "collision mesh reference does not name a live Graphics mesh",
+                )
+            })?;
+        let asset = staged
+            .state
+            .projector
+            .resources_mut()
+            .static_meshes
+            .iter()
+            .find(|candidate| candidate.asset == mesh.asset)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_COLLISION_MESH_STALE",
+                    "collision mesh reference has no staged Graphics payload",
+                )
+            })?;
+        let MeshPayloadSource::Inline {
+            positions, indices, ..
+        } = &asset.payload.source
+        else {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_MESH_NONINLINE",
+                "collision mesh references require an inline Graphics mesh",
+            ));
+        };
+        let (position_chunks, position_remainder) = positions.as_chunks::<3>();
+        let (index_chunks, index_remainder) = indices.as_chunks::<3>();
+        if !position_remainder.is_empty() || !index_remainder.is_empty() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_MESH_INVALID",
+                "inline Graphics mesh had incomplete collision geometry",
+            ));
+        }
+        Ok((
+            position_chunks
+                .iter()
+                .map(|position| {
+                    [
+                        f64::from(position[0]),
+                        f64::from(position[1]),
+                        f64::from(position[2]),
+                    ]
+                })
+                .collect(),
+            index_chunks.to_vec(),
+        ))
     }
 
     unsafe fn create_static_mesh(
