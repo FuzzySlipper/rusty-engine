@@ -323,16 +323,16 @@ test('rejected runtime recovery facts remain decoded result facts rather than tr
       const pathname = new URL(String(input), 'http://product.local/').pathname;
       switch (pathname) {
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}advance-realtime`:
-          return response({ ...rejected, operation: 'advance-realtime' });
+          return response({ ...rejected, operation: 'advance-realtime' }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}input`:
-          return response({ ...rejected, count: 0, acceptedCount: 0, droppedCount: 0 });
+          return response({ ...rejected, count: 0, acceptedCount: 0, droppedCount: 0 }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}audio-feedback`:
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}animation-feedback`:
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}ghost-plate-feedback`:
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}renderer-diagnostics`:
-          return response({ ...rejected, runtime: RUNTIME });
+          return response({ ...rejected, runtime: RUNTIME }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
         case `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`:
-          return response({ ...rejected, ticket: '1' });
+          return response({ ...rejected, ticket: '1' }, 200, { 'x-rusty-commit-disposition': 'not-applied' });
         default:
           throw new Error(`unexpected route ${pathname}`);
       }
@@ -1501,3 +1501,27 @@ test('attachment health reports only renderer-confirmed baselines and correlates
   assert.deepEqual(headers, reports.map((entry) => entry.attachment.id));
   adapter.dispose();
 });
+
+for (const certainty of ['not-applied', 'unknown'] as const) {
+  test(`runtime ${certainty} disposition survives a truncated rejection body`, async () => {
+    let requests = 0;
+    const adapter = createProductBrowserLocalHttpAdapter({
+      fetch: async () => {
+        requests += 1;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { controller.error(new TypeError('truncated rejection')); },
+        }), { headers: {
+          'content-type': 'application/json',
+          'x-rusty-commit-disposition': certainty,
+        } });
+      },
+      eventSource: FakeEventSource,
+    });
+    await assert.rejects(adapter.lifecycle({ kind: 'start' }), (error: unknown) =>
+      error instanceof ProductBrowserLocalTransportError
+      && error.mutation.certainty === (certainty === 'unknown' ? 'outcome-unknown' : certainty)
+      && error.mutation.outputRecovery === 'none');
+    assert.equal(requests, 1, 'the callback request must not be replayed');
+    adapter.dispose();
+  });
+}

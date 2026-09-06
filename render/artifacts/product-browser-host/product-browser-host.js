@@ -29455,7 +29455,7 @@ function QO(e, t) {
 		route: t,
 		mutation: XO
 	});
-	if (n === "committed" && r === null || n === "resync-required" && r === "fresh") return n;
+	if ((n === "committed" || n === "not-applied" || n === "unknown") && r === null || n === "resync-required" && r === "fresh") return n;
 	throw new Q("response_decode_failed", `Product Browser local runtime response for ${t} has an unknown or incoherent commit disposition`, {
 		route: t,
 		mutation: XO
@@ -29567,9 +29567,9 @@ function $O(e = {}) {
 				mutation: XO
 			});
 		}
-		let p = d.headers.get("x-rusty-output-through"), m = null;
-		if (p !== null) try {
-			m = ik(p, "X-Rusty-Output-Through response header", "response_decode_failed", e);
+		let p = f === "not-applied" ? "not-applied" : f === "unknown" ? "outcome-unknown" : "committed", m = d.headers.get("x-rusty-output-through"), h = null;
+		if (m !== null) try {
+			h = ik(m, "X-Rusty-Output-Through response header", "response_decode_failed", e);
 		} catch (t) {
 			let n = t instanceof Q ? t : new Q("response_decode_failed", `Product Browser local runtime returned an invalid output cursor for ${e}`, {
 				cause: t,
@@ -29578,63 +29578,63 @@ function $O(e = {}) {
 				cause: n,
 				route: e,
 				mutation: Object.freeze({
-					certainty: "committed",
-					outputRecovery: "fresh-baseline-required",
+					certainty: p,
+					outputRecovery: p === "committed" ? "fresh-baseline-required" : "none",
 					outputThrough: null
 				})
 			});
-			throw await ue(e), r;
+			throw p === "committed" && await ue(e), r;
 		}
-		let h = Object.freeze({
-			certainty: "committed",
+		let g = Object.freeze({
+			certainty: p,
 			outputRecovery: f === "resync-required" ? "fresh-baseline-required" : "none",
-			outputThrough: m?.toString(10) ?? null
+			outputThrough: h?.toString(10) ?? null
 		});
 		if (!(d.headers.get("content-type")?.toLowerCase() ?? "").startsWith("application/json")) {
 			let t = new Q("response_decode_failed", `Product Browser local runtime response for ${e} must use application/json`, {
 				route: e,
-				mutation: h
+				mutation: g
 			});
-			throw h.outputRecovery === "fresh-baseline-required" && await ue(e), t;
+			throw g.outputRecovery === "fresh-baseline-required" && await ue(e), t;
 		}
-		let g;
+		let _;
 		try {
-			g = await hk(d, a, e);
+			_ = await hk(d, a, e);
 		} catch (t) {
 			let n = t instanceof Q ? t : new Q("request_failed", `Product Browser local runtime response could not be read for ${e}`, {
 				cause: t,
 				route: e,
-				mutation: h
+				mutation: g
 			}), r = new Q(n.code, n.message, {
 				cause: n,
 				route: e,
-				mutation: h
+				mutation: g
 			});
-			throw h.outputRecovery === "fresh-baseline-required" && await ue(e), r;
+			throw g.outputRecovery === "fresh-baseline-required" && await ue(e), r;
 		}
-		let _;
+		let v;
 		try {
-			_ = JSON.parse(g);
+			v = JSON.parse(_);
 		} catch (t) {
 			let n = new Q("response_decode_failed", `Product Browser local runtime returned invalid JSON for ${e}`, {
 				cause: t,
 				route: e,
-				mutation: h
+				mutation: g
 			});
-			throw h.outputRecovery === "fresh-baseline-required" && await ue(e), n;
+			throw g.outputRecovery === "fresh-baseline-required" && await ue(e), n;
 		}
-		let v;
+		let y;
 		try {
-			s || te(), v = o(_);
+			s || te(), y = o(v);
 		} catch (t) {
 			let n = t instanceof Q ? t : new Q("response_decode_failed", `Product Browser local runtime returned an invalid response for ${e}: ${t instanceof Error ? t.message : String(t)}`, {
 				cause: t,
 				route: e,
-				mutation: h
+				mutation: g
 			});
-			throw h.outputRecovery === "fresh-baseline-required" && await ue(e), n;
+			throw g.outputRecovery === "fresh-baseline-required" && await ue(e), n;
 		}
-		return f === "resync-required" ? await ue(e) : m !== null && (w === l ? await ae(m) : await T), v;
+		return f === "resync-required" ? await ue(e) : h !== null && (w === l ? await ae(h) : await T), y;
 	}, fe = (e) => de(pO.lifecycle[e.kind], {}, (t) => Vk(t, e.kind)), pe = (e) => de(pO.control.replace, { runtime: vk(e) }, (e) => Vk(e, "replace-control")), me = (e) => de(pO.input, { batch: _k(e) }, Uk), he = (e) => {
 		let t = bk(e);
 		return de(pO.audioFeedback, t, (e) => Wk(e, t.runtime, t.facts));

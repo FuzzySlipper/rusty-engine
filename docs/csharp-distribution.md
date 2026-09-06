@@ -62,8 +62,22 @@ never replaces an output path:
 ./scripts/build-csharp-release-pair.sh --output /tmp/rusty-engine-release
 ```
 
-The exact-tag publication workflow accepts only a tag named
-`csharp-sdk-v0.1.0-dev.<12-char-HEAD>`. It rebuilds, verifies, clean-consumer
-tests, and publishes that archive plus its checksum. There are intentionally
-no channels, version aliases, signing layers, compatibility matrices, or
-multi-platform releases in this first distribution lane.
+The contributor publishes the verified local artifact; GitHub Actions does
+not rebuild or publish another pair when its tag appears. After pushing the
+source commit, publish the archive with:
+
+```bash
+./scripts/publish-csharp-release-pair.sh /tmp/rusty-engine-release/*.tar.gz
+```
+
+This reuses the pair verifier, reads the source revision and version from the
+archive, and publishes it with its checksum under `csharp-sdk-v<version>`.
+An existing release is not replaced. Install these published bytes in
+consumers; do not independently rebuild a pair under the same version.
+
+Ordinary C# CI still exercises the generated SDK/CoreCLR path. When NativeAOT
+fidelity needs verification, run `./scripts/verify-csharp.sh --aot` or dispatch
+the C# workflow with its `nativeaot` input. A disposable distribution consumer
+can be exercised with `./scripts/test-csharp-release-pair.sh <pair.tar.gz>`.
+Choose these checks for the changed boundary rather than repeating them merely
+to publish an already verified artifact.

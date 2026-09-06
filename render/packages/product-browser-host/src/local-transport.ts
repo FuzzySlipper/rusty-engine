@@ -322,7 +322,7 @@ export class ProductBrowserLocalTransportError extends Error {
   }
 }
 
-type ProductBrowserCommitDisposition = 'committed' | 'resync-required';
+type ProductBrowserCommitDisposition = 'not-applied' | 'unknown' | 'committed' | 'resync-required';
 
 function decodeCommitDisposition(
   headers: Headers,
@@ -342,7 +342,8 @@ function decodeCommitDisposition(
     `Product Browser local runtime response for ${route} named a resync without a commit disposition`,
     { route, mutation: UNKNOWN_MUTATION },
   );
-  if (disposition === 'committed' && resync === null) return disposition;
+  if ((disposition === 'committed' || disposition === 'not-applied' || disposition === 'unknown')
+    && resync === null) return disposition;
   if (disposition === 'resync-required' && resync === 'fresh') return disposition;
   throw new ProductBrowserLocalTransportError(
     'response_decode_failed',
@@ -673,6 +674,8 @@ export function createProductBrowserLocalHttpAdapter(
         );
       throw error;
     }
+    const mutationCertainty = commitDisposition === 'not-applied' ? 'not-applied' as const
+      : commitDisposition === 'unknown' ? 'outcome-unknown' as const : 'committed' as const;
     const outputThroughHeader = response.headers.get('x-rusty-output-through');
     let outputThrough: bigint | null = null;
     if (outputThroughHeader !== null) {
@@ -698,18 +701,19 @@ export function createProductBrowserLocalHttpAdapter(
             cause: source,
             route,
             mutation: Object.freeze({
-              certainty: 'committed' as const,
-              outputRecovery: 'fresh-baseline-required' as const,
+              certainty: mutationCertainty,
+              outputRecovery: mutationCertainty === 'committed'
+                ? 'fresh-baseline-required' as const : 'none' as const,
               outputThrough: null,
             }),
           },
         );
-        await recoverFreshOutputsOrTerminal(route);
+        if (mutationCertainty === 'committed') await recoverFreshOutputsOrTerminal(route);
         throw error;
       }
     }
     const mutation = Object.freeze({
-      certainty: 'committed' as const,
+      certainty: mutationCertainty,
       outputRecovery: commitDisposition === 'resync-required'
         ? 'fresh-baseline-required' as const
         : 'none' as const,

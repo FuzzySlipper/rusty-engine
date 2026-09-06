@@ -2274,8 +2274,9 @@ where
                     .expect("runtime diagnostics are bounded"),
                 );
                 request_incarnation_replacement(state, &error);
+                let mutation = error.recovery().mutation();
                 return Ok((match error_result(error) {
-                    Ok(result) => json_response(200, &result),
+                    Ok(result) => json_response(200, &result).with_runtime_mutation(mutation),
                     Err(host_error) => {
                         HttpResponse::error(500, host_error.code(), host_error.detail())
                     }
@@ -4313,12 +4314,14 @@ struct HttpResponse {
     delivery_certainty: Option<ResponseDeliveryCertainty>,
 }
 
-/// The host makes only two delivery claims for a typed runtime receipt.
+/// Preserve the runtime's mutation certainty even on a typed rejection.
 /// `ResyncRequired` means the runtime result was committed, but the caller
 /// must use its existing binding/readout identity and `/outputs/fresh` rather
 /// than replaying the route request.
 #[derive(Clone, Copy)]
 enum CommitDisposition {
+    NotApplied,
+    Unknown,
     Committed,
     ResyncRequired,
 }
@@ -4346,6 +4349,8 @@ impl ResponseDeliveryCertainty {
 impl CommitDisposition {
     const fn as_header(self) -> &'static str {
         match self {
+            Self::NotApplied => "not-applied",
+            Self::Unknown => "unknown",
             Self::Committed => "committed",
             Self::ResyncRequired => "resync-required",
         }
@@ -4362,6 +4367,18 @@ impl HttpResponse {
             commit_disposition: None,
             delivery_certainty: None,
         }
+    }
+
+    fn with_runtime_mutation(mut self, mutation: crate::ProductDevMutationCertainty) -> Self {
+        self.commit_disposition = Some(match mutation {
+            crate::ProductDevMutationCertainty::NotApplied => CommitDisposition::NotApplied,
+            crate::ProductDevMutationCertainty::Unknown => CommitDisposition::Unknown,
+            crate::ProductDevMutationCertainty::Committed => {
+                self.delivery_certainty = Some(ResponseDeliveryCertainty::Settled);
+                CommitDisposition::Committed
+            }
+        });
+        self
     }
 
     fn with_output_through(mut self, output_through: u64) -> Self {
