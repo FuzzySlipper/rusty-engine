@@ -138,13 +138,11 @@ test('application host owns composition, input arbitration, and disposal', async
     resourceBytes: 203,
     resourceCount: 3,
   });
-  await page.evaluate(() => {
+  const visibleResourcePixels = await page.locator('canvas').evaluate((element) => {
     window.__rustyApplicationHost?.renderer.setCameraPose({
       position: [0, 0, 3], pitchDegrees: 0, yawDegrees: 0,
     });
     window.__rustyApplicationHost?.renderer.renderOnce();
-  });
-  const visibleResourcePixels = await page.locator('canvas').evaluate((element) => {
     const canvas = element as HTMLCanvasElement;
     const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
     if (context === null) return 0;
