@@ -2,7 +2,8 @@
 //!
 //! Shapes are negative inside. CSG preserves a zero surface, not necessarily
 //! Euclidean distance. An arena owns shape expressions; nodes are local to it.
-//! Fidget owns evaluation, interval pruning and manifold dual contouring.
+//! Fidget supplies evaluation, interval pruning and adaptive dual-cell
+//! connectivity. Engine triangulates the resulting cell-vertex polygons.
 
 use fidget::{
     context::Tree,
@@ -14,6 +15,7 @@ use nalgebra::{Matrix4, Vector3};
 use std::time::Instant;
 
 pub mod surface;
+mod triangulate;
 
 pub type Node = u32;
 
@@ -245,7 +247,7 @@ impl Field {
         };
         let octree = Octree::build(&bound, &settings)
             .ok_or_else(|| Error("surface generation cancelled".into()))?;
-        let mesh = octree.walk_dual();
+        let mesh = triangulate::dual_polygons(octree.walk_dual());
         if mesh.vertices.len() > options.max_vertices as usize
             || mesh.triangles.len() > options.max_triangles as usize
         {
@@ -259,32 +261,19 @@ impl Field {
             return Err(Error("extraction produced a non-finite vertex".into()));
         }
         let positions = mesh.vertices.iter().map(|p| [p.x, p.y, p.z]).collect();
-        let centers: Vec<[f32; 3]> = mesh
-            .triangles
-            .iter()
-            .map(|t| ((mesh.vertices[t.x] + mesh.vertices[t.y] + mesh.vertices[t.z]) / 3.0).into())
-            .collect();
-        let gradients = gradients_shape(&shape, &centers)?;
         let mut triangles = Vec::with_capacity(mesh.triangles.len());
-        let mut reoriented_triangles = 0;
         let mut degenerate_triangles = 0;
-        for (t, g) in mesh.triangles.iter().zip(gradients) {
+        for t in &mesh.triangles {
             let normal = (mesh.vertices[t.y] - mesh.vertices[t.x])
                 .cross(&(mesh.vertices[t.z] - mesh.vertices[t.x]));
             if normal.norm_squared() == 0.0 {
                 degenerate_triangles += 1;
                 continue;
             }
-            let mut tri = [t.x as u32, t.y as u32, t.z as u32];
-            // QEF triangulation can locally fold even on a sphere. Orient the
-            // rendered facets against the actual source field, not a backend
-            // winding assumption. This is not a self-intersection repair or a
-            // manifold guarantee; expose the correction count to callers.
-            if normal.dot(&Vector3::from(g)) < 0.0 {
-                tri.swap(1, 2);
-                reoriented_triangles += 1;
-            }
-            triangles.push(tri);
+            // Keep the polygon's consistent shared-edge winding. Independently
+            // flipping faces against centroid gradients neither repairs a fold
+            // nor reliably classifies facets spanning an unresolved CSG detail.
+            triangles.push([t.x as u32, t.y as u32, t.z as u32]);
         }
         Ok(Geometry {
             positions,
@@ -292,7 +281,7 @@ impl Field {
             depth: depth as u32,
             cell_size: [extent.max() / 2_f32.powi(depth as i32); 3],
             generation_seconds: started.elapsed().as_secs_f64(),
-            reoriented_triangles,
+            reoriented_triangles: 0,
             degenerate_triangles,
         })
     }
@@ -332,6 +321,7 @@ fn sample_shape(shape: &JitShape, points: &[[f32; 3]]) -> Result<Vec<f32>, Error
         .map_err(|e| Error(format!("field evaluation failed: {e}")))
 }
 
+#[cfg(test)]
 fn gradients_shape(shape: &JitShape, points: &[[f32; 3]]) -> Result<Vec<[f32; 3]>, Error> {
     use fidget::types::Grad;
     let mut evaluator = JitShape::new_grad_slice_eval();
@@ -374,6 +364,8 @@ pub struct Geometry {
     pub depth: u32,
     pub cell_size: [f32; 3],
     pub generation_seconds: f64,
+    /// Retained readout compatibility: polygon winding is preserved, so the
+    /// current generator performs no independent per-triangle reorientation.
     pub reoriented_triangles: u32,
     pub degenerate_triangles: u32,
 }
@@ -381,6 +373,22 @@ pub struct Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    fn assert_closed_and_oriented(mesh: &Geometry) {
+        let mut edges = BTreeMap::<(u32, u32), (usize, i32)>::new();
+        for &[a, b, c] in &mesh.triangles {
+            for (a, b) in [(a, b), (b, c), (c, a)] {
+                let entry = edges.entry((a.min(b), a.max(b))).or_default();
+                entry.0 += 1;
+                entry.1 += if a < b { 1 } else { -1 };
+            }
+        }
+        for (edge, (count, orientation)) in edges {
+            assert_eq!(count, 2, "open or nonmanifold edge {edge:?}");
+            assert_eq!(orientation, 0, "inconsistent winding at {edge:?}");
+        }
+    }
     fn options(bounds: Bounds) -> GenerateOptions {
         GenerateOptions {
             bounds,
@@ -431,6 +439,7 @@ mod tests {
             );
         }
         assert!(m.cell_size.iter().all(|v| *v <= 0.08));
+        assert_closed_and_oriented(&m);
     }
 
     #[test]
@@ -467,6 +476,7 @@ mod tests {
             "outward {positive}, inward {negative}, worst {worst}, triangles {}",
             mesh.triangles.len()
         );
+        assert_closed_and_oriented(&mesh);
         let matrix = Matrix4::new_translation(&Vector3::new(3.0, 2.0, 1.0))
             * Matrix4::new_nonuniform_scaling(&Vector3::new(2.0, 1.0, 0.5));
         let placed = f
@@ -476,5 +486,93 @@ mod tests {
             .sample(placed, &[[3.0, 2.0, 1.0], [4.0, 2.0, 1.0], [5.0, 2.0, 1.0]])
             .unwrap();
         assert!(values[0] < 0.0 && values[1] < 0.0 && values[2] > 0.0);
+    }
+
+    #[test]
+    fn adaptive_box_and_cap_have_coherent_outward_facets() {
+        for cap in [false, true] {
+            let mut field = Field::new();
+            let mut root = field
+                .box_shape(Bounds {
+                    min: [-2.0, 0.0, -0.3],
+                    max: [2.0, 3.0, 0.3],
+                })
+                .unwrap();
+            if cap {
+                let trim = field
+                    .box_shape(Bounds {
+                        min: [-2.14, 2.78, -0.44],
+                        max: [2.14, 3.0 + 0.14, 0.44],
+                    })
+                    .unwrap();
+                root = field.union(root, trim).unwrap();
+            }
+            let geometry = field
+                .generate(
+                    root,
+                    GenerateOptions {
+                        bounds: Bounds {
+                            min: [-2.45, -0.95, -2.45],
+                            max: [2.45, 3.95, 2.45],
+                        },
+                        cell_size: 0.2,
+                        max_vertices: 200_000,
+                        max_triangles: 400_000,
+                    },
+                )
+                .unwrap();
+            assert_closed_and_oriented(&geometry);
+            let centroids: Vec<[f32; 3]> = geometry
+                .triangles
+                .iter()
+                .map(|t| {
+                    let p = t.map(|i| Vector3::from(geometry.positions[i as usize]));
+                    ((p[0] + p[1] + p[2]) / 3.0).into()
+                })
+                .collect();
+            let gradients =
+                gradients_shape(&JitShape::from(field.tree(root).unwrap()), &centroids).unwrap();
+            for (t, gradient) in geometry.triangles.iter().zip(gradients) {
+                let p = t.map(|i| Vector3::from(geometry.positions[i as usize]));
+                let normal = (p[1] - p[0]).cross(&(p[2] - p[0]));
+                assert!(
+                    normal.dot(&Vector3::from(gradient)) >= -1e-6,
+                    "inward cap={cap} triangle={p:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn disconnected_inner_boundary_retains_cavity_winding() {
+        let mut field = Field::new();
+        let outer = field.sphere([0.0; 3], 0.9).unwrap();
+        let inner = field.sphere([0.0; 3], 0.4).unwrap();
+        let shell = field.difference(outer, inner).unwrap();
+        let mesh = field
+            .generate(
+                shell,
+                options(Bounds {
+                    min: [-1.1; 3],
+                    max: [1.1; 3],
+                }),
+            )
+            .unwrap();
+        assert_closed_and_oriented(&mesh);
+        let mut inner_faces = 0;
+        let mut outer_faces = 0;
+        for t in &mesh.triangles {
+            let p = t.map(|i| Vector3::from(mesh.positions[i as usize]));
+            let center = (p[0] + p[1] + p[2]) / 3.0;
+            let normal = (p[1] - p[0]).cross(&(p[2] - p[0]));
+            if center.norm() < 0.65 {
+                inner_faces += 1;
+                assert!(normal.dot(&center) < 0.0, "cavity faces into solid");
+            } else {
+                outer_faces += 1;
+                assert!(normal.dot(&center) > 0.0, "outer face points inward");
+            }
+        }
+        assert!(inner_faces > 0 && outer_faces > 0);
     }
 }

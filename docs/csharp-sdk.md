@@ -475,17 +475,21 @@ reference retains the existing borrowed-array collision path.
 
 `ReadGeneration(field)` reports the most recent successful generation's vertex,
 triangle and material-group counts, actual sample spacing, octree depth,
-elapsed service time, and corrected/degenerate facet counts. Generation is
+elapsed service time, and reorientation/degenerate facet counts. Generation is
 synchronous in the normal product callback; use load-time or explicit bounded
 regeneration, not every frame. Partition large authored compositions and give
 simple planar solids coarser sampling. Existing inline mesh admission budgets
 still apply after normal/UV seam splitting. Output limits are checked after
 extraction and do not bound peak memory or guarantee a latency deadline.
 
-The initial backend is Fidget 0.5 evaluation and dual contouring. Facets are
-oriented against source gradients and zero-area triangles omitted. These
-corrections are reported; they do not repair self-intersections or establish a
-watertight/manifold guarantee. This is currently a bounded constructive-shape
+The backend uses Fidget 0.5 evaluation and dual-cell connectivity. Engine
+triangulates its ordered cell-vertex polygons, avoiding folded fans around
+sampled edge intersections at adaptive transitions. Shared-edge winding is
+preserved; the retained reorientation counter is zero because individual faces
+are no longer flipped against centroid gradients. Zero-area triangles are
+omitted. This does not repair escaped cell vertices, guarantee thin features,
+or establish a general watertight/self-intersection-free guarantee. This is a
+bounded constructive-shape
 surface service, not a dense-grid importer, adaptive scene streamer, runtime
 editing system, or texture baker.
 Large retained replacements in the packaged host use its complete committed
