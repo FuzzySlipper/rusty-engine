@@ -276,3 +276,222 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     appearance.commit(Some(cleanup_appearance));
     implicit.commit_call(cleanup_implicit);
 }
+
+#[test]
+fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
+    let mut appearance =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+    let mut implicit = RuntimeImplicitBridge::new();
+
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let mut first_field = NativeImplicitFieldHandle { value: 0 };
+    let mut second_field = NativeImplicitFieldHandle { value: 0 };
+    assert_eq!(
+        unsafe { (api.create_field)(api.context, &mut first_field) },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe { (api.create_field)(api.context, &mut second_field) },
+        ABI_OK
+    );
+    let mut first_node = NativeImplicitNode { value: 0 };
+    let mut second_node = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.add_sphere)(
+                api.context,
+                NativeImplicitSphereRequest {
+                    field: first_field,
+                    center: NativeVec3::default(),
+                    radius: 0.5,
+                },
+                &mut first_node,
+            )
+        },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe {
+            (api.add_box)(
+                api.context,
+                NativeImplicitBoxRequest {
+                    field: second_field,
+                    minimum: NativeVec3 {
+                        x: -1.0,
+                        y: -1.0,
+                        z: -1.0,
+                    },
+                    maximum: NativeVec3 {
+                        x: 1.0,
+                        y: 1.0,
+                        z: 1.0,
+                    },
+                },
+                &mut second_node,
+            )
+        },
+        ABI_OK
+    );
+    let setup_appearance = appearance
+        .take_staged_call()
+        .expect("setup appearance call");
+    let setup_implicit = implicit.take_call().expect("setup implicit call");
+    appearance.commit(setup_appearance);
+    implicit.commit_call(setup_implicit);
+
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let mut sample = NativeImplicitSample { value: 0.0 };
+    assert_eq!(
+        unsafe {
+            (api.sample)(
+                api.context,
+                NativeImplicitSampleRequest {
+                    field: second_field,
+                    source: first_node,
+                    position: NativeVec3::default(),
+                },
+                &mut sample,
+            )
+        },
+        0
+    );
+    appearance.discard_call();
+    implicit.discard_call();
+
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let mut combined = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.union)(
+                api.context,
+                NativeImplicitBinaryRequest {
+                    field: second_field,
+                    left: first_node,
+                    right: second_node,
+                },
+                &mut combined,
+            )
+        },
+        0
+    );
+    appearance.discard_call();
+    implicit.discard_call();
+
+    let generate_request = |source, regions, regions_len| NativeImplicitGenerateRequest {
+        field: second_field,
+        source,
+        minimum: NativeVec3 {
+            x: -1.0,
+            y: -1.0,
+            z: -1.0,
+        },
+        maximum: NativeVec3 {
+            x: 1.0,
+            y: 1.0,
+            z: 1.0,
+        },
+        cell_size: 0.5,
+        crease_angle_degrees: 0.0,
+        uv_scale: 1.0,
+        default_material: NativeMaterialHandle::default(),
+        regions,
+        regions_len,
+    };
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let mut mesh = NativeMeshResourceHandle::default();
+    assert_eq!(
+        unsafe {
+            (api.generate)(
+                api.context,
+                &generate_request(first_node, std::ptr::null(), 0),
+                &mut mesh,
+            )
+        },
+        0
+    );
+    appearance.discard_call();
+    implicit.discard_call();
+
+    let regions = [NativeImplicitMaterialRegion {
+        node: first_node,
+        material: NativeMaterialHandle::default(),
+    }];
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    assert_eq!(
+        unsafe {
+            (api.generate)(
+                api.context,
+                &generate_request(second_node, regions.as_ptr(), regions.len()),
+                &mut mesh,
+            )
+        },
+        0
+    );
+    appearance.discard_call();
+    implicit.discard_call();
+
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let mut discarded_node = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.add_sphere)(
+                api.context,
+                NativeImplicitSphereRequest {
+                    field: second_field,
+                    center: NativeVec3::default(),
+                    radius: 0.25,
+                },
+                &mut discarded_node,
+            )
+        },
+        ABI_OK
+    );
+    appearance.discard_call();
+    implicit.discard_call();
+
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let mut fresh_node = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.add_sphere)(
+                api.context,
+                NativeImplicitSphereRequest {
+                    field: second_field,
+                    center: NativeVec3::default(),
+                    radius: 0.25,
+                },
+                &mut fresh_node,
+            )
+        },
+        ABI_OK
+    );
+    assert_ne!(discarded_node.value, fresh_node.value);
+    assert_eq!(
+        unsafe {
+            (api.sample)(
+                api.context,
+                NativeImplicitSampleRequest {
+                    field: second_field,
+                    source: discarded_node,
+                    position: NativeVec3::default(),
+                },
+                &mut sample,
+            )
+        },
+        0
+    );
+}

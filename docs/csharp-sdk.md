@@ -436,7 +436,8 @@ into this service.
 Create an `ImplicitField`, add boxes, spheres, ellipsoids, capsules or planes,
 and compose their returned `ImplicitNode` values with union, intersection,
 difference, smooth union, offset and affine TRS placement. Nodes belong to that
-field. Values are negative inside; these constructive fields preserve a zero
+field: their opaque tokens are valid only with the field that produced them, and
+discarded or disposed-field tokens are rejected. Values are negative inside; these constructive fields preserve a zero
 surface but are not necessarily Euclidean distances. Smooth-union radii and
 level-set offsets are in field-value units, especially after nonuniform scale.
 

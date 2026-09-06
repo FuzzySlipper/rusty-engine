@@ -11,7 +11,8 @@ pub struct NativeImplicitFieldHandle {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeImplicitNode {
-    pub value: u32,
+    /// Opaque field-owned token. Its value is not the kernel's arena index.
+    pub value: u64,
 }
 
 #[repr(C)]

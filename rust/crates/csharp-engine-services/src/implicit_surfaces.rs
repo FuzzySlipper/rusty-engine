@@ -33,7 +33,16 @@ fn nv(p: [f32; 3]) -> NativeVec3 {
 #[derive(Clone)]
 struct RetainedField {
     field: Arc<Field>,
+    nodes: BTreeMap<u64, Node>,
     generation: Option<NativeImplicitGenerationReadout>,
+}
+impl RetainedField {
+    fn node(&self, token: NativeImplicitNode) -> Result<Node> {
+        self.nodes
+            .get(&token.value)
+            .copied()
+            .ok_or_else(|| error("unknown implicit field node"))
+    }
 }
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeImplicitCall {
@@ -44,6 +53,9 @@ pub(crate) struct RuntimeImplicitBridge {
     staged: Option<RuntimeImplicitCall>,
     // Monotonic even across rollback: stale managed values cannot alias a new arena.
     next_field: u64,
+    // Public node identities are not the local svc-implicit arena indices.
+    // Keep this outside staged state so discarded nodes cannot be reused.
+    next_node: u64,
     appearance: Option<*mut RuntimeAppearanceBridge>,
     callback_error: Option<CsharpEngineServicesError>,
 }
@@ -53,6 +65,7 @@ impl RuntimeImplicitBridge {
             state: RuntimeImplicitCall::default(),
             staged: None,
             next_field: 1,
+            next_node: 1,
             appearance: None,
             callback_error: None,
         }
@@ -87,14 +100,30 @@ impl RuntimeImplicitBridge {
             .get_mut(&handle.value)
             .ok_or_else(|| error("unknown implicit field"))
     }
+    fn node(
+        &mut self,
+        handle: NativeImplicitFieldHandle,
+        token: NativeImplicitNode,
+    ) -> Result<Node> {
+        self.retained(handle)?.node(token)
+    }
+    fn allocate_node(&mut self) -> Result<u64> {
+        let value = self.next_node;
+        self.next_node = value
+            .checked_add(1)
+            .ok_or_else(|| error("implicit node identity exhausted"))?;
+        Ok(value)
+    }
     fn edit(
         &mut self,
         handle: NativeImplicitFieldHandle,
         action: impl FnOnce(&mut Field) -> std::result::Result<Node, svc_implicit::Error>,
     ) -> Result<NativeImplicitNode> {
+        let token = self.allocate_node()?;
         let retained = self.retained(handle)?;
         let value = action(Arc::make_mut(&mut retained.field)).map_err(kernel)?;
-        Ok(NativeImplicitNode { value })
+        retained.nodes.insert(token, value);
+        Ok(NativeImplicitNode { value: token })
     }
     unsafe fn generate(
         &mut self,
@@ -111,10 +140,18 @@ impl RuntimeImplicitBridge {
         if regions.len() > 255 {
             return Err(error("at most 255 material regions are supported per mesh"));
         }
-        let field = self.retained(request.field)?.field.clone();
+        let (field, source, region_nodes) = {
+            let retained = self.retained(request.field)?;
+            let source = retained.node(request.source)?;
+            let region_nodes = regions
+                .iter()
+                .map(|region| Ok((retained.node(region.node)?, region.material)))
+                .collect::<Result<Vec<_>>>()?;
+            (retained.field.clone(), source, region_nodes)
+        };
         let geometry = field
             .generate(
-                request.source.value,
+                source,
                 GenerateOptions {
                     bounds: Bounds {
                         min: v(request.minimum),
@@ -132,18 +169,18 @@ impl RuntimeImplicitBridge {
             ));
         }
         let mut materials = vec![request.default_material];
-        let regions: Vec<_> = regions
+        let regions: Vec<_> = region_nodes
             .iter()
-            .map(|r| {
+            .map(|(node, material)| {
                 let slot = materials
                     .iter()
-                    .position(|m| m.value == r.material.value)
+                    .position(|m| m.value == material.value)
                     .unwrap_or_else(|| {
-                        materials.push(r.material);
+                        materials.push(*material);
                         materials.len() - 1
                     });
                 MaterialRegion {
-                    node: r.node.value,
+                    node: *node,
                     slot: slot as u32,
                 }
             })
@@ -286,6 +323,7 @@ unsafe extern "C" fn create_field(
             value,
             RetainedField {
                 field: Arc::new(Field::new()),
+                nodes: BTreeMap::new(),
                 generation: None,
             },
         );
@@ -328,10 +366,11 @@ unsafe extern "C" fn sample(
     result: *mut NativeImplicitSample,
 ) -> i32 {
     call(context, result, |b| {
+        let source = b.node(r.field, r.source)?;
         let values = b
             .retained(r.field)?
             .field
-            .sample(r.source.value, &[v(r.position)])
+            .sample(source, &[v(r.position)])
             .map_err(kernel)?;
         Ok(NativeImplicitSample { value: values[0] })
     })
@@ -392,7 +431,9 @@ unsafe extern "C" fn union(
     result: *mut NativeImplicitNode,
 ) -> i32 {
     call(context, result, |b| {
-        b.edit(r.field, |f| f.union(r.left.value, r.right.value))
+        let left = b.node(r.field, r.left)?;
+        let right = b.node(r.field, r.right)?;
+        b.edit(r.field, |f| f.union(left, right))
     })
 }
 unsafe extern "C" fn intersection(
@@ -401,7 +442,9 @@ unsafe extern "C" fn intersection(
     result: *mut NativeImplicitNode,
 ) -> i32 {
     call(context, result, |b| {
-        b.edit(r.field, |f| f.intersection(r.left.value, r.right.value))
+        let left = b.node(r.field, r.left)?;
+        let right = b.node(r.field, r.right)?;
+        b.edit(r.field, |f| f.intersection(left, right))
     })
 }
 unsafe extern "C" fn difference(
@@ -410,7 +453,9 @@ unsafe extern "C" fn difference(
     result: *mut NativeImplicitNode,
 ) -> i32 {
     call(context, result, |b| {
-        b.edit(r.field, |f| f.difference(r.left.value, r.right.value))
+        let left = b.node(r.field, r.left)?;
+        let right = b.node(r.field, r.right)?;
+        b.edit(r.field, |f| f.difference(left, right))
     })
 }
 unsafe extern "C" fn smooth_union(
@@ -419,9 +464,9 @@ unsafe extern "C" fn smooth_union(
     result: *mut NativeImplicitNode,
 ) -> i32 {
     call(context, result, |b| {
-        b.edit(r.field, |f| {
-            f.smooth_union(r.left.value, r.right.value, r.radius)
-        })
+        let left = b.node(r.field, r.left)?;
+        let right = b.node(r.field, r.right)?;
+        b.edit(r.field, |f| f.smooth_union(left, right, r.radius))
     })
 }
 unsafe extern "C" fn offset(
@@ -430,7 +475,8 @@ unsafe extern "C" fn offset(
     result: *mut NativeImplicitNode,
 ) -> i32 {
     call(context, result, |b| {
-        b.edit(r.field, |f| f.offset(r.source.value, r.amount))
+        let source = b.node(r.field, r.source)?;
+        b.edit(r.field, |f| f.offset(source, r.amount))
     })
 }
 unsafe extern "C" fn transform(
@@ -439,9 +485,10 @@ unsafe extern "C" fn transform(
     result: *mut NativeImplicitNode,
 ) -> i32 {
     call(context, result, |b| {
+        let source = b.node(r.field, r.source)?;
         b.edit(r.field, |f| {
             f.transform_trs(
-                r.source.value,
+                source,
                 v(r.transform.translation),
                 [
                     r.transform.rotation.x,
