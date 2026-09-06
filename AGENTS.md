@@ -34,8 +34,18 @@ Read [the architecture overview](docs/architecture.md) and
   task records.
 - If a needed mechanism is not expressible through the generated API, identify
   the exact upstream capability, file or link the owning request when
-  authorized, and stop. Do not recreate it in C#, TypeScript, or browser code
+  authorized, and stop downstream substitution. If the owning Engine change is
+  already authorized, implement it upstream and continue the dependent work.
+  Otherwise report the blocked behavior and stop at that boundary. Do not
+  recreate Engine-owned mechanisms in C#, TypeScript, or browser product code
   merely to complete a task.
+- Classify downstream blockers as a new Engine mechanism, missing composition
+  primitive or binding, unnecessary restriction/fail-closed behavior,
+  lifecycle/reconciliation deficiency, convenience/helper, or
+  documentation/discoverability gap. Use the composition and failure guidance
+  in [architecture source owners](docs/architecture.md#source-owners) to choose
+  the owning change. Repeated restriction or recovery requests are feedback
+  about the boundary, not automatically reasons for another feature-shaped API.
 
 ## Generated C# boundary
 
