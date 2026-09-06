@@ -724,6 +724,385 @@ test('a fresh projection baseline received during mount is applied before readin
   }
 });
 
+test('a transient retained baseline rejection retries with backoff and settles the later epoch', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const runtime = { instanceId: 'retry', generation: '1', controlRevision: '1' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let recoveryRequests = 0;
+    let replacementAttempts = 0;
+    const confirmedEpochs: number[] = [];
+    const transport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportAnimationFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportGhostPlateFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+      recoverOutputProjection: async () => {
+        recoveryRequests += 1;
+        const publish = emit;
+        if (publish === null) return;
+        const epoch = recoveryRequests + 2;
+        setTimeout(() => publish([
+          { kind: 'binding', runtime, nextInputSequence: String(epoch) },
+          { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: `recovered-${String(epoch)}` }] } },
+        ], { epoch, baseline: true, recovery: 'none' }), 0);
+      },
+      confirmOutputBaseline: (epoch: number) => { confirmedEpochs.push(epoch); },
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => undefined,
+        resetAnimationRealizationOwner: () => undefined,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => undefined,
+        acknowledgeAnimationRealizedFacts: () => undefined,
+        replaceFrame: async () => {
+          replacementAttempts += 1;
+          if (replacementAttempts < 3) {
+            return {
+              applied: false,
+              outcome: 'rejected_atomic' as const,
+              diagnostics: [{ code: 'candidate_mount_failed', message: 'candidate surface was unavailable' }],
+            };
+          }
+          return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+        },
+      },
+      input: { sampleController: () => 0, drain: () => [], bindRuntime: () => undefined },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport: transport as never,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => fakeApplication as never);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publish([], { epoch: 1, baseline: false, recovery: 'fresh-baseline-required' });
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '1' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'first-candidate' }] } },
+    ], { epoch: 2, baseline: true, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(replacementAttempts, 1);
+    assert.equal(recoveryRequests, 0, 'a failed candidate waits for the first backoff interval');
+    assert.equal(host.readout().state, 'degraded');
+    assert.match(host.readout().lastFailure ?? '', /candidate_mount_failed: candidate surface was unavailable/u);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 80));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(recoveryRequests, 1);
+    assert.equal(replacementAttempts, 2);
+    assert.equal(host.readout().state, 'degraded');
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    assert.equal(recoveryRequests, 1, 'a persistent failure does not retry in a tight loop');
+    await new Promise<void>((resolve) => setTimeout(resolve, 220));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(recoveryRequests, 2, 'the unresolved episode advances to its next backoff');
+    assert.equal(replacementAttempts, 3);
+    assert.deepEqual(confirmedEpochs, [0, 4]);
+    assert.equal(host.readout().state, 'ready');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
+test('projection recovery keeps the host gated until retained presentation realization drains', async () => {
+  const previousHTMLElement = globalThis.HTMLElement;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const runtime = { instanceId: 'tail', generation: '1', controlRevision: '1' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let resolvePresentation: ((receipt: unknown) => void) | null = null;
+    let presentationStarted = false;
+    const confirmations: number[] = [];
+    const transport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportAnimationFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportGhostPlateFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+      confirmOutputBaseline: (epoch: number) => { confirmations.push(epoch); },
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => undefined,
+        resetAnimationRealizationOwner: () => undefined,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => undefined,
+        acknowledgeAnimationRealizedFacts: () => undefined,
+        replaceFrame: async () => ({ applied: true, outcome: 'applied' as const, diagnostics: [] }),
+        applyPresentation: async () => {
+          presentationStarted = true;
+          return new Promise((resolve) => { resolvePresentation = resolve; });
+        },
+      },
+      input: { sampleController: () => 0, drain: () => [], bindRuntime: () => undefined },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport: transport as never,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => fakeApplication as never);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publish([], { epoch: 1, baseline: false, recovery: 'fresh-baseline-required' });
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '1' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'recovered-scene' }] } },
+      {
+        kind: 'presentation',
+        frame: {
+          schemaVersion: 1,
+          publication: { stream: 'presentation-world', baseRevision: 0, revision: 1, operationCount: 0 },
+          ops: [],
+        },
+      } as never,
+    ], { epoch: 2, baseline: true, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(presentationStarted, true);
+    assert.deepEqual(confirmations, [0]);
+    assert.equal(host.readout().state, 'degraded');
+    (resolvePresentation as unknown as (receipt: unknown) => void)({
+      applied: 0,
+      outcome: 'applied',
+      diagnostics: [],
+      domains: [],
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(confirmations, [0, 2]);
+    assert.equal(host.readout().state, 'ready');
+    await host.dispose();
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
+test('active Engine canvas context loss and restoration share one fresh projection recovery', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const previousHTMLElement = globalThis.HTMLElement;
+  type Listener = (event: Event) => void;
+  class FakeElement {
+    readonly childNodes: unknown[] = [];
+    readonly dataset: Record<string, string> = {};
+    readonly listeners = new Map<string, Set<Listener>>();
+    readonly ownerDocument: {
+      readonly body: FakeElement;
+      readonly defaultView: { readonly addEventListener: () => void; readonly removeEventListener: () => void };
+    };
+    activeCanvas: EventTarget | null = null;
+    constructor(document: FakeElement['ownerDocument']) { this.ownerDocument = document; }
+    addEventListener(type: string, listener: Listener): void {
+      const listeners = this.listeners.get(type) ?? new Set<Listener>();
+      listeners.add(listener);
+      this.listeners.set(type, listeners);
+    }
+    removeEventListener(type: string, listener: Listener): void {
+      this.listeners.get(type)?.delete(listener);
+    }
+    querySelector(): EventTarget | null { return this.activeCanvas; }
+    dispatch(type: string, target: EventTarget): void {
+      const event = { target } as unknown as Event;
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+  try {
+    const document = {} as FakeElement['ownerDocument'];
+    const root = new FakeElement(document);
+    Object.assign(document, {
+      body: root,
+      defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+    });
+    const canvas = { dataset: { rustyApplicationRenderer: 'engine-owned' } } as unknown as EventTarget;
+    const uiCanvas = { dataset: {} } as unknown as EventTarget;
+    root.activeCanvas = canvas;
+    const runtime = { instanceId: 'context', generation: '1', controlRevision: '1' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    let recoveryRequests = 0;
+    const replacedFrames: unknown[] = [];
+    let rejectRecoveryCandidates = false;
+    const transport = {
+      lifecycle: async (operation: { readonly kind: 'start' | 'pause' | 'resume' | 'restart' | 'shutdown' | 'report-fault' }) => ({
+        accepted: true as const, ...ACCEPTED_FAULT, operation: operation.kind,
+      }),
+      input: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, count: 0 }),
+      reportAudioFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportAnimationFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      reportGhostPlateFeedback: async (feedback: { readonly runtime: typeof runtime }) => ({ accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime }),
+      advanceRealtime: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'advance-realtime' as const }),
+      admitDemandStep: async () => ({ accepted: true as const, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+      recoverOutputProjection: async () => {
+        recoveryRequests += 1;
+        const recoveryRequest = recoveryRequests;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        emit?.([
+          { kind: 'binding', runtime, nextInputSequence: '2' },
+          { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: `context-recovered-${String(recoveryRequest)}` }] } },
+        ], { epoch: recoveryRequest + 1, baseline: true, recovery: 'none' });
+      },
+      subscribeOutputs: () => () => undefined,
+      subscribeOutputBatches: (listener: ProductBrowserRuntimeOutputBatchListener) => {
+        emit = listener;
+        return () => { emit = null; };
+      },
+      dispose: () => undefined,
+    };
+    const fakeApplication = {
+      renderer: {
+        resetAudioRealizationOwner: () => undefined,
+        resetAnimationRealizationOwner: () => undefined,
+        audioRealizedFacts: () => null,
+        animationRealizedFacts: () => null,
+        ghostPlateReadout: () => null,
+        acknowledgeAudioRealizedFacts: () => undefined,
+        acknowledgeAnimationRealizedFacts: () => undefined,
+        replaceFrame: async (frame: unknown) => {
+          replacedFrames.push(frame);
+          if (rejectRecoveryCandidates) {
+            return {
+              applied: false,
+              outcome: 'rejected_atomic' as const,
+              diagnostics: [{ code: 'candidate_mount_failed', message: 'candidate surface was unavailable' }],
+            };
+          }
+          return { applied: true, outcome: 'applied' as const, diagnostics: [] };
+        },
+      },
+      input: { sampleController: () => 0, drain: () => [], bindRuntime: () => undefined },
+      readout: () => ({ state: 'ready' }),
+      dispose: async () => undefined,
+    };
+    const host = await mountProductBrowserHostWithApplication({
+      root: root as unknown as HTMLElement,
+      transport: transport as never,
+      lifecycleMode: 'demand',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async () => fakeApplication as never);
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    publish([
+      { kind: 'binding', runtime, nextInputSequence: '1' },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'initial-scene' }] } },
+    ], { epoch: 1, baseline: true, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual([...root.listeners.keys()], ['webglcontextlost', 'webglcontextrestored']);
+    root.dispatch('webglcontextlost', uiCanvas);
+    assert.equal(recoveryRequests, 0, 'a downstream UI canvas cannot invalidate the Engine projection');
+    root.dispatch('webglcontextlost', canvas);
+    root.dispatch('webglcontextrestored', canvas);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(recoveryRequests, 1);
+    assert.equal(replacedFrames.length, 2);
+    assert.equal(host.readout().state, 'ready');
+
+    // A persistent candidate failure exhausts the bounded recovery episode.
+    // Repeated loss events do not reset its retry budget; restoration is the
+    // independent availability fact that explicitly re-arms recovery.
+    rejectRecoveryCandidates = true;
+    root.dispatch('webglcontextlost', canvas);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(recoveryRequests, 2);
+    assert.equal(replacedFrames.length, 3);
+    assert.equal(host.readout().state, 'degraded');
+    t.mock.timers.tick(50);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(recoveryRequests, 3);
+    t.mock.timers.tick(250);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(recoveryRequests, 4);
+    t.mock.timers.tick(1_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(recoveryRequests, 5);
+    assert.equal(replacedFrames.length, 6);
+    assert.equal(host.readout().state, 'degraded');
+    root.dispatch('webglcontextlost', canvas);
+    assert.equal(recoveryRequests, 5, 'repeated loss does not reset an exhausted retry episode');
+
+    rejectRecoveryCandidates = false;
+    root.dispatch('webglcontextrestored', canvas);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(recoveryRequests, 6, 'restoration re-arms a fresh recovery request');
+    assert.equal(replacedFrames.length, 7);
+    assert.equal(host.readout().state, 'ready');
+    await host.dispose();
+    root.dispatch('webglcontextlost', canvas);
+    assert.equal(recoveryRequests, 6, 'disposed hosts remove the context recovery observer');
+  } finally {
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+  }
+});
+
 test('only the typed lifecycle clock regression is a dropped cadence observation', () => {
   const dropped = {
     accepted: false,

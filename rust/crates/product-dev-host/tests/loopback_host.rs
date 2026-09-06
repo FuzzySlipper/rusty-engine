@@ -1524,6 +1524,13 @@ fn live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed() {
     );
     assert!(failed.starts_with("HTTP/1.1 422 Unprocessable Content\r\n"));
     assert!(failed.ends_with("fixture semantic failure"));
+    assert!(!host.termination_requested());
+    let mut invalid_utf8_request = b"POST /__rusty/product/runtime/debug/execute HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 1\r\n\r\n".to_vec();
+    invalid_utf8_request.push(0xff);
+    let invalid_utf8 = request_bytes(&origin, &invalid_utf8_request);
+    assert!(invalid_utf8.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+    // Pre-entry rejection and semantic failure leave this owner usable. A
+    // callback/runtime fault with unknown mutation must terminate it instead.
     let runtime_body = "fixture.runtime";
     let runtime = request(
         &origin,
@@ -1531,9 +1538,6 @@ fn live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed() {
     );
     assert!(runtime.starts_with("HTTP/1.1 500 Internal Server Error\r\n"));
     assert!(runtime.contains("FIXTURE_DEBUG_RUNTIME"));
-    let mut invalid_utf8_request = b"POST /__rusty/product/runtime/debug/execute HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 1\r\n\r\n".to_vec();
-    invalid_utf8_request.push(0xff);
-    let invalid_utf8 = request_bytes(&origin, &invalid_utf8_request);
-    assert!(invalid_utf8.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+    assert!(host.termination_requested());
     host.shutdown().unwrap();
 }

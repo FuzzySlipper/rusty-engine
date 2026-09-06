@@ -52,6 +52,11 @@ window.requestAnimationFrame = (callback: FrameRequestCallback): number => {
 };
 
 let outputListeners = new Set<(output: ProductBrowserRuntimeOutput) => void>();
+type BatchListener = Parameters<NonNullable<ProductBrowserRuntimeAdapter['subscribeOutputBatches']>>[0];
+const recoveryFixture = new URLSearchParams(window.location.search).has('contextLossRecovery');
+const batchListeners = new Set<BatchListener>();
+let projectionEpoch = 0;
+
 let terminalFailureListeners = new Set<(failure: ProductBrowserRuntimeTerminalFailure) => void>();
 let disposed = false;
 let scheduledInputResultIndex = 0;
@@ -78,6 +83,7 @@ window.__rustyProductBrowserOutputs = outputs;
 function emit(output: ProductBrowserRuntimeOutput): void {
   outputs.push(output);
   for (const listener of outputListeners) listener(output);
+  for (const listener of batchListeners) listener([output], { epoch: projectionEpoch, baseline: false, recovery: 'none' });
 }
 
 const runtimeReadout = (state: ProductBrowserRuntimeReadout['state']): ProductBrowserRuntimeReadout => ({
@@ -95,6 +101,23 @@ const runtimeReadout = (state: ProductBrowserRuntimeReadout['state']): ProductBr
 });
 
 const adapter: ProductBrowserRuntimeAdapter = {
+  ...(recoveryFixture ? {
+    subscribeOutputBatches: (listener: BatchListener) => {
+      batchListeners.add(listener);
+      listener([{ kind: 'binding', runtime, nextInputSequence: '1' }], { epoch: projectionEpoch, baseline: false, recovery: 'none' });
+      return () => { batchListeners.delete(listener); };
+    },
+    recoverOutputProjection: async () => {
+      projectionEpoch += 1;
+      // A retained baseline only; this path never starts/resets the fixture's
+      // runtime state or its update counter.
+      for (const listener of batchListeners) listener([
+        { kind: 'binding', runtime, nextInputSequence: '1', publicationFrontiers: [] },
+        { kind: 'frame', frame: { schemaVersion: 1, ops: [] } },
+        { kind: 'runtime-readout', readout: runtimeReadout('running') },
+      ], { epoch: projectionEpoch, baseline: true, recovery: 'none' });
+    },
+  } : {}),
   lifecycle: async (operation) => {
     if (operation.kind === 'start') {
       emit({ kind: 'binding', runtime, nextInputSequence: '1' });

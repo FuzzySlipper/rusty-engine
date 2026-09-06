@@ -213,3 +213,30 @@ test('browser-owned products reject injected Rust-host progress evidence', async
     'Rust-host realtime progress is unavailable for this Product Browser Host mode',
   );
 });
+
+
+test('a real WebGL context loss replaces the projection while runtime progress continues', async ({ page }) => {
+  await page.goto('/browser/product-browser-host.html?contextLossRecovery');
+  const selector = 'canvas[data-rusty-application-renderer="engine-owned"]';
+  await expect(page.locator(selector)).toHaveCount(1);
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+  const oldCanvas = await page.locator(selector).elementHandle();
+  const before = await page.evaluate(() => window.__rustyProductBrowserRealtimeTicks?.length ?? 0);
+  const supported = await page.locator(selector).evaluate((canvas) => {
+    const gl = (canvas as HTMLCanvasElement).getContext('webgl2');
+    const extension = gl?.getExtension('WEBGL_lose_context');
+    if (extension === null || extension === undefined) return false;
+    extension.loseContext();
+    return true;
+  });
+  expect(supported, 'browser fixture must expose real context loss').toBe(true);
+  await expect.poll(() => oldCanvas!.evaluate((canvas) => canvas.isConnected)).toBe(false);
+  await expect(page.locator(selector)).toHaveCount(1);
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+  await expect.poll(() => page.evaluate(() => window.__rustyProductBrowserRealtimeTicks?.length ?? 0)).toBeGreaterThan(before);
+  await page.locator(selector).focus();
+  await page.keyboard.press('KeyW');
+  await expect.poll(() => page.evaluate(() => window.__rustyProductBrowserInputBatches?.length ?? 0)).toBeGreaterThan(0);
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-runtime-failure', /WebGL context was lost/);
+  expect(await page.evaluate(() => window.__rustyProductBrowserHost?.readout().runtime?.runtime)).toEqual({ instanceId: '7', generation: '1', controlRevision: '1' });
+});

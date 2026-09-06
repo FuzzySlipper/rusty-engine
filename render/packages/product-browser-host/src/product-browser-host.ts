@@ -633,6 +633,13 @@ export interface ProductBrowserHostOptions {
 
 const PRODUCT_BROWSER_INITIAL_RENDERER_FRAME_TIMEOUT_MS = 10_000;
 const PRODUCT_BROWSER_RENDERER_DIAGNOSTICS_INTERVAL_MS = 750;
+/**
+ * A complete baseline can fail while its replacement canvas is being mounted
+ * (for example while the browser is recovering a lost GPU context). Keep the
+ * recovery bounded and increasingly patient so a persistent realization
+ * failure cannot turn into a tight reconnect loop.
+ */
+const PRODUCT_BROWSER_PROJECTION_RECOVERY_RETRY_DELAYS_MS = [50, 250, 1_000] as const;
 
 /** @internal Reports whether admitted animation bytes still need their first semantic frame. */
 export function productBrowserInitialRendererFrameRequired(
@@ -1310,6 +1317,8 @@ export async function mountProductBrowserHostWithApplication(
   // runtime keeps running, but browser projection must not admit a second
   // incremental frame until its fresh baseline has replaced the old one.
   let projectionRecovery: { readonly fromEpoch: number } | null = null;
+  let projectionRecoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let projectionRecoveryRetryAttempt = 0;
   let pendingProjectionBaseline: {
     readonly epoch: number;
     readonly outputs: readonly ProductBrowserRuntimeOutput[];
@@ -1367,6 +1376,7 @@ export async function mountProductBrowserHostWithApplication(
     | { readonly accepted: false; readonly error: ProductBrowserHostError }
   ) => void) | null = null;
   let initialRendererFrameTimeout: ReturnType<typeof setTimeout> | null = null;
+  let rendererContextLost = false;
 
   if (requiresInitialRendererFrame) {
     if (options.autoStart === false) {
@@ -1557,10 +1567,20 @@ export async function mountProductBrowserHostWithApplication(
 
   let cadence: ProductBrowserCadence | null = null;
   let removePageDiagnosticListeners: (() => void) | null = null;
+  let removeRendererContextListeners: (() => void) | null = null;
+  const removeContextListeners = (): void => {
+    const remove = removeRendererContextListeners;
+    removeRendererContextListeners = null;
+    remove?.();
+  };
   const closeTransport = (): void => {
     if (transportClosed) return;
     transportClosed = true;
     started = false;
+    if (projectionRecoveryRetryTimer !== null) {
+      clearTimeout(projectionRecoveryRetryTimer);
+      projectionRecoveryRetryTimer = null;
+    }
     cadence?.dispose();
     rendererObservationCadenceSampler?.dispose();
     unsubscribeTerminalFailures?.();
@@ -1569,6 +1589,7 @@ export async function mountProductBrowserHostWithApplication(
     unsubscribeOutputs = null;
     removePageDiagnosticListeners?.();
     removePageDiagnosticListeners = null;
+    removeContextListeners();
     // This exact report route remains callable after disposal. Send after the
     // state transition so stopped-host diagnostics never claim open streams.
     publishHealth();
@@ -1761,8 +1782,8 @@ export async function mountProductBrowserHostWithApplication(
   const enqueueRendererOutput = (
     apply: () => void | Promise<void>,
     projectionEpoch = rendererProjectionEpoch,
-  ): void => {
-    rendererOutputTail = rendererOutputTail.then(async () => {
+  ): Promise<void> => {
+    const nextTail = rendererOutputTail.then(async () => {
       // Disposal unsubscribes the source before awaiting this tail, so work
       // already accepted by the host must still drain. A terminal renderer
       // failure is the only state that invalidates the remaining queue.
@@ -1773,9 +1794,15 @@ export async function mountProductBrowserHostWithApplication(
         failAndClose(cause, 'output_failed');
       }
     });
+    rendererOutputTail = nextTail;
+    return nextTail;
   };
 
-  const applyOutput = (output: ProductBrowserRuntimeOutput, outputEpoch = acceptedProjectionEpoch): void => {
+  const applyOutput = (
+    output: ProductBrowserRuntimeOutput,
+    outputEpoch = acceptedProjectionEpoch,
+    requireAppliedPresentation = false,
+  ): void => {
     if (application === null) {
       if (!bufferProductBrowserPreMountOutput(pendingOutputs, output, maximumPendingOutputs)) {
         failAndClose(
@@ -1894,6 +1921,13 @@ export async function mountProductBrowserHostWithApplication(
             const configuredDiagnostics = receipt.diagnostics.filter((diagnostic) => (
               diagnostic.code !== 'unavailableHost'
             ));
+            if (requireAppliedPresentation && receipt.outcome !== 'applied'
+              && (configuredDiagnostics.length > 0 || receipt.diagnostics.length === 0)) {
+              const diagnostic = configuredDiagnostics.map((entry) => entry.message).join('; ')
+                || 'configured retained presentation was not realized';
+              requestPublishedProjectionRecovery(outputEpoch, diagnostic);
+              return;
+            }
             if (output.frame['publication'] !== undefined && configuredDiagnostics.length > 0) {
               const diagnostic = configuredDiagnostics.map((entry) => entry.message).join('; ')
                 || 'renderer did not apply configured presentation';
@@ -1941,6 +1975,15 @@ export async function mountProductBrowserHostWithApplication(
 
   const beginProjectionRecovery = (epoch: number): void => {
     if (projectionRecovery !== null && epoch <= projectionRecovery.fromEpoch) return;
+    const newRecoveryEpisode = projectionRecovery === null;
+    if (projectionRecoveryRetryTimer !== null) {
+      clearTimeout(projectionRecoveryRetryTimer);
+      projectionRecoveryRetryTimer = null;
+    }
+    // A newer baseline in the same unresolved recovery episode must retain the
+    // backoff budget. Reset only after the prior episode has settled or when a
+    // genuinely new invalidation starts with no pending recovery.
+    if (newRecoveryEpisode) projectionRecoveryRetryAttempt = 0;
     projectionRecovery = { fromEpoch: epoch };
     if (pendingProjectionBaseline !== null && pendingProjectionBaseline.epoch <= epoch) {
       pendingProjectionBaseline = null;
@@ -1975,6 +2018,118 @@ export async function mountProductBrowserHostWithApplication(
     });
   };
 
+  /**
+   * Retry only the fresh projection request after a candidate baseline failed
+   * before commit. The old renderer remains the authority until a later
+   * complete baseline applies, so no product operation or callback is replayed.
+   */
+  const scheduleProjectionRecoveryRetry = (
+    epoch: number,
+    diagnostic: string,
+  ): void => {
+    if (state === 'failed' || state === 'disposed' || transportClosed) return;
+    if (recoveryFailure === null) {
+      recoveryFailure = new ProductBrowserHostError('output_failed', diagnostic);
+    }
+    if (projectionRecovery === null || projectionRecovery.fromEpoch < epoch) {
+      beginProjectionRecovery(epoch);
+    }
+    if (projectionRecovery === null || projectionRecovery.fromEpoch !== epoch) return;
+    if (projectionRecoveryRetryTimer !== null) return;
+    const retryIndex = projectionRecoveryRetryAttempt;
+    const delay = PRODUCT_BROWSER_PROJECTION_RECOVERY_RETRY_DELAYS_MS[retryIndex];
+    if (delay === undefined) {
+      // Keep the host gated with the first concrete failure visible. A later
+      // independent invalidation can start a new bounded recovery episode.
+      publishHealth();
+      return;
+    }
+    projectionRecoveryRetryAttempt += 1;
+    projectionRecoveryRetryTimer = setTimeout(() => {
+      projectionRecoveryRetryTimer = null;
+      if (state === 'failed' || state === 'disposed' || transportClosed
+        || projectionRecovery?.fromEpoch !== epoch) return;
+      if (transport.recoverOutputProjection === undefined) {
+        failAndClose(new ProductBrowserHostError(
+          'transport_failed',
+          'runtime transport did not provide the required fresh output recovery',
+        ), 'transport_failed');
+        return;
+      }
+      void transport.recoverOutputProjection().catch((cause: unknown) => {
+        recoverOrClose(cause, 'transport_failed');
+      });
+    }, delay);
+  };
+
+  /**
+   * WebGL context events are the surface's typed browser-lifetime boundary.
+   * Capture them at the Product root so application-host can replace the lost
+   * canvas through its existing complete-frame path without touching runtime
+   * state or replaying a product operation.
+   */
+  const installRendererContextListeners = (): void => {
+    const root = options.root as unknown as {
+      readonly addEventListener?: (
+        type: string,
+        listener: (event: Event) => void,
+        options?: boolean,
+      ) => void;
+      readonly removeEventListener?: (
+        type: string,
+        listener: (event: Event) => void,
+        options?: boolean,
+      ) => void;
+      readonly querySelector?: (selectors: string) => EventTarget | null;
+    };
+    if (typeof root.addEventListener !== 'function'
+      || typeof root.removeEventListener !== 'function') return;
+    const isActiveRendererCanvasEvent = (event: Event): boolean => {
+      const target = event.target;
+      if (target === null) return false;
+      const activeCanvas = root.querySelector?.('[data-rusty-application-renderer="engine-owned"]') ?? null;
+      if (activeCanvas !== null) return target === activeCanvas;
+      const dataset = (target as { readonly dataset?: Record<string, string | undefined> }).dataset;
+      return dataset?.['rustyApplicationRenderer'] === 'engine-owned';
+    };
+    const recover = (event: Event, eventKind: 'lost' | 'restored'): void => {
+      if (state === 'failed' || state === 'disposed') return;
+      // The Product root can also contain downstream UI canvases. Only the
+      // active Engine canvas may invalidate the retained renderer projection.
+      if (!isActiveRendererCanvasEvent(event)) return;
+      if (eventKind === 'lost') rendererContextLost = true;
+      if (eventKind === 'restored'
+        && projectionRecovery !== null
+        && projectionRecoveryRetryTimer === null
+        && projectionRecoveryRetryAttempt >= PRODUCT_BROWSER_PROJECTION_RECOVERY_RETRY_DELAYS_MS.length) {
+        // Candidate mount failures exhausted this loss episode. Restoration is
+        // a new browser availability fact, so re-arm one bounded recovery
+        // episode while invalidating any stale completion from the old epoch.
+        projectionRecovery = null;
+        pendingProjectionBaseline = null;
+        selectedProjectionBaselineEpoch = null;
+        pendingProjectionIncrementals = null;
+        rendererProjectionEpoch += 1;
+        projectionRecoveryRetryAttempt = 0;
+      }
+      if (!rendererContextLost || application === null) return;
+      requestPublishedProjectionRecovery(
+        acceptedProjectionEpoch,
+        eventKind === 'lost'
+          ? 'WebGL context was lost; rebuilding the retained renderer projection'
+        : 'WebGL context was restored after loss; rebuilding the retained renderer projection',
+      );
+    };
+    const onContextLost = (event: Event): void => recover(event, 'lost');
+    const onContextRestored = (event: Event): void => recover(event, 'restored');
+    root.addEventListener('webglcontextlost', onContextLost, true);
+    root.addEventListener('webglcontextrestored', onContextRestored, true);
+    removeRendererContextListeners = () => {
+      root.removeEventListener?.('webglcontextlost', onContextLost, true);
+      root.removeEventListener?.('webglcontextrestored', onContextRestored, true);
+    };
+  };
+
   const applyProjectionBaseline = (
     outputs: readonly ProductBrowserRuntimeOutput[],
     epoch: number,
@@ -1988,6 +2143,10 @@ export async function mountProductBrowserHostWithApplication(
       // A newer retained replacement supersedes one that was selected but has
       // not become visible yet. Its queued renderer work cannot release this
       // gate, and only the new epoch's trailing output remains relevant.
+      if (projectionRecoveryRetryTimer !== null) {
+        clearTimeout(projectionRecoveryRetryTimer);
+        projectionRecoveryRetryTimer = null;
+      }
       rendererProjectionEpoch += 1;
       pendingProjectionIncrementals = null;
     }
@@ -2021,7 +2180,7 @@ export async function mountProductBrowserHostWithApplication(
     // existing complete-frame representation accepted by replaceFrame.
     rendererOutputTail = rendererOutputTail.then(async () => {
       if ((pending !== null && projectionRecovery?.fromEpoch !== pending.fromEpoch)
-        || (pending === null && epoch <= acceptedProjectionEpoch)
+        || (pending === null && (projectionRecovery !== null || epoch <= acceptedProjectionEpoch))
         || rendererProjectionEpoch !== replacementEpoch
         || state === 'failed'
         || state === 'disposed') return;
@@ -2030,13 +2189,14 @@ export async function mountProductBrowserHostWithApplication(
         // A normal incremental frame may continue after rejected_atomic, but
         // a recovery baseline is not installed until the replacement applied.
         if (receipt.outcome !== 'applied') {
+          const diagnostic = boundedDiagnostic(
+            receipt.diagnostics.map((entry) => `${entry.code}: ${entry.message}`).join('; ')
+              || 'renderer did not apply the recovered retained projection',
+          );
           if (recoveryFailure === null) {
-            recoveryFailure = new ProductBrowserHostError(
-              'output_failed',
-              'renderer did not apply the recovered retained projection',
-            );
+            recoveryFailure = new ProductBrowserHostError('output_failed', diagnostic);
           }
-          if (state === 'ready') state = 'degraded';
+          scheduleProjectionRecoveryRetry(epoch, diagnostic);
           publishHealth();
           return;
         }
@@ -2071,17 +2231,14 @@ export async function mountProductBrowserHostWithApplication(
               throw new ProductBrowserHostError('output_failed', 'renderer did not apply recovered animation cues');
             }
           } else {
-            applyOutput(output, epoch);
+            applyOutput(output, epoch, true);
           }
         }
         if ((pending !== null && projectionRecovery?.fromEpoch !== pending.fromEpoch)
-          || (pending === null && epoch <= acceptedProjectionEpoch)
+          || (pending === null && (projectionRecovery !== null || epoch <= acceptedProjectionEpoch))
           || rendererProjectionEpoch !== replacementEpoch
           || failure !== null
           || transportClosed) return;
-        acceptedProjectionEpoch = epoch;
-        if (pending !== null) projectionRecovery = null;
-        selectedProjectionBaselineEpoch = null;
         const trailingOutputs = pendingProjectionIncrementals?.epoch === epoch
           ? pendingProjectionIncrementals.outputs
           : [];
@@ -2089,28 +2246,41 @@ export async function mountProductBrowserHostWithApplication(
         // The retained replacement is physically installed before any normal
         // output accepted behind its CompleteBaseline. This preserves the
         // current epoch rather than dropping it during the asynchronous swap.
-        for (const output of trailingOutputs) applyOutput(output, epoch);
+        for (const output of trailingOutputs) applyOutput(output, epoch, true);
         // Retained presentation can settle asynchronously behind the graphics
-        // replacement. Report recovery only after that realization tail drains.
+        // replacement. Only this tail-drained continuation may release the
+        // recovery gate and acknowledge the new baseline.
         enqueueRendererOutput(() => {
+          if ((pending !== null && projectionRecovery?.fromEpoch !== pending.fromEpoch)
+            || (pending === null && (projectionRecovery !== null || epoch <= acceptedProjectionEpoch))
+            || rendererProjectionEpoch !== replacementEpoch
+            || failure !== null
+            || transportClosed) return;
+          acceptedProjectionEpoch = epoch;
+          if (pending !== null) projectionRecovery = null;
+          selectedProjectionBaselineEpoch = null;
+          if (projectionRecoveryRetryTimer !== null) {
+            clearTimeout(projectionRecoveryRetryTimer);
+            projectionRecoveryRetryTimer = null;
+          }
+          projectionRecoveryRetryAttempt = 0;
+          rendererContextLost = false;
           transport.confirmOutputBaseline?.(epoch);
           // A prior in-flight report must not acknowledge this new baseline.
           baselineConfirmationRevision += 1;
           publishHealth();
+          restoreReadyAfterHealthyTransport();
+          cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
+          scheduleRendererFeedbackFlush();
         }, replacementEpoch);
-        restoreReadyAfterHealthyTransport();
-        cadence?.pulseInput(globalThis.performance?.now() ?? Date.now());
       } catch (cause) {
+        const diagnostic = cause instanceof Error ? cause.message : String(cause);
         if (recoveryFailure === null) {
           recoveryFailure = cause instanceof ProductBrowserHostError
             ? cause
-            : new ProductBrowserHostError(
-              'output_failed',
-              cause instanceof Error ? cause.message : String(cause),
-              cause instanceof Error ? { cause } : undefined,
-            );
+            : new ProductBrowserHostError('output_failed', diagnostic);
         }
-        if (state === 'ready') state = 'degraded';
+        scheduleProjectionRecoveryRetry(epoch, diagnostic);
         publishHealth();
       }
     });
@@ -2380,6 +2550,7 @@ export async function mountProductBrowserHostWithApplication(
     unsubscribeTerminalFailures = transport.subscribeTerminalFailures?.(applyTerminalFailure) ?? null;
     unsubscribeOutputs = transport.subscribeOutputBatches?.(applyOutputBatch)
       ?? transport.subscribeOutputs((output) => applyOutputBatch([output]));
+    installRendererContextListeners();
     let renderer = options.renderer;
     let runtimeStartedBeforeMount = false;
     if (requiresInitialRendererFrame) {
@@ -2469,6 +2640,12 @@ export async function mountProductBrowserHostWithApplication(
             },
           }),
     });
+    if (rendererContextLost) {
+      requestPublishedProjectionRecovery(
+        acceptedProjectionEpoch,
+        'WebGL context was lost while mounting; rebuilding the retained renderer projection',
+      );
+    }
     audioFeedbackReporter = createProductBrowserAudioFeedbackReporter({
       renderer: application.renderer,
       report: transport.reportAudioFeedback,
@@ -2573,6 +2750,7 @@ export async function mountProductBrowserHostWithApplication(
     unsubscribeTerminalFailures = null;
     unsubscribeOutputs?.();
     unsubscribeOutputs = null;
+    removeContextListeners();
     try {
       await transport.dispose();
     } catch {
@@ -2715,6 +2893,7 @@ export async function mountProductBrowserHostWithApplication(
       unsubscribeTerminalFailures = null;
       unsubscribeOutputs?.();
       unsubscribeOutputs = null;
+      removeContextListeners();
       removePageDiagnosticListeners?.();
       removePageDiagnosticListeners = null;
       await queue.settle();

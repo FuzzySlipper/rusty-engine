@@ -234,8 +234,25 @@ export interface RendererSurfaceDiagnosticsReadout {
 
 export type RendererSurfaceCadenceState = 'ready' | 'contextLost' | 'terminal';
 
+/**
+ * A browser-owned surface lifetime change. The surface stays paused after a
+ * loss; its owner must replace the surface from a complete retained baseline.
+ */
+export type RendererSurfaceContextEvent =
+  | {
+      readonly kind: 'lost';
+      readonly state: 'contextLost';
+      readonly diagnostic: string;
+    }
+  | {
+      readonly kind: 'restored';
+      /** Restored context is still untrusted until the owner installs a new surface. */
+      readonly state: 'contextLost';
+      readonly diagnostic: string;
+    };
+
 export interface RendererSurfaceCadenceFailure {
-  readonly stage: 'animationCallback' | 'automaticSubmission' | 'backendRender' | 'contextLost';
+  readonly stage: 'animationCallback' | 'automaticSubmission' | 'backendRender' | 'contextLost' | 'contextCallback';
   readonly message: string;
   readonly occurrences: number;
 }
@@ -275,6 +292,11 @@ export interface RendererSurfaceOptions {
   readonly autoStart?: boolean;
   /** Optional observer on the one Engine-owned animation cadence. */
   readonly onAnimationFrame?: (timeMs: number) => void;
+  /**
+   * Observe a context loss/restoration. This callback never resumes the old
+   * surface; the owner must install a fresh surface from a complete baseline.
+   */
+  readonly onContextEvent?: (event: RendererSurfaceContextEvent) => void;
   readonly clearColor?: number;
   readonly controls?: RendererSurfaceControlsOptions;
   readonly frame?: RenderFrameDiff;
@@ -287,6 +309,46 @@ export interface RendererSurfaceOptions {
   /** Active publisher continuation points installed before this surface admits later frames. */
   readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
   readonly viewComposition?: RendererViewComposition;
+}
+
+/**
+ * Installs the one-shot browser context lifetime observation for a surface.
+ * Restoration is reported as a fact while the surface remains untrusted; the
+ * owner must replace the surface before it can resume rendering.
+ *
+ * @internal
+ */
+export function installRendererSurfaceContextEventListeners(
+  canvas: Pick<HTMLCanvasElement, 'addEventListener' | 'removeEventListener'>,
+  onEvent: (event: RendererSurfaceContextEvent) => void,
+): () => void {
+  let contextLost = false;
+  let contextRestored = false;
+  const onContextLost = (event: Event): void => {
+    if (contextLost) return;
+    event.preventDefault();
+    contextLost = true;
+    onEvent(Object.freeze({
+      kind: 'lost',
+      state: 'contextLost',
+      diagnostic: 'WebGL context lost; automatic rendering is paused until remount',
+    }));
+  };
+  const onContextRestored = (): void => {
+    if (!contextLost || contextRestored) return;
+    contextRestored = true;
+    onEvent(Object.freeze({
+      kind: 'restored',
+      state: 'contextLost',
+      diagnostic: 'WebGL context was restored; a fresh surface baseline is required before rendering resumes',
+    }));
+  };
+  canvas.addEventListener('webglcontextlost', onContextLost);
+  canvas.addEventListener('webglcontextrestored', onContextRestored);
+  return () => {
+    canvas.removeEventListener('webglcontextlost', onContextLost);
+    canvas.removeEventListener('webglcontextrestored', onContextRestored);
+  };
 }
 
 export interface RendererSurfaceFogOptions {
@@ -805,14 +867,26 @@ function mountPreparedRendererSurface(
   const requestAutomaticSubmission = (): void => {
     submissionDemand.request();
   };
-  const onContextLost = (event: Event): void => {
-    event.preventDefault();
-    if (disposed || cadenceState === 'terminal') return;
-    cadenceState = 'contextLost';
-    rememberCadenceFailure('contextLost', 'WebGL context lost; automatic rendering is paused until remount');
-    stop();
+  const notifyContextEvent = (contextEvent: RendererSurfaceContextEvent): void => {
+    try {
+      options.onContextEvent?.(Object.freeze(contextEvent));
+    } catch (cause) {
+      // A recovery observer cannot own or resume the old surface. Retain its
+      // failure as a bounded cadence diagnostic and keep the loss gate intact.
+      rememberCadenceFailure('contextCallback', cause);
+    }
   };
-  canvas.addEventListener('webglcontextlost', onContextLost);
+  const removeContextEventListeners = installRendererSurfaceContextEventListeners(canvas, (contextEvent) => {
+    if (disposed || cadenceState === 'terminal') return;
+    if (contextEvent.kind === 'lost') {
+      cadenceState = 'contextLost';
+      rememberCadenceFailure('contextLost', contextEvent.diagnostic);
+      // Stop before notifying the owner so a synchronous replacement cannot
+      // race an already queued callback on this lost surface.
+      stop();
+    }
+    notifyContextEvent(contextEvent);
+  });
   const syncListener = (fallback: RendererSurfaceCameraSnapshot): void => {
     presentationHosts?.syncListener(resolveRendererAudioListenerPose(
       backendSurface.viewCompositionReadout(),
@@ -1019,7 +1093,7 @@ function mountPreparedRendererSurface(
       // Stop first so an already-dequeued RAF observes the new generation and
       // cannot queue another callback while owner cleanup is in progress.
       stop();
-      attempt(() => canvas.removeEventListener('webglcontextlost', onContextLost));
+      attempt(removeContextEventListeners);
       attempt(() => presentationHosts?.dispose());
       presentationHosts = null;
       attempt(() => controls.dispose());
