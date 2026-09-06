@@ -237,8 +237,10 @@ impl ProductDevRuntime for FixtureRuntime {
     > {
         if self.fail_lifecycle {
             return Err(product_dev_host::ProductDevRuntimeError::new(
-                "FIXTURE_CALLBACK_UNKNOWN", "callback effects are unknown",
-            ).unwrap());
+                "FIXTURE_CALLBACK_UNKNOWN",
+                "callback effects are unknown",
+            )
+            .unwrap());
         }
         Ok(Self::operation(operation.operation_kind()))
     }
@@ -1551,18 +1553,29 @@ fn live_debug_routes_are_opt_in_serialized_and_keep_semantic_failure_typed() {
 
 #[test]
 fn typed_runtime_rejections_preserve_known_and_unknown_mutation_headers() {
-    let bundle = || ProductDevBundle::new(vec![ProductDevBundleEntry::new(
-        "index.html", "text/html; charset=utf-8", b"<!doctype html>".to_vec(),
-    ).unwrap()]).unwrap();
+    let bundle = || {
+        ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+            "index.html",
+            "text/html; charset=utf-8",
+            b"<!doctype html>".to_vec(),
+        )
+        .unwrap()])
+        .unwrap()
+    };
     let host = ProductDevHost::start(
-        FixtureRuntime::default(), ProductDevHostConfig::new(0, bundle()),
-    ).unwrap();
+        FixtureRuntime::default(),
+        ProductDevHostConfig::new(0, bundle()),
+    )
+    .unwrap();
     let body = r#"{"runtime":{"instanceId":"7","generation":"1","controlRevision":"2"},"snapshot":{"schemaVersion":1}}"#;
     let rejected = request(&host.origin(), &format!(
         "POST /__rusty/product/runtime/renderer-diagnostics HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body,
     ));
     assert!(rejected.starts_with("HTTP/1.1 200 OK"), "{rejected}");
-    assert!(rejected.contains("X-Rusty-Commit-Disposition: not-applied\r\n"), "{rejected}");
+    assert!(
+        rejected.contains("X-Rusty-Commit-Disposition: not-applied\r\n"),
+        "{rejected}"
+    );
     assert!(rejected.contains("DEV_HOST_RENDERER_DIAGNOSTICS_UNSUPPORTED"));
     assert!(rejected.contains("\"mutation\":\"not-applied\""));
     assert!(!rejected.contains("X-Rusty-Output-Through:"));
@@ -1572,11 +1585,18 @@ fn typed_runtime_rejections_preserve_known_and_unknown_mutation_headers() {
     host.shutdown().unwrap();
 
     let host = ProductDevHost::start(
-        FixtureRuntime { fail_lifecycle: true, ..Default::default() },
+        FixtureRuntime {
+            fail_lifecycle: true,
+            ..Default::default()
+        },
         ProductDevHostConfig::new(0, bundle()),
-    ).unwrap();
+    )
+    .unwrap();
     let rejected = request(&host.origin(), "POST /__rusty/product/runtime/lifecycle/start HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
-    assert!(rejected.contains("X-Rusty-Commit-Disposition: unknown\r\n"), "{rejected}");
+    assert!(
+        rejected.contains("X-Rusty-Commit-Disposition: unknown\r\n"),
+        "{rejected}"
+    );
     assert!(rejected.contains("FIXTURE_CALLBACK_UNKNOWN"));
     assert!(rejected.contains("\"mutation\":\"unknown\""));
     assert!(host.termination_requested());
