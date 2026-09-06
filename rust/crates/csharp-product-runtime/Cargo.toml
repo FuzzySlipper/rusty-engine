@@ -28,3 +28,6 @@ runtime-ui.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
+
+[dev-dependencies]
+render-model.workspace = true

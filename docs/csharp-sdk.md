@@ -488,3 +488,8 @@ corrections are reported; they do not repair self-intersections or establish a
 watertight/manifold guarantee. This is currently a bounded constructive-shape
 surface service, not a dense-grid importer, adaptive scene streamer, runtime
 editing system, or texture baker.
+Large retained replacements in the packaged host use its complete committed
+snapshot when their incremental publication exceeds the ordinary output budget.
+This preserves renderer publication frontiers and new transient presentation
+events without re-entering product callbacks. Existing complete-snapshot and
+per-mesh bounds still apply; this is not an unbounded asset-transfer path.

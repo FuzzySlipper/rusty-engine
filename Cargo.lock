@@ -766,6 +766,7 @@ dependencies = [
  "libloading",
  "netcorehost",
  "product-dev-host",
+ "render-model",
  "render-presentation",
  "runtime-diagnostics",
  "runtime-input",

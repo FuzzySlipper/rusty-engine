@@ -39,9 +39,10 @@ use product_dev_host::{
     ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult,
     ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
     ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
-    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeReadout,
-    ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
+    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeOutput,
+    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
+    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    ProductDevUpdateAttribution,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -2301,6 +2302,8 @@ impl CsharpProductRuntime {
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
         let mut all_outputs = self.take_pending_recovery_outputs();
         all_outputs.extend(outputs);
+        let all_outputs =
+            fit_publication_budget(all_outputs, |outputs| self.tag_complete_baseline(outputs))?;
         let readout = self.readout();
         let result = ProductDevOperationResult::accepted(
             operation,
@@ -5445,6 +5448,44 @@ fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDe
     ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
         .expect("bounded host error")
 }
+
+/// Large retained replacements use the same committed-state reconstruction as
+/// a newly attached browser. Keep the normal incremental and baseline limits;
+/// never replay retained deltas against the replacement's publication frontier.
+fn fit_publication_budget(
+    outputs: Vec<RuntimePublication>,
+    reconstruct: impl FnOnce(
+        Vec<RuntimePublication>,
+    ) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError>,
+) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
+    let validate = |outputs: &[RuntimePublication]| {
+        let wire = outputs
+            .iter()
+            .cloned()
+            .map(ProductDevRuntimeOutput::from_publication)
+            .collect::<Result<Vec<_>, _>>()?;
+        ProductDevRuntimeOutput::validate_output_group(&wire).map(|_| ())
+    };
+    match validate(&outputs) {
+        Ok(()) => Ok(outputs),
+        Err(error)
+            if matches!(
+                error.code(),
+                "DEV_HOST_OUTPUT_BOUNDS" | "DEV_HOST_OUTPUT_BATCH_BOUNDS"
+            ) && outputs
+                .iter()
+                .all(|output| output.binding_marker().is_none()) =>
+        {
+            let baseline = reconstruct(outputs)?;
+            validate(&baseline).map_err(host_runtime_error)?;
+            Ok(baseline)
+        }
+        Err(error) => Err(host_runtime_error(error)),
+    }
+}
+
+#[cfg(test)]
+mod publication_budget_tests;
 
 #[cfg(test)]
 mod tests {
