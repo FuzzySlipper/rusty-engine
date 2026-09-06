@@ -179,14 +179,23 @@ commands that must remain within that bound.
 
 ### Runtime-generated geometry
 
+Ordinary `MaterialRequest` exposes opaque, mask/cutoff, and blend alpha modes.
+Sprite requests accept a `SpriteMaterialDescriptor` for lighting, normal/depth
+maps, alpha, and shadow policy. Sprites and atlases retain the sampler selected
+when their texture was opened; the short constructors preserve existing
+opaque mesh and unlit/blended sprite defaults.
+
 `Graphics.CreateMeshResource(new MeshResourceCreateRequest(positions, normals,
-uvs, indices, groups, bindings))` copies ordinary managed arrays into an
-immutable retained mesh. Positions/normals are `Vector3`; optional UVs are
-`Vector2`; indices are `uint`. `MeshGroup` ranges tile the triangle index list,
-and `MeshMaterialBinding` selects an existing Engine material for every used
-slot. Bounds are computed by Rust. Admission accepts 3–65,536 vertices,
-3–196,608 indices and up to 256 groups/bindings; invalid streams or missing
-materials fail before creating an owner.
+uvs, colors, indices, groups, bindings))` copies ordinary managed arrays into
+an immutable retained mesh. Positions/normals are `Vector3`; optional UVs are
+`Vector2`; optional vertex colors are linear `Color` RGBA; indices are `uint`.
+`MeshGroup` ranges tile the triangle index list, and `MeshMaterialBinding`
+selects an existing Engine material for every used slot. Bounds are computed by
+Rust. `GraphicsMeshLimits` names the admission budget: at most 262,144
+vertices, 786,432 indices, and 16 MiB for both copied streams and the encoded
+resource definition, with up to 256
+groups/bindings. This is a retained-resource byte budget, not a 16-bit index
+constraint; invalid streams or missing materials fail before creating an owner.
 
 Create one or more appearances with `Graphics.CreateMeshAppearance(mesh)` and
 publish ordinary `AppearanceFact` values. Existing static-mesh material
@@ -201,6 +210,18 @@ appearances. The Engine releases unused mesh definitions and GPU geometry;
 a browser reconnect reconstructs only current retained geometry. See the
 [procedural mesh fixture](../fixtures/csharp-mesh-composition) for a C# shockwave
 composed from these primitives.
+
+### Retained camera composition
+
+`CameraView` retains cameras, offscreen targets, and a complete typed
+`CameraCompositionRequest`. A composition view selects a live camera, its
+normalized viewport, ordering, and either the primary surface or one Engine
+target. Presentations copy an offscreen target into a normalized primary
+destination, so split-screen and an inset/rear view remain Engine-rendered.
+Target revisions and GPU lifetime belong to Rust and the renderer; C# must not
+use a target as an arbitrary mesh texture. `SetActiveCamera` remains the
+single-primary-view convenience over this same retained composition. Use
+`CameraViewports` for ordinary full, split, and inset normalized rectangles.
 
 ### Atlas sprite playback
 

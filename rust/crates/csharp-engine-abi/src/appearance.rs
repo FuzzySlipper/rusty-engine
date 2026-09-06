@@ -160,6 +160,79 @@ pub enum NativeSpriteDepthPolicy {
     DepthWriteOff = 2,
 }
 
+/// Explicit renderer material alpha semantics. Opaque is the stable ordinary
+/// default; a cutoff is used only for Mask.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeMaterialAlphaMode {
+    #[default]
+    Opaque = 0,
+    Mask = 1,
+    Blend = 2,
+}
+
+/// Lighting inputs admitted for an ordinary sprite. Texture handles remain
+/// Engine-owned render resources and are copied into retained facts.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeSpriteLightingMode {
+    #[default]
+    Unlit = 0,
+    AuthoredNormal = 1,
+    AuthoredDepth = 2,
+    DerivedGradient = 3,
+    Synthetic = 4,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeSpriteAlphaMode {
+    Opaque = 0,
+    Mask = 1,
+    #[default]
+    Blend = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeSpriteShadowPolicy {
+    #[default]
+    None = 0,
+    Cast = 1,
+    Receive = 2,
+    CastAndReceive = 3,
+}
+
+/// Renderer-neutral sprite material inputs. A zero normal/depth texture handle
+/// omits that input. Default values preserve the existing unlit blended sprite.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteMaterialDescriptor {
+    pub lighting: NativeSpriteLightingMode,
+    pub normal_texture: NativeRenderResourceHandle,
+    pub depth_texture: NativeRenderResourceHandle,
+    pub normal_strength: f32,
+    pub normal_bias: f32,
+    pub alpha_mode: NativeSpriteAlphaMode,
+    pub alpha_cutoff: f32,
+    pub shadow: NativeSpriteShadowPolicy,
+}
+
+impl Default for NativeSpriteMaterialDescriptor {
+    fn default() -> Self {
+        Self {
+            lighting: NativeSpriteLightingMode::Unlit,
+            normal_texture: NativeRenderResourceHandle::default(),
+            depth_texture: NativeRenderResourceHandle::default(),
+            normal_strength: 1.0,
+            normal_bias: 0.0,
+            alpha_mode: NativeSpriteAlphaMode::Blend,
+            alpha_cutoff: 0.5,
+            shadow: NativeSpriteShadowPolicy::None,
+        }
+    }
+}
+
 /// Sampling of an ordinary PNG renderer resource.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -248,6 +321,7 @@ pub struct NativeSpriteFromAtlasRequest {
     pub render_order: i32,
     pub depth: NativeSpriteDepthPolicy,
     pub tint: NativeColor,
+    pub material: NativeSpriteMaterialDescriptor,
 }
 
 #[repr(C)]
@@ -444,6 +518,8 @@ pub struct NativeMaterialRequest {
     pub emission_color: NativeVec3,
     pub emission_intensity: f32,
     pub double_sided: bool,
+    pub alpha_mode: NativeMaterialAlphaMode,
+    pub alpha_cutoff: f32,
 }
 
 /// Projects one admitted authored material through Engine-owned catalog and
@@ -504,7 +580,9 @@ pub struct NativeMeshResourceHandle {
 }
 
 /// Triangle streams are copied during this call. Groups must tile the indices;
-/// bindings supply every used material slot. Empty UVs omit that attribute.
+/// bindings supply every used material slot. Empty UV/color streams omit those
+/// attributes. The Engine bounds a fully attributed inline mesh to its named
+/// admission budget before copying.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMeshResourceCreateRequest {
@@ -514,6 +592,8 @@ pub struct NativeMeshResourceCreateRequest {
     pub normals_len: usize,
     pub uvs: *const NativeVec2,
     pub uvs_len: usize,
+    pub colors: *const NativeColor,
+    pub colors_len: usize,
     pub indices: *const u32,
     pub indices_len: usize,
     pub groups: *const NativeMeshGroup,
@@ -572,6 +652,7 @@ pub struct NativeSpriteAppearanceRequest {
     pub render_order: i32,
     pub depth: NativeSpriteDepthPolicy,
     pub tint: NativeColor,
+    pub material: NativeSpriteMaterialDescriptor,
 }
 
 #[repr(C)]

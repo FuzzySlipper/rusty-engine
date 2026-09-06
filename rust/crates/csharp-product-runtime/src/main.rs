@@ -73,7 +73,9 @@ fn main() -> Result<(), String> {
     }
     if args.supervised {
         if args.debugger {
-            eprintln!("RUSTY_HOST debugger: worker startup and callback deadlines are disabled; source restaging still replaces the worker");
+            eprintln!(
+                "RUSTY_HOST debugger: worker startup and callback deadlines are disabled; source restaging still replaces the worker"
+            );
         }
         return run_supervised_shell(args);
     }
@@ -568,6 +570,37 @@ impl WorkerTerminalCause {
     }
 }
 
+/// Local projection waits do not count as product callback execution time.
+#[derive(Clone, Default)]
+struct PublicationWait(Arc<Mutex<(Duration, Option<Instant>)>>);
+
+impl PublicationWait {
+    fn elapsed(&self) -> Duration {
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.0 + state.1.map(|start| start.elapsed()).unwrap_or_default()
+    }
+
+    fn begin(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .1 = Some(Instant::now());
+    }
+
+    fn end(&self) {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(start) = state.1.take() {
+            state.0 += start.elapsed();
+        }
+    }
+}
+
 struct WorkerConnection {
     child: Child,
     writer: TcpStream,
@@ -577,6 +610,7 @@ struct WorkerConnection {
     pending_attribution: Option<product_dev_host::ProductDevUpdateAttribution>,
     terminal_cause: WorkerTerminalCause,
     retiring: Arc<AtomicBool>,
+    publication_wait: PublicationWait,
     reader: Option<thread::JoinHandle<()>>,
     generation: u64,
 }
@@ -863,10 +897,12 @@ impl WorkerRuntime {
         }
         let (response_tx, response_rx) = mpsc::channel();
         let retiring = Arc::new(AtomicBool::new(false));
+        let publication_wait = PublicationWait::default();
         let terminal_cause = WorkerTerminalCause::default();
         let lifetime = WorkerReaderLifetime {
             generation,
             retiring: Arc::clone(&retiring),
+            publication_wait: publication_wait.clone(),
             terminal_cause: terminal_cause.clone(),
         };
         let reader = match thread::Builder::new()
@@ -900,6 +936,7 @@ impl WorkerRuntime {
                 pending_attribution: None,
                 terminal_cause,
                 retiring,
+                publication_wait,
                 reader: Some(reader),
                 generation,
             },
@@ -954,14 +991,25 @@ fn invoke_connection_inner<T: serde::de::DeserializeOwned>(
         stop_worker(connection);
         return Err(error);
     }
-    // A debugger can stop inside any managed callback. Only the explicit
-    // development mode waits without a deadline; channel EOF still fails.
-    let received = match connection.operation_timeout {
-        Some(timeout) => connection.responses.recv_timeout(timeout),
-        None => connection
-            .responses
-            .recv()
-            .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+    // Preserve the product execution deadline while excluding confirmed local
+    // publication waits. The reader still reports genuine EOF/callback faults.
+    let started = Instant::now();
+    let initial_wait = connection.publication_wait.elapsed();
+    let received = loop {
+        match connection.responses.recv_timeout(Duration::from_millis(20)) {
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let publication_time = connection
+                    .publication_wait
+                    .elapsed()
+                    .saturating_sub(initial_wait);
+                if connection.operation_timeout.is_some_and(|timeout| {
+                    started.elapsed().saturating_sub(publication_time) >= timeout
+                }) {
+                    break Err(mpsc::RecvTimeoutError::Timeout);
+                }
+            }
+            received => break received,
+        }
     };
     let response = match received {
         Ok(Ok(response)) => response,
@@ -1040,7 +1088,71 @@ fn invoke_connection_inner<T: serde::de::DeserializeOwned>(
 struct WorkerReaderLifetime {
     generation: u64,
     retiring: Arc<AtomicBool>,
+    publication_wait: PublicationWait,
     terminal_cause: WorkerTerminalCause,
+}
+
+fn publication_wait_tick(
+    lifetime: &WorkerReaderLifetime,
+    scheduler_inflight: &runtime_diagnostics::RuntimeOperationActivity,
+) -> Result<(), ()> {
+    if lifetime.retiring.load(Ordering::Acquire) {
+        return Err(());
+    }
+    // Reader lag can hide the child's completed-scheduler marker. Defer this
+    // observation deadline until the ordered channel is flowing again.
+    if let Ok(mut activity) = scheduler_inflight.lock() {
+        if let Some((generation, started)) = activity.as_mut() {
+            if *generation == lifetime.generation {
+                *started = Instant::now();
+            }
+        }
+    }
+    Ok(())
+}
+
+fn queue_worker_publication(
+    outputs: &mpsc::SyncSender<ProductDevWorkerPublication>,
+    mut publication: ProductDevWorkerPublication,
+    lifetime: &WorkerReaderLifetime,
+    scheduler_inflight: &runtime_diagnostics::RuntimeOperationActivity,
+) -> Result<(), ()> {
+    lifetime.publication_wait.begin();
+    let result = loop {
+        if publication_wait_tick(lifetime, scheduler_inflight).is_err() {
+            break Err(());
+        }
+        match outputs.try_send(publication) {
+            Ok(()) => break Ok(()),
+            Err(mpsc::TrySendError::Disconnected(_)) => break Err(()),
+            Err(mpsc::TrySendError::Full(pending)) => {
+                publication = pending;
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    };
+    lifetime.publication_wait.end();
+    result
+}
+
+fn acknowledge_worker_publication(
+    acknowledgement: mpsc::Receiver<Option<u64>>,
+    lifetime: &WorkerReaderLifetime,
+    scheduler_inflight: &runtime_diagnostics::RuntimeOperationActivity,
+) -> Result<u64, ()> {
+    lifetime.publication_wait.begin();
+    let result = loop {
+        if publication_wait_tick(lifetime, scheduler_inflight).is_err() {
+            break Err(());
+        }
+        match acknowledgement.recv_timeout(Duration::from_millis(5)) {
+            Ok(Some(cursor)) => break Ok(cursor),
+            Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => break Err(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    };
+    lifetime.publication_wait.end();
+    result
 }
 
 fn worker_reader(
@@ -1061,23 +1173,22 @@ fn worker_reader(
                 // a marker through the same shell queue as those publications;
                 // later ticks must not move this snapshot's subscription cursor.
                 let (acknowledged, acknowledgement) = mpsc::sync_channel(1);
-                let queued = outputs.try_send(ProductDevWorkerPublication::ConnectionBoundary {
-                    generation,
-                    acknowledged,
-                });
-                let cursor = queued.ok().and_then(|()| {
-                    acknowledgement
-                        .recv_timeout(WORKER_OPERATION_TIMEOUT)
-                        .ok()
-                        .flatten()
-                });
-                let Some(cursor) = cursor else {
-                    let error = worker_runtime_error(
-                        "DEV_HOST_WORKER_CONNECTION_BOUNDARY",
-                        "worker connection publication boundary was not acknowledged",
-                    );
-                    let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
-                    let _ = failures.try_send(generation);
+                if queue_worker_publication(
+                    &outputs,
+                    ProductDevWorkerPublication::ConnectionBoundary {
+                        generation,
+                        acknowledged,
+                    },
+                    &lifetime,
+                    &scheduler_inflight,
+                )
+                .is_err()
+                {
+                    return;
+                }
+                let Ok(cursor) =
+                    acknowledge_worker_publication(acknowledgement, &lifetime, &scheduler_inflight)
+                else {
                     return;
                 };
                 if responses
@@ -1098,49 +1209,50 @@ fn worker_reader(
                 // outputs through the HTTP thread would race the output reader.
                 if !response.outputs.is_empty() {
                     let received_at = Instant::now();
-                    let published =
-                        worker_outputs(std::mem::take(&mut response.outputs)).and_then(|decoded| {
-                            outputs
-                                .try_send(ProductDevWorkerPublication::Outputs(
-                                    ProductDevWorkerOutputBatch {
-                                        generation,
-                                        outputs: decoded,
-                                        received_at,
-                                        decode_duration_us: elapsed_us(received_at),
-                                    },
-                                ))
-                                .map_err(|_| {
-                                    worker_runtime_error(
-                                        "DEV_HOST_WORKER_OUTPUT_BACKPRESSURE",
-                                        "shell could not queue the worker command publication",
-                                    )
-                                })?;
-                            let (acknowledged, acknowledgement) = mpsc::sync_channel(1);
-                            outputs
-                                .try_send(ProductDevWorkerPublication::ConnectionBoundary {
-                                    generation,
-                                    acknowledged,
-                                })
-                                .map_err(|_| {
-                                    worker_runtime_error(
-                                        "DEV_HOST_WORKER_PUBLICATION_BOUNDARY",
-                                        "shell could not queue the command output boundary",
-                                    )
-                                })?;
-                            acknowledgement
-                                .recv_timeout(WORKER_OPERATION_TIMEOUT)
-                                .ok()
-                                .flatten()
-                                .ok_or_else(|| {
-                                    worker_runtime_error(
-                                        "DEV_HOST_WORKER_PUBLICATION_BOUNDARY",
-                                        "worker command publication was not acknowledged",
-                                    )
-                                })
-                        });
-                    if let Err(error) = published {
-                        let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
-                        let _ = failures.try_send(generation);
+                    let decoded = match worker_outputs(std::mem::take(&mut response.outputs)) {
+                        Ok(decoded) => decoded,
+                        Err(error) => {
+                            let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
+                            let _ = failures.try_send(generation);
+                            return;
+                        }
+                    };
+                    if queue_worker_publication(
+                        &outputs,
+                        ProductDevWorkerPublication::Outputs(ProductDevWorkerOutputBatch {
+                            generation,
+                            outputs: decoded,
+                            received_at,
+                            decode_duration_us: elapsed_us(received_at),
+                        }),
+                        &lifetime,
+                        &scheduler_inflight,
+                    )
+                    .is_err()
+                    {
+                        return;
+                    }
+                    let (acknowledged, acknowledgement) = mpsc::sync_channel(1);
+                    if queue_worker_publication(
+                        &outputs,
+                        ProductDevWorkerPublication::ConnectionBoundary {
+                            generation,
+                            acknowledged,
+                        },
+                        &lifetime,
+                        &scheduler_inflight,
+                    )
+                    .is_err()
+                    {
+                        return;
+                    }
+                    if acknowledge_worker_publication(
+                        acknowledgement,
+                        &lifetime,
+                        &scheduler_inflight,
+                    )
+                    .is_err()
+                    {
                         return;
                     }
                 }
@@ -1159,29 +1271,23 @@ fn worker_reader(
                 let decoded = worker_outputs(values);
                 let decode_duration_us = elapsed_us(received_at);
                 match decoded {
-                    Ok(decoded) => match outputs.try_send(ProductDevWorkerPublication::Outputs(
-                        ProductDevWorkerOutputBatch {
-                            generation,
-                            outputs: decoded,
-                            received_at,
-                            decode_duration_us,
-                        },
-                    )) {
-                        Ok(()) => {}
-                        Err(mpsc::TrySendError::Disconnected(_)) => return,
-                        Err(mpsc::TrySendError::Full(_)) => {
-                            let error = worker_runtime_error(
-                                "DEV_HOST_WORKER_OUTPUT_BACKPRESSURE",
-                                "shell output receiver did not drain the bounded worker output queue",
-                            );
-                            let _ = diagnostics.try_send(
-                                ProductDevWorkerDiagnostic::from_runtime_error(error.clone()),
-                            );
-                            let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
-                            let _ = failures.try_send(generation);
+                    Ok(decoded) => {
+                        if queue_worker_publication(
+                            &outputs,
+                            ProductDevWorkerPublication::Outputs(ProductDevWorkerOutputBatch {
+                                generation,
+                                outputs: decoded,
+                                received_at,
+                                decode_duration_us,
+                            }),
+                            &lifetime,
+                            &scheduler_inflight,
+                        )
+                        .is_err()
+                        {
                             return;
                         }
-                    },
+                    }
                     Err(error) => {
                         let _ = diagnostics.try_send(
                             ProductDevWorkerDiagnostic::from_runtime_error(error.clone()),
@@ -1229,7 +1335,10 @@ fn worker_reader(
                     })
                     .is_err()
                 {
-                    let error = worker_runtime_error("DEV_HOST_WORKER_TELEMETRY_DROPPED", "shell publication queue could not retain the worker timing observation; displayed sample age may grow");
+                    let error = worker_runtime_error(
+                        "DEV_HOST_WORKER_TELEMETRY_DROPPED",
+                        "shell publication queue could not retain the worker timing observation; displayed sample age may grow",
+                    );
                     let mut diagnostic = ProductDevWorkerDiagnostic::from_runtime_error(error);
                     diagnostic.severity = product_dev_host::ProductDevLogSeverity::Warning;
                     diagnostic.disposition = product_dev_host::ProductDevLogDisposition::Degraded;
@@ -2105,23 +2214,19 @@ fn worker_request(
             ProductDevWorkerLifecycleOperation::Connect => {
                 worker_receipt(request_id, owner.connect())
             }
-            _ => {
-                mailbox.clear();
-                worker_receipt(
-                    request_id,
-                    owner.lifecycle_with_binding(worker_lifecycle(operation), binding),
-                )
-            }
+            _ => worker_receipt(
+                request_id,
+                owner.lifecycle_with_input_fence(worker_lifecycle(operation), binding, || {
+                    mailbox.clear()
+                }),
+            ),
         },
         ProductDevWorkerRequest::Control {
             operation, binding, ..
-        } => {
-            mailbox.clear();
-            worker_receipt(
-                request_id,
-                owner.control(worker_control(operation), binding),
-            )
-        }
+        } => worker_receipt(
+            request_id,
+            owner.control_with_input_fence(worker_control(operation), binding, || mailbox.clear()),
+        ),
         ProductDevWorkerRequest::RecoverInput { .. } => {
             mailbox.clear();
             worker_receipt(request_id, owner.recover_input_overflow())
@@ -3398,6 +3503,7 @@ mod tests {
                 pending_attribution: None,
                 terminal_cause: WorkerTerminalCause::default(),
                 retiring: Arc::new(AtomicBool::new(false)),
+                publication_wait: PublicationWait::default(),
                 reader: None,
                 generation: 1,
             })),
@@ -3528,6 +3634,51 @@ mod tests {
     }
 
     #[test]
+    fn publication_pressure_preserves_order_and_retirement_interrupts_wait() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let retiring = Arc::new(AtomicBool::new(false));
+        let lifetime = WorkerReaderLifetime {
+            generation: 7,
+            retiring: Arc::clone(&retiring),
+            publication_wait: PublicationWait::default(),
+            terminal_cause: WorkerTerminalCause::default(),
+        };
+        let activity = Arc::new(Mutex::new(None));
+        let publication = |generation| {
+            ProductDevWorkerPublication::Outputs(ProductDevWorkerOutputBatch {
+                generation,
+                outputs: Vec::new(),
+                received_at: Instant::now(),
+                decode_duration_us: 0,
+            })
+        };
+        tx.send(publication(1)).unwrap();
+        let (done, completed) = mpsc::channel();
+        let producer = thread::spawn(move || {
+            queue_worker_publication(&tx, publication(2), &lifetime, &activity).unwrap();
+            done.send(()).unwrap();
+            let result = queue_worker_publication(&tx, publication(3), &lifetime, &activity);
+            assert!(
+                result.is_err(),
+                "retirement cancels the next blocked publication"
+            );
+            assert!(lifetime.terminal_cause.read().is_none());
+        });
+        assert!(completed.recv_timeout(Duration::from_millis(30)).is_err());
+        let ProductDevWorkerPublication::Outputs(first) = rx.recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(first.generation, 1);
+        completed.recv_timeout(Duration::from_secs(1)).unwrap();
+        retiring.store(true, Ordering::Release);
+        producer.join().unwrap();
+        let ProductDevWorkerPublication::Outputs(second) = rx.recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(second.generation, 2);
+    }
+
+    #[test]
     fn connection_response_keeps_its_ordered_output_boundary() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut child = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -3547,6 +3698,7 @@ mod tests {
                 WorkerReaderLifetime {
                     generation: 3,
                     retiring: Arc::new(AtomicBool::new(false)),
+                    publication_wait: PublicationWait::default(),
                     terminal_cause: WorkerTerminalCause::default(),
                 },
             )
@@ -3672,6 +3824,7 @@ mod tests {
                 WorkerReaderLifetime {
                     generation: 1,
                     retiring: Arc::new(AtomicBool::new(false)),
+                    publication_wait: PublicationWait::default(),
                     terminal_cause: reader_cause,
                 },
             )
@@ -3701,6 +3854,7 @@ mod tests {
             pending_attribution: None,
             terminal_cause,
             retiring: Arc::new(AtomicBool::new(false)),
+            publication_wait: PublicationWait::default(),
             reader: None,
             generation: 1,
         };
@@ -3740,6 +3894,7 @@ mod tests {
                 WorkerReaderLifetime {
                     generation: 4,
                     retiring: Arc::new(AtomicBool::new(retiring)),
+                    publication_wait: PublicationWait::default(),
                     terminal_cause: WorkerTerminalCause::default(),
                 },
             );

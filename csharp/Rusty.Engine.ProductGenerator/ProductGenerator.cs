@@ -391,7 +391,11 @@ public sealed class ProductGenerator : IIncrementalGenerator
                         *accepted = Get(handle).Product.CompleteTimeline(value) ? (byte)1 : (byte)0;
                         return 1;
                     }
-                    catch { return 99; }
+                    catch (Exception exception)
+                    {
+                        RecordCallError(handle, exception);
+                        return 99;
+                    }
                 }
 
                 [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

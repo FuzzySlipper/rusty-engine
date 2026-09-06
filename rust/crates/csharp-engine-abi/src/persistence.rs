@@ -42,9 +42,20 @@ pub struct NativePersistenceSaveRequest {
     pub payload: NativeByteSlice,
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativePersistenceSaveOutcome {
+    #[default]
+    Saved = 0,
+    RevisionConflict = 1,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativePersistenceSaveReceipt {
+    /// Saved values describe the new blob. Conflict values describe the
+    /// existing blob; revision and schema zero mean the key is absent.
+    pub outcome: NativePersistenceSaveOutcome,
     pub revision: u64,
     pub schema_version: u32,
 }

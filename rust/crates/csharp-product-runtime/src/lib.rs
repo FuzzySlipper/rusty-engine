@@ -66,10 +66,15 @@ const STANDARD_REALTIME_HZ: u32 = 60;
 const STANDARD_MAX_CATCH_UP_STEPS: u32 = 4;
 const STANDARD_REALTIME_EXERCISE_ADMISSION_NS: u64 = 16_666_667;
 /// Native input events are held only until the next admitted product update.
-/// Keep this second, callback-facing queue no larger than one accepted wire
-/// batch; the Rust-host mailbox is the only place allowed to absorb cadence
-/// pressure between observations.
-const MAX_PENDING_NATIVE_INPUTS: usize = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS;
+/// One accepted wire batch plus the Engine-inserted rebind clear. Additional
+/// cadence pressure is resynchronized rather than silently truncating history.
+const MAX_PENDING_NATIVE_INPUTS: usize = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS + 1;
+
+#[derive(Debug, PartialEq, Eq)]
+enum PendingInputAdmission {
+    Appended,
+    Resynchronized,
+}
 // The Engine-owned Product Browser Host uses this same default when its
 // generated bundle does not supply an input-context override. Keeping the
 // standard native runtime on that typed host default lets generated physical
@@ -2080,7 +2085,9 @@ impl CsharpProductRuntime {
             .iter()
             .map(|envelope| native_intent_event(envelope, &context))
             .collect::<Vec<_>>();
-        self.append_pending_inputs(mapped)?;
+        if self.append_pending_inputs(mapped)? == PendingInputAdmission::Resynchronized {
+            return Ok(Vec::new());
+        }
         let facts = update_facts(
             &self.lifecycle,
             kind,
@@ -2181,7 +2188,7 @@ impl CsharpProductRuntime {
     fn append_pending_inputs(
         &mut self,
         inputs: Vec<NativeInputOwned>,
-    ) -> Result<(), CsharpProductRuntimeError> {
+    ) -> Result<PendingInputAdmission, CsharpProductRuntimeError> {
         if self
             .pending_inputs
             .len()
@@ -2206,10 +2213,21 @@ impl CsharpProductRuntime {
             // latest complete baseline so the following scheduled operation
             // publishes the new binding instead of leaving the browser stale.
             self.pending_recovery_outputs = outputs;
-            return Err(error);
+            let _ = self.diagnostics.publish(
+                ProductDevLogEvent::new(
+                    ProductDevLogSeverity::Warning,
+                    ProductDevLogDisposition::ResyncRequired,
+                    "csharp-runtime",
+                    error.code(),
+                    error.detail(),
+                )
+                .expect("bounded input recovery diagnostic")
+                .with_runtime(self.binding()),
+            );
+            return Ok(PendingInputAdmission::Resynchronized);
         }
         self.pending_inputs.extend(inputs);
-        Ok(())
+        Ok(PendingInputAdmission::Appended)
     }
 
     fn action<F, T>(
@@ -2878,8 +2896,24 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .filter(|index| matches!(batch.events()[**index], RuntimeInputEvent::Physical(_)))
             .map(|index| native_event(&batch.events()[*index]))
             .collect::<Vec<_>>();
-        self.append_pending_inputs(native)
-            .map_err(|error| self.runtime_error(error))?;
+        if self
+            .append_pending_inputs(native)
+            .map_err(|error| self.runtime_error(error))?
+            == PendingInputAdmission::Resynchronized
+        {
+            let result = ProductDevInputResult::pending_resynchronized(
+                receipt.submitted_count(),
+                self.next_input_sequence(),
+                self.binding(),
+                self.readout(),
+            )
+            .map_err(host_runtime_error)?;
+            return ProductDevRuntimeReceipt::new(
+                result,
+                std::mem::take(&mut self.pending_recovery_outputs),
+            )
+            .map_err(host_runtime_error);
+        }
         let next_input_sequence = receipt
             .next_sequence()
             .map(CanonicalU64::new)
@@ -2932,26 +2966,27 @@ impl ProductDevRuntime for CsharpProductRuntime {
         // Debug commands may use ordinary generated Engine services. Keep
         // their Engine transaction identical to a product action: a completed
         // callback (including a semantic command failure) commits; an ABI or
-        // copying failure rolls back and acknowledges that outcome explicitly.
+        // copying failure latches the incarnation: staged cleanup cannot undo
+        // managed or immediate Engine mutations made inside the callback.
         self.services.begin_call(ui_binding(&self.lifecycle));
         let result = match call_debug(execute, release, self.handle, command) {
             Ok(result) => result,
             Err(error) => {
-                self.discard_staged_call();
+                let error = self.taint_after_callback(error);
                 return Err(self.runtime_error(error));
             }
         };
         let staged = match self.services.take_call() {
             Ok(staged) => staged,
             Err(error) => {
-                self.discard_staged_call();
-                return Err(self.runtime_error(error.into()));
+                let error = self.taint_after_callback(error.into());
+                return Err(self.runtime_error(error));
             }
         };
         let outputs = match service_outputs(self.services.outputs(&staged)) {
             Ok(outputs) => outputs,
             Err(error) => {
-                self.discard_staged_call();
+                let error = self.taint_after_callback(error);
                 return Err(self.runtime_error(error));
             }
         };
@@ -3010,7 +3045,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             ) {
                 Ok(outputs) => outputs,
                 Err(error) => {
-                    return self.resync_operation(ProductDevOperationKind::AdvanceRealtime, error)
+                    return self.resync_operation(ProductDevOperationKind::AdvanceRealtime, error);
                 }
             },
             None => Vec::new(),
@@ -3034,7 +3069,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let outputs = match self.update_admitted(DEMAND_UPDATE_MODE, None, admission, 0) {
             Ok(outputs) => outputs,
             Err(error) => {
-                return self.resync_operation(ProductDevOperationKind::AdmitDemandStep, error)
+                return self.resync_operation(ProductDevOperationKind::AdmitDemandStep, error);
             }
         };
         match self.receipt(ProductDevOperationKind::AdmitDemandStep, outputs) {
@@ -3057,7 +3092,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
         let outputs = match self.update_admitted(EXTERNAL_UPDATE_MODE, None, admission, 0) {
             Ok(outputs) => outputs,
             Err(error) => {
-                return self.resync_operation(ProductDevOperationKind::AdmitExternalStep, error)
+                return self.resync_operation(ProductDevOperationKind::AdmitExternalStep, error);
             }
         };
         match self.receipt(ProductDevOperationKind::AdmitExternalStep, outputs) {
@@ -3182,7 +3217,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
                 return self.resync_timeline(
                     ticket,
                     CsharpProductRuntimeError::new(error.code(), error.detail().to_owned()),
-                )
+                );
             }
         };
         match ProductDevRuntimeReceipt::new(result, outputs) {
@@ -4290,7 +4325,9 @@ fn call_complete_timeline(
     // SAFETY: all pointers in `completion` borrow local UTF-8/JSON buffers that
     // remain alive for this call; the generated C# bootstrap copies them.
     let status = unsafe { (api.complete_timeline)(handle, completion, &mut accepted) };
-    checked_status(status, "complete_timeline")?;
+    if let Err(fallback) = checked_status(status, "complete_timeline") {
+        return Err(read_product_call_error(api, handle).unwrap_or(fallback));
+    }
     match accepted {
         0 => Ok(false),
         1 => Ok(true),
@@ -6140,6 +6177,8 @@ mod tests {
                         emission_color: NativeVec3::default(),
                         emission_intensity: 0.0,
                         double_sided: false,
+                        alpha_mode: NativeMaterialAlphaMode::Opaque,
+                        alpha_cutoff: 0.5,
                     },
                     &mut material,
                 )
@@ -6640,6 +6679,90 @@ mod tests {
     }
 
     #[test]
+    fn direct_debug_failure_latches_but_semantic_rejection_remains_usable() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("fixture gate");
+        let _debug_guard = DEBUG_FIXTURE_GATE.lock().expect("debug gate");
+        let (mut runtime, root) = drop_fixture_runtime("debug-fault-latch");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .unwrap();
+        runtime.api.debug = Some((debug_semantic_failure, release_debug_fixture));
+        assert!(!runtime
+            .execute_debug("unknown")
+            .unwrap()
+            .result()
+            .succeeded());
+        runtime
+            .admit_demand_step()
+            .expect("semantic rejection preserves the owner");
+        runtime.api.debug = Some((debug_abi_failure_after_result, release_debug_fixture));
+        assert_eq!(
+            runtime
+                .execute_debug("mutating-command")
+                .unwrap_err()
+                .code(),
+            "CSHARP_PRODUCT_CALL"
+        );
+        assert_eq!(
+            runtime.admit_demand_step().unwrap_err().code(),
+            "CSHARP_RUNTIME_TAINTED"
+        );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    unsafe extern "C" fn timeline_error_fixture(
+        _handle: *mut c_void,
+        _completion: *const NativeProductTimelineCompletion,
+        _accepted: *mut u8,
+    ) -> i32 {
+        99
+    }
+
+    unsafe extern "C" fn timeline_error_read(
+        _handle: *mut c_void,
+        result: *mut NativeProductCallError,
+    ) -> i32 {
+        let mut ignored = ptr::null_mut();
+        // SAFETY: reuse the fixture's static named diagnostic, with local outputs.
+        unsafe {
+            product_error_fixture_create(ptr::null(), &mut ignored, result);
+        }
+        ABI_OK
+    }
+
+    #[test]
+    fn timeline_failure_preserves_named_call_error_and_false_is_not_failure() {
+        let _guard = DROP_FIXTURE_GATE.lock().expect("fixture gate");
+        let mut api = drop_fixture_api();
+        let completion = NativeProductTimelineCompletion {
+            ticket: 1,
+            instance_id: 1,
+            generation: 1,
+            control_revision: 1,
+            correlation: NativeUtf8Slice::default(),
+            outcome: NativeProductTimelineOutcome::Success,
+            outcome_data: NativeByteSlice {
+                bytes: ptr::null(),
+                len: 0,
+            },
+            provenance_correlation: NativeUtf8Slice::default(),
+            provenance_detail: NativeByteSlice {
+                bytes: ptr::null(),
+                len: 0,
+            },
+        };
+        assert!(!call_complete_timeline(&api, ptr::null_mut(), &completion).unwrap());
+        api.complete_timeline = timeline_error_fixture;
+        api.call_error = Some((timeline_error_read, product_error_fixture_release));
+        let error = call_complete_timeline(&api, ptr::null_mut(), &completion).unwrap_err();
+        assert!(error
+            .detail()
+            .contains("Animation.OpenAnimatedMesh returned status 0"));
+        assert!(error.detail().contains("CSHARP_ANIMATION_RESOURCE_UNKNOWN"));
+    }
+
+    #[test]
     fn failed_create_copies_named_engine_diagnostic_and_rolls_back_before_destroy() {
         let _guard = DROP_FIXTURE_GATE
             .lock()
@@ -6821,12 +6944,14 @@ mod tests {
             .iter()
             .filter(|output| output["kind"] == "presentation")
             .all(|output| output["frame"].get("publication").is_none()));
-        assert!(encoded.iter().any(|output| output["kind"] == "presentation"
-            && output["frame"]["ops"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|op| op["op"]["control"]["muted"] == true)));
+        assert!(encoded.iter().any(|output| {
+            output["kind"] == "presentation"
+                && output["frame"]["ops"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|op| op["op"]["control"]["muted"] == true)
+        }));
         assert!(encoded.iter().any(|output| output["kind"] == "frame"));
         assert_eq!(runtime.services.renderer_publication_frontiers()[0].1, 1);
         drop(runtime);
@@ -7332,6 +7457,91 @@ mod tests {
     }
 
     #[test]
+    fn stale_control_and_lifecycle_leave_queued_input_until_an_admitted_fence() {
+        let _guard = DROP_FIXTURE_GATE.lock().unwrap();
+        let (mut runtime, root) = drop_fixture_runtime("mailbox-fence-admission");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .unwrap();
+        let old_binding = runtime.binding();
+        runtime
+            .control(
+                product_dev_host::ProductDevControlOperation::Replace,
+                old_binding,
+            )
+            .unwrap();
+        let binding = runtime.binding();
+        let owner = product_dev_host::ProductDevOperationOwner::new(runtime);
+        let queued = std::cell::Cell::new(2);
+        let stale_control = owner.control_with_input_fence(
+            product_dev_host::ProductDevControlOperation::Replace,
+            old_binding,
+            || queued.set(0),
+        );
+        assert!(stale_control.is_err());
+        assert_eq!(queued.get(), 2);
+        let stale_lifecycle = owner.lifecycle_with_input_fence(
+            ProductDevLifecycleOperation::Pause,
+            Some(old_binding),
+            || queued.set(0),
+        );
+        assert!(stale_lifecycle.is_err());
+        assert_eq!(queued.get(), 2);
+        owner
+            .control_with_input_fence(
+                product_dev_host::ProductDevControlOperation::Replace,
+                binding,
+                || queued.set(0),
+            )
+            .unwrap();
+        assert_eq!(queued.get(), 0);
+        drop(owner);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_wire_batch_reserves_clear_and_following_pressure_returns_scoped_receipt() {
+        let _guard = DROP_FIXTURE_GATE.lock().unwrap();
+        let (mut runtime, root) = drop_fixture_runtime("input-pressure-receipt");
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .unwrap();
+        let binding = runtime.binding();
+        let batch = |first: usize, count: usize| {
+            let events = (first..first + count).map(|sequence| serde_json::json!({
+                "runtime": binding, "sequence": sequence.to_string(), "context": "gameplay.default",
+                "fact": {"kind": "key", "code": "digit-1", "edge": if sequence % 2 == 1 { "pressed" } else { "released" }},
+            })).collect::<Vec<_>>();
+            ProductDevInputBatch::decode_json(&serde_json::to_vec(&events).unwrap()).unwrap()
+        };
+        let count = runtime_input::MAX_RUNTIME_INPUT_WIRE_EVENTS;
+        assert!(runtime
+            .input(batch(1, count))
+            .unwrap()
+            .result()
+            .is_accepted());
+        assert_eq!(runtime.binding(), binding);
+        assert_eq!(runtime.pending_inputs.len(), count + 1);
+        let receipt = runtime
+            .input(batch(count + 1, 1))
+            .expect("safe pressure receipt");
+        let result = serde_json::to_value(receipt.result()).unwrap();
+        assert_eq!(result["disposition"], "resync-required");
+        assert_eq!(result["code"], "CSHARP_INPUT_PENDING_BOUNDS");
+        assert_eq!(result["nextInputSequence"], "1");
+        assert_eq!(runtime.binding().instance_id, binding.instance_id);
+        assert_ne!(runtime.binding().control_revision, binding.control_revision);
+        let (_, outputs) = receipt.into_parts();
+        assert_eq!(
+            publication_value(outputs.last().unwrap())["kind"],
+            "complete-baseline"
+        );
+        runtime.admit_demand_step().expect("owner remains usable");
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn pending_input_overflow_rebinds_and_publishes_recovery_baseline() {
         let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
         let (mut runtime, root) = drop_fixture_runtime("pending-input-recovery");
@@ -7344,13 +7554,13 @@ mod tests {
             .map(|_| clear_input_owned(pending_binding, InputClearReason::FocusLoss))
             .collect();
 
-        let error = runtime
+        let admission = runtime
             .append_pending_inputs(vec![clear_input_owned(
                 pending_binding,
                 InputClearReason::FocusLoss,
             )])
-            .expect_err("callback input bound must reject an overflowing append");
-        assert_eq!(error.code(), "CSHARP_INPUT_PENDING_BOUNDS");
+            .expect("overflow is a completed scoped recovery");
+        assert_eq!(admission, PendingInputAdmission::Resynchronized);
         assert_ne!(runtime.binding(), previous_binding);
         assert_eq!(runtime.pending_inputs.len(), 1);
         assert_eq!(

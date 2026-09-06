@@ -549,7 +549,7 @@ impl ProductDevAnimationFeedback {
                     return Err(ProductDevHostError::new(
                         "DEV_HOST_ANIMATION_FEEDBACK_FACT",
                         "animation natural completion is invalid",
-                    ))
+                    ));
                 }
                 ProductDevAnimationFeedbackFact::Diagnostic { code, .. }
                     if !animation_feedback_text_fits(code) =>
@@ -557,7 +557,7 @@ impl ProductDevAnimationFeedback {
                     return Err(ProductDevHostError::new(
                         "DEV_HOST_ANIMATION_FEEDBACK_FACT",
                         "animation diagnostic code is empty",
-                    ))
+                    ));
                 }
                 ProductDevAnimationFeedbackFact::Cue {
                     cue_id,
@@ -580,7 +580,7 @@ impl ProductDevAnimationFeedback {
                     return Err(ProductDevHostError::new(
                         "DEV_HOST_ANIMATION_FEEDBACK_FACT",
                         "animation cue observation is invalid",
-                    ))
+                    ));
                 }
                 ProductDevAnimationFeedbackFact::Stopped { reason, .. }
                     if !animation_feedback_text_fits(reason)
@@ -589,7 +589,7 @@ impl ProductDevAnimationFeedback {
                     return Err(ProductDevHostError::new(
                         "DEV_HOST_ANIMATION_FEEDBACK_FACT",
                         "animation stop observation is invalid",
-                    ))
+                    ));
                 }
                 _ => {}
             }
@@ -1840,6 +1840,30 @@ impl ProductDevInputResult {
                 "input batch was not a strict runtime-input wire batch; the runtime input binding was resynchronized".to_owned(),
             )?),
         })
+    }
+
+    /// The callback-facing queue was fenced before product callback entry.
+    /// The accompanying complete baseline names the committed replacement fence.
+    pub fn pending_resynchronized(
+        count: usize,
+        next_input_sequence: CanonicalU64,
+        binding: ProductDevRuntimeBinding,
+        readout: ProductDevRuntimeReadout,
+    ) -> Result<Self, ProductDevHostError> {
+        let mut result = Self::with_progress(
+            count,
+            0,
+            count,
+            None,
+            None,
+            next_input_sequence,
+            binding,
+            readout,
+        )?;
+        result.code = "CSHARP_INPUT_PENDING_BOUNDS".to_owned();
+        result.disposition = ProductDevFaultDisposition::ResyncRequired;
+        result.diagnostic = Some("callback input pressure was resynchronized before callback entry; continue from the accompanying baseline".to_owned());
+        Ok(result)
     }
 
     pub fn rejected(diagnostic: impl Into<String>) -> Result<Self, ProductDevHostError> {

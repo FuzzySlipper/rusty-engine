@@ -55,6 +55,8 @@ public sealed class ProductStateStore<TState> : IDisposable
         _store = _persistence.OpenStore(new PersistenceOpenRequest(scope));
     }
 
+    /// <summary>Returns RevisionConflict with the current stored revision when
+    /// the guard does not match; no bytes are written in that case.</summary>
     public PersistenceSaveReceipt Save(
         string key,
         in TState state,

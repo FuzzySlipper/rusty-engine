@@ -1199,6 +1199,8 @@ mod tests {
                         emission_color: NativeVec3::default(),
                         emission_intensity: 0.0,
                         double_sided: false,
+                        alpha_mode: NativeMaterialAlphaMode::Opaque,
+                        alpha_cutoff: 0.5,
                     },
                     &mut handle,
                 )
@@ -2200,6 +2202,8 @@ mod tests {
                         emission_color: NativeVec3::default(),
                         emission_intensity: 0.0,
                         double_sided: false,
+                        alpha_mode: NativeMaterialAlphaMode::Opaque,
+                        alpha_cutoff: 0.5,
                     },
                     &mut material,
                 )

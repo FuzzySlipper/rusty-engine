@@ -84,6 +84,38 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.with_runtime(|runtime| runtime.lifecycle_with_binding(operation, binding))
     }
 
+    /// Retire queued transport input only after the runtime admits the fence,
+    /// while still holding the same owner lock used by scheduler draining.
+    pub fn lifecycle_with_input_fence(
+        &self,
+        operation: ProductDevLifecycleOperation,
+        binding: Option<ProductDevRuntimeBinding>,
+        clear_admitted: impl FnOnce(),
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.with_runtime(|runtime| {
+            let receipt = runtime.lifecycle_with_binding(operation, binding)?;
+            if receipt.result().is_accepted() {
+                clear_admitted();
+            }
+            Ok(receipt)
+        })
+    }
+
+    pub fn control_with_input_fence(
+        &self,
+        operation: crate::ProductDevControlOperation,
+        binding: ProductDevRuntimeBinding,
+        clear_admitted: impl FnOnce(),
+    ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
+        self.with_runtime(|runtime| {
+            let receipt = runtime.control(operation, binding)?;
+            if receipt.result().is_accepted() {
+                clear_admitted();
+            }
+            Ok(receipt)
+        })
+    }
+
     pub fn control(
         &self,
         operation: crate::ProductDevControlOperation,
@@ -405,6 +437,27 @@ mod tests {
             )
             .unwrap())
         }
+    }
+
+    #[test]
+    fn rejected_lifecycle_and_control_preserve_queued_input_fence() {
+        let owner = ProductDevOperationOwner::new(FixtureRuntime);
+        let cleared = std::cell::Cell::new(false);
+        let result = owner
+            .lifecycle_with_input_fence(
+                ProductDevLifecycleOperation::Pause,
+                Some(binding()),
+                || cleared.set(true),
+            )
+            .unwrap();
+        assert!(!result.result().is_accepted());
+        assert!(!cleared.get());
+        let _ = owner.control_with_input_fence(
+            crate::ProductDevControlOperation::Replace,
+            binding(),
+            || cleared.set(true),
+        );
+        assert!(!cleared.get());
     }
 
     #[test]

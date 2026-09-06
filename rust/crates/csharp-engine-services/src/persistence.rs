@@ -187,7 +187,14 @@ unsafe extern "C" fn save(
         request.expected_revision,
         current.as_ref(),
     ) {
-        return 0;
+        unsafe {
+            *receipt = NativePersistenceSaveReceipt {
+                outcome: NativePersistenceSaveOutcome::RevisionConflict,
+                revision: current.as_ref().map_or(0, |blob| blob.revision),
+                schema_version: current.as_ref().map_or(0, |blob| blob.schema_version),
+            };
+        }
+        return ABI_OK;
     }
     let revision = match current {
         Some(value) => match value.revision.checked_add(1) {
@@ -207,6 +214,7 @@ unsafe extern "C" fn save(
     }
     unsafe {
         *receipt = NativePersistenceSaveReceipt {
+            outcome: NativePersistenceSaveOutcome::Saved,
             revision,
             schema_version: request.schema_version,
         };
@@ -511,7 +519,17 @@ mod tests {
             expected_revision: 0,
             ..first
         };
-        assert_eq!(unsafe { save(context, &stale, &mut saved) }, 0);
+        assert_eq!(unsafe { save(context, &stale, &mut saved) }, ABI_OK);
+        assert_eq!(
+            saved.outcome,
+            NativePersistenceSaveOutcome::RevisionConflict
+        );
+        assert_eq!(saved.revision, 1);
+        assert_eq!(unsafe { save(context, &first, &mut saved) }, ABI_OK);
+        assert_eq!(
+            saved.outcome,
+            NativePersistenceSaveOutcome::RevisionConflict
+        );
 
         let load_request = NativePersistenceLoadRequest {
             store,

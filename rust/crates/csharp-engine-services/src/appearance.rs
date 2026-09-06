@@ -41,6 +41,11 @@ use std::{
 // boundary so a successful product call is already host-admissible.
 const MAX_RENDER_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_INLINE_MESH_RESOURCE_BYTES: u32 = MAX_RENDER_RESOURCE_BYTES as u32;
+// The full position/normal/UV/color/index stream at these limits remains
+// below the 16 MiB resource-admission ceiling. U32 indices remain supported;
+// this is a copied-byte budget, not a 16-bit index restriction.
+const MAX_INLINE_MESH_VERTICES: usize = 262_144;
+const MAX_INLINE_MESH_INDICES: usize = 786_432;
 const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
 const MAX_ANIMATION_CUE_DEFINITIONS: usize = 128;
 const MAX_ANIMATION_CUE_TEXT_BYTES: usize = 96;
@@ -482,6 +487,7 @@ fn atlas_sprite_request(
             b: 1.0,
             a: 1.0,
         },
+        material: NativeSpriteMaterialDescriptor::default(),
     }
 }
 
@@ -503,6 +509,7 @@ fn legacy_sprite_request(texture: NativeRenderResourceHandle) -> NativeSpriteApp
             b: 1.0,
             a: 1.0,
         },
+        material: NativeSpriteMaterialDescriptor::default(),
     }
 }
 
@@ -3749,19 +3756,21 @@ impl RuntimeAppearanceBridge {
         let invalid =
             |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_ADMISSION", message);
         // Bound borrowed lengths before copying, including optional streams.
-        if !(3..=65_536).contains(&request.positions_len)
+        if !(3..=MAX_INLINE_MESH_VERTICES).contains(&request.positions_len)
             || request.normals_len != request.positions_len
             || (request.uvs_len != 0 && request.uvs_len != request.positions_len)
-            || !(3..=196_608).contains(&request.indices_len)
+            || (request.colors_len != 0 && request.colors_len != request.positions_len)
+            || !(3..=MAX_INLINE_MESH_INDICES).contains(&request.indices_len)
             || !request.indices_len.is_multiple_of(3)
             || !(1..=256).contains(&request.groups_len)
             || !(1..=256).contains(&request.bindings_len)
         {
-            return Err(invalid("mesh requires 3..65536 vertices, matching normals/optional UVs, 3..196608 triangle indices and 1..256 groups/bindings"));
+            return Err(invalid("mesh requires 3..262144 vertices, matching normals/optional UV/color streams, 3..786432 triangle indices and 1..256 groups/bindings"));
         }
         let positions = borrowed_slice(request.positions, request.positions_len, "mesh positions")?;
         let normals = borrowed_slice(request.normals, request.normals_len, "mesh normals")?;
         let uvs = borrowed_slice(request.uvs, request.uvs_len, "mesh UVs")?;
+        let colors = borrowed_slice(request.colors, request.colors_len, "mesh colors")?;
         let indices = borrowed_slice(request.indices, request.indices_len, "mesh indices")?;
         let groups = borrowed_slice(request.groups, request.groups_len, "mesh groups")?;
         let bindings = borrowed_slice(request.bindings, request.bindings_len, "mesh bindings")?;
@@ -3815,6 +3824,24 @@ impl RuntimeAppearanceBridge {
                 kind: MeshAttributeKind::F32,
             });
         }
+        if !colors.is_empty() {
+            attributes.push(MeshAttribute {
+                name: MeshAttributeName::Color,
+                components: 4,
+                kind: MeshAttributeKind::F32,
+            });
+        }
+        let copied_bytes = std::mem::size_of_val(positions)
+            .checked_add(std::mem::size_of_val(normals))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(uvs)))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(colors)))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(indices)))
+            .ok_or_else(|| invalid("mesh copied-byte calculation overflowed"))?;
+        if copied_bytes > MAX_INLINE_MESH_RESOURCE_BYTES as usize {
+            return Err(invalid(
+                "mesh copied streams exceed the 16 MiB inline admission budget",
+            ));
+        }
         let payload = MeshPayloadDescriptor {
             layout: MeshBufferLayout {
                 vertex_count: positions.len() as u32,
@@ -3835,7 +3862,12 @@ impl RuntimeAppearanceBridge {
                     .collect(),
                 uvs: (!uvs.is_empty())
                     .then(|| uvs.iter().flat_map(|value| [value.x, value.y]).collect()),
-                colors: None,
+                colors: (!colors.is_empty()).then(|| {
+                    colors
+                        .iter()
+                        .flat_map(|value| [value.r, value.g, value.b, value.a])
+                        .collect()
+                }),
                 indices: indices.to_vec(),
             },
             provenance: MeshProvenance::Generated,
@@ -3883,6 +3915,16 @@ impl RuntimeAppearanceBridge {
         definition
             .validate()
             .map_err(|error| invalid(&format!("invalid mesh resource: {error:?}")))?;
+        // Inline numeric streams are encoded as JSON in the retained frame;
+        // their wire size can exceed their packed attribute size. Reject an
+        // oversized resource here, before it becomes canonical presentation.
+        let encoded = serde_json::to_vec(&definition)
+            .map_err(|error| invalid(&format!("mesh resource encoding failed: {error}")))?;
+        if encoded.len() > MAX_INLINE_MESH_RESOURCE_BYTES as usize {
+            return Err(invalid(
+                "mesh encoded definition exceeds the 16 MiB inline admission budget",
+            ));
+        }
         staged
             .state
             .projector
@@ -4219,16 +4261,7 @@ impl RuntimeAppearanceBridge {
         let handle = self.staged_mut()?.state.next_sprite_atlas;
         let texture_asset = format!("texture/atlas-{handle}");
         let asset = format!("sprite/atlas-{handle}");
-        let texture = TextureDescriptor::admit_png_rgba8_resource(
-            texture_asset.clone(),
-            resource.bytes(),
-            TextureFilter::Nearest,
-            TextureWrap::Clamp,
-            1,
-        )
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_SPRITE_ATLAS_TEXTURE", format!("{error:?}"))
-        })?;
+        let texture = sprite_texture_descriptor(&resource, texture_asset.clone())?;
         let atlas = SpriteAtlasDescriptor {
             id: asset.clone(),
             texture: texture_asset.clone(),
@@ -4357,6 +4390,88 @@ impl RuntimeAppearanceBridge {
             })
     }
 
+    fn sprite_material_descriptor(
+        &self,
+        value: NativeSpriteMaterialDescriptor,
+    ) -> Result<SpriteMaterialDescriptor, CsharpEngineServicesError> {
+        let resolve_texture = |handle: NativeRenderResourceHandle,
+                               label: &str|
+         -> Result<Option<String>, CsharpEngineServicesError> {
+            if handle.value == 0 {
+                return Ok(None);
+            }
+            let resource = self.resource(handle.value)?;
+            if resource.kind() != CsharpRenderResourceKind::Texture {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_MATERIAL_TEXTURE",
+                    format!("sprite {label} texture must be an admitted texture resource"),
+                ));
+            }
+            Ok(Some(resource.asset_identity().to_owned()))
+        };
+        let descriptor = SpriteMaterialDescriptor {
+            lighting: match value.lighting {
+                NativeSpriteLightingMode::Unlit => SpriteLightingMode::Unlit,
+                NativeSpriteLightingMode::AuthoredNormal => SpriteLightingMode::AuthoredNormal,
+                NativeSpriteLightingMode::AuthoredDepth => SpriteLightingMode::AuthoredDepth,
+                NativeSpriteLightingMode::DerivedGradient => SpriteLightingMode::DerivedGradient,
+                NativeSpriteLightingMode::Synthetic => SpriteLightingMode::Synthetic,
+            },
+            normal_texture: resolve_texture(value.normal_texture, "normal")?,
+            depth_texture: resolve_texture(value.depth_texture, "depth")?,
+            normal_strength: value.normal_strength,
+            normal_bias: value.normal_bias,
+            alpha: match value.alpha_mode {
+                NativeSpriteAlphaMode::Opaque => SpriteAlphaMode::Opaque,
+                NativeSpriteAlphaMode::Mask => SpriteAlphaMode::Mask {
+                    cutoff: value.alpha_cutoff,
+                },
+                NativeSpriteAlphaMode::Blend => SpriteAlphaMode::Blend,
+            },
+            shadow: match value.shadow {
+                NativeSpriteShadowPolicy::None => SpriteShadowPolicy::None,
+                NativeSpriteShadowPolicy::Cast => SpriteShadowPolicy::Cast,
+                NativeSpriteShadowPolicy::Receive => SpriteShadowPolicy::Receive,
+                NativeSpriteShadowPolicy::CastAndReceive => SpriteShadowPolicy::CastAndReceive,
+            },
+        };
+        descriptor.validate().map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_MATERIAL",
+                format!("sprite material is invalid: {error:?}"),
+            )
+        })?;
+        Ok(descriptor)
+    }
+
+    fn retain_sprite_material_textures(
+        &mut self,
+        material: NativeSpriteMaterialDescriptor,
+    ) -> Result<(), CsharpEngineServicesError> {
+        for handle in [material.normal_texture, material.depth_texture] {
+            if handle.value == 0 {
+                continue;
+            }
+            // Descriptor validation has already established the resource kind.
+            // Resource admission alone does not publish a texture definition.
+            let texture = self
+                .resource(handle.value)?
+                .texture()
+                .cloned()
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_SPRITE_MATERIAL_TEXTURE",
+                        "sprite material texture is unavailable",
+                    )
+                })?;
+            retain_texture_descriptor(
+                &mut self.staged_mut()?.state.projector.resources_mut().textures,
+                texture,
+            )?;
+        }
+        Ok(())
+    }
+
     fn sprite_from_atlas(
         &self,
         request: NativeSpriteFromAtlasRequest,
@@ -4378,6 +4493,7 @@ impl RuntimeAppearanceBridge {
             request.render_order,
             request.depth,
             request.tint,
+            self.sprite_material_descriptor(request.material)?,
         );
         sprite.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_ATLAS_FRAME", format!("{error:?}"))
@@ -4390,6 +4506,7 @@ impl RuntimeAppearanceBridge {
         request: NativeSpriteFromAtlasRequest,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
         let (_, sprite) = self.sprite_from_atlas(request)?;
+        self.retain_sprite_material_textures(request.material)?;
         let appearance = self.allocate_appearance(Appearance::Sprite { sprite })?;
         let staged = self.staged_mut()?;
         staged
@@ -5011,16 +5128,7 @@ impl RuntimeAppearanceBridge {
                 "sprite appearance requires a texture resource",
             ));
         }
-        let texture = TextureDescriptor::admit_png_rgba8_resource(
-            "texture/legacy-validation".to_owned(),
-            resource.bytes(),
-            TextureFilter::Nearest,
-            TextureWrap::Clamp,
-            1,
-        )
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_SPRITE_TEXTURE", format!("{error:?}"))
-        })?;
+        let texture = sprite_texture_descriptor(&resource, "texture/legacy-validation".to_owned())?;
         let atlas = SpriteAtlasDescriptor {
             id: "sprite/legacy-validation".to_owned(),
             texture: texture.id,
@@ -5044,6 +5152,7 @@ impl RuntimeAppearanceBridge {
             request.render_order,
             request.depth,
             request.tint,
+            self.sprite_material_descriptor(request.material)?,
         );
         sprite.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
@@ -5064,16 +5173,7 @@ impl RuntimeAppearanceBridge {
         let handle = self.staged_mut()?.state.next_appearance;
         let texture_id = format!("texture/native-{handle}");
         let atlas_id = format!("sprite/native-{handle}");
-        let texture = TextureDescriptor::admit_png_rgba8_resource(
-            texture_id.clone(),
-            resource.bytes(),
-            TextureFilter::Nearest,
-            TextureWrap::Clamp,
-            1,
-        )
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_SPRITE_TEXTURE", format!("{error:?}"))
-        })?;
+        let texture = sprite_texture_descriptor(&resource, texture_id.clone())?;
         let atlas = SpriteAtlasDescriptor {
             id: atlas_id.clone(),
             texture: texture_id,
@@ -5094,10 +5194,12 @@ impl RuntimeAppearanceBridge {
             request.render_order,
             request.depth,
             request.tint,
+            self.sprite_material_descriptor(request.material)?,
         );
         sprite.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_SPRITE_FRAME", format!("{error:?}"))
         })?;
+        self.retain_sprite_material_textures(request.material)?;
         {
             let resources = self.staged_mut()?.state.projector.resources_mut();
             resources.textures.push(texture);
@@ -8884,6 +8986,7 @@ fn sprite_instance_descriptor(
     render_order: i32,
     depth: NativeSpriteDepthPolicy,
     tint: NativeColor,
+    material: SpriteMaterialDescriptor,
 ) -> SpriteInstanceDescriptor {
     SpriteInstanceDescriptor {
         asset,
@@ -8906,13 +9009,33 @@ fn sprite_instance_descriptor(
             NativeSpriteDepthPolicy::DepthTestOff => SpriteDepthPolicy::DepthTestOff,
             NativeSpriteDepthPolicy::DepthWriteOff => SpriteDepthPolicy::DepthWriteOff,
         },
-        shading: SpriteShading::Unlit,
-        material: SpriteMaterialDescriptor::default(),
+        shading: match material.lighting {
+            SpriteLightingMode::Unlit => SpriteShading::Unlit,
+            _ => SpriteShading::Lit,
+        },
+        material,
         visible: true,
         transform: Transform::IDENTITY,
         attachment: SpriteAttachment::default(),
         metadata: RenderMetadata::default(),
     }
+}
+
+fn sprite_texture_descriptor(
+    resource: &CsharpRenderResource,
+    texture_id: String,
+) -> Result<TextureDescriptor, CsharpEngineServicesError> {
+    let mut texture = resource.texture().cloned().ok_or_else(|| {
+        CsharpEngineServicesError::new(
+            "CSHARP_SPRITE_TEXTURE",
+            "sprite texture resource did not retain an admitted texture descriptor",
+        )
+    })?;
+    texture.id = texture_id;
+    texture.validate().map_err(|error| {
+        CsharpEngineServicesError::new("CSHARP_SPRITE_TEXTURE", format!("{error:?}"))
+    })?;
+    Ok(texture)
 }
 
 fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
@@ -8964,7 +9087,13 @@ fn material_descriptor(
         emission_color: native_vec3_array(request.emission_color),
         emission_intensity: request.emission_intensity,
         uv_strategy: MaterialUvStrategy::Flat,
-        alpha_mode: MaterialAlphaModeDescriptor::Opaque,
+        alpha_mode: match request.alpha_mode {
+            NativeMaterialAlphaMode::Opaque => MaterialAlphaModeDescriptor::Opaque,
+            NativeMaterialAlphaMode::Mask => MaterialAlphaModeDescriptor::Mask {
+                cutoff: request.alpha_cutoff,
+            },
+            NativeMaterialAlphaMode::Blend => MaterialAlphaModeDescriptor::Blend,
+        },
         double_sided: request.double_sided,
         voxel_surface: None,
     };
@@ -9276,6 +9405,8 @@ pub(super) mod tests {
                 emission_color: NativeVec3::default(),
                 emission_intensity: 0.0,
                 double_sided: true,
+                alpha_mode: NativeMaterialAlphaMode::Mask,
+                alpha_cutoff: 0.4,
             })
             .unwrap();
         let mut positions = [
@@ -9296,6 +9427,26 @@ pub(super) mod tests {
             y: 0.0,
             z: 1.0,
         }; 3];
+        let mut colors = [
+            NativeColor {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            NativeColor {
+                r: 0.0,
+                g: 1.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            NativeColor {
+                r: 0.0,
+                g: 0.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        ];
         let mut indices = [0, 1, 2];
         let groups = [NativeMeshGroup {
             material_slot: 3,
@@ -9313,6 +9464,8 @@ pub(super) mod tests {
             normals_len: normals.len(),
             uvs: std::ptr::null(),
             uvs_len: 0,
+            colors: colors.as_ptr(),
+            colors_len: colors.len(),
             indices: indices.as_ptr(),
             indices_len: indices.len(),
             groups: groups.as_ptr(),
@@ -9322,8 +9475,10 @@ pub(super) mod tests {
         };
         let resource = unsafe { bridge.create_mesh_resource(&request) }.unwrap();
         positions[1].x = 99.0;
+        colors[0].r = 0.25;
         indices[1] = 99;
         assert_eq!(positions[1].x, 99.0);
+        assert_eq!(colors[0].r, 0.25);
         assert_eq!(indices[1], 99);
         // Bad indices fail before admission, preserving the prior owner/allocator.
         let count = bridge.staged_ref().unwrap().state.mesh_resources.len();
@@ -9331,6 +9486,28 @@ pub(super) mod tests {
         assert_eq!(
             bridge.staged_ref().unwrap().state.mesh_resources.len(),
             count
+        );
+        let over_budget = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: MAX_INLINE_MESH_VERTICES + 1,
+            normals: normals.as_ptr(),
+            normals_len: MAX_INLINE_MESH_VERTICES + 1,
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: std::ptr::null(),
+            colors_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: 3,
+            groups: groups.as_ptr(),
+            groups_len: 1,
+            bindings: bindings.as_ptr(),
+            bindings_len: 1,
+        };
+        assert_eq!(
+            unsafe { bridge.create_mesh_resource(&over_budget) }
+                .expect_err("mesh vertex budget")
+                .code(),
+            "CSHARP_MESH_ADMISSION"
         );
         let appearance = bridge.create_mesh_appearance(resource).unwrap();
         assert!(bridge.destroy_mesh_resource(resource).is_err());
@@ -9347,12 +9524,24 @@ pub(super) mod tests {
         let baseline = world.snapshot();
         let encoded = serde_json::to_value(&baseline.frame).unwrap();
         assert!(encoded.to_string().contains("mesh/runtime-1"));
+        assert!(encoded.to_string().contains("mask"));
+        assert!(matches!(
+            call.state.projector.clone().resources_mut().materials[0].alpha_mode,
+            MaterialAlphaModeDescriptor::Mask { cutoff } if cutoff == 0.4
+        ));
         let asset = &call.state.projector.clone().resources_mut().static_meshes[0].clone();
         match &asset.payload.source {
             MeshPayloadSource::Inline {
-                positions, indices, ..
+                positions,
+                colors,
+                indices,
+                ..
             } => {
                 assert_eq!(positions[3], 1.0);
+                assert_eq!(
+                    colors.as_deref(),
+                    Some(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0][..])
+                );
                 assert_eq!(indices, &[0, 1, 2]);
             }
             _ => panic!("generated stream must be retained and reconstructible"),
@@ -9975,6 +10164,8 @@ pub(super) mod tests {
                     emission_color: NativeVec3::default(),
                     emission_intensity: 0.0,
                     double_sided: false,
+                    alpha_mode: NativeMaterialAlphaMode::Opaque,
+                    alpha_cutoff: 0.5,
                 })
                 .unwrap();
         }
@@ -10002,6 +10193,93 @@ pub(super) mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn sprites_retain_selected_sampling_and_typed_material_facts() {
+        let mut content = BTreeMap::new();
+        content.insert("sprite.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("normal.png".to_owned(), Arc::from(RGBA_PNG));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        bridge.begin_call();
+        let mut sprite_texture_request = resource_request("sprite.png");
+        sprite_texture_request.filter = NativeTextureFilter::Linear;
+        sprite_texture_request.wrap = NativeTextureWrap::Repeat;
+        let sprite_texture = bridge
+            .open_resource(&sprite_texture_request)
+            .expect("selected sprite texture");
+        let normal_texture = bridge
+            .open_resource(&resource_request("normal.png"))
+            .expect("selected normal texture");
+        let frames = [NativeSpriteAtlasFrame {
+            frame_id: 7,
+            uv_min: NativeVec2::default(),
+            uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+            has_size: false,
+            size: NativeVec2::default(),
+        }];
+        let atlas = unsafe {
+            bridge
+                .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                    texture: sprite_texture.handle,
+                    frames: frames.as_ptr(),
+                    frames_len: frames.len(),
+                })
+                .expect("atlas")
+        };
+        let mut request = atlas_sprite_request(atlas, 7);
+        request.material = NativeSpriteMaterialDescriptor {
+            lighting: NativeSpriteLightingMode::AuthoredNormal,
+            normal_texture: normal_texture.handle,
+            depth_texture: NativeRenderResourceHandle::default(),
+            normal_strength: 1.5,
+            normal_bias: 0.1,
+            alpha_mode: NativeSpriteAlphaMode::Mask,
+            alpha_cutoff: 0.4,
+            shadow: NativeSpriteShadowPolicy::CastAndReceive,
+        };
+        let appearance = bridge
+            .create_sprite_from_atlas(request)
+            .expect("typed sprite material");
+        let normal_identity = bridge
+            .resource(normal_texture.handle.value)
+            .unwrap()
+            .asset_identity()
+            .to_owned();
+        let resources = bridge
+            .staged
+            .as_mut()
+            .unwrap()
+            .state
+            .projector
+            .resources_mut();
+        let atlas_texture = resources
+            .textures
+            .iter()
+            .find(|texture| texture.id == "texture/atlas-1")
+            .expect("atlas texture");
+        assert_eq!(atlas_texture.filter, TextureFilter::Linear);
+        assert_eq!(atlas_texture.wrap, TextureWrap::Repeat);
+        assert!(
+            resources
+                .textures
+                .iter()
+                .any(|texture| texture.id == normal_identity),
+            "normal map must be present in the retained resource baseline"
+        );
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        let mut world = render_presentation::PresentationWorld::default();
+        for output in &call.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                world.apply(frame).unwrap();
+            }
+        }
+        let encoded = serde_json::to_string(&world.snapshot().frame).unwrap();
+        assert!(encoded.contains("sprite/atlas-1"));
+        assert!(encoded.contains("authoredNormal"));
+        assert!(encoded.contains("castAndReceive"));
     }
 
     #[test]
@@ -10488,6 +10766,8 @@ pub(super) mod tests {
                 emission_color: NativeVec3::default(),
                 emission_intensity: 0.0,
                 double_sided: false,
+                alpha_mode: NativeMaterialAlphaMode::Opaque,
+                alpha_cutoff: 0.5,
             })
             .expect("material");
         let bindings = [NativeMeshMaterialBinding {

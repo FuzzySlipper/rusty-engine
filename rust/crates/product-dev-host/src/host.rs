@@ -1563,19 +1563,19 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
                 let receipt = match runtime.describe_debug() {
                     Ok(receipt) => receipt,
                     Err(error) => {
-                        return Ok(HttpResponse::error(500, error.code(), error.diagnostic()))
+                        return Ok(HttpResponse::error(500, error.code(), error.diagnostic()));
                     }
                 };
                 let (catalog, outputs) = match receipt.into_wire_parts() {
                     Ok(parts) => parts,
                     Err(error) => {
-                        return Ok(HttpResponse::error(503, error.code(), error.detail()))
+                        return Ok(HttpResponse::error(503, error.code(), error.detail()));
                     }
                 };
                 let output_through = match push_host_outputs(state, outputs) {
                     Ok(output_through) => output_through,
                     Err(error) => {
-                        return Ok(HttpResponse::error(503, error.code(), error.detail()))
+                        return Ok(HttpResponse::error(503, error.code(), error.detail()));
                     }
                 };
                 Ok(json_response(200, &catalog).with_output_through(output_through))
@@ -1607,6 +1607,7 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
                 let receipt = match runtime.execute_debug(command) {
                     Ok(receipt) => receipt,
                     Err(error) => {
+                        request_incarnation_replacement(state, &error);
                         return Ok(debug_text_error(
                             500,
                             &format!("{}: {}", error.code(), error.diagnostic()),
@@ -1656,15 +1657,16 @@ fn invoke_lifecycle<R: ProductDevRuntime>(
         Ok(value) => value,
         Err(response) => return response,
     };
-    // A lifecycle transition changes the input binding or terminal state.
-    // Discard transport work queued before that fence before taking the owner
-    // operation; a concurrent scheduler still serializes its already-drained
-    // prefix through the same runtime lock.
-    state.input_mailbox.clear();
     let response = call_runtime(
         state,
         operation.operation_kind(),
-        |runtime| runtime.lifecycle_with_binding(operation, request.runtime),
+        |runtime| {
+            let receipt = runtime.lifecycle_with_binding(operation, request.runtime)?;
+            if receipt.result().is_accepted() {
+                state.input_mailbox.clear();
+            }
+            Ok(receipt)
+        },
         |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
     );
     state.scheduler_wake.notify();
@@ -1680,11 +1682,16 @@ fn invoke_control<R: ProductDevRuntime>(
         Ok(value) => value,
         Err(response) => return response,
     };
-    state.input_mailbox.clear();
     let response = call_runtime(
         state,
         operation.operation_kind(),
-        |runtime| runtime.control(operation, request.runtime),
+        |runtime| {
+            let receipt = runtime.control(operation, request.runtime)?;
+            if receipt.result().is_accepted() {
+                state.input_mailbox.clear();
+            }
+            Ok(receipt)
+        },
         |error| ProductDevOperationResult::rejected_runtime(operation.operation_kind(), error),
     );
     state.scheduler_wake.notify();

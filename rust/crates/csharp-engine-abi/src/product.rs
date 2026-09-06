@@ -704,6 +704,22 @@ pub type NativeReplaceCamera = unsafe extern "C" fn(
     *mut NativeCameraHandle,
 ) -> i32;
 pub type NativeDestroyCamera = unsafe extern "C" fn(*mut c_void, NativeCameraHandle) -> i32;
+pub type NativeCreateCameraTarget = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCameraTargetDescriptor,
+    *mut NativeCameraTargetHandle,
+) -> i32;
+pub type NativeUpdateCameraTarget =
+    unsafe extern "C" fn(*mut c_void, *const NativeCameraTargetUpdateRequest) -> i32;
+pub type NativeReplaceCameraTarget = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCameraTargetReplaceRequest,
+    *mut NativeCameraTargetHandle,
+) -> i32;
+pub type NativeDestroyCameraTarget =
+    unsafe extern "C" fn(*mut c_void, NativeCameraTargetHandle) -> i32;
+pub type NativeSetCameraComposition =
+    unsafe extern "C" fn(*mut c_void, *const NativeCameraCompositionRequest) -> i32;
 pub type NativeSetActiveCamera = unsafe extern "C" fn(*mut c_void, NativeCameraHandle) -> i32;
 pub type NativeClearActiveCamera =
     unsafe extern "C" fn(*mut c_void, *const NativeClearActiveCameraRequest) -> i32;
@@ -1104,6 +1120,11 @@ pub struct NativeCameraViewApi {
     pub update_camera: NativeUpdateCamera,
     pub replace_camera: NativeReplaceCamera,
     pub destroy_camera: NativeDestroyCamera,
+    pub create_camera_target: NativeCreateCameraTarget,
+    pub update_camera_target: NativeUpdateCameraTarget,
+    pub replace_camera_target: NativeReplaceCameraTarget,
+    pub destroy_camera_target: NativeDestroyCameraTarget,
+    pub set_camera_composition: NativeSetCameraComposition,
     pub set_active_camera: NativeSetActiveCamera,
     pub clear_active_camera: NativeClearActiveCamera,
     pub set_sky_background: NativeSetSkyBackground,
