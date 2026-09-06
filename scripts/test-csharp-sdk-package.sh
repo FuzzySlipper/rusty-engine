@@ -314,10 +314,10 @@ if rg -F -q "$repo_root" "$consumer_dir/obj" "$consumer_packages"; then
     exit 1
 fi
 
+host_bundle_dir="$work_dir/host-bundle"
+mkdir -p "$host_bundle_dir"
+printf '<!doctype html><title>Rusty Engine C# package smoke</title>\n' > "$host_bundle_dir/index.html"
 if [[ "$coreclr_smoke" == true ]]; then
-    host_bundle_dir="$work_dir/host-bundle"
-    mkdir -p "$host_bundle_dir"
-    printf '<!doctype html><title>Rusty Engine C# package smoke</title>\n' > "$host_bundle_dir/index.html"
     cargo run --manifest-path "$repo_root/Cargo.toml" -p csharp-product-runtime --bin rusty-product-host --locked -- \
         --loader coreclr \
         --library "$staged_product_directory/coreclr/Rusty.Engine.Product.dll" \
@@ -356,6 +356,18 @@ if [[ "$run_aot" == true ]]; then
         echo "test-csharp-sdk-package: NativeAOT staging did not preserve the same Product bundle." >&2
         exit 1
     }
+    # Exercise the generated package consumer through the native loader too.
+    # A checked legacy composition is not the downstream NativeAOT path.
+    cargo run --manifest-path "$repo_root/Cargo.toml" -p csharp-product-runtime --bin rusty-product-host --locked -- \
+        --library "$staged_product_directory/native/Rusty.Engine.Product.so" \
+        --bundle-dir "$host_bundle_dir" \
+        --content-dir "$staged_product_directory/content" \
+        --mode realtime \
+        --persistence-root "$work_dir/aot-persistence" \
+        --content-store-root "$work_dir/aot-content-store" \
+        --direct-intent runtime.exercise=payload:runtime.exercise.payload \
+        --port 0 \
+        --exercise
 elif grep -Eiq 'warning (CS|RS)[0-9]+:' "$work_dir/coreclr-staging.log"; then
     echo "test-csharp-sdk-package: generated CoreCLR composition emitted compiler or analyzer warnings." >&2
     cat "$work_dir/coreclr-staging.log" >&2
