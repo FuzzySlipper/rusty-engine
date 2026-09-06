@@ -47,6 +47,23 @@ full source-level Rust API coverage. Its current shape is defined by the Rust
 ABI crate and binding generator; use current Den coverage guidance for
 planning, rather than copying a volatile service table into this document.
 
+Named capabilities should expose composable Engine mechanisms to trusted C#
+callers. A convenient helper or authored-content route must not be the only
+way to select facts that an underlying mechanism already supports. Keep
+resource ownership, retained state, and realization in the Engine while
+providing direct typed operations for those facts. Defaults should guide
+ordinary use without silently overriding an explicit caller selection.
+Missing bindings and restrictive adapter policy are upstream gaps, distinct
+from genuinely new Engine mechanisms; exposing every implementation detail
+is not the objective.
+
+Apply the same distinction to failures. Expected rejection, exhausted work
+budgets, and uncertain renderer realization should have outcomes appropriate
+to their scope: product handling, backpressure, or a fresh projection baseline.
+They should not accidentally become an uncertain product callback or a dead
+session. Preserve actual ABI/lifetime invariants and canonical-state
+uncertainty, including the prohibition on replaying possibly committed work.
+
 ## Lifecycle and data movement
 
 1. The packaged Rust runtime loads the staged Product through CoreCLR during
