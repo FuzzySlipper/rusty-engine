@@ -452,11 +452,18 @@ angle, UV scale, default material, and optional ordered material regions:
 - Zero crease angle gives flat facets; larger angles admit incident faces into
   area-weighted normals. Major-axis planar UV charts use world coordinates;
   UV scale is repeats per world unit, independent of extraction density.
-- Each triangle uses the first material region containing its centroid, or the
-  default material. Regions classify triangles; they do not split triangles at
-  exact material boundaries. Texture filtering/wrapping comes from ordinary
-  authored materials. Materials are grouped into indexed ranges, not one
-  submission per stone or sample.
+- The short request constructor keeps `ImplicitMaterialBoundaryMode.Centroid`:
+  each triangle uses the first region containing its centroid, or the default
+  material. Select `MaterialBoundaryMode: ImplicitMaterialBoundaryMode.Interpolated`
+  in the full request to split triangles at the zero contour of linearly
+  interpolated vertex field samples. This gives exact cuts for affine fields
+  such as planes, independently of triangle direction. Curved fields are
+  polygonal approximations; regions hidden between vertices can be missed.
+  Increase source sampling when those details matter. Cuts preserve the source
+  surface and interpolate its existing normals/UVs instead of creating shading
+  creases. First-region precedence remains unchanged. Added triangles count
+  toward the ordinary mesh admission limits. Texture filtering/wrapping comes
+  from ordinary materials; material groups remain indexed ranges.
 
 Create an appearance with `engine.Graphics.CreateMeshAppearance(mesh)` and
 include it in the product's complete appearance snapshot. A mesh may have

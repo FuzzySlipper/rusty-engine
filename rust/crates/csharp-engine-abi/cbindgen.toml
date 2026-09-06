@@ -23,6 +23,7 @@ include = [
     "NativeImplicitSampleRequest",
     "NativeImplicitSample",
     "NativeImplicitMaterialRegion",
+    "NativeImplicitMaterialBoundaryMode",
     "NativeImplicitGenerateRequest",
     "NativeImplicitGenerationReadout",
     "NativeCreateImplicitField",

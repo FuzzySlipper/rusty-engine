@@ -4,7 +4,21 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::{Error, Field, Geometry, Node};
 
-/// Selects a material slot for triangles whose centroid is inside `node`.
+mod regions;
+
+/// How material regions are represented on the extracted surface.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MaterialBoundaryMode {
+    /// Assign whole triangles by their centroid (no additional triangles).
+    #[default]
+    Centroid,
+    /// Split at the zero contour of linearly interpolated vertex field samples.
+    /// Exact for affine fields; curved boundaries are polygonal approximations.
+    /// Regions with no vertex sign change can be missed entirely.
+    Interpolated,
+}
+
+/// Selects a material slot using the configured boundary sampling mode.
 /// Regions are considered in slice order because arbitrary field values are
 /// only meaningful as inside/outside tests, not as comparable distances.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +35,7 @@ pub struct SurfaceOptions {
     /// World units per UV unit multiplier for planar charts.
     pub uv_scale: f32,
     pub default_slot: u32,
+    pub material_boundary_mode: MaterialBoundaryMode,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,9 +72,12 @@ struct VertexKey {
 
 /// Builds ordinary indexed render attributes from extracted triangles.
 ///
-/// Material regions select the first field whose centroid sample is at or
-/// below zero. UVs use the face's dominant normal axis and remain in world
-/// space, so extraction density does not affect their scale.
+/// Material regions select the first field whose sample is at or below zero.
+/// Centroid mode assigns whole triangles. Interpolated mode partitions each
+/// original triangle using linear interpolation of its vertex field samples;
+/// hidden interior regions and curved contours require sufficiently dense
+/// source geometry. It does not move the extracted surface. UVs use the face's
+/// dominant normal axis and remain in world space, independent of density.
 pub fn assemble(
     field: &Field,
     geometry: &Geometry,
@@ -112,10 +130,17 @@ pub fn assemble(
             groups: Vec::new(),
         });
     }
-    assign_materials(field, &mut faces, &centroids, regions)?;
+    if options.material_boundary_mode == MaterialBoundaryMode::Centroid {
+        assign_materials(field, &mut faces, &centroids, regions)?;
+    }
     let incidents = incident_faces(geometry.positions.len(), &faces);
     let normals = corner_normals(&faces, &incidents, options.crease_angle_degrees);
-    emit_surface(&geometry.positions, &faces, &normals, options.uv_scale)
+    let surface = emit_surface(&geometry.positions, &faces, &normals, options.uv_scale)?;
+    if options.material_boundary_mode == MaterialBoundaryMode::Interpolated && !regions.is_empty() {
+        regions::split(field, surface, regions, options.default_slot)
+    } else {
+        Ok(surface)
+    }
 }
 
 fn validate_options(options: SurfaceOptions) -> Result<(), Error> {
@@ -346,6 +371,145 @@ mod tests {
             crease_angle_degrees,
             uv_scale: 1.0,
             default_slot: 2,
+            material_boundary_mode: MaterialBoundaryMode::Centroid,
+        }
+    }
+
+    fn material_area(surface: &Surface, slot: u32) -> f32 {
+        surface
+            .groups
+            .iter()
+            .filter(|g| g.slot == slot)
+            .map(|g| {
+                surface.indices[g.index_start as usize..(g.index_start + g.index_count) as usize]
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|t| {
+                        let a = surface.positions[t[0] as usize];
+                        let b = surface.positions[t[1] as usize];
+                        let c = surface.positions[t[2] as usize];
+                        let n = cross(sub(b, a), sub(c, a));
+                        dot(n, n).sqrt() * 0.5
+                    })
+                    .sum::<f32>()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn fixed_mesh_cutoff_sweep_is_quantized_by_centroids_but_continuous_when_split() {
+        for rotated in [false, true] {
+            let mut positions = Vec::new();
+            for x in 0..=4 {
+                for y in [0.0, 1.0] {
+                    positions.push(if rotated {
+                        [0.0, y, -(x as f32)]
+                    } else {
+                        [x as f32, y, 0.0]
+                    });
+                }
+            }
+            let triangles = (0..4)
+                .flat_map(|x| {
+                    let a = x * 2;
+                    [[a, a + 2, a + 3], [a, a + 3, a + 1]]
+                })
+                .collect();
+            let geometry = geometry(positions, triangles);
+            let original_positions = geometry.positions.clone();
+            let original_triangles = geometry.triangles.clone();
+            for (cutoff, centroid_area) in [(0.2, 0.0), (0.5, 2.0), (0.8, 4.0)] {
+                let mut field = Field::new();
+                let region = MaterialRegion {
+                    node: field.plane([0.0, 1.0, 0.0], cutoff).unwrap(),
+                    slot: 5,
+                };
+                let old = assemble(&field, &geometry, &[region], options(0.0)).unwrap();
+                assert!((material_area(&old, 5) - centroid_area).abs() < 1e-5);
+                let split = assemble(
+                    &field,
+                    &geometry,
+                    &[region],
+                    SurfaceOptions {
+                        material_boundary_mode: MaterialBoundaryMode::Interpolated,
+                        ..options(0.0)
+                    },
+                )
+                .unwrap();
+                assert!((material_area(&split, 5) - 4.0 * cutoff).abs() < 1e-5);
+                assert!((material_area(&split, 2) - 4.0 * (1.0 - cutoff)).abs() < 1e-5);
+                for group in &split.groups {
+                    for &i in &split.indices[group.index_start as usize
+                        ..(group.index_start + group.index_count) as usize]
+                    {
+                        let y = split.positions[i as usize][1];
+                        assert!(if group.slot == 5 {
+                            y <= cutoff + 1e-6
+                        } else {
+                            y >= cutoff - 1e-6
+                        });
+                    }
+                }
+                for t in split.indices.as_chunks::<3>().0.iter() {
+                    let [a, b, c] = [t[0], t[1], t[2]].map(|i| split.positions[i as usize]);
+                    assert!(cross(sub(b, a), sub(c, a))[if rotated { 0 } else { 2 }] > 0.0);
+                }
+                assert_eq!(geometry.positions, original_positions);
+                assert_eq!(geometry.triangles, original_triangles);
+            }
+        }
+    }
+
+    #[test]
+    fn split_regions_preserve_first_match_and_original_uv_and_normal_fields() {
+        let mut field = Field::new();
+        let regions = [
+            MaterialRegion {
+                node: field.plane([0.0, 1.0, 0.0], 0.65).unwrap(),
+                slot: 5,
+            },
+            MaterialRegion {
+                node: field.plane([0.0, 1.0, 0.0], 0.85).unwrap(),
+                slot: 9,
+            },
+        ];
+        let geometry = geometry(
+            vec![
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [4.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            vec![[0, 1, 2], [0, 2, 3]],
+        );
+        let split = assemble(
+            &field,
+            &geometry,
+            &regions,
+            SurfaceOptions {
+                material_boundary_mode: MaterialBoundaryMode::Interpolated,
+                ..options(180.0)
+            },
+        )
+        .unwrap();
+        for (slot, area) in [(5, 2.6), (9, 0.8), (2, 0.6)] {
+            assert!((material_area(&split, slot) - area).abs() < 1e-5);
+        }
+        for i in 0..split.positions.len() {
+            assert_eq!(split.normals[i], [0.0, 0.0, 1.0]);
+            assert_eq!(split.uvs[i], [split.positions[i][0], split.positions[i][1]]);
+        }
+        // Both sides of the original shared diagonal use identical crossing
+        // positions, despite opposite edge traversal and sequential regions.
+        for cutoff in [0.65_f32, 0.85] {
+            let p = [4.0 * cutoff, cutoff, 0.0];
+            let hits: Vec<_> = split
+                .positions
+                .iter()
+                .filter(|q| (q[1] - cutoff).abs() < 1e-6 && (q[0] - p[0]).abs() < 1e-6)
+                .collect();
+            assert_eq!(hits.len(), 1);
         }
     }
 

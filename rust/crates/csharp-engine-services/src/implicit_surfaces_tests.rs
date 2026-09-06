@@ -156,6 +156,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
                     default_material: material,
                     regions: std::ptr::null(),
                     regions_len: 0,
+                    material_boundary_mode: NativeImplicitMaterialBoundaryMode::Interpolated,
                 },
                 &mut mesh,
             )
@@ -402,6 +403,7 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         default_material: NativeMaterialHandle::default(),
         regions,
         regions_len,
+        material_boundary_mode: NativeImplicitMaterialBoundaryMode::Centroid,
     };
     appearance.begin_call();
     implicit.begin_call();

@@ -110,6 +110,13 @@ pub struct NativeImplicitMaterialRegion {
     pub material: NativeMaterialHandle,
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeImplicitMaterialBoundaryMode {
+    Centroid = 0,
+    Interpolated = 1,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeImplicitGenerateRequest {
@@ -123,6 +130,7 @@ pub struct NativeImplicitGenerateRequest {
     pub default_material: NativeMaterialHandle,
     pub regions: *const NativeImplicitMaterialRegion,
     pub regions_len: usize,
+    pub material_boundary_mode: NativeImplicitMaterialBoundaryMode,
 }
 
 #[repr(C)]

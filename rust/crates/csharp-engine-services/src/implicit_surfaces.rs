@@ -8,7 +8,7 @@ use crate::{
 use csharp_engine_abi::*;
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc, time::Instant};
 use svc_implicit::{
-    surface::{self, MaterialRegion, SurfaceOptions},
+    surface::{self, MaterialBoundaryMode, MaterialRegion, SurfaceOptions},
     Bounds, Field, GenerateOptions, Node,
 };
 
@@ -193,6 +193,12 @@ impl RuntimeImplicitBridge {
                 crease_angle_degrees: request.crease_angle_degrees,
                 uv_scale: request.uv_scale,
                 default_slot: 0,
+                material_boundary_mode: match request.material_boundary_mode {
+                    NativeImplicitMaterialBoundaryMode::Centroid => MaterialBoundaryMode::Centroid,
+                    NativeImplicitMaterialBoundaryMode::Interpolated => {
+                        MaterialBoundaryMode::Interpolated
+                    }
+                },
             },
         )
         .map_err(kernel)?;
