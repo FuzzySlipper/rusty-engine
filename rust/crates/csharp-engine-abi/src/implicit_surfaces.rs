@@ -131,6 +131,9 @@ pub struct NativeImplicitGenerateRequest {
     pub regions: *const NativeImplicitMaterialRegion,
     pub regions_len: usize,
     pub material_boundary_mode: NativeImplicitMaterialBoundaryMode,
+    /// Optional material-boundary sample spacing. Zero preserves ordinary
+    /// interpolation; a positive value requests bounded material refinement.
+    pub material_sample_spacing: f32,
 }
 
 #[repr(C)]

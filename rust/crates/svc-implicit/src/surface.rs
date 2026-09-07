@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::{Error, Field, Geometry, Node};
 
+mod refinement;
 mod regions;
 
 /// How material regions are represented on the extracted surface.
@@ -27,6 +28,16 @@ pub struct MaterialRegion {
     pub slot: u32,
 }
 
+/// Opt-in sampling of material fields on the existing surface. This bounds
+/// triangle edge length before clipping, independently of geometric flatness.
+/// It is not a guarantee for arbitrarily narrow or tangent material regions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaterialSampling {
+    pub max_edge_length: f32,
+    pub max_vertices: usize,
+    pub max_triangles: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceOptions {
     /// The largest angle between a face and an incident face that contributes
@@ -36,6 +47,7 @@ pub struct SurfaceOptions {
     pub uv_scale: f32,
     pub default_slot: u32,
     pub material_boundary_mode: MaterialBoundaryMode,
+    pub material_sampling: Option<MaterialSampling>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,7 +88,7 @@ struct VertexKey {
 /// Centroid mode assigns whole triangles. Interpolated mode partitions each
 /// original triangle using linear interpolation of its vertex field samples;
 /// hidden interior regions and curved contours require sufficiently dense
-/// source geometry. It does not move the extracted surface. UVs use the face's
+/// samples. Optional material sampling refines the attributed triangles first. It does not move the extracted surface. UVs use the face's
 /// dominant normal axis and remain in world space, independent of density.
 pub fn assemble(
     field: &Field,
@@ -137,13 +149,41 @@ pub fn assemble(
     let normals = corner_normals(&faces, &incidents, options.crease_angle_degrees);
     let surface = emit_surface(&geometry.positions, &faces, &normals, options.uv_scale)?;
     if options.material_boundary_mode == MaterialBoundaryMode::Interpolated && !regions.is_empty() {
-        regions::split(field, surface, regions, options.default_slot)
+        let surface = if let Some(sampling) = options.material_sampling {
+            refinement::refine(surface, sampling)?
+        } else {
+            surface
+        };
+        regions::split(
+            field,
+            surface,
+            regions,
+            options.default_slot,
+            options.material_sampling,
+        )
     } else {
         Ok(surface)
     }
 }
 
 fn validate_options(options: SurfaceOptions) -> Result<(), Error> {
+    if let Some(sampling) = options.material_sampling {
+        if !sampling.max_edge_length.is_finite()
+            || sampling.max_edge_length <= 0.0
+            || sampling.max_vertices == 0
+            || sampling.max_triangles == 0
+        {
+            return Err(Error(
+                "material sampling requires positive finite spacing and nonzero mesh budgets"
+                    .into(),
+            ));
+        }
+        if options.material_boundary_mode != MaterialBoundaryMode::Interpolated {
+            return Err(Error(
+                "material sampling requires interpolated material boundaries".into(),
+            ));
+        }
+    }
     if !options.crease_angle_degrees.is_finite()
         || !(0.0..=180.0).contains(&options.crease_angle_degrees)
     {
@@ -372,6 +412,7 @@ mod tests {
             uv_scale: 1.0,
             default_slot: 2,
             material_boundary_mode: MaterialBoundaryMode::Centroid,
+            material_sampling: None,
         }
     }
 
@@ -395,6 +436,113 @@ mod tests {
                     .sum::<f32>()
             })
             .sum()
+    }
+
+    #[test]
+    fn material_sampling_recovers_closed_regions_without_changing_geometry() {
+        for angle in [
+            0.0_f32,
+            std::f32::consts::FRAC_PI_4,
+            std::f32::consts::FRAC_PI_2,
+        ] {
+            let place = |x: f32, y: f32| [x * angle.cos(), y, -x * angle.sin()];
+            let geometry = geometry(
+                vec![
+                    place(0.0, 0.0),
+                    place(1.0, 0.0),
+                    place(1.0, 1.0),
+                    place(0.0, 1.0),
+                ],
+                vec![[0, 1, 2], [0, 2, 3]],
+            );
+            let mut field = Field::new();
+            let radius = 0.035;
+            let node = field.sphere(place(0.31, 0.27), radius).unwrap();
+            let region = MaterialRegion { node, slot: 5 };
+            let base = SurfaceOptions {
+                material_boundary_mode: MaterialBoundaryMode::Interpolated,
+                ..options(180.0)
+            };
+            let missed = assemble(&field, &geometry, &[region], base).unwrap();
+            assert_eq!(material_area(&missed, 5), 0.0);
+            for spacing in [0.04, 0.01] {
+                // Repeated identical regions also test first-region precedence.
+                let output = assemble(
+                    &field,
+                    &geometry,
+                    &[region, MaterialRegion { node, slot: 9 }],
+                    SurfaceOptions {
+                        material_sampling: Some(MaterialSampling {
+                            max_edge_length: spacing,
+                            max_vertices: 262_144,
+                            max_triangles: 262_144,
+                        }),
+                        ..base
+                    },
+                )
+                .unwrap();
+                let expected = std::f32::consts::PI * radius * radius;
+                let area = material_area(&output, 5);
+                let relative_error = (area / expected - 1.0).abs();
+                println!(
+                    "angle={angle:.3} spacing={spacing} circle_area={area:.7} relative_error={relative_error:.4} triangles={}",
+                    output.indices.len() / 3
+                );
+                assert!(relative_error < if spacing == 0.01 { 0.025 } else { 0.20 });
+                assert_eq!(material_area(&output, 9), 0.0);
+                assert!((material_area(&output, 2) + area - 1.0).abs() < 0.0001);
+                let expected_normal = [angle.sin(), 0.0, angle.cos()];
+                for (position, normal) in output.positions.iter().zip(&output.normals) {
+                    assert!(dot(*position, expected_normal).abs() < 0.000001);
+                    assert!(dot(*normal, expected_normal) > 0.99999);
+                }
+                if angle == 0.0 {
+                    for (position, uv) in output.positions.iter().zip(&output.uvs) {
+                        assert!(
+                            (position[0] - uv[0]).abs() < 0.000001
+                                && (position[1] - uv[1]).abs() < 0.000001
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn material_sampling_rejects_exhausted_budgets_and_inappropriate_mode() {
+        let geometry = geometry(
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            vec![[0, 1, 2]],
+        );
+        let mut field = Field::new();
+        let region = MaterialRegion {
+            node: field.plane([1.0, 0.0, 0.0], 0.25).unwrap(),
+            slot: 5,
+        };
+        for (spacing, vertices, triangles, mode) in [
+            (0.1, 4, 100, MaterialBoundaryMode::Interpolated),
+            (0.1, 100, 2, MaterialBoundaryMode::Interpolated),
+            // No refinement needed, but clipping itself exceeds these budgets.
+            (2.0, 3, 100, MaterialBoundaryMode::Interpolated),
+            (2.0, 100, 1, MaterialBoundaryMode::Interpolated),
+            (0.1, 100, 100, MaterialBoundaryMode::Centroid),
+        ] {
+            assert!(assemble(
+                &field,
+                &geometry,
+                &[region],
+                SurfaceOptions {
+                    material_boundary_mode: mode,
+                    material_sampling: Some(MaterialSampling {
+                        max_edge_length: spacing,
+                        max_vertices: vertices,
+                        max_triangles: triangles
+                    }),
+                    ..options(0.0)
+                }
+            )
+            .is_err());
+        }
     }
 
     #[test]

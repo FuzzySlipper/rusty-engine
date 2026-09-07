@@ -9,5 +9,13 @@ public readonly partial record struct ImplicitGenerateRequest
         Vector3 Minimum, Vector3 Maximum, float CellSize, float CreaseAngleDegrees,
         float UvScale, Material DefaultMaterial, ReadOnlyMemory<ImplicitMaterialRegion> Regions)
         : this(Field, Source, Minimum, Maximum, CellSize, CreaseAngleDegrees,
-            UvScale, DefaultMaterial, Regions, ImplicitMaterialBoundaryMode.Centroid) { }
+            UvScale, DefaultMaterial, Regions, ImplicitMaterialBoundaryMode.Centroid, 0.0f) { }
+
+    /// <summary>Generates with the requested material-boundary assignment mode.</summary>
+    public ImplicitGenerateRequest(ImplicitField Field, ImplicitNode Source,
+        Vector3 Minimum, Vector3 Maximum, float CellSize, float CreaseAngleDegrees,
+        float UvScale, Material DefaultMaterial, ReadOnlyMemory<ImplicitMaterialRegion> Regions,
+        ImplicitMaterialBoundaryMode MaterialBoundaryMode)
+        : this(Field, Source, Minimum, Maximum, CellSize, CreaseAngleDegrees,
+            UvScale, DefaultMaterial, Regions, MaterialBoundaryMode, 0.0f) { }
 }

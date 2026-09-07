@@ -2,7 +2,9 @@
 //! and UV construction keeps material boundaries from changing the shading or
 //! projection charts of the original geometry.
 
-use super::{BTreeMap, Error, Field, HashMap, MaterialRegion, Surface, SurfaceGroup};
+use super::{
+    BTreeMap, Error, Field, HashMap, MaterialRegion, MaterialSampling, Surface, SurfaceGroup,
+};
 
 #[derive(Clone)]
 struct Vertex {
@@ -26,6 +28,7 @@ pub(super) fn split(
     surface: Surface,
     regions: &[MaterialRegion],
     default_slot: u32,
+    limits: Option<MaterialSampling>,
 ) -> Result<Surface, Error> {
     let samples = regions
         .iter()
@@ -42,7 +45,10 @@ pub(super) fn split(
             values: samples.iter().map(|s| f64::from(s[i])).collect(),
         })
         .collect();
-    let mut output = Output::default();
+    let mut output = Output {
+        limits,
+        ..Output::default()
+    };
     for triangle in surface.indices.as_chunks::<3>().0 {
         let mut remaining: Vec<_> = triangle
             .iter()
@@ -117,6 +123,8 @@ fn intersection<'a>(mut a: &'a Vertex, mut b: &'a Vertex, region: usize) -> Vert
 
 #[derive(Default)]
 struct Output {
+    limits: Option<MaterialSampling>,
+    triangles: usize,
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
@@ -139,11 +147,24 @@ impl Output {
             if cross == [0.0; 3] {
                 continue;
             }
+            if self
+                .limits
+                .is_some_and(|limits| self.triangles >= limits.max_triangles)
+            {
+                return Err(Error("material surface triangle budget exceeded".into()));
+            }
+            self.triangles += 1;
             for vertex in triangle {
                 let key = vertex.key();
                 let index = if let Some(&index) = self.vertices.get(&key) {
                     index
                 } else {
+                    if self
+                        .limits
+                        .is_some_and(|limits| self.positions.len() >= limits.max_vertices)
+                    {
+                        return Err(Error("material surface vertex budget exceeded".into()));
+                    }
                     let index = u32::try_from(self.positions.len())
                         .map_err(|_| Error("surface vertex capacity exceeded".into()))?;
                     self.positions.push(vertex.position);
@@ -202,7 +223,14 @@ mod tests {
                 index_count: 3,
             }],
         };
-        let output = split(&field, surface, &[MaterialRegion { node, slot: 1 }], 0).unwrap();
+        let output = split(
+            &field,
+            surface,
+            &[MaterialRegion { node, slot: 1 }],
+            0,
+            None,
+        )
+        .unwrap();
         assert!(output.positions.len() > 3);
         for (p, n) in output.positions.iter().zip(&output.normals) {
             assert_eq!(*n, [1.0 - p[0] - p[1], p[0], p[1]]);

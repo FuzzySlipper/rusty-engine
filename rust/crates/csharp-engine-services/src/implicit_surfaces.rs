@@ -8,7 +8,7 @@ use crate::{
 use csharp_engine_abi::*;
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc, time::Instant};
 use svc_implicit::{
-    surface::{self, MaterialBoundaryMode, MaterialRegion, SurfaceOptions},
+    surface::{self, MaterialBoundaryMode, MaterialRegion, MaterialSampling, SurfaceOptions},
     Bounds, Field, GenerateOptions, Node,
 };
 
@@ -130,6 +130,26 @@ impl RuntimeImplicitBridge {
         request: &NativeImplicitGenerateRequest,
     ) -> Result<NativeMeshResourceHandle> {
         let started = Instant::now();
+        let material_sampling = if !request.material_sample_spacing.is_finite()
+            || request.material_sample_spacing < 0.0
+        {
+            return Err(error(
+                "material sample spacing must be finite and non-negative",
+            ));
+        } else if request.material_sample_spacing > 0.0 {
+            if request.material_boundary_mode != NativeImplicitMaterialBoundaryMode::Interpolated {
+                return Err(error(
+                    "material sample spacing requires interpolated material boundaries",
+                ));
+            }
+            Some(MaterialSampling {
+                max_edge_length: request.material_sample_spacing,
+                max_vertices: 262_144,
+                max_triangles: 262_144,
+            })
+        } else {
+            None
+        };
         let regions = unsafe {
             borrowed_slice(
                 request.regions,
@@ -199,6 +219,7 @@ impl RuntimeImplicitBridge {
                         MaterialBoundaryMode::Interpolated
                     }
                 },
+                material_sampling,
             },
         )
         .map_err(kernel)?;

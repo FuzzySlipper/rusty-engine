@@ -459,7 +459,17 @@ angle, UV scale, default material, and optional ordered material regions:
   interpolated vertex field samples. This gives exact cuts for affine fields
   such as planes, independently of triangle direction. Curved fields are
   polygonal approximations; regions hidden between vertices can be missed.
-  Increase source sampling when those details matter. Cuts preserve the source
+  Set `MaterialSampleSpacing` to a positive world-space edge length to subdivide
+  the attributed surface before sampling material fields, independently of DC
+  simplification. Zero retains the existing behavior. This option requires
+  `Interpolated`; it does not change geometry extraction or recover missing
+  grooves. Shared edges subdivide consistently and new normals/UVs interpolate
+  the original attributes. Choose spacing below the narrowest desired motif;
+  arbitrarily small, tangent or undersampled regions can still disappear.
+  Refinement and subsequent clipping enforce the ordinary 262,144 vertex and
+  triangle budgets per mesh, returning an error rather than silently dropping
+  detail. Smaller spacing increases surface sampling and triangle cost; use
+  bounded authored pieces. Cuts preserve the source
   surface and interpolate its existing normals/UVs instead of creating shading
   creases. First-region precedence remains unchanged. Added triangles count
   toward the ordinary mesh admission limits. Texture filtering/wrapping comes

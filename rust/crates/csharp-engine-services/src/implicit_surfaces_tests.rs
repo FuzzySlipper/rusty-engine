@@ -132,6 +132,12 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         ABI_OK
     );
 
+    // The region makes the opt-in spacing exercise the surface-material path,
+    // rather than merely accepting an unused option.
+    let material_regions = [NativeImplicitMaterialRegion {
+        node: sphere,
+        material,
+    }];
     let mut mesh = NativeMeshResourceHandle::default();
     assert_eq!(
         unsafe {
@@ -154,9 +160,10 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
                     crease_angle_degrees: 35.0,
                     uv_scale: 1.0,
                     default_material: material,
-                    regions: std::ptr::null(),
-                    regions_len: 0,
+                    regions: material_regions.as_ptr(),
+                    regions_len: material_regions.len(),
                     material_boundary_mode: NativeImplicitMaterialBoundaryMode::Interpolated,
+                    material_sample_spacing: 0.08,
                 },
                 &mut mesh,
             )
@@ -404,7 +411,33 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         regions,
         regions_len,
         material_boundary_mode: NativeImplicitMaterialBoundaryMode::Centroid,
+        material_sample_spacing: 0.0,
     };
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let invalid_sampling_request = NativeImplicitGenerateRequest {
+        material_sample_spacing: 0.1,
+        ..generate_request(second_node, std::ptr::null(), 0)
+    };
+    assert_eq!(
+        unsafe {
+            (api.generate)(
+                api.context,
+                &invalid_sampling_request,
+                &mut NativeMeshResourceHandle::default(),
+            )
+        },
+        0
+    );
+    let failure = implicit
+        .take_call()
+        .err()
+        .expect("centroid material sampling is rejected before generation");
+    assert!(failure
+        .to_string()
+        .contains("requires interpolated material boundaries"));
+    appearance.discard_call();
     appearance.begin_call();
     implicit.begin_call();
     let api = implicit_api(&mut implicit, &mut appearance);

@@ -64,6 +64,7 @@ fn stairs(bevelled: bool, cell_size: f32) -> (StaticMesh, StaticMesh) {
             uv_scale: 1.0,
             default_slot: 0,
             material_boundary_mode: svc_implicit::surface::MaterialBoundaryMode::Centroid,
+            material_sampling: None,
         },
     )
     .unwrap();
