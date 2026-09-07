@@ -215,7 +215,7 @@ impl RuntimeImplicitBridge {
         geometry: &Geometry,
         region_nodes: &[(Node, NativeMaterialHandle)],
         options: SurfaceGenerationOptions,
-        generation_seconds: f64,
+        started: Instant,
     ) -> Result<(NativeMeshResourceHandle, NativeImplicitGenerationReadout)> {
         let material_sampling = if !options.material_sample_spacing.is_finite()
             || options.material_sample_spacing < 0.0
@@ -333,7 +333,7 @@ impl RuntimeImplicitBridge {
                 material_groups: groups.len() as u32,
                 octree_depth: geometry.depth,
                 sample_spacing: geometry.cell_size[0],
-                generation_seconds,
+                generation_seconds: started.elapsed().as_secs_f64(),
                 reoriented_triangles: geometry.reoriented_triangles,
                 degenerate_triangles: geometry.degenerate_triangles,
                 boundary_edges: topology.boundary_edges,
@@ -396,7 +396,7 @@ impl RuntimeImplicitBridge {
                     material_boundary_mode: request.material_boundary_mode,
                     material_sample_spacing: request.material_sample_spacing,
                 },
-                started.elapsed().as_secs_f64(),
+                started,
             )
         }?;
         self.retained(request.field)?.generation = Some(readout);
@@ -727,7 +727,7 @@ unsafe extern "C" fn generate_sampled_volume(
                     material_boundary_mode: request.material_boundary_mode,
                     material_sample_spacing: request.material_sample_spacing,
                 },
-                started.elapsed().as_secs_f64(),
+                started,
             )
         }?;
         b.retained_volume(request.volume)?.generation = Some(readout);
