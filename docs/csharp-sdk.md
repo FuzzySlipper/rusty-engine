@@ -177,6 +177,17 @@ large finite angular deltas at the configured limit so a quick mouse turn does
 not throw out of the product update. `Integrate` retains strict rejection for
 commands that must remain within that bound.
 
+Controller sticks arrive as `ControllerAxis` physical input with the normalized
+value in `ProductInputEvent.X`. Analog buttons (including standard-gamepad
+triggers) arrive independently as `ControllerButtonValue`, with `X` in `[0, 1]`;
+`ControllerButton` continues to carry digital press/release edges. Products can
+map `controller-button-value:button-7` to an `axis` intent for proportional right
+trigger input, just as `controller-axis:axis-0` maps the left stick's X axis.
+The runtime retains these scalar values between samples and clears them with
+the input lane. Products own dead zones, movement meaning, and stick look speed;
+integrate a held stick's angular rate using admitted simulation time, rather
+than treating each input sample as a mouse displacement.
+
 ### Runtime-generated geometry
 
 Ordinary `MaterialRequest` exposes opaque, mask/cutoff, and blend alpha modes.
@@ -191,11 +202,19 @@ an immutable retained mesh. Positions/normals are `Vector3`; optional UVs are
 `Vector2`; optional vertex colors are linear `Color` RGBA; indices are `uint`.
 `MeshGroup` ranges tile the triangle index list, and `MeshMaterialBinding`
 selects an existing Engine material for every used slot. Bounds are computed by
-Rust. `GraphicsMeshLimits` names the admission budget: at most 262,144
-vertices, 786,432 indices, and 16 MiB for both copied streams and the encoded
-resource definition, with up to 256
-groups/bindings. This is a retained-resource byte budget, not a 16-bit index
-constraint; invalid streams or missing materials fail before creating an owner.
+Rust. Generated mesh admission has no copied-byte or encoded-byte policy cap.
+`GraphicsMeshLimits` describes the managed span count representation; the native
+mesh layout stores vertex/index counts as `u32`. Matching streams, finite data,
+valid indices and material bindings are checked as part of the final mesh
+validation. There is no preliminary serialization solely to measure JSON size.
+The current 256-group/binding restriction remains a separate review candidate.
+
+Packed mesh resources still have 64 MiB per-resource / 256 MiB retained-set
+policies under review. Generated presentation output has no default aggregate
+byte/count cap: the host fragments large deltas without rebuilding the scene.
+Worker messages retain their actual `u32` byte-length representation constraint;
+allocation and browser/backend capacity still apply. Browser embedders may
+select a per-output-batch `maximumOutputBytes` budget.
 
 Create one or more appearances with `Graphics.CreateMeshAppearance(mesh)` and
 publish ordinary `AppearanceFact` values. Existing static-mesh material
@@ -441,12 +460,27 @@ discarded or disposed-field tokens are rejected. Values are negative inside; the
 surface but are not necessarily Euclidean distances. Smooth-union radii and
 level-set offsets are in field-value units, especially after nonuniform scale.
 
+`DisplaceWaves(ImplicitWaveRequest)` adds smooth seeded spectral noise to a
+source field. `Frequency` selects cycles per coordinate unit on each axis;
+`Amplitude` bounds the absolute change in field value. `Octaves` (1–8),
+`Lacunarity` (at least 1), and `Gain` (0–1) control the normalized multiscale
+sum. The same seed and parameters reproduce the field. This is a finite sum
+of independently oriented waves, not lattice Perlin noise or simulated erosion.
+Amplitude is not a world-space displacement guarantee. The operation preserves
+neither connectivity nor a bounding shell; compose protected volumes afterward
+and select extraction spacing appropriate to the finest wavelength. The scoped
+`ImplicitRecipe.DisplaceWaves` helper uses this same Engine operation.
+
 `Generate(ImplicitGenerateRequest)` takes an enclosure, sample spacing, crease
 angle, UV scale, default material, and optional ordered material regions:
 
 - The enclosure expands about its center into a cube with its longest side,
   preserving uniform world-space samples. To clip to a rectangular volume,
   explicitly intersect a box. Domain boundaries are not automatic caps.
+- `MaxExtractionVertices` and `MaxExtractionTriangles` select raw extraction
+  output budgets. Zero retains the default 262,144 each; positive values select
+  the caller's budget. These are not peak-memory limits or limits on subsequent
+  attribute/material splitting. Material-refinement budgets remain separate.
 - Cell size is a maximum leaf sample spacing, not a minimum-feature guarantee.
   Thin features can disappear. Keep enough empty margin around closed shapes.
 - `AddFrustum` authors a capped circular taper between distinct `Start` and `End`
@@ -519,11 +553,10 @@ those invalid solutions from driving collapse. `BoundedLeafVertices` counts thes
 adaptive recoveries. This bounds placement; it does not guarantee thin-feature
 survival or self-intersection-free output. The patch and its source/license ship
 in the runtime pack's `share/third-party/fidget-mesh` directory.
-Large retained replacements in the packaged host use its complete committed
-snapshot when their incremental publication exceeds the ordinary output budget.
-This preserves renderer publication frontiers and new transient presentation
-events without re-entering product callbacks. Existing complete-snapshot and
-per-mesh bounds still apply; this is not an unbounded asset-transfer path.
+Large retained replacements remain ordinary deltas. The host encodes the actual
+batch, fragments it for delivery, and retains every fragment of that incremental
+transfer. Complete committed snapshots still serve fresh connections and recovery;
+size alone does not replay/reconstruct the scene or re-enter product callbacks.
 
 Implicit generation readouts also report boundary, non-manifold, and inconsistent
 winding edges on extracted geometry before normal, UV, and material splitting.

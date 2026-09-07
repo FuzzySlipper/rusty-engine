@@ -21,6 +21,7 @@ pub enum NativeInputEventKind {
     MappedDigital = 11,
     MappedAxis = 12,
     MappedProductPayload = 13,
+    ControllerButtonValue = 14,
 }
 
 #[repr(u32)]
@@ -208,6 +209,7 @@ pub enum NativeInputTriggerKind {
     Wheel = 4,
     ControllerButton = 5,
     ControllerAxis = 6,
+    ControllerButtonValue = 7,
 }
 
 /// Runtime/control identity carried with every admitted product input fact.

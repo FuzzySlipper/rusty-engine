@@ -211,6 +211,59 @@ void test('input ingress rebaselines held keyboard and pointer state without rep
   ingress.dispose();
 });
 
+void test('controller pressure survives subthreshold changes, neutral, rebaseline and disconnect', () => {
+  const canvas = {} as HTMLCanvasElement;
+  const document = {
+    ...createListenerTarget(), activeElement: canvas, pointerLockElement: null,
+    defaultView: createListenerTarget(),
+  } as unknown as Document;
+  let pressure = 0.25;
+  let connected = true;
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL, selectedController: { index: 0 } }, {
+    canvas: () => canvas, eventTarget: createListenerTarget() as unknown as HTMLElement, document,
+    allowsGameplayInput: () => true, interactionMode: () => 'gameplay', active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [{ connected, axes: [0, 0, 0, 0],
+      buttons: Array.from({ length: 16 }, (_, index) => ({
+        value: index === 7 ? pressure : 0, pressed: index === 7 && pressure > 0.5,
+      })),
+    } as unknown as Gamepad],
+  });
+  ingress.drain();
+  for (const value of [0.25, 0.4]) {
+    pressure = value;
+    ingress.sampleController();
+    assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+      { kind: 'controller-button-value', button: 'button-7', value },
+    ]);
+  }
+  pressure = 0.75;
+  ingress.sampleController();
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'controller-button-value', button: 'button-7', value: 0.75 },
+    { kind: 'controller-button', button: 'button-7', edge: 'pressed' },
+  ]);
+  pressure = 0;
+  ingress.sampleController();
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'controller-button-value', button: 'button-7', value: 0 },
+    { kind: 'controller-button', button: 'button-7', edge: 'released' },
+  ]);
+  pressure = 0.25;
+  ingress.rebaselineRuntime({ ...INITIAL,
+    runtime: { ...INITIAL.runtime, controlRevision: '12' }, nextSequence: '1',
+  });
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'controller-button-value', button: 'button-7', value: 0.25 },
+  ]);
+  connected = false;
+  ingress.sampleController();
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'clear', reason: 'interaction-mode-loss' },
+  ]);
+  ingress.dispose();
+});
+
 void test('input ingress fails closed on bounded-queue overflow', () => {
   const queue = createRustyApplicationInputQueue(2);
   queue.bindRuntime(INITIAL);

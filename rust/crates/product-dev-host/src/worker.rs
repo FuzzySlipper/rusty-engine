@@ -15,17 +15,11 @@ use serde_json::Value;
 
 use crate::{
     ProductDevHostError, ProductDevLogDisposition, ProductDevLogEvent, ProductDevLogSeverity,
-    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeRecovery, MAX_BUNDLE_BYTES,
+    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeRecovery,
 };
 
-/// The worker channel uses a four-byte little-endian length followed by one
-/// JSON envelope.  Readiness may carry one full already-admitted browser
-/// bundle. JSON represents those binary bytes as decimal array entries, so
-/// the outer frame permits that local encoding overhead above the existing
-/// raw aggregate bundle bound.
-/// Individual operation and output payloads keep their narrower normal-host
-/// bounds before becoming a worker message.
-pub const MAX_WORKER_FRAME_BYTES: usize = MAX_BUNDLE_BYTES * 5;
+// Worker frames use a u32 little-endian byte length. This representation,
+// rather than the unrelated resource-bundle budget, bounds a message.
 
 /// The immutable browser files needed when a freshly loaded worker becomes
 /// the current product incarnation.  The shell replaces its admitted bundle
@@ -313,9 +307,8 @@ pub enum ProductDevWorkerEvent {
     },
 }
 
-/// Writes one bounded, closed worker envelope.  The bound is enforced before
-/// writing its prefix so a malformed candidate cannot desynchronize a live
-/// shell channel.
+/// Writes one worker envelope, checking u32 length representation before
+/// writing its prefix so an unrepresentable message cannot desynchronize it.
 pub fn write_worker_frame<T: Serialize>(
     writer: &mut impl Write,
     value: &T,
@@ -326,12 +319,6 @@ pub fn write_worker_frame<T: Serialize>(
             "worker message could not be encoded",
         )
     })?;
-    if bytes.len() > MAX_WORKER_FRAME_BYTES {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_WORKER_BOUNDS",
-            "worker message exceeds the maximum frame length",
-        ));
-    }
     let length = u32::try_from(bytes.len()).map_err(|_| {
         ProductDevHostError::new(
             "DEV_HOST_WORKER_BOUNDS",
@@ -353,12 +340,6 @@ pub fn read_worker_frame<T: for<'de> Deserialize<'de>>(
     let mut prefix = [0_u8; 4];
     read_exact_worker(reader, &mut prefix, "DEV_HOST_WORKER_EOF")?;
     let length = u32::from_le_bytes(prefix) as usize;
-    if length > MAX_WORKER_FRAME_BYTES {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_WORKER_BOUNDS",
-            "worker message exceeds the maximum frame length",
-        ));
-    }
     let mut bytes = vec![0_u8; length];
     read_exact_worker(reader, &mut bytes, "DEV_HOST_WORKER_EOF")?;
     serde_json::from_slice(&bytes).map_err(|_| {
@@ -419,16 +400,6 @@ mod tests {
             read_worker_frame::<ProductDevWorkerEvent>(&mut bytes.as_slice()).unwrap(),
             event
         );
-    }
-
-    #[test]
-    fn worker_frame_rejects_declared_length_over_the_bundle_bound() {
-        let mut bytes = ((MAX_WORKER_FRAME_BYTES as u32).saturating_add(1))
-            .to_le_bytes()
-            .to_vec();
-        bytes.extend_from_slice(b"{} ");
-        let error = read_worker_frame::<ProductDevWorkerEvent>(&mut bytes.as_slice()).unwrap_err();
-        assert_eq!(error.code(), "DEV_HOST_WORKER_BOUNDS");
     }
 
     #[test]

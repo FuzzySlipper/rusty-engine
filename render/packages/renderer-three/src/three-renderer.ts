@@ -135,7 +135,11 @@ export interface MeshResourceSource {
   releaseResource(resource: string): void;
 }
 
-/** Explicit provider for content-addressed encoded texture bytes. */
+/**
+ * Provider of borrowed encoded texture bytes. A successful acquisition keeps
+ * its bytes stable and readable until releaseResource. The renderer decodes
+ * synchronously into owned pixels and does not retain the borrowed view.
+ */
 export interface TextureResourceSource {
   acquireResource(resource: string, contentHash: string, byteLength: number): MeshBufferView;
   releaseResource(resource: string): void;
@@ -3187,7 +3191,7 @@ function prepareTextureResource(
         payload.contentHash,
         payload.byteLength,
       );
-      bytes = view.bytes.slice();
+      bytes = view.bytes;
       borrowedResource = payload.source.resource;
     } catch (cause) {
       throw classifyResourceError(

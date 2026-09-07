@@ -23,10 +23,9 @@ use crate::{
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
     ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, ProductDevWorkerDiagnostic,
-    ProductDevWorkerPublication, ProductDevWorkerUpdateSnapshot, MAX_BASELINE_AGGREGATE_BYTES,
-    MAX_CONNECTIONS, MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_EVENT_BYTES,
-    MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES,
-    MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevWorkerPublication, ProductDevWorkerUpdateSnapshot, MAX_CONNECTIONS,
+    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
+    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -1469,7 +1468,7 @@ fn dispatch_request<R: ProductDevRuntime>(
         if request.body.is_empty() {
             if let Ok(bundle) = state.bundle.read() {
                 if let Some(entry) = bundle.get(&request.path) {
-                    return HttpResponse::bytes(200, entry.content_type(), entry.bytes().to_vec());
+                    return HttpResponse::bytes(200, entry.content_type(), entry.shared_bytes());
                 }
             }
             return HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted");
@@ -2656,7 +2655,6 @@ struct OutputBus {
     active_binding: Option<crate::ProductDevRuntimeBinding>,
     pending_baseline: Option<PendingBaseline>,
     retained_event_limit: usize,
-    private_baseline_bytes: Option<usize>,
 }
 
 impl Default for OutputBus {
@@ -2669,7 +2667,6 @@ impl Default for OutputBus {
             active_binding: None,
             pending_baseline: None,
             retained_event_limit: MAX_OUTPUT_QUEUE_ITEMS,
-            private_baseline_bytes: None,
         }
     }
 }
@@ -2696,7 +2693,6 @@ impl OutputBus {
     fn private_baseline() -> Self {
         Self {
             retained_event_limit: usize::MAX,
-            private_baseline_bytes: Some(0),
             ..Self::default()
         }
     }
@@ -2901,7 +2897,6 @@ struct OutputPushStage {
     retained_start: usize,
     floor_cursor: u64,
     new_events: VecDeque<OutputEvent>,
-    private_baseline_bytes: Option<usize>,
 }
 
 impl OutputPushStage {
@@ -2914,13 +2909,13 @@ impl OutputPushStage {
             retained_start: 0,
             floor_cursor: bus.floor_cursor,
             new_events: VecDeque::new(),
-            private_baseline_bytes: bus.private_baseline_bytes,
         }
     }
 
-    fn push_event(&mut self, bus: &OutputBus, event: OutputEvent) {
-        let retained_existing = bus.events.len().saturating_sub(self.retained_start);
-        if retained_existing + self.new_events.len() == bus.retained_event_limit {
+    fn push_event(&mut self, bus: &OutputBus, event: OutputEvent, retention_limit: usize) {
+        while bus.events.len().saturating_sub(self.retained_start) + self.new_events.len()
+            >= retention_limit
+        {
             if self.retained_start < bus.events.len() {
                 self.floor_cursor = bus.events[self.retained_start].id;
                 self.retained_start += 1;
@@ -2939,7 +2934,6 @@ impl OutputPushStage {
         bus.floor_cursor = self.floor_cursor;
         bus.active_binding = self.active_binding;
         bus.pending_baseline = self.pending_baseline;
-        bus.private_baseline_bytes = self.private_baseline_bytes;
     }
 }
 
@@ -2952,36 +2946,16 @@ fn append_staged_output_events(
 ) -> Result<(), ProductDevHostError> {
     let mut encoded_events = Vec::new();
     let mut next_transfer_id = staged.next_transfer_id;
-    let encoded = serde_json::to_string(&serde_json::json!({
-        "kind": "runtime-output-batch",
-        "outputs": outputs,
-    }))
+    #[derive(Serialize)]
+    struct OutputBatch<'a> {
+        kind: &'static str,
+        outputs: &'a [ProductDevRuntimeOutput],
+    }
+    let encoded = serde_json::to_string(&OutputBatch {
+        kind: "runtime-output-batch",
+        outputs: &outputs,
+    })
     .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))?;
-    let maximum = match delivery {
-        OutputDelivery::Incremental => MAX_OUTPUT_AGGREGATE_BYTES,
-        OutputDelivery::Baseline => MAX_BASELINE_AGGREGATE_BYTES,
-    };
-    if encoded.len() > maximum {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_OUTPUT_BOUNDS",
-            match delivery {
-                OutputDelivery::Incremental => "output aggregate exceeds host bound",
-                OutputDelivery::Baseline => "complete retained baseline exceeds host bound",
-            },
-        ));
-    }
-    if let Some(total) = staged.private_baseline_bytes {
-        if matches!(delivery, OutputDelivery::Baseline) {
-            let total = total.saturating_add(encoded.len());
-            if total > MAX_BASELINE_AGGREGATE_BYTES {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_OUTPUT_BOUNDS",
-                    "private connection baseline exceeds host bound",
-                ));
-            }
-            staged.private_baseline_bytes = Some(total);
-        }
-    }
     if encoded.len() <= MAX_OUTPUT_EVENT_BYTES {
         encoded_events.push(EncodedOutputEvent {
             event: None,
@@ -3017,14 +2991,12 @@ fn append_staged_output_events(
             });
         }
     }
-    if matches!(delivery, OutputDelivery::Incremental)
-        && encoded_events.len() > MAX_OUTPUT_QUEUE_ITEMS
-    {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_OUTPUT_BATCH_BOUNDS",
-            "encoded output batch exceeds the retained event count",
-        ));
-    }
+    // Retention is a history target, not a maximum update size. Keep every
+    // fragment of the newest incremental batch so it cannot evict its own prefix.
+    let retention_limit = match delivery {
+        OutputDelivery::Incremental => bus.retained_event_limit.max(encoded_events.len()),
+        OutputDelivery::Baseline => bus.retained_event_limit,
+    };
     let final_id = staged
         .next_id
         .checked_add(encoded_events.len() as u64)
@@ -3040,6 +3012,7 @@ fn append_staged_output_events(
                 event: encoded.event,
                 json: encoded.json,
             },
+            retention_limit,
         );
     }
     debug_assert_eq!(staged.next_id, final_id);
@@ -3952,20 +3925,35 @@ mod tests {
     }
 
     #[test]
-    fn oversized_aggregate_is_rejected_without_publishing_partial_events() {
+    fn large_incremental_keeps_every_fragment_without_a_size_cutoff() {
         let mut bus = OutputBus::default();
-        let error = append_output_events(
+        let payload = "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS + 1));
+        append_output_events(
             &mut bus,
             binding(),
             vec![crate::model::ProductDevRuntimeOutput::test_frame_value(
-                serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_AGGREGATE_BYTES + 1)}),
+                serde_json::json!({"payload": payload}),
             )],
         )
-        .unwrap_err();
-        assert_eq!(error.code(), "DEV_HOST_OUTPUT_BOUNDS");
-        assert!(bus.events.is_empty());
-        assert_eq!(bus.next_id, 0);
-        assert_eq!(bus.next_transfer_id, 0);
+        .unwrap();
+        assert!(bus.events.len() > MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(bus.floor_cursor, 0);
+        let first: serde_json::Value =
+            serde_json::from_str(&bus.events.front().unwrap().json).unwrap();
+        let last: serde_json::Value =
+            serde_json::from_str(&bus.events.back().unwrap().json).unwrap();
+        assert_eq!(first["fragmentIndex"], 0);
+        assert_eq!(last["fragmentCount"], bus.events.len());
+        assert_eq!(last["fragmentIndex"], bus.events.len() - 1);
+        // Later publications may age this transfer out; normal lag recovery remains.
+        append_output_events(
+            &mut bus,
+            binding(),
+            vec![ProductDevRuntimeOutput::runtime_progress()],
+        )
+        .unwrap();
+        assert_eq!(bus.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
+        assert!(bus.floor_cursor > 0);
     }
 
     #[test]
@@ -4009,7 +3997,7 @@ mod tests {
             vec![
                 crate::model::ProductDevRuntimeOutput::binding(runtime, CanonicalU64::new(0)),
                 crate::model::ProductDevRuntimeOutput::test_frame_value(
-                    serde_json::json!({"payload": "x".repeat(MAX_OUTPUT_AGGREGATE_BYTES + 1)}),
+                    serde_json::json!({"payload": "x".repeat(16 * 1024 * 1024 + 1)}),
                 ),
             ],
         )
@@ -4308,7 +4296,7 @@ fn has_admitted_origin(request: &HttpRequest, bind_host: Ipv4Addr, expected_port
 struct HttpResponse {
     status: u16,
     content_type: String,
-    body: Vec<u8>,
+    body: Arc<[u8]>,
     output_through: Option<u64>,
     commit_disposition: Option<CommitDisposition>,
     delivery_certainty: Option<ResponseDeliveryCertainty>,
@@ -4358,11 +4346,11 @@ impl CommitDisposition {
 }
 
 impl HttpResponse {
-    fn bytes(status: u16, content_type: impl Into<String>, body: Vec<u8>) -> Self {
+    fn bytes(status: u16, content_type: impl Into<String>, body: impl Into<Arc<[u8]>>) -> Self {
         Self {
             status,
             content_type: content_type.into(),
-            body,
+            body: body.into(),
             output_through: None,
             commit_disposition: None,
             delivery_certainty: None,

@@ -38,6 +38,10 @@ pub enum RuntimeInputTrigger {
         edge: InputEdge,
         context: Option<InputContext>,
     },
+    ControllerButtonValue {
+        button: ControllerButton,
+        context: Option<InputContext>,
+    },
     ControllerAxis {
         axis: ControllerAxis,
         context: Option<InputContext>,
@@ -50,9 +54,10 @@ impl RuntimeInputTrigger {
             Self::Key { .. } | Self::PointerButton { .. } | Self::ControllerButton { .. } => {
                 IntentValueKind::Digital
             }
-            Self::PointerAxis { .. } | Self::Wheel { .. } | Self::ControllerAxis { .. } => {
-                IntentValueKind::Axis
-            }
+            Self::PointerAxis { .. }
+            | Self::Wheel { .. }
+            | Self::ControllerAxis { .. }
+            | Self::ControllerButtonValue { .. } => IntentValueKind::Axis,
         }
     }
 
@@ -63,6 +68,7 @@ impl RuntimeInputTrigger {
             | Self::PointerAxis { context, .. }
             | Self::Wheel { context, .. }
             | Self::ControllerButton { context, .. }
+            | Self::ControllerButtonValue { context, .. }
             | Self::ControllerAxis { context, .. } => context.as_ref(),
         }
     }

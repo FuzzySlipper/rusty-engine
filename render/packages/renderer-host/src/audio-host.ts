@@ -54,7 +54,7 @@ interface RendererPannerNode extends RendererAudioNode {
   readonly positionZ: RendererAudioParam;
 }
 
-interface RendererAudioListener {
+interface RendererAudioParamListener {
   readonly forwardX: RendererAudioParam;
   readonly forwardY: RendererAudioParam;
   readonly forwardZ: RendererAudioParam;
@@ -65,6 +65,14 @@ interface RendererAudioListener {
   readonly upY: RendererAudioParam;
   readonly upZ: RendererAudioParam;
 }
+
+// Firefox exposes the method-based listener API instead of AudioParams.
+interface RendererAudioMethodListener {
+  setPosition(x: number, y: number, z: number): void;
+  setOrientation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): void;
+}
+
+type RendererAudioListener = RendererAudioParamListener | RendererAudioMethodListener;
 
 interface RendererBufferSourceNode extends RendererAudioNode {
   buffer: unknown;
@@ -248,9 +256,15 @@ export class RendererAudioHost {
       return this.#recordHostDiagnostic('invalidDescriptor', 'audio listener pose must be finite');
     }
     const time = this.#context.currentTime;
-    setVector(this.#context.listener, 'position', pose.position, time);
-    setVector(this.#context.listener, 'forward', pose.forward, time);
-    setVector(this.#context.listener, 'up', pose.up, time);
+    const listener = this.#context.listener;
+    if ('positionX' in listener) {
+      setVector(listener, 'position', pose.position, time);
+      setVector(listener, 'forward', pose.forward, time);
+      setVector(listener, 'up', pose.up, time);
+    } else {
+      listener.setPosition(...pose.position);
+      listener.setOrientation(...pose.forward, ...pose.up);
+    }
     return [];
   }
 
@@ -827,7 +841,7 @@ function setPannerPosition(
 }
 
 function setVector(
-  listener: RendererAudioListener,
+  listener: RendererAudioParamListener,
   prefix: 'position' | 'forward' | 'up',
   value: readonly [number, number, number],
   time: number,

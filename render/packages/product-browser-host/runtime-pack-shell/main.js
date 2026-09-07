@@ -39,7 +39,11 @@ void mountProductBrowserHost({
   lifecycleMode: bootstrap.lifecycle.mode,
   realtimeAdvanceOwner: 'rust-host',
   initialInteractionMode: 'gameplay',
-  runtimeInput: {},
+  runtimeInput: {
+    maximumPointerDelta: 32,
+    maximumWheelDelta: 64,
+    selectedController: { index: 0 },
+  },
   renderer: { initialContent: rendererInitialContent },
   ...(uiProjection === undefined ? {} : { uiProjection }),
   mountUi: (uiRoot, context) => productUi.mountProductUi(uiRoot, context),

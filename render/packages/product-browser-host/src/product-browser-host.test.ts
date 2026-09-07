@@ -2267,6 +2267,7 @@ test('bundle assets are fixed JS composition roots and descriptor bytes are repr
   assert.match(first[2]!.content, /realtimeAdvanceOwner: "browser"/u);
   assert.match(first[2]!.content, /createProductBrowserLocalHttpAdapter/u);
   assert.match(first[2]!.content, /PRODUCT_RUNTIME_HTTP_BASE_PATH/u);
+  assert.match(first[2]!.content, /selectedController: \{ index: 0 \}/u);
   const descriptor = productBrowserBundleDescriptor(options);
   assert.equal(descriptor.artifact, 'rusty.product.bundle');
   assert.deepEqual(

@@ -7,12 +7,12 @@
 
 use fidget::{
     context::Tree,
-    jit::JitShape,
+    jit::{JitBulkFn, JitShape},
     mesh::{Octree, Settings},
-    shape::EzShape,
+    shape::{EzShape, ShapeTape},
 };
 use nalgebra::{Matrix4, Vector3};
-use std::time::Instant;
+use std::{sync::Mutex, time::Instant};
 
 pub mod surface;
 mod triangulate;
@@ -50,10 +50,32 @@ impl Bounds {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct WaveDisplacement {
+    pub frequency: [f32; 3],
+    pub amplitude: f32,
+    pub octaves: u32,
+    pub lacunarity: f32,
+    pub gain: f32,
+    pub seed: u64,
+}
+
 /// No geometric or aesthetic policy is hidden in the node arena.
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct Field {
     nodes: Vec<Tree>,
+    // One immutable tape avoids recompiling the same expression for scalar
+    // probes. Bounded to one entry; clones own independent cache lifetimes.
+    sample_tape: Mutex<Option<(Node, ShapeTape<JitBulkFn<f32>>)>>,
+}
+
+impl Clone for Field {
+    fn clone(&self) -> Self {
+        Self {
+            nodes: self.nodes.clone(),
+            sample_tape: Mutex::new(None),
+        }
+    }
 }
 
 impl Field {
@@ -198,6 +220,62 @@ impl Field {
         self.push(self.tree(source)? - amount)
     }
 
+    /// Smooth seeded spectral noise, normalized to [-amplitude, amplitude].
+    /// Frequency is cycles per coordinate unit; amplitude is in source field
+    /// units, not necessarily distance. This is a finite wave sum, not Perlin
+    /// noise or a hydraulic erosion simulation. Products select sampling scale.
+    pub fn displace_waves(&mut self, source: Node, noise: WaveDisplacement) -> Result<Node, Error> {
+        let source = self.tree(source)?;
+        finite(&noise.frequency)?;
+        finite(&[noise.amplitude, noise.lacunarity, noise.gain])?;
+        if noise.frequency.iter().any(|f| *f <= 0.0)
+            || noise.amplitude < 0.0
+            || !(1..=8).contains(&noise.octaves)
+            || noise.lacunarity < 1.0
+            || !(0.0..=1.0).contains(&noise.gain)
+        {
+            return Err(Error("wave displacement requires positive frequencies, nonnegative amplitude, 1..8 octaves, lacunarity >= 1 and gain in 0..1".into()));
+        }
+        let highest = noise.lacunarity.powi(noise.octaves as i32 - 1);
+        finite(&noise.frequency.map(|f| f * highest * std::f32::consts::TAU))?;
+        if noise.amplitude == 0.0 {
+            return self.push(source);
+        }
+        let mut state = noise.seed;
+        let mut draw = || {
+            state = state.wrapping_add(0x9e3779b97f4a7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+            ((z ^ (z >> 31)) >> 40) as f32 / 16777216.0
+        };
+        let mut sum = Tree::from(0.0_f32);
+        let mut weight = 1.0_f32;
+        let mut frequency = 1.0_f32;
+        let mut total = 0.0_f32;
+        for _ in 0..noise.octaves {
+            // Three independently oriented waves avoid a privileged grid axis.
+            for _ in 0..3 {
+                let z = draw() * 2.0 - 1.0;
+                let angle = draw() * std::f32::consts::TAU;
+                let radial = (1.0 - z * z).sqrt();
+                let direction = [radial * angle.cos(), radial * angle.sin(), z];
+                let phase = draw() * std::f32::consts::TAU;
+                let scale = frequency * std::f32::consts::TAU;
+                let wave = (Tree::x() * (direction[0] * noise.frequency[0] * scale)
+                    + Tree::y() * (direction[1] * noise.frequency[1] * scale)
+                    + Tree::z() * (direction[2] * noise.frequency[2] * scale)
+                    + phase)
+                    .sin();
+                sum += wave * weight;
+                total += weight;
+            }
+            weight *= noise.gain;
+            frequency *= noise.lacunarity;
+        }
+        self.push(source + sum * (noise.amplitude / total))
+    }
+
     /// Polynomial smooth union; radius is in field-value units.
     pub fn smooth_union(&mut self, a: Node, b: Node, radius: f32) -> Result<Node, Error> {
         positive(radius, "blend radius")?;
@@ -251,8 +329,18 @@ impl Field {
     }
 
     pub fn sample(&self, node: Node, points: &[[f32; 3]]) -> Result<Vec<f32>, Error> {
-        let shape = JitShape::from(self.tree(node)?);
-        sample_shape(&shape, points)
+        let tape = {
+            let mut cached = self
+                .sample_tape
+                .lock()
+                .map_err(|_| Error("field sample cache poisoned".into()))?;
+            if cached.as_ref().is_none_or(|(key, _)| *key != node) {
+                let shape = JitShape::from(self.tree(node)?);
+                *cached = Some((node, shape.ez_float_slice_tape()));
+            }
+            cached.as_ref().expect("tape populated").1.clone()
+        };
+        sample_tape(&tape, points)
     }
 
     pub fn generate(&self, node: Node, options: GenerateOptions) -> Result<Geometry, Error> {
@@ -346,14 +434,13 @@ fn positive(value: f32, name: &str) -> Result<(), Error> {
     }
 }
 
-fn sample_shape(shape: &JitShape, points: &[[f32; 3]]) -> Result<Vec<f32>, Error> {
+fn sample_tape(tape: &ShapeTape<JitBulkFn<f32>>, points: &[[f32; 3]]) -> Result<Vec<f32>, Error> {
     let mut evaluator = JitShape::new_float_slice_eval();
-    let tape = shape.ez_float_slice_tape();
     let x: Vec<_> = points.iter().map(|p| p[0]).collect();
     let y: Vec<_> = points.iter().map(|p| p[1]).collect();
     let z: Vec<_> = points.iter().map(|p| p[2]).collect();
     evaluator
-        .eval(&tape, &x, &y, &z)
+        .eval(tape, &x, &y, &z)
         .map(|v| v.to_vec())
         .map_err(|e| Error(format!("field evaluation failed: {e}")))
 }
@@ -443,6 +530,115 @@ impl Geometry {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sampling_cache_preserves_node_and_clone_ownership() {
+        let mut field = Field::new();
+        let first = field.sphere([0.0; 3], 1.0).unwrap();
+        assert_eq!(field.sample(first, &[[2.0, 0.0, 0.0]]).unwrap(), vec![1.0]);
+        let mut clone = field.clone();
+        let next = field.sphere([0.0; 3], 3.0).unwrap();
+        let other = clone.sphere([0.0; 3], 4.0).unwrap();
+        assert_eq!(next, other);
+        assert_eq!(field.sample(next, &[[2.0, 0.0, 0.0]]).unwrap(), vec![-1.0]);
+        assert_eq!(clone.sample(other, &[[2.0, 0.0, 0.0]]).unwrap(), vec![-2.0]);
+        assert_eq!(field.sample(first, &[[2.0, 0.0, 0.0]]).unwrap(), vec![1.0]);
+        assert!(field.sample(9999, &[[0.0; 3]]).is_err());
+        assert_eq!(field.sample(first, &[[2.0, 0.0, 0.0]]).unwrap(), vec![1.0]);
+    }
+
+    #[test]
+    fn waves_are_bounded_repeatable_continuous_and_meshable() {
+        let mut field = Field::new();
+        let sphere = field.sphere([0.0; 3], 1.0).unwrap();
+        let options = WaveDisplacement {
+            frequency: [0.6, 0.8, 0.5],
+            amplitude: 0.12,
+            octaves: 3,
+            lacunarity: 2.0,
+            gain: 0.5,
+            seed: 29,
+        };
+        let rough = field.displace_waves(sphere, options).unwrap();
+        let repeat = field.displace_waves(sphere, options).unwrap();
+        let other = field
+            .displace_waves(
+                sphere,
+                WaveDisplacement {
+                    seed: 47,
+                    ..options
+                },
+            )
+            .unwrap();
+        let zero = field
+            .displace_waves(
+                sphere,
+                WaveDisplacement {
+                    amplitude: 0.0,
+                    ..options
+                },
+            )
+            .unwrap();
+        let points: Vec<_> = (0..100)
+            .map(|i| [i as f32 * 0.031 - 1.5, 0.3, -0.7])
+            .collect();
+        let base = field.sample(sphere, &points).unwrap();
+        let values = field.sample(rough, &points).unwrap();
+        assert_eq!(values, field.sample(repeat, &points).unwrap());
+        assert_eq!(base, field.sample(zero, &points).unwrap());
+        assert_ne!(values, field.sample(other, &points).unwrap());
+        assert!(
+            values
+                .iter()
+                .zip(&base)
+                .all(|(a, b)| (a - b).abs() <= options.amplitude + 1e-6)
+        );
+        let adjacent: Vec<_> = points.iter().map(|p| [p[0] + 1e-5, p[1], p[2]]).collect();
+        assert!(
+            values
+                .iter()
+                .zip(field.sample(rough, &adjacent).unwrap())
+                .all(|(a, b)| (a - b).abs() < 1e-3)
+        );
+        assert!(
+            field
+                .displace_waves(
+                    sphere,
+                    WaveDisplacement {
+                        octaves: 0,
+                        ..options
+                    }
+                )
+                .is_err()
+        );
+        assert!(
+            field
+                .displace_waves(
+                    sphere,
+                    WaveDisplacement {
+                        frequency: [f32::MAX; 3],
+                        ..options
+                    }
+                )
+                .is_err()
+        );
+        let mesh = field
+            .generate(
+                rough,
+                GenerateOptions {
+                    bounds: Bounds {
+                        min: [-1.4; 3],
+                        max: [1.4; 3],
+                    },
+                    cell_size: 0.08,
+                    max_vertices: 100_000,
+                    max_triangles: 200_000,
+                },
+            )
+            .unwrap();
+        assert!(!mesh.triangles.is_empty());
+        assert_eq!(mesh.topology(), TopologyReadout::default());
+    }
+
     use super::*;
     use std::collections::BTreeMap;
 

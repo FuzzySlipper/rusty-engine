@@ -1,7 +1,7 @@
 use runtime_lifecycle::{RuntimeLifecycle, RuntimePhase, RuntimePhaseToken, SimulationStep};
 
 use crate::{
-    model::{validate_controller_axis, InputFrameFacts},
+    model::{validate_controller_axis, validate_controller_button_value, InputFrameFacts},
     AxisValue, ButtonSnapshot, CompiledInputMappings, ControllerAxis, ControllerButton, InputAxis,
     InputClearReason, InputContext, InputEdge, InputFrame, IntentPhase, IntentProvenance,
     IntentValueKind, KeyboardControl, PhysicalEdge, PointerButton, RuntimeDirectIntentClaim,
@@ -60,6 +60,7 @@ struct InputLaneCheckpoint {
     pointer: (AxisValue, AxisValue),
     wheel: (AxisValue, AxisValue),
     controller_axes: Vec<(ControllerAxis, AxisValue)>,
+    controller_button_values: Vec<(ControllerButton, AxisValue)>,
     mapping_active: Vec<bool>,
     pending_intents: Vec<PendingIntent>,
     disposed: bool,
@@ -85,6 +86,7 @@ pub struct RuntimeInputLane {
     pointer: (AxisValue, AxisValue),
     wheel: (AxisValue, AxisValue),
     controller_axes: Vec<(ControllerAxis, AxisValue)>,
+    controller_button_values: Vec<(ControllerButton, AxisValue)>,
     mapping_active: Vec<bool>,
     pending_intents: Vec<PendingIntent>,
     disposed: bool,
@@ -110,6 +112,7 @@ impl RuntimeInputLane {
             pointer: (zero, zero),
             wheel: (zero, zero),
             controller_axes: Vec::new(),
+            controller_button_values: Vec::new(),
             mapping_active: vec![false; mapping_count],
             pending_intents: Vec::new(),
             disposed: false,
@@ -338,6 +341,7 @@ impl RuntimeInputLane {
             pointer: self.pointer,
             wheel: self.wheel,
             controller_axes: self.controller_axes.clone(),
+            controller_button_values: self.controller_button_values.clone(),
             mapping_active: self.mapping_active.clone(),
             pending_intents: self.pending_intents.clone(),
             disposed: self.disposed,
@@ -355,6 +359,7 @@ impl RuntimeInputLane {
         self.pointer = checkpoint.pointer;
         self.wheel = checkpoint.wheel;
         self.controller_axes = checkpoint.controller_axes;
+        self.controller_button_values = checkpoint.controller_button_values;
         self.mapping_active = checkpoint.mapping_active;
         self.pending_intents = checkpoint.pending_intents;
         self.disposed = checkpoint.disposed;
@@ -409,6 +414,11 @@ impl RuntimeInputLane {
                 &mut self.controller_axes,
                 *axis,
                 validate_controller_axis(*value)?,
+            ),
+            RuntimeInputFact::ControllerButtonValue { button, value } => set_axis(
+                &mut self.controller_button_values,
+                *button,
+                validate_controller_button_value(*value)?,
             ),
         }
         if !matches!(ingress.fact(), RuntimeInputFact::Clear { .. }) {
@@ -465,6 +475,7 @@ impl RuntimeInputLane {
                 pointer: self.pointer,
                 wheel: self.wheel,
                 controller_axes: self.controller_axes.iter().copied().collect(),
+                controller_button_values: self.controller_button_values.iter().copied().collect(),
             },
         )
     }
@@ -489,6 +500,7 @@ impl RuntimeInputLane {
                     edge: InputEdge::Held,
                     ..
                 } | RuntimeInputTrigger::ControllerAxis { .. }
+                    | RuntimeInputTrigger::ControllerButtonValue { .. }
             ) {
                 continue;
             }
@@ -529,6 +541,7 @@ impl RuntimeInputLane {
         self.pointer = (zero, zero);
         self.wheel = (zero, zero);
         self.controller_axes.clear();
+        self.controller_button_values.clear();
         self.mapping_active.fill(false);
         self.pending_intents.clear();
     }
@@ -720,6 +733,14 @@ fn trigger_value(
                 .controller_axis(*axis)
                 .map(|value| (RuntimeIntentValue::Axis { value }, IntentPhase::Axis)))
         }
+        RuntimeInputTrigger::ControllerButtonValue { button, context } => {
+            if !context_matches(context.as_ref()) {
+                return Ok(None);
+            }
+            Ok(frame
+                .controller_button_value(*button)
+                .map(|value| (RuntimeIntentValue::Axis { value }, IntentPhase::Axis)))
+        }
     }
 }
 
@@ -784,6 +805,13 @@ fn physical_trigger_value(
         // observed value (including zero), avoiding a duplicate on ingress.
         RuntimeInputTrigger::ControllerAxis { .. }
             if matches!(fact, RuntimeInputFact::ControllerAxis { .. }) =>
+        {
+            Ok(None)
+        }
+        // Controller button values are persistent state. A snapshot emits the
+        // latest value, including zero, rather than duplicating the ingress.
+        RuntimeInputTrigger::ControllerButtonValue { .. }
+            if matches!(fact, RuntimeInputFact::ControllerButtonValue { .. }) =>
         {
             Ok(None)
         }

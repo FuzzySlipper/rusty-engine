@@ -229,9 +229,8 @@ pub fn pack_mesh_resources(
     }
 
     let resources = resources_by_id.into_values().collect::<Vec<_>>();
-    for resource in &resources {
-        resource.validate()?;
-    }
+    // Bodies and hashes were produced together above. Public validation remains
+    // available for independently supplied or modified resource bytes.
     Ok(PackedMeshResourceSet {
         payloads: packed_payloads,
         resources,

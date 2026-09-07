@@ -63,6 +63,10 @@ export type RustyApplicationRuntimeInputFact = {
     readonly axis: RustyApplicationControllerAxis;
     readonly value: number;
 } | {
+    readonly kind: 'controller-button-value';
+    readonly button: RustyApplicationControllerButton;
+    readonly value: number;
+} | {
     readonly kind: 'clear';
     readonly reason: RustyApplicationInputClearReason;
 };

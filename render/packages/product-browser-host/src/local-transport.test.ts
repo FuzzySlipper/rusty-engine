@@ -949,7 +949,7 @@ test('output cursor mismatch replaces the projection and ignores late old-stream
   }
 });
 
-test('large retained output fragments publish once after complete ordered reassembly', () => {
+test('ordinary output fragments above 16 MiB publish once after complete ordered reassembly', () => {
   FakeEventSource.instances.length = 0;
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async () => response({}),
@@ -962,7 +962,7 @@ test('large retained output fragments publish once after complete ordered reasse
   const encoded = JSON.stringify({
     kind: 'runtime-output-batch',
     outputs: [
-      { kind: 'frame', frame: { payload: 'x'.repeat(300_000) } },
+      { kind: 'frame', frame: { payload: 'x'.repeat(16 * 1024 * 1024 + 1) } },
       { kind: 'runtime-progress', owner: 'rust-host' },
     ],
   });
@@ -978,7 +978,30 @@ test('large retained output fragments publish once after complete ordered reasse
   }));
   assert.equal(batches.length, 2);
   assert.deepEqual(batches[1]?.map((output) => (output as { kind: string }).kind), ['frame', 'runtime-progress']);
-  assert.equal(((batches[1]?.[0] as { frame: { payload: string } }).frame.payload).length, 300_000);
+  assert.equal(((batches[1]?.[0] as { frame: { payload: string } }).frame.payload).length, 16 * 1024 * 1024 + 1);
+  adapter.dispose();
+});
+
+test('private connection baseline admits metadata above the former 256 MiB bound without allocating it', () => {
+  FakeEventSource.instances.length = 0;
+  const errors: ProductBrowserLocalTransportError[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+    onTransportError: (error) => errors.push(error),
+  });
+  adapter.subscribeOutputs(() => undefined);
+  const stream = FakeEventSource.instances[0]!;
+  stream.emitFragment({
+    schemaVersion: 1,
+    transferId: '1',
+    runtime: RUNTIME,
+    fragmentIndex: 0,
+    fragmentCount: Math.ceil((256 * 1024 * 1024 + 1) / (96 * 1024)),
+    aggregateBytes: 256 * 1024 * 1024 + 1,
+    data: 'x',
+  }, '');
+  assert.deepEqual(errors, [], 'the default transport admits internally coherent baseline metadata');
   adapter.dispose();
 });
 
@@ -996,6 +1019,7 @@ test('private connection baseline admits a bounded resource set beyond the stead
     outputs: [
       { kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' },
       { kind: 'frame', frame: { payload: 'x'.repeat(96 * 1024 * 257) } },
+      ...Array.from({ length: 255 }, () => ({ kind: 'runtime-progress', owner: 'rust-host' })),
     ],
   });
   const chunks = encoded.match(/[\s\S]{1,98304}/gu)!;
@@ -1012,6 +1036,7 @@ test('private connection baseline admits a bounded resource set beyond the stead
   assert.equal(batches.length, 0, 'no partial connection baseline is realized');
   stream.emitBaseline(result('connect'), '');
   assert.equal(batches.length, 1);
+  assert.equal(batches[0]?.length, 257, 'the complete baseline keeps all outputs above the old 256-item limit');
   assert.equal(((batches[0]?.[1] as { frame: { payload: string } }).frame.payload).length, 96 * 1024 * 257);
   adapter.dispose();
 });
@@ -1363,6 +1388,27 @@ test('local transport preserves primary and secondary pointer button edges', asy
     { runtime: RUNTIME, sequence: '6', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'secondary', edge: 'pressed' } },
     { runtime: RUNTIME, sequence: '7', context: 'gameplay.default', fact: { kind: 'pointer-button', button: 'secondary', edge: 'released' } },
   ] }]);
+  adapter.dispose();
+});
+
+test('local transport preserves analog button values and rejects pressure outside its range', async () => {
+  const bodies: unknown[] = [];
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return response({ accepted: true, ...ACCEPTED_FAULT, count: 2 });
+    }, eventSource: FakeEventSource,
+  });
+  const batch = [0.25, 0].map((value, index) => ({
+    runtime: RUNTIME, sequence: String(index + 4), context: 'gameplay.default',
+    fact: { kind: 'controller-button-value' as const, button: 'button-7' as const, value },
+  }));
+  await adapter.input(batch);
+  assert.deepEqual(bodies, [{ batch }]);
+  for (const value of [-0.1, 1.1, NaN]) {
+    assert.throws(() => adapter.input([{ ...batch[0]!, fact: { ...batch[0]!.fact, value } }]));
+  }
+  assert.equal(bodies.length, 1);
   adapter.dispose();
 });
 

@@ -39,10 +39,9 @@ use product_dev_host::{
     ProductDevLogSeverity, ProductDevOperationKind, ProductDevOperationResult,
     ProductDevRendererDiagnosticsFeedback, ProductDevRendererDiagnosticsFeedbackResult,
     ProductDevRendererResource, ProductDevRuntime, ProductDevRuntimeBinding,
-    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeOutput,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState,
-    ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
-    ProductDevUpdateAttribution,
+    ProductDevRuntimeError, ProductDevRuntimeFault, ProductDevRuntimeReadout,
+    ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState, ProductDevRuntimeState,
+    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
 };
 use runtime_input::{
     self as runtime_input_model, AxisValue, CompiledInputMappings, DirectInputIntentDescriptor,
@@ -88,7 +87,7 @@ const EXTERNAL_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::E
 // references. The per-file limit matches the Engine renderer resource limit;
 // the aggregate limit matches the existing product persistence payload limit.
 const MAX_CONTENT_FILES: usize = 8_192;
-const MAX_CONTENT_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_CONTENT_FILE_BYTES: u64 = product_dev_host::MAX_BUNDLE_RESOURCE_BYTES as u64;
 const MAX_CONTENT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DEBUG_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_DEBUG_RESULT_BYTES: usize = 64 * 1024;
@@ -2302,8 +2301,6 @@ impl CsharpProductRuntime {
     ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError> {
         let mut all_outputs = self.take_pending_recovery_outputs();
         all_outputs.extend(outputs);
-        let all_outputs =
-            fit_publication_budget(all_outputs, |outputs| self.tag_complete_baseline(outputs))?;
         let readout = self.readout();
         let result = ProductDevOperationResult::accepted(
             operation,
@@ -4007,6 +4004,9 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
         RuntimeInputError::InvalidControllerAxisValue => {
             "CSHARP_INPUT_INVALID_CONTROLLER_AXIS_VALUE"
         }
+        RuntimeInputError::InvalidControllerButtonValue => {
+            "CSHARP_INPUT_INVALID_CONTROLLER_BUTTON_VALUE"
+        }
         RuntimeInputError::NonCanonicalWireInteger => "CSHARP_INPUT_NON_CANONICAL_WIRE_INTEGER",
         RuntimeInputError::WireMalformed => "CSHARP_INPUT_WIRE_MALFORMED",
         RuntimeInputError::WireTooLarge => "CSHARP_INPUT_WIRE_TOO_LARGE",
@@ -4812,6 +4812,10 @@ fn native_input_mapping(
             native.edge = configured_edge(*edge);
             native.controller_button = controller_button(*button);
         }
+        RuntimeInputTrigger::ControllerButtonValue { button, .. } => {
+            native.trigger_kind = NativeInputTriggerKind::ControllerButtonValue;
+            native.controller_button = controller_button(*button);
+        }
         RuntimeInputTrigger::ControllerAxis { axis, .. } => {
             native.trigger_kind = NativeInputTriggerKind::ControllerAxis;
             native.controller_axis = controller_axis(*axis);
@@ -4932,6 +4936,21 @@ fn native_event(event: &RuntimeInputEvent) -> NativeInputOwned {
                     value.value(),
                     0.0,
                     format!("{axis:?}"),
+                ),
+                runtime_input::RuntimeInputFact::ControllerButtonValue { button, value } => (
+                    NativeInputEventKind::ControllerButtonValue,
+                    NativeInputEdge::None,
+                    NativeInputDevice::Controller,
+                    NativeInputChannel::Button,
+                    NativeInputAxis::None,
+                    NativeKeyboardControl::None,
+                    NativePointerButton::None,
+                    controller_button(*button),
+                    NativeControllerAxis::None,
+                    NativeInputClearReason::None,
+                    value.value(),
+                    0.0,
+                    format!("{button:?}"),
                 ),
                 runtime_input::RuntimeInputFact::Clear { reason } => (
                     NativeInputEventKind::Clear,
@@ -5280,30 +5299,22 @@ fn admit_renderer_resources(
 fn admit_renderer_resource(
     resource: &CsharpRenderResource,
 ) -> Result<ProductDevRendererResource, CsharpProductRuntimeError> {
-    match resource.kind() {
-        CsharpRenderResourceKind::Texture => {
-            ProductDevRendererResource::admit_texture(resource.path(), resource.bytes().to_vec())
-        }
-        CsharpRenderResourceKind::Mesh => {
-            ProductDevRendererResource::admit_mesh(resource.path(), resource.bytes().to_vec())
-        }
-        CsharpRenderResourceKind::Font => {
-            ProductDevRendererResource::admit_font(resource.path(), resource.bytes().to_vec())
-        }
-        CsharpRenderResourceKind::Audio => {
-            ProductDevRendererResource::admit_audio(resource.path(), resource.bytes().to_vec())
-        }
-        CsharpRenderResourceKind::AnimatedMesh => ProductDevRendererResource::admit_animated_mesh(
-            resource.path(),
-            resource.bytes().to_vec(),
-        ),
-        CsharpRenderResourceKind::AnimationClipPack => {
-            ProductDevRendererResource::admit_animation_clip_pack(
-                resource.path(),
-                resource.bytes().to_vec(),
-            )
-        }
-    }
+    use product_dev_host::ProductDevRendererResourceKind as HostKind;
+    let kind = match resource.kind() {
+        CsharpRenderResourceKind::Texture => HostKind::Texture,
+        CsharpRenderResourceKind::Mesh => HostKind::Mesh,
+        CsharpRenderResourceKind::Font => HostKind::Font,
+        CsharpRenderResourceKind::Audio => HostKind::Audio,
+        CsharpRenderResourceKind::AnimatedMesh => HostKind::AnimatedMesh,
+        CsharpRenderResourceKind::AnimationClipPack => HostKind::AnimationClipPack,
+    };
+    ProductDevRendererResource::from_retained(
+        kind,
+        resource.identity().to_owned(),
+        resource.content_hash().to_owned(),
+        resource.path().to_owned(),
+        resource.shared_bytes(),
+    )
     .map_err(|error| CsharpProductRuntimeError::new(error.code(), error.detail()))
 }
 
@@ -5447,41 +5458,6 @@ fn complete_voxel_baseline(
 fn host_runtime_error(error: product_dev_host::ProductDevHostError) -> ProductDevRuntimeError {
     ProductDevRuntimeError::new(error.code(), error.detail().to_owned())
         .expect("bounded host error")
-}
-
-/// Large retained replacements use the same committed-state reconstruction as
-/// a newly attached browser. Keep the normal incremental and baseline limits;
-/// never replay retained deltas against the replacement's publication frontier.
-fn fit_publication_budget(
-    outputs: Vec<RuntimePublication>,
-    reconstruct: impl FnOnce(
-        Vec<RuntimePublication>,
-    ) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError>,
-) -> Result<Vec<RuntimePublication>, ProductDevRuntimeError> {
-    let validate = |outputs: &[RuntimePublication]| {
-        let wire = outputs
-            .iter()
-            .cloned()
-            .map(ProductDevRuntimeOutput::from_publication)
-            .collect::<Result<Vec<_>, _>>()?;
-        ProductDevRuntimeOutput::validate_output_group(&wire).map(|_| ())
-    };
-    match validate(&outputs) {
-        Ok(()) => Ok(outputs),
-        Err(error)
-            if matches!(
-                error.code(),
-                "DEV_HOST_OUTPUT_BOUNDS" | "DEV_HOST_OUTPUT_BATCH_BOUNDS"
-            ) && outputs
-                .iter()
-                .all(|output| output.binding_marker().is_none()) =>
-        {
-            let baseline = reconstruct(outputs)?;
-            validate(&baseline).map_err(host_runtime_error)?;
-            Ok(baseline)
-        }
-        Err(error) => Err(host_runtime_error(error)),
-    }
 }
 
 #[cfg(test)]

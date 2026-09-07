@@ -1,7 +1,5 @@
 use super::*;
 
-use std::cell::Cell;
-
 use render_model::{
     MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout,
     MeshIndexWidth, MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance, RenderDiff,
@@ -10,7 +8,7 @@ use render_model::{
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 
 const INCREMENTAL_VERTEX_COUNT: usize = 750_000;
-const OVERSIZED_BASELINE_VERTEX_COUNT: usize = 1_400_000;
+const LARGE_BASELINE_VERTEX_COUNT: usize = 1_400_000;
 
 fn fixture_binding(instance: u64) -> RuntimeInputBinding {
     RuntimeInputBinding::new(
@@ -62,129 +60,32 @@ fn inline_mesh_frame(vertex_count: usize) -> RuntimePublication {
     RuntimePublication::frame(&frame).expect("valid runtime publication")
 }
 
-fn output_group_error(outputs: &[RuntimePublication]) -> product_dev_host::ProductDevHostError {
-    let wire = outputs
-        .iter()
-        .cloned()
-        .map(ProductDevRuntimeOutput::from_publication)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("typed publications adapt to host outputs");
-    ProductDevRuntimeOutput::validate_output_group(&wire)
-        .expect_err("fixture must exceed the selected host budget")
+#[test]
+fn large_mesh_publication_remains_an_incremental_through_host_adaptation() {
+    let publication = inline_mesh_frame(INCREMENTAL_VERTEX_COUNT);
+    let receipt = ProductDevRuntimeReceipt::new((), vec![publication.clone()]).unwrap();
+    let (_, wire) = receipt.into_wire_parts().unwrap();
+    assert_eq!(wire.len(), 1);
+    assert!(serde_json::to_vec(&wire).unwrap().len() > 16 * 1024 * 1024);
+    let actual = wire.into_iter().next().unwrap().into_publication().unwrap();
+    assert_eq!(actual, publication);
+    assert!(actual.binding_marker().is_none());
 }
 
 #[test]
-fn publication_budget_leaves_small_ordinary_group_unchanged() {
-    let outputs = vec![RuntimePublication::frame(&RenderFrameDiff::new())
-        .expect("empty frame is a valid ordinary publication")];
-    let reconstructed = Cell::new(false);
-
-    let actual = fit_publication_budget(outputs.clone(), |unexpected| {
-        reconstructed.set(true);
-        Ok(unexpected)
-    })
-    .expect("small ordinary group remains admitted");
-
-    assert_eq!(actual, outputs);
-    assert!(
-        !reconstructed.get(),
-        "small group must not reconstruct a baseline"
-    );
-}
-
-#[test]
-fn publication_budget_reconstructs_large_inline_mesh_as_complete_baseline_once() {
-    let outputs = vec![inline_mesh_frame(INCREMENTAL_VERTEX_COUNT)];
-    assert_eq!(
-        output_group_error(&outputs).code(),
-        "DEV_HOST_OUTPUT_BOUNDS"
-    );
-    let binding = fixture_binding(7);
-    let reconstructions = Cell::new(0);
-
-    let actual = fit_publication_budget(outputs, |deltas| {
-        reconstructions.set(reconstructions.get() + 1);
-        let mut baseline = Vec::with_capacity(deltas.len() + 2);
-        baseline.push(RuntimePublication::binding(binding, 3));
-        baseline.extend(deltas);
-        baseline.push(RuntimePublication::complete_baseline(binding));
-        Ok(baseline)
-    })
-    .expect("large retained replacement reconstructs within the baseline budget");
-
-    assert_eq!(reconstructions.get(), 1);
-    assert!(matches!(
-        actual.as_slice(),
-        [
-            RuntimePublication::Binding { runtime, .. },
-            RuntimePublication::Frame(_),
-            RuntimePublication::CompleteBaseline {
-                runtime: completion,
-                ..
-            },
-        ] if *runtime == binding && *completion == binding
-    ));
-    let wire = actual
-        .into_iter()
-        .map(ProductDevRuntimeOutput::from_publication)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("reconstructed publications adapt to host outputs");
-    assert!(
-        ProductDevRuntimeOutput::validate_output_group(&wire).is_ok(),
-        "binding-through-completion reconstruction receives the unchanged baseline limit"
-    );
-}
-
-#[test]
-fn publication_budget_does_not_retry_a_malformed_reconstructed_baseline() {
-    let binding = fixture_binding(11);
-    let reconstructions = Cell::new(0);
-
-    let error = fit_publication_budget(
-        vec![inline_mesh_frame(INCREMENTAL_VERTEX_COUNT)],
-        |mut deltas| {
-            reconstructions.set(reconstructions.get() + 1);
-            Ok(vec![
-                RuntimePublication::binding(binding, 1),
-                deltas.pop().expect("large source publication"),
-                RuntimePublication::complete_baseline(fixture_binding(12)),
-            ])
-        },
-    )
-    .expect_err("mismatched completion remains an error");
-
-    assert_eq!(error.code(), "DEV_HOST_OUTPUT_BASELINE");
-    assert_eq!(
-        reconstructions.get(),
-        1,
-        "malformed replacement cannot loop"
-    );
-}
-
-#[test]
-fn publication_budget_does_not_retry_an_oversized_reconstructed_baseline() {
+fn retained_baseline_and_following_delta_keep_their_publication_order() {
     let binding = fixture_binding(19);
-    let reconstructions = Cell::new(0);
-
-    let error = fit_publication_budget(
-        vec![inline_mesh_frame(OVERSIZED_BASELINE_VERTEX_COUNT)],
-        |mut deltas| {
-            reconstructions.set(reconstructions.get() + 1);
-            let frame = deltas.pop().expect("large source publication");
-            Ok(vec![
-                RuntimePublication::binding(binding, 1),
-                frame.clone(),
-                frame,
-                RuntimePublication::complete_baseline(binding),
-            ])
-        },
-    )
-    .expect_err("replacement keeps the existing 64 MiB baseline limit");
-
-    assert_eq!(error.code(), "DEV_HOST_OUTPUT_BOUNDS");
-    assert_eq!(
-        reconstructions.get(),
-        1,
-        "oversized replacement cannot loop"
-    );
+    let outputs = vec![
+        RuntimePublication::binding(binding, 1),
+        inline_mesh_frame(LARGE_BASELINE_VERTEX_COUNT),
+        RuntimePublication::complete_baseline(binding),
+        RuntimePublication::frame(&RenderFrameDiff::new()).unwrap(),
+    ];
+    let receipt = ProductDevRuntimeReceipt::new((), outputs.clone()).unwrap();
+    let (_, wire) = receipt.into_wire_parts().unwrap();
+    let decoded = wire
+        .into_iter()
+        .map(|output| output.into_publication().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(decoded, outputs);
 }

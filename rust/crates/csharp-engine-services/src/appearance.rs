@@ -36,16 +36,9 @@ use std::{
     sync::Arc,
 };
 
-// Renderer resources cross into the product-development host after C# has
-// selected them. Keep the pre-split per-resource ceiling at the selection
-// boundary so a successful product call is already host-admissible.
-const MAX_RENDER_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_INLINE_MESH_RESOURCE_BYTES: u32 = MAX_RENDER_RESOURCE_BYTES as u32;
-// The full position/normal/UV/color/index stream at these limits remains
-// below the 16 MiB resource-admission ceiling. U32 indices remain supported;
-// this is a copied-byte budget, not a 16-bit index restriction.
-const MAX_INLINE_MESH_VERTICES: usize = 262_144;
-const MAX_INLINE_MESH_INDICES: usize = 786_432;
+// Admission policy for immutable bundle-backed resource files. Generated mesh
+// definitions remain typed and do not use this file-resource byte ceiling.
+const MAX_RENDER_RESOURCE_BYTES: usize = MAX_MESH_RESOURCE_BYTES as usize;
 const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
 const MAX_ANIMATION_CUE_DEFINITIONS: usize = 128;
 const MAX_ANIMATION_CUE_TEXT_BYTES: usize = 96;
@@ -454,6 +447,10 @@ impl CsharpRenderResource {
     }
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+    /// Shares the immutable body with Engine host delivery without copying it.
+    pub fn shared_bytes(&self) -> Arc<[u8]> {
+        Arc::clone(&self.bytes)
     }
     pub(crate) fn texture(&self) -> Option<&TextureDescriptor> {
         self.texture.as_ref()
@@ -3757,17 +3754,22 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeMeshResourceHandle, CsharpEngineServicesError> {
         let invalid =
             |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_ADMISSION", message);
-        // Bound borrowed lengths before copying, including optional streams.
-        if !(3..=MAX_INLINE_MESH_VERTICES).contains(&request.positions_len)
+        // Counts are stored as u32 in the mesh layout. This is a representation
+        // constraint, not a byte budget on trusted product geometry.
+        let vertex_count = u32::try_from(request.positions_len)
+            .map_err(|_| invalid("mesh vertex count exceeds the u32 layout representation"))?;
+        let index_count = u32::try_from(request.indices_len)
+            .map_err(|_| invalid("mesh index count exceeds the u32 layout representation"))?;
+        if request.positions_len < 3
             || request.normals_len != request.positions_len
             || (request.uvs_len != 0 && request.uvs_len != request.positions_len)
             || (request.colors_len != 0 && request.colors_len != request.positions_len)
-            || !(3..=MAX_INLINE_MESH_INDICES).contains(&request.indices_len)
+            || request.indices_len < 3
             || !request.indices_len.is_multiple_of(3)
             || !(1..=256).contains(&request.groups_len)
             || !(1..=256).contains(&request.bindings_len)
         {
-            return Err(invalid("mesh requires 3..262144 vertices, matching normals/optional UV/color streams, 3..786432 triangle indices and 1..256 groups/bindings"));
+            return Err(invalid("mesh requires at least 3 vertices, matching normals/optional UV/color streams, complete triangle indices, 1..256 groups/bindings"));
         }
         let positions = borrowed_slice(request.positions, request.positions_len, "mesh positions")?;
         let normals = borrowed_slice(request.normals, request.normals_len, "mesh normals")?;
@@ -3833,21 +3835,10 @@ impl RuntimeAppearanceBridge {
                 kind: MeshAttributeKind::F32,
             });
         }
-        let copied_bytes = std::mem::size_of_val(positions)
-            .checked_add(std::mem::size_of_val(normals))
-            .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(uvs)))
-            .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(colors)))
-            .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(indices)))
-            .ok_or_else(|| invalid("mesh copied-byte calculation overflowed"))?;
-        if copied_bytes > MAX_INLINE_MESH_RESOURCE_BYTES as usize {
-            return Err(invalid(
-                "mesh copied streams exceed the 16 MiB inline admission budget",
-            ));
-        }
         let payload = MeshPayloadDescriptor {
             layout: MeshBufferLayout {
-                vertex_count: positions.len() as u32,
-                index_count: indices.len() as u32,
+                vertex_count,
+                index_count,
                 index_width: MeshIndexWidth::U32,
                 attributes,
             },
@@ -3874,9 +3865,6 @@ impl RuntimeAppearanceBridge {
             },
             provenance: MeshProvenance::Generated,
         };
-        payload
-            .validate()
-            .map_err(|error| invalid(&format!("invalid mesh streams: {error:?}")))?;
         let staged = self.staged_mut()?;
         let mut bound_slots = BTreeSet::new();
         let mut material_slots = Vec::new();
@@ -3917,16 +3905,8 @@ impl RuntimeAppearanceBridge {
         definition
             .validate()
             .map_err(|error| invalid(&format!("invalid mesh resource: {error:?}")))?;
-        // Inline numeric streams are encoded as JSON in the retained frame;
-        // their wire size can exceed their packed attribute size. Reject an
-        // oversized resource here, before it becomes canonical presentation.
-        let encoded = serde_json::to_vec(&definition)
-            .map_err(|error| invalid(&format!("mesh resource encoding failed: {error}")))?;
-        if encoded.len() > MAX_INLINE_MESH_RESOURCE_BYTES as usize {
-            return Err(invalid(
-                "mesh encoded definition exceeds the 16 MiB inline admission budget",
-            ));
-        }
+        // Retain the typed definition. Delivery owns its eventual encoding;
+        // do not serialize and discard an extra copy merely to measure it.
         staged
             .state
             .projector
@@ -4238,8 +4218,8 @@ impl RuntimeAppearanceBridge {
                 "static mesh content must use an inline payload",
             ));
         }
-        let mut packed = pack_mesh_resources(&[asset.payload], MAX_INLINE_MESH_RESOURCE_BYTES)
-            .map_err(|error| {
+        let mut packed =
+            pack_mesh_resources(&[asset.payload], MAX_MESH_RESOURCE_BYTES).map_err(|error| {
                 CsharpEngineServicesError::new("CSHARP_STATIC_MESH_PACK", format!("{error:?}"))
             })?;
         let payload = packed.payloads.pop().ok_or_else(|| {
@@ -9557,11 +9537,11 @@ pub(super) mod tests {
             bridge.staged_ref().unwrap().state.mesh_resources.len(),
             count
         );
-        let over_budget = NativeMeshResourceCreateRequest {
+        let unrepresentable = NativeMeshResourceCreateRequest {
             positions: positions.as_ptr(),
-            positions_len: MAX_INLINE_MESH_VERTICES + 1,
+            positions_len: usize::MAX,
             normals: normals.as_ptr(),
-            normals_len: MAX_INLINE_MESH_VERTICES + 1,
+            normals_len: usize::MAX,
             uvs: std::ptr::null(),
             uvs_len: 0,
             colors: std::ptr::null(),
@@ -9574,11 +9554,41 @@ pub(super) mod tests {
             bindings_len: 1,
         };
         assert_eq!(
-            unsafe { bridge.create_mesh_resource(&over_budget) }
-                .expect_err("mesh vertex budget")
+            unsafe { bridge.create_mesh_resource(&unrepresentable) }
+                .expect_err("mesh count must fit its layout representation")
                 .code(),
             "CSHARP_MESH_ADMISSION"
         );
+        // A valid mesh above the former 64 MiB copied-stream cap is admitted.
+        // It has no byte-budget preflight or throwaway JSON-size encoding.
+        let mut large_positions = vec![NativeVec3::default(); 2_900_000];
+        large_positions[1].x = 1.0;
+        large_positions[2].y = 1.0;
+        let large_normals = vec![
+            NativeVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0
+            };
+            2_900_000
+        ];
+        let large_indices = [0u32, 1, 2];
+        let large_request = NativeMeshResourceCreateRequest {
+            positions: large_positions.as_ptr(),
+            positions_len: large_positions.len(),
+            normals: large_normals.as_ptr(),
+            normals_len: large_normals.len(),
+            indices: large_indices.as_ptr(),
+            indices_len: large_indices.len(),
+            ..unrepresentable
+        };
+        assert!(
+            std::mem::size_of_val(large_positions.as_slice())
+                + std::mem::size_of_val(large_normals.as_slice())
+                > 64 * 1024 * 1024
+        );
+        let large_resource = unsafe { bridge.create_mesh_resource(&large_request) }.unwrap();
+        bridge.destroy_mesh_resource(large_resource).unwrap();
         let appearance = bridge.create_mesh_appearance(resource).unwrap();
         assert!(bridge.destroy_mesh_resource(resource).is_err());
         assert!(bridge.destroy_material(material).is_err());

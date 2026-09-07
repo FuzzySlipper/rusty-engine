@@ -11,14 +11,12 @@ use runtime_timeline::{
     RuntimeOpaqueData, RuntimeProvenance, RuntimeTimelineBinding, TimelineCompletionEnvelope,
     TimelineCompletionOutcome, TimelineCompletionTicketId,
 };
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
     ProductDevHostError, ProductDevInvalidatedScope, ProductDevMutationCertainty,
     ProductDevNextAction, ProductDevRuntimeError, ProductDevRuntimeRecovery,
-    MAX_BASELINE_AGGREGATE_BYTES, MAX_OUTPUT_AGGREGATE_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
 };
 
 /// Fixed Engine-owned local-runtime route prefix consumed by product-browser-host.
@@ -2307,19 +2305,19 @@ enum ProductDevRuntimeOutputWire {
         publication_frontiers: Vec<ProductDevRendererPublicationFrontier>,
     },
     Frame {
-        frame: Value,
+        frame: render_model::RenderFrameDiff,
     },
     ViewComposition {
-        composition: Value,
+        composition: render_host_contracts::RendererViewComposition,
     },
     Presentation {
-        frame: Value,
+        frame: render_presentation::PresentationFrameDiff,
     },
     AnimationCueDefinitions {
         definitions: Vec<ProductDevAnimationCueDefinition>,
     },
     UiProjection {
-        envelope: Value,
+        envelope: runtime_ui::RuntimeUiProjectionEnvelope,
     },
     RuntimeReadout {
         readout: ProductDevRuntimeReadout,
@@ -2401,16 +2399,9 @@ impl ProductDevAnimationCueDefinition {
 
 impl ProductDevRuntimeOutput {
     /// Decodes one worker-retained output through the same bounded JSON
-    /// representation used by the browser projection.  The local worker is
-    /// trusted, but a shell still refuses malformed or oversized output
-    /// rather than letting it poison its retained SSE history.
+    /// representation used by the browser projection. Delivery owns framing;
+    /// typed decoding does not impose an unrelated aggregate byte budget.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
-        if bytes.len() > MAX_BASELINE_AGGREGATE_BYTES {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_WORKER_OUTPUT_DECODE",
-                "worker output exceeds the maximum baseline output bound",
-            ));
-        }
         serde_json::from_slice(bytes).map_err(|_| {
             ProductDevHostError::new(
                 "DEV_HOST_WORKER_OUTPUT_DECODE",
@@ -2464,11 +2455,15 @@ impl ProductDevRuntimeOutput {
                     .map(host_publication_frontier)
                     .collect::<Result<Vec<_>, _>>()?,
             )),
-            RuntimePublication::Frame(frame) => Self::frame(&frame),
-            RuntimePublication::ViewComposition(composition) => {
-                Self::view_composition(&composition)
-            }
-            RuntimePublication::Presentation(frame) => Self::presentation(&frame),
+            RuntimePublication::Frame(frame) => Ok(Self {
+                wire: ProductDevRuntimeOutputWire::Frame { frame },
+            }),
+            RuntimePublication::ViewComposition(composition) => Ok(Self {
+                wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
+            }),
+            RuntimePublication::Presentation(frame) => Ok(Self {
+                wire: ProductDevRuntimeOutputWire::Presentation { frame },
+            }),
             RuntimePublication::AnimationCueDefinitions(definitions) => {
                 let definitions = definitions
                     .into_iter()
@@ -2476,7 +2471,9 @@ impl ProductDevRuntimeOutput {
                     .collect::<Result<Vec<_>, _>>()?;
                 Self::animation_cue_definitions(definitions)
             }
-            RuntimePublication::UiProjection(envelope) => Self::ui_projection(&envelope),
+            RuntimePublication::UiProjection(envelope) => Ok(Self {
+                wire: ProductDevRuntimeOutputWire::UiProjection { envelope },
+            }),
         }
     }
 
@@ -2521,15 +2518,13 @@ impl ProductDevRuntimeOutput {
                 Ok(publication)
             }
             ProductDevRuntimeOutputWire::Frame { frame } => {
-                RuntimePublication::frame(&decode_render_frame(frame)?).map_err(publication_error)
+                RuntimePublication::frame(&frame).map_err(publication_error)
             }
             ProductDevRuntimeOutputWire::ViewComposition { composition } => {
-                let composition = decode_typed_value(composition, "DEV_HOST_VIEW_COMPOSITION")?;
                 RuntimePublication::view_composition(&composition).map_err(publication_error)
             }
             ProductDevRuntimeOutputWire::Presentation { frame } => {
-                RuntimePublication::presentation(&decode_presentation_frame(frame)?)
-                    .map_err(publication_error)
+                RuntimePublication::presentation(&frame).map_err(publication_error)
             }
             ProductDevRuntimeOutputWire::AnimationCueDefinitions { definitions } => {
                 let definitions = definitions
@@ -2540,19 +2535,6 @@ impl ProductDevRuntimeOutput {
                     .map_err(publication_error)
             }
             ProductDevRuntimeOutputWire::UiProjection { envelope } => {
-                let bytes = serde_json::to_vec(&envelope).map_err(|_| {
-                    ProductDevHostError::new(
-                        "DEV_HOST_UI_PROJECTION",
-                        "UI projection output could not be converted to typed JSON",
-                    )
-                })?;
-                let envelope = runtime_ui::RuntimeUiProjectionEnvelope::decode_json(&bytes)
-                    .map_err(|_| {
-                        ProductDevHostError::new(
-                            "DEV_HOST_UI_PROJECTION",
-                            "UI projection output is not a valid typed envelope",
-                        )
-                    })?;
                 RuntimePublication::ui_projection(&envelope).map_err(publication_error)
             }
             ProductDevRuntimeOutputWire::RuntimeReadout { .. }
@@ -2565,7 +2547,17 @@ impl ProductDevRuntimeOutput {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_frame_value(frame: Value) -> Self {
+    pub(crate) fn test_frame_value(value: Value) -> Self {
+        // Transport tests vary byte volume and ordering independently of renderer admission.
+        let frame = render_model::RenderFrameDiff {
+            publication: Some(render_model::RenderFramePublication {
+                stream: value.to_string(),
+                base_revision: 0,
+                revision: 1,
+                operation_count: 0,
+            }),
+            ..Default::default()
+        };
         Self {
             wire: ProductDevRuntimeOutputWire::Frame { frame },
         }
@@ -2581,9 +2573,10 @@ impl ProductDevRuntimeOutput {
         }
     }
     pub fn frame(frame: &render_model::RenderFrameDiff) -> Result<Self, ProductDevHostError> {
-        let frame = encode_validated_wire(frame.encode_json().map_err(|_| {
-            ProductDevHostError::new("DEV_HOST_RENDER_FRAME", "render frame is invalid")
-        })?)?;
+        frame
+            .validate()
+            .map_err(|_| ProductDevHostError::new("DEV_HOST_RENDER_FRAME", "frame is invalid"))?;
+        let frame = frame.clone();
         Ok(Self {
             wire: ProductDevRuntimeOutputWire::Frame { frame },
         })
@@ -2597,12 +2590,7 @@ impl ProductDevRuntimeOutput {
         composition.validate().map_err(|_| {
             ProductDevHostError::new("DEV_HOST_VIEW_COMPOSITION", "view composition is invalid")
         })?;
-        let composition = serde_json::to_value(composition).map_err(|_| {
-            ProductDevHostError::new(
-                "DEV_HOST_VIEW_COMPOSITION",
-                "view composition could not be encoded",
-            )
-        })?;
+        let composition = composition.clone();
         Ok(Self {
             wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
         })
@@ -2613,13 +2601,6 @@ impl ProductDevRuntimeOutput {
         let ProductDevRuntimeOutputWire::Presentation { frame } = &self.wire else {
             return Ok(None);
         };
-        let frame: render_presentation::PresentationFrameDiff =
-            serde_json::from_value(frame.clone()).map_err(|_| {
-                ProductDevHostError::new(
-                    "DEV_HOST_PRESENTATION_FRAME",
-                    "presentation frame is invalid",
-                )
-            })?;
         let events = frame.transient_events();
         if events.is_empty() {
             Ok(None)
@@ -2631,12 +2612,10 @@ impl ProductDevRuntimeOutput {
     pub fn presentation(
         frame: &render_presentation::PresentationFrameDiff,
     ) -> Result<Self, ProductDevHostError> {
-        let frame = encode_validated_wire(frame.encode_json().map_err(|_| {
-            ProductDevHostError::new(
-                "DEV_HOST_PRESENTATION_FRAME",
-                "presentation frame is invalid",
-            )
-        })?)?;
+        frame.validate().map_err(|_| {
+            ProductDevHostError::new("DEV_HOST_PRESENTATION_FRAME", "frame is invalid")
+        })?;
+        let frame = frame.clone();
         Ok(Self {
             wire: ProductDevRuntimeOutputWire::Presentation { frame },
         })
@@ -2689,18 +2668,7 @@ impl ProductDevRuntimeOutput {
     pub fn ui_projection(
         envelope: &runtime_ui::RuntimeUiProjectionEnvelope,
     ) -> Result<Self, ProductDevHostError> {
-        let bytes = envelope.encode_json().map_err(|_| {
-            ProductDevHostError::new(
-                "DEV_HOST_UI_PROJECTION",
-                "UI projection envelope is invalid",
-            )
-        })?;
-        let envelope = serde_json::from_slice(&bytes).map_err(|_| {
-            ProductDevHostError::new(
-                "DEV_HOST_UI_PROJECTION",
-                "UI projection envelope could not be decoded",
-            )
-        })?;
+        let envelope = envelope.clone();
         Ok(Self {
             wire: ProductDevRuntimeOutputWire::UiProjection { envelope },
         })
@@ -2762,67 +2730,25 @@ impl ProductDevRuntimeOutput {
         }
     }
 
-    /// Validates one published output group. Each complete
-    /// binding-to-completion subsequence receives the larger retained
-    /// baseline budget, while every ordinary contiguous subsequence keeps the
-    /// normal output bound. This permits a recovery baseline and following
-    /// ordinary tick facts to share one worker publication without widening
-    /// the incremental lane.
-    ///
-    /// Returns the binding only when the entire group is one baseline, which
-    /// remains useful to callers that need to recognize that simpler shape.
+    /// Checks binding/completion coherence without encoding or imposing delivery budgets.
+    /// Returns a binding only when the whole group is one complete baseline.
     pub fn validate_output_group(
         outputs: &[Self],
     ) -> Result<Option<ProductDevRuntimeBinding>, ProductDevHostError> {
-        if outputs.len() > MAX_OUTPUT_QUEUE_ITEMS {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_OUTPUT_BATCH_BOUNDS",
-                "runtime receipt contains too many output events",
-            ));
-        }
+        let mut whole_baseline = None;
         let mut index = 0;
-        let mut entire_group_baseline = None;
         while index < outputs.len() {
-            let complete = outputs[index]
-                .binding_marker()
-                .map(|binding| complete_baseline_end(outputs, index, binding))
-                .transpose()?;
-            let Some(complete) = complete.flatten() else {
-                let mut aggregate = 0_usize;
-                while index < outputs.len() {
-                    if let Some(binding) = outputs[index].binding_marker() {
-                        if complete_baseline_end(outputs, index, binding)?.is_some() {
-                            break;
-                        }
+            if let Some(binding) = outputs[index].binding_marker() {
+                if let Some(end) = complete_baseline_end(outputs, index, binding)? {
+                    if index == 0 && end + 1 == outputs.len() {
+                        whole_baseline = Some(binding);
                     }
-                    aggregate = aggregate.saturating_add(encoded_output_bytes(&outputs[index])?);
-                    if aggregate > MAX_OUTPUT_AGGREGATE_BYTES {
-                        return Err(ProductDevHostError::new(
-                            "DEV_HOST_OUTPUT_BOUNDS",
-                            "runtime receipt outputs exceed the maximum aggregate byte length",
-                        ));
-                    }
-                    index += 1;
-                }
-                continue;
-            };
-
-            let mut aggregate = 0_usize;
-            for output in &outputs[index..=complete] {
-                aggregate = aggregate.saturating_add(encoded_output_bytes(output)?);
-                if aggregate > MAX_BASELINE_AGGREGATE_BYTES {
-                    return Err(ProductDevHostError::new(
-                        "DEV_HOST_OUTPUT_BOUNDS",
-                        "complete retained baseline exceeds the maximum aggregate byte length",
-                    ));
+                    index = end;
                 }
             }
-            if index == 0 && complete + 1 == outputs.len() {
-                entire_group_baseline = outputs[index].binding_marker();
-            }
-            index = complete + 1;
+            index += 1;
         }
-        Ok(entire_group_baseline)
+        Ok(whole_baseline)
     }
 
     pub(crate) fn attach_complete_baseline_frontiers_to_binding(
@@ -2934,46 +2860,6 @@ fn neutral_animation_cue_definition(
     .map_err(publication_error)
 }
 
-fn decode_typed_value<T: DeserializeOwned>(
-    value: Value,
-    code: &'static str,
-) -> Result<T, ProductDevHostError> {
-    serde_json::from_value(value)
-        .map_err(|_| ProductDevHostError::new(code, "typed runtime publication JSON is invalid"))
-}
-
-fn decode_render_frame(value: Value) -> Result<render_model::RenderFrameDiff, ProductDevHostError> {
-    let encoded = serde_json::to_string(&value).map_err(|_| {
-        ProductDevHostError::new(
-            "DEV_HOST_RENDER_FRAME",
-            "render frame output could not be converted to typed JSON",
-        )
-    })?;
-    render_model::RenderFrameDiff::decode_json(&encoded).map_err(|_| {
-        ProductDevHostError::new(
-            "DEV_HOST_RENDER_FRAME",
-            "render frame output is not a valid typed frame",
-        )
-    })
-}
-
-fn decode_presentation_frame(
-    value: Value,
-) -> Result<render_presentation::PresentationFrameDiff, ProductDevHostError> {
-    let encoded = serde_json::to_string(&value).map_err(|_| {
-        ProductDevHostError::new(
-            "DEV_HOST_PRESENTATION_FRAME",
-            "presentation output could not be converted to typed JSON",
-        )
-    })?;
-    render_presentation::PresentationFrameDiff::decode_json(&encoded).map_err(|_| {
-        ProductDevHostError::new(
-            "DEV_HOST_PRESENTATION_FRAME",
-            "presentation output is not a valid typed frame",
-        )
-    })
-}
-
 impl Serialize for ProductDevRuntimeOutput {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.wire.serialize(serializer)
@@ -2992,15 +2878,6 @@ impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
 pub struct ProductDevRuntimeReceipt<T> {
     receipt: runtime_publication::RuntimeReceipt<T>,
     connection_output_cursor: Option<u64>,
-}
-
-fn encode_validated_wire(value: String) -> Result<Value, ProductDevHostError> {
-    serde_json::from_str(&value).map_err(|_| {
-        ProductDevHostError::new(
-            "DEV_HOST_WIRE_ENCODE",
-            "typed render frame could not be converted to wire JSON",
-        )
-    })
 }
 
 fn decode_strict_json<T>(
@@ -3023,12 +2900,6 @@ where
         .end()
         .map_err(|_| ProductDevHostError::new(code, detail))?;
     Ok(value)
-}
-
-fn encoded_output_bytes(output: &ProductDevRuntimeOutput) -> Result<usize, ProductDevHostError> {
-    serde_json::to_vec(output)
-        .map(|encoded| encoded.len())
-        .map_err(|error| ProductDevHostError::new("DEV_HOST_OUTPUT_ENCODE", error.to_string()))
 }
 
 fn complete_baseline_end(
@@ -3553,10 +3424,26 @@ mod tests {
         let baseline_wire = ProductDevRuntimeOutput::from_publication(baseline.clone()).unwrap();
         assert_eq!(baseline_wire.into_publication().unwrap(), baseline);
 
-        let frame = RenderFrameDiff::new();
+        let frame = RenderFrameDiff::try_from_ops(vec![render_model::RenderDiff::Destroy {
+            handle: render_model::RenderHandle::new(17),
+        }])
+        .unwrap();
         let frame_publication = RuntimePublication::frame(&frame).unwrap();
         let frame_wire =
             ProductDevRuntimeOutput::from_publication(frame_publication.clone()).unwrap();
+        let encoded = serde_json::to_vec(&frame_wire).unwrap();
+        let json: Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            json["frame"],
+            serde_json::from_str::<Value>(&frame.encode_json().unwrap()).unwrap()
+        );
+        assert_eq!(
+            ProductDevRuntimeOutput::decode_json(&encoded)
+                .unwrap()
+                .into_publication()
+                .unwrap(),
+            frame_publication
+        );
         assert_eq!(frame_wire.into_publication().unwrap(), frame_publication);
 
         let cue = RuntimeAnimationCueDefinition::new(
@@ -3584,8 +3471,23 @@ mod tests {
             serde_json::json!({ "visible": true }),
         )
         .unwrap();
+        let canonical: Value = serde_json::from_slice(&envelope.encode_json().unwrap()).unwrap();
+        assert_eq!(canonical["runtime"]["instanceId"], "7");
+        assert_eq!(canonical["sequence"], "1");
         let ui_publication = RuntimePublication::ui_projection(&envelope).unwrap();
         let ui_wire = ProductDevRuntimeOutput::from_publication(ui_publication.clone()).unwrap();
+        let encoded = serde_json::to_vec(&ui_wire).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&encoded).unwrap()["envelope"],
+            canonical
+        );
+        assert_eq!(
+            ProductDevRuntimeOutput::decode_json(&encoded)
+                .unwrap()
+                .into_publication()
+                .unwrap(),
+            ui_publication
+        );
         assert_eq!(ui_wire.into_publication().unwrap(), ui_publication);
     }
 
@@ -3630,18 +3532,19 @@ mod tests {
     }
 
     #[test]
-    fn output_group_only_grants_the_larger_budget_to_a_complete_baseline() {
+    fn output_group_recognizes_baselines_without_a_size_preflight() {
         let binding = ProductDevRuntimeBinding {
             instance_id: CanonicalU64::new(7),
             generation: CanonicalU64::new(3),
             control_revision: CanonicalU64::new(5),
         };
         let large = ProductDevRuntimeOutput::test_frame_value(serde_json::json!({
-            "payload": "x".repeat(MAX_OUTPUT_AGGREGATE_BYTES + 1),
+            "payload": "x".repeat(16 * 1024 * 1024 + 1),
         }));
-        let ordinary = ProductDevRuntimeOutput::validate_output_group(std::slice::from_ref(&large))
-            .expect_err("ordinary output keeps the 16 MiB limit");
-        assert_eq!(ordinary.code(), "DEV_HOST_OUTPUT_BOUNDS");
+        assert_eq!(
+            ProductDevRuntimeOutput::validate_output_group(std::slice::from_ref(&large)).unwrap(),
+            None
+        );
 
         assert_eq!(
             ProductDevRuntimeOutput::validate_output_group(&[

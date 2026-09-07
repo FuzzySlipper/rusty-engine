@@ -10,8 +10,8 @@ const AUDIO_MAX_COUNT = 64;
 const AUDIO_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const AUDIO_MAX_BYTES = 8 * 1024 * 1024;
 const MESH_MAX_COUNT = 1024;
-const MESH_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
-const MESH_MAX_BYTES = 16 * 1024 * 1024;
+const MESH_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+const MESH_MAX_BYTES = 64 * 1024 * 1024;
 
 interface RendererPreloadDescriptor {
   readonly artifact: 'rusty.product.renderer-preload.v1';

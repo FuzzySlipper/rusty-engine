@@ -216,6 +216,25 @@ function host(context: FakeContext): RendererAudioHost {
   });
 }
 
+void test('Firefox method-based listener synchronizes without degrading presentation', () => {
+  const context = new FakeContext();
+  const positions: number[][] = [];
+  const orientations: number[][] = [];
+  Object.defineProperty(context, 'listener', { value: {
+    setPosition: (...value: number[]) => positions.push(value),
+    setOrientation: (...value: number[]) => orientations.push(value),
+  } });
+  const audio = host(context);
+  const hosts = new RendererPresentationHostSet({ audio });
+  for (const x of [4, 7]) {
+    const receipt = hosts.syncListener({ position: [x, 5, 6], forward: [1, 0, 0], up: [0, 1, 0] });
+    assert.equal(receipt.applied, true);
+    assert.deepEqual(receipt.diagnostics, []);
+  }
+  assert.deepEqual(positions, [[4, 5, 6], [7, 5, 6]]);
+  assert.deepEqual(orientations, [[1, 0, 0, 0, 1, 0], [1, 0, 0, 0, 1, 0]]);
+});
+
 void test('Web Audio host emits catalog-hash-bound 3D cues and caches decoded clips', async () => {
   const context = new FakeContext();
   const audio = host(context);

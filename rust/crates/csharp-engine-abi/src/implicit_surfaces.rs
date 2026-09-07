@@ -97,6 +97,21 @@ pub struct NativeImplicitOffsetRequest {
     pub amount: f32,
 }
 
+/// Continuous normalized spectral displacement. Amplitude is in field units;
+/// frequency is cycles per world-coordinate unit. Not a distance guarantee.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitWaveRequest {
+    pub field: NativeImplicitFieldHandle,
+    pub source: NativeImplicitNode,
+    pub frequency: NativeVec3,
+    pub amplitude: f32,
+    pub octaves: u32,
+    pub lacunarity: f32,
+    pub gain: f32,
+    pub seed: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeImplicitTransformRequest {
@@ -246,6 +261,10 @@ pub struct NativeImplicitGenerateRequest {
     /// Optional material-boundary sample spacing. Zero preserves ordinary
     /// interpolation; a positive value requests bounded material refinement.
     pub material_sample_spacing: f32,
+    /// Extraction-only budgets before normal/UV/material splitting. Zero uses
+    /// the Engine default of 262144. These are output caps, not peak-memory caps.
+    pub max_extraction_vertices: u32,
+    pub max_extraction_triangles: u32,
 }
 
 #[repr(C)]
@@ -370,6 +389,9 @@ pub type NativeImplicitDifference =
 pub type NativeImplicitSmoothUnion =
     unsafe extern "C" fn(*mut c_void, NativeImplicitBlendRequest, *mut NativeImplicitNode) -> i32;
 
+pub type NativeImplicitDisplaceWaves =
+    unsafe extern "C" fn(*mut c_void, NativeImplicitWaveRequest, *mut NativeImplicitNode) -> i32;
+
 pub type NativeImplicitOffset =
     unsafe extern "C" fn(*mut c_void, NativeImplicitOffsetRequest, *mut NativeImplicitNode) -> i32;
 
@@ -433,4 +455,5 @@ pub struct NativeImplicitSurfacesApi {
     pub read_generation: NativeReadImplicitGeneration,
     pub destroy_operation_diagnostic_lease: NativeDestroyImplicitOperationDiagnosticLease,
     pub add_frustum: NativeAddImplicitFrustum,
+    pub displace_waves: NativeImplicitDisplaceWaves,
 }

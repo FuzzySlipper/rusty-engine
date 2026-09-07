@@ -1,17 +1,26 @@
 //! Staged general-purpose fields. Generated output uses the canonical Graphics
 //! mesh resource path, including renderer recovery and resource lifetimes.
 use crate::{
-    appearance::RuntimeAppearanceBridge,
-    composition::{borrowed_slice, ABI_OK},
     CsharpEngineServicesError,
+    appearance::RuntimeAppearanceBridge,
+    composition::{ABI_OK, borrowed_slice},
 };
 use csharp_engine_abi::*;
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc, time::Instant};
 use svc_implicit::{
+    Bounds, Field, GenerateOptions, Geometry, Node,
     surface::{self, MaterialBoundaryMode, MaterialRegion, MaterialSampling, SurfaceOptions},
     volume::{SampledVolume, VolumeDescriptor},
-    Bounds, Field, GenerateOptions, Geometry, Node,
 };
+
+const DEFAULT_EXTRACTION_CAPACITY: u32 = 262_144;
+fn extraction_capacity(requested: u32) -> u32 {
+    if requested == 0 {
+        DEFAULT_EXTRACTION_CAPACITY
+    } else {
+        requested
+    }
+}
 
 type Result<T> = std::result::Result<T, CsharpEngineServicesError>;
 fn error(message: impl Into<String>) -> CsharpEngineServicesError {
@@ -379,8 +388,8 @@ impl RuntimeImplicitBridge {
                         max: v(request.maximum),
                     },
                     cell_size: request.cell_size,
-                    max_vertices: 262_144,
-                    max_triangles: 262_144,
+                    max_vertices: extraction_capacity(request.max_extraction_vertices),
+                    max_triangles: extraction_capacity(request.max_extraction_triangles),
                 },
             )
             .map_err(kernel)?;
@@ -433,6 +442,7 @@ pub(crate) fn api(
         intersection,
         difference,
         smooth_union,
+        displace_waves,
         offset,
         transform,
         sample,
@@ -992,6 +1002,28 @@ unsafe extern "C" fn smooth_union(
         let left = b.node(r.field, r.left)?;
         let right = b.node(r.field, r.right)?;
         b.edit(r.field, |f| f.smooth_union(left, right, r.radius))
+    })
+}
+unsafe extern "C" fn displace_waves(
+    context: *mut c_void,
+    r: NativeImplicitWaveRequest,
+    result: *mut NativeImplicitNode,
+) -> i32 {
+    call(context, result, |b| {
+        let source = b.node(r.field, r.source)?;
+        b.edit(r.field, |f| {
+            f.displace_waves(
+                source,
+                svc_implicit::WaveDisplacement {
+                    frequency: v(r.frequency),
+                    amplitude: r.amplitude,
+                    octaves: r.octaves,
+                    lacunarity: r.lacunarity,
+                    gain: r.gain,
+                    seed: r.seed,
+                },
+            )
+        })
     })
 }
 unsafe extern "C" fn offset(

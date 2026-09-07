@@ -1,4 +1,4 @@
-use super::{api as implicit_api, RuntimeImplicitBridge};
+use super::{RuntimeImplicitBridge, api as implicit_api};
 use crate::{
     appearance::{self, RuntimeAppearanceBridge},
     composition::ABI_OK,
@@ -165,6 +165,8 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
                     regions_len: material_regions.len(),
                     material_boundary_mode: NativeImplicitMaterialBoundaryMode::Interpolated,
                     material_sample_spacing: 0.001,
+                    max_extraction_vertices: 0,
+                    max_extraction_triangles: 0,
                 },
                 &mut mesh,
                 &mut generate_error,
@@ -176,9 +178,11 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     let diagnostic = unsafe { &*generate_error.diagnostics.diagnostics };
     let message =
         unsafe { std::slice::from_raw_parts(diagnostic.message.bytes, diagnostic.message.len) };
-    assert!(std::str::from_utf8(message)
-        .unwrap()
-        .contains("budget exceeded"));
+    assert!(
+        std::str::from_utf8(message)
+            .unwrap()
+            .contains("budget exceeded")
+    );
     assert_eq!(mesh.value, 0, "failed extraction never publishes a mesh");
     let lease = generate_error.diagnostics.handle;
     assert_eq!(
@@ -189,34 +193,56 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         unsafe { (api.destroy_operation_diagnostic_lease)(api.context, lease) },
         0
     );
+    let mut bounded_request = NativeImplicitGenerateRequest {
+        field,
+        source: carved,
+        minimum: NativeVec3 {
+            x: -1.0,
+            y: -1.0,
+            z: -1.0,
+        },
+        maximum: NativeVec3 {
+            x: 1.0,
+            y: 1.0,
+            z: 1.0,
+        },
+        cell_size: 0.16,
+        crease_angle_degrees: 35.0,
+        uv_scale: 1.0,
+        default_material: material,
+        regions: material_regions.as_ptr(),
+        regions_len: material_regions.len(),
+        material_boundary_mode: NativeImplicitMaterialBoundaryMode::Interpolated,
+        material_sample_spacing: 0.08,
+        max_extraction_vertices: 0,
+        max_extraction_triangles: 1,
+    };
+    assert_ne!(
+        unsafe {
+            (api.generate)(
+                api.context,
+                &bounded_request,
+                &mut mesh,
+                &mut generate_error,
+            )
+        },
+        ABI_OK
+    );
+    assert_eq!(mesh.value, 0);
+    assert_eq!(
+        unsafe {
+            (api.destroy_operation_diagnostic_lease)(api.context, generate_error.diagnostics.handle)
+        },
+        ABI_OK
+    );
+    bounded_request.max_extraction_triangles = 10_000;
     // A caught budget rejection must allow successful generation and the
     // appearance/implicit callback commit below, without restarting the host.
     assert_eq!(
         unsafe {
             (api.generate)(
                 api.context,
-                &NativeImplicitGenerateRequest {
-                    field,
-                    source: carved,
-                    minimum: NativeVec3 {
-                        x: -1.0,
-                        y: -1.0,
-                        z: -1.0,
-                    },
-                    maximum: NativeVec3 {
-                        x: 1.0,
-                        y: 1.0,
-                        z: 1.0,
-                    },
-                    cell_size: 0.16,
-                    crease_angle_degrees: 35.0,
-                    uv_scale: 1.0,
-                    default_material: material,
-                    regions: material_regions.as_ptr(),
-                    regions_len: material_regions.len(),
-                    material_boundary_mode: NativeImplicitMaterialBoundaryMode::Interpolated,
-                    material_sample_spacing: 0.08,
-                },
+                &bounded_request,
                 &mut mesh,
                 &mut generate_error,
             )
@@ -670,6 +696,8 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         regions_len,
         material_boundary_mode: NativeImplicitMaterialBoundaryMode::Centroid,
         material_sample_spacing: 0.0,
+        max_extraction_vertices: 0,
+        max_extraction_triangles: 0,
     };
     appearance.begin_call();
     implicit.begin_call();

@@ -52,6 +52,13 @@ public sealed class ImplicitRecipe : IDisposable
     public ImplicitNode Offset(ImplicitNode source, float amount) =>
         _service.Offset(new ImplicitOffsetRequest(Field, source, amount));
 
+    /// <summary>Bounded smooth spectral noise; amplitude is in field units,
+    /// frequency in cycles per coordinate unit. This is not hydraulic erosion.</summary>
+    public ImplicitNode DisplaceWaves(ImplicitNode source, Vector3 frequency, float amplitude,
+        uint octaves, float lacunarity, float gain, ulong seed) =>
+        _service.DisplaceWaves(new ImplicitWaveRequest(Field, source, frequency, amplitude,
+            octaves, lacunarity, gain, seed));
+
     public ImplicitNode Translate(ImplicitNode source, Vector3 translation) =>
         Place(source, new Transform(translation, Quaternion.Identity, Vector3.One));
 
@@ -73,7 +80,7 @@ public sealed class ImplicitRecipe : IDisposable
         surface.Material,
         surface.Regions,
         surface.Sampling.MaterialBoundaries,
-        surface.Sampling.MaterialSampleSpacing));
+        surface.Sampling.MaterialSampleSpacing, surface.Sampling.MaxExtractionVertices, surface.Sampling.MaxExtractionTriangles));
 
     public void Dispose() => Field.Dispose();
 }
@@ -84,7 +91,9 @@ public readonly record struct RecipeSampling(
     float CreaseDegrees,
     float TextureRepeats,
     ImplicitMaterialBoundaryMode MaterialBoundaries,
-    float MaterialSampleSpacing = 0f);
+    float MaterialSampleSpacing = 0f,
+    uint MaxExtractionVertices = 0,
+    uint MaxExtractionTriangles = 0);
 
 /// <summary>
 /// A synchronous description of one field extraction. The receiving callback

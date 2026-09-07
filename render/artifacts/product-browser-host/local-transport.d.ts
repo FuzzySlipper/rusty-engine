@@ -37,6 +37,7 @@ export interface ProductBrowserLocalTransportOptions {
     /** Injectable only for headless tests. Browser builds use EventSource. */
     readonly eventSource?: ProductBrowserLocalEventSourceConstructor;
     readonly maximumResponseBytes?: number;
+    /** Optional caller-selected aggregate output budget; omitted uses JS's safe-integer ceiling. */
     readonly maximumOutputBytes?: number;
     /** Stream errors are surfaced here; the operation surface remains closed. */
     readonly onTransportError?: (error: ProductBrowserLocalTransportError) => void;

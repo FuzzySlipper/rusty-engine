@@ -2655,6 +2655,11 @@ class TestTextureResourceSource implements TextureResourceSource {
 void test('inline and resource PNG textures converge on one generic static-mesh material path', () => {
   const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 128]);
   const source = new TestTextureResourceSource(bytes);
+  const release = source.releaseResource.bind(source);
+  source.releaseResource = (resource) => {
+    release(resource);
+    bytes.fill(0); // A provider may reclaim its encoded view once decoding releases it.
+  };
   const inline = new ThreeRenderer();
   const resource = new ThreeRenderer({ textureResourceSource: source });
   for (const [renderer, kind] of [[inline, 'inline'], [resource, 'resource']] as const) {

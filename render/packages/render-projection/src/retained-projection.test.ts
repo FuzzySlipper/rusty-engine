@@ -492,6 +492,25 @@ void test('a rejected baseline does not replace retained topology or publication
   assert.equal(projection.node(renderHandle(44))?.visible, false);
 });
 
+void test('retained mesh copies isolate incoming data and returned snapshots', () => {
+  const projection = new RenderProjection();
+  const handle = renderHandle(21);
+  const payload = quadPayload();
+  projection.applyFrame({ schemaVersion: 1, ops: [
+    createPrimitive(21, 'isolated-mesh'),
+    { op: 'replaceMeshPayload', handle, payload },
+  ] });
+  assert.equal(payload.source.kind, 'inline');
+  if (payload.source.kind !== 'inline') throw new Error('inline fixture required');
+  const original = projection.node(handle)?.meshPayload;
+  (payload.source.positions as number[])[0] = 123;
+  assert.deepEqual(projection.node(handle)?.meshPayload, original);
+  const returned = projection.node(handle)?.meshPayload;
+  assert.ok(returned && returned.source.kind === 'inline');
+  (returned.source.positions as number[])[0] = 456;
+  assert.deepEqual(projection.node(handle)?.meshPayload, original);
+});
+
 void test('small atomic frames structurally share unrelated retained definitions', () => {
   const projection = new RenderProjection();
   projection.applyFrame({

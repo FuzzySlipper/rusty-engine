@@ -188,9 +188,7 @@ impl RuntimeUiProjectionEnvelope {
     }
 
     fn encoded_bytes(&self) -> Result<Vec<u8>, RuntimeUiProjectionError> {
-        let wire = WireEnvelope::from(self);
-        let bytes =
-            serde_json::to_vec(&wire).map_err(|_| RuntimeUiProjectionError::WireEncoding)?;
+        let bytes = serde_json::to_vec(self).map_err(|_| RuntimeUiProjectionError::WireEncoding)?;
         if bytes.len() > MAX_RUNTIME_UI_PROJECTION_WIRE_BYTES {
             return Err(RuntimeUiProjectionError::WireTooLarge {
                 bytes: bytes.len(),
@@ -465,20 +463,32 @@ struct WireRuntime {
     control_revision: String,
 }
 
-impl From<&RuntimeUiProjectionEnvelope> for WireEnvelope {
-    fn from(envelope: &RuntimeUiProjectionEnvelope) -> Self {
-        Self {
-            artifact: RUNTIME_UI_PROJECTION_ARTIFACT.to_owned(),
-            runtime: WireRuntime {
-                instance_id: envelope.runtime.instance_id().value().to_string(),
-                generation: envelope.runtime.generation().value().to_string(),
-                control_revision: envelope.runtime.control_revision().value().to_string(),
+impl Serialize for RuntimeUiProjectionEnvelope {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut wire = serializer.serialize_struct("WireEnvelope", 6)?;
+        wire.serialize_field("artifact", RUNTIME_UI_PROJECTION_ARTIFACT)?;
+        wire.serialize_field(
+            "runtime",
+            &WireRuntime {
+                instance_id: self.runtime.instance_id().value().to_string(),
+                generation: self.runtime.generation().value().to_string(),
+                control_revision: self.runtime.control_revision().value().to_string(),
             },
-            sequence: envelope.sequence.to_string(),
-            stream: envelope.stream.clone(),
-            contract: envelope.contract.clone(),
-            value: envelope.value.clone(),
-        }
+        )?;
+        wire.serialize_field("sequence", &self.sequence.to_string())?;
+        wire.serialize_field("stream", &self.stream)?;
+        wire.serialize_field("contract", &self.contract)?;
+        wire.serialize_field("value", &self.value)?;
+        wire.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeUiProjectionEnvelope {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        WireEnvelope::deserialize(deserializer)?
+            .into_envelope()
+            .map_err(serde::de::Error::custom)
     }
 }
 

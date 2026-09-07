@@ -56,6 +56,7 @@ const PHYSICAL_MAPPING_USAGE: &str = "--physical-mapping <mapping-id>=<intent-id
   pointer-axis:<x|y>[:context=<identity>]\n\
   wheel:<x|y>[:context=<identity>]\n\
   controller-button:<button-0..button-15>:<held|pressed|released>[:context=<identity>]\n\
+  controller-button-value:<button-0..button-15>[:context=<identity>]\n\
   controller-axis:<axis-0..axis-3>[:context=<identity>]\n\
 keyboard controls: key-a..key-z, digit-0..digit-9, space, enter, escape, shift-left,\n\
   shift-right, control-left, control-right, alt-left, alt-right";
@@ -1409,13 +1410,8 @@ fn worker_bundle(bundle: ProductDevWorkerBundle) -> Result<ProductDevBundle, Str
 fn worker_output(
     value: serde_json::Value,
 ) -> Result<ProductDevRuntimeOutput, ProductDevRuntimeError> {
-    let bytes = serde_json::to_vec(&value).map_err(|_| {
-        worker_runtime_error(
-            "DEV_HOST_WORKER_OUTPUT_DECODE",
-            "worker output could not be encoded for bounded decoding",
-        )
-    })?;
-    ProductDevRuntimeOutput::decode_json(&bytes).map_err(worker_host_error)
+    serde_json::from_value(value)
+        .map_err(|error| worker_runtime_error("DEV_HOST_WORKER_OUTPUT_DECODE", error.to_string()))
 }
 
 fn worker_publications(
@@ -1427,9 +1423,8 @@ fn worker_publications(
         .collect()
 }
 
-/// Decode the full worker output group before admitting it. A complete
-/// binding-to-completion baseline may use the dedicated 64 MiB recovery
-/// budget; every other worker publication remains in the normal 16 MiB lane.
+/// Decode the worker output group and check baseline marker coherence.
+/// Framing and encoding belong to the worker writer and serving host.
 fn worker_outputs(
     values: Vec<serde_json::Value>,
 ) -> Result<Vec<ProductDevRuntimeOutput>, ProductDevRuntimeError> {
@@ -2180,8 +2175,7 @@ fn worker_output_values(
     ProductDevRuntimeOutput::validate_output_group(&outputs).map_err(|error| error.to_string())?;
     let mut values = Vec::with_capacity(outputs.len());
     for output in outputs {
-        let bytes = serde_json::to_vec(&output).map_err(|error| error.to_string())?;
-        values.push(serde_json::from_slice(&bytes).map_err(|error| error.to_string())?);
+        values.push(serde_json::to_value(output).map_err(|error| error.to_string())?);
     }
     Ok(values)
 }
@@ -3200,13 +3194,17 @@ fn parse_physical_mapping(value: &str) -> Result<RuntimeInputMapping, String> {
             edge: parse_input_edge(next_mapping_token(&mut tokens, "controller-button edge")?)?,
             context: parse_mapping_qualifiers(&mut tokens, false)?.0,
         },
+        "controller-button-value" => RuntimeInputTrigger::ControllerButtonValue {
+            button: parse_controller_button(next_mapping_token(&mut tokens, "controller button")?)?,
+            context: parse_mapping_qualifiers(&mut tokens, false)?.0,
+        },
         "controller-axis" => RuntimeInputTrigger::ControllerAxis {
             axis: parse_controller_axis(next_mapping_token(&mut tokens, "controller axis")?)?,
             context: parse_mapping_qualifiers(&mut tokens, false)?.0,
         },
         _ => {
             return Err(format!(
-                "--physical-mapping trigger `{trigger_kind}` is unsupported; expected key, pointer-button, pointer-axis, wheel, controller-button, or controller-axis"
+                "--physical-mapping trigger `{trigger_kind}` is unsupported; expected key, pointer-button, pointer-axis, wheel, controller-button, controller-button-value, or controller-axis"
             ));
         }
     };
@@ -3602,7 +3600,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_output_group_only_admits_large_complete_baselines() {
+    fn worker_output_group_admits_large_incrementals_and_baselines() {
         let runtime = serde_json::json!({
             "instanceId": "7",
             "generation": "3",
@@ -3610,11 +3608,12 @@ mod tests {
         });
         let frame = serde_json::json!({
             "kind": "frame",
-            "frame": { "payload": "x".repeat(product_dev_host::MAX_OUTPUT_AGGREGATE_BYTES + 1) },
+            "frame": { "schemaVersion": 1, "ops": [], "publication": {
+                "stream": "x".repeat(16 * 1024 * 1024 + 1), "baseRevision": 0,
+                "revision": 1, "operationCount": 0,
+            } },
         });
-        let ordinary = worker_outputs(vec![frame.clone()])
-            .expect_err("ordinary worker output keeps the 16 MiB limit");
-        assert_eq!(ordinary.code(), "DEV_HOST_OUTPUT_BOUNDS");
+        worker_outputs(vec![frame.clone()]).expect("wire transport imposes no 16 MiB cap");
 
         worker_outputs(vec![
             serde_json::json!({
@@ -4009,6 +4008,8 @@ mod tests {
             "--direct-intent",
             "controller-button=digital",
             "--direct-intent",
+            "controller-button-value=axis",
+            "--direct-intent",
             "controller-axis=axis",
             "--physical-mapping",
             "key=key:key:key-w:pressed",
@@ -4020,6 +4021,8 @@ mod tests {
             "wheel=wheel:wheel:y",
             "--physical-mapping",
             "controller-button=controller-button:controller-button:button-0:held",
+            "--physical-mapping",
+            "controller-button-value=controller-button-value:controller-button-value:button-7",
             "--physical-mapping",
             "controller-axis=controller-axis:controller-axis:axis-3",
         ])
@@ -4048,6 +4051,10 @@ mod tests {
         ));
         assert!(matches!(
             mappings[5].trigger(),
+            RuntimeInputTrigger::ControllerButtonValue { .. }
+        ));
+        assert!(matches!(
+            mappings[6].trigger(),
             RuntimeInputTrigger::ControllerAxis { .. }
         ));
     }

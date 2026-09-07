@@ -91,19 +91,12 @@ const ROUTES = Object.freeze({
 
 const MAXIMUM_RUNTIME_RESPONSE_BYTES = 512 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES = 256 * 1024;
-const MAXIMUM_RUNTIME_OUTPUT_BYTES = 16 * 1024 * 1024;
-// A fresh, subscriber-private binding-to-completion baseline may carry one
-// complete retained resource set. It is staged until the cursorless baseline
-// completion arrives and never widens steady-state output delivery.
-const MAXIMUM_RUNTIME_BASELINE_BYTES = 64 * 1024 * 1024;
 const MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES = 96 * 1024;
 // Mirrors ProductDevRendererDiagnosticsFeedback::MAX_SNAPSHOT_BYTES. Renderer
 // observations are not direct UI product payloads and have their own closed,
 // versioned transport budget.
 const MAXIMUM_RENDERER_DIAGNOSTICS_SNAPSHOT_BYTES = 256 * 1024;
-const MAXIMUM_CONNECTION_BASELINE_OUTPUTS = 256;
 const DEFAULT_MAXIMUM_RESPONSE_BYTES = MAXIMUM_RUNTIME_RESPONSE_BYTES;
-const DEFAULT_MAXIMUM_OUTPUT_BYTES = MAXIMUM_RUNTIME_OUTPUT_BYTES;
 const MAXIMUM_CONFIGURED_BYTES = 16 * 1024 * 1024;
 const UINT64_MAX_DECIMAL = '18446744073709551615';
 const MAXIMUM_INPUT_BATCH_LENGTH = 1_024;
@@ -249,6 +242,7 @@ export interface ProductBrowserLocalTransportOptions {
   /** Injectable only for headless tests. Browser builds use EventSource. */
   readonly eventSource?: ProductBrowserLocalEventSourceConstructor;
   readonly maximumResponseBytes?: number;
+  /** Optional caller-selected aggregate output budget; omitted uses JS's safe-integer ceiling. */
   readonly maximumOutputBytes?: number;
   /** Stream errors are surfaced here; the operation surface remains closed. */
   readonly onTransportError?: (error: ProductBrowserLocalTransportError) => void;
@@ -371,9 +365,8 @@ export function createProductBrowserLocalHttpAdapter(
     MAXIMUM_RUNTIME_RESPONSE_BYTES,
   );
   const maximumOutputBytes = validateMaximumBytes(
-    options.maximumOutputBytes ?? DEFAULT_MAXIMUM_OUTPUT_BYTES,
+    options.maximumOutputBytes ?? Number.MAX_SAFE_INTEGER,
     'maximumOutputBytes',
-    MAXIMUM_RUNTIME_OUTPUT_BYTES,
   );
   let disposed = false;
   let stream: ProductBrowserLocalEventSource | null = null;
@@ -389,7 +382,6 @@ export function createProductBrowserLocalHttpAdapter(
   let rejectConnectionReady: ((error: ProductBrowserLocalTransportError) => void) | null = null;
   let connectionBaselineComplete = false;
   let pendingConnectionOutputs: ProductBrowserRuntimeOutput[] = [];
-  let pendingConnectionBaselineBytes = 0;
   let terminalFailure: ProductBrowserRuntimeTerminalFailure | null = null;
   let nextOutputEpoch = 0;
   let currentOutputEpoch = 0;
@@ -511,7 +503,6 @@ export function createProductBrowserLocalHttpAdapter(
     }
     pendingFragment = null;
     pendingConnectionOutputs = [];
-    pendingConnectionBaselineBytes = 0;
     releaseOutputSequenceWaiters('closed');
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
@@ -552,7 +543,6 @@ export function createProductBrowserLocalHttpAdapter(
     streamBaselineListener = null;
     pendingFragment = null;
     pendingConnectionOutputs = [];
-    pendingConnectionBaselineBytes = 0;
     currentOutputBinding = null;
     connectionBaselineComplete = false;
     observedOutputSequence = 0n;
@@ -945,7 +935,6 @@ export function createProductBrowserLocalHttpAdapter(
   const stageOrPublishOutputBatch = (
     outputs: readonly ProductBrowserRuntimeOutput[],
     epoch: number,
-    encodedBytes: number,
   ): void => {
     if (connectionBaselineComplete) {
       const replacementBinding = outputs.find((output) => output.kind === 'binding');
@@ -961,21 +950,6 @@ export function createProductBrowserLocalHttpAdapter(
       }
       publishOutputBatch(outputs, { epoch, baseline: false, recovery: 'none' });
       return;
-    }
-    if (pendingConnectionOutputs.length + outputs.length > MAXIMUM_CONNECTION_BASELINE_OUTPUTS) {
-      throw new ProductBrowserLocalTransportError(
-        'output_decode_failed',
-        `Product Browser local runtime connection baseline exceeds ${String(MAXIMUM_CONNECTION_BASELINE_OUTPUTS)} outputs`,
-        { route: ROUTES.freshOutputs },
-      );
-    }
-    pendingConnectionBaselineBytes += encodedBytes;
-    if (pendingConnectionBaselineBytes > MAXIMUM_RUNTIME_BASELINE_BYTES) {
-      throw new ProductBrowserLocalTransportError(
-        'output_decode_failed',
-        `Product Browser local runtime connection baseline exceeds ${String(MAXIMUM_RUNTIME_BASELINE_BYTES)} bytes`,
-        { route: ROUTES.freshOutputs },
-      );
     }
     for (const output of outputs) {
       if (output.kind === 'binding') currentOutputBinding = output.runtime;
@@ -1038,7 +1012,6 @@ export function createProductBrowserLocalHttpAdapter(
         void connectionReady.catch(() => undefined);
         connectionBaselineComplete = false;
         pendingConnectionOutputs = [];
-        pendingConnectionBaselineBytes = 0;
         const attachedStream = new eventSourceConstructor(`${basePath}${ROUTES.freshOutputs}`);
         const outputEpoch = nextOutputEpoch + 1;
         nextOutputEpoch = outputEpoch;
@@ -1099,12 +1072,9 @@ export function createProductBrowserLocalHttpAdapter(
         streamFragmentListener = (event) => {
           if (!ownsProjection()) return;
           try {
-            const maximumFragmentBytes = connectionBaselineComplete
-              ? maximumOutputBytes
-              : MAXIMUM_RUNTIME_BASELINE_BYTES;
             const fragment = decodeOutputFragment(
               parseBoundedJson(event.data, MAXIMUM_RUNTIME_OUTPUT_EVENT_BYTES),
-              maximumFragmentBytes,
+              maximumOutputBytes,
             );
             if (currentOutputBinding === null && !connectionBaselineComplete) {
               currentOutputBinding = fragment.runtime;
@@ -1138,7 +1108,6 @@ export function createProductBrowserLocalHttpAdapter(
             pending.byteLength += new TextEncoder().encode(fragment.data).byteLength;
             pending.nextIndex += 1;
             let completedOutputs: readonly ProductBrowserRuntimeOutput[] | null = null;
-            let completedAggregateBytes = 0;
             if (pending.byteLength > pending.aggregateBytes) {
               throw new TypeError('output fragments exceed their declared aggregate length');
             }
@@ -1147,15 +1116,14 @@ export function createProductBrowserLocalHttpAdapter(
                 throw new TypeError('output fragment transfer ended before its declared aggregate length');
               }
               const encoded = pending.data.join('');
-              completedAggregateBytes = pending.aggregateBytes;
               pendingFragment = null;
-              completedOutputs = decodeRuntimeOutputBatch(parseBoundedJson(encoded, maximumFragmentBytes));
+              completedOutputs = decodeRuntimeOutputBatch(parseBoundedJson(encoded, maximumOutputBytes));
             }
             if (connectionBaselineComplete) {
               observeOutputSequence(event.lastEventId);
             }
             if (completedOutputs !== null) {
-              stageOrPublishOutputBatch(completedOutputs, outputEpoch, completedAggregateBytes);
+              stageOrPublishOutputBatch(completedOutputs, outputEpoch);
             }
           } catch (cause) {
             failFragmentStream(cause);
@@ -1188,7 +1156,6 @@ export function createProductBrowserLocalHttpAdapter(
             connectionBaselineComplete = true;
             const baselineOutputs = pendingConnectionOutputs;
             pendingConnectionOutputs = [];
-            pendingConnectionBaselineBytes = 0;
             publishOutputBatch(baselineOutputs, {
               epoch: outputEpoch,
               baseline: true,
@@ -1233,7 +1200,6 @@ export function createProductBrowserLocalHttpAdapter(
             stageOrPublishOutputBatch(
               outputs,
               outputEpoch,
-              new TextEncoder().encode(event.data).byteLength,
             );
           } catch (cause) {
             const error = cause instanceof ProductBrowserLocalTransportError
@@ -1251,7 +1217,6 @@ export function createProductBrowserLocalHttpAdapter(
           if (!connectionBaselineComplete) {
             pendingFragment = null;
             pendingConnectionOutputs = [];
-            pendingConnectionBaselineBytes = 0;
             currentOutputBinding = null;
           } else if (observedOutputSequence === 0n) {
             // An unnumbered completed baseline still fences a renderer
@@ -1279,7 +1244,6 @@ export function createProductBrowserLocalHttpAdapter(
         streamBaselineListener = null;
         pendingFragment = null;
         pendingConnectionOutputs = [];
-        pendingConnectionBaselineBytes = 0;
         releaseOutputSequenceWaiters('closed');
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
@@ -1316,7 +1280,6 @@ export function createProductBrowserLocalHttpAdapter(
         stream = null;
         pendingFragment = null;
         pendingConnectionOutputs = [];
-        pendingConnectionBaselineBytes = 0;
         releaseOutputSequenceWaiters('closed');
         resolveOutputSubscriptionReady?.();
         resolveOutputSubscriptionReady = null;
@@ -1429,7 +1392,6 @@ export function createProductBrowserLocalHttpAdapter(
     stream = null;
     pendingFragment = null;
     pendingConnectionOutputs = [];
-    pendingConnectionBaselineBytes = 0;
     releaseOutputSequenceWaiters('closed');
     resolveOutputSubscriptionReady?.();
     resolveOutputSubscriptionReady = null;
@@ -1503,11 +1465,13 @@ function validateBasePath(value: string): string {
   return value;
 }
 
-function validateMaximumBytes(value: number, name: string, maximum = MAXIMUM_CONFIGURED_BYTES): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+function validateMaximumBytes(value: number, name: string, maximum?: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || (maximum !== undefined && value > maximum)) {
     throw new ProductBrowserLocalTransportError(
       'invalid_options',
-      `${name} must be a positive safe integer no greater than ${String(maximum)}`,
+      maximum === undefined
+        ? `${name} must be a positive safe integer`
+        : `${name} must be a positive safe integer no greater than ${String(maximum)}`,
     );
   }
   return value;
@@ -2054,6 +2018,13 @@ function snapshotInputFact(value: unknown): RustyApplicationRuntimeInputFact {
         axis: requireCatalogValue<RustyApplicationControllerAxis>(record['axis'], 'controller axis', CONTROLLER_AXES),
         value: requireFiniteNumber(record['value'], 'controller axis value', -1, 1),
       });
+    case 'controller-button-value':
+      requireKnownFields(record, ['kind', 'button', 'value'], 'controller-button-value input fact');
+      return Object.freeze({
+        kind,
+        button: requireCatalogValue<RustyApplicationControllerButton>(record['button'], 'controller button', CONTROLLER_BUTTONS),
+        value: requireFiniteNumber(record['value'], 'controller button value', 0, 1),
+      });
     case 'clear':
       requireKnownFields(record, ['kind', 'reason'], 'clear input fact');
       return Object.freeze({
@@ -2245,13 +2216,9 @@ function decodeOutputFragment(
     'aggregateBytes', 'data',
   ], 'output fragment');
   if (record['schemaVersion'] !== 1) throw new TypeError('output fragment schemaVersion must equal 1');
-  const maximumFragments = Math.ceil(
-    maximumAggregateBytes / MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES,
-  );
   if (!Number.isSafeInteger(record['fragmentCount'])
-    || (record['fragmentCount'] as number) < 2
-    || (record['fragmentCount'] as number) > maximumFragments) {
-    throw new TypeError('output fragment count is outside the retained stream bound');
+    || (record['fragmentCount'] as number) < 2) {
+    throw new TypeError('output fragment count must be a positive safe integer greater than one');
   }
   const fragmentCount = record['fragmentCount'] as number;
   if (!Number.isSafeInteger(record['fragmentIndex'])
@@ -2264,6 +2231,11 @@ function decodeOutputFragment(
     || (record['aggregateBytes'] as number) > maximumAggregateBytes) {
     throw new TypeError('output fragment aggregate length is outside the configured bound');
   }
+  const aggregateBytes = record['aggregateBytes'] as number;
+  if (fragmentCount > aggregateBytes
+    || fragmentCount < Math.ceil(aggregateBytes / MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES)) {
+    throw new TypeError('output fragment count cannot carry its declared aggregate length');
+  }
   if (typeof record.data !== 'string') throw new TypeError('output fragment data must be text');
   const dataBytes = new TextEncoder().encode(record.data).byteLength;
   if (dataBytes === 0 || dataBytes > MAXIMUM_RUNTIME_OUTPUT_FRAGMENT_DATA_BYTES) {
@@ -2274,7 +2246,7 @@ function decodeOutputFragment(
     runtime: decodeRuntimeIdentity(record.runtime),
     fragmentIndex: record['fragmentIndex'] as number,
     fragmentCount,
-    aggregateBytes: record['aggregateBytes'] as number,
+    aggregateBytes,
     data: record.data,
   };
 }
@@ -2725,11 +2697,7 @@ function decodeRuntimeOutputBatch(value: unknown): readonly ProductBrowserRuntim
   }
   requireKnownFields(record, ['kind', 'outputs'], 'runtime output batch');
   const outputs = requirePlainArray(record['outputs'], 'runtime output batch outputs');
-  if (outputs.length === 0 || outputs.length > MAXIMUM_CONNECTION_BASELINE_OUTPUTS) {
-    throw new TypeError(
-      `runtime output batch must contain 1 to ${String(MAXIMUM_CONNECTION_BASELINE_OUTPUTS)} outputs`,
-    );
-  }
+  if (outputs.length === 0) throw new TypeError('runtime output batch must contain at least one output');
   return Object.freeze(outputs.map(decodeRuntimeOutput));
 }
 

@@ -88,6 +88,11 @@ export type RustyApplicationRuntimeInputFact =
       readonly axis: RustyApplicationControllerAxis;
       readonly value: number;
     }
+  | {
+      readonly kind: 'controller-button-value';
+      readonly button: RustyApplicationControllerButton;
+      readonly value: number;
+    }
   | { readonly kind: 'clear'; readonly reason: RustyApplicationInputClearReason };
 
 export interface RustyApplicationRuntimeInputIngress {
@@ -233,6 +238,7 @@ export function createRustyApplicationInputIngress(
   const heldKeys = new Set<RustyApplicationKeyboardControl>();
   const heldPointerButtons = new Set<RustyApplicationPointerButton>();
   const controllerAxes = new Map<RustyApplicationControllerAxis, number>();
+  const controllerButtonValues = new Map<RustyApplicationControllerButton, number>();
   const heldControllerButtons = new Set<RustyApplicationControllerButton>();
   let attachedCanvas = environment.canvas();
   let disposed = false;
@@ -245,6 +251,7 @@ export function createRustyApplicationInputIngress(
     heldPointerButtons.clear();
     heldControllerButtons.clear();
     controllerAxes.clear();
+    controllerButtonValues.clear();
   };
   const clear = (reason: RustyApplicationInputClearReason): void => {
     clearLocal();
@@ -357,7 +364,7 @@ export function createRustyApplicationInputIngress(
     }
     const controller = environment.gamepads()[normalized.selectedController];
     if (controller === null || controller === undefined || !controller.connected) {
-      if (heldControllerButtons.size > 0 || controllerAxes.size > 0) clear('interaction-mode-loss');
+      if (heldControllerButtons.size > 0 || controllerAxes.size > 0 || controllerButtonValues.size > 0) clear('interaction-mode-loss');
       return 0;
     }
     let observed = 0;
@@ -372,6 +379,12 @@ export function createRustyApplicationInputIngress(
     }
     for (let index = 0; index < 16; index += 1) {
       const button = controllerButton(index);
+      const value = Math.max(0, boundedNumber(controller.buttons[index]?.value ?? 0, 1));
+      if (value !== (controllerButtonValues.get(button) ?? 0)) {
+        controllerButtonValues.set(button, value);
+        if (enqueueFact(Object.freeze({ kind: 'controller-button-value', button, value }))) return observed;
+        observed += 1;
+      }
       const pressed = controller.buttons[index]?.pressed === true;
       const wasPressed = heldControllerButtons.has(button);
       if (pressed === wasPressed) continue;
@@ -404,6 +417,10 @@ export function createRustyApplicationInputIngress(
     for (const button of [...heldControllerButtons].sort()) {
       enqueueFact(Object.freeze({ kind: 'controller-button', button, edge: 'pressed' }));
     }
+    for (const button of [...controllerButtonValues.keys()].sort()) {
+      const value = controllerButtonValues.get(button)!;
+      if (value !== 0) enqueueFact(Object.freeze({ kind: 'controller-button-value', button, value }));
+    }
     normalized.onAvailable?.();
   };
 
@@ -412,6 +429,7 @@ export function createRustyApplicationInputIngress(
     const controller = environment.gamepads()[normalized.selectedController];
     heldControllerButtons.clear();
     controllerAxes.clear();
+    controllerButtonValues.clear();
     if (controller === null || controller === undefined || !controller.connected) return;
     for (let index = 0; index < 4; index += 1) {
       const value = boundedNumber(controller.axes[index] ?? 0, 1);
@@ -419,6 +437,8 @@ export function createRustyApplicationInputIngress(
     }
     for (let index = 0; index < 16; index += 1) {
       if (controller.buttons[index]?.pressed === true) heldControllerButtons.add(controllerButton(index));
+      const value = Math.max(0, boundedNumber(controller.buttons[index]?.value ?? 0, 1));
+      if (value !== 0) controllerButtonValues.set(controllerButton(index), value);
     }
   }
 
@@ -1002,6 +1022,13 @@ function validateInputFact(
         throw new TypeError('controller axis input fact requires one closed axis within [-1, 1]');
       }
       return Object.freeze({ kind: 'controller-axis', axis: value.axis, value: value.value });
+    }
+    case 'controller-button-value': {
+      if (!isControllerButton(value.button) || !Number.isFinite(value.value)
+        || value.value < 0 || value.value > 1) {
+        throw new TypeError('controller button value requires one closed button within [0, 1]');
+      }
+      return Object.freeze({ kind: 'controller-button-value', button: value.button, value: value.value });
     }
     case 'clear':
       return Object.freeze({ kind: 'clear', reason: validateClearReason(value.reason) });

@@ -2703,7 +2703,7 @@ function un(e, t) {
 	return e - t;
 }
 function H(e) {
-	return e === void 0 ? e : JSON.parse(JSON.stringify(e));
+	return structuredClone(e);
 }
 var dn = "attached", fn = 1e3, pn = 1001, mn = 1002, hn = 1003, gn = 1004, _n = 1005, vn = 1006, yn = 1007, bn = 1008, xn = 1009, Sn = 1010, Cn = 1011, wn = 1012, Tn = 1013, En = 1014, Dn = 1015, On = 1016, kn = 1017, An = 1018, jn = 1020, Mn = 35902, Nn = 35899, Pn = 1021, Fn = 1022, In = 1023, Ln = 1026, Rn = 1027, zn = 1028, Bn = 1029, Vn = 1030, Hn = 1031, Un = 1033, Wn = 33776, Gn = 33777, Kn = 33778, qn = 33779, Jn = 35840, Yn = 35841, Xn = 35842, Zn = 35843, Qn = 36196, $n = 37492, er = 37496, tr = 37488, nr = 37489, rr = 37490, ir = 37491, ar = 37808, or = 37809, sr = 37810, cr = 37811, lr = 37812, ur = 37813, dr = 37814, fr = 37815, pr = 37816, mr = 37817, hr = 37818, gr = 37819, _r = 37820, vr = 37821, yr = 36492, br = 36494, xr = 36495, Sr = 36283, Cr = 36284, wr = 36285, Tr = 36286, Er = 2200, Dr = 2201, Or = 2202, kr = 2300, Ar = 2301, jr = 2302, Mr = 2303, Nr = 2400, Pr = 2401, Fr = 2402, Ir = 2500, Lr = 2501, Rr = 3200, zr = "srgb", Br = "srgb-linear", Vr = "linear", Hr = "srgb", Ur = 7680, Wr = 35044, Gr = 35048, Kr = 2e3;
 function qr(e) {
@@ -20087,7 +20087,7 @@ function H_(e, t, n) {
 	else {
 		if (t === void 0) throw new Q(`${n}: resource texture needs a texture resource provider (${r.source.resource})`);
 		try {
-			i = t.acquireResource(r.source.resource, r.contentHash, r.byteLength).bytes.slice(), a = r.source.resource;
+			i = t.acquireResource(r.source.resource, r.contentHash, r.byteLength).bytes, a = r.source.resource;
 		} catch (e) {
 			throw Q_(e, r.source.resource, n, "unavailable");
 		}
@@ -25068,8 +25068,8 @@ var gC = class {
 			...e.forward,
 			...e.up
 		].every(Number.isFinite)) return this.#O("invalidDescriptor", "audio listener pose must be finite");
-		let t = this.#e.currentTime;
-		return SC(this.#e.listener, "position", e.position, t), SC(this.#e.listener, "forward", e.forward, t), SC(this.#e.listener, "up", e.up, t), [];
+		let t = this.#e.currentTime, n = this.#e.listener;
+		return "positionX" in n ? (SC(n, "position", e.position, t), SC(n, "forward", e.forward, t), SC(n, "up", e.up, t)) : (n.setPosition(...e.position), n.setOrientation(...e.forward, ...e.up)), [];
 	}
 	async applyPresentation(e) {
 		if (this.#v) return this.#P(0, this.#O("hostFailure", "audio host is disposed"));
@@ -26547,85 +26547,85 @@ function mT(e, t, n) {
 //#region packages/application-host/src/input-ingress.ts
 var hT = 1024, gT = 256, _T = 256, vT = 3, yT = 18446744073709551615n, bT = 65536, xT = 32, ST = 4096, CT = 16384, wT = 1024, TT = 9007199254740991;
 function ET(e, t) {
-	let n = jT(e), r = OT(n.maximumQueue), i = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set(), o = /* @__PURE__ */ new Map(), s = /* @__PURE__ */ new Set(), c = t.canvas(), l = !1, u = () => t.document.pointerLockElement === t.canvas(), d = () => u() || t.document.activeElement === t.canvas(), f = () => {
-		i.clear(), a.clear(), s.clear(), o.clear();
-	}, p = (e) => {
-		f(), r.clear(e), n.onAvailable?.();
+	let n = jT(e), r = OT(n.maximumQueue), i = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set(), o = /* @__PURE__ */ new Map(), s = /* @__PURE__ */ new Map(), c = /* @__PURE__ */ new Set(), l = t.canvas(), u = !1, d = () => t.document.pointerLockElement === t.canvas(), f = () => d() || t.document.activeElement === t.canvas(), p = () => {
+		i.clear(), a.clear(), c.clear(), o.clear(), s.clear();
 	}, m = (e) => {
+		p(), r.clear(e), n.onAvailable?.();
+	}, h = (e) => {
 		let t = r.enqueueFact(e);
-		return t && f(), n.onAvailable?.(), t;
-	}, h = (e, n) => t.allowsGameplayInput(e) ? n && !d() ? (p("focus-loss"), !1) : !0 : (p("interaction-mode-loss"), !1), g = (e) => {
-		if (!h(e, !1)) return;
+		return t && p(), n.onAvailable?.(), t;
+	}, g = (e, n) => t.allowsGameplayInput(e) ? n && !f() ? (m("focus-loss"), !1) : !0 : (m("interaction-mode-loss"), !1), _ = (e) => {
+		if (!g(e, !1)) return;
 		let n = JT(e.button);
-		n !== null && (a.has(n) || (a.add(n), m(Object.freeze({
+		n !== null && (a.has(n) || (a.add(n), h(Object.freeze({
 			kind: "pointer-button",
 			button: n,
 			edge: "pressed"
 		}))), n === "primary" && t.focusGameplay());
-	}, _ = (e) => {
-		if (!h(e, !0)) return;
+	}, v = (e) => {
+		if (!g(e, !0)) return;
 		let t = JT(e.button);
-		t === null || !a.delete(t) || m(Object.freeze({
+		t === null || !a.delete(t) || h(Object.freeze({
 			kind: "pointer-button",
 			button: t,
 			edge: "released"
 		}));
-	}, v = (e) => {
-		t.allowsGameplayInput(e), p("interaction-mode-loss");
 	}, y = (e) => {
-		if (!h(e, !1) || !u()) return;
+		t.allowsGameplayInput(e), m("interaction-mode-loss");
+	}, b = (e) => {
+		if (!g(e, !1) || !d()) return;
 		let t = tE(e.movementX, n.maximumPointerDelta), r = tE(e.movementY, n.maximumPointerDelta);
-		t === 0 && r === 0 || m(Object.freeze({
+		t === 0 && r === 0 || h(Object.freeze({
 			kind: "pointer-delta",
 			x: t,
 			y: r
 		}));
-	}, b = (e) => {
-		if (!h(e, !0)) return;
+	}, x = (e) => {
+		if (!g(e, !0)) return;
 		let t = tE(e.deltaX, n.maximumWheelDelta), r = tE(e.deltaY, n.maximumWheelDelta);
-		t === 0 && r === 0 || m(Object.freeze({
+		t === 0 && r === 0 || h(Object.freeze({
 			kind: "wheel",
 			x: t,
 			y: r
 		}));
-	}, x = (e) => {
-		if (!h(e, !0)) return;
+	}, S = (e) => {
+		if (!g(e, !0)) return;
 		let t = DT(e.code);
-		t === null || i.has(t) || (i.add(t), m(Object.freeze({
+		t === null || i.has(t) || (i.add(t), h(Object.freeze({
 			kind: "key",
 			code: t,
 			edge: "pressed"
 		})));
-	}, S = (e) => {
-		if (!h(e, !0)) return;
+	}, C = (e) => {
+		if (!g(e, !0)) return;
 		let t = DT(e.code);
-		t === null || !i.delete(t) || m(Object.freeze({
+		t === null || !i.delete(t) || h(Object.freeze({
 			kind: "key",
 			code: t,
 			edge: "released"
 		}));
-	}, C = (e) => {
-		t.allowsGameplayInput(e), u() || p("pointer-lock-loss");
 	}, w = (e) => {
-		t.allowsGameplayInput(e), p("focus-loss");
+		t.allowsGameplayInput(e), d() || m("pointer-lock-loss");
 	}, T = (e) => {
-		t.allowsGameplayInput(e);
+		t.allowsGameplayInput(e), m("focus-loss");
 	}, E = (e) => {
-		t.allowsGameplayInput(e), n.selectedController === e.gamepad.index && p("interaction-mode-loss");
-	}, D = () => {
-		t.eventTarget.addEventListener("pointerdown", g), t.document.addEventListener("pointerup", _), t.document.addEventListener("pointercancel", v), t.document.addEventListener("wheel", b, { passive: !0 });
+		t.allowsGameplayInput(e);
+	}, D = (e) => {
+		t.allowsGameplayInput(e), n.selectedController === e.gamepad.index && m("interaction-mode-loss");
 	}, O = () => {
-		t.eventTarget.removeEventListener("pointerdown", g), t.document.removeEventListener("pointerup", _), t.document.removeEventListener("pointercancel", v), t.document.removeEventListener("wheel", b);
+		t.eventTarget.addEventListener("pointerdown", _), t.document.addEventListener("pointerup", v), t.document.addEventListener("pointercancel", y), t.document.addEventListener("wheel", x, { passive: !0 });
 	}, k = () => {
-		if (l || n.selectedController === null) return 0;
-		if (!t.active() || t.interactionMode() !== "gameplay" || !d()) return p("interaction-mode-loss"), 0;
+		t.eventTarget.removeEventListener("pointerdown", _), t.document.removeEventListener("pointerup", v), t.document.removeEventListener("pointercancel", y), t.document.removeEventListener("wheel", x);
+	}, A = () => {
+		if (u || n.selectedController === null) return 0;
+		if (!t.active() || t.interactionMode() !== "gameplay" || !f()) return m("interaction-mode-loss"), 0;
 		let e = t.gamepads()[n.selectedController];
-		if (e == null || !e.connected) return (s.size > 0 || o.size > 0) && p("interaction-mode-loss"), 0;
+		if (e == null || !e.connected) return (c.size > 0 || o.size > 0 || s.size > 0) && m("interaction-mode-loss"), 0;
 		let r = 0;
 		for (let t = 0; t < 4; t += 1) {
 			let n = eE(t), i = tE(e.axes[t] ?? 0, 1);
 			if (i !== (o.get(n) ?? 0)) {
-				if (o.set(n, i), m(Object.freeze({
+				if (o.set(n, i), h(Object.freeze({
 					kind: "controller-axis",
 					axis: n,
 					value: i
@@ -26634,81 +26634,102 @@ function ET(e, t) {
 			}
 		}
 		for (let t = 0; t < 16; t += 1) {
-			let n = $T(t), i = e.buttons[t]?.pressed === !0;
-			if (i !== s.has(n)) {
-				if (i ? s.add(n) : s.delete(n), m(Object.freeze({
+			let n = $T(t), i = Math.max(0, tE(e.buttons[t]?.value ?? 0, 1));
+			if (i !== (s.get(n) ?? 0)) {
+				if (s.set(n, i), h(Object.freeze({
+					kind: "controller-button-value",
+					button: n,
+					value: i
+				}))) return r;
+				r += 1;
+			}
+			let a = e.buttons[t]?.pressed === !0;
+			if (a !== c.has(n)) {
+				if (a ? c.add(n) : c.delete(n), h(Object.freeze({
 					kind: "controller-button",
 					button: n,
-					edge: i ? "pressed" : "released"
+					edge: a ? "pressed" : "released"
 				}))) return r;
 				r += 1;
 			}
 		}
 		return r;
-	}, A = (e) => {
-		if (!(l || !r.rebaseRuntime(e))) {
-			ee();
-			for (let e of [...i].sort()) m(Object.freeze({
+	}, ee = (e) => {
+		if (!(u || !r.rebaseRuntime(e))) {
+			te();
+			for (let e of [...i].sort()) h(Object.freeze({
 				kind: "key",
 				code: e,
 				edge: "pressed"
 			}));
-			for (let e of [...a].sort()) m(Object.freeze({
+			for (let e of [...a].sort()) h(Object.freeze({
 				kind: "pointer-button",
 				button: e,
 				edge: "pressed"
 			}));
 			for (let e of [...o.keys()].sort()) {
 				let t = o.get(e);
-				t !== 0 && m(Object.freeze({
+				t !== 0 && h(Object.freeze({
 					kind: "controller-axis",
 					axis: e,
 					value: t
 				}));
 			}
-			for (let e of [...s].sort()) m(Object.freeze({
+			for (let e of [...c].sort()) h(Object.freeze({
 				kind: "controller-button",
 				button: e,
 				edge: "pressed"
 			}));
+			for (let e of [...s.keys()].sort()) {
+				let t = s.get(e);
+				t !== 0 && h(Object.freeze({
+					kind: "controller-button-value",
+					button: e,
+					value: t
+				}));
+			}
 			n.onAvailable?.();
 		}
 	};
-	function ee() {
+	function te() {
 		if (n.selectedController === null) return;
 		let e = t.gamepads()[n.selectedController];
-		if (s.clear(), o.clear(), !(e == null || !e.connected)) {
+		if (c.clear(), o.clear(), s.clear(), !(e == null || !e.connected)) {
 			for (let t = 0; t < 4; t += 1) {
 				let n = tE(e.axes[t] ?? 0, 1);
 				n !== 0 && o.set(eE(t), n);
 			}
-			for (let t = 0; t < 16; t += 1) e.buttons[t]?.pressed === !0 && s.add($T(t));
+			for (let t = 0; t < 16; t += 1) {
+				e.buttons[t]?.pressed === !0 && c.add($T(t));
+				let n = Math.max(0, tE(e.buttons[t]?.value ?? 0, 1));
+				n !== 0 && s.set($T(t), n);
+			}
 		}
 	}
-	return D(), t.document.addEventListener("pointermove", y), t.document.addEventListener("keydown", x), t.document.addEventListener("keyup", S), t.document.addEventListener("pointerlockchange", C), t.document.defaultView?.addEventListener("blur", w), t.document.defaultView?.addEventListener("gamepadconnected", T), t.document.defaultView?.addEventListener("gamepaddisconnected", E), n.initialBinding !== null && r.bindRuntime(n.initialBinding), Object.freeze({
+	return O(), t.document.addEventListener("pointermove", b), t.document.addEventListener("keydown", S), t.document.addEventListener("keyup", C), t.document.addEventListener("pointerlockchange", w), t.document.defaultView?.addEventListener("blur", T), t.document.defaultView?.addEventListener("gamepadconnected", E), t.document.defaultView?.addEventListener("gamepaddisconnected", D), n.initialBinding !== null && r.bindRuntime(n.initialBinding), Object.freeze({
 		bindRuntime: (e) => {
-			l || r.bindRuntime(e) && f();
+			u || r.bindRuntime(e) && p();
 		},
 		synchronizeRuntime: (e) => {
-			l || r.bindRuntime(e) && f();
+			u || r.bindRuntime(e) && p();
 		},
-		rebaselineRuntime: A,
+		rebaselineRuntime: ee,
 		setContext: (e) => {
-			l || r.setContext(e) && f();
+			u || r.setContext(e) && p();
 		},
 		clear: (e) => {
-			l || p(e);
+			u || m(e);
 		},
 		drain: () => r.drain(),
 		claim: (e, t) => {
-			l || (r.claim(e, t) && f(), n.onAvailable?.());
+			u || (r.claim(e, t) && p(), n.onAvailable?.());
 		},
-		sampleController: k,
+		sampleController: A,
 		rebindCanvas: (e) => {
-			l || e === c || (c = e, p("pointer-lock-loss"));
+			u || e === l || (l = e, m("pointer-lock-loss"));
 		},
 		dispose: () => {
-			l || (p("dispose"), l = !0, O(), t.document.removeEventListener("pointermove", y), t.document.removeEventListener("keydown", x), t.document.removeEventListener("keyup", S), t.document.removeEventListener("pointerlockchange", C), t.document.defaultView?.removeEventListener("blur", w), t.document.defaultView?.removeEventListener("gamepadconnected", T), t.document.defaultView?.removeEventListener("gamepaddisconnected", E));
+			u || (m("dispose"), u = !0, k(), t.document.removeEventListener("pointermove", b), t.document.removeEventListener("keydown", S), t.document.removeEventListener("keyup", C), t.document.removeEventListener("pointerlockchange", w), t.document.defaultView?.removeEventListener("blur", T), t.document.defaultView?.removeEventListener("gamepadconnected", E), t.document.defaultView?.removeEventListener("gamepaddisconnected", D));
 		}
 	});
 }
@@ -26995,6 +27016,13 @@ function WT(e) {
 			return Object.freeze({
 				kind: "controller-axis",
 				axis: e.axis,
+				value: e.value
+			});
+		case "controller-button-value":
+			if (!ZT(e.button) || !Number.isFinite(e.value) || e.value < 0 || e.value > 1) throw TypeError("controller button value requires one closed button within [0, 1]");
+			return Object.freeze({
+				kind: "controller-button-value",
+				button: e.button,
 				value: e.value
 			});
 		case "clear": return Object.freeze({

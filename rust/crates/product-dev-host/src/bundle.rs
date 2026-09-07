@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use render_model::{
     mesh_resource_content_hash, validate_mesh_resource_header, TextureDescriptor, TextureFilter,
@@ -24,7 +27,7 @@ pub struct ProductDevRendererResource {
     identity: String,
     content_hash: String,
     path: String,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +41,31 @@ pub enum ProductDevRendererResourceKind {
 }
 
 impl ProductDevRendererResource {
+    /// Carries content already admitted by an Engine service into host delivery.
+    /// The caller supplies its retained identity and immutable body; this does
+    /// not decode or hash the same bytes again. Raw imports use `admit_*`.
+    pub fn from_retained(
+        kind: ProductDevRendererResourceKind,
+        identity: String,
+        content_hash: String,
+        path: String,
+        bytes: Arc<[u8]>,
+    ) -> Result<Self, ProductDevHostError> {
+        let resource = Self {
+            kind,
+            identity,
+            content_hash,
+            path,
+            bytes,
+        };
+        validate_bundle_entry_metadata(
+            &resource.path,
+            resource.media_type(),
+            resource.bytes.len(),
+        )?;
+        Ok(resource)
+    }
+
     pub fn admit_texture(
         path: impl Into<String>,
         bytes: Vec<u8>,
@@ -69,13 +97,13 @@ impl ProductDevRendererResource {
                 unreachable!("PNG admission constructs a resource-backed texture")
             }
         };
-        ProductDevBundleEntry::new(path.clone(), "image/png", bytes.clone())?;
+        validate_bundle_entry_metadata(&path, "image/png", bytes.len())?;
         Ok(Self {
             kind: ProductDevRendererResourceKind::Texture,
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: bytes.into(),
         })
     }
 
@@ -97,13 +125,13 @@ impl ProductDevRendererResource {
                 .strip_prefix("sha256:")
                 .expect("Engine mesh hash uses SHA-256")
         );
-        ProductDevBundleEntry::new(path.clone(), "application/octet-stream", bytes.clone())?;
+        validate_bundle_entry_metadata(&path, "application/octet-stream", bytes.len())?;
         Ok(Self {
             kind: ProductDevRendererResourceKind::Mesh,
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: bytes.into(),
         })
     }
 
@@ -121,7 +149,7 @@ impl ProductDevRendererResource {
                 "audio resource is not an admitted RIFF/WAVE body",
             ));
         }
-        ProductDevBundleEntry::new(path.clone(), "audio/wav", bytes.clone())?;
+        validate_bundle_entry_metadata(&path, "audio/wav", bytes.len())?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "audio-resource/{}",
@@ -134,7 +162,7 @@ impl ProductDevRendererResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: bytes.into(),
         })
     }
 
@@ -154,7 +182,7 @@ impl ProductDevRendererResource {
                 "font resource is not an admitted WOFF2 body",
             ));
         }
-        ProductDevBundleEntry::new(path.clone(), "font/woff2", bytes.clone())?;
+        validate_bundle_entry_metadata(&path, "font/woff2", bytes.len())?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "font/{}",
@@ -167,7 +195,7 @@ impl ProductDevRendererResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: bytes.into(),
         })
     }
 
@@ -187,7 +215,7 @@ impl ProductDevRendererResource {
                 "animated mesh preload is not a binary GLB resource",
             ));
         }
-        ProductDevBundleEntry::new(path.clone(), "model/gltf-binary", bytes.clone())?;
+        validate_bundle_entry_metadata(&path, "model/gltf-binary", bytes.len())?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "animated-mesh-resource/{}",
@@ -200,7 +228,7 @@ impl ProductDevRendererResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: bytes.into(),
         })
     }
 
@@ -220,7 +248,7 @@ impl ProductDevRendererResource {
                 "animation clip-pack preload is not a binary GLB resource",
             ));
         }
-        ProductDevBundleEntry::new(path.clone(), "model/gltf-binary", bytes.clone())?;
+        validate_bundle_entry_metadata(&path, "model/gltf-binary", bytes.len())?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "clip-pack-resource/{}",
@@ -233,7 +261,7 @@ impl ProductDevRendererResource {
             identity,
             content_hash,
             path,
-            bytes,
+            bytes: bytes.into(),
         })
     }
 
@@ -343,34 +371,44 @@ fn renderer_path(path: String, extension: &str) -> Result<String, ProductDevHost
     Ok(path)
 }
 
+fn validate_bundle_entry_metadata(
+    path: &str,
+    content_type: &str,
+    byte_length: usize,
+) -> Result<String, ProductDevHostError> {
+    let path = normalize_path(path)?;
+    if !is_allowed_content_type(content_type) {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_BUNDLE_CONTENT_TYPE",
+            "bundle resource content type is not admitted",
+        ));
+    }
+    if byte_length > MAX_BUNDLE_RESOURCE_BYTES {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_BUNDLE_RESOURCE_BOUNDS",
+            "bundle resource exceeds the maximum byte length",
+        ));
+    }
+    Ok(path)
+}
+
 /// One pre-admitted immutable browser resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductDevBundleEntry {
     path: String,
     content_type: String,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
 }
 
 impl ProductDevBundleEntry {
     pub fn new(
         path: impl Into<String>,
         content_type: impl Into<String>,
-        bytes: Vec<u8>,
+        bytes: impl Into<Arc<[u8]>>,
     ) -> Result<Self, ProductDevHostError> {
-        let path = normalize_path(&path.into())?;
+        let bytes = bytes.into();
         let content_type = content_type.into();
-        if !is_allowed_content_type(&content_type) {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_BUNDLE_CONTENT_TYPE",
-                "bundle resource content type is not admitted",
-            ));
-        }
-        if bytes.len() > MAX_BUNDLE_RESOURCE_BYTES {
-            return Err(ProductDevHostError::new(
-                "DEV_HOST_BUNDLE_RESOURCE_BOUNDS",
-                "bundle resource exceeds the maximum byte length",
-            ));
-        }
+        let path = validate_bundle_entry_metadata(&path.into(), &content_type, bytes.len())?;
         Ok(Self {
             path,
             content_type,
@@ -388,6 +426,10 @@ impl ProductDevBundleEntry {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub fn shared_bytes(&self) -> Arc<[u8]> {
+        Arc::clone(&self.bytes)
     }
 }
 
@@ -552,6 +594,34 @@ mod tests {
         let error = ProductDevBundleEntry::new("content/renderer/theme.ogg", "audio/ogg", vec![1])
             .expect_err("unadmitted media type");
         assert!(error.to_string().contains("DEV_HOST_BUNDLE_CONTENT_TYPE"));
+    }
+
+    #[test]
+    fn retained_resource_and_bundle_clones_share_the_admitted_body() {
+        let original = ProductDevRendererResource::admit_texture(
+            "content/art/shared.png",
+            CHECKER_PNG.to_vec(),
+        )
+        .unwrap();
+        let body = std::sync::Arc::clone(&original.bytes);
+        let carried = ProductDevRendererResource::from_retained(
+            original.kind,
+            original.identity.clone(),
+            original.content_hash.clone(),
+            original.path.clone(),
+            std::sync::Arc::clone(&body),
+        )
+        .unwrap();
+        let entries = product_dev_renderer_preload_entries(&[carried.clone()]).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.path() == carried.path())
+            .unwrap();
+        let shared = entry.clone().shared_bytes();
+        drop(original);
+        drop(carried);
+        assert!(std::sync::Arc::ptr_eq(&body, &shared));
+        assert_eq!(&*shared, CHECKER_PNG);
     }
 
     #[test]

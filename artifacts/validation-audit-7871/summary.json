@@ -1,0 +1,41 @@
+{
+  "candidate_counts": {
+    "broad_guard": 11318,
+    "limit": 4005,
+    "validation": 22009
+  },
+  "candidate_language_counts": {
+    "C#": 2772,
+    "JSON": 32,
+    "JavaScript": 384,
+    "Python": 122,
+    "Rust": 19735,
+    "Shell": 212,
+    "TOML": 2,
+    "TypeScript": 11390,
+    "YAML": 50
+  },
+  "discovered_paths": 1006,
+  "discovery_command": "git ls-files --cached --others --exclude-standard -z",
+  "excluded_counts": {
+    "audit_output": 5,
+    "generated_artifact": 23,
+    "inventory_tool": 1,
+    "lockfile": 4,
+    "unsupported_file_type": 112,
+    "vendor_or_build": 15
+  },
+  "generated_at": "2026-09-07T12:07:00.282369+00:00",
+  "notes": [
+    "Raw candidates are heuristics; review status is intentionally unreviewed.",
+    "Broad if/match guards are low-confidence fallback coverage, not proof of validation.",
+    "Hint fields are not ownership, validity, or removal verdicts."
+  ],
+  "output": "/home/dev/rusty-engine/artifacts/validation-audit-7871",
+  "record_count": 34699,
+  "root": "/home/dev/rusty-engine",
+  "scanned_files": 846,
+  "test_or_fixture_candidates": 11553,
+  "tool": "scripts/inventory-validation.py",
+  "tool_version": "1"
+}

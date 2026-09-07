@@ -12,6 +12,7 @@ pub const MAX_PENDING_INGRESS: usize = 1_024;
 pub const MAX_AXIS_MAGNITUDE: f32 = 8_192.0;
 pub const MAX_DIRECT_INTENT_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_AXIS_MAGNITUDE: f32 = 1.0;
+pub const MAX_CONTROLLER_BUTTON_VALUE: f32 = 1.0;
 /// Maximum canonical JSON bytes one direct product-payload intent may carry.
 pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES: usize = 65_536;
 pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES: usize =
@@ -258,6 +259,15 @@ pub(crate) fn validate_controller_axis(value: AxisValue) -> Result<AxisValue, Ru
     Ok(value)
 }
 
+pub(crate) fn validate_controller_button_value(
+    value: AxisValue,
+) -> Result<AxisValue, RuntimeInputError> {
+    if value.value() < 0.0 || value.value() > MAX_CONTROLLER_BUTTON_VALUE {
+        return Err(RuntimeInputError::InvalidControllerButtonValue);
+    }
+    Ok(value)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhysicalEdge {
     Pressed,
@@ -301,6 +311,10 @@ pub enum RuntimeInputFact {
     },
     ControllerAxis {
         axis: ControllerAxis,
+        value: AxisValue,
+    },
+    ControllerButtonValue {
+        button: ControllerButton,
         value: AxisValue,
     },
     Clear {
@@ -522,6 +536,7 @@ pub struct InputFrame {
     pointer: (AxisValue, AxisValue),
     wheel: (AxisValue, AxisValue),
     controller_axes: BTreeMap<ControllerAxis, AxisValue>,
+    controller_button_values: BTreeMap<ControllerButton, AxisValue>,
 }
 
 pub(crate) struct InputFrameFacts {
@@ -531,6 +546,7 @@ pub(crate) struct InputFrameFacts {
     pub(crate) pointer: (AxisValue, AxisValue),
     pub(crate) wheel: (AxisValue, AxisValue),
     pub(crate) controller_axes: BTreeMap<ControllerAxis, AxisValue>,
+    pub(crate) controller_button_values: BTreeMap<ControllerButton, AxisValue>,
 }
 
 impl InputFrame {
@@ -550,6 +566,7 @@ impl InputFrame {
             pointer: facts.pointer,
             wheel: facts.wheel,
             controller_axes: facts.controller_axes,
+            controller_button_values: facts.controller_button_values,
         }
     }
     pub const fn runtime(&self) -> RuntimeInputBinding {
@@ -578,6 +595,9 @@ impl InputFrame {
     }
     pub fn controller_axis(&self, axis: ControllerAxis) -> Option<AxisValue> {
         self.controller_axes.get(&axis).copied()
+    }
+    pub fn controller_button_value(&self, button: ControllerButton) -> Option<AxisValue> {
+        self.controller_button_values.get(&button).copied()
     }
 }
 
@@ -668,6 +688,7 @@ pub enum RuntimeInputError {
     ProductPayloadStructureOutOfBounds(&'static str),
     ProductPayloadContractMismatch,
     InvalidControllerAxisValue,
+    InvalidControllerButtonValue,
     NonCanonicalWireInteger,
     WireMalformed,
     WireTooLarge,

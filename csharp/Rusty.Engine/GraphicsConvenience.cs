@@ -76,17 +76,14 @@ public readonly partial record struct SpriteFromAtlasRequest
     }
 }
 
-/// <summary>Named limits for one immutable inline mesh admission.</summary>
+/// <summary>Managed span count representation for generated mesh inputs; not allocation guarantees.</summary>
 public static class GraphicsMeshLimits
 {
-    /// <summary>Maximum vertices admitted in one mesh resource.</summary>
-    public const int MaximumVertices = 262_144;
+    /// <summary>Managed span length representation. Meshes have no separate vertex policy cap.</summary>
+    public const int MaximumVertices = int.MaxValue;
 
-    /// <summary>Maximum triangle indices admitted in one mesh resource.</summary>
-    public const int MaximumIndices = 786_432;
-
-    /// <summary>Maximum copied attribute/index bytes and encoded definition bytes for one inline mesh resource.</summary>
-    public const int MaximumInlineBytes = 16 * 1024 * 1024;
+    /// <summary>Managed span length representation. Meshes have no separate index policy cap.</summary>
+    public const int MaximumIndices = int.MaxValue;
 }
 
 internal static class GraphicsDefaults

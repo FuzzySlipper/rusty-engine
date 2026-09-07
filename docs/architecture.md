@@ -115,12 +115,14 @@ adapter converts them to ProductDev wire DTOs and adds progress/input receipt
 observations. Mailbox draining and publication callbacks belong to that host
 scheduler; neutral session scopes retain the single runtime lock.
 
-Complete baseline transfers use the existing ordered fragment protocol with a
-64 MiB aggregate bound. Their private staging preserves all fragments until the
-completion marker; the ordinary incremental lane retains its 16 MiB bound and
-256-event history. Lost or interrupted baseline fragments discard the staged
-projection. A large public baseline may exceed retained history, in which case
-cursor lag requests the complete private baseline instead of repairing a tail.
+Output batches use ordered fragments without a default aggregate byte/count cap.
+The host serializes actual delivery bytes, not a discarded size preflight. The
+256-event reconnect history is a retention target: a larger incremental batch is
+kept whole so it cannot evict its own prefix. Private baselines preserve every
+fragment until completion. Lost/interrupted transfers discard staging and use a
+fresh complete baseline. Size alone does not reconstruct a delta as a baseline.
+The worker frame retains its u32 byte-length representation; browser callers may
+choose an explicit per-batch byte budget. Resource-bundle limits are separate.
 
 The TS `render-projection` model has no Three or DOM dependency. A mounted
 `renderer-host` surface and its `renderer-three` backend share one neutral

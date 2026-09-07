@@ -3231,7 +3231,7 @@ export function productBrowserBundleAssets(
         ...(options.uiProjection === undefined || options.uiProjection === null
           ? ['    uiProjection: undefined,']
           : [`    uiProjection: ${JSON.stringify(options.uiProjection)},`]),
-        '    runtimeInput: { maximumPointerDelta: 32, maximumWheelDelta: 64 },',
+        '    runtimeInput: { maximumPointerDelta: 32, maximumWheelDelta: 64, selectedController: { index: 0 } },',
         '  };',
         '}',
         '',

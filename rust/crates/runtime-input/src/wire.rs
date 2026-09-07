@@ -2,10 +2,11 @@ use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstan
 use serde::Deserialize;
 
 use crate::{
-    model::validate_controller_axis, parse_canonical_u64, AxisValue, ControllerAxis,
-    ControllerButton, InputClearReason, InputContext, KeyboardControl, PhysicalEdge, PointerButton,
-    RuntimeDirectIntentClaim, RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent,
-    RuntimeInputFact, RuntimeInputIngress, RuntimeIntentValue, RuntimeProductPayload,
+    model::{validate_controller_axis, validate_controller_button_value},
+    parse_canonical_u64, AxisValue, ControllerAxis, ControllerButton, InputClearReason,
+    InputContext, KeyboardControl, PhysicalEdge, PointerButton, RuntimeDirectIntentClaim,
+    RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent, RuntimeInputFact,
+    RuntimeInputIngress, RuntimeIntentValue, RuntimeProductPayload,
 };
 
 /// Maximum bytes accepted from one host wire decode operation.
@@ -156,6 +157,10 @@ enum WireFact {
         axis: ControllerAxis,
         value: f32,
     },
+    ControllerButtonValue {
+        button: ControllerButton,
+        value: f32,
+    },
     Clear {
         reason: WireClearReason,
     },
@@ -188,6 +193,12 @@ impl WireFact {
                 axis,
                 value: validate_controller_axis(AxisValue::new(value)?)?,
             },
+            Self::ControllerButtonValue { button, value } => {
+                RuntimeInputFact::ControllerButtonValue {
+                    button,
+                    value: validate_controller_button_value(AxisValue::new(value)?)?,
+                }
+            }
             Self::Clear { reason } => RuntimeInputFact::Clear {
                 reason: reason.into_reason(),
             },

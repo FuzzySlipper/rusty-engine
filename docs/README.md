@@ -21,6 +21,8 @@ already exposed to C#.
   managed profiling, callback breakpoints over SSH, and dumps.
 - [Runtime profiling](runtime-profiling.md) explains worker timing, runtime
   correlation, and optimized Rust CPU captures.
+- [Validation inventory](validation-inventory.md) explains the searchable validation/limit
+  candidate survey and the per-check review questions.
 - [Verification notes](verification.md) describe the report-only Playwright
   warning-delta capture and compatible-baseline comparison.
 

@@ -1,9 +1,10 @@
 use runtime_input::{
-    AxisValue, CompiledInputMappings, ControllerAxis, DirectInputIntentDescriptor, InputAxis,
-    InputClearReason, InputContext, InputEdge, IntentPhase, IntentProvenance, IntentValueKind,
-    KeyboardControl, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding,
-    RuntimeInputError, RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress, RuntimeInputLane,
-    RuntimeInputMapping, RuntimeInputTrigger, RuntimeIntentValue, RuntimeProductPayload,
+    AxisValue, CompiledInputMappings, ControllerAxis, ControllerButton,
+    DirectInputIntentDescriptor, InputAxis, InputClearReason, InputContext, InputEdge, IntentPhase,
+    IntentProvenance, IntentValueKind, KeyboardControl, PhysicalEdge, RuntimeDirectIntentClaim,
+    RuntimeInputBinding, RuntimeInputError, RuntimeInputEvent, RuntimeInputFact,
+    RuntimeInputIngress, RuntimeInputLane, RuntimeInputMapping, RuntimeInputTrigger,
+    RuntimeIntentValue, RuntimeProductPayload,
 };
 use runtime_lifecycle::{
     RuntimeFault, RuntimeInstanceId, RuntimeLifecycle, RuntimeLifecycleConfig,
@@ -617,6 +618,84 @@ fn direct_claims_fail_closed_for_unknown_kind_axis_range_and_pending_overflow() 
 }
 
 #[test]
+fn controller_button_values_are_bounded_persistent_axes_and_mappable() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mappings = CompiledInputMappings::standard(
+        vec![DirectInputIntentDescriptor::new("thrust", IntentValueKind::Axis).unwrap()],
+        vec![RuntimeInputMapping::new(
+            "right-trigger",
+            "thrust",
+            RuntimeInputTrigger::ControllerButtonValue {
+                button: ControllerButton::Button7,
+                context: Some(context()),
+            },
+        )
+        .unwrap()],
+    )
+    .unwrap();
+    let mut lane = RuntimeInputLane::new(mappings, binding, context());
+    lane.ingest(physical(
+        binding,
+        0,
+        RuntimeInputFact::ControllerButtonValue {
+            button: ControllerButton::Button7,
+            value: axis(0.25),
+        },
+    ))
+    .unwrap();
+    let (frame, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(
+        frame
+            .controller_button_value(ControllerButton::Button7)
+            .unwrap()
+            .value(),
+        0.25
+    );
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].intent(), "thrust");
+    assert_eq!(envelopes[0].phase(), IntentPhase::Axis);
+    assert_eq!(
+        envelopes[0].value(),
+        RuntimeIntentValue::Axis { value: axis(0.25) }
+    );
+
+    lane.ingest(physical(
+        binding,
+        1,
+        RuntimeInputFact::ControllerButtonValue {
+            button: ControllerButton::Button7,
+            value: axis(0.0),
+        },
+    ))
+    .unwrap();
+    let (frame, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(
+        frame
+            .controller_button_value(ControllerButton::Button7)
+            .unwrap()
+            .value(),
+        0.0
+    );
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(
+        envelopes[0].value(),
+        RuntimeIntentValue::Axis { value: axis(0.0) }
+    );
+
+    assert!(matches!(
+        lane.ingest(physical(
+            binding,
+            2,
+            RuntimeInputFact::ControllerButtonValue {
+                button: ControllerButton::Button7,
+                value: axis(1.01),
+            },
+        )),
+        Err(RuntimeInputError::InvalidControllerButtonValue)
+    ));
+}
+
+#[test]
 fn wire_decode_retains_canonical_host_facts_and_rejects_bad_values() {
     let events = runtime_input::decode_runtime_input_wire_events_json(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -632,10 +711,25 @@ fn wire_decode_retains_canonical_host_facts_and_rejects_bad_values() {
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","intent":"move.forward","value":{"kind":"unknown","active":true}}"#,
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","intent":"look.horizontal","value":{"kind":"axis","value":1.1}}"#,
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"controller-axis","axis":"axis-0","value":1.1}}"#,
+        br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"controller-button-value","button":"button-7","value":1.1}}"#,
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"clear","reason":"focus-loss","extra":true}}"#,
     ] {
         assert!(runtime_input::decode_runtime_input_wire_event_json(invalid).is_err());
     }
+    let trigger_wire = serde_json::json!({
+        "runtime": {"instanceId": "7", "generation": "3", "controlRevision": "11"},
+        "sequence": "0",
+        "context": "gameplay",
+        "fact": {"kind": "controller-button-value", "button": "button-7", "value": 0.375}
+    });
+    assert!(matches!(
+        runtime_input::decode_runtime_input_wire_event_json(&serde_json::to_vec(&trigger_wire).unwrap()),
+        Ok(RuntimeInputEvent::Physical(event))
+            if event.fact() == &RuntimeInputFact::ControllerButtonValue {
+                button: ControllerButton::Button7,
+                value: axis(0.375),
+            }
+    ));
     assert_eq!(axis(-0.0).value().to_bits(), 0.0_f32.to_bits());
 }
 

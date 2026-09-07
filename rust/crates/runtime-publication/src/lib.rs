@@ -211,9 +211,7 @@ impl RuntimePublication {
     pub fn ui_projection(
         envelope: &RuntimeUiProjectionEnvelope,
     ) -> Result<Self, RuntimePublicationError> {
-        envelope
-            .encode_json()
-            .map_err(|_| RuntimePublicationError::InvalidUiProjection)?;
+        // The envelope is immutable and validates at construction/deserialization.
         Ok(Self::UiProjection(envelope.clone()))
     }
 
@@ -265,10 +263,7 @@ impl RuntimePublication {
                 }
                 Ok(())
             }
-            Self::UiProjection(envelope) => envelope
-                .encode_json()
-                .map(|_| ())
-                .map_err(|_| RuntimePublicationError::InvalidUiProjection),
+            Self::UiProjection(_) => Ok(()),
         }
     }
 

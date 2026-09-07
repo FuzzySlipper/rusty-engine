@@ -1847,8 +1847,7 @@ function numberCompare(a: number, b: number): number {
 }
 
 function clone<T>(value: T): T {
-  if (value === undefined) {
-    return value;
-  }
-  return JSON.parse(JSON.stringify(value)) as T;
+  // These are admitted data records; detach retained/caller ownership without
+  // encoding a transport representation merely to make a copy.
+  return structuredClone(value);
 }
