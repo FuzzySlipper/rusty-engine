@@ -150,6 +150,7 @@ cat > "$source_override_dir/SourceOverride.csproj" <<EOF
 </Project>
 EOF
 cp "$consumer_dir/Library.cs" "$source_override_dir/Library.cs"
+cp "$repo_root/scripts/fixtures/ImplicitRecipeChecks.cs" "$consumer_dir/ImplicitRecipeChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
@@ -166,6 +167,7 @@ public sealed class Product : IEngineProduct
 
     public Product(ProductCreateContext context)
     {
+        ImplicitRecipeChecks.Run();
         _engine = context.Engine;
         _stream = _engine.Ui.OpenStream(new UiStreamRequest("sdk-package", "sdk.package.smoke"));
         _voxelMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
