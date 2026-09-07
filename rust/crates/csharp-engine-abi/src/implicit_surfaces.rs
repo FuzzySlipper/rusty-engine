@@ -9,6 +9,12 @@ pub struct NativeImplicitFieldHandle {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSampledVolumeHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeImplicitNode {
     /// Opaque field-owned token. Its value is not the kernel's arena index.
@@ -115,6 +121,102 @@ pub struct NativeImplicitSample {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeDensitySample {
+    pub value: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeCreateRequest {
+    pub origin: NativeVec3,
+    pub spacing: f32,
+    /// Lattice point counts, rather than cell counts, along each axis.
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub initial_value: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeDescriptor {
+    pub origin: NativeVec3,
+    pub spacing: f32,
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub revision: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeWriteRequest {
+    pub volume: NativeSampledVolumeHandle,
+    /// X-fast linear lattice index.
+    pub start: u32,
+    pub samples: *const NativeDensitySample,
+    pub samples_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeReadRequest {
+    pub volume: NativeSampledVolumeHandle,
+    /// X-fast linear lattice index.
+    pub start: u32,
+    pub count: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeDensitySnapshotLeaseHandle {
+    pub value: u64,
+}
+
+/// Owned copied density range. Release with `destroy_density_snapshot_lease`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDensitySnapshotLease {
+    pub handle: NativeDensitySnapshotLeaseHandle,
+    pub descriptor: NativeSampledVolumeDescriptor,
+    pub start: u32,
+    pub samples: *const NativeDensitySample,
+    pub samples_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeSampleRequest {
+    pub volume: NativeSampledVolumeHandle,
+    pub position: NativeVec3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeRasterizeRequest {
+    pub volume: NativeSampledVolumeHandle,
+    pub field: NativeImplicitFieldHandle,
+    pub source: NativeImplicitNode,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSampledVolumeGenerateRequest {
+    pub volume: NativeSampledVolumeHandle,
+    /// Independent retained field for material-region expressions.
+    pub field: NativeImplicitFieldHandle,
+    pub isovalue: f32,
+    pub crease_angle_degrees: f32,
+    pub uv_scale: f32,
+    pub default_material: NativeMaterialHandle,
+    pub regions: *const NativeImplicitMaterialRegion,
+    pub regions_len: usize,
+    pub material_boundary_mode: NativeImplicitMaterialBoundaryMode,
+    pub material_sample_spacing: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeImplicitMaterialRegion {
     pub node: NativeImplicitNode,
     pub material: NativeMaterialHandle,
@@ -163,6 +265,10 @@ pub struct NativeImplicitGenerationReadout {
     pub boundary_edges: u32,
     pub non_manifold_edges: u32,
     pub inconsistent_winding_edges: u32,
+    /// Bounded QEF recovery count for adaptive expression-field octree leaves.
+    /// Sampled-volume extraction reports zero; its uniform QEF diagnostics have
+    /// distinct semantics and are not represented by this field.
+    pub bounded_leaf_vertices: u32,
 }
 
 pub type NativeCreateImplicitField =
@@ -170,6 +276,66 @@ pub type NativeCreateImplicitField =
 
 pub type NativeDestroyImplicitField =
     unsafe extern "C" fn(*mut c_void, NativeImplicitFieldHandle) -> i32;
+
+pub type NativeCreateSampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeCreateRequest,
+    *mut NativeSampledVolumeHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeDestroySampledVolume =
+    unsafe extern "C" fn(*mut c_void, NativeSampledVolumeHandle) -> i32;
+
+pub type NativeDescribeSampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeHandle,
+    *mut NativeSampledVolumeDescriptor,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeWriteSampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSampledVolumeWriteRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeReadSampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeReadRequest,
+    *mut NativeDensitySnapshotLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeDestroyDensitySnapshotLease =
+    unsafe extern "C" fn(*mut c_void, NativeDensitySnapshotLeaseHandle) -> i32;
+
+pub type NativeSampleSampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeSampleRequest,
+    *mut NativeDensitySample,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeRasterizeSampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeRasterizeRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeGenerateSampledVolume = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSampledVolumeGenerateRequest,
+    *mut NativeMeshResourceHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeReadSampledVolumeGeneration = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSampledVolumeHandle,
+    *mut NativeImplicitGenerationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 
 pub type NativeAddImplicitBox =
     unsafe extern "C" fn(*mut c_void, NativeImplicitBoxRequest, *mut NativeImplicitNode) -> i32;
@@ -241,6 +407,16 @@ pub struct NativeImplicitSurfacesApi {
     pub context: *mut c_void,
     pub create_field: NativeCreateImplicitField,
     pub destroy_field: NativeDestroyImplicitField,
+    pub create_sampled_volume: NativeCreateSampledVolume,
+    pub destroy_sampled_volume: NativeDestroySampledVolume,
+    pub describe_sampled_volume: NativeDescribeSampledVolume,
+    pub write_sampled_volume: NativeWriteSampledVolume,
+    pub read_sampled_volume: NativeReadSampledVolume,
+    pub destroy_density_snapshot_lease: NativeDestroyDensitySnapshotLease,
+    pub sample_sampled_volume: NativeSampleSampledVolume,
+    pub rasterize_sampled_volume: NativeRasterizeSampledVolume,
+    pub generate_sampled_volume: NativeGenerateSampledVolume,
+    pub read_sampled_volume_generation: NativeReadSampledVolumeGeneration,
     pub add_box: NativeAddImplicitBox,
     pub add_sphere: NativeAddImplicitSphere,
     pub add_ellipsoid: NativeAddImplicitEllipsoid,

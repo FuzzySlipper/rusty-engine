@@ -9,7 +9,8 @@ use csharp_engine_abi::*;
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc, time::Instant};
 use svc_implicit::{
     surface::{self, MaterialBoundaryMode, MaterialRegion, MaterialSampling, SurfaceOptions},
-    Bounds, Field, GenerateOptions, Node,
+    volume::{SampledVolume, VolumeDescriptor},
+    Bounds, Field, GenerateOptions, Geometry, Node,
 };
 
 type Result<T> = std::result::Result<T, CsharpEngineServicesError>;
@@ -29,6 +30,16 @@ fn nv(p: [f32; 3]) -> NativeVec3 {
         z: p[2],
     }
 }
+fn native_volume_descriptor(value: VolumeDescriptor) -> NativeSampledVolumeDescriptor {
+    NativeSampledVolumeDescriptor {
+        origin: nv(value.origin),
+        spacing: value.spacing,
+        width: value.dimensions[0],
+        height: value.dimensions[1],
+        depth: value.dimensions[2],
+        revision: value.revision,
+    }
+}
 
 #[derive(Clone)]
 struct RetainedField {
@@ -44,9 +55,30 @@ impl RetainedField {
             .ok_or_else(|| error("unknown implicit field node"))
     }
 }
+
+#[derive(Clone)]
+struct RetainedVolume {
+    volume: Arc<SampledVolume>,
+    generation: Option<NativeImplicitGenerationReadout>,
+}
+
+struct DensitySnapshotLease {
+    samples: Vec<NativeDensitySample>,
+}
+
+#[derive(Clone, Copy)]
+struct SurfaceGenerationOptions {
+    crease_angle_degrees: f32,
+    uv_scale: f32,
+    default_material: NativeMaterialHandle,
+    material_boundary_mode: NativeImplicitMaterialBoundaryMode,
+    material_sample_spacing: f32,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeImplicitCall {
     fields: BTreeMap<u64, RetainedField>,
+    volumes: BTreeMap<u64, RetainedVolume>,
 }
 pub(crate) struct RuntimeImplicitBridge {
     state: RuntimeImplicitCall,
@@ -56,10 +88,15 @@ pub(crate) struct RuntimeImplicitBridge {
     // Public node identities are not the local svc-implicit arena indices.
     // Keep this outside staged state so discarded nodes cannot be reused.
     next_node: u64,
+    // Volume identities are independent from field/node identities and never
+    // reused after staged rollback.
+    next_volume: u64,
     appearance: Option<*mut RuntimeAppearanceBridge>,
     callback_error: Option<CsharpEngineServicesError>,
     diagnostic_leases: BTreeMap<u64, Box<GenerationDiagnosticLease>>,
     next_diagnostic_lease: u64,
+    density_snapshot_leases: BTreeMap<u64, DensitySnapshotLease>,
+    next_density_snapshot_lease: u64,
 }
 impl RuntimeImplicitBridge {
     pub(crate) fn new() -> Self {
@@ -68,10 +105,13 @@ impl RuntimeImplicitBridge {
             staged: None,
             next_field: 1,
             next_node: 1,
+            next_volume: 1,
             appearance: None,
             callback_error: None,
             diagnostic_leases: BTreeMap::new(),
             next_diagnostic_lease: 1,
+            density_snapshot_leases: BTreeMap::new(),
+            next_density_snapshot_lease: 1,
         }
     }
     pub(crate) fn begin_call(&mut self) {
@@ -104,6 +144,46 @@ impl RuntimeImplicitBridge {
             .get_mut(&handle.value)
             .ok_or_else(|| error("unknown implicit field"))
     }
+    fn retained_volume(
+        &mut self,
+        handle: NativeSampledVolumeHandle,
+    ) -> Result<&mut RetainedVolume> {
+        self.stage()?
+            .volumes
+            .get_mut(&handle.value)
+            .ok_or_else(|| error("unknown sampled volume"))
+    }
+    fn allocate_volume(&mut self) -> Result<u64> {
+        let value = self.next_volume;
+        self.next_volume = value
+            .checked_add(1)
+            .ok_or_else(|| error("sampled volume identity exhausted"))?;
+        Ok(value)
+    }
+    fn retain_density_snapshot(
+        &mut self,
+        descriptor: VolumeDescriptor,
+        start: u32,
+        samples: Vec<NativeDensitySample>,
+    ) -> Result<NativeDensitySnapshotLease> {
+        let value = self.next_density_snapshot_lease;
+        self.next_density_snapshot_lease = value
+            .checked_add(1)
+            .ok_or_else(|| error("density snapshot lease identity exhausted"))?;
+        self.density_snapshot_leases
+            .insert(value, DensitySnapshotLease { samples });
+        let retained = self
+            .density_snapshot_leases
+            .get(&value)
+            .expect("inserted density snapshot lease");
+        Ok(NativeDensitySnapshotLease {
+            handle: NativeDensitySnapshotLeaseHandle { value },
+            descriptor: native_volume_descriptor(descriptor),
+            start,
+            samples: retained.samples.as_ptr(),
+            samples_len: retained.samples.len(),
+        })
+    }
     fn node(
         &mut self,
         handle: NativeImplicitFieldHandle,
@@ -129,71 +209,41 @@ impl RuntimeImplicitBridge {
         retained.nodes.insert(token, value);
         Ok(NativeImplicitNode { value: token })
     }
-    unsafe fn generate(
+    unsafe fn admit_geometry(
         &mut self,
-        request: &NativeImplicitGenerateRequest,
-    ) -> Result<NativeMeshResourceHandle> {
-        let started = Instant::now();
-        let material_sampling = if !request.material_sample_spacing.is_finite()
-            || request.material_sample_spacing < 0.0
+        field: &Field,
+        geometry: &Geometry,
+        region_nodes: &[(Node, NativeMaterialHandle)],
+        options: SurfaceGenerationOptions,
+        generation_seconds: f64,
+    ) -> Result<(NativeMeshResourceHandle, NativeImplicitGenerationReadout)> {
+        let material_sampling = if !options.material_sample_spacing.is_finite()
+            || options.material_sample_spacing < 0.0
         {
             return Err(error(
                 "material sample spacing must be finite and non-negative",
             ));
-        } else if request.material_sample_spacing > 0.0 {
-            if request.material_boundary_mode != NativeImplicitMaterialBoundaryMode::Interpolated {
+        } else if options.material_sample_spacing > 0.0 {
+            if options.material_boundary_mode != NativeImplicitMaterialBoundaryMode::Interpolated {
                 return Err(error(
                     "material sample spacing requires interpolated material boundaries",
                 ));
             }
             Some(MaterialSampling {
-                max_edge_length: request.material_sample_spacing,
+                max_edge_length: options.material_sample_spacing,
                 max_vertices: 262_144,
                 max_triangles: 262_144,
             })
         } else {
             None
         };
-        let regions = unsafe {
-            borrowed_slice(
-                request.regions,
-                request.regions_len,
-                "implicit material regions",
-            )
-        }?;
-        if regions.len() > 255 {
-            return Err(error("at most 255 material regions are supported per mesh"));
-        }
-        let (field, source, region_nodes) = {
-            let retained = self.retained(request.field)?;
-            let source = retained.node(request.source)?;
-            let region_nodes = regions
-                .iter()
-                .map(|region| Ok((retained.node(region.node)?, region.material)))
-                .collect::<Result<Vec<_>>>()?;
-            (retained.field.clone(), source, region_nodes)
-        };
-        let geometry = field
-            .generate(
-                source,
-                GenerateOptions {
-                    bounds: Bounds {
-                        min: v(request.minimum),
-                        max: v(request.maximum),
-                    },
-                    cell_size: request.cell_size,
-                    max_vertices: 262_144,
-                    max_triangles: 262_144,
-                },
-            )
-            .map_err(kernel)?;
         if geometry.triangles.is_empty() {
             return Err(error(
                 "field has no extractable surface in the selected domain",
             ));
         }
         let topology = geometry.topology();
-        let mut materials = vec![request.default_material];
+        let mut materials = vec![options.default_material];
         let regions: Vec<_> = region_nodes
             .iter()
             .map(|(node, material)| {
@@ -211,14 +261,14 @@ impl RuntimeImplicitBridge {
             })
             .collect();
         let mesh = surface::assemble(
-            &field,
-            &geometry,
+            field,
+            geometry,
             &regions,
             SurfaceOptions {
-                crease_angle_degrees: request.crease_angle_degrees,
-                uv_scale: request.uv_scale,
+                crease_angle_degrees: options.crease_angle_degrees,
+                uv_scale: options.uv_scale,
                 default_slot: 0,
-                material_boundary_mode: match request.material_boundary_mode {
+                material_boundary_mode: match options.material_boundary_mode {
                     NativeImplicitMaterialBoundaryMode::Centroid => MaterialBoundaryMode::Centroid,
                     NativeImplicitMaterialBoundaryMode::Interpolated => {
                         MaterialBoundaryMode::Interpolated
@@ -274,20 +324,82 @@ impl RuntimeImplicitBridge {
         // The EngineServiceSet refreshes this sibling pointer for the current
         // synchronous call. Admission copies all streams before returning.
         let handle = unsafe { (&mut *appearance).create_mesh_resource(&raw) }?;
-        self.retained(request.field)?.generation = Some(NativeImplicitGenerationReadout {
-            node_count: field.node_count() as u32,
-            vertices: positions.len() as u32,
-            triangles: mesh.indices.len() as u32 / 3,
-            material_groups: groups.len() as u32,
-            octree_depth: geometry.depth,
-            sample_spacing: geometry.cell_size[0],
-            generation_seconds: started.elapsed().as_secs_f64(),
-            reoriented_triangles: geometry.reoriented_triangles,
-            degenerate_triangles: geometry.degenerate_triangles,
-            boundary_edges: topology.boundary_edges,
-            non_manifold_edges: topology.non_manifold_edges,
-            inconsistent_winding_edges: topology.inconsistent_winding_edges,
-        });
+        Ok((
+            handle,
+            NativeImplicitGenerationReadout {
+                node_count: field.node_count() as u32,
+                vertices: positions.len() as u32,
+                triangles: mesh.indices.len() as u32 / 3,
+                material_groups: groups.len() as u32,
+                octree_depth: geometry.depth,
+                sample_spacing: geometry.cell_size[0],
+                generation_seconds,
+                reoriented_triangles: geometry.reoriented_triangles,
+                degenerate_triangles: geometry.degenerate_triangles,
+                boundary_edges: topology.boundary_edges,
+                non_manifold_edges: topology.non_manifold_edges,
+                inconsistent_winding_edges: topology.inconsistent_winding_edges,
+                // This remains specific to adaptive expression-field octree
+                // leaves. Sampled-volume extraction reports zero because its
+                // uniform QEF fallbacks have distinct semantics.
+                bounded_leaf_vertices: geometry.bounded_leaf_vertices,
+            },
+        ))
+    }
+    unsafe fn generate(
+        &mut self,
+        request: &NativeImplicitGenerateRequest,
+    ) -> Result<NativeMeshResourceHandle> {
+        let started = Instant::now();
+        let regions = unsafe {
+            borrowed_slice(
+                request.regions,
+                request.regions_len,
+                "implicit material regions",
+            )
+        }?;
+        if regions.len() > 255 {
+            return Err(error("at most 255 material regions are supported per mesh"));
+        }
+        let (field, source, region_nodes) = {
+            let retained = self.retained(request.field)?;
+            let source = retained.node(request.source)?;
+            let region_nodes = regions
+                .iter()
+                .map(|region| Ok((retained.node(region.node)?, region.material)))
+                .collect::<Result<Vec<_>>>()?;
+            (retained.field.clone(), source, region_nodes)
+        };
+        let geometry = field
+            .generate(
+                source,
+                GenerateOptions {
+                    bounds: Bounds {
+                        min: v(request.minimum),
+                        max: v(request.maximum),
+                    },
+                    cell_size: request.cell_size,
+                    max_vertices: 262_144,
+                    max_triangles: 262_144,
+                },
+            )
+            .map_err(kernel)?;
+        let (handle, readout) = unsafe {
+            self.admit_geometry(
+                &field,
+                &geometry,
+                &region_nodes,
+                SurfaceGenerationOptions {
+                    crease_angle_degrees: request.crease_angle_degrees,
+                    uv_scale: request.uv_scale,
+                    default_material: request.default_material,
+                    material_boundary_mode: request.material_boundary_mode,
+                    material_sample_spacing: request.material_sample_spacing,
+                },
+                started.elapsed().as_secs_f64(),
+            )
+        }?;
+        self.retained(request.field)?.generation = Some(readout);
         Ok(handle)
     }
 }
@@ -301,6 +413,16 @@ pub(crate) fn api(
         context: (bridge as *mut RuntimeImplicitBridge).cast(),
         create_field,
         destroy_field,
+        create_sampled_volume,
+        destroy_sampled_volume,
+        describe_sampled_volume,
+        write_sampled_volume,
+        read_sampled_volume,
+        destroy_density_snapshot_lease,
+        sample_sampled_volume,
+        rasterize_sampled_volume,
+        generate_sampled_volume,
+        read_sampled_volume_generation,
         add_box,
         add_sphere,
         add_ellipsoid,
@@ -347,6 +469,42 @@ fn call<T>(
         }
     }
 }
+fn call_operation<T>(
+    context: *mut c_void,
+    result: *mut T,
+    receipt: *mut NativeOperationErrorReceipt,
+    operation: &'static [u8],
+    action: impl FnOnce(&mut RuntimeImplicitBridge) -> Result<T>,
+) -> i32 {
+    if receipt.is_null() {
+        return 0;
+    }
+    unsafe {
+        *receipt = std::mem::zeroed();
+    }
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(bridge))) {
+        Ok(Ok(value)) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Ok(Err(error)) if error.code() == "CSHARP_SPATIAL_POINTER" => {
+            bridge.callback_error = Some(error);
+            0
+        }
+        Ok(Err(error)) => {
+            bridge.retain_operation_error(operation, error, receipt);
+            0
+        }
+        Err(_) => {
+            bridge.callback_error = Some(error("implicit backend panicked during operation"));
+            0
+        }
+    }
+}
 unsafe extern "C" fn create_field(
     context: *mut c_void,
     result: *mut NativeImplicitFieldHandle,
@@ -375,6 +533,224 @@ unsafe extern "C" fn destroy_field(context: *mut c_void, field: NativeImplicitFi
             .ok_or_else(|| error("unknown implicit field"))?;
         Ok(())
     })
+}
+unsafe extern "C" fn create_sampled_volume(
+    context: *mut c_void,
+    request: NativeSampledVolumeCreateRequest,
+    result: *mut NativeSampledVolumeHandle,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, result, receipt, b"CreateSampledVolume", |b| {
+        let volume = SampledVolume::new(
+            v(request.origin),
+            request.spacing,
+            [request.width, request.height, request.depth],
+            request.initial_value,
+        )
+        .map_err(kernel)?;
+        let value = b.allocate_volume()?;
+        b.stage()?.volumes.insert(
+            value,
+            RetainedVolume {
+                volume: Arc::new(volume),
+                generation: None,
+            },
+        );
+        Ok(NativeSampledVolumeHandle { value })
+    })
+}
+unsafe extern "C" fn destroy_sampled_volume(
+    context: *mut c_void,
+    volume: NativeSampledVolumeHandle,
+) -> i32 {
+    call(context, &mut (), |b| {
+        b.stage()?
+            .volumes
+            .remove(&volume.value)
+            .ok_or_else(|| error("unknown sampled volume"))?;
+        Ok(())
+    })
+}
+unsafe extern "C" fn describe_sampled_volume(
+    context: *mut c_void,
+    volume: NativeSampledVolumeHandle,
+    result: *mut NativeSampledVolumeDescriptor,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, result, receipt, b"DescribeSampledVolume", |b| {
+        Ok(native_volume_descriptor(
+            b.retained_volume(volume)?.volume.descriptor(),
+        ))
+    })
+}
+unsafe extern "C" fn write_sampled_volume(
+    context: *mut c_void,
+    request: *const NativeSampledVolumeWriteRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, &mut (), receipt, b"WriteSampledVolume", |b| {
+        if request.is_null() {
+            return Err(error("sampled volume write request was null"));
+        }
+        let request = unsafe { &*request };
+        let samples = unsafe {
+            borrowed_slice(
+                request.samples,
+                request.samples_len,
+                "sampled volume write samples",
+            )
+        }?;
+        let samples: Vec<_> = samples.iter().map(|sample| sample.value).collect();
+        let retained = b.retained_volume(request.volume)?;
+        Arc::make_mut(&mut retained.volume)
+            .write(request.start as usize, &samples)
+            .map_err(kernel)?;
+        retained.generation = None;
+        Ok(())
+    })
+}
+unsafe extern "C" fn read_sampled_volume(
+    context: *mut c_void,
+    request: NativeSampledVolumeReadRequest,
+    result: *mut NativeDensitySnapshotLease,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, result, receipt, b"ReadSampledVolume", |b| {
+        let (descriptor, samples) = {
+            let retained = b.retained_volume(request.volume)?;
+            let samples = retained
+                .volume
+                .read(request.start as usize, request.count as usize)
+                .map_err(kernel)?
+                .iter()
+                .copied()
+                .map(|value| NativeDensitySample { value })
+                .collect();
+            (retained.volume.descriptor(), samples)
+        };
+        b.retain_density_snapshot(descriptor, request.start, samples)
+    })
+}
+unsafe extern "C" fn destroy_density_snapshot_lease(
+    context: *mut c_void,
+    handle: NativeDensitySnapshotLeaseHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeImplicitBridge>() };
+    i32::from(
+        handle.value != 0
+            && bridge
+                .density_snapshot_leases
+                .remove(&handle.value)
+                .is_some(),
+    )
+}
+unsafe extern "C" fn sample_sampled_volume(
+    context: *mut c_void,
+    request: NativeSampledVolumeSampleRequest,
+    result: *mut NativeDensitySample,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, result, receipt, b"SampleSampledVolume", |b| {
+        let value = b
+            .retained_volume(request.volume)?
+            .volume
+            .sample(v(request.position))
+            .map_err(kernel)?;
+        Ok(NativeDensitySample { value })
+    })
+}
+unsafe extern "C" fn rasterize_sampled_volume(
+    context: *mut c_void,
+    request: NativeSampledVolumeRasterizeRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, &mut (), receipt, b"RasterizeSampledVolume", |b| {
+        let (field, source) = {
+            let retained = b.retained(request.field)?;
+            (retained.field.clone(), retained.node(request.source)?)
+        };
+        let retained = b.retained_volume(request.volume)?;
+        Arc::make_mut(&mut retained.volume)
+            .rasterize(&field, source)
+            .map_err(kernel)?;
+        retained.generation = None;
+        Ok(())
+    })
+}
+unsafe extern "C" fn generate_sampled_volume(
+    context: *mut c_void,
+    request: *const NativeSampledVolumeGenerateRequest,
+    result: *mut NativeMeshResourceHandle,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(context, result, receipt, b"GenerateSampledVolume", |b| {
+        if request.is_null() {
+            return Err(error("sampled volume generate request was null"));
+        }
+        let request = unsafe { &*request };
+        let regions = unsafe {
+            borrowed_slice(
+                request.regions,
+                request.regions_len,
+                "sampled volume material regions",
+            )
+        }?;
+        if regions.len() > 255 {
+            return Err(error("at most 255 material regions are supported per mesh"));
+        }
+        let (field, region_nodes) = {
+            let retained = b.retained(request.field)?;
+            let region_nodes = regions
+                .iter()
+                .map(|region| Ok((retained.node(region.node)?, region.material)))
+                .collect::<Result<Vec<_>>>()?;
+            (retained.field.clone(), region_nodes)
+        };
+        let started = Instant::now();
+        let geometry = b
+            .retained_volume(request.volume)?
+            .volume
+            .generate(request.isovalue, 262_144, 262_144)
+            .map_err(kernel)?;
+        let (mesh, readout) = unsafe {
+            b.admit_geometry(
+                &field,
+                &geometry,
+                &region_nodes,
+                SurfaceGenerationOptions {
+                    crease_angle_degrees: request.crease_angle_degrees,
+                    uv_scale: request.uv_scale,
+                    default_material: request.default_material,
+                    material_boundary_mode: request.material_boundary_mode,
+                    material_sample_spacing: request.material_sample_spacing,
+                },
+                started.elapsed().as_secs_f64(),
+            )
+        }?;
+        b.retained_volume(request.volume)?.generation = Some(readout);
+        Ok(mesh)
+    })
+}
+unsafe extern "C" fn read_sampled_volume_generation(
+    context: *mut c_void,
+    volume: NativeSampledVolumeHandle,
+    result: *mut NativeImplicitGenerationReadout,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    call_operation(
+        context,
+        result,
+        receipt,
+        b"ReadSampledVolumeGeneration",
+        |b| {
+            b.retained_volume(volume)?
+                .generation
+                .ok_or_else(|| error("sampled volume has not produced a mesh"))
+        },
+    )
 }
 unsafe extern "C" fn generate(
     context: *mut c_void,
@@ -411,7 +787,7 @@ unsafe extern "C" fn generate(
             0
         }
         Ok(Err(error)) => {
-            bridge.retain_generation_error(error, receipt);
+            bridge.retain_operation_error(b"Generate", error, receipt);
             0
         }
         Err(_) => {
@@ -435,8 +811,9 @@ fn native_utf8(value: &[u8]) -> NativeUtf8Slice {
 }
 
 impl RuntimeImplicitBridge {
-    fn retain_generation_error(
+    fn retain_operation_error(
         &mut self,
+        operation: &'static [u8],
         failure: CsharpEngineServicesError,
         receipt: *mut NativeOperationErrorReceipt,
     ) {
@@ -468,7 +845,7 @@ impl RuntimeImplicitBridge {
         unsafe {
             *receipt = NativeOperationErrorReceipt {
                 service: native_utf8(b"ImplicitSurfaces"),
-                operation: native_utf8(b"Generate"),
+                operation: native_utf8(operation),
                 status: 0,
                 diagnostics,
             };

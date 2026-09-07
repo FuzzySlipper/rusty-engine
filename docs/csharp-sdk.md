@@ -513,11 +513,12 @@ triangulates its ordered cell-vertex polygons, avoiding folded fans around
 sampled edge intersections at adaptive transitions. Shared-edge winding is
 preserved; the retained reorientation counter is zero because individual faces
 are no longer flipped against centroid gradients. Zero-area triangles are
-omitted. This does not repair escaped cell vertices, guarantee thin features,
-or establish a general watertight/self-intersection-free guarantee. This is a
-bounded constructive-shape
-surface service, not a dense-grid importer, adaptive scene streamer, runtime
-editing system, or texture baker.
+omitted. The vendored `fidget-mesh` patch recovers finest-cell QEF vertices
+that escape their cell to the mean of that cell's Hermite crossings, and prevents
+those invalid solutions from driving collapse. `BoundedLeafVertices` counts these
+adaptive recoveries. This bounds placement; it does not guarantee thin-feature
+survival or self-intersection-free output. The patch and its source/license ship
+in the runtime pack's `share/third-party/fidget-mesh` directory.
 Large retained replacements in the packaged host use its complete committed
 snapshot when their incremental publication exceeds the ordinary output budget.
 This preserves renderer publication frontiers and new transient presentation
@@ -529,3 +530,50 @@ winding edges on extracted geometry before normal, UV, and material splitting.
 An entrance into a carved solid can still have a closed rock surface around its
 rim. These report-only counts diagnose index topology, not self-intersections,
 feature survival, or final attributed-mesh watertightness.
+
+
+### Managed authoring vocabulary
+
+`Rusty.Engine.Implicit` provides optional ordinary C# helpers. `ImplicitRecipe`
+scopes an Engine field and composes typed nodes; `RecipeWriter` emits borrowed
+`RecipeSurface` descriptions synchronously. The receiver generates and publishes
+the mesh before the recipe is disposed. `ArchitecturalRecipes` supplies tunable
+layered walls, masonry courses, passages, chambers, joins, and enclosed carving
+with explicit portals. Products retain layouts, seeds, materials, artistic
+choices, stage ordering, and publication policy. These helpers do not own a
+renderer, evaluator, scene registry, or serialization format.
+
+### Retained sampled densities
+
+The same `ImplicitSurfaces` service owns `SampledVolume`. Create one with an
+origin, positive uniform spacing, lattice-point counts (at least two per axis),
+and initial scalar value. Values are finite floats, negative inside, in x-fastest
+order: `((z * height) + y) * width + x`. The last sample lies at
+`origin + spacing * (dimensions - 1)`. The retained limit is eight million points.
+
+`WriteSampledVolume` replaces a bounded contiguous sample range;
+`ReadSampledVolume` returns a managed copy and descriptor/revision. The generated
+lease is released before returning. `SampleSampledVolume` trilinearly samples
+inside the explicit domain and rejects outside positions. `RasterizeSampledVolume`
+evaluates an analytic field onto the lattice in native batches, committing only
+when all samples succeed. Successful writes and rasterization advance the
+revision and invalidate the last generation readout; previously generated mesh
+resources remain independent snapshots. Disposing the source field does not
+invalidate stored densities.
+
+`GenerateSampledVolume` extracts the selected isovalue through Engine's existing
+uniform dual-contouring mesher. Its `Field` supplies only optional material
+regions, independently of geometry. It reuses analytic generation's attribute,
+material, resource, and collision paths. `SampledRecipeSurface` is an optional
+synchronous description for this extraction. `ReadSampledVolumeGeneration`
+reports actual lattice spacing and topology; octree depth and adaptive leaf
+recoveries are zero because this path is uniform. Expected operation errors
+return copied diagnostics without poisoning an otherwise handled product call.
+
+Sampling resolution remains a real limit: crossings hidden between lattice
+points are lost, and one vertex per active cell cannot represent arbitrary
+within-cell topology. The mesher does not add padding or caps at volume edges;
+include exterior samples around closed solids. Dense extraction has explicit
+cell, temporary-memory, and mesh budgets, so not every retained volume can be
+meshed in one request. Partition large products deliberately. This foundation
+does not implement erosion, world streaming, or efficient sparse edits.

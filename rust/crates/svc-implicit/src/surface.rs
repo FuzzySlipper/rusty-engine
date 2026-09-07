@@ -403,6 +403,7 @@ mod tests {
             generation_seconds: 0.0,
             reoriented_triangles: 0,
             degenerate_triangles: 0,
+            bounded_leaf_vertices: 0,
         }
     }
 

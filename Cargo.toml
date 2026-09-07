@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["rust/vendor/fidget-mesh"]
 resolver = "2"
 members = [
     "rust/crates/rusty-cli",
@@ -114,3 +115,6 @@ unsafe_code = "forbid"
 # Contributors can request full locals/types with CARGO_PROFILE_RELEASE_DEBUG=2.
 [profile.release]
 debug = "line-tables-only"
+
+[patch.crates-io]
+fidget-mesh = { path = "rust/vendor/fidget-mesh" }

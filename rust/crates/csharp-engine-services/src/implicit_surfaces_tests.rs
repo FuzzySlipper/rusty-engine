@@ -236,6 +236,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         boundary_edges: 0,
         non_manifold_edges: 0,
         inconsistent_winding_edges: 0,
+        bounded_leaf_vertices: 0,
     };
     assert_eq!(
         unsafe { (api.read_generation)(api.context, field, &mut generation) },
@@ -343,6 +344,203 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     let cleanup_implicit = implicit.take_call().expect("cleanup implicit call");
     appearance.commit(Some(cleanup_appearance));
     implicit.commit_call(cleanup_implicit);
+}
+
+#[test]
+fn native_sampled_volume_copies_snapshots_and_invalidates_stale_generation() {
+    let mut appearance =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+    let mut implicit = RuntimeImplicitBridge::new();
+
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+    let appearance_context = (&mut appearance as *mut RuntimeAppearanceBridge).cast();
+
+    let mut material = NativeMaterialHandle::default();
+    assert_eq!(
+        unsafe {
+            appearance::create_material(appearance_context, opaque_material(), &mut material)
+        },
+        ABI_OK
+    );
+    let mut field = NativeImplicitFieldHandle { value: 0 };
+    assert_eq!(
+        unsafe { (api.create_field)(api.context, &mut field) },
+        ABI_OK
+    );
+    let mut sphere = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.add_sphere)(
+                api.context,
+                NativeImplicitSphereRequest {
+                    field,
+                    center: NativeVec3::default(),
+                    radius: 0.65,
+                },
+                &mut sphere,
+            )
+        },
+        ABI_OK
+    );
+
+    let mut volume = NativeSampledVolumeHandle::default();
+    let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+    assert_eq!(
+        unsafe {
+            (api.create_sampled_volume)(
+                api.context,
+                NativeSampledVolumeCreateRequest {
+                    origin: NativeVec3 {
+                        x: -1.0,
+                        y: -1.0,
+                        z: -1.0,
+                    },
+                    spacing: 0.5,
+                    width: 5,
+                    height: 5,
+                    depth: 5,
+                    initial_value: 1.0,
+                },
+                &mut volume,
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    assert_ne!(volume.value, 0);
+    let mut descriptor = unsafe { std::mem::zeroed::<NativeSampledVolumeDescriptor>() };
+    assert_eq!(
+        unsafe {
+            (api.describe_sampled_volume)(api.context, volume, &mut descriptor, &mut receipt)
+        },
+        ABI_OK
+    );
+    assert_eq!(
+        [descriptor.width, descriptor.height, descriptor.depth],
+        [5; 3]
+    );
+    assert_eq!(descriptor.revision, 0);
+
+    let edited = [NativeDensitySample { value: -0.25 }];
+    let write = NativeSampledVolumeWriteRequest {
+        volume,
+        start: 0,
+        samples: edited.as_ptr(),
+        samples_len: edited.len(),
+    };
+    assert_eq!(
+        unsafe { (api.write_sampled_volume)(api.context, &write, &mut receipt) },
+        ABI_OK
+    );
+    let mut snapshot = unsafe { std::mem::zeroed::<NativeDensitySnapshotLease>() };
+    assert_eq!(
+        unsafe {
+            (api.read_sampled_volume)(
+                api.context,
+                NativeSampledVolumeReadRequest {
+                    volume,
+                    start: 0,
+                    count: 1,
+                },
+                &mut snapshot,
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    assert_eq!(snapshot.descriptor.revision, 1);
+    assert_eq!(unsafe { (*snapshot.samples).value }, -0.25);
+    assert_eq!(
+        unsafe { (api.destroy_density_snapshot_lease)(api.context, snapshot.handle) },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe { (api.destroy_density_snapshot_lease)(api.context, snapshot.handle) },
+        0
+    );
+
+    assert_eq!(
+        unsafe {
+            (api.rasterize_sampled_volume)(
+                api.context,
+                NativeSampledVolumeRasterizeRequest {
+                    volume,
+                    field,
+                    source: sphere,
+                },
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    let mut density = NativeDensitySample { value: 0.0 };
+    assert_eq!(
+        unsafe {
+            (api.sample_sampled_volume)(
+                api.context,
+                NativeSampledVolumeSampleRequest {
+                    volume,
+                    position: NativeVec3::default(),
+                },
+                &mut density,
+                &mut receipt,
+            )
+        },
+        ABI_OK
+    );
+    assert!(density.value < 0.0);
+
+    let generate = NativeSampledVolumeGenerateRequest {
+        volume,
+        field,
+        isovalue: 0.0,
+        crease_angle_degrees: 35.0,
+        uv_scale: 1.0,
+        default_material: material,
+        regions: std::ptr::null(),
+        regions_len: 0,
+        material_boundary_mode: NativeImplicitMaterialBoundaryMode::Centroid,
+        material_sample_spacing: 0.0,
+    };
+    let mut mesh = NativeMeshResourceHandle::default();
+    assert_eq!(
+        unsafe { (api.generate_sampled_volume)(api.context, &generate, &mut mesh, &mut receipt) },
+        ABI_OK
+    );
+    assert_ne!(mesh.value, 0);
+    let mut generation = unsafe { std::mem::zeroed::<NativeImplicitGenerationReadout>() };
+    assert_eq!(
+        unsafe {
+            (api.read_sampled_volume_generation)(api.context, volume, &mut generation, &mut receipt)
+        },
+        ABI_OK
+    );
+    assert!(generation.vertices > 0 && generation.triangles > 0);
+
+    assert_eq!(
+        unsafe { (api.write_sampled_volume)(api.context, &write, &mut receipt) },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe {
+            (api.read_sampled_volume_generation)(api.context, volume, &mut generation, &mut receipt)
+        },
+        0
+    );
+    assert_ne!(receipt.diagnostics.handle.value, 0);
+    assert_eq!(
+        unsafe {
+            (api.destroy_operation_diagnostic_lease)(api.context, receipt.diagnostics.handle)
+        },
+        ABI_OK
+    );
+    let retained = implicit
+        .take_call()
+        .expect("expected generation readout rejection leaves the call usable");
+    implicit.commit_call(retained);
+    appearance.discard_call();
 }
 
 #[test]

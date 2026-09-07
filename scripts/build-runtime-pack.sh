@@ -78,6 +78,10 @@ find render/packages/live-debug-client/dist -maxdepth 1 -type f \
   -exec install -m 644 {} "$STAGE/share/live-debug-client/" \;
 cp -a studio/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
 
+# Include the corresponding source and license for our modified MPL component.
+install -d "$STAGE/share/third-party"
+cp -a rust/vendor/fidget-mesh "$STAGE/share/third-party/fidget-mesh"
+
 if command -v objcopy >/dev/null 2>&1; then
   objcopy --only-keep-debug "$STAGE/bin/rusty-product-host" \
     "$STAGE/symbols/rusty-product-host.debug"

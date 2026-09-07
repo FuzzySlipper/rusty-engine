@@ -16,6 +16,7 @@ use std::time::Instant;
 
 pub mod surface;
 mod triangulate;
+pub mod volume;
 
 pub type Node = u32;
 
@@ -281,6 +282,7 @@ impl Field {
         };
         let octree = Octree::build(&bound, &settings)
             .ok_or_else(|| Error("surface generation cancelled".into()))?;
+        let bounded_leaf_vertices = octree.bounded_leaf_vertices();
         let mesh = triangulate::dual_polygons(octree.walk_dual());
         if mesh.vertices.len() > options.max_vertices as usize
             || mesh.triangles.len() > options.max_triangles as usize
@@ -317,6 +319,7 @@ impl Field {
             generation_seconds: started.elapsed().as_secs_f64(),
             reoriented_triangles: 0,
             degenerate_triangles,
+            bounded_leaf_vertices,
         })
     }
 }
@@ -402,6 +405,8 @@ pub struct Geometry {
     /// current generator performs no independent per-triangle reorientation.
     pub reoriented_triangles: u32,
     pub degenerate_triangles: u32,
+    /// Escaped leaf QEF solutions recovered within their source cells.
+    pub bounded_leaf_vertices: u32,
 }
 
 /// Index topology of extracted geometry, before normal/UV/material splitting.
@@ -466,6 +471,7 @@ mod tests {
             generation_seconds: 0.,
             reoriented_triangles: 0,
             degenerate_triangles: 0,
+            bounded_leaf_vertices: 0,
         };
         assert_eq!(mesh.topology().boundary_edges, 3);
         mesh.triangles.push([0, 1, 3]);

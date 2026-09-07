@@ -183,6 +183,16 @@ pub enum MeshError {
     CoordinateRangeTooLarge,
     InvalidCellSize,
     InvalidPivot,
+    InvalidSampleDimensions {
+        dimensions: [usize; 3],
+    },
+    InvalidSampleCount {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidScalarSample,
+    InvalidScalarOrigin,
+    InvalidIsovalue,
     DuplicateCell {
         coordinate: [i64; 3],
     },
@@ -224,6 +234,17 @@ impl core::fmt::Display for MeshError {
             }
             MeshError::InvalidCellSize => write!(f, "cell size must be finite and positive"),
             MeshError::InvalidPivot => write!(f, "pivot components must be finite"),
+            MeshError::InvalidSampleDimensions { dimensions } => write!(
+                f,
+                "scalar sample dimensions must be at least 2 on every axis; got {dimensions:?}"
+            ),
+            MeshError::InvalidSampleCount { expected, actual } => write!(
+                f,
+                "scalar sample count is {actual}; dimensions require exactly {expected}"
+            ),
+            MeshError::InvalidScalarSample => write!(f, "scalar samples must be finite"),
+            MeshError::InvalidScalarOrigin => write!(f, "scalar sample origin must be finite"),
+            MeshError::InvalidIsovalue => write!(f, "scalar isovalue must be finite"),
             MeshError::DuplicateCell { coordinate } => {
                 write!(f, "duplicate mesh cell at {coordinate:?}")
             }
@@ -418,6 +439,35 @@ pub fn mesh_cells_standalone(
             ..SurfaceMeshOptions::default()
         },
     )
+}
+
+/// Extract a dual-contoured surface from an explicit, bounded scalar lattice.
+///
+/// Samples are lattice points in x-fastest order at
+/// `origin + [x, y, z] * spacing`. Values below `isovalue` are inside; a value
+/// equal to the isovalue is outside. The supplied point lattice is the entire
+/// domain: crossings at its boundary remain open rather than receiving an
+/// invented padding layer or cap. Sampled geometry uses material slot zero;
+/// its product attributes are supplied by the owning implicit-surface service.
+pub fn mesh_scalar_samples(
+    origin: [f64; 3],
+    spacing: f64,
+    dimensions: [usize; 3],
+    samples: &[f32],
+    isovalue: f32,
+    limits: SurfaceMeshLimits,
+) -> Result<MeshPayload, MeshError> {
+    if !origin.iter().all(|value| value.is_finite()) {
+        return Err(MeshError::InvalidScalarOrigin);
+    }
+    if !spacing.is_finite() || spacing <= 0.0 {
+        return Err(MeshError::InvalidCellSize);
+    }
+    let pivot = origin.map(|value| 0.5 - value / spacing);
+    if !pivot.iter().all(|value| value.is_finite()) {
+        return Err(MeshError::InvalidPivot);
+    }
+    surface::mesh_scalar_samples(spacing, pivot, dimensions, samples, isovalue, limits)
 }
 
 /// Mesh a complete local-space cell arrangement with an explicit derived
@@ -1040,6 +1090,226 @@ mod tests {
                 (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
             assert!((length - 1.0).abs() < 1.0e-4, "normal={normal:?}");
         }
+    }
+
+    fn scalar_samples(
+        dimensions: [usize; 3],
+        mut value: impl FnMut(usize, usize, usize) -> f32,
+    ) -> Vec<f32> {
+        let mut samples = Vec::with_capacity(dimensions.into_iter().product());
+        for z in 0..dimensions[2] {
+            for y in 0..dimensions[1] {
+                for x in 0..dimensions[0] {
+                    samples.push(value(x, y, z));
+                }
+            }
+        }
+        samples
+    }
+
+    #[test]
+    fn scalar_samples_interpolate_nonbinary_sloped_planes_at_the_crossing() {
+        let mesh = mesh_scalar_samples(
+            [0.0; 3],
+            1.0,
+            [3, 3, 3],
+            &scalar_samples([3, 3, 3], |x, _, _| x as f32 - 0.25),
+            0.0,
+            SurfaceMeshLimits::default(),
+        )
+        .unwrap();
+
+        assert_eq!(mesh.surface_mode, SurfaceMode::DualContouring);
+        assert_eq!(mesh.groups.len(), 1);
+        assert_eq!(mesh.groups[0].material_slot, 0);
+        assert_eq!(mesh.groups[0].direction, None);
+        assert_eq!(mesh.indices.len(), 6);
+        for point in mesh.positions.as_chunks::<3>().0 {
+            assert!((point[0] - 0.25).abs() < 1.0e-5, "point={point:?}");
+        }
+    }
+
+    #[test]
+    fn scalar_sample_origin_and_spacing_are_applied_to_output_positions() {
+        let mesh = mesh_scalar_samples(
+            [10.0, -4.0, 2.0],
+            2.0,
+            [3, 3, 3],
+            &scalar_samples([3, 3, 3], |x, _, _| x as f32 - 0.25),
+            0.0,
+            SurfaceMeshLimits::default(),
+        )
+        .unwrap();
+
+        for point in mesh.positions.as_chunks::<3>().0 {
+            assert!((point[0] - 10.5).abs() < 1.0e-5, "point={point:?}");
+        }
+    }
+
+    #[test]
+    fn scalar_sphere_is_closed_and_topologically_outward() {
+        let dimensions = [5, 5, 5];
+        let samples = scalar_samples(dimensions, |x, y, z| {
+            let dx = x as f32 - 2.0;
+            let dy = y as f32 - 2.0;
+            let dz = z as f32 - 2.0;
+            (dx * dx + dy * dy + dz * dz).sqrt() - 1.6
+        });
+        let mesh = mesh_scalar_samples(
+            [0.0; 3],
+            1.0,
+            dimensions,
+            &samples,
+            0.0,
+            SurfaceMeshLimits::default(),
+        )
+        .unwrap();
+
+        let mut edge_uses = BTreeMap::<(u32, u32), u32>::new();
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            for (left, right) in [
+                (triangle[0], triangle[1]),
+                (triangle[1], triangle[2]),
+                (triangle[2], triangle[0]),
+            ] {
+                *edge_uses
+                    .entry((left.min(right), left.max(right)))
+                    .or_default() += 1;
+            }
+            let point = |index: u32| -> [f32; 3] {
+                let offset = index as usize * 3;
+                [
+                    mesh.positions[offset],
+                    mesh.positions[offset + 1],
+                    mesh.positions[offset + 2],
+                ]
+            };
+            let a = point(triangle[0]);
+            let b = point(triangle[1]);
+            let c = point(triangle[2]);
+            let centroid = [
+                (a[0] + b[0] + c[0]) / 3.0 - 2.0,
+                (a[1] + b[1] + c[1]) / 3.0 - 2.0,
+                (a[2] + b[2] + c[2]) / 3.0 - 2.0,
+            ];
+            assert!(dot(cross(sub(b, a), sub(c, a)), centroid) > 0.0);
+        }
+        assert!(!edge_uses.is_empty());
+        assert!(edge_uses.values().all(|uses| *uses == 2));
+    }
+
+    #[test]
+    fn scalar_boundary_crossings_remain_open_without_a_cap() {
+        let mesh = mesh_scalar_samples(
+            [0.0; 3],
+            1.0,
+            [3, 3, 3],
+            &scalar_samples([3, 3, 3], |x, _, _| x as f32 - 0.25),
+            0.0,
+            SurfaceMeshLimits::default(),
+        )
+        .unwrap();
+
+        let mut edge_uses = BTreeMap::<(u32, u32), u32>::new();
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            for (left, right) in [
+                (triangle[0], triangle[1]),
+                (triangle[1], triangle[2]),
+                (triangle[2], triangle[0]),
+            ] {
+                *edge_uses
+                    .entry((left.min(right), left.max(right)))
+                    .or_default() += 1;
+            }
+        }
+        assert!(edge_uses.values().any(|uses| *uses == 1));
+    }
+
+    #[test]
+    fn scalar_sample_input_rejects_invalid_shape_values_and_limits() {
+        assert!(matches!(
+            mesh_scalar_samples(
+                [0.0; 3],
+                1.0,
+                [1, 2, 2],
+                &[],
+                0.0,
+                SurfaceMeshLimits::default()
+            ),
+            Err(MeshError::InvalidSampleDimensions { .. })
+        ));
+        assert!(matches!(
+            mesh_scalar_samples(
+                [0.0; 3],
+                1.0,
+                [2, 2, 2],
+                &[0.0; 7],
+                0.0,
+                SurfaceMeshLimits::default()
+            ),
+            Err(MeshError::InvalidSampleCount {
+                expected: 8,
+                actual: 7
+            })
+        ));
+        assert!(matches!(
+            mesh_scalar_samples(
+                [f64::NAN, 0.0, 0.0],
+                1.0,
+                [2, 2, 2],
+                &[0.0; 8],
+                0.0,
+                SurfaceMeshLimits::default()
+            ),
+            Err(MeshError::InvalidScalarOrigin)
+        ));
+        assert!(matches!(
+            mesh_scalar_samples(
+                [0.0; 3],
+                f64::NAN,
+                [2, 2, 2],
+                &[0.0; 8],
+                0.0,
+                SurfaceMeshLimits::default()
+            ),
+            Err(MeshError::InvalidCellSize)
+        ));
+        assert!(matches!(
+            mesh_scalar_samples(
+                [0.0; 3],
+                1.0,
+                [2, 2, 2],
+                &[f32::NAN; 8],
+                0.0,
+                SurfaceMeshLimits::default()
+            ),
+            Err(MeshError::InvalidScalarSample)
+        ));
+        assert!(matches!(
+            mesh_scalar_samples(
+                [0.0; 3],
+                1.0,
+                [2, 2, 2],
+                &[0.0; 8],
+                f32::INFINITY,
+                SurfaceMeshLimits::default()
+            ),
+            Err(MeshError::InvalidIsovalue)
+        ));
+        assert!(matches!(
+            mesh_scalar_samples(
+                [0.0; 3],
+                1.0,
+                [2, 2, 2],
+                &[0.0; 8],
+                0.0,
+                SurfaceMeshLimits {
+                    max_sampled_cells: 0,
+                    ..SurfaceMeshLimits::default()
+                },
+            ),
+            Err(MeshError::TooManySampledCells { cells: 1, limit: 0 })
+        ));
     }
 
     fn fixture_hash(mesh: &MeshPayload) -> String {

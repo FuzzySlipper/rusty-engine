@@ -91,8 +91,18 @@ const FACES: [Face; 6] = [
 struct ScalarField {
     origin: [i64; 3],
     dimensions: [usize; 3],
-    materials: Vec<Option<u16>>,
+    values: ScalarValues,
     sampled_cells: u64,
+}
+
+#[derive(Debug)]
+enum ScalarValues {
+    /// The retained voxel path. `Some` is the positive-inside half of the
+    /// field and still carries its original material identity.
+    Occupancy(Vec<Option<u16>>),
+    /// Explicit scalar samples are already inverted to the mesher's
+    /// positive-inside convention (`isovalue - sample`).
+    Explicit(Vec<f64>),
 }
 
 impl ScalarField {
@@ -149,16 +159,73 @@ impl ScalarField {
         let mut field = Self {
             origin: minimum,
             dimensions,
-            materials: vec![None; point_count],
+            values: ScalarValues::Occupancy(vec![None; point_count]),
             sampled_cells,
         };
         for (&coordinate, &slot) in occupied {
             let index = field
                 .index(coordinate)
                 .expect("occupied coordinate is in padded field");
-            field.materials[index] = Some(slot);
+            let ScalarValues::Occupancy(materials) = &mut field.values else {
+                unreachable!("new occupancy fields always retain materials");
+            };
+            materials[index] = Some(slot);
         }
         Ok(Some(field))
+    }
+
+    fn explicit(
+        dimensions: [usize; 3],
+        samples: &[f32],
+        isovalue: f32,
+        limits: SurfaceMeshLimits,
+    ) -> Result<Self, MeshError> {
+        if dimensions.iter().any(|dimension| *dimension < 2) {
+            return Err(MeshError::InvalidSampleDimensions { dimensions });
+        }
+        let point_count = checked_product(dimensions)?;
+        if samples.len() != point_count {
+            return Err(MeshError::InvalidSampleCount {
+                expected: point_count,
+                actual: samples.len(),
+            });
+        }
+        let sampled_cells =
+            checked_product([dimensions[0] - 1, dimensions[1] - 1, dimensions[2] - 1])? as u64;
+        if sampled_cells > limits.max_sampled_cells {
+            return Err(MeshError::TooManySampledCells {
+                cells: sampled_cells,
+                limit: limits.max_sampled_cells,
+            });
+        }
+        let temporary_bytes = (point_count as u64)
+            .checked_mul(std::mem::size_of::<f64>() as u64)
+            .ok_or(MeshError::CoordinateRangeTooLarge)?;
+        if temporary_bytes > limits.max_temporary_field_bytes {
+            return Err(MeshError::TemporaryFieldTooLarge {
+                bytes: temporary_bytes,
+                limit: limits.max_temporary_field_bytes,
+            });
+        }
+        if !isovalue.is_finite() {
+            return Err(MeshError::InvalidIsovalue);
+        }
+        let values = samples
+            .iter()
+            .copied()
+            .map(|sample| {
+                if !sample.is_finite() {
+                    return Err(MeshError::InvalidScalarSample);
+                }
+                Ok(f64::from(isovalue) - f64::from(sample))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            origin: [0; 3],
+            dimensions,
+            values: ScalarValues::Explicit(values),
+            sampled_cells,
+        })
     }
 
     fn maximum_point(&self) -> [i64; 3] {
@@ -190,12 +257,50 @@ impl ScalarField {
     }
 
     fn material(&self, coordinate: [i64; 3]) -> Option<u16> {
-        self.index(coordinate)
-            .and_then(|index| self.materials[index])
+        let ScalarValues::Occupancy(materials) = &self.values else {
+            return None;
+        };
+        self.index(coordinate).and_then(|index| materials[index])
     }
 
     fn cube_materials(&self, cell: [i64; 3]) -> [Option<u16>; 8] {
         std::array::from_fn(|index| self.material(add_i64(cell, CORNERS[index])))
+    }
+
+    fn value(&self, coordinate: [i64; 3]) -> Option<f64> {
+        let index = self.index(coordinate)?;
+        Some(match &self.values {
+            ScalarValues::Occupancy(materials) => {
+                if materials[index].is_some() {
+                    0.5
+                } else {
+                    -0.5
+                }
+            }
+            ScalarValues::Explicit(values) => values[index],
+        })
+    }
+
+    fn cube_values(&self, cell: [i64; 3]) -> [f64; 8] {
+        std::array::from_fn(|index| {
+            self.value(add_i64(cell, CORNERS[index]))
+                .expect("cell corners are in the scalar field")
+        })
+    }
+
+    fn is_explicit(&self) -> bool {
+        matches!(self.values, ScalarValues::Explicit(_))
+    }
+
+    fn temporary_field_bytes(&self) -> u64 {
+        match &self.values {
+            ScalarValues::Occupancy(values) => {
+                values.len() as u64 * std::mem::size_of::<Option<u16>>() as u64
+            }
+            ScalarValues::Explicit(values) => {
+                values.len() as u64 * std::mem::size_of::<f64>() as u64
+            }
+        }
     }
 }
 
@@ -247,6 +352,18 @@ pub(super) fn mesh_reconstructed_cells_owned(
             owner,
         ),
     }
+}
+
+pub(super) fn mesh_scalar_samples(
+    spacing: f64,
+    pivot: [f64; 3],
+    dimensions: [usize; 3],
+    samples: &[f32],
+    isovalue: f32,
+    limits: SurfaceMeshLimits,
+) -> Result<MeshPayload, MeshError> {
+    let field = ScalarField::explicit(dimensions, samples, isovalue, limits)?;
+    dual_contouring(&field, spacing, pivot, limits, 0, 0, None)
 }
 
 fn count_source_faces(
@@ -508,25 +625,28 @@ fn dual_contouring(
     let mut rank_deficient = 0_u32;
     let mut fallbacks = 0_u32;
     for_each_coordinate(field.origin, field.maximum_cell(), |cell| {
-        let materials = field.cube_materials(cell);
-        if materials.iter().all(Option::is_none) || materials.iter().all(Option::is_some) {
+        let signed = field.cube_values(cell);
+        let has_inside = signed.iter().any(|value| *value > 0.0);
+        let has_outside = signed.iter().any(|value| *value <= 0.0);
+        if !has_inside || !has_outside {
             return Ok(());
         }
-        let signed: [f64; 8] =
-            materials.map(|material| if material.is_some() { 0.5 } else { -0.5 });
         let mut samples = Vec::new();
         for (edge, &(a, b)) in EDGES.iter().enumerate() {
-            if signed[a].is_sign_positive() == signed[b].is_sign_positive() {
+            if (signed[a] > 0.0) == (signed[b] > 0.0) {
                 continue;
             }
-            let point = edge_point(cell, edge);
+            let t = signed[a] / (signed[a] - signed[b]);
+            let local = edge_local_point_at(edge, t);
+            let point = edge_point_at(cell, edge, t);
             let normal = outward_normal(
-                trilinear_gradient(signed, edge_local_point(edge)),
+                trilinear_gradient(signed, local),
                 sub_f64(point, add_f64(cell_f64(cell), [1.0; 3])),
             );
             samples.push((point, normal));
         }
-        let (position, was_rank_deficient, fallback) = solve_qef(cell, &samples);
+        let (position, was_rank_deficient, fallback) =
+            solve_qef(cell, &samples, field.is_explicit());
         rank_deficient = rank_deficient.saturating_add(u32::from(was_rank_deficient));
         fallbacks = fallbacks.saturating_add(u32::from(fallback));
         let normal = normalize_or(
@@ -541,13 +661,9 @@ fn dual_contouring(
                 vertices: next_count,
             });
         }
-        let temporary_bytes = (field.materials.len() as u64)
-            .checked_mul(std::mem::size_of::<Option<u16>>() as u64)
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    next_count * (std::mem::size_of::<([i64; 3], DualVertex)>() as u64),
-                )
-            })
+        let temporary_bytes = field
+            .temporary_field_bytes()
+            .checked_add(next_count * (std::mem::size_of::<([i64; 3], DualVertex)>() as u64))
             .ok_or(MeshError::CoordinateRangeTooLarge)?;
         if temporary_bytes > limits.max_temporary_field_bytes {
             return Err(MeshError::TemporaryFieldTooLarge {
@@ -577,14 +693,19 @@ fn dual_contouring(
         for_each_coordinate(field.origin, edge_maximum, |start| {
             let mut end = start;
             end[axis] += 1;
-            let start_material = field.material(start);
-            let end_material = field.material(end);
-            if start_material.is_some() == end_material.is_some() {
+            let start_value = field
+                .value(start)
+                .expect("edge start is in the scalar field");
+            let end_value = field.value(end).expect("edge end is in the scalar field");
+            let start_inside = start_value > 0.0;
+            if start_inside == (end_value > 0.0) {
                 return Ok(());
             }
-            let owner_coordinate = if start_material.is_some() { start } else { end };
-            if owner.is_some_and(|bounds| !within_owner(owner_coordinate, bounds)) {
-                return Ok(());
+            if !field.is_explicit() {
+                let owner_coordinate = if start_inside { start } else { end };
+                if owner.is_some_and(|bounds| !within_owner(owner_coordinate, bounds)) {
+                    return Ok(());
+                }
             }
             let cells = incident_cells(axis, start);
             let Some(vertices) = cells
@@ -592,11 +713,25 @@ fn dual_contouring(
                 .into_iter()
                 .collect::<Option<Vec<_>>>()
             else {
+                if field.is_explicit() {
+                    // The caller supplied the complete scalar domain. An edge
+                    // at its boundary has no four incident cells, so it is an
+                    // honest open boundary rather than an invented cap.
+                    return Ok(());
+                }
                 return Err(MeshError::CoordinateRangeTooLarge);
             };
-            let slot = start_material
-                .or(end_material)
-                .expect("crossing has occupied endpoint");
+            let slot = if field.is_explicit() {
+                0
+            } else if start_inside {
+                field
+                    .material(start)
+                    .expect("inside occupancy endpoint has material")
+            } else {
+                field
+                    .material(end)
+                    .expect("inside occupancy endpoint has material")
+            };
             if !lane_indices.contains_key(&slot)
                 && lane_indices.len() as u64 + 1 > u64::from(limits.max_material_partitions)
             {
@@ -605,20 +740,35 @@ fn dual_contouring(
                     limit: limits.max_material_partitions,
                 });
             }
+            if field.is_explicit() && total_indices / 6 + 1 > limits.max_source_faces {
+                return Err(MeshError::TooManyFaces {
+                    faces: total_indices / 6 + 1,
+                    limit: limits.max_source_faces,
+                });
+            }
             check_output_growth(active.len() as u64, total_indices, 0, 6, limits)?;
             let mut order = [0_usize, 1, 2, 3];
-            let average_normal = normalize_or(
-                vertices
-                    .iter()
-                    .fold([0.0; 3], |sum, vertex| add_f64(sum, vertex.normal)),
-                [0.0, 1.0, 0.0],
-            );
-            let geometric = cross_f64(
-                sub_f64(vertices[1].position, vertices[0].position),
-                sub_f64(vertices[2].position, vertices[0].position),
-            );
-            if dot_f64(geometric, average_normal) < 0.0 {
-                order.reverse();
+            if field.is_explicit() {
+                // `incident_cells` enumerates a right-handed loop facing the
+                // positive edge axis. Positive start samples are inside, so
+                // that loop is outward exactly when the edge exits the solid.
+                if !start_inside {
+                    order.reverse();
+                }
+            } else {
+                let average_normal = normalize_or(
+                    vertices
+                        .iter()
+                        .fold([0.0; 3], |sum, vertex| add_f64(sum, vertex.normal)),
+                    [0.0, 1.0, 0.0],
+                );
+                let geometric = cross_f64(
+                    sub_f64(vertices[1].position, vertices[0].position),
+                    sub_f64(vertices[2].position, vertices[0].position),
+                );
+                if dot_f64(geometric, average_normal) < 0.0 {
+                    order.reverse();
+                }
             }
             let diagonal_02 =
                 squared_distance(vertices[order[0]].position, vertices[order[2]].position);
@@ -683,7 +833,11 @@ fn dual_contouring(
                 triangles: (total_indices / 3) as u32,
                 quads: (total_indices / 6) as u32,
                 faces_emitted: (total_indices / 3) as u32,
-                source_faces,
+                source_faces: if field.is_explicit() {
+                    (total_indices / 6) as u32
+                } else {
+                    source_faces
+                },
                 faces_culled,
                 sampled_cells: field.sampled_cells,
                 qef_rank_deficient: rank_deficient,
@@ -695,7 +849,15 @@ fn dual_contouring(
     )
 }
 
-fn solve_qef(cell: [i64; 3], samples: &[([f64; 3], [f64; 3])]) -> ([f64; 3], bool, bool) {
+/// Solve the same bounded QEF used by the retained occupancy path. Explicit
+/// scalar samples retain the mass point when the minimizer escapes its cell:
+/// clamping an escaped fit to a sampled-domain edge would collapse the surface
+/// there, while the Hermite mass point remains a local crossing-derived point.
+fn solve_qef(
+    cell: [i64; 3],
+    samples: &[([f64; 3], [f64; 3])],
+    mass_point_on_escape: bool,
+) -> ([f64; 3], bool, bool) {
     let mass_point = scale_f64(
         samples
             .iter()
@@ -737,10 +899,19 @@ fn solve_qef(cell: [i64; 3], samples: &[([f64; 3], [f64; 3])]) -> ([f64; 3], boo
         }
     }
     let candidate = add_f64(mass_point, offset);
-    let fallback = rank == 0 || !candidate.iter().all(|value| value.is_finite());
+    let mut fallback = rank == 0 || !candidate.iter().all(|value| value.is_finite());
     let candidate = if fallback { mass_point } else { candidate };
     let minimum = add_f64(cell_f64(cell), [0.5; 3]);
     let maximum = add_f64(cell_f64(cell), [1.5; 3]);
+    if mass_point_on_escape
+        && candidate
+            .iter()
+            .enumerate()
+            .any(|(axis, value)| *value < minimum[axis] || *value > maximum[axis])
+    {
+        fallback = true;
+        return (mass_point, rank < 3, fallback);
+    }
     (
         std::array::from_fn(|axis| candidate[axis].clamp(minimum[axis], maximum[axis])),
         rank < 3,
@@ -983,13 +1154,23 @@ fn connect(adjacency: &mut [Vec<usize>; 12], left: usize, right: usize) {
 }
 
 fn edge_point(cell: [i64; 3], edge: usize) -> [f64; 3] {
-    let local = edge_local_point(edge);
+    edge_point_at(cell, edge, 0.5)
+}
+
+fn edge_point_at(cell: [i64; 3], edge: usize, t: f64) -> [f64; 3] {
+    let local = edge_local_point_at(edge, t);
     std::array::from_fn(|axis| cell[axis] as f64 + local[axis] + 0.5)
 }
 
 fn edge_local_point(edge: usize) -> [f64; 3] {
+    edge_local_point_at(edge, 0.5)
+}
+
+fn edge_local_point_at(edge: usize, t: f64) -> [f64; 3] {
     let (a, b) = EDGES[edge];
-    std::array::from_fn(|axis| (CORNERS[a][axis] + CORNERS[b][axis]) as f64 * 0.5)
+    std::array::from_fn(|axis| {
+        CORNERS[a][axis] as f64 + (CORNERS[b][axis] - CORNERS[a][axis]) as f64 * t
+    })
 }
 
 fn trilinear_gradient(values: [f64; 8], point: [f64; 3]) -> [f64; 3] {
@@ -1152,8 +1333,8 @@ mod tests {
             vec![([1.0, 1.0, 1.0], [0.0, 0.0, 0.0])],
         ];
         for samples in cases {
-            let first = solve_qef([0, 0, 0], &samples);
-            let second = solve_qef([0, 0, 0], &samples);
+            let first = solve_qef([0, 0, 0], &samples, false);
+            let second = solve_qef([0, 0, 0], &samples, false);
             assert_eq!(first, second);
             assert!(first.0.iter().all(|value| value.is_finite()));
             assert!(first.0.iter().all(|value| (0.5..=1.5).contains(value)));
