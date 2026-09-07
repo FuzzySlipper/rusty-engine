@@ -650,3 +650,90 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         0
     );
 }
+
+#[test]
+fn native_implicit_frustum_samples_taper_with_start_to_end_orientation() {
+    let mut appearance =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+    let mut implicit = RuntimeImplicitBridge::new();
+
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
+
+    let mut field = NativeImplicitFieldHandle { value: 0 };
+    assert_eq!(
+        unsafe { (api.create_field)(api.context, &mut field) },
+        ABI_OK
+    );
+    let mut frustum = NativeImplicitNode { value: 0 };
+    assert_eq!(
+        unsafe {
+            (api.add_frustum)(
+                api.context,
+                NativeImplicitFrustumRequest {
+                    field,
+                    start: NativeVec3 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    end: NativeVec3 {
+                        x: 0.0,
+                        y: 2.0,
+                        z: 0.0,
+                    },
+                    // Zero start radius exercises the reusable cone form.
+                    start_radius: 0.0,
+                    end_radius: 1.0,
+                },
+                &mut frustum,
+            )
+        },
+        ABI_OK
+    );
+
+    let sample = |position| {
+        let mut value = NativeImplicitSample { value: 0.0 };
+        assert_eq!(
+            unsafe {
+                (api.sample)(
+                    api.context,
+                    NativeImplicitSampleRequest {
+                        field,
+                        source: frustum,
+                        position,
+                    },
+                    &mut value,
+                )
+            },
+            ABI_OK
+        );
+        value.value
+    };
+
+    assert!(
+        sample(NativeVec3 {
+            x: 0.7,
+            y: 0.25,
+            z: 0.0,
+        }) > 0.0,
+        "the cone is outside near its tip at this radius"
+    );
+    assert!(
+        sample(NativeVec3 {
+            x: 0.7,
+            y: 1.75,
+            z: 0.0,
+        }) < 0.0,
+        "the cone is inside near its wide end at the same radius"
+    );
+    assert!(
+        sample(NativeVec3 {
+            x: 1.1,
+            y: 1.75,
+            z: 0.0,
+        }) > 0.0,
+        "a point beyond the end radius is outside"
+    );
+}

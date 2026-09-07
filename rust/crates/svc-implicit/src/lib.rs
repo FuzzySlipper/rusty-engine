@@ -147,6 +147,40 @@ impl Field {
         )
     }
 
+    /// Capped circular taper along an arbitrary axis. Equal radii give a
+    /// cylinder; one zero radius gives a cone. This preserves the selected
+    /// zero surface, but is not generally Euclidean signed distance.
+    pub fn frustum(
+        &mut self,
+        start: [f32; 3],
+        end: [f32; 3],
+        start_radius: f32,
+        end_radius: f32,
+    ) -> Result<Node, Error> {
+        finite(&start)?;
+        finite(&end)?;
+        finite(&[start_radius, end_radius])?;
+        if start_radius < 0.0 || end_radius < 0.0 || start_radius.max(end_radius) == 0.0 {
+            return Err(Error(
+                "frustum radii must be non-negative and at least one positive".into(),
+            ));
+        }
+        let axis = Vector3::from(end) - Vector3::from(start);
+        let length = axis.norm();
+        positive(length, "frustum axis length")?;
+        let axis = axis / length;
+        let slope = (end_radius - start_radius) / length;
+        finite(&[slope])?;
+        let p = coordinates(start);
+        let along = p[0].clone() * axis.x + p[1].clone() * axis.y + p[2].clone() * axis.z;
+        let radial = ((p[0].clone() - along.clone() * axis.x).square()
+            + (p[1].clone() - along.clone() * axis.y).square()
+            + (p[2].clone() - along.clone() * axis.z).square())
+        .sqrt();
+        let side = radial - (start_radius + along.clone() * slope);
+        self.push(side.max(-along.clone()).max(along - length))
+    }
+
     pub fn union(&mut self, a: Node, b: Node) -> Result<Node, Error> {
         self.push(self.tree(a)?.min(self.tree(b)?))
     }
@@ -396,6 +430,61 @@ mod tests {
             max_vertices: 200_000,
             max_triangles: 400_000,
         }
+    }
+
+    #[test]
+    fn capped_tapers_preserve_caps_radius_and_orientation() {
+        let mut f = Field::new();
+        let taper = f
+            .frustum([1.0, 0.0, 0.0], [1.0, 2.0, 0.0], 1.0, 0.5)
+            .unwrap();
+        let samples = [
+            [1.0, 1.0, 0.0],
+            [1.0, -0.1, 0.0],
+            [1.0, 2.1, 0.0],
+            [1.75, 1.0, 0.0],
+            [1.8, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 2.0, 0.0],
+        ];
+        let values = f.sample(taper, &samples).unwrap();
+        assert!(values[0] < 0.0 && values[1] > 0.0 && values[2] > 0.0 && values[4] > 0.0);
+        for i in [3, 5, 6] {
+            assert!(values[i].abs() < 1e-5);
+        }
+        let reverse = f
+            .frustum([1.0, 2.0, 0.0], [1.0, 0.0, 0.0], 0.5, 1.0)
+            .unwrap();
+        for (a, b) in values.iter().zip(f.sample(reverse, &samples).unwrap()) {
+            assert!((a - b).abs() < 1e-5);
+        }
+        let diagonal = f.frustum([0.0; 3], [2.0, 2.0, 0.0], 0.5, 0.5).unwrap();
+        let values = f
+            .sample(
+                diagonal,
+                &[[1.0, 1.0, 0.4], [1.0, 1.0, 0.6], [-0.1, -0.1, 0.0]],
+            )
+            .unwrap();
+        assert!(values[0] < 0.0 && values[1] > 0.0 && values[2] > 0.0);
+        let cone = f.frustum([0.0; 3], [0.0, 2.0, 0.0], 1.0, 0.0).unwrap();
+        let values = f.sample(cone, &[[0.0, 2.0, 0.0], [0.1, 1.9, 0.0]]).unwrap();
+        assert!(values[0].abs() < 1e-5 && values[1] > 0.0);
+        for node in [taper, diagonal, cone] {
+            let mesh = f
+                .generate(
+                    node,
+                    options(Bounds {
+                        min: [-1.2, -0.2, -1.2],
+                        max: [2.8, 2.8, 1.2],
+                    }),
+                )
+                .unwrap();
+            assert!(!mesh.triangles.is_empty());
+            assert_closed_and_oriented(&mesh);
+        }
+        assert!(f.frustum([0.0; 3], [0.0; 3], 1.0, 1.0).is_err());
+        assert!(f.frustum([0.0; 3], [0.0, 1.0, 0.0], -1.0, 1.0).is_err());
+        assert!(f.frustum([0.0; 3], [0.0, 1.0, 0.0], 0.0, 0.0).is_err());
     }
 
     #[test]

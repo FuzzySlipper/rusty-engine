@@ -449,6 +449,12 @@ angle, UV scale, default material, and optional ordered material regions:
   explicitly intersect a box. Domain boundaries are not automatic caps.
 - Cell size is a maximum leaf sample spacing, not a minimum-feature guarantee.
   Thin features can disappear. Keep enough empty margin around closed shapes.
+- `AddFrustum` authors a capped circular taper between distinct `Start` and `End`
+  points. Non-negative `StartRadius`/`EndRadius` select the endpoint sizes; at
+  least one must be positive. Equal radii give a cylinder, one zero radius a
+  cone. Caps are perpendicular to the axis. Its negative-inside field preserves
+  the zero surface but is not generally Euclidean signed distance, so offsets
+  and blends retain the ordinary field-value interpretation.
 - Zero crease angle gives flat facets; larger angles admit incident faces into
   area-weighted normals. Major-axis planar UV charts use world coordinates;
   UV scale is repeats per world unit, independent of extraction density.

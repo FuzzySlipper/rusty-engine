@@ -50,6 +50,16 @@ pub struct NativeImplicitCapsuleRequest {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitFrustumRequest {
+    pub field: NativeImplicitFieldHandle,
+    pub start: NativeVec3,
+    pub end: NativeVec3,
+    pub start_radius: f32,
+    pub end_radius: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct NativeImplicitPlaneRequest {
     pub field: NativeImplicitFieldHandle,
     pub normal: NativeVec3,
@@ -171,6 +181,9 @@ pub type NativeAddImplicitEllipsoid = unsafe extern "C" fn(
 pub type NativeAddImplicitCapsule =
     unsafe extern "C" fn(*mut c_void, NativeImplicitCapsuleRequest, *mut NativeImplicitNode) -> i32;
 
+pub type NativeAddImplicitFrustum =
+    unsafe extern "C" fn(*mut c_void, NativeImplicitFrustumRequest, *mut NativeImplicitNode) -> i32;
+
 pub type NativeAddImplicitPlane =
     unsafe extern "C" fn(*mut c_void, NativeImplicitPlaneRequest, *mut NativeImplicitNode) -> i32;
 
@@ -238,4 +251,5 @@ pub struct NativeImplicitSurfacesApi {
     pub generate: NativeGenerateImplicitSurface,
     pub read_generation: NativeReadImplicitGeneration,
     pub destroy_operation_diagnostic_lease: NativeDestroyImplicitOperationDiagnosticLease,
+    pub add_frustum: NativeAddImplicitFrustum,
 }

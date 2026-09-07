@@ -301,6 +301,7 @@ pub(crate) fn api(
         add_sphere,
         add_ellipsoid,
         add_capsule,
+        add_frustum,
         add_plane,
         union,
         intersection,
@@ -546,6 +547,17 @@ unsafe extern "C" fn add_capsule(
 ) -> i32 {
     call(context, result, |b| {
         b.edit(r.field, |f| f.capsule(v(r.start), v(r.end), r.radius))
+    })
+}
+unsafe extern "C" fn add_frustum(
+    context: *mut c_void,
+    r: NativeImplicitFrustumRequest,
+    result: *mut NativeImplicitNode,
+) -> i32 {
+    call(context, result, |b| {
+        b.edit(r.field, |f| {
+            f.frustum(v(r.start), v(r.end), r.start_radius, r.end_radius)
+        })
     })
 }
 unsafe extern "C" fn add_plane(
