@@ -468,7 +468,10 @@ angle, UV scale, default material, and optional ordered material regions:
   arbitrarily small, tangent or undersampled regions can still disappear.
   Refinement and subsequent clipping enforce the ordinary 262,144 vertex and
   triangle budgets per mesh, returning an error rather than silently dropping
-  detail. Smaller spacing increases surface sampling and triangle cost; use
+  detail. `Generate` rejections include copied diagnostics on `EngineCallException`;
+  catching that operation error allows the product callback to continue and keep
+  its prior scene. Backend panics still fail the callback.
+  Smaller spacing increases surface sampling and triangle cost; use
   bounded authored pieces. Cuts preserve the source
   surface and interpolate its existing normals/UVs instead of creating shading
   creases. First-region precedence remains unchanged. Added triangles count

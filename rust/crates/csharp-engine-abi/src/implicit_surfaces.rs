@@ -205,7 +205,11 @@ pub type NativeGenerateImplicitSurface = unsafe extern "C" fn(
     *mut c_void,
     *const NativeImplicitGenerateRequest,
     *mut NativeMeshResourceHandle,
+    *mut NativeOperationErrorReceipt,
 ) -> i32;
+
+pub type NativeDestroyImplicitOperationDiagnosticLease =
+    unsafe extern "C" fn(*mut c_void, NativeEngineDiagnosticLeaseHandle) -> i32;
 
 pub type NativeReadImplicitGeneration = unsafe extern "C" fn(
     *mut c_void,
@@ -233,4 +237,5 @@ pub struct NativeImplicitSurfacesApi {
     pub sample: NativeSampleImplicitField,
     pub generate: NativeGenerateImplicitSurface,
     pub read_generation: NativeReadImplicitGeneration,
+    pub destroy_operation_diagnostic_lease: NativeDestroyImplicitOperationDiagnosticLease,
 }

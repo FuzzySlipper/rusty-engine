@@ -139,6 +139,58 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         material,
     }];
     let mut mesh = NativeMeshResourceHandle::default();
+    let mut generate_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+    assert_eq!(
+        unsafe {
+            (api.generate)(
+                api.context,
+                &NativeImplicitGenerateRequest {
+                    field,
+                    source: carved,
+                    minimum: NativeVec3 {
+                        x: -1.0,
+                        y: -1.0,
+                        z: -1.0,
+                    },
+                    maximum: NativeVec3 {
+                        x: 1.0,
+                        y: 1.0,
+                        z: 1.0,
+                    },
+                    cell_size: 0.16,
+                    crease_angle_degrees: 35.0,
+                    uv_scale: 1.0,
+                    default_material: material,
+                    regions: material_regions.as_ptr(),
+                    regions_len: material_regions.len(),
+                    material_boundary_mode: NativeImplicitMaterialBoundaryMode::Interpolated,
+                    material_sample_spacing: 0.001,
+                },
+                &mut mesh,
+                &mut generate_error,
+            )
+        },
+        0
+    );
+    assert_eq!(generate_error.diagnostics.diagnostics_len, 1);
+    let diagnostic = unsafe { &*generate_error.diagnostics.diagnostics };
+    let message =
+        unsafe { std::slice::from_raw_parts(diagnostic.message.bytes, diagnostic.message.len) };
+    assert!(std::str::from_utf8(message)
+        .unwrap()
+        .contains("budget exceeded"));
+    assert_eq!(mesh.value, 0, "failed extraction never publishes a mesh");
+    let lease = generate_error.diagnostics.handle;
+    assert_eq!(
+        unsafe { (api.destroy_operation_diagnostic_lease)(api.context, lease) },
+        ABI_OK
+    );
+    assert_eq!(
+        unsafe { (api.destroy_operation_diagnostic_lease)(api.context, lease) },
+        0
+    );
+    // A caught budget rejection must allow successful generation and the
+    // appearance/implicit callback commit below, without restarting the host.
     assert_eq!(
         unsafe {
             (api.generate)(
@@ -166,6 +218,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
                     material_sample_spacing: 0.08,
                 },
                 &mut mesh,
+                &mut generate_error,
             )
         },
         ABI_OK
@@ -187,6 +240,7 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     );
     assert!(generation.vertices > 0 && generation.triangles > 0);
     assert_eq!(generation.material_groups, 1);
+    assert_eq!(generate_error.diagnostics.handle.value, 0);
 
     let mut first = NativeAppearanceHandle::default();
     let mut second = NativeAppearanceHandle::default();
@@ -420,37 +474,65 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
         material_sample_spacing: 0.1,
         ..generate_request(second_node, std::ptr::null(), 0)
     };
+    let mut sampling_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
     assert_eq!(
         unsafe {
             (api.generate)(
                 api.context,
                 &invalid_sampling_request,
                 &mut NativeMeshResourceHandle::default(),
+                &mut sampling_error,
             )
         },
         0
     );
-    let failure = implicit
+    assert_eq!(sampling_error.status, 0);
+    assert_eq!(sampling_error.diagnostics.diagnostics_len, 1);
+    let diagnostic = unsafe { *sampling_error.diagnostics.diagnostics };
+    let message = unsafe {
+        std::str::from_utf8(std::slice::from_raw_parts(
+            diagnostic.message.bytes,
+            diagnostic.message.len,
+        ))
+    }
+    .expect("implicit sampling diagnostic is UTF-8");
+    assert!(message.contains("requires interpolated material boundaries"));
+    assert_eq!(
+        unsafe {
+            (api.destroy_operation_diagnostic_lease)(api.context, sampling_error.diagnostics.handle)
+        },
+        ABI_OK
+    );
+    let retained = implicit
         .take_call()
-        .err()
-        .expect("centroid material sampling is rejected before generation");
-    assert!(failure
-        .to_string()
-        .contains("requires interpolated material boundaries"));
+        .expect("expected sampling rejection leaves the implicit call usable");
+    implicit.commit_call(retained);
     appearance.discard_call();
     appearance.begin_call();
     implicit.begin_call();
     let api = implicit_api(&mut implicit, &mut appearance);
     let mut mesh = NativeMeshResourceHandle::default();
+    let mut foreign_node_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
     assert_eq!(
         unsafe {
             (api.generate)(
                 api.context,
                 &generate_request(first_node, std::ptr::null(), 0),
                 &mut mesh,
+                &mut foreign_node_error,
             )
         },
         0
+    );
+    assert_ne!(foreign_node_error.diagnostics.handle.value, 0);
+    assert_eq!(
+        unsafe {
+            (api.destroy_operation_diagnostic_lease)(
+                api.context,
+                foreign_node_error.diagnostics.handle,
+            )
+        },
+        ABI_OK
     );
     appearance.discard_call();
     implicit.discard_call();
@@ -462,15 +544,27 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
     appearance.begin_call();
     implicit.begin_call();
     let api = implicit_api(&mut implicit, &mut appearance);
+    let mut foreign_region_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
     assert_eq!(
         unsafe {
             (api.generate)(
                 api.context,
                 &generate_request(second_node, regions.as_ptr(), regions.len()),
                 &mut mesh,
+                &mut foreign_region_error,
             )
         },
         0
+    );
+    assert_ne!(foreign_region_error.diagnostics.handle.value, 0);
+    assert_eq!(
+        unsafe {
+            (api.destroy_operation_diagnostic_lease)(
+                api.context,
+                foreign_region_error.diagnostics.handle,
+            )
+        },
+        ABI_OK
     );
     appearance.discard_call();
     implicit.discard_call();
