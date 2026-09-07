@@ -233,6 +233,9 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
         generation_seconds: 0.0,
         reoriented_triangles: 0,
         degenerate_triangles: 0,
+        boundary_edges: 0,
+        non_manifold_edges: 0,
+        inconsistent_winding_edges: 0,
     };
     assert_eq!(
         unsafe { (api.read_generation)(api.context, field, &mut generation) },
@@ -240,6 +243,9 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     );
     assert!(generation.vertices > 0 && generation.triangles > 0);
     assert_eq!(generation.material_groups, 1);
+    assert_eq!(generation.boundary_edges, 0);
+    assert_eq!(generation.non_manifold_edges, 0);
+    assert_eq!(generation.inconsistent_winding_edges, 0);
     assert_eq!(generate_error.diagnostics.handle.value, 0);
 
     let mut first = NativeAppearanceHandle::default();

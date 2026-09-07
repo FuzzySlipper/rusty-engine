@@ -404,12 +404,45 @@ pub struct Geometry {
     pub degenerate_triangles: u32,
 }
 
+/// Index topology of extracted geometry, before normal/UV/material splitting.
+/// These counts do not establish absence of geometric self-intersections.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TopologyReadout {
+    pub boundary_edges: u32,
+    pub non_manifold_edges: u32,
+    pub inconsistent_winding_edges: u32,
+}
+
+impl Geometry {
+    pub fn topology(&self) -> TopologyReadout {
+        let mut edges = std::collections::HashMap::<(u32, u32), (u32, i32)>::new();
+        for &[a, b, c] in &self.triangles {
+            for (a, b) in [(a, b), (b, c), (c, a)] {
+                let entry = edges.entry((a.min(b), a.max(b))).or_default();
+                entry.0 += 1;
+                entry.1 += if a < b { 1 } else { -1 };
+            }
+        }
+        let mut result = TopologyReadout::default();
+        for (uses, balance) in edges.into_values() {
+            match uses {
+                1 => result.boundary_edges += 1,
+                2 if balance != 0 => result.inconsistent_winding_edges += 1,
+                3.. => result.non_manifold_edges += 1,
+                _ => {}
+            }
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
     fn assert_closed_and_oriented(mesh: &Geometry) {
+        assert_eq!(mesh.topology(), TopologyReadout::default());
         let mut edges = BTreeMap::<(u32, u32), (usize, i32)>::new();
         for &[a, b, c] in &mesh.triangles {
             for (a, b) in [(a, b), (b, c), (c, a)] {
@@ -423,6 +456,40 @@ mod tests {
             assert_eq!(orientation, 0, "inconsistent winding at {edge:?}");
         }
     }
+    #[test]
+    fn topology_distinguishes_open_nonmanifold_and_reversed_edges() {
+        let mut mesh = Geometry {
+            positions: vec![],
+            triangles: vec![[0, 1, 2]],
+            depth: 0,
+            cell_size: [1.; 3],
+            generation_seconds: 0.,
+            reoriented_triangles: 0,
+            degenerate_triangles: 0,
+        };
+        assert_eq!(mesh.topology().boundary_edges, 3);
+        mesh.triangles.push([0, 1, 3]);
+        assert_eq!(
+            mesh.topology(),
+            TopologyReadout {
+                boundary_edges: 4,
+                inconsistent_winding_edges: 1,
+                non_manifold_edges: 0,
+            }
+        );
+        mesh.triangles.push([1, 0, 4]);
+        assert_eq!(
+            mesh.topology(),
+            TopologyReadout {
+                boundary_edges: 6,
+                inconsistent_winding_edges: 0,
+                non_manifold_edges: 1,
+            }
+        );
+        mesh.triangles = vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]];
+        assert_eq!(mesh.topology(), TopologyReadout::default());
+    }
+
     fn options(bounds: Bounds) -> GenerateOptions {
         GenerateOptions {
             bounds,

@@ -158,6 +158,11 @@ pub struct NativeImplicitGenerationReadout {
     pub generation_seconds: f64,
     pub reoriented_triangles: u32,
     pub degenerate_triangles: u32,
+    /// Topology is measured on extracted geometry before surface assembly
+    /// splits vertices for normals, UVs, or material attributes.
+    pub boundary_edges: u32,
+    pub non_manifold_edges: u32,
+    pub inconsistent_winding_edges: u32,
 }
 
 pub type NativeCreateImplicitField =

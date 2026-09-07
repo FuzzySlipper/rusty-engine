@@ -523,3 +523,9 @@ snapshot when their incremental publication exceeds the ordinary output budget.
 This preserves renderer publication frontiers and new transient presentation
 events without re-entering product callbacks. Existing complete-snapshot and
 per-mesh bounds still apply; this is not an unbounded asset-transfer path.
+
+Implicit generation readouts also report boundary, non-manifold, and inconsistent
+winding edges on extracted geometry before normal, UV, and material splitting.
+An entrance into a carved solid can still have a closed rock surface around its
+rim. These report-only counts diagnose index topology, not self-intersections,
+feature survival, or final attributed-mesh watertightness.

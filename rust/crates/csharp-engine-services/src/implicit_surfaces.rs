@@ -192,6 +192,7 @@ impl RuntimeImplicitBridge {
                 "field has no extractable surface in the selected domain",
             ));
         }
+        let topology = geometry.topology();
         let mut materials = vec![request.default_material];
         let regions: Vec<_> = region_nodes
             .iter()
@@ -283,6 +284,9 @@ impl RuntimeImplicitBridge {
             generation_seconds: started.elapsed().as_secs_f64(),
             reoriented_triangles: geometry.reoriented_triangles,
             degenerate_triangles: geometry.degenerate_triangles,
+            boundary_edges: topology.boundary_edges,
+            non_manifold_edges: topology.non_manifold_edges,
+            inconsistent_winding_edges: topology.inconsistent_winding_edges,
         });
         Ok(handle)
     }
