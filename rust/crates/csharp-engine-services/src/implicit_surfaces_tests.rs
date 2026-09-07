@@ -470,6 +470,32 @@ fn native_implicit_nodes_reject_foreign_and_discarded_tokens() {
     appearance.begin_call();
     implicit.begin_call();
     let api = implicit_api(&mut implicit, &mut appearance);
+    let malformed_request = generate_request(second_node, std::ptr::null(), 1);
+    let mut malformed_error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+    let mut malformed_mesh = NativeMeshResourceHandle::default();
+    assert_eq!(
+        unsafe {
+            (api.generate)(
+                api.context,
+                &malformed_request,
+                &mut malformed_mesh,
+                &mut malformed_error,
+            )
+        },
+        0
+    );
+    assert_eq!(malformed_error.diagnostics.handle.value, 0);
+    let failure = implicit
+        .take_call()
+        .err()
+        .expect("ABI pointer failure must poison callback");
+    assert_eq!(failure.code(), "CSHARP_SPATIAL_POINTER");
+    appearance.discard_call();
+    implicit.discard_call();
+
+    appearance.begin_call();
+    implicit.begin_call();
+    let api = implicit_api(&mut implicit, &mut appearance);
     let invalid_sampling_request = NativeImplicitGenerateRequest {
         material_sample_spacing: 0.1,
         ..generate_request(second_node, std::ptr::null(), 0)

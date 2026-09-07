@@ -399,6 +399,12 @@ unsafe extern "C" fn generate(
             }
             ABI_OK
         }
+        Ok(Err(error)) if error.code() == "CSHARP_SPATIAL_POINTER" => {
+            // Pointer/length incoherence is an ABI failure, not an authoring
+            // request the product may catch and continue past.
+            bridge.callback_error = Some(error);
+            0
+        }
         Ok(Err(error)) => {
             bridge.retain_generation_error(error, receipt);
             0
