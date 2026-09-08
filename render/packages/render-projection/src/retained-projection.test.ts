@@ -708,6 +708,27 @@ void test('viewmodel descendants retain one bounded camera-relative channel', ()
   assert.deepEqual(projection.snapshot(), before);
 });
 
+void test('viewmodel world bounds do not reject CSS pixel or viewport sprite dimensions', () => {
+  const projection = new RenderProjection();
+  for (const [index, sizeMode, viewportPlacement] of [
+    [1, 'pixel', undefined],
+    [2, 'world', { minimum: [0, 0], size: [1, 1], alignment: [0.5, 0], fit: 'contain' }],
+  ] as const) {
+    assert.doesNotThrow(() => projection.applyDiff({
+      op: 'createSprite', handle: renderHandle(index), parent: null,
+      sprite: { ...sprite(), layer: 'viewmodel', size: [320, 200], sizeMode,
+        ...(viewportPlacement === undefined ? {} : { viewportPlacement,
+          transform: { translation: [123, -45, 99], rotation: [0, 0, 0, 1], scale: [7, 3, 2] },
+        }),
+      },
+    }));
+  }
+  assert.throws(() => projection.applyDiff({
+    op: 'createSprite', handle: renderHandle(3), parent: null,
+    sprite: { ...sprite(), layer: 'viewmodel', size: [320, 200] },
+  }), /viewmodel dimensions/);
+});
+
 void test('viewmodel node and distinct-asset capacities reject without partial mutation', () => {
   const projection = new RenderProjection();
   projection.applyDiff(viewmodelRoot());

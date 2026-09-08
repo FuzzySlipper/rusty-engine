@@ -63,10 +63,10 @@ function viewportSpriteBrowserProof(): ViewportSpriteSample[] {
         { frame: 1, uvMin: [0, 0.5] as const, uvMax: [1, 1] as const, size: [200, 320] as const },
       ] } };
       if (op.op === 'createSprite') return { ...op, sprite: { ...op.sprite,
-        layer: 'viewmodel' as const,
+        layer: 'viewmodel' as const, size: [320, 200] as const, sizeMode: 'pixel' as const,
         viewportPlacement: { minimum: [0, 0] as const, size: [1, 1] as const,
           alignment: [0.5, 0] as const, fit: 'contain' as const },
-        transform: identity([9, -4, 7], [7, 3, 2]),
+        transform: identity([123, -45, 99], [7, 3, 2]),
       } };
       return op;
     }) };

@@ -97,8 +97,9 @@ fn triangle_signatures(mesh: &MeshPayloadDescriptor) -> Vec<(u16, Vec<u32>)> {
     };
     let mut result = Vec::new();
     for group in &mesh.groups {
-        for triangle in
-            indices[group.start as usize..(group.start + group.count) as usize].chunks_exact(3)
+        for triangle in indices[group.start as usize..(group.start + group.count) as usize]
+            .as_chunks::<3>()
+            .0
         {
             let mut attributes = Vec::new();
             for &index in triangle {

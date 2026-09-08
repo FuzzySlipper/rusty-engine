@@ -1967,41 +1967,42 @@ var Pt, V = class extends Error {
 		};
 	}
 	#p(e) {
-		this.#H(e.handle, "update").layer === "viewmodel" && e.transform !== null && Rt(e.transform, "update.transform");
-		let t = this.#W(e.handle, "update");
-		return e.transform !== null && (t.transform = H(e.transform), t.kind === "primitive" ? t.node = {
-			...t.node,
+		let t = this.#H(e.handle, "update");
+		t.layer === "viewmodel" && e.transform !== null && !(t.kind === "sprite" && t.sprite.viewportPlacement != null) && Rt(e.transform, "update.transform");
+		let n = this.#W(e.handle, "update");
+		return e.transform !== null && (n.transform = H(e.transform), n.kind === "primitive" ? n.node = {
+			...n.node,
 			transform: H(e.transform)
-		} : t.kind === "staticMesh" || t.kind === "animatedMesh" || t.kind === "voxelObject" ? t.instance = {
-			...t.instance,
+		} : n.kind === "staticMesh" || n.kind === "animatedMesh" || n.kind === "voxelObject" ? n.instance = {
+			...n.instance,
 			transform: H(e.transform)
-		} : t.sprite = {
-			...t.sprite,
+		} : n.sprite = {
+			...n.sprite,
 			transform: H(e.transform)
-		}), e.material !== null && (t.material = H(e.material), t.kind === "primitive" && (t.node = {
-			...t.node,
+		}), e.material !== null && (n.material = H(e.material), n.kind === "primitive" && (n.node = {
+			...n.node,
 			material: H(e.material)
-		})), e.visible !== null && (t.visible = e.visible, t.kind === "primitive" ? t.node = {
-			...t.node,
+		})), e.visible !== null && (n.visible = e.visible, n.kind === "primitive" ? n.node = {
+			...n.node,
 			visible: e.visible
-		} : t.kind === "staticMesh" || t.kind === "animatedMesh" || t.kind === "voxelObject" ? t.instance = {
-			...t.instance,
+		} : n.kind === "staticMesh" || n.kind === "animatedMesh" || n.kind === "voxelObject" ? n.instance = {
+			...n.instance,
 			visible: e.visible
-		} : t.sprite = {
-			...t.sprite,
+		} : n.sprite = {
+			...n.sprite,
 			visible: e.visible
-		}), e.metadata !== null && (t.metadata = H(e.metadata), t.kind === "primitive" ? t.node = {
-			...t.node,
+		}), e.metadata !== null && (n.metadata = H(e.metadata), n.kind === "primitive" ? n.node = {
+			...n.node,
 			metadata: H(e.metadata)
-		} : t.kind === "staticMesh" || t.kind === "animatedMesh" || t.kind === "voxelObject" ? t.instance = {
-			...t.instance,
+		} : n.kind === "staticMesh" || n.kind === "animatedMesh" || n.kind === "voxelObject" ? n.instance = {
+			...n.instance,
 			metadata: H(e.metadata)
-		} : t.sprite = {
-			...t.sprite,
+		} : n.sprite = {
+			...n.sprite,
 			metadata: H(e.metadata)
 		}), {
 			op: "upsertNode",
-			node: Wt(t)
+			node: Wt(n)
 		};
 	}
 	#m(e) {
@@ -2350,7 +2351,7 @@ var Pt, V = class extends Error {
 	}
 	#R(e, t) {
 		if (e.layer !== "viewmodel") return;
-		Rt(e.transform, `${t}.transform`), this.#z(e, t);
+		e.kind === "sprite" && e.sprite.viewportPlacement != null || Rt(e.transform, `${t}.transform`), this.#z(e, t);
 		let n = [...this.#e.values()].filter((e) => e.layer === "viewmodel");
 		if (n.length >= 128) throw new V(`${t}: viewmodel node capacity 128 is exhausted`);
 		let r = Vt(e);
@@ -2370,7 +2371,7 @@ var Pt, V = class extends Error {
 			return;
 		}
 		if (e.kind === "sprite") {
-			if (e.sprite.size.some((e) => e > 16)) throw new V(`${t}.sprite.size: viewmodel dimensions must not exceed 16`);
+			if (e.sprite.sizeMode === "world" && e.sprite.viewportPlacement == null && e.sprite.size.some((e) => e > 16)) throw new V(`${t}.sprite.size: viewmodel dimensions must not exceed 16`);
 			return;
 		}
 		e.meshPayload !== null && zt(e.meshPayload.bounds, `${t}.asset.bounds`);

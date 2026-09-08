@@ -571,7 +571,8 @@ export class RenderProjection {
 
   #update(diff: Extract<RenderDiff, { op: 'update' }>): RenderProjectionInstruction {
     const current = this.#require(diff.handle, 'update');
-    if (current.layer === 'viewmodel' && diff.transform !== null) {
+    if (current.layer === 'viewmodel' && diff.transform !== null
+      && !(current.kind === 'sprite' && current.sprite.viewportPlacement != null)) {
       validateViewmodelTransform(diff.transform, 'update.transform');
     }
     const record = this.#mutableNode(diff.handle, 'update');
@@ -1139,7 +1140,9 @@ export class RenderProjection {
     if (record.layer !== 'viewmodel') {
       return;
     }
-    validateViewmodelTransform(record.transform, `${ctx}.transform`);
+    if (!(record.kind === 'sprite' && record.sprite.viewportPlacement != null)) {
+      validateViewmodelTransform(record.transform, `${ctx}.transform`);
+    }
     this.#validateViewmodelAsset(record, ctx);
     const liveViewmodelNodes = [...this.#nodes.values()]
       .filter((candidate) => candidate.layer === 'viewmodel');
@@ -1186,7 +1189,10 @@ export class RenderProjection {
       return;
     }
     if (record.kind === 'sprite') {
-      if (record.sprite.size.some((component) => component > MAX_VIEWMODEL_ASSET_EXTENT)) {
+      // This extent is in world units. Pixel dimensions and viewport fitting
+      // are realized from the active camera and must not inherit that bound.
+      if (record.sprite.sizeMode === 'world' && record.sprite.viewportPlacement == null
+        && record.sprite.size.some((component) => component > MAX_VIEWMODEL_ASSET_EXTENT)) {
         throw new RenderProjectionError(
           `${ctx}.sprite.size: viewmodel dimensions must not exceed ${MAX_VIEWMODEL_ASSET_EXTENT}`,
         );
