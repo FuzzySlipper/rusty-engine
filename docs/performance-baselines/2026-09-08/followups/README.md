@@ -49,3 +49,38 @@ listener synchronization, movement resolution and demand. The public diagnostic
 pose remains rounded. The browser regression exercises sub-rounding position,
 pitch and yaw changes (including the adjacent sine values at steps 51/52), then
 verifies that repeating an identical pose does not demand another frame.
+
+## Canonical CoreCLR and NativeAOT
+
+`cpu-canonical.json` retains 27 records from three complete CPU wrapper runs:
+Rust service staging, managed updates, both canonical loaders and HTTP paths,
+plus the three DC workloads. The new crossover product publishes one numeric UI
+value per demand update through the generated Engine API. Each loader receives
+50 measured updates after eight warmups; HTTP is a separate 50-request series.
+The same generated Release bundle carries both loader artifacts.
+
+Median of three run medians/p95s, milliseconds:
+
+| Lane | Loader | Median | p95 | Run median range |
+| --- | --- | ---: | ---: | ---: |
+| csharp-rust-crossover | coreclr | 0.002515 | 0.004528 | 0.002474–0.002544 |
+| product-dev-host-http | coreclr | 0.258729 | 0.456725 | 0.241027–0.289889 |
+| csharp-rust-crossover | nativeaot | 0.002234 | 0.004879 | 0.002124–0.002295 |
+| product-dev-host-http | nativeaot | 0.262556 | 0.398808 | 0.253811–0.273058 |
+
+The managed lane records .NET 10.0.11. These short warmed crossover samples are
+not a claim about long-running tiered JIT behavior or game performance. The old
+trial and this product perform different work; their timings must not be treated
+as a before/after speedup. Loader, product/workload and configuration identity
+separate them in the comparator.
+
+This capture records dirty `e181167a`; the measured canonical source was then
+committed as `ffbae22497eeb98570314340cb7cf69e10692136`. The renderer measurements
+above correspond to `e181167a90a02a9fe6a640dd4fb8b5e316498c1d`. The environment
+label explicitly identifies a shared development host. These are retained
+observations, with no universal CI timing threshold installed.
+
+Verification: 47 browser tests, compiled renderer tests (including transactional
+failure and detached mesh ownership), reproducible renderer artifacts, boundary
+checks, comparator tests, three canonical CPU captures, Rust formatting and
+focused host clippy all passed. Renderer/studio/docs CI passed on `e181167a`.

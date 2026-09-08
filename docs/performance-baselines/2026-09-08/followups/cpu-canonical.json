@@ -1,0 +1,986 @@
+{
+  "schemaVersion": 1,
+  "artifact": "rusty-engine.performance-results",
+  "capturedAt": "2026-09-08T10:37:06.586Z",
+  "environment": "developer-linux-shared-workspace",
+  "git": {
+    "revision": "e181167a90a02a9fe6a640dd4fb8b5e316498c1d",
+    "dirty": true
+  },
+  "host": {
+    "os": {
+      "platform": "linux",
+      "release": "7.2.2-arch1-1",
+      "arch": "x64"
+    },
+    "cpu": {
+      "count": 16,
+      "models": [
+        "AMD Ryzen 7 8845HS w/ Radeon 780M Graphics"
+      ]
+    },
+    "node": "v26.8.1"
+  },
+  "records": [
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-1.log",
+        "line": 5
+      },
+      "record": {
+        "iterations": 10000,
+        "lane": "rust-appearance-call-stage",
+        "maximum": 0.014727,
+        "mean": 0.0003141919,
+        "median": 0.0003,
+        "minimum": 0.000281,
+        "p95": 0.000431,
+        "resourceBytes": 8388608,
+        "schemaVersion": 1,
+        "unit": "milliseconds"
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-1.log",
+        "line": 10
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "managed-csharp-update",
+        "iterations": 10000,
+        "unit": "milliseconds",
+        "minimum": 0.0018,
+        "median": 0.0027,
+        "p95": 0.0041,
+        "maximum": 0.0493,
+        "mean": 0.002876340000000387,
+        "allocatedBytes": 128,
+        "checksum": 17955.269382789087,
+        "runtime": "10.0.11"
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-1.log",
+        "line": 15
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "csharp-rust-crossover",
+        "loader": "coreclr",
+        "maximum": 0.015469,
+        "mean": 0.00304584,
+        "median": 0.002544,
+        "minimum": 0.002434,
+        "p95": 0.006662,
+        "runtime": "CoreCLR",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "coreclr",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-1.log",
+        "line": 16
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "product-dev-host-http",
+        "loader": "coreclr",
+        "maximum": 0.457301,
+        "mean": 0.30395212,
+        "median": 0.289889,
+        "minimum": 0.237221,
+        "p95": 0.410864,
+        "runtime": "CoreCLR",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "coreclr",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-1.log",
+        "line": 17
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "csharp-rust-crossover",
+        "loader": "nativeaot",
+        "maximum": 0.008225,
+        "mean": 0.00262108,
+        "median": 0.002295,
+        "minimum": 0.002194,
+        "p95": 0.004879,
+        "runtime": "NativeAOT",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "nativeaot",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-1.log",
+        "line": 18
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "product-dev-host-http",
+        "loader": "nativeaot",
+        "maximum": 0.414541,
+        "mean": 0.28965638,
+        "median": 0.273058,
+        "minimum": 0.217554,
+        "p95": 0.382691,
+        "runtime": "NativeAOT",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "nativeaot",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-2.log",
+        "line": 5
+      },
+      "record": {
+        "iterations": 10000,
+        "lane": "rust-appearance-call-stage",
+        "maximum": 0.008406,
+        "mean": 0.0003633967,
+        "median": 0.000301,
+        "minimum": 0.00029,
+        "p95": 0.000611,
+        "resourceBytes": 8388608,
+        "schemaVersion": 1,
+        "unit": "milliseconds"
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-2.log",
+        "line": 10
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "managed-csharp-update",
+        "iterations": 10000,
+        "unit": "milliseconds",
+        "minimum": 0.002,
+        "median": 0.0028,
+        "p95": 0.0042,
+        "maximum": 0.0293,
+        "mean": 0.0029128900000003066,
+        "allocatedBytes": 128,
+        "checksum": 17955.269382789087,
+        "runtime": "10.0.11"
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-2.log",
+        "line": 14
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "csharp-rust-crossover",
+        "loader": "coreclr",
+        "maximum": 0.014958,
+        "mean": 0.00288936,
+        "median": 0.002515,
+        "minimum": 0.002414,
+        "p95": 0.004528,
+        "runtime": "CoreCLR",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "coreclr",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-2.log",
+        "line": 15
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "product-dev-host-http",
+        "loader": "coreclr",
+        "maximum": 0.540821,
+        "mean": 0.28551396,
+        "median": 0.258729,
+        "minimum": 0.220919,
+        "p95": 0.456725,
+        "runtime": "CoreCLR",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "coreclr",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-2.log",
+        "line": 16
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "csharp-rust-crossover",
+        "loader": "nativeaot",
+        "maximum": 0.008205,
+        "mean": 0.0026633000000000004,
+        "median": 0.002234,
+        "minimum": 0.002134,
+        "p95": 0.004879,
+        "runtime": "NativeAOT",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "nativeaot",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-2.log",
+        "line": 17
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "product-dev-host-http",
+        "loader": "nativeaot",
+        "maximum": 0.446947,
+        "mean": 0.27825718,
+        "median": 0.262556,
+        "minimum": 0.211512,
+        "p95": 0.398808,
+        "runtime": "NativeAOT",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "nativeaot",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-3.log",
+        "line": 5
+      },
+      "record": {
+        "iterations": 10000,
+        "lane": "rust-appearance-call-stage",
+        "maximum": 0.006933,
+        "mean": 0.0003107206,
+        "median": 0.0003,
+        "minimum": 0.00029,
+        "p95": 0.000421,
+        "resourceBytes": 8388608,
+        "schemaVersion": 1,
+        "unit": "milliseconds"
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-3.log",
+        "line": 10
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "managed-csharp-update",
+        "iterations": 10000,
+        "unit": "milliseconds",
+        "minimum": 0.0018,
+        "median": 0.0028,
+        "p95": 0.003,
+        "maximum": 0.0461,
+        "mean": 0.0028779400000003104,
+        "allocatedBytes": 128,
+        "checksum": 17955.269382789087,
+        "runtime": "10.0.11"
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-3.log",
+        "line": 14
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "csharp-rust-crossover",
+        "loader": "coreclr",
+        "maximum": 0.018404,
+        "mean": 0.00291602,
+        "median": 0.002474,
+        "minimum": 0.002354,
+        "p95": 0.004338,
+        "runtime": "CoreCLR",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "coreclr",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-3.log",
+        "line": 15
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "product-dev-host-http",
+        "loader": "coreclr",
+        "maximum": 0.58326,
+        "mean": 0.28796662,
+        "median": 0.241027,
+        "minimum": 0.213044,
+        "p95": 0.481863,
+        "runtime": "CoreCLR",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "coreclr",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-3.log",
+        "line": 16
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "csharp-rust-crossover",
+        "loader": "nativeaot",
+        "maximum": 0.00537,
+        "mean": 0.00227504,
+        "median": 0.002124,
+        "minimum": 0.002054,
+        "p95": 0.003597,
+        "runtime": "NativeAOT",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "nativeaot",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/layers-3.log",
+        "line": 17
+      },
+      "record": {
+        "iterations": 50,
+        "lane": "product-dev-host-http",
+        "loader": "nativeaot",
+        "maximum": 1.278498,
+        "mean": 0.31529402,
+        "median": 0.253811,
+        "minimum": 0.200461,
+        "p95": 0.675941,
+        "runtime": "NativeAOT",
+        "schemaVersion": 1,
+        "unit": "milliseconds",
+        "workload": {
+          "configuration": "Release",
+          "id": "csharp-crossover-performance",
+          "launch": "canonical-product-v1",
+          "lifecycle": "demand",
+          "loader": "nativeaot",
+          "version": 1
+        }
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 3
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 1,
+        "workload": {
+          "id": "sculpted-32",
+          "version": "dc-voxel-v1",
+          "field": "sculpted_tunnel_lobes",
+          "seed": "0x5C017ED000000032",
+          "gridDimensions": [
+            32,
+            32,
+            32
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          2.756695,
+          2.7004,
+          2.538531,
+          2.545473,
+          2.578735,
+          2.623287,
+          2.547577,
+          2.548389,
+          2.69988,
+          2.873972,
+          2.514435,
+          2.53266,
+          2.550643,
+          2.515969,
+          2.505089,
+          2.538691,
+          2.864465,
+          2.667549,
+          2.517862,
+          2.512362
+        ],
+        "minimum": 2.505089,
+        "median": 2.548389,
+        "p95": 2.864465,
+        "maximum": 2.873972,
+        "mean": 2.606633,
+        "vertices": 2054,
+        "triangles": 4108
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 4
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 1,
+        "workload": {
+          "id": "noisy-carved-40",
+          "version": "dc-voxel-v1",
+          "field": "noisy_carved_volume",
+          "seed": "0x5C017ED0CAFE0001",
+          "gridDimensions": [
+            40,
+            40,
+            40
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          12.396916,
+          11.803647,
+          11.824546,
+          11.225026,
+          11.460561,
+          11.452687,
+          11.350718,
+          11.67592,
+          11.187587,
+          11.736724,
+          11.177276,
+          11.557511,
+          11.245694,
+          11.639402,
+          11.198747,
+          11.544687,
+          11.296908,
+          11.394309,
+          11.528778,
+          11.190482
+        ],
+        "minimum": 11.177276,
+        "median": 11.460561,
+        "p95": 11.824546,
+        "maximum": 12.396916,
+        "mean": 11.494406,
+        "vertices": 9309,
+        "triangles": 21448
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 5
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 1,
+        "workload": {
+          "id": "noisy-carved-56",
+          "version": "dc-voxel-v1",
+          "field": "noisy_carved_volume",
+          "seed": "0x5C017ED0CAFE0001",
+          "gridDimensions": [
+            56,
+            56,
+            56
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          31.556634,
+          31.419429,
+          32.659345,
+          31.204402,
+          31.156823,
+          30.816643,
+          30.299056,
+          30.735273,
+          30.348807,
+          31.562665,
+          30.621523,
+          31.350322,
+          30.589574,
+          31.079211,
+          31.151123,
+          31.672549,
+          31.370019,
+          30.483557,
+          31.026563,
+          30.25285
+        ],
+        "minimum": 30.25285,
+        "median": 31.151123,
+        "p95": 31.672549,
+        "maximum": 32.659345,
+        "mean": 31.067818,
+        "vertices": 23215,
+        "triangles": 55280
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 6
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 2,
+        "workload": {
+          "id": "sculpted-32",
+          "version": "dc-voxel-v1",
+          "field": "sculpted_tunnel_lobes",
+          "seed": "0x5C017ED000000032",
+          "gridDimensions": [
+            32,
+            32,
+            32
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          2.537849,
+          2.544472,
+          2.583584,
+          2.674863,
+          2.639378,
+          2.676095,
+          2.558207,
+          2.576571,
+          2.500751,
+          2.516199,
+          2.539603,
+          2.596688,
+          2.54876,
+          2.60323,
+          2.556575,
+          2.545804,
+          2.505078,
+          2.517292,
+          2.627055,
+          2.580028
+        ],
+        "minimum": 2.500751,
+        "median": 2.558207,
+        "p95": 2.674863,
+        "maximum": 2.676095,
+        "mean": 2.571404,
+        "vertices": 2054,
+        "triangles": 4108
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 7
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 2,
+        "workload": {
+          "id": "noisy-carved-40",
+          "version": "dc-voxel-v1",
+          "field": "noisy_carved_volume",
+          "seed": "0x5C017ED0CAFE0001",
+          "gridDimensions": [
+            40,
+            40,
+            40
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          11.258648,
+          11.512118,
+          11.085487,
+          11.818725,
+          10.993136,
+          11.457336,
+          11.077362,
+          11.398797,
+          10.883934,
+          11.338716,
+          11.095326,
+          11.274988,
+          11.071922,
+          11.231257,
+          10.969533,
+          11.21665,
+          10.964533,
+          11.13507,
+          11.001331,
+          11.348865
+        ],
+        "minimum": 10.883934,
+        "median": 11.21665,
+        "p95": 11.512118,
+        "maximum": 11.818725,
+        "mean": 11.206687,
+        "vertices": 9309,
+        "triangles": 21448
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 8
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 2,
+        "workload": {
+          "id": "noisy-carved-56",
+          "version": "dc-voxel-v1",
+          "field": "noisy_carved_volume",
+          "seed": "0x5C017ED0CAFE0001",
+          "gridDimensions": [
+            56,
+            56,
+            56
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          31.607538,
+          31.146064,
+          31.714517,
+          31.798281,
+          31.642382,
+          31.211556,
+          31.649016,
+          32.415014,
+          35.32922,
+          31.37613,
+          32.327522,
+          31.570951,
+          32.349172,
+          31.332599,
+          32.88237,
+          32.344924,
+          33.336421,
+          32.11021,
+          33.117886,
+          31.162034
+        ],
+        "minimum": 31.146064,
+        "median": 31.798281,
+        "p95": 33.336421,
+        "maximum": 35.32922,
+        "mean": 32.12119,
+        "vertices": 23215,
+        "triangles": 55280
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 9
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 3,
+        "workload": {
+          "id": "sculpted-32",
+          "version": "dc-voxel-v1",
+          "field": "sculpted_tunnel_lobes",
+          "seed": "0x5C017ED000000032",
+          "gridDimensions": [
+            32,
+            32,
+            32
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          2.674192,
+          2.559158,
+          2.583755,
+          2.610574,
+          2.648734,
+          2.556204,
+          2.65713,
+          2.911342,
+          2.606827,
+          2.611355,
+          3.139914,
+          2.640339,
+          2.59267,
+          2.60283,
+          2.89436,
+          2.79754,
+          2.549591,
+          2.690803,
+          2.843556,
+          2.619511
+        ],
+        "minimum": 2.549591,
+        "median": 2.640339,
+        "p95": 2.911342,
+        "maximum": 3.139914,
+        "mean": 2.689519,
+        "vertices": 2054,
+        "triangles": 4108
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 10
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 3,
+        "workload": {
+          "id": "noisy-carved-40",
+          "version": "dc-voxel-v1",
+          "field": "noisy_carved_volume",
+          "seed": "0x5C017ED0CAFE0001",
+          "gridDimensions": [
+            40,
+            40,
+            40
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          11.785223,
+          12.267677,
+          13.23075,
+          11.703372,
+          12.065292,
+          12.236228,
+          11.203336,
+          11.369915,
+          11.752052,
+          11.248599,
+          12.142094,
+          11.190772,
+          12.596897,
+          12.069149,
+          12.464691,
+          12.282454,
+          11.424235,
+          11.744368,
+          11.193067,
+          12.259451
+        ],
+        "minimum": 11.190772,
+        "median": 12.065292,
+        "p95": 12.596897,
+        "maximum": 13.23075,
+        "mean": 11.911481,
+        "vertices": 9309,
+        "triangles": 21448
+      }
+    },
+    {
+      "source": {
+        "path": "/tmp/7886-cpu-canonical-release/voxel.log",
+        "line": 11
+      },
+      "record": {
+        "schemaVersion": 1,
+        "lane": "voxel-dc-meshing",
+        "run": 3,
+        "workload": {
+          "id": "noisy-carved-56",
+          "version": "dc-voxel-v1",
+          "field": "noisy_carved_volume",
+          "seed": "0x5C017ED0CAFE0001",
+          "gridDimensions": [
+            56,
+            56,
+            56
+          ],
+          "warmupSamples": 3,
+          "measuredSamples": 20,
+          "pipeline": "svc-mesh.mesh_scalar_samples",
+          "surfaceMode": "dualContouring"
+        },
+        "timedRegion": "mesh_scalar_samples_only",
+        "iterations": 20,
+        "unit": "milliseconds",
+        "samples": [
+          30.773905,
+          31.375159,
+          30.633757,
+          31.857882,
+          31.618379,
+          32.099951,
+          31.08472,
+          32.058174,
+          31.603592,
+          31.249626,
+          30.836661,
+          32.903319,
+          30.81409,
+          30.294788,
+          31.059875,
+          30.168955,
+          34.23829,
+          29.920295,
+          31.301884,
+          30.253161
+        ],
+        "minimum": 29.920295,
+        "median": 31.249626,
+        "p95": 32.903319,
+        "maximum": 34.23829,
+        "mean": 31.307323,
+        "vertices": 23215,
+        "triangles": 55280
+      }
+    }
+  ]
+}
