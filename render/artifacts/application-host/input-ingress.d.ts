@@ -185,4 +185,6 @@ export declare function createRustyApplicationInputQueue(maximumQueue: number, i
  * browser ingress boundary because `claim` queues data for later delivery.
  */
 export declare function snapshotRustyApplicationProductPayloadJson(value: unknown): RustyApplicationProductPayloadJson;
+/** Snapshots transport JSON without imposing the direct-input integer contract. */
+export declare function snapshotRustyApplicationJson(value: unknown): RustyApplicationProductPayloadJson;
 export {};

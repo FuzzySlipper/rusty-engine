@@ -32,13 +32,15 @@ test('shared host realizes retained, presentation, and inspection families in a 
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   await page.goto('/browser/');
-  await expect.poll(
-    () => page.evaluate(() => ({
-      failure: window.__rustyRenderFailure ?? null,
-      ready: window.__rustyRenderProof?.ready ?? false,
-    })),
+  await page.waitForFunction(
+    () => window.__rustyRenderFailure != null || window.__rustyRenderProof?.ready === true,
+    undefined,
     { timeout: 60_000 },
-  ).toEqual({ failure: null, ready: true });
+  );
+  expect(await page.evaluate(() => ({
+    failure: window.__rustyRenderFailure ?? null,
+    ready: window.__rustyRenderProof?.ready ?? false,
+  }))).toEqual({ failure: null, ready: true });
 
   const proof = await page.evaluate(() => window.__rustyRenderProof!);
   expect(proof.animatedCapture).toEqual({

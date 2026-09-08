@@ -1,5 +1,5 @@
 import { browserAttachmentEvidence } from './attachment-evidence.js';
-import { snapshotRustyApplicationProductPayloadJson } from '@rusty-engine/application-host';
+import { snapshotRustyApplicationJson, snapshotRustyApplicationProductPayloadJson } from '@rusty-engine/application-host';
 import type {
   RustyApplicationFrame,
   RustyApplicationAnimationCueDefinition,
@@ -104,17 +104,6 @@ const MAXIMUM_AUDIO_FEEDBACK_FACTS = 128;
 const MAXIMUM_ANIMATION_FEEDBACK_FACTS = 128;
 const MAXIMUM_ANIMATION_CUE_DEFINITIONS = 128;
 const MAXIMUM_ANIMATION_CUE_TEXT_BYTES = 96;
-const MAXIMUM_JSON_DEPTH = 64;
-const MAXIMUM_JSON_ARRAY_LENGTH = 1_024;
-const MAXIMUM_JSON_OBJECT_KEYS = 256;
-const MAXIMUM_JSON_STRING_BYTES = 64 * 1024;
-// runtime-timeline::RuntimeOpaqueData owns a deliberately tighter opaque
-// payload contract than the general projection JSON lane.
-const MAXIMUM_TIMELINE_JSON_BYTES = 4_096;
-const MAXIMUM_TIMELINE_JSON_DEPTH = 32;
-const MAXIMUM_TIMELINE_JSON_NODES = 256;
-const MAXIMUM_TIMELINE_JSON_ARRAY_LENGTH = 128;
-const MAXIMUM_TIMELINE_JSON_OBJECT_KEYS = 128;
 const KEYBOARD_CONTROLS = new Set<string>([
   ...Array.from({ length: 26 }, (_, index) => `key-${String.fromCharCode(97 + index)}`),
   ...Array.from({ length: 10 }, (_, index) => `digit-${String(index)}`),
@@ -2101,83 +2090,11 @@ function snapshotTimelineCompletion(
 }
 
 function snapshotTimelineOpaqueData(value: unknown): ProductBrowserLocalJson {
-  const snapshot = snapshotTimelineJsonValue(value);
-  const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
-  if (bytes > MAXIMUM_TIMELINE_JSON_BYTES) {
-    throw new TypeError(
-      `timeline opaque data exceeds ${String(MAXIMUM_TIMELINE_JSON_BYTES)} bytes`,
-    );
-  }
-  return snapshot;
+  return snapshotRustyApplicationJson(value);
 }
 
-function snapshotTimelineJsonValue(value: unknown, depth = 0, state = { nodes: 0 }): ProductBrowserLocalJson {
-  if (depth > MAXIMUM_TIMELINE_JSON_DEPTH) {
-    throw new TypeError('timeline opaque data exceeds the runtime-timeline depth bound');
-  }
-  state.nodes += 1;
-  if (state.nodes > MAXIMUM_TIMELINE_JSON_NODES) {
-    throw new TypeError('timeline opaque data exceeds the runtime-timeline node bound');
-  }
-  if (value === null || typeof value === 'boolean') return value;
-  if (typeof value === 'string') {
-    return requireBoundedString(value, 'timeline JSON string', MAXIMUM_TIMELINE_JSON_BYTES);
-  }
-  if (typeof value === 'number') return requireFiniteNumber(value, 'timeline JSON number');
-  if (Array.isArray(value)) {
-    const source = requirePlainArray(value, 'timeline JSON array');
-    if (source.length > MAXIMUM_TIMELINE_JSON_ARRAY_LENGTH) {
-      throw new TypeError('timeline opaque data array exceeds the runtime-timeline bound');
-    }
-    const entries: ProductBrowserLocalJson[] = [];
-    for (let index = 0; index < source.length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(source, String(index));
-      if (descriptor === undefined || !('value' in descriptor)) {
-        throw new TypeError(`timeline JSON array entry ${String(index)} cannot be a getter or hole`);
-      }
-      entries.push(snapshotTimelineJsonValue(descriptor.value, depth + 1, state));
-    }
-    return Object.freeze(entries);
-  }
-  const record = requireRecord(value, 'timeline JSON object');
-  const keys = Reflect.ownKeys(record);
-  if (keys.length > MAXIMUM_TIMELINE_JSON_OBJECT_KEYS) {
-    throw new TypeError('timeline opaque data object exceeds the runtime-timeline bound');
-  }
-  const result: Record<string, ProductBrowserLocalJson> = Object.create(null) as Record<string, ProductBrowserLocalJson>;
-  for (const key of keys) {
-    if (typeof key !== 'string') throw new TypeError('timeline JSON object cannot contain symbol keys');
-    const descriptor = Object.getOwnPropertyDescriptor(record, key);
-    if (descriptor === undefined || !('value' in descriptor)) {
-      throw new TypeError(`timeline JSON object field ${key} cannot be a getter`);
-    }
-    result[key] = snapshotTimelineJsonValue(descriptor.value, depth + 1, state);
-  }
-  return Object.freeze(result);
-}
-
-function snapshotJsonValue(value: unknown, depth = 0): ProductBrowserLocalJson {
-  if (depth > MAXIMUM_JSON_DEPTH) throw new TypeError('JSON value exceeds the transport depth bound');
-  if (value === null || typeof value === 'boolean') return value;
-  if (typeof value === 'string') return requireBoundedString(value, 'JSON string', MAXIMUM_JSON_STRING_BYTES);
-  if (typeof value === 'number') return requireFiniteNumber(value, 'JSON number');
-  if (Array.isArray(value)) {
-    const source = requirePlainArray(value, 'JSON array');
-    if (source.length > MAXIMUM_JSON_ARRAY_LENGTH) throw new TypeError('JSON array exceeds the transport bound');
-    const entries: ProductBrowserLocalJson[] = [];
-    for (let index = 0; index < source.length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(source, String(index));
-      if (descriptor === undefined || !('value' in descriptor)) throw new TypeError(`JSON array entry ${String(index)} cannot be a getter or hole`);
-      entries.push(snapshotJsonValue(descriptor.value, depth + 1));
-    }
-    return Object.freeze(entries);
-  }
-  const record = requireRecord(value, 'JSON object');
-  const keys = Object.keys(record);
-  if (keys.length > MAXIMUM_JSON_OBJECT_KEYS) throw new TypeError('JSON object exceeds the transport key bound');
-  const result: Record<string, ProductBrowserLocalJson> = Object.create(null) as Record<string, ProductBrowserLocalJson>;
-  for (const key of keys) result[key] = snapshotJsonValue(record[key], depth + 1);
-  return Object.freeze(result);
+function snapshotJsonValue(value: unknown): ProductBrowserLocalJson {
+  return snapshotRustyApplicationJson(value);
 }
 
 function parseBoundedJson(value: string, maximumBytes: number): unknown {

@@ -353,7 +353,7 @@ impl RuntimeInputIngress {
 
 /// The only direct UI claim vocabulary. It is admitted against the same
 /// product intent descriptors as physical mappings before it enters the lane.
-/// Bounded plain JSON provided by a direct product UI claim. Its contract is
+/// Plain JSON provided by a direct product UI claim. Its contract is
 /// later matched with the descriptor-owned contract before it can reach a
 /// Product Runtime Adapter.
 #[derive(Debug, Clone, PartialEq)]
@@ -387,7 +387,7 @@ impl RuntimeProductPayload {
         &self.data
     }
 
-    /// Canonical bounded payload bytes retained at direct-claim admission.
+    /// Canonical payload bytes retained at direct-claim admission.
     /// Product adapters copy this opaque data; they do not reinterpret it.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -681,7 +681,6 @@ pub enum RuntimeInputError {
     InvalidControllerButtonValue,
     NonCanonicalWireInteger,
     WireMalformed,
-    WireTooLarge,
     WireEventLimit,
     SequenceOutOfOrder { expected: u64, received: u64 },
     SequenceExhausted,

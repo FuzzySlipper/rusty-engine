@@ -859,6 +859,15 @@ function validateIntentValue(
 export function snapshotRustyApplicationProductPayloadJson(
   value: unknown,
 ): RustyApplicationProductPayloadJson {
+  return snapshotPlainJson(value, true);
+}
+
+/** Snapshots transport JSON without imposing the direct-input integer contract. */
+export function snapshotRustyApplicationJson(value: unknown): RustyApplicationProductPayloadJson {
+  return snapshotPlainJson(value, false);
+}
+
+function snapshotPlainJson(value: unknown, requireSafeIntegers: boolean): RustyApplicationProductPayloadJson {
   type JsonContainer = RustyApplicationProductPayloadJson[] | Record<string, RustyApplicationProductPayloadJson>;
   type Work =
     | { readonly kind: 'value'; readonly candidate: unknown; readonly path: string; readonly assign: (value: RustyApplicationProductPayloadJson) => void }
@@ -886,7 +895,7 @@ export function snapshotRustyApplicationProductPayloadJson(
       continue;
     }
     if (typeof candidate === 'number') {
-      if (!Number.isFinite(candidate) || (Number.isInteger(candidate)
+      if (!Number.isFinite(candidate) || (requireSafeIntegers && Number.isInteger(candidate)
         && Math.abs(candidate) > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM)) {
         throw new TypeError(`product payload JSON number is invalid at ${path}`);
       }

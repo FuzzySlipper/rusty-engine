@@ -1602,3 +1602,17 @@ fn typed_runtime_rejections_preserve_known_and_unknown_mutation_headers() {
     assert!(host.termination_requested());
     host.shutdown().unwrap();
 }
+
+#[test]
+fn input_http_framing_remains_host_owned() {
+    // A valid empty event page can exceed HTTP framing through whitespace alone.
+    // The host-neutral decoder admits it; this particular HTTP host does not.
+    let bytes = format!("[{}]", " ".repeat(product_dev_host::MAX_REQUEST_BODY_BYTES));
+    assert!(
+        runtime_input::decode_runtime_input_wire_events_json(bytes.as_bytes())
+            .unwrap()
+            .is_empty()
+    );
+    let error = ProductDevInputBatch::decode_json(bytes.as_bytes()).unwrap_err();
+    assert_eq!(error.code(), "DEV_HOST_BODY_BOUNDS");
+}

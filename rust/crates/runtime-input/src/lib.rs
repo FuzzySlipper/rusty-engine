@@ -28,5 +28,5 @@ pub use model::{
 };
 pub use wire::{
     decode_runtime_input_wire_event_json, decode_runtime_input_wire_events_json,
-    MAX_RUNTIME_INPUT_WIRE_BYTES, MAX_RUNTIME_INPUT_WIRE_EVENTS,
+    MAX_RUNTIME_INPUT_WIRE_EVENTS,
 };

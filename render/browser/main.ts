@@ -1241,17 +1241,13 @@ async function decodeBrowserImage(url: string): Promise<void> {
   await image.decode();
 }
 
-async function waitForAnimationFrame(
-  predicate: () => boolean,
-  maximumFrames = 120,
-): Promise<void> {
-  for (let index = 0; index < maximumFrames; index += 1) {
-    if (predicate()) {
-      return;
-    }
+async function waitForAnimationFrame(predicate: () => boolean): Promise<void> {
+  // Software submission pacing may deliberately admit the next render several
+  // seconds later. Display callback count is not a renderer progress deadline.
+  // The browser test owns the elapsed-time readiness timeout for the fixture.
+  while (!predicate()) {
     await waitAnimationFrames(1);
   }
-  throw new Error(`renderer condition did not settle within ${maximumFrames} animation frames`);
 }
 
 function replacementFrame(): RenderFrameDiff {

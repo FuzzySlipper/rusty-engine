@@ -945,3 +945,29 @@ fn neutral_mapping_construction_validates_identity_and_value_kind() {
         Err(RuntimeInputError::IntentValueKindMismatch)
     ));
 }
+
+#[test]
+fn wire_decoder_does_not_inherit_an_http_hosts_byte_budget() {
+    let data = "x".repeat(600_000);
+    let value = serde_json::json!({
+        "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+        "sequence": "0", "context": "gameplay", "intent": "inventory.import",
+        "value": { "kind": "product-payload", "contract": "inventory.v1", "data": data }
+    });
+    let one = serde_json::to_vec(&value).unwrap();
+    let batch = serde_json::to_vec(&vec![value]).unwrap();
+    for decoded in [
+        runtime_input::decode_runtime_input_wire_event_json(&one).unwrap(),
+        runtime_input::decode_runtime_input_wire_events_json(&batch)
+            .unwrap()
+            .remove(0),
+    ] {
+        let RuntimeInputEvent::DirectIntent(claim) = decoded else {
+            panic!("expected direct claim")
+        };
+        let RuntimeIntentValue::ProductPayload { payload } = claim.value() else {
+            panic!("expected payload")
+        };
+        assert_eq!(payload.data(), &serde_json::Value::String(data.clone()));
+    }
+}

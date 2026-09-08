@@ -78,6 +78,7 @@ export {
   RUSTY_APPLICATION_INPUT_U64_MAXIMUM,
   RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM,
   snapshotRustyApplicationProductPayloadJson,
+  snapshotRustyApplicationJson,
 } from './input-ingress.js';
 export type {
   RustyApplicationControllerAxis,

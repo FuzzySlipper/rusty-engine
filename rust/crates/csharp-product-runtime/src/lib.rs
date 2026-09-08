@@ -4003,7 +4003,6 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
         }
         RuntimeInputError::NonCanonicalWireInteger => "CSHARP_INPUT_NON_CANONICAL_WIRE_INTEGER",
         RuntimeInputError::WireMalformed => "CSHARP_INPUT_WIRE_MALFORMED",
-        RuntimeInputError::WireTooLarge => "CSHARP_INPUT_WIRE_TOO_LARGE",
         RuntimeInputError::WireEventLimit => "CSHARP_INPUT_WIRE_EVENT_LIMIT",
         RuntimeInputError::SequenceOutOfOrder { .. } => "CSHARP_INPUT_SEQUENCE_OUT_OF_ORDER",
         RuntimeInputError::SequenceExhausted => "CSHARP_INPUT_SEQUENCE_EXHAUSTED",

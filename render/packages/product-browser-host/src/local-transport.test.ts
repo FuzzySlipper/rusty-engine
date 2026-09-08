@@ -24,6 +24,14 @@ const READOUT = {
   fault: null,
 } as const;
 
+type TestJson =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly TestJson[]
+  | { readonly [key: string]: TestJson };
+
 class FakeEventSource implements ProductBrowserLocalEventSource {
   static readonly instances: FakeEventSource[] = [];
   readonly namedListeners = new Map<string, (event: { readonly data: string; readonly lastEventId: string }) => void>();
@@ -105,6 +113,16 @@ function completeConnectionBaseline(stream: FakeEventSource): void {
   stream.emit({ kind: 'binding', runtime: RUNTIME, nextInputSequence: '1' }, '');
   stream.emitBaseline(result('connect'), '');
   stream.nextEventId = 1;
+}
+
+function assertNestedArrayDepth(value: unknown, expectedDepth: number): void {
+  let nested = value;
+  for (let depth = 0; depth < expectedDepth; depth += 1) {
+    if (!Array.isArray(nested)) assert.fail(`expected array at depth ${String(depth)}`);
+    assert.equal(nested.length, 1);
+    nested = nested[0];
+  }
+  assert.equal(nested, null);
 }
 
 test('same-origin local transport uses fixed typed operation routes and SSE outputs', async () => {
@@ -241,16 +259,6 @@ test('same-origin local transport uses fixed typed operation routes and SSE outp
       ticket: '1',
       runtime: RUNTIME,
       correlation: 'request-1',
-      outcome: { kind: 'success', data: { entries: Array.from({ length: 129 }, () => 1) } },
-      provenance: { correlation: 'request-1' },
-    }),
-    (error: unknown) => error instanceof TypeError,
-  );
-  assert.throws(
-    () => adapter.completeTimeline?.({
-      ticket: '1',
-      runtime: RUNTIME,
-      correlation: 'request-1',
       outcome: { kind: 'success' },
       provenance: { correlation: 'different' },
     }),
@@ -303,6 +311,51 @@ test('local transport distinguishes an unknown mutation outcome from an HTTP rej
       && error.code === 'request_failed'
       && error.mutation.certainty === 'not-applied',
   );
+});
+
+test('local transport posts large deep timeline data as a detached immutable snapshot', async () => {
+  let posted: Record<string, unknown> | null = null;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async (input, init) => {
+      assert.equal(
+        new URL(String(input), 'http://product.local/').pathname,
+        `${PRODUCT_BROWSER_LOCAL_RUNTIME_BASE_PATH}timeline-completion`,
+      );
+      posted = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return response({ accepted: true, ...ACCEPTED_FAULT, ticket: '1', binding: RUNTIME, readout: READOUT });
+    },
+    eventSource: FakeEventSource,
+  });
+  let deep: TestJson = null;
+  for (let depth = 0; depth < 128; depth += 1) deep = [deep];
+  const data = {
+    status: { value: 'before' },
+    deep,
+    magnitude: 1e20,
+    entries: Array.from({ length: 129 }, (_, index) => index),
+    text: 'x'.repeat(4 * 1024 + 1),
+  } satisfies { readonly [key: string]: TestJson };
+
+  const completion = adapter.completeTimeline!({
+    ticket: '1',
+    runtime: RUNTIME,
+    correlation: 'request-1',
+    outcome: { kind: 'success', data },
+    provenance: { correlation: 'request-1', detail: data },
+  });
+  data.status.value = 'after';
+  await completion;
+
+  assert.ok(posted !== null);
+  const outcome = (posted as Record<string, unknown>)['outcome'] as { readonly data: Record<string, unknown> };
+  const provenance = (posted as Record<string, unknown>)['provenance'] as { readonly detail: Record<string, unknown> };
+  assert.equal((outcome.data['status'] as { readonly value: string }).value, 'before');
+  assert.equal((provenance.detail['status'] as { readonly value: string }).value, 'before');
+  assert.equal(outcome.data['magnitude'], 1e20);
+  assert.equal((outcome.data['entries'] as readonly unknown[]).length, 129);
+  assert.equal((outcome.data['text'] as string).length, 4 * 1024 + 1);
+  assertNestedArrayDepth(outcome.data['deep'], 128);
+  adapter.dispose();
 });
 
 test('rejected runtime recovery facts remain decoded result facts rather than transport failures', async () => {
@@ -517,6 +570,76 @@ test('one runtime output batch is decoded and delivered through one batch callba
     'runtime-progress',
   ]);
   unsubscribe?.();
+  adapter.dispose();
+});
+
+test('runtime output UI snapshots retain large deep data as detached immutable values', () => {
+  FakeEventSource.instances.length = 0;
+  const adapter = createProductBrowserLocalHttpAdapter({
+    fetch: async () => response({}),
+    eventSource: FakeEventSource,
+  });
+  const received: unknown[] = [];
+  const unsubscribe = adapter.subscribeOutputs((output) => received.push(output));
+  const stream = FakeEventSource.instances[0]!;
+  completeConnectionBaseline(stream);
+  received.length = 0;
+
+  let deep: TestJson = null;
+  for (let depth = 0; depth < 128; depth += 1) deep = [deep];
+  const originalJsonParse = JSON.parse;
+  let decodedWireValue: { nested: { state: string } } | null = null;
+  JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+    const parsed = originalJsonParse(...args) as {
+      readonly kind?: string;
+      readonly outputs?: readonly { readonly envelope?: { readonly value?: unknown } }[];
+    };
+    if (parsed.kind === 'runtime-output-batch') {
+      decodedWireValue = parsed.outputs?.[0]?.envelope?.value as { nested: { state: string } };
+    }
+    return parsed;
+  }) as typeof JSON.parse;
+  try {
+    stream.emit({
+      kind: 'runtime-output-batch',
+      outputs: [{
+        kind: 'ui-projection',
+        envelope: {
+          artifact: 'rusty.product.ui-projection',
+          runtime: RUNTIME,
+          sequence: '1',
+          stream: 'product.ui',
+          contract: 'product.ui.v1',
+          value: {
+            nested: { state: 'before' },
+            magnitude: 1e20,
+            deep,
+            entries: Array.from({ length: 1_025 }, (_, index) => index),
+            text: 'x'.repeat(64 * 1024 + 1),
+          },
+        },
+      }],
+    }, '1');
+  } finally {
+    JSON.parse = originalJsonParse;
+  }
+
+  decodedWireValue!.nested.state = 'after';
+  const output = received.at(-1) as {
+    readonly kind: string;
+    readonly envelope: { readonly value: Record<string, unknown> };
+  };
+  assert.equal(output.kind, 'ui-projection');
+  const value = output.envelope.value;
+  assert.equal(value['magnitude'], 1e20);
+  assert.equal((value['nested'] as { readonly state: string }).state, 'before');
+  assert.equal((value['entries'] as readonly unknown[]).length, 1_025);
+  assert.equal((value['text'] as string).length, 64 * 1024 + 1);
+  assertNestedArrayDepth(value['deep'], 128);
+  assert.equal(Object.isFrozen(value), true);
+  assert.equal(Object.isFrozen(value['nested'] as object), true);
+  assert.throws(() => Object.defineProperty(value, 'text', { value: 'changed' }), TypeError);
+  unsubscribe();
   adapter.dispose();
 });
 

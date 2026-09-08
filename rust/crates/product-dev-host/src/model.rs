@@ -1661,9 +1661,9 @@ impl ProductDevInputBatch {
     }
 
     /// Strictly decodes the ordered runtime-input wire array used by host
-    /// adapters. The runtime-input crate owns event semantics and its exact
-    /// event/count limits; this method only maps its bounded decoder error to
-    /// the product development host error surface.
+    /// adapters. This host owns HTTP byte framing; runtime-input owns event
+    /// semantics and the event-page count. Decoder errors are mapped to the
+    /// product development host error surface.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
         if bytes.len() > crate::MAX_REQUEST_BODY_BYTES {
             return Err(ProductDevHostError::new(

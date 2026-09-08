@@ -9,8 +9,6 @@ use crate::{
     RuntimeInputIngress, RuntimeIntentValue, RuntimeProductPayload,
 };
 
-/// Maximum bytes accepted from one host wire decode operation.
-pub const MAX_RUNTIME_INPUT_WIRE_BYTES: usize = 524_288;
 /// Maximum normalized physical/direct envelopes accepted in one wire batch.
 pub const MAX_RUNTIME_INPUT_WIRE_EVENTS: usize = 1_024;
 
@@ -19,9 +17,6 @@ pub const MAX_RUNTIME_INPUT_WIRE_EVENTS: usize = 1_024;
 pub fn decode_runtime_input_wire_event_json(
     bytes: &[u8],
 ) -> Result<RuntimeInputEvent, RuntimeInputError> {
-    if bytes.len() > MAX_RUNTIME_INPUT_WIRE_BYTES {
-        return Err(RuntimeInputError::WireTooLarge);
-    }
     decode_exact::<WireInputEvent>(bytes)?.into_event()
 }
 
@@ -30,9 +25,6 @@ pub fn decode_runtime_input_wire_event_json(
 pub fn decode_runtime_input_wire_events_json(
     bytes: &[u8],
 ) -> Result<Vec<RuntimeInputEvent>, RuntimeInputError> {
-    if bytes.len() > MAX_RUNTIME_INPUT_WIRE_BYTES {
-        return Err(RuntimeInputError::WireTooLarge);
-    }
     let events = decode_exact::<Vec<WireInputEvent>>(bytes)?;
     if events.len() > MAX_RUNTIME_INPUT_WIRE_EVENTS {
         return Err(RuntimeInputError::WireEventLimit);
