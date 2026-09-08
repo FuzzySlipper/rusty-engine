@@ -17,4 +17,5 @@ done
 cargo run --release --locked -p svc-mesh --example dual_contouring_performance \
   > "$OUTPUT_DIRECTORY/voxel.log" 2>&1
 node scripts/performance-results.mjs capture --output "$OUTPUT_DIRECTORY/baseline.json" \
-  --environment "$2" "$OUTPUT_DIRECTORY"/layers-*.log "$OUTPUT_DIRECTORY/voxel.log"
+  --environment "$2" "$OUTPUT_DIRECTORY/layers-1.log" "$OUTPUT_DIRECTORY/layers-2.log" \
+  "$OUTPUT_DIRECTORY/layers-3.log" "$OUTPUT_DIRECTORY/voxel.log"

@@ -37,3 +37,38 @@ not cold GPU shader completion. Field construction is excluded from DC meshing.
 Followups: #7884 separates exact camera demand from rounded diagnostics; #7886
 adds the normal packaged CoreCLR crossover fixture; #7887 profiles dense mesh
 realization. #7885 removes the confirmed diagnostic snapshot overhead now.
+
+## Clean revision references
+
+Both [CPU](cpu-reference.json) and [GPU](gpu-reference.json) captures identify
+clean source revision `90c4e9717cd721dbbf98447b90de20e799f9f086`. Each row below is
+the median of three run medians, in milliseconds. Raw samples and run spread
+remain in the JSON artifacts; the old service probes retain their original
+per-run summary records.
+
+| CPU workload | Median ms |
+| --- | ---: |
+| Rust appearance staging with retained 8 MiB resource | 0.000301 |
+| Managed update, 256 entities | 0.0028 |
+| NativeAOT C#–Rust crossover | 0.010109 |
+| Product host HTTP | 0.310598 |
+| DC sculpted 32³ | 2.860818 |
+| DC noisy/carved 40³ | 13.966754 |
+| DC noisy/carved 56³ | 39.030978 |
+
+| GPU browser workload | CPU submission | Frame interval | Diagnostic read | CPU scene application |
+| --- | ---: | ---: | ---: | ---: |
+| 256 retained cubes | 1.84 | 17.06 | 0.88 | 25.18 |
+| 8,192-triangle relief | 0.30 | 17.06 | 0.44 | 35.18 |
+| 131,072-triangle relief | 0.30 | 17.06 | 0.44 | 654.50 |
+
+GPU timer duration is unavailable, not represented by these CPU columns. The
+observed isolated Firefox clock quantum was approximately 0.02 ms. Repeated
+CPU p95 measurements can vary appreciably at these small durations; the current
+reference deliberately has no default failure percentage.
+
+The final GPU capture completed at 10:08:20 UTC. Its lease expired at 10:08:53;
+subsequent stop/status confirmed already released with no sessions or lobbies.
+CPU reference sampling then ran without the Moonlight viewer. The earlier
+successful loaded-scene observations are retained by the playtest service under
+session `4aef4cd3-2b99-4431-be0b-c118622d6f7b`.
