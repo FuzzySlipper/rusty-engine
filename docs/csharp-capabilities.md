@@ -212,3 +212,5 @@ After changing the ABI, regenerate bindings and compare the generated
 focused Rust compilation, managed compilation, CoreCLR staging, and a
 representative NativeAOT publish are normally sufficient. Generated files stay
 ignored and must never be edited or committed.
+
+The [viewport sprite package-consumer fixture](../fixtures/csharp-viewport-sprite/README.md) demonstrates safe C# atlas playback and viewport placement, with retained runtime evidence.

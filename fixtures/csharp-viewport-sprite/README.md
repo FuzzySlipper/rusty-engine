@@ -14,3 +14,5 @@ dotnet restore CsharpViewportSprite.csproj --source /path/to/pair/sdk-feed
 /path/to/pair/runtime-pack/bin/rusty dev \
   --project CsharpViewportSprite.csproj --runtime /path/to/pair/runtime-pack
 ```
+
+[Packaged runtime evidence](evidence/README.md) records actual playback and fitting.

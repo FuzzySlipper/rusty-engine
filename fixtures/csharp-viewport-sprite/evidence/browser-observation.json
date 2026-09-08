@@ -1,0 +1,43 @@
+{
+  "status": 200,
+  "canvas": {
+    "x": 0,
+    "y": 0,
+    "width": 640,
+    "height": 360
+  },
+  "visible": "Viewport sprite fixture: retained atlas playback is active.",
+  "frames": [
+    {
+      "index": 0,
+      "atMs": 769.365383
+    },
+    {
+      "index": 1,
+      "atMs": 900.753026
+    },
+    {
+      "index": 2,
+      "atMs": 1017.769458
+    },
+    {
+      "index": 3,
+      "atMs": 1133.187581
+    },
+    {
+      "index": 4,
+      "atMs": 1250.995914
+    },
+    {
+      "index": 5,
+      "atMs": 1366.58271
+    }
+  ],
+  "errors": [],
+  "consoleMessages": [
+    "warning: [.WebGL-0x22dc00162000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+    "warning: [.WebGL-0x22dc00163200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+    "warning: [.WebGL-0x22dc00163200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+    "warning: [.WebGL-0x22dc00163200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+  ]
+}

@@ -47,6 +47,7 @@ public sealed class Product : IEngineProduct
             ReadOnlyMemory<SpritePlaybackMarker>.Empty,
             SpritePlaybackLoopMode.Loop,
             1.0));
+        _engine.Graphics.ControlSpritePlayback(new SpritePlaybackControlRequest(_playback, SpritePlaybackControl.Start));
         Publish();
     }
 
@@ -55,6 +56,7 @@ public sealed class Product : IEngineProduct
     public ProductUpdateResult Update(ProductUpdate update)
     {
         _engine.Graphics.AdvanceSpritePlayback(new SpritePlaybackAdvanceRequest(_playback));
+        Publish();
         return ProductUpdateResult.None;
     }
 
