@@ -1716,6 +1716,42 @@ test('renderer diagnostics retries one recoverable rejection without loss or flo
   assert.deepEqual(observations, [4, 5]);
 });
 
+test('renderer diagnostics cancels an in-flight observation after runtime replacement', async () => {
+  const reports: Array<{ readonly runtime: { readonly instanceId: string; readonly generation: string; readonly controlRevision: string } }> = [];
+  const observations: number[] = [];
+  const deferred: { resolve: ((value: unknown) => void) | null } = { resolve: null };
+  const freshRuntime = { instanceId: '7', generation: '1', controlRevision: '3' } as const;
+  const renderer = {
+    diagnosticsReadout: () => ({ schemaVersion: 1, submission: { renderSequence: 4 } }),
+  } as unknown as Parameters<typeof createProductBrowserRendererDiagnosticsReporter>[0]['renderer'];
+  const reporter = createProductBrowserRendererDiagnosticsReporter({
+    renderer,
+    report: async (feedback) => {
+      reports.push(feedback);
+      if (reports.length === 1) return new Promise((resolve) => { deferred.resolve = resolve; }) as never;
+      return { accepted: true as const, ...ACCEPTED_FAULT, runtime: feedback.runtime };
+    },
+    initialRuntime: AUDIO_RUNTIME,
+    onObservation: (sequence) => observations.push(sequence),
+  });
+
+  const inFlight = reporter.flush();
+  assert.ok(deferred.resolve);
+  reporter.bindRuntime(freshRuntime);
+  deferred.resolve({
+    accepted: false,
+    ...RECOVERABLE_FAULT,
+    runtime: AUDIO_RUNTIME,
+    diagnostic: 'stale observation was fenced by runtime replacement',
+  });
+  await inFlight;
+
+  assert.deepEqual(observations, []);
+  await reporter.flush();
+  assert.deepEqual(reports.map((feedback) => feedback.runtime), [AUDIO_RUNTIME, freshRuntime]);
+  assert.deepEqual(observations, [4]);
+});
+
 test('renderer diagnostics cadence sampling stays quiet until a changed sequence is due', async () => {
   const reports: number[] = [];
   let renderSequence = 2;

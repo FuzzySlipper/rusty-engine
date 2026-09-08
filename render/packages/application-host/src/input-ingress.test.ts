@@ -180,6 +180,100 @@ void test('input ingress rebinding and context changes clear with the exact epoc
   }]);
 });
 
+void test('managed interface events preserve a claimed product payload while releasing physical input', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const canvas = {} as HTMLCanvasElement;
+  const document = {
+    ...documentTarget,
+    activeElement: canvas,
+    pointerLockElement: null,
+    defaultView: createListenerTarget(),
+  } as unknown as Document;
+  let acceptsGameplayInput = true;
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => acceptsGameplayInput,
+    interactionMode: () => acceptsGameplayInput ? 'gameplay' : 'interface',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [],
+  });
+
+  documentTarget.emit('keydown', { code: 'KeyW' } as KeyboardEvent);
+  ingress.claim('inventory.drop', {
+    kind: 'product-payload',
+    contract: 'example.inventory.drop.v1',
+    data: { sourceSlot: 3, targetSlot: 5 },
+  });
+  acceptsGameplayInput = false;
+  documentTarget.emit('pointermove', {} as PointerEvent);
+  documentTarget.emit('pointermove', {} as PointerEvent);
+  eventTarget.emit('pointerdown', { button: 0 } as PointerEvent);
+
+  assert.deepEqual(ingress.drain(), [
+    {
+      runtime: INITIAL.runtime,
+      sequence: '0',
+      context: INITIAL.context,
+      fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+    },
+    {
+      runtime: INITIAL.runtime,
+      sequence: '1',
+      context: INITIAL.context,
+      intent: 'inventory.drop',
+      value: {
+        kind: 'product-payload',
+        contract: 'example.inventory.drop.v1',
+        data: Object.assign(Object.create(null), { sourceSlot: 3, targetSlot: 5 }),
+      },
+    },
+    {
+      runtime: INITIAL.runtime,
+      sequence: '2',
+      context: INITIAL.context,
+      fact: { kind: 'clear', reason: 'interaction-mode-loss' },
+    },
+  ]);
+  ingress.dispose();
+});
+
+void test('focus, context, and restart invalidation discard queued direct product payloads', () => {
+  const queue = createRustyApplicationInputQueue(8);
+  queue.bindRuntime(INITIAL);
+  const claim = (): void => {
+    queue.claim('inventory.drop', {
+      kind: 'product-payload',
+      contract: 'example.inventory.drop.v1',
+      data: { sourceSlot: 3, targetSlot: 5 },
+    });
+  };
+
+  claim();
+  queue.clear('focus-loss');
+  assert.deepEqual(queue.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'clear', reason: 'focus-loss' },
+  ]);
+
+  claim();
+  queue.setContext('interface.menu');
+  assert.deepEqual(queue.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'clear', reason: 'interaction-mode-loss' },
+  ]);
+
+  claim();
+  queue.bindRuntime({
+    runtime: { instanceId: '7', generation: '4', controlRevision: '12' },
+    context: 'interface.menu',
+  });
+  assert.deepEqual(queue.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'clear', reason: 'restart' },
+  ]);
+});
+
 void test('input ingress rebaselines held keyboard and pointer state without replaying an uncertain batch', () => {
   const eventTarget = createListenerTarget();
   const documentTarget = createListenerTarget();

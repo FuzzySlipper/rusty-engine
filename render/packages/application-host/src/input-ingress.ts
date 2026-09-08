@@ -676,7 +676,18 @@ export function createRustyApplicationInputQueue(
       return true;
     },
     clear: (reason) => {
-      replaceQueuedWithClear(validateClearReason(reason));
+      const normalized = validateClearReason(reason);
+      if (normalized === 'interaction-mode-loss') {
+        // Same-context physical loss must not discard an accepted DOM action.
+        // Keep ordering (including any earlier context transition), and coalesce
+        // repeated disallowed pointer events instead of filling the queue.
+        const last = entries.at(-1);
+        if (last !== undefined && 'fact' in last && last.fact.kind === 'clear'
+          && last.fact.reason === normalized) return;
+        appendFact(Object.freeze({ kind: 'clear', reason: normalized }));
+      } else {
+        replaceQueuedWithClear(normalized);
+      }
     },
     enqueueFact: (fact) => {
       return appendFact(validateInputFact(fact));

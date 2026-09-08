@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod bundle;
+mod diagnostic_relay;
 mod error;
 mod host;
 mod log;
@@ -28,6 +29,10 @@ pub use bundle::{
     product_dev_renderer_preload_entries, ProductDevBundle, ProductDevBundleEntry,
     ProductDevRendererResource, ProductDevRendererResourceKind, PRODUCT_DEV_INDEX_PATH,
     PRODUCT_DEV_RENDERER_PRELOAD_PATH,
+};
+pub use diagnostic_relay::{
+    worker_diagnostic_relay, ProductDevWorkerDiagnosticRelayReceiver,
+    ProductDevWorkerDiagnosticRelaySender, WORKER_DIAGNOSTIC_RELAY_CAPACITY,
 };
 pub use error::{
     ProductDevHostError, ProductDevInvalidatedScope, ProductDevMutationCertainty,

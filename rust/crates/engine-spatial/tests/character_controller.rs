@@ -358,6 +358,52 @@ fn bounded_autostep_climbs_a_low_voxel_and_reports_the_choice() {
     assert!(step.rise <= config.surface.maximum_step_height);
     let horizontal = Vec2::new(receipt.displacement.x, receipt.displacement.z).length();
     assert!(horizontal <= config.ground.forward_speed / 60.0 + 1.0e-4);
+
+    let stepped_sequence = receipt.command_sequence;
+    let stepped_height = receipt.transform_after.translation.y;
+    assert_eq!(receipt.motion_after.support_entity, Some(step_id));
+    let mut minimum_settled_height = stepped_height;
+    let mut maximum_settled_height = stepped_height;
+    let mut accepted_after_release = 0;
+    let mut resting_height = None;
+    for sequence in (stepped_sequence + 1)..=(stepped_sequence + 120) {
+        let settled = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::ZERO),
+            )
+            .unwrap();
+        minimum_settled_height = minimum_settled_height.min(settled.transform_after.translation.y);
+        maximum_settled_height = maximum_settled_height.max(settled.transform_after.translation.y);
+        accepted_after_release += usize::from(settled.step.is_some_and(|step| step.accepted));
+        assert_eq!(settled.motion_after.support_entity, Some(step_id));
+        if sequence > stepped_sequence + 60 {
+            let height = *resting_height.get_or_insert(settled.transform_after.translation.y);
+            assert!(
+                (settled.transform_after.translation.y - height).abs() < 1.0e-4,
+                "released step keeps bouncing after settling: {settled:?}"
+            );
+        }
+        assert!(
+            settled.motion_after.grounded,
+            "released low-step landing lost support: {settled:?}"
+        );
+    }
+    assert_eq!(
+        accepted_after_release, 0,
+        "release must not manufacture repeated steps"
+    );
+    assert!(
+        minimum_settled_height > 1.9 + config.shape.contact_skin,
+        "accepted low step fell back to the lower floor: {minimum_settled_height}"
+    );
+    assert!(
+        maximum_settled_height <= stepped_height + 1.0e-4,
+        "accepted low step gained unexpected height: {maximum_settled_height} > {stepped_height}"
+    );
 }
 
 #[test]
@@ -825,7 +871,7 @@ fn floor_wall_lip_retains_stable_support_at_rest_and_under_pressure() {
 }
 
 #[test]
-fn descending_trench_edge_does_not_manufacture_a_transient_up_step() {
+fn trench_ledge_within_step_limit_climbs_to_real_upper_support() {
     let scene = craftsurvive_trench_scene();
     let (entity, mut state) = character_at(Vec3::new(0.5, 3.875, 5.307_7));
     let mut config = CharacterControllerConfig::default();
@@ -861,20 +907,78 @@ fn descending_trench_edge_does_not_manufacture_a_transient_up_step() {
         accepted_steps += usize::from(receipt.step.is_some_and(|step| step.accepted));
     }
     let final_transform = state.transform(entity).unwrap();
-    assert_eq!(
-        accepted_steps, 0,
-        "descending support must not become an up step"
+    assert_eq!(accepted_steps, 1, "one supported climb onto the 1 m ledge");
+    assert!(
+        (final_transform.translation.y - 4.89).abs() < 0.002,
+        "must settle on the real upper tread, not bounce back to the trench: {final_transform:?}"
     );
     assert!(
-        maximum_y <= 3.89,
-        "trench traversal bounced to y={maximum_y}"
+        maximum_y < 5.0,
+        "unexpected vertical excursion: {maximum_y}"
     );
     assert!(
         minimum_y >= 3.87,
         "trench pressure dropped to y={minimum_y}"
     );
-    assert!(final_transform.translation.z >= 5.3);
+    assert!(final_transform.translation.z < 5.0);
     assert!(state.character_motion(entity).unwrap().grounded);
+}
+
+#[test]
+fn thin_trailing_ledge_cannot_manufacture_an_upward_step() {
+    let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let player = EntityId::new(1);
+    let floor = EntityId::new(2);
+    let edge = EntityId::new(3);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(player, "player")
+            .with_transform(Vec3::new(0.0, 1.9, 0.6))
+            .with_character_motion(CharacterMotionComponent::at_rest(1.9)),
+        EntityDefinition::new(floor, "floor")
+            .with_transform(Vec3::new(0.0, 0.5, 0.0))
+            .with_bounds(Vec3::new(-4.0, -0.5, -4.0), Vec3::new(4.0, 0.5, 4.0))
+            .with_collision(true, false),
+        // A 4 cm-deep raised strip has a vertical riser but no tread at the
+        // raised endpoint. The broad capsule can brush its trailing top edge
+        // while the central and leading footprint remain over the lower floor.
+        EntityDefinition::new(edge, "thin-raised-edge")
+            .with_transform(Vec3::new(0.0, 1.5, 0.0))
+            .with_bounds(Vec3::new(-2.0, -0.5, -0.02), Vec3::new(2.0, 0.5, 0.02))
+            .with_collision(true, false),
+    ])
+    .unwrap();
+    let mut config = CharacterControllerConfig::default();
+    config.surface.maximum_step_height = 1.05;
+    let mut service = CharacterControllerService::default();
+    service
+        .step(&mut state, &scene, player, &config, command(1, Vec2::ZERO))
+        .unwrap();
+
+    let mut attempted = false;
+    for sequence in 2..=120 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                player,
+                &config,
+                command(sequence, Vec2::new(0.0, 1.0)),
+            )
+            .unwrap();
+        attempted |= receipt.step.is_some();
+        assert!(
+            receipt.step.is_none_or(|step| !step.accepted),
+            "an unsupported trailing edge must not authorize an up-step: {receipt:?}"
+        );
+        assert!(
+            receipt.transform_after.translation.y <= 1.901,
+            "the raised edge must not manufacture height: {receipt:?}"
+        );
+    }
+    assert!(
+        attempted,
+        "the controller should evaluate the raised edge as a step candidate"
+    );
 }
 
 #[test]

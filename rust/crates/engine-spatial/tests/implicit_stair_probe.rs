@@ -184,7 +184,10 @@ fn assert_equivalent(raw: Vec3, split: Vec3) {
 #[test]
 fn hard_riser_collision_is_unchanged_by_render_attribute_vertex_splits() {
     let (raw, split) = stairs(false, BEVEL_CELL_SIZES[0]);
-    assert_equivalent(march(&scene(raw)), march(&scene(split)));
+    let raw_final = march(&scene(raw));
+    let split_final = march(&scene(split));
+    assert_equivalent(raw_final, split_final);
+    assert!(raw_final.z > 11.0, "hard risers stopped at {raw_final:?}");
 }
 
 #[test]

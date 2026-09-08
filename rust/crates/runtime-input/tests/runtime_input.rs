@@ -395,6 +395,159 @@ fn held_axes_and_clear_keep_state_owned_by_the_neutral_lane() {
 }
 
 #[test]
+fn same_context_interface_clear_releases_physical_input_and_delivers_one_direct_payload() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    lane.ingest(physical(
+        binding,
+        0,
+        RuntimeInputFact::Key {
+            code: KeyboardControl::KeyW,
+            edge: PhysicalEdge::Pressed,
+        },
+    ))
+    .unwrap();
+    lane.ingest(RuntimeInputEvent::DirectIntent(
+        RuntimeDirectIntentClaim::new(
+            binding,
+            1,
+            context(),
+            "inventory.drop",
+            RuntimeIntentValue::ProductPayload {
+                payload: RuntimeProductPayload::new(
+                    "example.inventory.drop.v1",
+                    serde_json::json!({"sourceSlot": 3, "targetSlot": 5}),
+                )
+                .unwrap(),
+            },
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    for sequence in [2, 3] {
+        lane.ingest(physical(
+            binding,
+            sequence,
+            RuntimeInputFact::Clear {
+                reason: InputClearReason::InteractionModeLoss,
+            },
+        ))
+        .unwrap();
+    }
+
+    let (frame, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert!(frame.keyboard().is_empty());
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].sequence(), 1);
+    assert_eq!(envelopes[0].phase(), IntentPhase::DirectUi);
+    assert_eq!(envelopes[0].provenance(), &IntentProvenance::DirectUi);
+    assert_eq!(
+        envelopes[0].value(),
+        RuntimeIntentValue::ProductPayload {
+            payload: RuntimeProductPayload::new(
+                "example.inventory.drop.v1",
+                serde_json::json!({"sourceSlot": 3, "targetSlot": 5}),
+            )
+            .unwrap(),
+        }
+    );
+
+    let (following_frame, following_envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert!(following_frame.keyboard().is_empty());
+    assert!(following_envelopes.is_empty());
+}
+
+#[test]
+fn focus_restart_and_context_invalidation_cancel_pending_direct_payloads() {
+    let payload = || RuntimeIntentValue::ProductPayload {
+        payload: RuntimeProductPayload::new(
+            "example.inventory.drop.v1",
+            serde_json::json!({"sourceSlot": 3, "targetSlot": 5}),
+        )
+        .unwrap(),
+    };
+
+    let (mut focus_lifecycle, focus_binding) = lifecycle_and_binding();
+    let mut focus_lane = RuntimeInputLane::new(compiled_mappings(), focus_binding, context());
+    focus_lane
+        .ingest(RuntimeInputEvent::DirectIntent(
+            RuntimeDirectIntentClaim::new(focus_binding, 0, context(), "inventory.drop", payload())
+                .unwrap(),
+        ))
+        .unwrap();
+    focus_lane
+        .ingest(physical(
+            focus_binding,
+            1,
+            RuntimeInputFact::Clear {
+                reason: InputClearReason::FocusLoss,
+            },
+        ))
+        .unwrap();
+    assert!(snapshot(&mut focus_lane, &mut focus_lifecycle)
+        .unwrap()
+        .1
+        .is_empty());
+
+    let (mut restart_lifecycle, restart_binding) = lifecycle_and_binding();
+    let mut restart_lane = RuntimeInputLane::new(compiled_mappings(), restart_binding, context());
+    restart_lane
+        .ingest(RuntimeInputEvent::DirectIntent(
+            RuntimeDirectIntentClaim::new(
+                restart_binding,
+                0,
+                context(),
+                "inventory.drop",
+                payload(),
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    restart_lifecycle.restart().unwrap();
+    let next_binding = RuntimeInputBinding::new(
+        restart_lifecycle.instance_id(),
+        restart_lifecycle.generation(),
+        restart_lifecycle.control_revision(),
+    );
+    restart_lane
+        .rebind(next_binding, context(), InputClearReason::Restart)
+        .unwrap();
+    assert!(snapshot(&mut restart_lane, &mut restart_lifecycle)
+        .unwrap()
+        .1
+        .is_empty());
+
+    let (mut context_lifecycle, context_binding) = lifecycle_and_binding();
+    let mut context_lane = RuntimeInputLane::new(compiled_mappings(), context_binding, context());
+    context_lane
+        .ingest(RuntimeInputEvent::DirectIntent(
+            RuntimeDirectIntentClaim::new(
+                context_binding,
+                0,
+                context(),
+                "inventory.drop",
+                payload(),
+            )
+            .unwrap(),
+        ))
+        .unwrap();
+    context_lane
+        .ingest(RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+            context_binding,
+            1,
+            InputContext::new("interface.menu").unwrap(),
+            RuntimeInputFact::Clear {
+                reason: InputClearReason::InteractionModeLoss,
+            },
+        )))
+        .unwrap();
+    assert!(snapshot(&mut context_lane, &mut context_lifecycle)
+        .unwrap()
+        .1
+        .is_empty());
+}
+
+#[test]
 fn lifecycle_tokens_fence_wrong_phase_foreign_and_stale_bindings() {
     let (mut lifecycle, binding) = lifecycle_and_binding();
     let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());

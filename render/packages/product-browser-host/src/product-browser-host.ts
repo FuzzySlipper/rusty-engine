@@ -1080,9 +1080,14 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
       ? rendererSnapshot
       : Object.freeze({ ...rendererSnapshot, productFrames: options.productFrames() });
     const result = await options.report(Object.freeze({ runtime: binding, snapshot }));
-    if (!sameRuntimeBinding(currentBinding, binding) || !sameRuntimeBinding(result.runtime, binding)) {
+    if (!sameRuntimeBinding(result.runtime, binding)) {
       throw new ProductBrowserHostError('transport_failed', 'renderer diagnostics result did not match the current Product runtime binding');
     }
+    // A replacement binding may arrive while an auxiliary observation is in
+    // flight. Its stale result cannot update renderer diagnostics because Rust
+    // fences the request at the binding, so discard it rather than reporting a
+    // recoverable renderer failure for an expected cancellation.
+    if (!sameRuntimeBinding(currentBinding, binding)) return;
     if (isRecoverableReportRejection(result)) return;
     if (!result.accepted || result.diagnostic !== undefined) {
       throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'renderer diagnostics were rejected by the runtime');

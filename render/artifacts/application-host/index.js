@@ -26793,7 +26793,15 @@ function vT(e, t = 0n) {
 			}), l("interaction-mode-loss"), !0);
 		},
 		clear: (e) => {
-			l(PT(e));
+			let t = PT(e);
+			if (t === "interaction-mode-loss") {
+				let e = o.at(-1);
+				if (e !== void 0 && "fact" in e && e.fact.kind === "clear" && e.fact.reason === t) return;
+				u(Object.freeze({
+					kind: "clear",
+					reason: t
+				}));
+			} else l(t);
 		},
 		enqueueFact: (e) => u(NT(e)),
 		claim: (e, t) => {

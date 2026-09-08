@@ -943,6 +943,10 @@ impl CharacterControllerService {
         }
         motion.grounded = ground.is_some();
         if motion.grounded {
+            // Ground-plane clipping can turn horizontal travel into an upward
+            // tangent. It follows the surface this tick; it is not a launch
+            // velocity to retain after input stops.
+            controlled.y = controlled.y.min(0.0);
             motion.coyote_remaining = config.jump.coyote_seconds;
             if !motion_before.grounded {
                 motion.landing_lockout_remaining = config.jump.landing_lockout_seconds;
@@ -1135,7 +1139,8 @@ where
     let cast_budget = u16::from(config.solver.maximum_cast_iterations)
         .min(config.solver.maximum_queries_per_step);
     for _ in 0..cast_budget {
-        if remaining.length_squared() <= 1.0e-10 {
+        if remaining.length_squared() <= 1.0e-10 || casts >= config.solver.maximum_queries_per_step
+        {
             break;
         }
         casts = casts.saturating_add(1);
@@ -1181,7 +1186,7 @@ where
         };
         if may_step
             && config.solver.maximum_step_attempts > 0
-            && casts.saturating_add(4) <= config.solver.maximum_queries_per_step
+            && casts.saturating_add(5) <= config.solver.maximum_queries_per_step
             && contacts
                 .iter()
                 .all(|contact| contact.kind == CharacterContactKind::Ground)
@@ -1191,7 +1196,7 @@ where
             )
         {
             step_attempted = true;
-            if let Some((stepped_center, step_rise, step_casts)) = try_step(
+            let (landing, step_casts) = try_step(
                 projection,
                 obstacles,
                 start_center,
@@ -1199,17 +1204,19 @@ where
                 requested_start,
                 config,
                 query_stats,
-            )? {
-                casts = casts.saturating_add(step_casts);
+            )?;
+            casts = casts.saturating_add(step_casts);
+            if let Some(landing) = landing {
+                contacts.push(landing.support);
                 return Ok(MoveSolveOutput {
-                    center: stepped_center,
-                    velocity,
+                    center: landing.center,
+                    velocity: Vec3::new(velocity.x, 0.0, velocity.z),
                     contacts,
                     blocks,
                     step: Some(CharacterStepFact {
                         attempted: true,
                         accepted: true,
-                        rise: step_rise,
+                        rise: landing.rise,
                     }),
                     casts,
                 });
@@ -1258,6 +1265,12 @@ where
     })
 }
 
+struct StepLanding {
+    center: WorldPos,
+    rise: f32,
+    support: CharacterContactFact,
+}
+
 fn try_step(
     projection: &svc_collision::CollisionProjection,
     obstacles: &[CharacterObstacle],
@@ -1266,99 +1279,142 @@ fn try_step(
     requested: Vec3,
     config: &CharacterControllerConfig,
     query_stats: &mut CharacterCollisionQueryStats,
-) -> Result<Option<(WorldPos, f32, u16)>, CharacterControllerError> {
+) -> Result<(Option<StepLanding>, u16), CharacterControllerError> {
+    let mut casts = 0;
+    let mut cast_step = |capsule, translation, skin| {
+        casts += 1;
+        cast_world(
+            projection,
+            obstacles,
+            capsule,
+            translation,
+            skin,
+            query_stats,
+        )
+    };
     let rise = config.surface.maximum_step_height;
     if rise <= 0.0 || requested.x * requested.x + requested.z * requested.z <= 1.0e-8 {
-        return Ok(None);
+        return Ok((None, casts));
     }
     // A grounded capsule can be within the query skin of its support. Begin the
     // upward clearance cast just beyond that skin so the separating floor does
-    // not mask a real ceiling farther along the probe.
+    // not mask a real ceiling farther along the probe. Sweep actual geometry:
+    // inflating by skin also reports a parallel nearby riser as an obstruction
+    // at time zero, masking the clear upward path. Real ceilings still block.
     let departure = (config.shape.contact_skin + config.recovery.normal_nudge).min(rise);
     let upward_start = add_world(start, WorldVec::new(0.0, f64::from(departure), 0.0));
     let upward = WorldVec::new(0.0, f64::from(rise - departure), 0.0);
-    if cast_world(
-        projection,
-        obstacles,
-        capsule(upward_start),
-        upward,
-        f64::from(config.shape.contact_skin),
-        query_stats,
-    )?
-    .is_some()
-    {
-        return Ok(None);
+    if cast_step(capsule(upward_start), upward, 0.0)?.is_some() {
+        return Ok((None, casts));
     }
     let raised = add_world(start, WorldVec::new(0.0, f64::from(rise), 0.0));
     let horizontal = Vec3::new(requested.x, 0.0, requested.z);
-    if cast_world(
-        projection,
-        obstacles,
+    if cast_step(
         capsule(raised),
         vec3_world(horizontal),
         f64::from(config.shape.contact_skin),
-        query_stats,
     )?
     .is_some()
     {
-        return Ok(None);
+        return Ok((None, casts));
     }
     let forward = add_world(raised, vec3_world(horizontal));
     let downward_distance = rise + config.surface.floor_snap_distance;
-    let Some(landing) = cast_world(
-        projection,
-        obstacles,
+    let Some(landing) = cast_step(
         capsule(forward),
         WorldVec::new(0.0, -f64::from(downward_distance), 0.0),
         f64::from(config.shape.contact_skin),
-        query_stats,
     )?
     else {
-        return Ok(None);
+        return Ok((None, casts));
     };
-    // The full capsule can first touch a top edge with a diagonal cap normal.
-    // Confirm support with a narrow bounded probe at the accepted horizontal
-    // endpoint so edge geometry cannot be mistaken for an over-limit slope.
+    let start_capsule = capsule(start);
+    let departure_floor = start.y - start_capsule.half_height - start_capsule.radius;
+    // Recontacting the departure floor across a trench is not an up-step.
+    // The candidate needs an actually higher tread, not merely skin clearance.
+    if landing.point.y <= departure_floor + f64::from(config.shape.contact_skin) {
+        return Ok((None, casts));
+    }
+    // The bounded central footprint must witness the same tread as the full
+    // capsule. A different lower floor cannot legitimize a lip contact.
     let support_probe = bounded_support_probe(capsule(forward), config);
-    let Some(support) = cast_world(
-        projection,
-        obstacles,
+    let support = cast_step(
         support_probe,
         WorldVec::new(0.0, -f64::from(downward_distance), 0.0),
         0.0,
-        query_stats,
-    )?
-    else {
-        return Ok(None);
-    };
-    if !standable(vec3_from_world(support.normal)?, config) {
-        return Ok(None);
-    }
-    let drop = downward_distance * finite_f32(landing.time_of_impact)?;
-    let support_drop = downward_distance * finite_f32(support.time_of_impact)?;
-    // The broad capsule may meet a rounded top edge before the central support probe. Permit an
-    // edge normal beyond the ordinary slope limit only by the angle implied by the minimum
-    // accepted tread width over the capsule radius. A more wall-dominant hit combined with a
-    // different support height describes two surfaces; accepting its broad height would
-    // manufacture an up-step toward adjacent terrain while actual support remains below.
+    )?;
     let landing_height_tolerance = config.shape.contact_skin
         + config
             .surface
             .minimum_step_width
             .max(config.recovery.normal_nudge);
-    let landing_normal = vec3_from_world(landing.normal)?;
-    let edge_angle_allowance = (config.surface.minimum_step_width / config.shape.radius).atan();
-    let minimum_edge_normal_y = (config.surface.maximum_slope_radians + edge_angle_allowance)
-        .min(std::f32::consts::FRAC_PI_2)
-        .cos();
-    if landing_normal.y < minimum_edge_normal_y
-        && (drop - support_drop).abs() > landing_height_tolerance
-    {
-        return Ok(None);
-    }
-    let landed = WorldPos::new(forward.x, forward.y - f64::from(drop), forward.z);
+    let central_supported = match support {
+        Some(support) => {
+            standable(vec3_from_world(support.normal)?, config)
+                && (support.point.y - landing.point.y).abs() <= f64::from(landing_height_tolerance)
+        }
+        None => false,
+    };
+    let accepted_support = if central_supported {
+        support.expect("central support was checked above")
+    } else {
+        // Verify a tread patch into the obstacle, not a millimetre-wide rim.
+        // The witness has the configured support radius and its center lies
+        // that far beyond the first contact in the travel direction.
+        let radius = support_probe.radius;
+        let length = f64::from(horizontal.length());
+        let tread_probe = CharacterCapsule {
+            center: WorldPos::new(
+                landing.point.x + f64::from(horizontal.x) / length * radius,
+                support_probe.center.y,
+                landing.point.z + f64::from(horizontal.z) / length * radius,
+            ),
+            ..support_probe
+        };
+        let Some(tread) = cast_step(
+            tread_probe,
+            WorldVec::new(0.0, -f64::from(downward_distance), 0.0),
+            0.0,
+        )?
+        else {
+            return Ok((None, casts));
+        };
+        if !standable(vec3_from_world(tread.normal)?, config)
+            || (tread.point.y - landing.point.y).abs() > f64::from(landing_height_tolerance)
+            || (tread.point.x - tread_probe.center.x).abs()
+                > f64::from(config.recovery.normal_nudge)
+            || (tread.point.z - tread_probe.center.z).abs()
+                > f64::from(config.recovery.normal_nudge)
+        {
+            return Ok((None, casts));
+        }
+        tread
+    };
+    let landed = WorldPos::new(
+        forward.x,
+        accepted_support.point.y
+            + start_capsule.half_height
+            + start_capsule.radius
+            + f64::from(config.shape.contact_skin),
+        forward.z,
+    );
     let actual_rise = (landed.y - start.y).max(0.0) as f32;
-    Ok(Some((landed, actual_rise, 4)))
+    let support_fact = contact_fact(
+        accepted_support,
+        vec3_from_world(accepted_support.normal)?,
+        CharacterContactKind::Ground,
+    )?;
+    if actual_rise > rise + config.recovery.normal_nudge {
+        return Ok((None, casts));
+    }
+    Ok((
+        Some(StepLanding {
+            center: landed,
+            rise: actual_rise,
+            support: support_fact,
+        }),
+        casts,
+    ))
 }
 
 fn contact_fact(

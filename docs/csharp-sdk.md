@@ -542,9 +542,8 @@ triangle and material-group counts, actual sample spacing, octree depth,
 elapsed service time, and reorientation/degenerate facet counts. Generation is
 synchronous in the normal product callback; use load-time or explicit bounded
 regeneration, not every frame. Partition large authored compositions and give
-simple planar solids coarser sampling. Existing inline mesh admission budgets
-still apply after normal/UV seam splitting. Output limits are checked after
-extraction and do not bound peak memory or guarantee a latency deadline.
+simple planar solids coarser sampling. Caller-selected output limits are checked
+after extraction and do not bound peak memory or guarantee a latency deadline.
 
 The backend uses Fidget 0.5 evaluation and dual-cell connectivity. Engine
 triangulates its ordered cell-vertex polygons, avoiding folded fans around
@@ -566,7 +565,9 @@ Implicit generation readouts also report boundary, non-manifold, and inconsisten
 winding edges on extracted geometry before normal, UV, and material splitting.
 An entrance into a carved solid can still have a closed rock surface around its
 rim. These report-only counts diagnose index topology, not self-intersections,
-feature survival, or final attributed-mesh watertightness.
+feature survival, or final attributed-mesh watertightness. Strongly displaced
+fields have a [known leaf-connectivity limitation](implicit-topology-diagnosis.md)
+tracked by Engine #7879: zero boundary edges does not establish manifold output.
 
 
 ### Managed authoring vocabulary

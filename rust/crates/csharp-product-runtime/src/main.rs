@@ -18,23 +18,24 @@ use csharp_product_runtime::{
     CsharpProductRuntimeConfig,
 };
 use product_dev_host::{
-    advance_realtime_with_input_and_publish, read_worker_frame, write_worker_frame, CanonicalU64,
-    ProductDevAnimationFeedback, ProductDevAnimationFeedbackResult, ProductDevAudioFeedback,
-    ProductDevAudioFeedbackResult, ProductDevBundle, ProductDevBundleEntry,
-    ProductDevControlOperation, ProductDevDebugCatalog, ProductDevDebugResult,
-    ProductDevGhostPlateFeedback, ProductDevGhostPlateFeedbackResult, ProductDevHost,
-    ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
+    advance_realtime_with_input_and_publish, read_worker_frame, worker_diagnostic_relay,
+    write_worker_frame, CanonicalU64, ProductDevAnimationFeedback,
+    ProductDevAnimationFeedbackResult, ProductDevAudioFeedback, ProductDevAudioFeedbackResult,
+    ProductDevBundle, ProductDevBundleEntry, ProductDevControlOperation, ProductDevDebugCatalog,
+    ProductDevDebugResult, ProductDevGhostPlateFeedback, ProductDevGhostPlateFeedbackResult,
+    ProductDevHost, ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationOwner,
     ProductDevOperationResult, ProductDevRendererDiagnosticsFeedback,
     ProductDevRendererDiagnosticsFeedbackResult, ProductDevRendererResource, ProductDevRuntime,
     ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
     ProductDevTimelineCompletionResult, ProductDevWorkerBundle, ProductDevWorkerBundleEntry,
-    ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic, ProductDevWorkerEvent,
-    ProductDevWorkerFault, ProductDevWorkerFeedbackOperation, ProductDevWorkerLifecycleOperation,
-    ProductDevWorkerOutputBatch, ProductDevWorkerPublication, ProductDevWorkerRequest,
-    ProductDevWorkerResponse, ProductDevWorkerUpdateOperation, ProductDevWorkerUpdateTelemetry,
-    RunningProductDevHost,
+    ProductDevWorkerControlOperation, ProductDevWorkerDiagnostic,
+    ProductDevWorkerDiagnosticRelayReceiver, ProductDevWorkerDiagnosticRelaySender,
+    ProductDevWorkerEvent, ProductDevWorkerFault, ProductDevWorkerFeedbackOperation,
+    ProductDevWorkerLifecycleOperation, ProductDevWorkerOutputBatch, ProductDevWorkerPublication,
+    ProductDevWorkerRequest, ProductDevWorkerResponse, ProductDevWorkerUpdateOperation,
+    ProductDevWorkerUpdateTelemetry, RunningProductDevHost,
 };
 use runtime_input::{
     CompiledInputMappings, ControllerAxis, ControllerButton, DirectInputIntentDescriptor,
@@ -519,7 +520,7 @@ struct WorkerRuntime {
     connection: Arc<Mutex<WorkerConnection>>,
     outputs: mpsc::SyncSender<ProductDevWorkerPublication>,
     output_generation: Arc<AtomicUsize>,
-    diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
+    diagnostics: ProductDevWorkerDiagnosticRelaySender,
     failures: mpsc::SyncSender<u64>,
     scheduler_inflight: runtime_diagnostics::RuntimeOperationActivity,
     operation_timeout: Option<Duration>,
@@ -530,7 +531,7 @@ type WorkerStart = (
     ProductDevBundle,
     Vec<ProductDevRuntimeOutput>,
     mpsc::Receiver<ProductDevWorkerPublication>,
-    mpsc::Receiver<ProductDevWorkerDiagnostic>,
+    ProductDevWorkerDiagnosticRelayReceiver,
     mpsc::Receiver<u64>,
 );
 
@@ -542,6 +543,14 @@ struct PendingWorker {
 struct WorkerResponse {
     response: ProductDevWorkerResponse,
     connection_output_cursor: Option<u64>,
+}
+
+/// Reader-side routes for an exact request response and its earlier execution
+/// settlement marker. Keeping them together prevents the worker reader from
+/// growing another independent delivery surface.
+struct WorkerReaderResponseChannels {
+    responses: mpsc::Sender<Result<WorkerResponse, ProductDevRuntimeError>>,
+    settlements: mpsc::Sender<u64>,
 }
 
 // Scoped to one worker incarnation. Preserve the initiating failure when its
@@ -606,6 +615,7 @@ struct WorkerConnection {
     child: Child,
     writer: TcpStream,
     responses: mpsc::Receiver<Result<WorkerResponse, ProductDevRuntimeError>>,
+    settlements: mpsc::Receiver<u64>,
     next_request_id: u64,
     operation_timeout: Option<Duration>,
     pending_attribution: Option<product_dev_host::ProductDevUpdateAttribution>,
@@ -663,7 +673,7 @@ impl WorkerRuntime {
         // Output remains fenced until the stable shell atomically publishes
         // the worker's ready bundle and complete baseline.
         let output_generation = Arc::new(AtomicUsize::new(0));
-        let (diagnostic_tx, diagnostic_rx) = mpsc::sync_channel(16);
+        let (diagnostic_tx, diagnostic_rx) = worker_diagnostic_relay();
         let (failure_tx, failure_rx) = mpsc::sync_channel(4);
         let scheduler_inflight = Arc::new(Mutex::new(None));
         let (connection, bundle, initial_outputs) = Self::spawn_connection(
@@ -762,7 +772,7 @@ impl WorkerRuntime {
     fn spawn_connection(
         args: &Arguments,
         output_tx: mpsc::SyncSender<ProductDevWorkerPublication>,
-        diagnostic_tx: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
+        diagnostic_tx: ProductDevWorkerDiagnosticRelaySender,
         failure_tx: mpsc::SyncSender<u64>,
         scheduler_inflight: runtime_diagnostics::RuntimeOperationActivity,
         generation: u64,
@@ -897,6 +907,7 @@ impl WorkerRuntime {
             return worker_start_failed(&mut child, format!("DEV_HOST_WORKER_CHANNEL: {error}"));
         }
         let (response_tx, response_rx) = mpsc::channel();
+        let (settlement_tx, settlement_rx) = mpsc::channel();
         let retiring = Arc::new(AtomicBool::new(false));
         let publication_wait = PublicationWait::default();
         let terminal_cause = WorkerTerminalCause::default();
@@ -911,7 +922,10 @@ impl WorkerRuntime {
             .spawn(move || {
                 worker_reader(
                     channel,
-                    response_tx,
+                    WorkerReaderResponseChannels {
+                        responses: response_tx,
+                        settlements: settlement_tx,
+                    },
                     output_tx,
                     diagnostic_tx,
                     failure_tx,
@@ -932,6 +946,7 @@ impl WorkerRuntime {
                 child,
                 writer,
                 responses: response_rx,
+                settlements: settlement_rx,
                 next_request_id: 1,
                 operation_timeout: args.worker_operation_timeout(),
                 pending_attribution: None,
@@ -996,22 +1011,44 @@ fn invoke_connection_inner<T: serde::de::DeserializeOwned>(
     // publication waits. The reader still reports genuine EOF/callback faults.
     let started = Instant::now();
     let initial_wait = connection.publication_wait.elapsed();
+    let mut execution_settled = false;
     let received = loop {
+        if let Err(error) =
+            observe_worker_settlement(connection, request_id, &mut execution_settled)
+        {
+            stop_worker(connection);
+            let _ = failures.try_send(connection.generation);
+            return Err(error);
+        }
         match connection.responses.recv_timeout(Duration::from_millis(20)) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Err(error) =
+                    observe_worker_settlement(connection, request_id, &mut execution_settled)
+                {
+                    stop_worker(connection);
+                    let _ = failures.try_send(connection.generation);
+                    return Err(error);
+                }
                 let publication_time = connection
                     .publication_wait
                     .elapsed()
                     .saturating_sub(initial_wait);
-                if connection.operation_timeout.is_some_and(|timeout| {
-                    started.elapsed().saturating_sub(publication_time) >= timeout
-                }) {
+                if !execution_settled
+                    && connection.operation_timeout.is_some_and(|timeout| {
+                        started.elapsed().saturating_sub(publication_time) >= timeout
+                    })
+                {
                     break Err(mpsc::RecvTimeoutError::Timeout);
                 }
             }
             received => break received,
         }
     };
+    if let Err(error) = observe_worker_settlement(connection, request_id, &mut execution_settled) {
+        stop_worker(connection);
+        let _ = failures.try_send(connection.generation);
+        return Err(error);
+    }
     let response = match received {
         Ok(Ok(response)) => response,
         Ok(Err(error)) => {
@@ -1086,6 +1123,30 @@ fn invoke_connection_inner<T: serde::de::DeserializeOwned>(
     })
 }
 
+/// Marks only the exact request that the worker has completed before it begins
+/// response conversion. A stale or malformed marker must never let a later
+/// callback bypass its execution deadline.
+fn observe_worker_settlement(
+    connection: &mut WorkerConnection,
+    request_id: u64,
+    settled: &mut bool,
+) -> Result<(), ProductDevRuntimeError> {
+    loop {
+        match connection.settlements.try_recv() {
+            Ok(marker_request_id) if marker_request_id == request_id => *settled = true,
+            Ok(marker_request_id) => {
+                return Err(worker_runtime_error(
+                    "DEV_HOST_WORKER_ORDER",
+                    format!(
+                        "worker settled request {marker_request_id} while request {request_id} was active"
+                    ),
+                ));
+            }
+            Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
+}
+
 struct WorkerReaderLifetime {
     generation: u64,
     retiring: Arc<AtomicBool>,
@@ -1158,9 +1219,9 @@ fn acknowledge_worker_publication(
 
 fn worker_reader(
     mut channel: TcpStream,
-    responses: mpsc::Sender<Result<WorkerResponse, ProductDevRuntimeError>>,
+    response_channels: WorkerReaderResponseChannels,
     outputs: mpsc::SyncSender<ProductDevWorkerPublication>,
-    diagnostics: mpsc::SyncSender<ProductDevWorkerDiagnostic>,
+    diagnostics: ProductDevWorkerDiagnosticRelaySender,
     failures: mpsc::SyncSender<u64>,
     scheduler_inflight: runtime_diagnostics::RuntimeOperationActivity,
     lifetime: WorkerReaderLifetime,
@@ -1192,13 +1253,19 @@ fn worker_reader(
                 else {
                     return;
                 };
-                if responses
+                if response_channels
+                    .responses
                     .send(Ok(WorkerResponse {
                         response,
                         connection_output_cursor: Some(cursor),
                     }))
                     .is_err()
                 {
+                    return;
+                }
+            }
+            Ok(ProductDevWorkerEvent::RequestSettled { request_id }) => {
+                if response_channels.settlements.send(request_id).is_err() {
                     return;
                 }
             }
@@ -1213,7 +1280,9 @@ fn worker_reader(
                     let decoded = match worker_outputs(std::mem::take(&mut response.outputs)) {
                         Ok(decoded) => decoded,
                         Err(error) => {
-                            let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
+                            let _ = response_channels
+                                .responses
+                                .send(Err(lifetime.terminal_cause.retain(error)));
                             let _ = failures.try_send(generation);
                             return;
                         }
@@ -1257,7 +1326,8 @@ fn worker_reader(
                         return;
                     }
                 }
-                if responses
+                if response_channels
+                    .responses
                     .send(Ok(WorkerResponse {
                         response,
                         connection_output_cursor: None,
@@ -1293,7 +1363,9 @@ fn worker_reader(
                         let _ = diagnostics.try_send(
                             ProductDevWorkerDiagnostic::from_runtime_error(error.clone()),
                         );
-                        let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
+                        let _ = response_channels
+                            .responses
+                            .send(Err(lifetime.terminal_cause.retain(error)));
                         let _ = failures.try_send(generation);
                         return;
                     }
@@ -1321,7 +1393,9 @@ fn worker_reader(
                 let _ = diagnostics.try_send(ProductDevWorkerDiagnostic::from_runtime_error(
                     error.clone(),
                 ));
-                let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
+                let _ = response_channels
+                    .responses
+                    .send(Err(lifetime.terminal_cause.retain(error)));
                 let _ = failures.try_send(generation);
             }
             Ok(ProductDevWorkerEvent::UpdateTelemetry { telemetry }) => {
@@ -1369,7 +1443,9 @@ fn worker_reader(
                 let _ = diagnostics.try_send(ProductDevWorkerDiagnostic::from_runtime_error(
                     error.clone(),
                 ));
-                let _ = responses.send(Err(lifetime.terminal_cause.retain(error)));
+                let _ = response_channels
+                    .responses
+                    .send(Err(lifetime.terminal_cause.retain(error)));
                 let _ = failures.try_send(generation);
                 return;
             }
@@ -1836,7 +1912,19 @@ fn run_worker(args: Arguments) -> Result<(), String> {
         let publication = publication_gate
             .lock()
             .map_err(|_| "DEV_HOST_WORKER_PUBLICATION: publication lock is poisoned".to_owned())?;
-        let mut result = worker_request(&owner, &mailbox, request);
+        let mut settle_request = |request_id| {
+            writer
+                .lock()
+                .map_err(|_| "DEV_HOST_WORKER_CHANNEL: writer lock is poisoned".to_owned())
+                .and_then(|mut writer| {
+                    write_worker_frame(
+                        &mut *writer,
+                        &ProductDevWorkerEvent::RequestSettled { request_id },
+                    )
+                    .map_err(|error| error.to_string())
+                })
+        };
+        let mut result = worker_request(&owner, &mailbox, request, &mut settle_request)?;
         result.attribution = owner
             .take_update_attribution()
             .map_err(|error| format!("{}: {}", error.code(), error.diagnostic()))?;
@@ -2199,31 +2287,34 @@ fn worker_request(
     owner: &ProductDevOperationOwner<CsharpProductRuntime>,
     mailbox: &WorkerInputMailbox,
     request: ProductDevWorkerRequest,
-) -> ProductDevWorkerResponse {
+    settle_request: &mut dyn FnMut(u64) -> Result<(), String>,
+) -> Result<ProductDevWorkerResponse, String> {
     let request_id = worker_request_id(&request);
-    match request {
+    Ok(match request {
         ProductDevWorkerRequest::Lifecycle {
             operation, binding, ..
         } => match operation {
             ProductDevWorkerLifecycleOperation::Connect => {
-                worker_receipt(request_id, owner.connect())
+                worker_receipt(request_id, owner.connect(), settle_request)?
             }
             _ => worker_receipt(
                 request_id,
                 owner.lifecycle_with_input_fence(worker_lifecycle(operation), binding, || {
                     mailbox.clear()
                 }),
-            ),
+                settle_request,
+            )?,
         },
         ProductDevWorkerRequest::Control {
             operation, binding, ..
         } => worker_receipt(
             request_id,
             owner.control_with_input_fence(worker_control(operation), binding, || mailbox.clear()),
-        ),
+            settle_request,
+        )?,
         ProductDevWorkerRequest::RecoverInput { .. } => {
             mailbox.clear();
-            worker_receipt(request_id, owner.recover_input_overflow())
+            worker_receipt(request_id, owner.recover_input_overflow(), settle_request)?
         }
         ProductDevWorkerRequest::Input { payload, .. } => {
             let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_INPUT")
@@ -2254,7 +2345,7 @@ fn worker_request(
                             })
                     }
                 });
-            worker_receipt(request_id, result)
+            worker_receipt(request_id, result, settle_request)?
         }
         ProductDevWorkerRequest::Update {
             operation, payload, ..
@@ -2267,10 +2358,10 @@ fn worker_request(
                             .map_err(worker_host_error)
                     })
                     .and_then(|time| owner.advance_realtime(time));
-                worker_receipt(request_id, result)
+                worker_receipt(request_id, result, settle_request)?
             }
             ProductDevWorkerUpdateOperation::AdmitDemandStep => {
-                worker_receipt(request_id, owner.admit_demand_step())
+                worker_receipt(request_id, owner.admit_demand_step(), settle_request)?
             }
             ProductDevWorkerUpdateOperation::AdmitExternalStep => {
                 let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_UPDATE")
@@ -2280,7 +2371,7 @@ fn worker_request(
                             .map_err(worker_host_error)
                     })
                     .and_then(|step| owner.admit_external_step(step));
-                worker_receipt(request_id, result)
+                worker_receipt(request_id, result, settle_request)?
             }
             ProductDevWorkerUpdateOperation::CompleteTimeline => {
                 let result = bounded_worker_payload(&payload, "DEV_HOST_WORKER_UPDATE")
@@ -2288,12 +2379,12 @@ fn worker_request(
                         ProductDevTimelineCompletion::decode_json(&bytes).map_err(worker_host_error)
                     })
                     .and_then(|completion| owner.complete_timeline(completion));
-                worker_receipt(request_id, result)
+                worker_receipt(request_id, result, settle_request)?
             }
         },
         ProductDevWorkerRequest::Debug { command, .. } => match command {
             Some(command) if command.len() <= product_dev_host::MAX_REQUEST_BODY_BYTES => {
-                worker_receipt(request_id, owner.execute_debug(&command))
+                worker_receipt(request_id, owner.execute_debug(&command), settle_request)?
             }
             Some(_) => worker_fault_response(
                 request_id,
@@ -2302,7 +2393,7 @@ fn worker_request(
                     "debug command exceeds the host request bound",
                 ),
             ),
-            None => worker_receipt(request_id, owner.describe_debug()),
+            None => worker_receipt(request_id, owner.describe_debug(), settle_request)?,
         },
         ProductDevWorkerRequest::Health { .. } => ProductDevWorkerResponse {
             attribution: None,
@@ -2321,7 +2412,8 @@ fn worker_request(
         ProductDevWorkerRequest::Shutdown { .. } => worker_receipt(
             request_id,
             owner.lifecycle(ProductDevLifecycleOperation::Shutdown),
-        ),
+            settle_request,
+        )?,
         ProductDevWorkerRequest::Feedback {
             operation, payload, ..
         } => match bounded_worker_payload(&payload, "DEV_HOST_WORKER_FEEDBACK") {
@@ -2332,28 +2424,32 @@ fn worker_request(
                     payload,
                     ProductDevAudioFeedback::validate,
                     |feedback| owner.report_audio_feedback(feedback),
-                ),
+                    settle_request,
+                )?,
                 ProductDevWorkerFeedbackOperation::Animation => worker_feedback(
                     request_id,
                     payload,
                     ProductDevAnimationFeedback::validate,
                     |feedback| owner.report_animation_feedback(feedback),
-                ),
+                    settle_request,
+                )?,
                 ProductDevWorkerFeedbackOperation::GhostPlate => worker_feedback(
                     request_id,
                     payload,
                     ProductDevGhostPlateFeedback::validate,
                     |feedback| owner.report_ghost_plate_feedback(feedback),
-                ),
+                    settle_request,
+                )?,
                 ProductDevWorkerFeedbackOperation::RendererDiagnostics => worker_feedback(
                     request_id,
                     payload,
                     ProductDevRendererDiagnosticsFeedback::validate,
                     |feedback| owner.report_renderer_diagnostics(feedback),
-                ),
+                    settle_request,
+                )?,
             },
         },
-    }
+    })
 }
 
 fn worker_request_id(request: &ProductDevWorkerRequest) -> u64 {
@@ -2395,8 +2491,14 @@ fn worker_control(operation: ProductDevWorkerControlOperation) -> ProductDevCont
 fn worker_receipt<T: serde::Serialize>(
     request_id: u64,
     result: Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
-) -> ProductDevWorkerResponse {
-    match result {
+    settle_request: &mut dyn FnMut(u64) -> Result<(), String>,
+) -> Result<ProductDevWorkerResponse, String> {
+    // The owner has returned its receipt/error. This is deliberately before
+    // converting either the result or its publications to JSON. Every `T` at
+    // this call boundary is a closed host receipt type; managed product code
+    // has already returned and cannot supply a serializer on this path.
+    settle_request(request_id)?;
+    Ok(match result {
         Ok(receipt) => {
             let (result, outputs) = receipt.into_parts();
             let response = serde_json::to_value(result)
@@ -2419,7 +2521,7 @@ fn worker_receipt<T: serde::Serialize>(
             }
         }
         Err(error) => worker_fault_response(request_id, error),
-    }
+    })
 }
 
 fn worker_fault_response(
@@ -2444,7 +2546,8 @@ fn worker_feedback<T, R, V, F>(
     payload: serde_json::Value,
     validate: V,
     apply: F,
-) -> ProductDevWorkerResponse
+    settle_request: &mut dyn FnMut(u64) -> Result<(), String>,
+) -> Result<ProductDevWorkerResponse, String>
 where
     T: serde::de::DeserializeOwned,
     R: serde::Serialize,
@@ -2461,7 +2564,7 @@ where
                 .map(|_| feedback)
         })
         .and_then(apply);
-    worker_receipt(request_id, result)
+    worker_receipt(request_id, result, settle_request)
 }
 
 #[allow(
@@ -3482,20 +3585,54 @@ fn content_type(path: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    struct SerializeAfterSettlement(Arc<AtomicBool>);
+
+    impl serde::Serialize for SerializeAfterSettlement {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            assert!(
+                self.0.load(Ordering::Acquire),
+                "receipt serialization must begin after the settlement marker"
+            );
+            serializer.serialize_bool(true)
+        }
+    }
+
+    #[test]
+    fn worker_receipt_emits_settlement_before_receipt_serialization() {
+        let settled = Arc::new(AtomicBool::new(false));
+        let receipt = ProductDevRuntimeReceipt::new(
+            SerializeAfterSettlement(Arc::clone(&settled)),
+            Vec::new(),
+        )
+        .unwrap();
+        let response = worker_receipt(17, Ok(receipt), &mut |request_id| {
+            assert_eq!(request_id, 17);
+            settled.store(true, Ordering::Release);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(response.result, Some(serde_json::json!(true)));
+    }
+
     #[test]
     fn worker_proxy_forwards_input_recovery_fences_and_their_fresh_binding() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut worker = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (writer, _) = listener.accept().unwrap();
         let (responses, response_rx) = mpsc::channel();
+        let (_settlements, settlement_rx) = mpsc::channel();
         let (outputs, _) = mpsc::sync_channel(8);
-        let (diagnostics, _) = mpsc::sync_channel(8);
+        let (diagnostics, _) = worker_diagnostic_relay();
         let (failures, _) = mpsc::sync_channel(8);
         let mut proxy = WorkerRuntime {
             connection: Arc::new(Mutex::new(WorkerConnection {
                 child: Command::new("sleep").arg("30").spawn().unwrap(),
                 writer,
                 responses: response_rx,
+                settlements: settlement_rx,
                 next_request_id: 1,
                 operation_timeout: Some(Duration::from_secs(1)),
                 pending_attribution: None,
@@ -3683,16 +3820,21 @@ mod tests {
         let mut child = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (channel, _) = listener.accept().unwrap();
         let (response_tx, response_rx) = mpsc::channel();
+        let (settlement_tx, _settlement_rx) = mpsc::channel();
         let (output_tx, output_rx) = mpsc::sync_channel(8);
-        let (diagnostic_tx, _diagnostic_rx) = mpsc::sync_channel(8);
+        let (diagnostic_tx, _diagnostic_rx) = worker_diagnostic_relay();
         let (failure_tx, _failure_rx) = mpsc::sync_channel(8);
+        let reader_failure = failure_tx.clone();
         let reader = thread::spawn(move || {
             worker_reader(
                 channel,
-                response_tx,
+                WorkerReaderResponseChannels {
+                    responses: response_tx,
+                    settlements: settlement_tx,
+                },
                 output_tx,
                 diagnostic_tx,
-                failure_tx,
+                reader_failure,
                 Arc::new(Mutex::new(None)),
                 WorkerReaderLifetime {
                     generation: 3,
@@ -3800,14 +3942,152 @@ mod tests {
     }
 
     #[test]
+    fn settled_request_allows_a_response_after_the_execution_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut worker = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (channel, _) = listener.accept().unwrap();
+        let writer = channel.try_clone().unwrap();
+        let (response_tx, response_rx) = mpsc::channel();
+        let (settlement_tx, settlement_rx) = mpsc::channel();
+        let (output_tx, _output_rx) = mpsc::sync_channel(8);
+        let (diagnostic_tx, _diagnostic_rx) = worker_diagnostic_relay();
+        let (failure_tx, _failure_rx) = mpsc::sync_channel(8);
+        let reader_failure = failure_tx.clone();
+        let reader = thread::spawn(move || {
+            worker_reader(
+                channel,
+                WorkerReaderResponseChannels {
+                    responses: response_tx,
+                    settlements: settlement_tx,
+                },
+                output_tx,
+                diagnostic_tx,
+                reader_failure,
+                Arc::new(Mutex::new(None)),
+                WorkerReaderLifetime {
+                    generation: 1,
+                    retiring: Arc::new(AtomicBool::new(false)),
+                    publication_wait: PublicationWait::default(),
+                    terminal_cause: WorkerTerminalCause::default(),
+                },
+            )
+        });
+        let responder = thread::spawn(move || {
+            let request = read_worker_frame::<ProductDevWorkerRequest>(&mut worker).unwrap();
+            let request_id = worker_request_id(&request);
+            write_worker_frame(
+                &mut worker,
+                &ProductDevWorkerEvent::RequestSettled { request_id },
+            )
+            .unwrap();
+            thread::sleep(Duration::from_millis(80));
+            write_worker_frame(
+                &mut worker,
+                &ProductDevWorkerEvent::Response(ProductDevWorkerResponse {
+                    attribution: None,
+                    request_id,
+                    result: Some(serde_json::json!({ "ready": true })),
+                    outputs: Vec::new(),
+                    error: None,
+                }),
+            )
+            .unwrap();
+            worker.shutdown(Shutdown::Both).unwrap();
+        });
+        let mut connection = WorkerConnection {
+            child: Command::new("sleep").arg("30").spawn().unwrap(),
+            writer,
+            responses: response_rx,
+            settlements: settlement_rx,
+            next_request_id: 1,
+            operation_timeout: Some(Duration::from_millis(20)),
+            pending_attribution: None,
+            terminal_cause: WorkerTerminalCause::default(),
+            retiring: Arc::new(AtomicBool::new(false)),
+            publication_wait: PublicationWait::default(),
+            reader: Some(reader),
+            generation: 1,
+        };
+        let receipt =
+            invoke_connection::<serde_json::Value>(&failure_tx, &mut connection, |request_id| {
+                ProductDevWorkerRequest::Health { request_id }
+            })
+            .expect("a settled request may wait for later response delivery");
+        assert_eq!(receipt.result(), &serde_json::json!({ "ready": true }));
+        responder.join().unwrap();
+        stop_worker(&mut connection);
+    }
+
+    #[test]
+    fn request_without_settlement_still_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut worker = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (channel, _) = listener.accept().unwrap();
+        let writer = channel.try_clone().unwrap();
+        let (response_tx, response_rx) = mpsc::channel();
+        let (settlement_tx, settlement_rx) = mpsc::channel();
+        let (output_tx, _output_rx) = mpsc::sync_channel(8);
+        let (diagnostic_tx, _diagnostic_rx) = worker_diagnostic_relay();
+        let (failure_tx, _failure_rx) = mpsc::sync_channel(8);
+        let reader_failure = failure_tx.clone();
+        let reader = thread::spawn(move || {
+            worker_reader(
+                channel,
+                WorkerReaderResponseChannels {
+                    responses: response_tx,
+                    settlements: settlement_tx,
+                },
+                output_tx,
+                diagnostic_tx,
+                reader_failure,
+                Arc::new(Mutex::new(None)),
+                WorkerReaderLifetime {
+                    generation: 1,
+                    retiring: Arc::new(AtomicBool::new(false)),
+                    publication_wait: PublicationWait::default(),
+                    terminal_cause: WorkerTerminalCause::default(),
+                },
+            )
+        });
+        let responder = thread::spawn(move || {
+            let _ = read_worker_frame::<ProductDevWorkerRequest>(&mut worker).unwrap();
+            thread::sleep(Duration::from_millis(80));
+            worker.shutdown(Shutdown::Both).unwrap();
+        });
+        let mut connection = WorkerConnection {
+            child: Command::new("sleep").arg("30").spawn().unwrap(),
+            writer,
+            responses: response_rx,
+            settlements: settlement_rx,
+            next_request_id: 1,
+            operation_timeout: Some(Duration::from_millis(20)),
+            pending_attribution: None,
+            terminal_cause: WorkerTerminalCause::default(),
+            retiring: Arc::new(AtomicBool::new(false)),
+            publication_wait: PublicationWait::default(),
+            reader: Some(reader),
+            generation: 1,
+        };
+        let error =
+            invoke_connection::<serde_json::Value>(&failure_tx, &mut connection, |request_id| {
+                ProductDevWorkerRequest::Health { request_id }
+            })
+            .expect_err("a worker that has not settled remains under the execution deadline");
+        assert_eq!(error.code(), "DEV_HOST_WORKER_TIMEOUT");
+        responder.join().unwrap();
+        stop_worker(&mut connection);
+    }
+
+    #[test]
     fn callback_failure_survives_eof_and_later_connection_writes() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let child_channel = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (channel, _) = listener.accept().unwrap();
         let mut writer = channel.try_clone().unwrap();
         let (response_tx, response_rx) = mpsc::channel();
+        let (settlement_tx, settlement_rx) = mpsc::channel();
         let (output_tx, _) = mpsc::sync_channel(8);
-        let (diagnostic_tx, _diagnostic_rx) = mpsc::sync_channel(8);
+        let (diagnostic_tx, _diagnostic_rx) = worker_diagnostic_relay();
         let (failure_tx, _failure_rx) = mpsc::sync_channel(8);
         let terminal_cause = WorkerTerminalCause::default();
         let reader_cause = terminal_cause.clone();
@@ -3815,7 +4095,10 @@ mod tests {
         let reader = thread::spawn(move || {
             worker_reader(
                 channel,
-                response_tx,
+                WorkerReaderResponseChannels {
+                    responses: response_tx,
+                    settlements: settlement_tx,
+                },
                 output_tx,
                 diagnostic_tx,
                 reader_failure,
@@ -3848,6 +4131,7 @@ mod tests {
             child: Command::new("sleep").arg("30").spawn().unwrap(),
             writer,
             responses: response_rx,
+            settlements: settlement_rx,
             next_request_id: 1,
             operation_timeout: Some(Duration::from_secs(1)),
             pending_attribution: None,
@@ -3879,13 +4163,17 @@ mod tests {
             let child = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
             let (channel, _) = listener.accept().unwrap();
             let (response_tx, _) = mpsc::channel();
+            let (settlement_tx, _) = mpsc::channel();
             let (output_tx, _) = mpsc::sync_channel(8);
-            let (diagnostic_tx, diagnostic_rx) = mpsc::sync_channel(8);
+            let (diagnostic_tx, diagnostic_rx) = worker_diagnostic_relay();
             let (failure_tx, failure_rx) = mpsc::sync_channel(8);
             drop(child);
             worker_reader(
                 channel,
-                response_tx,
+                WorkerReaderResponseChannels {
+                    responses: response_tx,
+                    settlements: settlement_tx,
+                },
                 output_tx,
                 diagnostic_tx,
                 failure_tx,
@@ -3897,7 +4185,10 @@ mod tests {
                     terminal_cause: WorkerTerminalCause::default(),
                 },
             );
-            assert_eq!(diagnostic_rx.try_recv().is_ok(), !retiring);
+            assert_eq!(
+                diagnostic_rx.recv_timeout(Duration::ZERO).is_ok(),
+                !retiring
+            );
             assert_eq!(failure_rx.try_recv().is_ok(), !retiring);
         }
     }

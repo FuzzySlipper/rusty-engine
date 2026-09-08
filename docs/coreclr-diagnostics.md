@@ -78,7 +78,15 @@ Start an explicitly debuggable session:
 ```
 
 `--debugger` removes supervised worker startup and callback deadlines for this
-CoreCLR session. Normal sessions retain their five-second deadlines and recovery.
+CoreCLR session. Normal sessions retain their five-second execution deadlines
+and recovery. Synchronous requests report owner settlement before the Engine
+encodes their retained publications; that encoding and delivery no longer count
+as a stalled product callback. Settlement is not a successful response or a
+publication acknowledgment: the caller still waits for the ordered output
+boundary, and worker death remains an uncertain failure that must not be replayed.
+Post-settlement Engine serialization has no callback deadline; the existing
+socket-write deadline and EOF handling remain. Actual synchronous product work,
+including implicit extraction inside the callback, still uses the normal deadline.
 Channel failures and shell protocol validation remain active. A paused or hung
 callback can wait indefinitely in this mode; continue, detach, or stop the session
 when finished. Source restaging still replaces workers, so avoid editing while

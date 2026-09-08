@@ -22,10 +22,11 @@ use crate::{
     ProductDevLogSeverity, ProductDevNextAction, ProductDevOperationKind,
     ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeError, ProductDevRuntimeOutput,
     ProductDevRuntimeReceipt, ProductDevTelemetrySnapshot, ProductDevTimelineCompletion,
-    ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot, ProductDevWorkerDiagnostic,
-    ProductDevWorkerPublication, ProductDevWorkerUpdateSnapshot, MAX_CONNECTIONS,
-    MAX_OUTPUT_EVENT_BYTES, MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS,
-    MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
+    ProductDevUpdateAttribution, ProductDevUpdateAttributionSnapshot,
+    ProductDevWorkerDiagnosticRelayReceiver, ProductDevWorkerPublication,
+    ProductDevWorkerUpdateSnapshot, MAX_CONNECTIONS, MAX_OUTPUT_EVENT_BYTES,
+    MAX_OUTPUT_FRAGMENT_DATA_BYTES, MAX_OUTPUT_QUEUE_ITEMS, MAX_REQUEST_BODY_BYTES,
+    MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
 };
 
 use crate::session::ProductDevOperationOwner;
@@ -44,7 +45,7 @@ pub const MAX_HOST_INPUT_BATCHES: usize = 256;
 /// not a transport abstraction: production always invokes `TcpListener`.
 type AcceptDecisionHook = Arc<dyn Fn() -> Option<io::ErrorKind> + Send + Sync>;
 type WorkerOutputReceiver = Arc<Mutex<mpsc::Receiver<ProductDevWorkerPublication>>>;
-type WorkerDiagnosticReceiver = Arc<Mutex<mpsc::Receiver<ProductDevWorkerDiagnostic>>>;
+type WorkerDiagnosticReceiver = Arc<Mutex<ProductDevWorkerDiagnosticRelayReceiver>>;
 
 /// Configuration for the fixed development host.
 #[derive(Clone)]
@@ -132,7 +133,7 @@ impl ProductDevHostConfig {
     /// owns HTTP and SSE; worker stderr remains human output only.
     pub fn with_worker_diagnostics(
         mut self,
-        receiver: mpsc::Receiver<ProductDevWorkerDiagnostic>,
+        receiver: ProductDevWorkerDiagnosticRelayReceiver,
     ) -> Self {
         self.worker_diagnostics = Some(Arc::new(Mutex::new(receiver)));
         self

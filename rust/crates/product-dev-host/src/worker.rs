@@ -288,6 +288,12 @@ pub enum ProductDevWorkerEvent {
     /// publication boundary immediately before forwarding this response to
     /// the invoking runtime owner.
     ConnectionResponse(ProductDevWorkerResponse),
+    /// The worker's owner has completed one direct request. This marker is
+    /// intentionally before response JSON conversion and does not imply a
+    /// successful response or a published output frontier.
+    RequestSettled {
+        request_id: u64,
+    },
     Outputs {
         outputs: Vec<Value>,
     },
@@ -399,6 +405,13 @@ mod tests {
         assert_eq!(
             read_worker_frame::<ProductDevWorkerEvent>(&mut bytes.as_slice()).unwrap(),
             event
+        );
+        bytes.clear();
+        let settled = ProductDevWorkerEvent::RequestSettled { request_id: 9 };
+        write_worker_frame(&mut bytes, &settled).unwrap();
+        assert_eq!(
+            read_worker_frame::<ProductDevWorkerEvent>(&mut bytes.as_slice()).unwrap(),
+            settled
         );
     }
 

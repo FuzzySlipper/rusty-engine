@@ -26711,7 +26711,15 @@ function gT(e, t = 0n) {
 			}), l("interaction-mode-loss"), !0);
 		},
 		clear: (e) => {
-			l(MT(e));
+			let t = MT(e);
+			if (t === "interaction-mode-loss") {
+				let e = o.at(-1);
+				if (e !== void 0 && "fact" in e && e.fact.kind === "clear" && e.fact.reason === t) return;
+				u(Object.freeze({
+					kind: "clear",
+					reason: t
+				}));
+			} else l(t);
 		},
 		enqueueFact: (e) => u(jT(e)),
 		claim: (e, t) => {
@@ -28263,8 +28271,8 @@ function aD(e) {
 				runtime: r,
 				snapshot: a
 			}));
-			if (!yD(t, r) || !yD(o.runtime, r)) throw new Z("transport_failed", "renderer diagnostics result did not match the current Product runtime binding");
-			if (!QE(o)) {
+			if (!yD(o.runtime, r)) throw new Z("transport_failed", "renderer diagnostics result did not match the current Product runtime binding");
+			if (yD(t, r) && !QE(o)) {
 				if (!o.accepted || o.diagnostic !== void 0) throw new Z("transport_failed", o.diagnostic ?? "renderer diagnostics were rejected by the runtime");
 				n = a.submission.renderSequence, e.onObservation?.(a.submission.renderSequence);
 			}

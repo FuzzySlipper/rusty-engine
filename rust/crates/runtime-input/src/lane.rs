@@ -394,8 +394,16 @@ impl RuntimeInputLane {
             }
         );
         match ingress.fact() {
-            RuntimeInputFact::Clear { .. } => {
-                self.clear_state();
+            RuntimeInputFact::Clear { reason } => {
+                if *reason == InputClearReason::InteractionModeLoss
+                    && ingress.context() == &self.context
+                {
+                    self.clear_physical_state();
+                    self.pending_intents
+                        .retain(|intent| matches!(intent.provenance, IntentProvenance::DirectUi));
+                } else {
+                    self.clear_state();
+                }
                 self.context = ingress.context().clone();
                 self.last_sequence = Some(ingress.sequence());
             }
@@ -534,6 +542,11 @@ impl RuntimeInputLane {
     }
 
     fn clear_state(&mut self) {
+        self.clear_physical_state();
+        self.pending_intents.clear();
+    }
+
+    fn clear_physical_state(&mut self) {
         self.keyboard.clear();
         self.pointer_buttons.clear();
         self.controller_buttons.clear();
@@ -543,7 +556,6 @@ impl RuntimeInputLane {
         self.controller_axes.clear();
         self.controller_button_values.clear();
         self.mapping_active.fill(false);
-        self.pending_intents.clear();
     }
 
     fn clear_transient(&mut self) {
