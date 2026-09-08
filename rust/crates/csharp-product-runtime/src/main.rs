@@ -3618,6 +3618,35 @@ mod tests {
     }
 
     #[test]
+    fn settlement_marker_cannot_complete_a_different_active_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _worker = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (writer, _) = listener.accept().unwrap();
+        let (_response_tx, response_rx) = mpsc::channel();
+        let (settlement_tx, settlement_rx) = mpsc::channel();
+        settlement_tx.send(18).unwrap();
+        let mut connection = WorkerConnection {
+            child: Command::new("sleep").arg("30").spawn().unwrap(),
+            writer,
+            responses: response_rx,
+            settlements: settlement_rx,
+            next_request_id: 1,
+            operation_timeout: Some(Duration::from_secs(1)),
+            pending_attribution: None,
+            terminal_cause: WorkerTerminalCause::default(),
+            retiring: Arc::new(AtomicBool::new(false)),
+            publication_wait: PublicationWait::default(),
+            reader: None,
+            generation: 1,
+        };
+        let mut settled = false;
+        let error = observe_worker_settlement(&mut connection, 17, &mut settled)
+            .expect_err("a marker for another request must not settle this request");
+        assert_eq!(error.code(), "DEV_HOST_WORKER_ORDER");
+        assert!(!settled);
+    }
+
+    #[test]
     fn worker_proxy_forwards_input_recovery_fences_and_their_fresh_binding() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut worker = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
