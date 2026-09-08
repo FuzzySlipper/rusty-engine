@@ -12,7 +12,6 @@ import type {
 } from '@rusty-engine/render-contracts';
 import {
   RenderProjection,
-  RenderProjectionError,
   type RenderProjectionInstruction,
   type RenderProjectionSnapshot,
 } from '@rusty-engine/render-projection';
@@ -1117,16 +1116,6 @@ function mountPreparedRendererSurface(
       );
     }
     try {
-      // Phase one is renderer-neutral and non-committing. ThreeRenderer performs
-      // its own complete backend/resource preflight, so neither store advances
-      // until both agree that the whole frame is applicable.
-      projection.validateFrame(nextFrame);
-    } catch (cause) {
-      if (cause instanceof RenderProjectionError) return atomicFrameRejection(cause);
-      terminalizeBackend(cause);
-      return terminalFrameReceipt('renderer_backend_failure', errorMessage(cause));
-    }
-    try {
       backendSurface.applyFrame(nextFrame);
     } catch (cause) {
       if (cause instanceof RendererTerminalError) {
@@ -1571,6 +1560,13 @@ function createRendererSurfaceFirstPersonControls(
   document.addEventListener('keyup', onKeyUp);
   document.defaultView?.addEventListener('blur', clearInput);
 
+  const exactCameraPose = (): RendererSurfaceCameraPose => ({
+    position: [...position],
+    pitchDegrees: radiansToDegrees(pitchRadians),
+    yawDegrees: radiansToDegrees(yawRadians),
+  });
+
+  // Rounded values are for public diagnostic readout, never rendering or demand.
   const cameraPose = (): RendererSurfaceCameraPose => ({
     position: [round4(position[0]), round4(position[1]), round4(position[2])],
     pitchDegrees: round2(radiansToDegrees(pitchRadians)),
@@ -1619,7 +1615,7 @@ function createRendererSurfaceFirstPersonControls(
         moveRight,
         moveSpeedUnitsPerSecond: moveSpeed,
         pitchDeltaDegrees,
-        poseBefore: cameraPose(),
+        poseBefore: exactCameraPose(),
         sequence,
         yawDeltaDegrees,
       });
@@ -1658,7 +1654,7 @@ function createRendererSurfaceFirstPersonControls(
 
   return {
     cameraPose,
-    cameraSnapshot: () => ({ ...(basis === undefined ? {} : { basis }), pose: cameraPose() }),
+    cameraSnapshot: () => ({ ...(basis === undefined ? {} : { basis }), pose: exactCameraPose() }),
     inputReadout: () => ({
       enabled,
       pointerLocked: pointerLocked(),

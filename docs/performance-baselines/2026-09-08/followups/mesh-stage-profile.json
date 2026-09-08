@@ -1,0 +1,56 @@
+{
+  "environment": "local-node-no-GL-instrumented",
+  "node": "v26.8.1",
+  "workload": "relief-grid-256-v2",
+  "note": "Old source transpiled from208e517; original surface preflight included. Clone timer covers all structuredClone calls. Backend timer excludes staged projection admission. Not a GPU benchmark.",
+  "records": [
+    {
+      "run": 1,
+      "implementation": "208e517-before",
+      "totalMs": 1003.3993049999999,
+      "structuredCloneMs": 927.2504089999991,
+      "fullMeshCloneCount": 6,
+      "backendRealizationMs": null
+    },
+    {
+      "run": 1,
+      "implementation": "working-tree-after",
+      "totalMs": 47.39561599999979,
+      "structuredCloneMs": 27.85365000000047,
+      "fullMeshCloneCount": 0,
+      "backendRealizationMs": 2.5624840000000404
+    },
+    {
+      "run": 2,
+      "implementation": "208e517-before",
+      "totalMs": 828.6743569999999,
+      "structuredCloneMs": 780.4293189999999,
+      "fullMeshCloneCount": 6,
+      "backendRealizationMs": null
+    },
+    {
+      "run": 2,
+      "implementation": "working-tree-after",
+      "totalMs": 52.19286499999998,
+      "structuredCloneMs": 23.79952399999911,
+      "fullMeshCloneCount": 0,
+      "backendRealizationMs": 1.7676559999999881
+    },
+    {
+      "run": 3,
+      "implementation": "208e517-before",
+      "totalMs": 889.2771859999998,
+      "structuredCloneMs": 835.8156919999992,
+      "fullMeshCloneCount": 6,
+      "backendRealizationMs": null
+    },
+    {
+      "run": 3,
+      "implementation": "working-tree-after",
+      "totalMs": 41.53366899999992,
+      "structuredCloneMs": 20.249473999999736,
+      "fullMeshCloneCount": 0,
+      "backendRealizationMs": 2.0547200000000885
+    }
+  ]
+}

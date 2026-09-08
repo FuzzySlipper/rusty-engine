@@ -134,6 +134,8 @@ interface BrowserProof {
   readonly staticDemandApplied: boolean;
   readonly staticDemandCameraPosition: readonly [number, number, number];
   readonly staticDemandCameraRenderCount: number;
+  readonly preciseCameraRenderCounts: readonly number[];
+  readonly unchangedCameraRenderCount: number;
   readonly staticDemandDirtyRenderCount: number;
   readonly staticDemandIdleRenderCount: number;
   readonly staticDemandRejectedApplied: boolean;
@@ -498,6 +500,25 @@ async function main(): Promise<void> {
   );
   const staticDemandCameraSequence = staticDemandSurface.submission().renderSequence;
   const staticDemandCameraPosition = staticDemandSurface.cameraPose().position;
+  // Each change is below the diagnostic rounding quantum. Rendering must still
+  // advance, including the adjacent sine values that formerly stalled at 52.
+  const preciseCameraRenderCounts: number[] = [];
+  const precisePoses = [
+    { position: [3.00001, 1.62, 8] as const, pitchDegrees: 0, yawDegrees: 0 },
+    { position: [3.00001, 1.62, 8] as const, pitchDegrees: 0.001, yawDegrees: 0 },
+    { position: [3.00001, 1.62, 8] as const, pitchDegrees: 0.001, yawDegrees: Math.sin(51 * 0.03) * 3 },
+    { position: [3.00001, 1.62, 8] as const, pitchDegrees: 0.001, yawDegrees: Math.sin(52 * 0.03) * 3 },
+  ];
+  for (const pose of precisePoses) {
+    const before = staticDemandSurface.submission().renderSequence;
+    staticDemandSurface.setCameraPose(pose);
+    await waitForAnimationFrame(() => staticDemandSurface.submission().renderSequence > before);
+    preciseCameraRenderCounts.push(staticDemandSurface.submission().renderSequence - before);
+  }
+  const unchangedCameraSequence = staticDemandSurface.submission().renderSequence;
+  staticDemandSurface.setCameraPose(precisePoses.at(-1)!);
+  await waitAnimationFrames(3);
+  const unchangedCameraRenderCount = staticDemandSurface.submission().renderSequence - unchangedCameraSequence;
   staticDemandSurface.stop();
   staticDemandSurface.dispose();
 
@@ -1047,6 +1068,8 @@ async function main(): Promise<void> {
     skyBackgroundViewComposition: skyBackgroundViewCompositionReadout,
     staticDemandApplied: staticDemandApplied.applied,
     staticDemandCameraPosition,
+    preciseCameraRenderCounts,
+    unchangedCameraRenderCount,
     staticDemandCameraRenderCount: staticDemandCameraSequence - staticDemandDirtySequence,
     staticDemandDirtyRenderCount: staticDemandDirtySequence - staticDemandIdleSequence,
     staticDemandIdleRenderCount: staticDemandIdleSequence - staticDemandMountSequence,

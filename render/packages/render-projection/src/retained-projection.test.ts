@@ -1398,3 +1398,50 @@ void test('graphics and auxiliary realization share a frontier without advancing
   projection.applyFrame({ schemaVersion: 1, publication: { ...publication, baseRevision: 8, revision: 9, operationCount: 1 }, ops: [createPrimitive(91, 'after-effects')] });
   assert.throws(() => projection.commitPublication(publication, 2), /stale publication/u);
 });
+
+void test('composed frame commits only after realization succeeds and keeps retained data detached', () => {
+  const projection = new RenderProjection();
+  const node = cubeNode();
+  const frame = { schemaVersion: 1 as const, ops: [
+    { op: 'create' as const, handle: renderHandle(1), parent: null, node },
+  ] };
+  const failed = new Error('realization failed');
+  assert.throws(() => projection.applyFrame(frame, () => {
+    assert.equal(projection.has(renderHandle(1)), false);
+    throw failed;
+  }), (error) => error === failed);
+  assert.equal(projection.has(renderHandle(1)), false);
+  projection.applyFrame(frame, (instructions) => {
+    assert.equal(projection.has(renderHandle(1)), false);
+    assert.equal(instructions.length, 1);
+  });
+  assert.equal(projection.has(renderHandle(1)), true);
+  const retained = projection.snapshot();
+  (node.metadata.tags as string[]).push('caller-mutation');
+  assert.deepEqual(projection.snapshot(), retained);
+});
+
+void test('static mesh stream copies isolate caller, instruction and readback ownership', () => {
+  const projection = new RenderProjection();
+  const base = meshAsset();
+  assert.equal(base.payload.source.kind, 'inline');
+  if (base.payload.source.kind !== 'inline') throw new Error('inline fixture required');
+  const asset: StaticMeshAsset = { ...base, payload: { ...base.payload,
+    layout: { ...base.payload.layout, attributes: [...base.payload.layout.attributes,
+      { name: 'uv', components: 2, kind: 'f32' }, { name: 'color', components: 4, kind: 'f32' }] },
+    source: { ...base.payload.source, uvs: [0, 0, 1, 0, 1, 1, 0, 1], colors: Array(16).fill(1) as number[] },
+  } };
+  const instructions = projection.applyFrame({ schemaVersion: 1, ops: [{ op: 'defineStaticMesh', asset }] });
+  const retained = projection.snapshot();
+  const mutateLeaves = (value: object): void => {
+    for (const [key, child] of Object.entries(value)) {
+      if (child !== null && typeof child === 'object') mutateLeaves(child as object);
+      else Reflect.set(value, key, typeof child === 'number' ? 999 : 'changed');
+    }
+  };
+  mutateLeaves(asset);
+  mutateLeaves(instructions);
+  mutateLeaves(projection.staticMesh('mesh/crate')!);
+  mutateLeaves(projection.snapshot());
+  assert.deepEqual(projection.snapshot(), retained);
+});

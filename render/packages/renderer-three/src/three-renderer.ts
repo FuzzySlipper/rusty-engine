@@ -529,17 +529,17 @@ export class ThreeRenderer {
     if (this.#terminalError !== null) {
       throw this.#terminalError;
     }
-    let instructions: readonly RenderProjectionInstruction[];
     try {
-      instructions = this.#projection.validateFrame(frame);
-      this.#validateShadowBudget(instructions);
+      this.#projection.applyFrame(frame, (instructions) => {
+        this.#validateShadowBudget(instructions);
+        this.#applyValidatedFrame(frame, instructions);
+      });
     } catch (cause) {
       if (cause instanceof RenderProjectionError) {
         throw new RenderApplyError(cause.message);
       }
       throw cause;
     }
-    this.#applyValidatedFrame(frame, instructions, () => this.#projection.applyFrame(frame));
   }
 
   /**
@@ -579,13 +579,13 @@ export class ThreeRenderer {
       }
       throw cause;
     }
-    this.#applyValidatedFrame(frame, instructions, () => this.#projection.establishBaseline(frame, frontiers));
+    this.#applyValidatedFrame(frame, instructions);
+    this.#projection.establishBaseline(frame, frontiers);
   }
 
   #applyValidatedFrame(
     frame: RenderFrameDiff,
     instructions: readonly RenderProjectionInstruction[],
-    commitProjection: () => void,
   ): void {
     const prepared = this.#prepareFrame(frame);
     try {
@@ -673,11 +673,7 @@ export class ThreeRenderer {
         throw this.#enterTerminal('shadow_realization', cause);
       }
     }
-    // The neutral publication is the success marker. Keep it at the prior
-    // revision until every fallible Three realization phase has completed;
-    // terminal backends are then rebaselined instead of claiming a delta they
-    // may only have partially realized.
-    commitProjection();
+
   }
 
   #enterTerminal(

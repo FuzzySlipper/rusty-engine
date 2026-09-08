@@ -354,6 +354,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.staticDemandDirtyRenderCount).toBe(1);
   expect(proof.staticDemandCameraPosition).toEqual([3, 1.62, 8]);
   expect(proof.staticDemandCameraRenderCount).toBe(1);
+  expect(proof.preciseCameraRenderCounts).toEqual([1, 1, 1, 1]);
+  expect(proof.unchangedCameraRenderCount).toBe(0);
   expect(proof.replacementRenderSequence).toBe(1);
   expect(proof.replacementStatistics).toEqual({
     schemaVersion: 1,

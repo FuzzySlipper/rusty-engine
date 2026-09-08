@@ -267,10 +267,18 @@ export class RenderProjection {
   /**
    * Apply a frame in authored order and return renderer-neutral instructions.
    * The frame is fail-atomic: a rejected later operation cannot retain any
-   * state from earlier operations in the same frame.
+   * state from earlier operations in the same frame. An optional synchronous
+   * realization callback runs before commit and must not mutate this projection.
+   * Throwing leaves the prior projection intact.
    */
-  applyFrame(frame: RenderFrameDiff): readonly RenderProjectionInstruction[] {
+  applyFrame(
+    frame: RenderFrameDiff,
+    realize?: (instructions: readonly RenderProjectionInstruction[]) => void,
+  ): readonly RenderProjectionInstruction[] {
     const { staged, instructions } = this.#stageFrame(frame);
+    // Realize synchronously against the prior committed projection. A failure
+    // leaves it untouched; success publishes this exact staged transition.
+    realize?.(instructions);
     this.#replaceWith(staged);
     return instructions;
   }
@@ -454,7 +462,8 @@ export class RenderProjection {
   }
 
   staticMesh(asset: string): StaticMeshAsset | undefined {
-    return clone(this.#staticMeshes.get(asset)?.asset);
+    const retained = this.#staticMeshes.get(asset)?.asset;
+    return retained === undefined ? undefined : copyStaticMeshAsset(retained);
   }
 
   animatedMesh(asset: string): AnimatedMeshAsset | undefined {
@@ -498,7 +507,7 @@ export class RenderProjection {
       textures: sortedValues(this.#textures),
       spriteAtlases: sortedValues(this.#spriteAtlases),
       staticMeshes: [...this.#staticMeshes.values()]
-        .map((record) => clone(record.asset))
+        .map((record) => copyStaticMeshAsset(record.asset))
         .sort((a, b) => a.asset.localeCompare(b.asset)),
       animatedMeshes: [...this.#animatedMeshes.values()]
         .map((record) => clone(record.asset))
@@ -771,8 +780,8 @@ export class RenderProjection {
         `defineStaticMesh: asset ${asset.asset} is in use by ${existing.refCount} instance(s)`,
       );
     }
-    this.#staticMeshes.set(asset.asset, { asset: clone(asset), refCount: 0 });
-    return { op: 'defineStaticMesh', asset: clone(asset) };
+    this.#staticMeshes.set(asset.asset, { asset: copyStaticMeshAsset(asset), refCount: 0 });
+    return { op: 'defineStaticMesh', asset: copyStaticMeshAsset(asset) };
   }
 
   #releaseStaticMesh(asset: string): RenderProjectionInstruction {
@@ -831,7 +840,9 @@ export class RenderProjection {
       visible: instance.visible,
       metadata: clone(instance.metadata),
       material: null,
-      meshPayload: clone(asset.asset.payload),
+      // Both records belong to this projection; instances share the immutable
+      // retained asset payload. Public readbacks still detach their data.
+      meshPayload: asset.asset.payload,
       asset: instance.asset,
       instance,
       materialParameters: new Map(),
@@ -1320,6 +1331,32 @@ export class RenderProjection {
     }
     return { staged, instructions };
   }
+}
+
+// These contracts are plain data with numeric streams. Copy their known fields
+// directly instead of sending large number arrays through structuredClone.
+function copyStaticMeshAsset(asset: StaticMeshAsset): StaticMeshAsset {
+  const payload = asset.payload;
+  const source = payload.source;
+  return {
+    ...asset,
+    collision: { ...asset.collision },
+    materialSlots: asset.materialSlots.map((slot) => ({ ...slot })),
+    payload: {
+      ...payload,
+      layout: { ...payload.layout, attributes: payload.layout.attributes.map((attribute) => ({ ...attribute })) },
+      groups: payload.groups.map((group) => ({ ...group })),
+      bounds: { min: [...payload.bounds.min], max: [...payload.bounds.max] },
+      source: source.kind === 'inline' ? {
+        ...source,
+        positions: source.positions.slice(),
+        normals: source.normals.slice(),
+        indices: source.indices.slice(),
+        ...(source.uvs === undefined ? {} : { uvs: source.uvs.slice() }),
+        ...(source.colors === undefined ? {} : { colors: source.colors.slice() }),
+      } : { ...source },
+    },
+  };
 }
 
 function copyNodeRecord(record: NodeRecord): NodeRecord {
