@@ -860,12 +860,18 @@ test('Engine application-host input ingress observes bounded physical facts and 
   await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
   await page.locator('#input-claim-button').click();
   const afterUiClaim = await page.evaluate(() => window.__rustyApplicationHost?.input?.drain());
-  expect(afterUiClaim).toHaveLength(2);
+  // Physical loss clears retain their order; a later clear must not erase
+  // already accepted events or the DOM claim that follows them.
+  expect(afterUiClaim).toHaveLength(3);
   expect(afterUiClaim?.[0]).toMatchObject({
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'pointer-lock-loss' },
+  });
+  expect(afterUiClaim?.[1]).toMatchObject({
     context: 'gameplay.default',
     fact: { kind: 'clear', reason: 'interaction-mode-loss' },
   });
-  expect(afterUiClaim?.[1]).toMatchObject({
+  expect(afterUiClaim?.[2]).toMatchObject({
     context: 'gameplay.default',
     intent: 'ui.confirm',
     value: { kind: 'digital', active: true },
@@ -1037,7 +1043,7 @@ test('application host without runtime ingress owns canvas focus through replace
   expect(await requests()).toBe(1);
 });
 
-test('application-host input ingress treats pointer cancellation as a fail-closed loss', async ({ page }) => {
+test('application-host input ingress preserves the press followed by its cancellation clear', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const entries = await page.evaluate(() => {
     const gameplay = document.querySelector<HTMLElement>('#gameplay-zone');
@@ -1049,6 +1055,11 @@ test('application-host input ingress treats pointer cancellation as a fail-close
   expect(entries).toEqual([{
     runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
     sequence: '0',
+    context: 'gameplay.default',
+    fact: { kind: 'pointer-button', button: 'primary', edge: 'pressed' },
+  }, {
+    runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+    sequence: '1',
     context: 'gameplay.default',
     fact: { kind: 'clear', reason: 'interaction-mode-loss' },
   }]);
@@ -1153,6 +1164,11 @@ test('application-host input ingress clears a pressed pointer when its release l
   expect(await page.evaluate(() => window.__rustyApplicationHost?.input?.drain())).toEqual([{
     runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
     sequence: '0',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'pointer-lock-loss' },
+  }, {
+    runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+    sequence: '1',
     context: 'gameplay.default',
     fact: { kind: 'clear', reason: 'interaction-mode-loss' },
   }]);
