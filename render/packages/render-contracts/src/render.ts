@@ -439,6 +439,18 @@ export interface MaterialInstanceParameters {
 export type SpriteSizeMode = 'world' | 'pixel';
 export type BillboardMode = 'none' | 'spherical' | 'cylindrical';
 export type SpriteDepthPolicy = 'default' | 'depthTestOff' | 'depthWriteOff';
+export type SpriteViewportFit = 'stretch' | 'contain';
+/**
+ * Optional lower-left CSS-viewport placement. Values may overscan and clip
+ * normally; no custom clip rectangle is created. When present, the renderer
+ * owns final screen geometry and ignores authored sprite transforms.
+ */
+export interface SpriteViewportPlacement {
+  readonly minimum: Vec2;
+  readonly size: Vec2;
+  readonly alignment: Vec2;
+  readonly fit: SpriteViewportFit;
+}
 export type SpriteShading = 'unlit' | 'lit' | 'shadowed' | 'custom';
 export type SpriteLightingMode =
   | 'unlit'
@@ -478,6 +490,9 @@ export interface SpriteInstanceDescriptor {
   readonly tint: Vec4;
   readonly renderOrder: number;
   readonly depth: SpriteDepthPolicy;
+  /** Parentless sprites default to scene; authored projection supplies this. */
+  readonly layer?: RenderLayer;
+  readonly viewportPlacement?: SpriteViewportPlacement | null;
   readonly shading: SpriteShading;
   /** Omitted legacy descriptors resolve from `shading`; new writers use this bounded shape. */
   readonly material?: SpriteMaterialDescriptor;

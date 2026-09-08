@@ -600,6 +600,8 @@
         ],
         "renderOrder": 3,
         "depth": "default",
+        "layer": "scene",
+        "viewportPlacement": null,
         "shading": "unlit",
         "material": {
           "lighting": "unlit",

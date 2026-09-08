@@ -38,9 +38,9 @@ use crate::appearance::{
     read_sprite_playback, replace_light, replace_material, replace_primitive_appearance,
     replace_sprite_appearance, replace_sprite_from_atlas, replace_static_mesh_appearance,
     replace_static_mesh_from_content_appearance, sample_sprite_playback,
-    select_sprite_playback_frame, set_sprite_frame, take_mesh_partition_part, update_light,
-    update_material, update_static_mesh_materials, AnimationCueDefinition, CsharpRenderResource,
-    RuntimeAppearanceBridge, RuntimeAppearanceCall,
+    select_sprite_playback_frame, set_sprite_frame, set_sprite_viewport, take_mesh_partition_part,
+    update_light, update_material, update_static_mesh_materials, AnimationCueDefinition,
+    CsharpRenderResource, RuntimeAppearanceBridge, RuntimeAppearanceCall,
 };
 
 #[allow(
@@ -117,6 +117,7 @@ fn engine_api(
             create_sprite_from_atlas,
             replace_sprite_from_atlas,
             set_sprite_frame,
+            set_sprite_viewport,
             read_sprite,
             create_sprite_playback,
             destroy_sprite_playback,

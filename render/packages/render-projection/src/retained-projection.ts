@@ -1066,7 +1066,7 @@ export class RenderProjection {
       parent,
       children: new Set(),
       kind: 'sprite',
-      layer: parent === null ? 'scene' : this.#require(parent, 'createSprite.parent').layer,
+      layer: parent === null ? (sprite.layer ?? 'scene') : this.#require(parent, 'createSprite.parent').layer,
       transform: clone(sprite.transform),
       visible: sprite.visible,
       metadata: clone(sprite.metadata),

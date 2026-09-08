@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <RustyEngineProductEntryType>CsharpViewportSprite.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>csharp-viewport-sprite</RustyEngineProductId>
+    <RustyEngineProductTitle>C# Viewport Sprite</RustyEngineProductTitle>
+    <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
+    <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/../csharp-nativeaot-trial/content</RustyEngineProductContentRoot>
+    <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
+    <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineStagedProductDirectory>$(MSBuildProjectDirectory)/obj/Rusty.Engine/Product</RustyEngineStagedProductDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$(RustyEngineFixtureSdkVersion)" />
+  </ItemGroup>
+</Project>

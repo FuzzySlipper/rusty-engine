@@ -380,6 +380,7 @@ fn validate_scene(
         if let Appearance::Sprite { sprite } = &mut appearance {
             sprite.transform = node.transform;
             sprite.visible = node.visible;
+            sprite.layer = node.layer;
             sprite.metadata = node.metadata.clone();
         }
         nodes.insert(
@@ -774,6 +775,8 @@ fn requires_recreate(previous: &ProjectedNode, next: &ProjectedNode) -> bool {
                 || previous.size_mode != next.size_mode
                 || previous.billboard != next.billboard
                 || previous.depth != next.depth
+                || previous.layer != next.layer
+                || previous.viewport_placement != next.viewport_placement
                 || previous.shading != next.shading
                 || previous.material != next.material
                 || previous.attachment != next.attachment
@@ -867,6 +870,7 @@ fn create_node(
             let mut sprite = sprite.clone();
             sprite.transform = node.transform;
             sprite.visible = node.visible;
+            sprite.layer = node.layer;
             sprite.metadata = node.metadata.clone();
             RenderDiff::CreateSprite {
                 handle,

@@ -160,6 +160,28 @@ pub enum NativeSpriteDepthPolicy {
     DepthWriteOff = 2,
 }
 
+/// Fitting policy for a renderer-neutral sprite viewport placement.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeSpriteViewportFit {
+    Stretch = 0,
+    Contain = 1,
+}
+
+/// Updates the optional CSS-viewport-relative placement retained by a sprite
+/// appearance. A disabled request clears placement; enabled values describe a
+/// lower-left normalized rectangle and alignment inside it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteViewportUpdateRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub enabled: bool,
+    pub minimum: NativeVec2,
+    pub size: NativeVec2,
+    pub alignment: NativeVec2,
+    pub fit: NativeSpriteViewportFit,
+}
+
 /// Explicit renderer material alpha semantics. Opaque is the stable ordinary
 /// default; a cutoff is used only for Mask.
 #[repr(u32)]

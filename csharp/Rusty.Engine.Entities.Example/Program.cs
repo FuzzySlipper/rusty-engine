@@ -926,6 +926,7 @@ sealed class GraphicsServiceFake : IGraphicsService
     public Appearance CreateSpriteFromAtlas(SpriteFromAtlasRequest arg0) => throw new NotSupportedException();
     public Appearance ReplaceSpriteFromAtlas(SpriteFromAtlasReplaceRequest arg0) => throw new NotSupportedException();
     public void SetSpriteFrame(SpriteFrameUpdateRequest arg0) => throw new NotSupportedException();
+    public void SetSpriteViewport(SpriteViewportUpdateRequest arg0) => throw new NotSupportedException();
     public SpriteReadout ReadSprite(Appearance arg0) => throw new NotSupportedException();
     public SpritePlayback CreateSpritePlayback(SpritePlaybackCreateRequest arg0) => throw new NotSupportedException();
     public SpritePlaybackReadout ControlSpritePlayback(SpritePlaybackControlRequest arg0) => throw new NotSupportedException();

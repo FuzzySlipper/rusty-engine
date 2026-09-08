@@ -517,6 +517,7 @@ export function mountRendererBrowserSurface(
       webgl.setSize(width, height, false);
       logicalViewport = { width, height };
     }
+    renderer.setViewportSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     viewmodelCamera.aspect = width / height;

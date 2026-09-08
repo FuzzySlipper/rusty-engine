@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::RenderLayer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -889,6 +890,49 @@ pub enum SpriteDepthPolicy {
     DepthWriteOff,
 }
 
+/// How a sprite is fitted into a renderer-owned normalized viewport rectangle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpriteViewportFit {
+    Stretch,
+    Contain,
+}
+
+/// Optional camera-relative screen placement for a sprite.
+///
+/// `minimum` is the lower-left corner and `size` is the positive extent, both
+/// measured in CSS-viewport units. Values may overscan the viewport, which
+/// clips normally. When present, the renderer owns final screen geometry; the
+/// authored transform cannot offset the fitted rectangle.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpriteViewportPlacement {
+    pub minimum: [f32; 2],
+    pub size: [f32; 2],
+    pub alignment: [f32; 2],
+    pub fit: SpriteViewportFit,
+}
+
+impl SpriteViewportPlacement {
+    pub fn validate(&self) -> Result<(), SpriteError> {
+        if !self
+            .minimum
+            .iter()
+            .chain(self.size.iter())
+            .chain(self.alignment.iter())
+            .all(|value| value.is_finite())
+            || self.size.iter().any(|value| *value <= 0.0)
+            || self
+                .alignment
+                .iter()
+                .any(|value| !(0.0..=1.0).contains(value))
+        {
+            return Err(SpriteError::InvalidViewportPlacement);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SpriteShading {
@@ -1042,6 +1086,10 @@ pub struct SpriteInstanceDescriptor {
     pub tint: [f32; 4],
     pub render_order: i32,
     pub depth: SpriteDepthPolicy,
+    #[serde(default)]
+    pub layer: RenderLayer,
+    #[serde(default)]
+    pub viewport_placement: Option<SpriteViewportPlacement>,
     pub shading: SpriteShading,
     #[serde(default)]
     pub material: SpriteMaterialDescriptor,
@@ -1072,6 +1120,9 @@ impl SpriteInstanceDescriptor {
             return Err(SpriteError::InvalidTint);
         }
         self.material.validate().map_err(SpriteError::Material)?;
+        if let Some(placement) = self.viewport_placement {
+            placement.validate()?;
+        }
         self.transform.validate().map_err(SpriteError::Transform)?;
         self.metadata.validate().map_err(SpriteError::Metadata)?;
         if self
@@ -1101,6 +1152,7 @@ pub enum SpriteError {
     PivotOutOfRange { pivot: [f32; 2] },
     NonPositiveSize { size: [f32; 2] },
     InvalidTint,
+    InvalidViewportPlacement,
     Material(SpriteMaterialError),
     Transform(crate::TransformError),
     Metadata(crate::NodeError),

@@ -1412,24 +1412,22 @@ fn worker_reader(
             }
             Ok(ProductDevWorkerEvent::UpdateTelemetry { telemetry }) => {
                 let delivery_interval_us = delivery_started.take().map(elapsed_us);
-                // Same bounded ordered publication queue as outputs. Losing a
-                // telemetry observation must not silently make stale timing look current.
-                if outputs
-                    .try_send(ProductDevWorkerPublication::UpdateTelemetry {
+                // Preserve the observation beside the outputs it measures. A full
+                // queue is delivery backpressure, not loss of the worker sample.
+                // The shared wait also excludes reader lag from execution deadlines.
+                if queue_worker_publication(
+                    &outputs,
+                    ProductDevWorkerPublication::UpdateTelemetry {
                         generation,
                         telemetry,
                         delivery_interval_us,
-                    })
-                    .is_err()
+                    },
+                    &lifetime,
+                    &scheduler_inflight,
+                )
+                .is_err()
                 {
-                    let error = worker_runtime_error(
-                        "DEV_HOST_WORKER_TELEMETRY_DROPPED",
-                        "shell publication queue could not retain the worker timing observation; displayed sample age may grow",
-                    );
-                    let mut diagnostic = ProductDevWorkerDiagnostic::from_runtime_error(error);
-                    diagnostic.severity = product_dev_host::ProductDevLogSeverity::Warning;
-                    diagnostic.disposition = product_dev_host::ProductDevLogDisposition::Degraded;
-                    let _ = diagnostics.try_send(diagnostic);
+                    return;
                 }
             }
             Ok(ProductDevWorkerEvent::SchedulerActivity { active }) => {
@@ -3894,6 +3892,91 @@ mod tests {
             panic!()
         };
         assert_eq!(second.generation, 2);
+    }
+
+    #[test]
+    fn worker_timing_observation_waits_for_output_queue_capacity() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut child = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (channel, _) = listener.accept().unwrap();
+        let (response_tx, _response_rx) = mpsc::channel();
+        let (settlement_tx, _settlement_rx) = mpsc::channel();
+        let (output_tx, output_rx) = mpsc::sync_channel(1);
+        let (diagnostic_tx, _diagnostic_rx) = worker_diagnostic_relay();
+        let (failure_tx, _failure_rx) = mpsc::sync_channel(1);
+        let (acknowledged, _acknowledgement) = mpsc::sync_channel(1);
+        output_tx
+            .send(ProductDevWorkerPublication::ConnectionBoundary {
+                generation: 3,
+                acknowledged,
+            })
+            .unwrap();
+        let wait = PublicationWait::default();
+        let observed_wait = wait.clone();
+        let retiring = Arc::new(AtomicBool::new(false));
+        let reader_retiring = retiring.clone();
+        let reader = thread::spawn(move || {
+            worker_reader(
+                channel,
+                WorkerReaderResponseChannels {
+                    responses: response_tx,
+                    settlements: settlement_tx,
+                },
+                output_tx,
+                diagnostic_tx,
+                failure_tx,
+                Arc::new(Mutex::new(None)),
+                WorkerReaderLifetime {
+                    generation: 3,
+                    retiring: reader_retiring,
+                    publication_wait: wait,
+                    terminal_cause: WorkerTerminalCause::default(),
+                },
+            )
+        });
+        let telemetry = ProductDevWorkerUpdateTelemetry {
+            worker_pid: CanonicalU64::new(42),
+            readout: None,
+            attribution: None,
+            phases: runtime_diagnostics::RuntimeWorkerPhases {
+                operation_duration_us: CanonicalU64::new(123),
+                output_conversion_duration_us: CanonicalU64::new(456),
+                output_encode_write_duration_us: CanonicalU64::new(789),
+                input_queue_age_us: None,
+            },
+        };
+        write_worker_frame(
+            &mut child,
+            &ProductDevWorkerEvent::UpdateTelemetry {
+                telemetry: Box::new(telemetry.clone()),
+            },
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while observed_wait.elapsed().is_zero() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            !observed_wait.elapsed().is_zero(),
+            "full queue applies backpressure instead of dropping telemetry"
+        );
+        assert!(matches!(
+            output_rx.recv().unwrap(),
+            ProductDevWorkerPublication::ConnectionBoundary { .. }
+        ));
+        let ProductDevWorkerPublication::UpdateTelemetry {
+            generation,
+            telemetry: received,
+            ..
+        } = output_rx.recv_timeout(Duration::from_secs(2)).unwrap()
+        else {
+            panic!("timing observation must follow prior publication");
+        };
+        assert_eq!(generation, 3);
+        assert_eq!(*received, telemetry);
+        retiring.store(true, Ordering::Release);
+        child.shutdown(Shutdown::Both).unwrap();
+        reader.join().unwrap();
     }
 
     #[test]

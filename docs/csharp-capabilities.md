@@ -54,6 +54,25 @@ The generated contracts are authoritative when this table and source ever
 disagree. Add a missing coherent family at the ABI and generator edge; do not
 handwrite a parallel C# declaration or generic dispatch protocol.
 
+### Sprite viewport placement
+
+`Graphics.SetSpriteViewport` optionally places an existing sprite in CSS
+viewport units through a lower-left rectangle, alignment, and `Stretch` or
+`Contain` fitting. `Contain` uses the selected atlas frame's aspect, so frame
+and playback changes refit without product-side geometry work. A placement
+owns the sprite's final screen geometry; authored transforms cannot offset it.
+The normal viewport clips overscan and offscreen rectangles, without a custom
+target-rectangle clipping surface. CSS dimensions determine layout while DPR
+only changes the backing buffer. Existing depth policy, render order, layer,
+and playback remain unchanged.
+
+`SpriteSizeMode.Pixel` uses CSS-pixel size at the sprite's authored
+position/depth. Its authored orientation and scale still apply, and the
+renderer recomputes projection for each camera. A sprite exactly on the camera
+plane has no finite projected size and contributes no pixels for that pass.
+Viewport placement overrides this sizing and authored transform, fitting the
+selected atlas frame instead.
+
 ### Ghost-plate presentation
 
 The generated `Presentation` service exposes `CreateGhostPlate`,

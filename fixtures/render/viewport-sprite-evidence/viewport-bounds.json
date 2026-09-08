@@ -1,0 +1,128 @@
+[
+  {
+    "fov": 35,
+    "pixelRatio": 1,
+    "backingRatio": 0.25,
+    "width": 640,
+    "height": 360,
+    "frame": 0,
+    "bounds": [
+      32,
+      0,
+      608,
+      360
+    ]
+  },
+  {
+    "fov": 35,
+    "pixelRatio": 1,
+    "backingRatio": 0.25,
+    "width": 300,
+    "height": 480,
+    "frame": 0,
+    "bounds": [
+      0,
+      0,
+      300,
+      188
+    ]
+  },
+  {
+    "fov": 35,
+    "pixelRatio": 1,
+    "backingRatio": 0.25,
+    "width": 300,
+    "height": 480,
+    "frame": 1,
+    "bounds": [
+      0,
+      0,
+      300,
+      480
+    ]
+  },
+  {
+    "fov": 100,
+    "pixelRatio": 2,
+    "backingRatio": 0.25,
+    "width": 640,
+    "height": 360,
+    "frame": 0,
+    "bounds": [
+      32,
+      0,
+      608,
+      360
+    ]
+  },
+  {
+    "fov": 100,
+    "pixelRatio": 2,
+    "backingRatio": 0.25,
+    "width": 300,
+    "height": 480,
+    "frame": 0,
+    "bounds": [
+      0,
+      0,
+      300,
+      188
+    ]
+  },
+  {
+    "fov": 100,
+    "pixelRatio": 2,
+    "backingRatio": 0.25,
+    "width": 300,
+    "height": 480,
+    "frame": 1,
+    "bounds": [
+      0,
+      0,
+      300,
+      480
+    ]
+  },
+  {
+    "fov": 60,
+    "pixelRatio": 0.125,
+    "backingRatio": 0.125,
+    "width": 640,
+    "height": 360,
+    "frame": 0,
+    "bounds": [
+      32,
+      0,
+      608,
+      360
+    ]
+  },
+  {
+    "fov": 60,
+    "pixelRatio": 0.125,
+    "backingRatio": 0.12333333333333334,
+    "width": 300,
+    "height": 480,
+    "frame": 0,
+    "bounds": [
+      0,
+      0,
+      300,
+      192
+    ]
+  },
+  {
+    "fov": 60,
+    "pixelRatio": 0.125,
+    "backingRatio": 0.12333333333333334,
+    "width": 300,
+    "height": 480,
+    "frame": 1,
+    "bounds": [
+      0,
+      0,
+      300,
+      480
+    ]
+  }
+]

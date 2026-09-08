@@ -2681,6 +2681,7 @@ struct PendingBaseline {
 #[derive(Clone)]
 struct OutputEvent {
     id: u64,
+    publication_end_id: u64,
     event: Option<&'static str>,
     json: String,
 }
@@ -2707,6 +2708,7 @@ impl OutputBus {
                 .filter(|event| event.id > cursor)
                 .map(|event| OutputEvent {
                     id: event.id,
+                    publication_end_id: event.publication_end_id,
                     event: event.event,
                     json: event.json.clone(),
                 })
@@ -2788,7 +2790,6 @@ fn push_outputs_staged(
                     &mut staged,
                     active_binding,
                     std::mem::take(&mut incremental_outputs),
-                    OutputDelivery::Incremental,
                 )?;
             }
             if staged.pending_baseline.is_some() {
@@ -2835,13 +2836,7 @@ fn push_outputs_staged(
                 )
             })?;
             output.attach_complete_baseline_frontiers_to_binding(baseline)?;
-            append_staged_output_events(
-                bus,
-                &mut staged,
-                pending.binding,
-                outputs,
-                OutputDelivery::Baseline,
-            )?;
+            append_staged_output_events(bus, &mut staged, pending.binding, outputs)?;
             staged.active_binding = Some(binding);
             continue;
         }
@@ -2859,13 +2854,7 @@ fn push_outputs_staged(
     }
     if !incremental_outputs.is_empty() {
         let binding = staged.active_binding.expect("active binding was checked");
-        append_staged_output_events(
-            bus,
-            &mut staged,
-            binding,
-            incremental_outputs,
-            OutputDelivery::Incremental,
-        )?;
+        append_staged_output_events(bus, &mut staged, binding, incremental_outputs)?;
     }
     let output_through = staged.next_id;
     staged.commit(bus);
@@ -2879,13 +2868,7 @@ fn append_output_events(
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<(), ProductDevHostError> {
     let mut staged = OutputPushStage::new(bus);
-    append_staged_output_events(
-        bus,
-        &mut staged,
-        binding,
-        outputs,
-        OutputDelivery::Incremental,
-    )?;
+    append_staged_output_events(bus, &mut staged, binding, outputs)?;
     staged.commit(bus);
     Ok(())
 }
@@ -2913,18 +2896,30 @@ impl OutputPushStage {
         }
     }
 
-    fn push_event(&mut self, bus: &OutputBus, event: OutputEvent, retention_limit: usize) {
-        while bus.events.len().saturating_sub(self.retained_start) + self.new_events.len()
-            >= retention_limit
-        {
-            if self.retained_start < bus.events.len() {
-                self.floor_cursor = bus.events[self.retained_start].id;
-                self.retained_start += 1;
-            } else if let Some(evicted) = self.new_events.pop_front() {
-                self.floor_cursor = evicted.id;
+    fn trim_history(&mut self, bus: &OutputBus) {
+        // Keep at least the configured event history, rounding the oldest edge
+        // outwards to a complete publication. The excess is at most one complete
+        // publication, not an unbounded backlog. A small progress event must not
+        // immediately erase the prefix of the large mesh that preceded it.
+        loop {
+            let retained = bus.events.len() - self.retained_start;
+            let total = retained + self.new_events.len();
+            let Some(first) = bus
+                .events
+                .get(self.retained_start)
+                .or_else(|| self.new_events.front())
+            else {
+                break;
+            };
+            let publication_len = (first.publication_end_id - first.id + 1) as usize;
+            if total.saturating_sub(publication_len) < bus.retained_event_limit {
+                break;
             }
+            self.floor_cursor = first.publication_end_id;
+            let from_bus = retained.min(publication_len);
+            self.retained_start += from_bus;
+            self.new_events.drain(..publication_len - from_bus);
         }
-        self.new_events.push_back(event);
     }
 
     fn commit(self, bus: &mut OutputBus) {
@@ -2943,7 +2938,6 @@ fn append_staged_output_events(
     staged: &mut OutputPushStage,
     binding: crate::ProductDevRuntimeBinding,
     outputs: Vec<ProductDevRuntimeOutput>,
-    delivery: OutputDelivery,
 ) -> Result<(), ProductDevHostError> {
     let mut encoded_events = Vec::new();
     let mut next_transfer_id = staged.next_transfer_id;
@@ -2992,12 +2986,6 @@ fn append_staged_output_events(
             });
         }
     }
-    // Retention is a history target, not a maximum update size. Keep every
-    // fragment of the newest incremental batch so it cannot evict its own prefix.
-    let retention_limit = match delivery {
-        OutputDelivery::Incremental => bus.retained_event_limit.max(encoded_events.len()),
-        OutputDelivery::Baseline => bus.retained_event_limit,
-    };
     let final_id = staged
         .next_id
         .checked_add(encoded_events.len() as u64)
@@ -3006,16 +2994,14 @@ fn append_staged_output_events(
         })?;
     for encoded in encoded_events {
         staged.next_id += 1;
-        staged.push_event(
-            bus,
-            OutputEvent {
-                id: staged.next_id,
-                event: encoded.event,
-                json: encoded.json,
-            },
-            retention_limit,
-        );
+        staged.new_events.push_back(OutputEvent {
+            id: staged.next_id,
+            publication_end_id: final_id,
+            event: encoded.event,
+            json: encoded.json,
+        });
     }
+    staged.trim_history(bus);
     debug_assert_eq!(staged.next_id, final_id);
     staged.next_transfer_id = next_transfer_id;
     Ok(())
@@ -3024,12 +3010,6 @@ fn append_staged_output_events(
 struct EncodedOutputEvent {
     event: Option<&'static str>,
     json: String,
-}
-
-#[derive(Clone, Copy)]
-enum OutputDelivery {
-    Incremental,
-    Baseline,
 }
 
 #[derive(Serialize)]
@@ -3946,19 +3926,32 @@ mod tests {
         assert_eq!(first["fragmentIndex"], 0);
         assert_eq!(last["fragmentCount"], bus.events.len());
         assert_eq!(last["fragmentIndex"], bus.events.len() - 1);
-        // Later publications may age this transfer out; normal lag recovery remains.
+        // One later pulse must not truncate the transfer before a subscriber can read it.
+        let transfer_end = bus.next_id;
         append_output_events(
             &mut bus,
             binding(),
             vec![ProductDevRuntimeOutput::runtime_progress()],
         )
         .unwrap();
+        assert_eq!(bus.floor_cursor, 0);
+        assert_eq!(bus.events.front().unwrap().id, 1);
+        assert_eq!(bus.events.len() as u64, transfer_end + 1);
+        // Once a full newer history exists, retire the entire transfer at once.
+        for _ in 1..MAX_OUTPUT_QUEUE_ITEMS {
+            append_output_events(
+                &mut bus,
+                binding(),
+                vec![ProductDevRuntimeOutput::runtime_progress()],
+            )
+            .unwrap();
+        }
         assert_eq!(bus.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-        assert!(bus.floor_cursor > 0);
+        assert_eq!(bus.floor_cursor, transfer_end);
     }
 
     #[test]
-    fn complete_large_baseline_keeps_private_transfer_while_public_history_forces_fresh() {
+    fn complete_large_baseline_keeps_whole_public_and_private_transfers() {
         let runtime = binding();
         let payload = "x".repeat(MAX_OUTPUT_FRAGMENT_DATA_BYTES * (MAX_OUTPUT_QUEUE_ITEMS + 1));
         let baseline = || {
@@ -3973,10 +3966,10 @@ mod tests {
 
         let mut public = OutputBus::default();
         push_outputs_staged(&mut public, baseline()).expect("large public baseline publishes");
-        assert_eq!(public.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-        assert!(
-            public.floor_cursor > 0,
-            "public history retains only the tail"
+        assert!(public.events.len() > MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(
+            public.floor_cursor, 0,
+            "public history must not truncate a newly completed baseline"
         );
         assert_eq!(public.after(0).floor_cursor, public.floor_cursor);
         assert_eq!(public.active_binding, Some(runtime));
@@ -4066,8 +4059,12 @@ mod tests {
         let locked = bus.lock().expect("test bus lock");
         assert!(locked.pending_baseline.is_none());
         assert_eq!(locked.active_binding, Some(replacement_runtime));
-        assert_eq!(locked.events.len(), MAX_OUTPUT_QUEUE_ITEMS);
-        assert!(locked.floor_cursor > 0);
+        assert!(locked.events.len() >= MAX_OUTPUT_QUEUE_ITEMS);
+        assert_eq!(
+            locked.floor_cursor, 1,
+            "only the initial complete binding publication ages out"
+        );
+        assert_eq!(locked.events.front().unwrap().id, 2);
         drop(locked);
 
         push_outputs(

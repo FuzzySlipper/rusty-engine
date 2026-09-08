@@ -117,9 +117,11 @@ scheduler; neutral session scopes retain the single runtime lock.
 
 Output batches use ordered fragments without a default aggregate byte/count cap.
 The host serializes actual delivery bytes, not a discarded size preflight. The
-256-event reconnect history is a retention target: a larger incremental batch is
-kept whole so it cannot evict its own prefix. Private baselines preserve every
-fragment until completion. Lost/interrupted transfers discard staging and use a
+256-event reconnect history is a retention target rounded outward to whole
+publications. Later progress events cannot truncate a large transfer; it ages out
+only once a full newer history exists. Private baselines preserve every fragment
+until completion. Worker timing observations share ordered output backpressure
+instead of being dropped when that queue fills. Lost/interrupted transfers discard staging and use a
 fresh complete baseline. Size alone does not reconstruct a delta as a baseline.
 The worker frame retains its u32 byte-length representation; browser callers may
 choose an explicit per-batch byte budget. Immutable host bundles and C# content

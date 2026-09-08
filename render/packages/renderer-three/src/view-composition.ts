@@ -183,20 +183,32 @@ export class RendererViewCompositionBackend {
   }
 
   visibilityReadout(): RendererViewCompositionVisibilityReadout {
-    const views = this.#composition.views
-      .map((view) => {
-        const camera = this.#cameras.get(view.cameraId);
-        if (camera === undefined) return null;
-        return Object.freeze({
-          viewId: view.id,
-          cameraId: view.cameraId,
-          target: view.target.kind,
-          visibility: this.#projection.visibilityReadout(camera, this.#projection.scene),
-        });
-      })
-      .filter((view): view is NonNullable<typeof view> => view !== null)
-      .sort((left, right) => left.viewId.localeCompare(right.viewId));
-    return Object.freeze({ schemaVersion: 1, views: Object.freeze(views) });
+    const primary = this.#webgl.domElement;
+    const ratio = this.#webgl.getPixelRatio();
+    try {
+      const views = this.#composition.views
+        .map((view) => {
+          const camera = this.#cameras.get(view.cameraId);
+          if (camera === undefined) return null;
+          const target = view.target.kind === 'offscreen'
+            ? this.#targets.get(view.target.targetId)?.descriptor : undefined;
+          const area = pixelViewport(view.viewport, target?.width ?? primary.width, target?.height ?? primary.height);
+          const viewRatio = target === undefined ? ratio : 1;
+          this.#projection.setViewportSize(area.width / viewRatio, area.height / viewRatio);
+          updateCameraAspect(camera, area.width / area.height);
+          return Object.freeze({
+            viewId: view.id,
+            cameraId: view.cameraId,
+            target: view.target.kind,
+            visibility: this.#projection.visibilityReadout(camera, this.#projection.scene),
+          });
+        })
+        .filter((view): view is NonNullable<typeof view> => view !== null)
+        .sort((left, right) => left.viewId.localeCompare(right.viewId));
+      return Object.freeze({ schemaVersion: 1, views: Object.freeze(views) });
+    } finally {
+      this.#projection.setViewportSize(primary.width / ratio, primary.height / ratio);
+    }
   }
 
   render(submission: number, primaryWidth: number, primaryHeight: number): void {
@@ -248,6 +260,8 @@ export class RendererViewCompositionBackend {
     } finally {
       this.#webgl.setRenderTarget(null);
       this.#webgl.setScissorTest(false);
+      const ratio = this.#webgl.getPixelRatio();
+      this.#projection.setViewportSize(primaryWidth / ratio, primaryHeight / ratio);
       setPhysicalViewport(this.#webgl, {
         x: 0,
         y: 0,
@@ -353,6 +367,7 @@ export class RendererViewCompositionBackend {
     if (target === undefined || camera === undefined) return;
     const area = pixelViewport(view.viewport, target.descriptor.width, target.descriptor.height);
     updateCameraAspect(camera, area.width / area.height);
+    this.#projection.setViewportSize(area.width, area.height);
     camera.updateMatrixWorld(true);
     this.#projection.scene.updateMatrixWorld(true);
     this.#webgl.setRenderTarget(target.target);
@@ -383,6 +398,8 @@ export class RendererViewCompositionBackend {
       area.width / area.height,
     );
     setPhysicalViewport(this.#webgl, area);
+    const ratio = this.#webgl.getPixelRatio();
+    this.#projection.setViewportSize(area.width / ratio, area.height / ratio);
     this.#webgl.clear(true, true, true);
     this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
     this.#projection.prepareStaticInstanceBatches(camera);

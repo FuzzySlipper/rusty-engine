@@ -524,6 +524,8 @@ pub type NativeReplaceSpriteFromAtlas = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeSetSpriteFrame =
     unsafe extern "C" fn(*mut c_void, NativeSpriteFrameUpdateRequest) -> i32;
+pub type NativeSetSpriteViewport =
+    unsafe extern "C" fn(*mut c_void, NativeSpriteViewportUpdateRequest) -> i32;
 pub type NativeReadSprite =
     unsafe extern "C" fn(*mut c_void, NativeAppearanceHandle, *mut NativeSpriteReadout) -> i32;
 pub type NativeCreateSpritePlayback = unsafe extern "C" fn(
@@ -981,6 +983,7 @@ pub struct NativeGraphicsApi {
     pub create_sprite_from_atlas: NativeCreateSpriteFromAtlas,
     pub replace_sprite_from_atlas: NativeReplaceSpriteFromAtlas,
     pub set_sprite_frame: NativeSetSpriteFrame,
+    pub set_sprite_viewport: NativeSetSpriteViewport,
     pub read_sprite: NativeReadSprite,
     pub create_sprite_playback: NativeCreateSpritePlayback,
     pub destroy_sprite_playback: NativeDestroySpritePlayback,

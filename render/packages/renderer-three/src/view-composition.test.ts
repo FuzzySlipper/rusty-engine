@@ -115,8 +115,9 @@ void test('composition visibility preserves configured view and camera identity'
     handles: [],
   };
   const manager = new RendererViewCompositionBackend(
-    { initRenderTarget: () => undefined } as unknown as THREE.WebGLRenderer,
+    { initRenderTarget: () => undefined, domElement: { width: 800, height: 600 }, getPixelRatio: () => 1 } as unknown as THREE.WebGLRenderer,
     {
+      setViewportSize: () => undefined,
       scene: {},
       visibilityReadout: () => visibility,
     } as unknown as ThreeRenderer,
@@ -157,6 +158,7 @@ void test('composed primary views keep viewmodel transforms camera-relative acro
   const projection = {
     scene: worldScene,
     viewmodelScene,
+    setViewportSize: () => undefined,
     prepareSpritesForCamera: () => undefined,
     prepareStaticInstanceBatches: () => undefined,
   } as unknown as ThreeRenderer;
@@ -179,11 +181,12 @@ void test('composed primary views keep viewmodel transforms camera-relative acro
 void test('camera-dependent realization is prepared for each actual primary and offscreen draw', () => {
   const scene = new THREE.Scene();
   const prepared: THREE.Camera[] = [];
+  const viewportSizes: number[][] = [];
   const viewTokens: object[] = [];
   const drawn: THREE.Camera[] = [];
   const webgl = {
     initRenderTarget: () => undefined,
-    getPixelRatio: () => 1,
+    getPixelRatio: () => 2,
     setRenderTarget: () => undefined,
     setScissorTest: () => undefined,
     setViewport: () => undefined,
@@ -198,6 +201,7 @@ void test('camera-dependent realization is prepared for each actual primary and 
   } as unknown as THREE.WebGLRenderer;
   const projection = {
     scene, viewmodelScene: new THREE.Scene(),
+    setViewportSize: (width: number, height: number) => viewportSizes.push([width, height]),
     prepareSpritesForCamera: () => undefined,
     prepareStaticInstanceBatches: () => undefined,
   } as unknown as ThreeRenderer;
@@ -212,6 +216,7 @@ void test('camera-dependent realization is prepared for each actual primary and 
       views: [...primary.views, ...offscreen.views],
     }).applied, true);
     manager.render(1, 800, 600);
+    assert.deepEqual(viewportSizes, [[64, 64], [400, 300], [400, 300]]);
     assert.deepEqual(prepared.map(camera => camera.position.toArray()), [[0, 12, 0], [9.5, 5.55, 11.7]]);
     assert.deepEqual(drawn, prepared);
     assert.equal(manager.configure(primaryComposition([11.7, 5.55, 9.5], -90)).applied, true);

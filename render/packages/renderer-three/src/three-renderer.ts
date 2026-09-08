@@ -352,7 +352,7 @@ export class ThreeRenderer {
   readonly #viewmodelGroup = new THREE.Group();
   readonly #handles = new Map<RenderHandle, NodeEntry>();
   /** Retained sprite handles whose mode requires camera-dependent realization. */
-  readonly #billboardHandles = new Set<RenderHandle>();
+  readonly #cameraSpriteHandles = new Set<RenderHandle>();
   /** Retained static mesh definitions, keyed by asset id. */
   readonly #staticMeshes = new Map<string, StaticMeshDef>();
   readonly #voxelObjects = new Map<string, VoxelObjectDef>();
@@ -404,6 +404,9 @@ export class ThreeRenderer {
   readonly #staticInstanceBatches = new Map<string, StaticInstanceBatch>();
   readonly #staticInstanceBatchByObject = new Map<THREE.InstancedMesh, StaticInstanceBatch>();
   readonly #staticInstanceCandidateObjects = new WeakSet<THREE.Object3D>();
+  /** CSS viewport dimensions supplied by the mounted browser surface. */
+  #viewportWidth = 1;
+  #viewportHeight = 1;
   #disposed = false;
   #terminalError: RendererTerminalError | null = null;
 
@@ -513,6 +516,18 @@ export class ThreeRenderer {
       case 'ui': return this.#uiGroup;
       case 'viewmodel': return this.#viewmodelGroup;
     }
+  }
+
+  /**
+   * Supplies the logical CSS viewport used for pixel sprites and normalized
+   * sprite placements. Device pixels remain a WebGL backing-buffer concern.
+   */
+  setViewportSize(width: number, height: number): void {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      throw new RenderApplyError('sprite viewport dimensions must be finite and positive');
+    }
+    this.#viewportWidth = width;
+    this.#viewportHeight = height;
   }
 
   /**
@@ -1174,7 +1189,7 @@ export class ThreeRenderer {
         this.#destroy({ op: 'destroy', handle });
       }
     }
-    this.#billboardHandles.clear();
+    this.#cameraSpriteHandles.clear();
     for (const definition of this.#staticMeshes.values()) {
       definition.geometry.dispose();
       definition.materials.forEach((material) => material.dispose());
@@ -1388,7 +1403,7 @@ export class ThreeRenderer {
     const right = new THREE.Vector3();
     const worldUp = new THREE.Vector3(0, 1, 0);
     const basis = new THREE.Matrix4();
-    const sprites = [...this.#billboardHandles]
+    const sprites = [...this.#cameraSpriteHandles]
       .map((handle) => this.#handles.get(handle))
       .filter((entry): entry is NodeEntry => entry !== undefined
         && entry.kind === 'sprite'
@@ -1397,19 +1412,27 @@ export class ThreeRenderer {
       .sort((left, rightEntry) => objectDepth(left.object) - objectDepth(rightEntry.object));
 
     // A preparation may follow a different camera in the same submission.
-    // Reacquire every authored local rotation first so A → B → A is exact and
-    // degenerate cylindrical headings never depend on the previous camera.
+    // Reacquire authored transforms before applying camera-local realization.
     for (const entry of sprites) {
       const sprite = entry.sprite;
       if (sprite !== undefined) {
-        entry.object.quaternion.set(...sprite.transform.rotation);
+        entry.object.matrixAutoUpdate = true;
+        applyTransform(entry.object, sprite.transform);
       }
     }
     scene.updateMatrixWorld(true);
 
     for (const entry of sprites) {
       const sprite = entry.sprite;
-      if (sprite === undefined || sprite.billboard === 'none') continue;
+      if (sprite === undefined) continue;
+      if (sprite.viewportPlacement !== null && sprite.viewportPlacement !== undefined) {
+        this.#applySpriteViewportPlacement(entry.object as THREE.Mesh, sprite, camera);
+        continue;
+      }
+      if (sprite.sizeMode === 'pixel') {
+        this.#applyPixelSpriteSize(entry.object as THREE.Mesh, sprite, camera);
+      }
+      if (sprite.billboard === 'none') continue;
       const object = entry.object;
       object.updateMatrixWorld(true);
       object.getWorldPosition(worldPosition);
@@ -1607,7 +1630,11 @@ export class ThreeRenderer {
   #update(diff: Extract<RenderDiff, { op: 'update' }>): void {
     const entry = this.#require(diff.handle, 'update');
     if (diff.transform) {
+      entry.object.matrixAutoUpdate = true;
       applyTransform(entry.object, diff.transform);
+      if (entry.kind === 'sprite' && entry.sprite !== undefined) {
+        entry.sprite = { ...entry.sprite, transform: diff.transform };
+      }
     }
     if (diff.material) {
       if (entry.meshProvenance !== undefined) {
@@ -1620,9 +1647,15 @@ export class ThreeRenderer {
     }
     if (diff.visible !== null) {
       entry.object.visible = diff.visible;
+      if (entry.kind === 'sprite' && entry.sprite !== undefined) {
+        entry.sprite = { ...entry.sprite, visible: diff.visible };
+      }
     }
     if (diff.metadata) {
       applyMetadata(entry.object, diff.metadata);
+      if (entry.kind === 'sprite' && entry.sprite !== undefined) {
+        entry.sprite = { ...entry.sprite, metadata: diff.metadata };
+      }
     }
   }
 
@@ -1657,7 +1690,7 @@ export class ThreeRenderer {
       disposeObject(entry.object);
     }
     this.#handles.delete(diff.handle);
-    this.#billboardHandles.delete(diff.handle);
+    this.#cameraSpriteHandles.delete(diff.handle);
     recursivelyDestroyed?.add(diff.handle);
   }
 
@@ -2615,7 +2648,98 @@ export class ThreeRenderer {
     return rect?.size ?? fallback;
   }
 
+  #unprojectViewportPoint(camera: THREE.Camera, x: number, y: number, z: number): THREE.Vector3 {
+    return new THREE.Vector3(
+      x / this.#viewportWidth * 2 - 1,
+      y / this.#viewportHeight * 2 - 1,
+      z,
+    ).unproject(camera);
+  }
+
+  #applySpriteViewportPlacement(
+    object: THREE.Mesh,
+    sprite: SpriteInstanceDescriptor,
+    camera: THREE.Camera,
+  ): void {
+    const placement = sprite.viewportPlacement;
+    if (placement === null || placement === undefined) return;
+    const targetWidth = this.#viewportWidth * placement.size[0];
+    const targetHeight = this.#viewportHeight * placement.size[1];
+    const frame = this.#spriteFrameSize(sprite.asset, sprite.frame, sprite.size);
+    const frameAspect = frame[0] / frame[1];
+    const targetAspect = targetWidth / targetHeight;
+    const width = placement.fit === 'stretch' || frameAspect >= targetAspect
+      ? targetWidth
+      : targetHeight * frameAspect;
+    const height = placement.fit === 'stretch' || frameAspect <= targetAspect
+      ? targetHeight
+      : targetWidth / frameAspect;
+    const left = this.#viewportWidth * placement.minimum[0]
+      + (targetWidth - width) * placement.alignment[0];
+    const bottom = this.#viewportHeight * placement.minimum[1]
+      + (targetHeight - height) * placement.alignment[1];
+    const bottomLeft = this.#unprojectViewportPoint(camera, left, bottom, 0);
+    const bottomRight = this.#unprojectViewportPoint(camera, left + width, bottom, 0);
+    const topLeft = this.#unprojectViewportPoint(camera, left, bottom + height, 0);
+    const cameraPosition = bottomRight.clone().add(topLeft).multiplyScalar(0.5);
+    const cameraQuaternion = camera.getWorldQuaternion(new THREE.Quaternion());
+    const desiredWorld = new THREE.Matrix4().compose(
+      cameraPosition,
+      cameraQuaternion,
+      new THREE.Vector3(
+        bottomRight.distanceTo(bottomLeft),
+        topLeft.distanceTo(bottomLeft),
+        1,
+      ),
+    );
+    const local = object.parent === null
+      ? desiredWorld
+      : new THREE.Matrix4().copy(object.parent.matrixWorld).invert().multiply(desiredWorld);
+    // A rotated, nonuniform parent can make the exact local placement matrix
+    // shear. Keep that matrix intact instead of losing the promised rectangle
+    // through a lossy position/quaternion/scale decomposition.
+    object.matrixAutoUpdate = false;
+    object.matrix.copy(local);
+    local.decompose(object.position, object.quaternion, object.scale);
+    object.matrixWorldNeedsUpdate = true;
+    object.updateMatrixWorld(true);
+  }
+
+  #applyPixelSpriteSize(
+    object: THREE.Mesh,
+    sprite: SpriteInstanceDescriptor,
+    camera: THREE.Camera,
+  ): void {
+    const worldPosition = object.getWorldPosition(new THREE.Vector3());
+    const projected = worldPosition.clone().project(camera);
+    if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
+      // A sprite crossing the camera plane has no finite perspective scale for
+      // this pass. Collapse it until the next camera preparation restores its
+      // authored transform; this is normal clipping, not a failed frame.
+      object.scale.set(0, 0, 0);
+      return;
+    }
+    const centerX = (projected.x + 1) * this.#viewportWidth / 2;
+    const centerY = (projected.y + 1) * this.#viewportHeight / 2;
+    const center = this.#unprojectViewportPoint(camera, centerX, centerY, projected.z);
+    const horizontal = this.#unprojectViewportPoint(
+      camera, centerX + sprite.size[0], centerY, projected.z,
+    );
+    const vertical = this.#unprojectViewportPoint(
+      camera, centerX, centerY + sprite.size[1], projected.z,
+    );
+    const frame = this.#spriteFrameSize(sprite.asset, sprite.frame, sprite.size);
+    object.scale.multiply(new THREE.Vector3(
+      horizontal.distanceTo(center) / frame[0],
+      vertical.distanceTo(center) / frame[1],
+      1,
+    ));
+  }
+
   #spriteGeometry(sprite: SpriteInstanceDescriptor, frame: number): THREE.PlaneGeometry {
+    if (sprite.viewportPlacement !== null && sprite.viewportPlacement !== undefined) {
+      return new THREE.PlaneGeometry(1, 1);
+    }
     const size = this.#spriteFrameSize(sprite.asset, frame, sprite.size);
     const geometry = new THREE.PlaneGeometry(size[0], size[1]);
     geometry.translate((0.5 - sprite.pivot[0]) * size[0], (0.5 - sprite.pivot[1]) * size[1], 0);
@@ -2650,8 +2774,9 @@ export class ThreeRenderer {
     mesh.receiveShadow = this.#shadowsEnabled
       && (resolvedMaterial.shadow === 'receive' || resolvedMaterial.shadow === 'castAndReceive');
 
-    const parent =
-      diff.parent === null ? this.#sceneGroup : this.#require(diff.parent, 'createSprite.parent').object;
+    const parent = diff.parent === null
+      ? this.#layerGroup(s.layer ?? 'scene')
+      : this.#require(diff.parent, 'createSprite.parent').object;
     parent.add(mesh);
     this.#handles.set(diff.handle, {
       object: mesh,
@@ -2661,8 +2786,10 @@ export class ThreeRenderer {
       ownsGeometry: true,
       sprite: s,
     });
-    if (s.billboard !== 'none') {
-      this.#billboardHandles.add(diff.handle);
+    if (s.billboard !== 'none'
+      || s.viewportPlacement !== null && s.viewportPlacement !== undefined
+      || s.sizeMode === 'pixel') {
+      this.#cameraSpriteHandles.add(diff.handle);
     }
   }
 

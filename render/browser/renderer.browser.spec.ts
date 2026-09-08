@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 
 function framebufferColorClass(pixel: readonly number[]): string {
@@ -20,7 +21,7 @@ function compositionColorClass(pixel: readonly number[]): 'red' | 'green' {
   return 'green';
 }
 
-test('shared host realizes retained, presentation, and inspection families in a real browser', async ({ page }) => {
+test('shared host realizes retained, presentation, and inspection families in a real browser', async ({ page }, testInfo) => {
   // The proof deliberately exercises every retained family, capture path, and
   // inspection surface before publishing its ready marker. Hosted Chromium can
   // spend tens of seconds in that synchronous setup under cold WebGL startup;
@@ -43,6 +44,22 @@ test('shared host realizes retained, presentation, and inspection families in a 
   }))).toEqual({ failure: null, ready: true });
 
   const proof = await page.evaluate(() => window.__rustyRenderProof!);
+  expect(proof.viewportSprites).toHaveLength(9);
+  await mkdir(testInfo.outputDir, { recursive: true });
+  const boundsPath = testInfo.outputPath('viewport-bounds.json');
+  await writeFile(boundsPath, JSON.stringify(proof.viewportSprites.map(({ png: _png, ...sample }) => sample), null, 2));
+  await testInfo.attach('viewport-bounds', { path: boundsPath, contentType: 'application/json' });
+  for (const sample of proof.viewportSprites) {
+    const aspect = sample.frame === 0 ? 320 / 200 : 200 / 320;
+    const width = Math.min(sample.width, sample.height * aspect);
+    const height = width / aspect;
+    const expected = [(sample.width - width) / 2, 0, (sample.width + width) / 2, height];
+    sample.bounds.forEach((value, index) => expect(Math.abs(value - expected[index]!), JSON.stringify({ ...sample, png: undefined, expected })).toBeLessThanOrEqual(1 / sample.backingRatio));
+    const imageName = `viewport-${sample.fov}-${sample.width}x${sample.height}-frame${sample.frame}.png`;
+    const imagePath = testInfo.outputPath(imageName);
+    await writeFile(imagePath, Buffer.from(sample.png.split(',')[1]!, 'base64'));
+    await testInfo.attach(imageName, { path: imagePath, contentType: 'image/png' });
+  }
   expect(proof.animatedCapture).toEqual({
     asset: 'mesh-animation/kenney-retro-character-medium',
     contactSheetPng: true,

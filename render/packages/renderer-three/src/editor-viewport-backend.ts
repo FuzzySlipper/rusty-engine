@@ -235,6 +235,7 @@ export function mountRendererEditorBackend(
     camera.aspect = next.width / next.height;
     camera.updateProjectionMatrix();
     gridProjection.resize(next);
+    for (const channel of CHANNEL_ORDER) channels.renderer(channel).setViewportSize(next.width, next.height);
   };
 
   const setCamera = (next: RendererEditorBackendCamera): void => {
@@ -303,6 +304,7 @@ export function mountRendererEditorBackend(
     replaceChannel: (channel, frame) => {
       requireActive(disposed);
       channels.replace(channel, frame);
+      channels.renderer(channel).setViewportSize(size.width, size.height);
     },
     setCamera,
     setGrid: (descriptor) => {

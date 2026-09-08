@@ -39,7 +39,73 @@ import * as THREE from 'three';
 
 import characterUrl from '../../fixtures/render/assets/kenney-retro-character/character-medium.glb?url';
 
+interface ViewportSpriteSample {
+  readonly fov: number;
+  readonly pixelRatio: number;
+  readonly backingRatio: number;
+  readonly width: number;
+  readonly height: number;
+  readonly frame: number;
+  readonly bounds: readonly number[];
+  readonly png: string;
+}
+
+function viewportSpriteBrowserProof(): ViewportSpriteSample[] {
+  const samples: ViewportSpriteSample[] = [];
+  for (const [fov, pixelRatio] of [[35, 1], [100, 2], [60, 0.125]] as const) {
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'position:fixed;left:-10000px;top:0;width:640px;height:360px';
+    document.body.appendChild(canvas);
+    const donor = billboardBrowserFrame('spherical');
+    const frame: RenderFrameDiff = { ...donor, ops: donor.ops.map((op) => {
+      if (op.op === 'defineSpriteAtlas') return { ...op, atlas: { ...op.atlas, frames: [
+        { frame: 0, uvMin: [0, 0] as const, uvMax: [1, 1] as const, size: [320, 200] as const },
+        { frame: 1, uvMin: [0, 0.5] as const, uvMax: [1, 1] as const, size: [200, 320] as const },
+      ] } };
+      if (op.op === 'createSprite') return { ...op, sprite: { ...op.sprite,
+        layer: 'viewmodel' as const,
+        viewportPlacement: { minimum: [0, 0] as const, size: [1, 1] as const,
+          alignment: [0.5, 0] as const, fit: 'contain' as const },
+        transform: identity([9, -4, 7], [7, 3, 2]),
+      } };
+      return op;
+    }) };
+    const surface = mountRendererBrowserSurface(canvas, {
+      autoStart: false, frame, pixelRatio, clearColor: 0x000000,
+      camera: { initialPose: { position: [20, 8, -9], pitchDegrees: 30, yawDegrees: 75 },
+        projection: { fovYDegrees: fov, near: 0.1, far: 20 } },
+    });
+    try {
+      for (const [width, height, selectedFrame] of [[640, 360, 0], [300, 480, 0], [300, 480, 1]] as const) {
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        surface.applyFrame({ schemaVersion: 1, ops: [{ op: 'updateSprite', handle: renderHandle(1),
+          frame: selectedFrame, tint: null, renderOrder: null, visible: null }] });
+        surface.renderOnce(samples.length + 1);
+        const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+        if (gl === null) throw new Error('viewport sprite WebGL context unavailable');
+        const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+        gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        let left = canvas.width, right = -1, bottom = canvas.height, top = -1;
+        for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+          const offset = (y * canvas.width + x) * 4;
+          if (Math.max(pixels[offset]!, pixels[offset + 1]!) < 100) continue;
+          left = Math.min(left, x); right = Math.max(right, x);
+          bottom = Math.min(bottom, y); top = Math.max(top, y);
+        }
+        const backingRatio = canvas.width / width;
+        samples.push({ fov, pixelRatio, backingRatio, width, height, frame: selectedFrame,
+          bounds: [left / backingRatio, bottom * height / canvas.height,
+            (right + 1) / backingRatio, (top + 1) * height / canvas.height],
+          png: canvas.toDataURL('image/png') });
+      }
+    } finally { surface.dispose(); canvas.remove(); }
+  }
+  return samples;
+}
+
 interface BrowserProof {
+  readonly viewportSprites: readonly ViewportSpriteSample[];
   readonly animatedCapture: {
     readonly asset: string;
     readonly contactSheetPng: boolean;
@@ -688,6 +754,8 @@ async function main(): Promise<void> {
     ({ proofSurface }) => proofSurface.renderer.voxelSurfaceMaterialReadout(),
   );
 
+  const viewportSprites = viewportSpriteBrowserProof();
+
   const billboardSurfaceProofs = (['spherical', 'cylindrical'] as const).map((mode) => {
     const proofCanvas = document.createElement('canvas');
     proofCanvas.width = 256;
@@ -1046,6 +1114,7 @@ async function main(): Promise<void> {
       canvas.height / canvas.clientHeight,
     ],
     rendererStatistics: autoSubmission.statistics,
+    viewportSprites,
     spriteBillboardPixels: {
       initialSpherical: billboardSurfaceProofs.find(({ mode }) => mode === 'spherical')!.initialPixels,
       initialCylindrical: billboardSurfaceProofs.find(({ mode }) => mode === 'cylindrical')!.initialPixels,

@@ -51,8 +51,11 @@ of the callback lock.
 These are elapsed durations, not CPU profiles. None subtracts absolute timestamps
 from different processes. Keep the runtime identity and readout with a capture;
 never correlate an old worker's trace with a replacement's callback statistics.
-A lost optional timing observation emits a degraded diagnostic and leaves the
-last sample visibly aging; timing loss alone does not terminate the product.
+Timing observations follow their outputs through the same ordered publication
+queue. Queue pressure delays delivery instead of dropping samples; local reader
+backpressure is excluded from worker execution deadlines. The last displayed
+sample continues aging while delivery waits. Retirement may discard old-worker
+observations, and replacement clears that worker's timing state.
 
 ## Optimized Linux native capture
 

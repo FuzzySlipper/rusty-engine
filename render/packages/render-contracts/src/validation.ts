@@ -994,7 +994,7 @@ function sprite(input: unknown, path: string): void {
   const value = recordOptional(input, path, [
     'asset', 'frame', 'pivot', 'size', 'sizeMode', 'billboard', 'tint', 'renderOrder',
     'depth', 'shading', 'visible', 'transform', 'attachment', 'metadata',
-  ], ['material']);
+  ], ['material', 'layer', 'viewportPlacement']);
   nonEmptyText(value['asset'], `${path}.asset`);
   nonNegativeInteger(value['frame'], `${path}.frame`);
   rangedTuple(value['pivot'], `${path}.pivot`, 2, 0, 1);
@@ -1005,6 +1005,22 @@ function sprite(input: unknown, path: string): void {
   color4(value['tint'], `${path}.tint`);
   integerValue(value['renderOrder'], `${path}.renderOrder`);
   enumeration(value['depth'], `${path}.depth`, ['default', 'depthTestOff', 'depthWriteOff'] as const);
+  if (value['layer'] !== undefined) {
+    enumeration(value['layer'], `${path}.layer`, ['scene', 'debug', 'ui', 'viewmodel'] as const);
+  }
+  if (value['viewportPlacement'] !== undefined && value['viewportPlacement'] !== null) {
+    const placement = record(value['viewportPlacement'], `${path}.viewportPlacement`, [
+      'minimum', 'size', 'alignment', 'fit',
+    ]);
+    const minimum = tuple(placement['minimum'], `${path}.viewportPlacement.minimum`, 2);
+    minimum.forEach((item, index) => finite(item, `${path}.viewportPlacement.minimum[${String(index)}]`));
+    const placementSize = tuple(placement['size'], `${path}.viewportPlacement.size`, 2);
+    placementSize.forEach((item, index) => {
+      positiveFinite(item, `${path}.viewportPlacement.size[${String(index)}]`);
+    });
+    rangedTuple(placement['alignment'], `${path}.viewportPlacement.alignment`, 2, 0, 1);
+    enumeration(placement['fit'], `${path}.viewportPlacement.fit`, ['stretch', 'contain'] as const);
+  }
   enumeration(value['shading'], `${path}.shading`, ['unlit', 'lit', 'shadowed', 'custom'] as const);
   if (value['material'] !== undefined) spriteMaterial(value['material'], `${path}.material`);
   booleanValue(value['visible'], `${path}.visible`);

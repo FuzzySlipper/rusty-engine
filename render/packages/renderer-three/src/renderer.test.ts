@@ -4807,6 +4807,76 @@ void test('createSprite builds a plane geometry (not THREE.Sprite) with render o
   assert.equal((mesh.material as THREE.MeshBasicMaterial).depthTest, false);
 });
 
+void test('viewport sprites stay in their CSS rectangle across FOV, zoom, and transformed parents', () => {
+  const renderer = new ThreeRenderer();
+  renderer.setViewportSize(800, 600);
+  renderer.applyDiff({
+    op: 'create', handle: renderHandle(90), parent: null,
+    node: {
+      geometry: { kind: 'group' }, material: { color: [1, 1, 1, 1], wireframe: false },
+      transform: { translation: [2, -1, 0], rotation: [0, 0, Math.sin(0.3), Math.cos(0.3)], scale: [2, 0.5, 1] },
+      visible: true, layer: 'viewmodel', metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: null },
+    },
+  });
+  renderer.applyDiff({
+    op: 'createSprite', handle: renderHandle(91), parent: renderHandle(90), sprite: sparkSprite({
+      size: [4, 1], billboard: 'none', layer: 'viewmodel',
+      transform: { translation: [9, -5, 7], rotation: [0, 0, 0.5, 0.5], scale: [7, 7, 7] },
+      viewportPlacement: { minimum: [0, 0], size: [0.5, 0.5], alignment: [0.5, 0], fit: 'contain' },
+    }),
+  });
+  const camera = new THREE.PerspectiveCamera(45, 800 / 600, 0.1, 100);
+  const bounds = (): readonly [number, number, number, number] => {
+    const mesh = renderer.objectFor(renderHandle(91)) as THREE.Mesh;
+    const corners = [
+      new THREE.Vector3(-0.5, -0.5, 0), new THREE.Vector3(0.5, -0.5, 0),
+      new THREE.Vector3(-0.5, 0.5, 0), new THREE.Vector3(0.5, 0.5, 0),
+    ].map((point) => point.applyMatrix4(mesh.matrixWorld).project(camera));
+    const xs = corners.map((point) => (point.x + 1) * 400);
+    const ys = corners.map((point) => (point.y + 1) * 300);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  };
+  for (const [fov, zoom] of [[45, 1], [100, 1.7]] as const) {
+    camera.fov = fov;
+    camera.zoom = zoom;
+    camera.updateProjectionMatrix();
+    renderer.prepareSpritesForCamera(camera, renderer.viewmodelScene);
+    const [minX, minY, maxX, maxY] = bounds();
+    assert.ok(Math.abs(minX) < 1e-4 && Math.abs(minY) < 1e-4);
+    assert.ok(Math.abs(maxX - 400) < 1e-4 && Math.abs(maxY - 100) < 1e-4);
+  }
+  assert.equal((renderer.objectFor(renderHandle(91)) as THREE.Mesh).matrixAutoUpdate, false);
+});
+
+void test('pixel sprites keep CSS-pixel dimensions under perspective FOV changes', () => {
+  const renderer = new ThreeRenderer();
+  renderer.setViewportSize(800, 600);
+  renderer.applyDiff({
+    op: 'createSprite', handle: renderHandle(92), parent: null,
+    sprite: sparkSprite({ size: [120, 90], sizeMode: 'pixel', billboard: 'none', transform: {
+      translation: [0, 0, -5], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+    } }),
+  });
+  const camera = new THREE.PerspectiveCamera(45, 800 / 600, 0.1, 100);
+  for (const fov of [45, 100]) {
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+    renderer.prepareSpritesForCamera(camera, renderer.scene);
+    const mesh = renderer.objectFor(renderHandle(92)) as THREE.Mesh;
+    const corners = [new THREE.Vector3(-60, -45, 0), new THREE.Vector3(60, 45, 0)]
+      .map((point) => point.applyMatrix4(mesh.matrixWorld).project(camera));
+    assert.ok(Math.abs((corners[1]!.x - corners[0]!.x) * 400 - 120) < 1e-4);
+    assert.ok(Math.abs((corners[1]!.y - corners[0]!.y) * 300 - 90) < 1e-4);
+  }
+  renderer.applyDiff({
+    op: 'update', handle: renderHandle(92), transform: {
+      translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+    }, material: null, visible: null, metadata: null,
+  });
+  assert.doesNotThrow(() => renderer.prepareSpritesForCamera(camera, renderer.scene));
+  assert.equal((renderer.objectFor(renderHandle(92)) as THREE.Mesh).scale.x, 0);
+});
+
 void test('textureless legacy and explicit blend sprites retain distinct depth policy', () => {
   const renderer = new ThreeRenderer();
   renderer.applyDiff({

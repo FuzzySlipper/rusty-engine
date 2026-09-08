@@ -147,6 +147,8 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
         tint: [1.0; 4],
         render_order: 3,
         depth: SpriteDepthPolicy::Default,
+        layer: RenderLayer::Scene,
+        viewport_placement: None,
         shading: SpriteShading::Unlit,
         material: SpriteMaterialDescriptor::default(),
         visible: true,

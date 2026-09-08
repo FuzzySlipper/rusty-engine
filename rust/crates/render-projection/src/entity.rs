@@ -4,9 +4,9 @@ use core_ids::EntityId;
 use entity_state::{EntityState, EntityTransform};
 use render_model::{
     AnimatedMeshInstanceDescriptor, BillboardMode, RenderAssetError, RenderAssetKind, RenderDiff,
-    RenderFrameDiff, RenderFrameError, RenderHandle, RenderMetadata, ResolvedRenderAsset,
-    SpriteAttachment, SpriteDepthPolicy, SpriteInstanceDescriptor, SpriteShading, SpriteSizeMode,
-    StaticMeshInstanceDescriptor, Transform,
+    RenderFrameDiff, RenderFrameError, RenderHandle, RenderLayer, RenderMetadata,
+    ResolvedRenderAsset, SpriteAttachment, SpriteDepthPolicy, SpriteInstanceDescriptor,
+    SpriteShading, SpriteSizeMode, StaticMeshInstanceDescriptor, Transform,
 };
 
 use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
@@ -228,6 +228,8 @@ fn create_operation(handle: RenderHandle, entity: &ProjectedEntity) -> RenderDif
                 tint: [1.0; 4],
                 render_order: 0,
                 depth: SpriteDepthPolicy::Default,
+                layer: RenderLayer::Scene,
+                viewport_placement: None,
                 shading: SpriteShading::Unlit,
                 material: Default::default(),
                 visible: entity.visible,

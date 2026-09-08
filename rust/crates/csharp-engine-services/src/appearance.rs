@@ -585,6 +585,73 @@ fn sprite_atlas_copies_frames_resolves_readout_and_releases_with_appearance() {
 
 #[cfg(test)]
 #[test]
+fn sprite_viewport_updates_retain_valid_placement_and_clear_it_when_disabled() {
+    let mut content_resources = BTreeMap::new();
+    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    let mut bridge =
+        RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+    let frames = [NativeSpriteAtlasFrame {
+        frame_id: 7,
+        uv_min: NativeVec2::default(),
+        uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+        has_size: true,
+        size: NativeVec2 { x: 16.0, y: 8.0 },
+    }];
+    bridge.begin_call();
+    let texture = bridge
+        .open_resource(&tests::resource_request("atlas.png"))
+        .expect("atlas texture")
+        .handle;
+    let atlas = unsafe {
+        bridge
+            .create_sprite_atlas(&NativeSpriteAtlasCreateRequest {
+                texture,
+                frames: frames.as_ptr(),
+                frames_len: frames.len(),
+            })
+            .expect("atlas")
+    };
+    let sprite = bridge
+        .create_sprite_from_atlas(atlas_sprite_request(atlas, 7))
+        .expect("atlas sprite");
+    bridge
+        .set_sprite_viewport(NativeSpriteViewportUpdateRequest {
+            appearance: sprite,
+            enabled: true,
+            minimum: NativeVec2 { x: -0.1, y: 0.0 },
+            size: NativeVec2 { x: 0.5, y: 0.25 },
+            alignment: NativeVec2 { x: 0.5, y: 0.0 },
+            fit: NativeSpriteViewportFit::Contain,
+        })
+        .expect("valid overscan placement");
+    assert_eq!(
+        bridge
+            .set_sprite_viewport(NativeSpriteViewportUpdateRequest {
+                appearance: sprite,
+                enabled: true,
+                minimum: NativeVec2::default(),
+                size: NativeVec2 { x: 0.0, y: 1.0 },
+                alignment: NativeVec2::default(),
+                fit: NativeSpriteViewportFit::Stretch,
+            })
+            .expect_err("zero size is rejected")
+            .code(),
+        "CSHARP_SPRITE_VIEWPORT"
+    );
+    bridge
+        .set_sprite_viewport(NativeSpriteViewportUpdateRequest {
+            appearance: sprite,
+            enabled: false,
+            minimum: NativeVec2::default(),
+            size: NativeVec2::default(),
+            alignment: NativeVec2::default(),
+            fit: NativeSpriteViewportFit::Stretch,
+        })
+        .expect("disabled placement clears the optional fact");
+}
+
+#[cfg(test)]
+#[test]
 fn atlas_sprite_failures_and_legacy_replacement_leave_or_release_the_lease() {
     let mut content_resources = BTreeMap::new();
     content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
@@ -4761,6 +4828,49 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
+    fn set_sprite_viewport(
+        &mut self,
+        request: NativeSpriteViewportUpdateRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let placement = if request.enabled {
+            Some(render_model::SpriteViewportPlacement {
+                minimum: native_vec2(request.minimum),
+                size: native_vec2(request.size),
+                alignment: native_vec2(request.alignment),
+                fit: match request.fit {
+                    NativeSpriteViewportFit::Stretch => render_model::SpriteViewportFit::Stretch,
+                    NativeSpriteViewportFit::Contain => render_model::SpriteViewportFit::Contain,
+                },
+            })
+        } else {
+            None
+        };
+        if let Some(placement) = placement {
+            placement.validate().map_err(|error| {
+                CsharpEngineServicesError::new("CSHARP_SPRITE_VIEWPORT", format!("{error:?}"))
+            })?;
+        }
+        let staged = self.staged_mut()?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&request.appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance is not live")
+            })?;
+        match staged.state.projector.appearance_mut(&identity) {
+            Some(Appearance::Sprite { sprite }) => sprite.viewport_placement = placement,
+            _ => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_VIEWPORT_APPEARANCE",
+                    "appearance is not a sprite",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn read_sprite(
         &mut self,
         appearance: NativeAppearanceHandle,
@@ -8090,6 +8200,13 @@ pub(crate) unsafe extern "C" fn set_sprite_frame(
     appearance_void(context, |bridge| bridge.set_sprite_frame(request))
 }
 
+pub(crate) unsafe extern "C" fn set_sprite_viewport(
+    context: *mut c_void,
+    request: NativeSpriteViewportUpdateRequest,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.set_sprite_viewport(request))
+}
+
 pub(crate) unsafe extern "C" fn read_sprite(
     context: *mut c_void,
     appearance: NativeAppearanceHandle,
@@ -9217,6 +9334,8 @@ fn sprite_instance_descriptor(
             NativeSpriteDepthPolicy::DepthTestOff => SpriteDepthPolicy::DepthTestOff,
             NativeSpriteDepthPolicy::DepthWriteOff => SpriteDepthPolicy::DepthWriteOff,
         },
+        layer: render_model::RenderLayer::Scene,
+        viewport_placement: None,
         shading: match material.lighting {
             SpriteLightingMode::Unlit => SpriteShading::Unlit,
             _ => SpriteShading::Lit,
