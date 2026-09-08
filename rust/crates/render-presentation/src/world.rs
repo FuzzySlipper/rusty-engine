@@ -124,13 +124,24 @@ impl PresentationWorld {
         if operations.is_empty() {
             return Ok(RenderFrameDiff::new());
         }
-        let delta = RenderFrameDiff::try_from_published_ops(
-            PRESENTATION_WORLD_STREAM,
-            self.revision,
-            revision,
-            operations,
-        )
-        .map_err(PresentationWorldError::Frame)?;
+        // Every operation was validated on entry and copied without modification.
+        // Only the publication metadata is new; do not rescan the mesh bodies.
+        let operation_count = u32::try_from(operations.len()).map_err(|_| {
+            PresentationWorldError::Frame(RenderFrameError::PublicationOperationCount {
+                expected: u32::MAX,
+                actual: operations.len(),
+            })
+        })?;
+        let delta = RenderFrameDiff {
+            schema_version: RENDER_FRAME_SCHEMA_VERSION,
+            publication: Some(RenderFramePublication {
+                stream: PRESENTATION_WORLD_STREAM.to_owned(),
+                base_revision: self.revision,
+                revision,
+                operation_count,
+            }),
+            ops: operations,
+        };
         candidate.revision = revision;
         *self = candidate;
         Ok(delta)
@@ -829,6 +840,28 @@ mod tests {
             }],
             collision: MeshCollisionPolicy::VisualOnly,
         }
+    }
+
+    #[test]
+    fn mesh_delta_is_valid_and_invalid_mutated_input_is_atomic() {
+        let mut world = PresentationWorld::default();
+        let mut input = frame(vec![RenderDiff::DefineStaticMesh {
+            asset: static_mesh("mesh/admission"),
+        }]);
+        let delta = world.apply(&input).unwrap();
+        delta.validate().unwrap();
+        assert_eq!(delta.ops, input.ops);
+        assert_eq!(delta.publication.as_ref().unwrap().operation_count, 1);
+        let before = world.snapshot();
+        let RenderDiff::DefineStaticMesh { asset } = &mut input.ops[0] else {
+            unreachable!()
+        };
+        let MeshPayloadSource::Inline { indices, .. } = &mut asset.payload.source else {
+            unreachable!()
+        };
+        indices[0] = 99;
+        assert!(world.apply(&input).is_err());
+        assert_eq!(world.snapshot(), before);
     }
 
     #[test]

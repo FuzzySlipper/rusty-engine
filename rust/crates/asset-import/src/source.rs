@@ -3,8 +3,8 @@ use serde::Deserialize;
 use crate::{ImportCode, ImportDiagnostic};
 
 pub const SUPPORTED_SOURCE_SCHEMA: u32 = 1;
-pub const MAX_SOURCE_VERTICES: usize = 16_000_000;
-pub const MAX_SOURCE_INDICES: usize = 48_000_000;
+pub const MAX_SOURCE_VERTICES: usize = u32::MAX as usize;
+pub const MAX_SOURCE_INDICES: usize = u32::MAX as usize;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -68,20 +68,26 @@ struct StoredSource {
     #[serde(default)]
     collision: Option<StoredCollision>,
     #[serde(default)]
-    #[serde(rename = "animations")]
-    _animations: Option<serde_json::Value>,
+    #[serde(
+        rename = "animations",
+        deserialize_with = "present_unsupported_feature"
+    )]
+    _animations: bool,
     #[serde(default)]
-    #[serde(rename = "skins")]
-    _skins: Option<serde_json::Value>,
+    #[serde(rename = "skins", deserialize_with = "present_unsupported_feature")]
+    _skins: bool,
     #[serde(default)]
-    #[serde(rename = "morphTargets")]
-    _morph_targets: Option<serde_json::Value>,
+    #[serde(
+        rename = "morphTargets",
+        deserialize_with = "present_unsupported_feature"
+    )]
+    _morph_targets: bool,
     #[serde(default)]
-    #[serde(rename = "cameras")]
-    _cameras: Option<serde_json::Value>,
+    #[serde(rename = "cameras", deserialize_with = "present_unsupported_feature")]
+    _cameras: bool,
     #[serde(default)]
-    #[serde(rename = "lights")]
-    _lights: Option<serde_json::Value>,
+    #[serde(rename = "lights", deserialize_with = "present_unsupported_feature")]
+    _lights: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +101,13 @@ enum StoredCollision {
 #[serde(deny_unknown_fields)]
 struct StoredProxy {
     proxy: String,
+}
+
+fn present_unsupported_feature<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<bool, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(true)
 }
 
 pub fn parse_source(text: &str, locus: &str) -> SourceParse {
@@ -123,15 +136,13 @@ pub fn parse_source(text: &str, locus: &str) -> SourceParse {
             "remove trailing input",
         ));
     }
-    let root: serde_json::Value =
-        serde_json::from_str(text).expect("the strict source decode already accepted this JSON");
     let mut diagnostics = Vec::new();
     for (name, present) in [
-        ("animations", root.get("animations").is_some()),
-        ("skins", root.get("skins").is_some()),
-        ("morphTargets", root.get("morphTargets").is_some()),
-        ("cameras", root.get("cameras").is_some()),
-        ("lights", root.get("lights").is_some()),
+        ("animations", stored._animations),
+        ("skins", stored._skins),
+        ("morphTargets", stored._morph_targets),
+        ("cameras", stored._cameras),
+        ("lights", stored._lights),
     ] {
         if present {
             diagnostics.push(ImportDiagnostic::error(
@@ -168,7 +179,7 @@ pub fn parse_source(text: &str, locus: &str) -> SourceParse {
         diagnostics.push(ImportDiagnostic::error(
             ImportCode::SourceTooLarge,
             locus,
-            "vertex stream exceeds the importer limit",
+            "vertex stream exceeds u32 count representation",
             "split the mesh into smaller offline assets",
         ));
     }
@@ -176,7 +187,7 @@ pub fn parse_source(text: &str, locus: &str) -> SourceParse {
         diagnostics.push(ImportDiagnostic::error(
             ImportCode::SourceTooLarge,
             locus,
-            "index stream exceeds the importer limit",
+            "index stream exceeds u32 count representation",
             "split the mesh into smaller offline assets",
         ));
     }

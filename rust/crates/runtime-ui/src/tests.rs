@@ -178,7 +178,7 @@ fn wrong_phase_foreign_stale_duplicate_regression_rebind_and_dispose_fail_closed
 }
 
 #[test]
-fn stream_contract_and_value_bounds_are_checked_before_emission() {
+fn stream_contract_is_checked_before_emission() {
     let mut lifecycle = fresh_lifecycle();
     let token = projection_token(&mut lifecycle);
     let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
@@ -196,20 +196,6 @@ fn stream_contract_and_value_bounds_are_checked_before_emission() {
             ..
         })
     ));
-    let huge = "x".repeat(MAX_RUNTIME_UI_PROJECTION_VALUE_JSON_BYTES);
-    let result = lane.emit_value(
-        &lifecycle,
-        token,
-        "stealth.hud",
-        "stealth.ui.snapshot.v1",
-        serde_json::json!({"huge": huge}),
-    );
-    assert!(matches!(
-        result,
-        Err(RuntimeUiProjectionError::ValueTooLarge { .. })
-    ));
-    assert_eq!(lane.readout().stream_count(), 0);
-
     let first = lane
         .emit_value(
             &lifecycle,
@@ -233,91 +219,30 @@ fn stream_contract_and_value_bounds_are_checked_before_emission() {
 }
 
 #[test]
-fn shape_bounds_match_application_host_limits() {
+fn large_and_deep_values_are_admitted_without_recursive_validation() {
     let mut lifecycle = fresh_lifecycle();
     let token = projection_token(&mut lifecycle);
     let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
-    let too_deep = (0..(MAX_RUNTIME_UI_PROJECTION_VALUE_DEPTH + 1))
-        .fold(serde_json::json!(null), |value, _| {
-            serde_json::json!([value])
-        });
-    let result = lane.emit_value(
-        &lifecycle,
-        token,
-        "stealth.deep",
-        "stealth.ui.snapshot.v1",
-        too_deep,
-    );
-    assert!(matches!(
-        result,
-        Err(RuntimeUiProjectionError::ValueDepthLimit { .. })
-    ));
-
-    let mut too_many_nodes_object = serde_json::Map::new();
-    for index in 0..MAX_RUNTIME_UI_PROJECTION_VALUE_OBJECT_KEYS {
-        too_many_nodes_object.insert(
-            index.to_string(),
-            serde_json::Value::Array((0..8).map(|_| serde_json::json!(null)).collect()),
-        );
+    let deeply_nested = (0..1_024).fold(serde_json::json!(null), |value, _| {
+        serde_json::json!([value])
+    });
+    let mut object = serde_json::Map::new();
+    for index in 0..300 {
+        object.insert(index.to_string(), serde_json::json!(index));
     }
     let result = lane.emit_value(
         &lifecycle,
         token,
-        "stealth.nodes",
-        "stealth.ui.snapshot.v1",
-        serde_json::Value::Object(too_many_nodes_object),
-    );
-    assert!(matches!(
-        result,
-        Err(RuntimeUiProjectionError::ValueNodeLimit { .. })
-    ));
-
-    let result = lane.emit_value(
-        &lifecycle,
-        token,
-        "stealth.string",
+        "stealth.large",
         "stealth.ui.snapshot.v1",
         serde_json::json!({
-            "value": "x".repeat(MAX_RUNTIME_UI_PROJECTION_VALUE_STRING_BYTES + 1)
+            "deeplyNested": deeply_nested,
+            "longText": "x".repeat(9_000),
+            "array": (0..600).collect::<Vec<_>>(),
+            "object": object,
         }),
     );
-    assert!(matches!(
-        result,
-        Err(RuntimeUiProjectionError::ValueStringLimit { .. })
-    ));
-
-    let too_many_array_entries = serde_json::Value::Array(
-        (0..(MAX_RUNTIME_UI_PROJECTION_VALUE_ARRAY_LENGTH + 1))
-            .map(|_| serde_json::json!(null))
-            .collect(),
-    );
-    let result = lane.emit_value(
-        &lifecycle,
-        token,
-        "stealth.array",
-        "stealth.ui.snapshot.v1",
-        too_many_array_entries,
-    );
-    assert!(matches!(
-        result,
-        Err(RuntimeUiProjectionError::ValueArrayLimit { .. })
-    ));
-
-    let mut too_many_object_keys = serde_json::Map::new();
-    for index in 0..(MAX_RUNTIME_UI_PROJECTION_VALUE_OBJECT_KEYS + 1) {
-        too_many_object_keys.insert(index.to_string(), serde_json::json!(null));
-    }
-    let result = lane.emit_value(
-        &lifecycle,
-        token,
-        "stealth.object",
-        "stealth.ui.snapshot.v1",
-        serde_json::Value::Object(too_many_object_keys),
-    );
-    assert!(matches!(
-        result,
-        Err(RuntimeUiProjectionError::ValueObjectLimit { .. })
-    ));
+    assert!(result.is_ok());
 }
 
 #[test]

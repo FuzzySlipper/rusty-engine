@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use sha2::{Digest, Sha256};
-use voxel_asset::{MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES};
 
 use crate::ConversionError;
 
+/// Imported renderer streams use u32 offsets and counts.
+pub(crate) const MAX_SOURCE_STREAM_COUNT: usize = u32::MAX as usize;
+
 mod gltf_scene;
 
-pub const MAX_IMPORTED_SCENE_DEPTH: usize = 256;
-pub const MAX_IMPORTED_TEXCOORD_SETS: usize = 8;
 pub const MAX_IMPORTED_NAME_BYTES: usize = 4_096;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,7 +183,7 @@ pub(crate) fn flatten_model_scene(
     ) -> Result<Vec<[f64; 3]>, ConversionError>,
 ) -> Result<ImportedStaticMesh, ConversionError> {
     let mut positions = Vec::new();
-    let texture_set_indices = collect_texture_set_indices(scene)?;
+    let texture_set_indices = collect_texture_set_indices(scene);
     let mut texture_coordinates = texture_set_indices
         .into_iter()
         .map(|source_set_index| (source_set_index, Vec::new()))
@@ -225,13 +225,13 @@ pub(crate) fn flatten_model_scene(
             ensure_total_limit(
                 positions.len(),
                 instance_positions.len(),
-                MAX_CONVERSION_SOURCE_VERTICES,
+                MAX_SOURCE_STREAM_COUNT,
                 "source.positions",
             )?;
             ensure_total_limit(
                 source_index_count,
                 primitive.indices.len(),
-                MAX_CONVERSION_SOURCE_INDICES,
+                MAX_SOURCE_STREAM_COUNT,
                 "source.indices",
             )?;
             source_index_count += primitive.indices.len();
@@ -398,32 +398,14 @@ fn compact_vertices_to_retained_triangles(
     Ok(())
 }
 
-fn collect_texture_set_indices(
-    scene: &ImportedModelScene,
-) -> Result<BTreeSet<u32>, ConversionError> {
-    let mut source_set_indices = BTreeSet::new();
-    for mesh in &scene.meshes {
-        for primitive in &mesh.primitives {
-            for texture_coordinates in &primitive.texture_coordinates {
-                source_set_indices.insert(texture_coordinates.source_set_index);
-                if source_set_indices.len() > MAX_IMPORTED_TEXCOORD_SETS {
-                    return Err(ConversionError::one(
-                        "conversion.resourceLimit",
-                        format!(
-                            "source.meshes[{}].primitives[{}].attributes.TEXCOORD_{}",
-                            mesh.source_mesh_index,
-                            primitive.source_primitive_index,
-                            texture_coordinates.source_set_index
-                        ),
-                        format!(
-                            "selected model defines more than {MAX_IMPORTED_TEXCOORD_SETS} distinct TEXCOORD sets"
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-    Ok(source_set_indices)
+fn collect_texture_set_indices(scene: &ImportedModelScene) -> BTreeSet<u32> {
+    scene
+        .meshes
+        .iter()
+        .flat_map(|mesh| &mesh.primitives)
+        .flat_map(|primitive| &primitive.texture_coordinates)
+        .map(|coordinates| coordinates.source_set_index)
+        .collect()
 }
 
 fn validate_triangles(
@@ -584,6 +566,28 @@ mod tests {
         DegenerateTrianglePolicy, ImportedMaterial, ImportedModelMesh, ImportedModelNode,
         ImportedModelPrimitive, ImportedModelScene, ImportedTextureCoordinates, ImportedTriangle,
     };
+
+    #[test]
+    fn stream_counts_follow_u32_representation() {
+        use super::{ensure_total_limit, MAX_SOURCE_STREAM_COUNT};
+        assert!(ensure_total_limit(2_000_000, 1, MAX_SOURCE_STREAM_COUNT, "vertices").is_ok());
+        assert!(ensure_total_limit(6_000_000, 1, MAX_SOURCE_STREAM_COUNT, "indices").is_ok());
+        assert!(ensure_total_limit(
+            MAX_SOURCE_STREAM_COUNT,
+            0,
+            MAX_SOURCE_STREAM_COUNT,
+            "indices"
+        )
+        .is_ok());
+        assert!(ensure_total_limit(
+            MAX_SOURCE_STREAM_COUNT,
+            1,
+            MAX_SOURCE_STREAM_COUNT,
+            "indices"
+        )
+        .is_err());
+        assert!(ensure_total_limit(usize::MAX, 1, MAX_SOURCE_STREAM_COUNT, "indices").is_err());
+    }
 
     const TRIANGLE: ImportedTriangle = ImportedTriangle {
         indices: [0, 1, 2],

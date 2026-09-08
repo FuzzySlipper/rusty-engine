@@ -2,13 +2,6 @@ import type { RustyApplicationRuntimeIdentity } from './input-ingress.js';
 /** The one Product UI projection artifact admitted by the application host. */
 export declare const RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT: "rusty.product.ui-projection";
 export declare const RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM = "product.ui";
-export declare const RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES = 65536;
-export declare const RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES = 262144;
-export declare const RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES = 2048;
-export declare const RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH = 16;
-export declare const RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES = 8192;
-export declare const RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH = 512;
-export declare const RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS = 256;
 export declare const RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS = 64;
 export declare const RUSTY_APPLICATION_UI_PROJECTION_U64_MAXIMUM = 18446744073709551615n;
 export type RustyApplicationUiProjectionJson = null | boolean | number | string | readonly RustyApplicationUiProjectionJson[] | {
@@ -59,16 +52,9 @@ export interface RustyApplicationUiProjectionOptions {
     /** Product/source-linked contract identity; the host never invents one. */
     readonly expectedContract: string;
     readonly binding?: RustyApplicationRuntimeIdentity;
-    readonly maximumBytes?: number;
-    readonly maximumWireBytes?: number;
-    readonly maximumNodes?: number;
-    readonly maximumDepth?: number;
-    readonly maximumStringBytes?: number;
-    readonly maximumArrayLength?: number;
-    readonly maximumObjectKeys?: number;
     readonly maximumSubscribers?: number;
 }
-export type RustyApplicationUiProjectionErrorCode = 'disposed' | 'invalid_envelope' | 'invalid_runtime' | 'invalid_sequence' | 'invalid_stream' | 'invalid_contract' | 'artifact_mismatch' | 'stream_mismatch' | 'contract_mismatch' | 'runtime_unbound' | 'runtime_mismatch' | 'sequence_not_increasing' | 'value_invalid' | 'value_limit_exceeded' | 'subscriber_limit_exceeded';
+export type RustyApplicationUiProjectionErrorCode = 'disposed' | 'invalid_envelope' | 'invalid_runtime' | 'invalid_sequence' | 'invalid_stream' | 'invalid_contract' | 'artifact_mismatch' | 'stream_mismatch' | 'contract_mismatch' | 'runtime_unbound' | 'runtime_mismatch' | 'sequence_not_increasing' | 'value_invalid' | 'subscriber_limit_exceeded';
 export declare class RustyApplicationUiProjectionError extends Error {
     readonly code: RustyApplicationUiProjectionErrorCode;
     constructor(code: RustyApplicationUiProjectionErrorCode, message: string, options?: ErrorOptions);

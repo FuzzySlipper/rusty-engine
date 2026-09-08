@@ -73,6 +73,19 @@ fn animated_asset_stem(source: &[u8]) -> String {
 }
 
 #[test]
+fn unsupported_source_fields_remain_rejected_even_when_null() {
+    for field in ["animations", "skins", "morphTargets", "cameras", "lights"] {
+        let mut document: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        document[field] = serde_json::Value::Null;
+        let parsed = parse_source(&document.to_string(), "fixture");
+        assert!(parsed.mesh.is_none());
+        assert!(parsed.diagnostics.iter().any(|diagnostic| diagnostic.code
+            == ImportCode::UnsupportedFeature
+            && diagnostic.locus.ends_with(field)));
+    }
+}
+
+#[test]
 fn valid_source_produces_deterministic_native_assets_and_manifest() {
     let context = ImportContext::with_textures(["steel-plate".to_owned()]);
     let first = plan_import(&uri(), VALID, &context, ImportMode::DryRun, None, None);
@@ -871,8 +884,6 @@ fn gltf_closure_rejects_ambient_paths_collisions_missing_and_unsupported_resourc
     let failure =
         gltf_relative_resource_uris(&serde_json::to_vec(&collision_root).unwrap()).unwrap_err();
     assert_eq!(failure.code, ImportCode::MalformedSource);
-
-
 }
 
 #[test]
@@ -882,7 +893,10 @@ fn gltf_json_above_retired_byte_quota_preserves_packed_mesh() {
     source.root_json.resize(64 * 1024 * 1024 + 1, b' ');
     let actual = admit_gltf_source(&source).unwrap();
     assert_eq!(actual.glb_bytes, expected.glb_bytes);
-    assert_eq!(actual.external_resource_uris, expected.external_resource_uris);
+    assert_eq!(
+        actual.external_resource_uris,
+        expected.external_resource_uris
+    );
 }
 
 #[test]
@@ -894,23 +908,36 @@ fn gltf_closure_packs_above_retired_external_resource_quotas() {
     for index in 1..257 {
         let uri = format!("resource-{index}.bin");
         let length = if index <= 2 { 64 * 1024 * 1024 + 4 } else { 4 };
-        root["buffers"].as_array_mut().unwrap().push(serde_json::json!({
-            "uri": uri, "byteLength": length,
-        }));
+        root["buffers"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "uri": uri, "byteLength": length,
+            }));
         source.resources.push(GltfResource {
-            uri, bytes: vec![index as u8; length],
+            uri,
+            bytes: vec![index as u8; length],
         });
     }
     source.root_json = serde_json::to_vec(&root).unwrap();
     let packed = admit_gltf_source(&source).unwrap();
     assert_eq!(packed.external_resource_uris.len(), 257);
-    assert_eq!(packed.source_byte_count,
-        source.root_json.len() as u64 + source.resources.iter()
-            .map(|resource| resource.bytes.len() as u64).sum::<u64>());
+    assert_eq!(
+        packed.source_byte_count,
+        source.root_json.len() as u64
+            + source
+                .resources
+                .iter()
+                .map(|resource| resource.bytes.len() as u64)
+                .sum::<u64>()
+    );
     let json_length = u32::from_le_bytes(packed.glb_bytes[12..16].try_into().unwrap()) as usize;
     let mut offset = 20 + json_length + 8;
     for resource in &source.resources {
-        assert_eq!(&packed.glb_bytes[offset..offset + resource.bytes.len()], resource.bytes);
+        assert_eq!(
+            &packed.glb_bytes[offset..offset + resource.bytes.len()],
+            resource.bytes
+        );
         offset += resource.bytes.len().next_multiple_of(4);
     }
     assert_eq!(offset, packed.glb_bytes.len());
@@ -1545,7 +1572,11 @@ fn cli_imports_valid_json_above_retired_source_byte_quota() {
         .arg(&output)
         .output()
         .unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(output.is_dir());
 
     let manifest = output.join("fixture-triangle.import.json");
@@ -1553,8 +1584,16 @@ fn cli_imports_valid_json_above_retired_source_byte_quota() {
     existing.resize(4 * 1024 * 1024 + 1, b' ');
     fs::write(manifest, existing).unwrap();
     let plan = Command::new(env!("CARGO_BIN_EXE_rusty-asset-import"))
-        .arg("plan").arg(&source).arg(&output).output().unwrap();
-    assert!(plan.status.success(), "{}", String::from_utf8_lossy(&plan.stderr));
+        .arg("plan")
+        .arg(&source)
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
     assert!(String::from_utf8_lossy(&plan.stdout).contains("reimportPlan: noop"));
 
     fs::remove_dir_all(root).unwrap();
@@ -1607,13 +1646,21 @@ fn skinned_import_preserves_large_rig_and_shared_skin_tables() {
     let mut json: serde_json::Value = serde_json::from_slice(&base[20..20 + json_length]).unwrap();
     let mut bin = base[28 + json_length..].to_vec();
     for _ in 0..3 {
-        for joint in [256u16, 0, 0, 0] { bin.extend_from_slice(&joint.to_le_bytes()); }
+        for joint in [256u16, 0, 0, 0] {
+            bin.extend_from_slice(&joint.to_le_bytes());
+        }
     }
     for _ in 0..3 {
-        for weight in [1f32, 0., 0., 0.] { bin.extend_from_slice(&weight.to_le_bytes()); }
+        for weight in [1f32, 0., 0., 0.] {
+            bin.extend_from_slice(&weight.to_le_bytes());
+        }
     }
-    for time in [0f32, 1.] { bin.extend_from_slice(&time.to_le_bytes()); }
-    for _ in 0..6 { bin.extend_from_slice(&0f32.to_le_bytes()); }
+    for time in [0f32, 1.] {
+        bin.extend_from_slice(&time.to_le_bytes());
+    }
+    for _ in 0..6 {
+        bin.extend_from_slice(&0f32.to_le_bytes());
+    }
     json["buffers"][0]["byteLength"] = bin.len().into();
     json["bufferViews"].as_array_mut().unwrap().extend([
         serde_json::json!({"buffer":0,"byteOffset":44,"byteLength":24,"target":34962}),
@@ -1634,10 +1681,13 @@ fn skinned_import_preserves_large_rig_and_shared_skin_tables() {
     for index in 1..129 {
         nodes.push(serde_json::json!({"name":format!("Mesh{index}"),"mesh":0,"skin":index}));
     }
-    json["scenes"][0]["nodes"] = serde_json::json!([vec![0,1], (258..386).collect()].concat());
-    json["skins"] = serde_json::json!(vec![serde_json::json!({
-        "joints": (1..258).collect::<Vec<_>>()
-    }); 129]);
+    json["scenes"][0]["nodes"] = serde_json::json!([vec![0, 1], (258..386).collect()].concat());
+    json["skins"] = serde_json::json!(vec![
+        serde_json::json!({
+            "joints": (1..258).collect::<Vec<_>>()
+        });
+        129
+    ]);
     json["bufferViews"].as_array_mut().unwrap().extend([
         serde_json::json!({"buffer":0,"byteOffset":116,"byteLength":8}),
         serde_json::json!({"buffer":0,"byteOffset":124,"byteLength":24}),
@@ -1652,9 +1702,17 @@ fn skinned_import_preserves_large_rig_and_shared_skin_tables() {
     }]);
     let source = test_glb(&serde_json::to_string(&json).unwrap(), &bin);
     let outcome = import_animated_glb_asset(
-        &SourceUri::RelativePath("shared-large-rig.glb".to_owned()), &source, &ImportContext::default());
-    let assets = outcome.assets.unwrap_or_else(|| panic!("{:?}", outcome.diagnostics));
-    let rig = assets.animated_mesh.rig.expect("large named rig is retained");
+        &SourceUri::RelativePath("shared-large-rig.glb".to_owned()),
+        &source,
+        &ImportContext::default(),
+    );
+    let assets = outcome
+        .assets
+        .unwrap_or_else(|| panic!("{:?}", outcome.diagnostics));
+    let rig = assets
+        .animated_mesh
+        .rig
+        .expect("large named rig is retained");
     assert_eq!(rig.joints.len(), 257);
     assert_eq!(assets.receipt.skin_count, 129);
     assert_eq!(assets.receipt.joint_count, 129 * 257);
@@ -1666,15 +1724,30 @@ fn imported_materials_are_not_limited_by_voxel_palette_capacity() {
     let source = rewrite_glb_json(&static_triangle_glb(), |json| {
         json["materials"] = serde_json::json!(vec![serde_json::json!({}); 4096]);
         let primitive = json["meshes"][0]["primitives"][0].clone();
-        json["meshes"][0]["primitives"] = serde_json::Value::Array((0..4096)
-            .map(|index| { let mut p = primitive.clone(); p["material"] = index.into(); p }).collect());
+        json["meshes"][0]["primitives"] = serde_json::Value::Array(
+            (0..4096)
+                .map(|index| {
+                    let mut p = primitive.clone();
+                    p["material"] = index.into();
+                    p
+                })
+                .collect(),
+        );
     });
     let outcome = import_animated_glb_asset(
-        &SourceUri::RelativePath("many-materials.glb".to_owned()), &source, &ImportContext::default());
-    let assets = outcome.assets.expect("4096 used materials fit renderer slots");
+        &SourceUri::RelativePath("many-materials.glb".to_owned()),
+        &source,
+        &ImportContext::default(),
+    );
+    let assets = outcome
+        .assets
+        .expect("4096 used materials fit renderer slots");
     assert_eq!(assets.receipt.material_count, 4096);
     assert_eq!(assets.animated_mesh.embedded_material_slots.len(), 4096);
-    assert_eq!(assets.animated_mesh.embedded_material_slots[4095].source_material_slot, 4095);
+    assert_eq!(
+        assets.animated_mesh.embedded_material_slots[4095].source_material_slot,
+        4095
+    );
     assert_eq!(assets.runtime_resource_bytes, source);
 }
 

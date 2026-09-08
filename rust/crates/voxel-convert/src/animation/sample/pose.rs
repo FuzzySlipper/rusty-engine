@@ -7,7 +7,7 @@ use super::matrix::compose_trs;
 use crate::animation::{
     AnimationProperty, ImportedAnimatedModel, ImportedAnimationClip, ImportedNodeTransform,
 };
-use crate::import::{multiply_matrices, validate_affine_matrix, MAX_IMPORTED_SCENE_DEPTH};
+use crate::import::{multiply_matrices, validate_affine_matrix};
 use crate::ConversionError;
 
 /// Maximum absolute numerical drift admitted when classifying an affine pose
@@ -395,15 +395,16 @@ fn compose_world_transforms(
     let indices = scene_node_indices(model)?;
     let mut states = vec![VisitState::Unseen; model.scene.nodes.len()];
     let mut world_transforms = vec![None; model.scene.nodes.len()];
+    let mut pending = Vec::new();
     for index in 0..model.scene.nodes.len() {
         compose_world_transform(
             index,
-            1,
             model,
             &indices,
             local_transforms,
             &mut states,
             &mut world_transforms,
+            &mut pending,
         )?;
     }
 
@@ -436,70 +437,61 @@ enum VisitState {
     Complete,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compose_world_transform(
     index: usize,
-    depth: usize,
     model: &ImportedAnimatedModel,
     indices: &BTreeMap<u32, usize>,
     local_transforms: &[[f64; 16]],
     states: &mut [VisitState],
     world_transforms: &mut [Option<[f64; 16]>],
+    pending: &mut Vec<usize>,
 ) -> Result<[f64; 16], ConversionError> {
-    let node = &model.scene.nodes[index];
-    match states[index] {
-        VisitState::Complete => {
-            return Ok(world_transforms[index]
-                .expect("complete hierarchy nodes retain their world transform"));
-        }
-        VisitState::Visiting => {
-            return Err(invalid_hierarchy(
-                node.source_node_index,
-                format!(
-                    "node hierarchy contains a cycle through node {}",
-                    node.source_node_index
-                ),
-            ));
-        }
-        VisitState::Unseen => {}
-    }
-    if depth > MAX_IMPORTED_SCENE_DEPTH {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            format!("sample.nodes[{}]", node.source_node_index),
-            format!("node hierarchy exceeds depth {MAX_IMPORTED_SCENE_DEPTH}"),
-        ));
-    }
-
-    states[index] = VisitState::Visiting;
-    let world = match node.parent_node_index {
-        Some(parent_node_index) => {
-            let parent_index = *indices.get(&parent_node_index).ok_or_else(|| {
-                invalid_hierarchy(
+    let mut current = index;
+    let mut parent_world = loop {
+        let node = &model.scene.nodes[current];
+        match states[current] {
+            VisitState::Complete => break world_transforms[current],
+            VisitState::Visiting => {
+                return Err(invalid_hierarchy(
                     node.source_node_index,
-                    format!("parent references missing node {parent_node_index}"),
-                )
-            })?;
-            let parent_world = compose_world_transform(
-                parent_index,
-                depth + 1,
-                model,
-                indices,
-                local_transforms,
-                states,
-                world_transforms,
-            )?;
-            multiply_matrices(parent_world, local_transforms[index])
+                    format!(
+                        "node hierarchy contains a cycle through node {}",
+                        node.source_node_index
+                    ),
+                ))
+            }
+            VisitState::Unseen => {}
         }
-        None => local_transforms[index],
+        states[current] = VisitState::Visiting;
+        pending.push(current);
+        match node.parent_node_index {
+            Some(parent) => {
+                current = *indices.get(&parent).ok_or_else(|| {
+                    invalid_hierarchy(
+                        node.source_node_index,
+                        format!("parent references missing node {parent}"),
+                    )
+                })?
+            }
+            None => break None,
+        }
     };
-    validate_affine_matrix(
-        world,
-        format!("sample.nodes[{}].modelTransform", node.source_node_index),
-    )?;
-    world_transforms[index] = Some(world);
-    states[index] = VisitState::Complete;
-    Ok(world)
+    while let Some(current) = pending.pop() {
+        let world = parent_world.map_or(local_transforms[current], |parent| {
+            multiply_matrices(parent, local_transforms[current])
+        });
+        validate_affine_matrix(
+            world,
+            format!(
+                "sample.nodes[{}].modelTransform",
+                model.scene.nodes[current].source_node_index
+            ),
+        )?;
+        world_transforms[current] = Some(world);
+        states[current] = VisitState::Complete;
+        parent_world = Some(world);
+    }
+    Ok(world_transforms[index].expect("complete hierarchy nodes retain their world transform"))
 }
 
 fn scene_node_indices(

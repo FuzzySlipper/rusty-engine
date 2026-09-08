@@ -605,3 +605,69 @@ launch/current fingerprints match. Seed 11 / disrupted / normal / hub reports
 `generationError=none`, 183,158 triangles, 142,802 vertices and unchanged topology
 (0 boundary edges, 9 nonmanifold edges #7870, 0 inconsistent winding). This is
 runtime debug readback, not a new GPU visual or performance measurement.
+
+
+## Final resource pass — source capacity and remaining ownership (#7876)
+
+Replaced recursive animated parent composition with an iterative parent-chain
+walk and removed the 256-depth quota. Source hierarchy traversal was already
+iterative. The reverse-ordered 2,048-node pose chain and a 300-node GLB chain
+preserve composed transforms; missing parents, cycles and non-finite transforms
+remain errors.
+
+General imported vertex/index streams now use their actual u32 count
+representation instead of 2M/6M or 16M/48M policies. Checked addition still
+prevents overflow. The numeric capacity test crosses the old quotas without
+allocating a u32-sized mesh. The generic importer preserves 16 TEXCOORD sets
+rather than rejecting at eight; this does not expand the renderer's supported
+selected texture channels (0..3).
+
+Removed the conversion source 64 MiB cap, its provenance restriction, the two
+1 MiB request-envelope quotas and the inspector's 4 MiB import-manifest read
+cap. Typed parsing, malformed-input errors, source identity and conversion work
+contracts remain. The conversion tests exercise actual CLI import above 64 MiB
+with small geometry and both CLIs above 1 MiB requests. Details and retained
+conversion ownership are in [the conversion disposition](audit-7876-conversion.md).
+The conversion work/output and voxel palette contracts govern requested voxel
+work and its artifact representation; they do not constrain generic mesh import.
+Other inspector commands' artifact policies are outside this resource operation.
+
+Mesh JSON admission no longer reparses the entire document into a generic Value
+tree to detect unsupported fields. The initial typed parse records field
+presence while skipping their contents. Explicitly null unsupported fields
+remain rejected, covered for all five fields.
+
+Final copy/hash dispositions for the traced resource operation:
+
+- Rust admitted bodies share immutable Arc storage through resources, bundles
+  and responses (earlier passes). Canonical asset encoding used to produce a
+  content hash remains actual identity input, not a discarded size preflight.
+- Browser content preparation retains its initial snapshot of mutable caller
+  bytes. Resource loaders snapshot independently supplied resolver buffers before
+  asynchronous hash/retention; otherwise caller mutation can invalidate identity.
+- Public Three resource providers remain independently usable. Their identity
+  verification is retained; no new trust flag or registration layer is added
+  solely to skip a hash on the usual path. Provider bytes remain stable until
+  release, allowing the earlier redundant encoded texture copy to stay removed.
+- Decoded GPU streams/pixels and audio decode buffers retain their own lifetime;
+  those copies are realization or consuming-decoder ownership, not validation.
+- Actual file/JSON/GLB/PNG/RMesh parsing, ABI counts, content identities and device
+  texture dimensions stay with their owning codec, representation or backend.
+
+This closes the resource operation audit and the specific outstanding decisions
+from audit16. It does not certify every raw validation-inventory row, guarantee
+arbitrary allocation success, or report a large-scene GPU benchmark.
+
+
+## Completion checks for #7874–#7877
+
+The final resource tests pass (14 voxel-convert library, 5 pose, 6 scene-import,
+unsupported-JSON-field regression, conversion/inspector CLI and provenance
+regressions). Retained publication integration passes 43 host unit, 5 world and
+6 publication tests, in addition to the two focused mesh bridge tests.
+Opaque payload and diagnostic evidence is recorded in
+[audit-7875](audit-7875.md) and [audit-7877](audit-7877.md); the retained-frame
+per-site decisions are in [audit-7874](audit-7874.md).
+All-target Clippy with warnings denied passes for all 13 touched Rust packages.
+The full Render build regenerates tracked bundles/declarations successfully.
+The existing Vite ineffective dynamic-import warning remains build-only.

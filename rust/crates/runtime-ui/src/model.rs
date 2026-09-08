@@ -13,32 +13,9 @@ pub const RUNTIME_UI_PROJECTION_ARTIFACT: &str = "rusty.product.ui-projection";
 /// Maximum number of distinct UI streams retained in one bound lane.
 pub const MAX_RUNTIME_UI_PROJECTION_STREAMS: usize = 256;
 
-/// Maximum compact JSON size of one copied product projection value.
-pub const MAX_RUNTIME_UI_PROJECTION_VALUE_JSON_BYTES: usize = 65_536;
-
-/// Maximum JSON node count accepted in one copied value. These shape bounds
-/// are shared with the rich-DOM application host so Rust cannot emit a value
-/// the host would later reject.
-pub const MAX_RUNTIME_UI_PROJECTION_VALUE_NODES: usize = 2_048;
-
-/// Maximum object/array nesting depth accepted in one copied value.
-pub const MAX_RUNTIME_UI_PROJECTION_VALUE_DEPTH: usize = 16;
-
-/// Maximum UTF-8 byte length of one string value in a copied DTO.
-pub const MAX_RUNTIME_UI_PROJECTION_VALUE_STRING_BYTES: usize = 8_192;
-
-/// Maximum entries in one array value.
-pub const MAX_RUNTIME_UI_PROJECTION_VALUE_ARRAY_LENGTH: usize = 512;
-
-/// Maximum keys in one object value.
-pub const MAX_RUNTIME_UI_PROJECTION_VALUE_OBJECT_KEYS: usize = 256;
-
 /// Largest integer-valued JSON number that crosses the JavaScript host
 /// boundary without losing precision.
 pub const MAX_RUNTIME_UI_PROJECTION_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
-
-/// Maximum encoded envelope size accepted from or emitted to a host.
-pub const MAX_RUNTIME_UI_PROJECTION_WIRE_BYTES: usize = 262_144;
 
 /// Typed lifecycle identity retained by one UI projection envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -87,9 +64,8 @@ impl From<&RuntimeLifecycle> for RuntimeUiRuntimeBinding {
 /// An owned, validated UI projection transport envelope.
 ///
 /// The fields are private and there are no mutating accessors. Constructing
-/// an envelope validates bounded identities, canonical runtime values,
-/// and the copied value's compact JSON bound. Use [`Self::encode_json`] to
-/// obtain the strict host wire shape.
+/// an envelope validates identities and JSON number portability. Use
+/// [`Self::encode_json`] to obtain the strict host wire shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeUiProjectionEnvelope {
     runtime: RuntimeUiRuntimeBinding,
@@ -112,15 +88,13 @@ impl RuntimeUiProjectionEnvelope {
         let stream = validate_identity("stream", stream.into())?;
         let contract = validate_identity("contract", contract.into())?;
         validate_value(&value)?;
-        let envelope = Self {
+        Ok(Self {
             runtime,
             sequence,
             stream,
             contract,
             value,
-        };
-        envelope.encoded_bytes()?;
-        Ok(envelope)
+        })
     }
 
     pub const fn runtime(&self) -> RuntimeUiRuntimeBinding {
@@ -172,12 +146,6 @@ impl RuntimeUiProjectionEnvelope {
     /// Strictly decodes the current wire shape, rejecting unknown fields and
     /// any non-whitespace trailing bytes.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, RuntimeUiProjectionError> {
-        if bytes.len() > MAX_RUNTIME_UI_PROJECTION_WIRE_BYTES {
-            return Err(RuntimeUiProjectionError::WireTooLarge {
-                bytes: bytes.len(),
-                maximum: MAX_RUNTIME_UI_PROJECTION_WIRE_BYTES,
-            });
-        }
         let mut decoder = serde_json::Deserializer::from_slice(bytes);
         let wire = WireEnvelope::deserialize(&mut decoder)
             .map_err(|_| RuntimeUiProjectionError::WireMalformed)?;
@@ -188,14 +156,7 @@ impl RuntimeUiProjectionEnvelope {
     }
 
     fn encoded_bytes(&self) -> Result<Vec<u8>, RuntimeUiProjectionError> {
-        let bytes = serde_json::to_vec(self).map_err(|_| RuntimeUiProjectionError::WireEncoding)?;
-        if bytes.len() > MAX_RUNTIME_UI_PROJECTION_WIRE_BYTES {
-            return Err(RuntimeUiProjectionError::WireTooLarge {
-                bytes: bytes.len(),
-                maximum: MAX_RUNTIME_UI_PROJECTION_WIRE_BYTES,
-            });
-        }
-        Ok(bytes)
+        serde_json::to_vec(self).map_err(|_| RuntimeUiProjectionError::WireEncoding)
     }
 }
 
@@ -286,37 +247,8 @@ pub enum RuntimeUiProjectionError {
         previous: u64,
         received: u64,
     },
-    ValueTooLarge {
-        bytes: usize,
-        maximum: usize,
-    },
-    ValueNodeLimit {
-        nodes: usize,
-        maximum: usize,
-    },
-    ValueDepthLimit {
-        depth: usize,
-        maximum: usize,
-    },
-    ValueStringLimit {
-        bytes: usize,
-        maximum: usize,
-    },
-    ValueArrayLimit {
-        entries: usize,
-        maximum: usize,
-    },
-    ValueObjectLimit {
-        entries: usize,
-        maximum: usize,
-    },
     ValueUnsafeInteger {
         value: String,
-    },
-    ValueEncoding(String),
-    WireTooLarge {
-        bytes: usize,
-        maximum: usize,
     },
     WireMalformed,
     WireUnknownArtifact {
@@ -354,73 +286,13 @@ pub(crate) fn validate_identity(
 }
 
 pub(crate) fn validate_value(value: &Value) -> Result<(), RuntimeUiProjectionError> {
-    let bytes = serde_json::to_vec(value)
-        .map_err(|error| RuntimeUiProjectionError::ValueEncoding(error.to_string()))?;
-    if bytes.len() > MAX_RUNTIME_UI_PROJECTION_VALUE_JSON_BYTES {
-        return Err(RuntimeUiProjectionError::ValueTooLarge {
-            bytes: bytes.len(),
-            maximum: MAX_RUNTIME_UI_PROJECTION_VALUE_JSON_BYTES,
-        });
-    }
-    let mut nodes = 0;
-    validate_value_shape(value, 0, &mut nodes)
-}
-
-fn validate_value_shape(
-    value: &Value,
-    depth: usize,
-    nodes: &mut usize,
-) -> Result<(), RuntimeUiProjectionError> {
-    *nodes = nodes
-        .checked_add(1)
-        .ok_or(RuntimeUiProjectionError::ValueNodeLimit {
-            nodes: usize::MAX,
-            maximum: MAX_RUNTIME_UI_PROJECTION_VALUE_NODES,
-        })?;
-    if *nodes > MAX_RUNTIME_UI_PROJECTION_VALUE_NODES {
-        return Err(RuntimeUiProjectionError::ValueNodeLimit {
-            nodes: *nodes,
-            maximum: MAX_RUNTIME_UI_PROJECTION_VALUE_NODES,
-        });
-    }
-    if depth > MAX_RUNTIME_UI_PROJECTION_VALUE_DEPTH {
-        return Err(RuntimeUiProjectionError::ValueDepthLimit {
-            depth,
-            maximum: MAX_RUNTIME_UI_PROJECTION_VALUE_DEPTH,
-        });
-    }
-    match value {
-        Value::Null | Value::Bool(_) => {}
-        Value::Number(number) => validate_number(number)?,
-        Value::String(text) => {
-            if text.len() > MAX_RUNTIME_UI_PROJECTION_VALUE_STRING_BYTES {
-                return Err(RuntimeUiProjectionError::ValueStringLimit {
-                    bytes: text.len(),
-                    maximum: MAX_RUNTIME_UI_PROJECTION_VALUE_STRING_BYTES,
-                });
-            }
-        }
-        Value::Array(values) => {
-            if values.len() > MAX_RUNTIME_UI_PROJECTION_VALUE_ARRAY_LENGTH {
-                return Err(RuntimeUiProjectionError::ValueArrayLimit {
-                    entries: values.len(),
-                    maximum: MAX_RUNTIME_UI_PROJECTION_VALUE_ARRAY_LENGTH,
-                });
-            }
-            for value in values {
-                validate_value_shape(value, depth + 1, nodes)?;
-            }
-        }
-        Value::Object(values) => {
-            if values.len() > MAX_RUNTIME_UI_PROJECTION_VALUE_OBJECT_KEYS {
-                return Err(RuntimeUiProjectionError::ValueObjectLimit {
-                    entries: values.len(),
-                    maximum: MAX_RUNTIME_UI_PROJECTION_VALUE_OBJECT_KEYS,
-                });
-            }
-            for value in values.values() {
-                validate_value_shape(value, depth + 1, nodes)?;
-            }
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Null | Value::Bool(_) | Value::String(_) => {}
+            Value::Number(number) => validate_number(number)?,
+            Value::Array(values) => pending.extend(values),
+            Value::Object(values) => pending.extend(values.values()),
         }
     }
     Ok(())

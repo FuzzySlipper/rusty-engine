@@ -6,12 +6,13 @@ use voxel_asset::{
     VoxelConversionOriginPolicy, VoxelConversionRequest, VoxelConversionSettings,
     VoxelCoordinateSystem, VoxelPaletteUpdateError, VoxelPaletteUpdateRequest, VoxelRepresentation,
     VoxelRepresentationKind, VoxelSparseRun, MAX_CONVERSION_RESOLUTION_AXIS,
-    MAX_CONVERSION_SOURCE_BYTES, VOXEL_ASSET_SCHEMA_VERSION,
+    VOXEL_ASSET_SCHEMA_VERSION,
 };
 
 #[test]
 fn schema_one_sparse_asset_is_canonical_and_byte_stable() {
     let mut source = valid_asset();
+    source.provenance.source_byte_count = 64 * 1024 * 1024 + 1;
     source.representation.sparse_runs.reverse();
     source.representation.sparse_runs.extend([
         VoxelSparseRun {
@@ -42,6 +43,7 @@ fn schema_one_sparse_asset_is_canonical_and_byte_stable() {
     assert!(first.ends_with('\n'));
     assert!(first.contains("\"rightHandedYUp\""));
     assert!(first.contains("\"sparseRuns\""));
+    assert_eq!(decoded.provenance.source_byte_count, 64 * 1024 * 1024 + 1);
 }
 
 #[test]
@@ -151,14 +153,14 @@ fn schema_provenance_and_sparse_resource_limits_are_structured() {
 #[test]
 fn conversion_input_fixes_identity_settings_and_hard_limits_before_parsing() {
     let request = valid_request();
-    validate_conversion_request(&request, MAX_CONVERSION_SOURCE_BYTES).unwrap();
+    validate_conversion_request(&request, 64 * 1024 * 1024 + 1).unwrap();
     let settings_hash = conversion_settings_sha256(&request.settings);
     assert!(settings_hash.starts_with("sha256:"));
     let mut reordered = request.settings.clone();
     reordered.material_map.reverse();
     assert_eq!(conversion_settings_sha256(&reordered), settings_hash);
 
-    let error = validate_conversion_request(&request, MAX_CONVERSION_SOURCE_BYTES + 1).unwrap_err();
+    let error = validate_conversion_request(&request, 0).unwrap_err();
     assert!(error.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "conversion.resourceLimit" && diagnostic.path == "source"
     }));

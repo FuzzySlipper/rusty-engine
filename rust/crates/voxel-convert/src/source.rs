@@ -1,9 +1,7 @@
+use crate::import::MAX_SOURCE_STREAM_COUNT;
 use core_assets::{AssetId, AssetKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use voxel_asset::{
-    MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
-};
 
 use crate::{
     flatten_static_scene, import_animated_glb, import_static_glb_scene, sample_animation_bind_pose,
@@ -473,13 +471,13 @@ pub(crate) fn mesh_metadata(
     scene: &ImportedModelScene,
     mesh: &ImportedStaticMesh,
 ) -> Result<MeshSourceMetadata, ConversionError> {
-    if mesh.positions.len() > MAX_CONVERSION_SOURCE_VERTICES
-        || mesh.triangles.len().saturating_mul(3) > MAX_CONVERSION_SOURCE_INDICES
+    if mesh.positions.len() > MAX_SOURCE_STREAM_COUNT
+        || mesh.triangles.len().saturating_mul(3) > MAX_SOURCE_STREAM_COUNT
     {
         return Err(ConversionError::one(
             "conversion.resourceLimit",
             "source.geometry",
-            "canonical mesh geometry exceeds conversion limits",
+            "canonical mesh geometry exceeds u32 stream representation",
         ));
     }
     let source_bounds = bounds_for_positions(&mesh.positions).ok_or_else(|| {

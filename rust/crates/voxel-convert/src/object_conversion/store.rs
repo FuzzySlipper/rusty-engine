@@ -6,7 +6,6 @@ use super::{
     apply_voxel_object_conversion_and_install, plan_animated_voxel_object_conversion,
     plan_static_voxel_object_conversion, VoxelObjectConversionApplyRequest,
     VoxelObjectConversionPlanRequest, VoxelObjectConversionReceipt,
-    MAX_VOXEL_OBJECT_CONVERSION_REQUEST_BYTES,
 };
 use crate::{
     import_animated_mesh_source, import_mesh_source, ConversionError, MeshSourceFormat,
@@ -16,16 +15,6 @@ use crate::{
 pub fn decode_voxel_object_conversion_request(
     input: &str,
 ) -> Result<VoxelObjectConversionPlanRequest, ConversionError> {
-    if input.len() > MAX_VOXEL_OBJECT_CONVERSION_REQUEST_BYTES {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            "$",
-            format!(
-                "request has {} bytes; limit is {MAX_VOXEL_OBJECT_CONVERSION_REQUEST_BYTES}",
-                input.len()
-            ),
-        ));
-    }
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let request = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
         ConversionError::one(

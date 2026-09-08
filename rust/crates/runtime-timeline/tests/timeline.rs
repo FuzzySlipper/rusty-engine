@@ -6,8 +6,11 @@ use runtime_timeline::{
     TimelineDescriptor, TimelineOperationIdentity, TimelineOperationReplacement,
     TimelineOperationRevision, TimelineOperationSnapshot, TimelineOperationSpec,
     TimelineRecurrence, TimelineSnapshot, TimelineStepDescriptor, TimelineTicketSnapshot,
+    MAX_TIMELINE_STEPS,
 };
 use serde_json::json;
+
+const INSPECTION_STEP_PAYLOAD_BYTES: usize = 4 * 1024;
 
 fn catalog() -> TimelineCatalog {
     TimelineCatalog::new([TimelineDescriptor::new(
@@ -42,7 +45,7 @@ fn setup() -> (
 fn provenance() -> RuntimeProvenance {
     RuntimeProvenance::new(
         "product-correlation-1",
-        Some(RuntimeOpaqueData::new(json!({"slot": 2})).unwrap()),
+        Some(RuntimeOpaqueData::new(json!({"slot": 2}))),
     )
     .unwrap()
 }
@@ -89,6 +92,26 @@ fn builds_neutral_descriptors_with_stable_inspection() {
         first.inspection_json_newline().unwrap(),
         second.inspection_json_newline().unwrap()
     );
+}
+
+#[test]
+fn catalog_retains_a_large_typed_inspection_without_admission_serialization() {
+    let payload = json!("x".repeat(INSPECTION_STEP_PAYLOAD_BYTES));
+    let catalog = TimelineCatalog::new([TimelineDescriptor::new(
+        "dense",
+        (0..MAX_TIMELINE_STEPS).map(|index| {
+            TimelineStepDescriptor::new(format!("step-{index}"), "dense.operation", payload.clone())
+                .unwrap()
+        }),
+    )
+    .unwrap()])
+    .unwrap();
+
+    assert_eq!(
+        catalog.inspection().timelines()[0].steps().len(),
+        MAX_TIMELINE_STEPS
+    );
+    assert!(catalog.inspection_json_newline().unwrap().len() > 1_048_576);
 }
 
 #[test]
@@ -228,9 +251,7 @@ fn completion_arrival_order_does_not_change_issue_order_or_gap_behavior() {
         for (index, ticket_index) in order.into_iter().enumerate() {
             let ticket = &tickets[ticket_index];
             let outcome = if ticket_index == 0 {
-                TimelineCompletionOutcome::Failure(Some(
-                    RuntimeOpaqueData::new(json!({"code": 7})).unwrap(),
-                ))
+                TimelineCompletionOutcome::Failure(Some(RuntimeOpaqueData::new(json!({"code": 7}))))
             } else {
                 TimelineCompletionOutcome::Success(None)
             };
@@ -398,9 +419,9 @@ fn replacement_and_recurrence_revision_changes_close_ticket_gaps() {
 
 #[test]
 fn completed_bound_tickets_survive_operation_revision_invalidation() {
-    let expected = TimelineCompletionOutcome::Success(Some(
-        RuntimeOpaqueData::new(json!({"preserved": true})).unwrap(),
-    ));
+    let expected = TimelineCompletionOutcome::Success(Some(RuntimeOpaqueData::new(
+        json!({"preserved": true}),
+    )));
 
     let (lifecycle, mut timeline, token) = setup();
     let cancel_operation = timeline
@@ -622,12 +643,11 @@ fn rebind_reconciles_multiple_admitted_steps_and_next_token_recovers_release() {
 }
 
 #[test]
-fn malformed_completion_data_is_bounded_but_semantic_neutral() {
+fn completion_data_is_semantic_neutral() {
     let value = RuntimeOpaqueData::new(json!({
         "url": "https://product.example/result",
         "token": "product-owned-reference",
-    }))
-    .unwrap();
+    }));
     assert_eq!(value.value()["token"], "product-owned-reference");
 }
 

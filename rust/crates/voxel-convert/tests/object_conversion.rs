@@ -131,7 +131,15 @@ fn static_object_plan_preview_apply_query_and_cli_are_hash_guarded() {
 
     let request_path = directory.join("request.json");
     let source_path = directory.join("source.glb");
-    fs::write(&request_path, serde_json::to_vec_pretty(&request).unwrap()).unwrap();
+    let request_json = serde_json::to_string(&request).unwrap();
+    let mut padded_request = request_json.clone();
+    padded_request
+        .push_str(&" ".repeat((1_024 * 1_024 + 1usize).saturating_sub(padded_request.len())));
+    assert_eq!(
+        decode_voxel_object_conversion_request(&padded_request).unwrap(),
+        request
+    );
+    fs::write(&request_path, padded_request).unwrap();
     fs::write(&source_path, STATIC_SOURCE).unwrap();
     let command = Command::new(env!("CARGO_BIN_EXE_voxel-object-convert"))
         .args([

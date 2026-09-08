@@ -1106,11 +1106,6 @@ impl RuntimeTimeline {
                 .map_err(|_| RuntimeTimelineError::SnapshotInvariant("ticket correlation"))?;
             crate::model::validate_runtime_identity(ticket.ticket.result_contract())
                 .map_err(|_| RuntimeTimelineError::SnapshotInvariant("result contract"))?;
-            ticket
-                .ticket
-                .provenance()
-                .validate()
-                .map_err(|_| RuntimeTimelineError::SnapshotInvariant("ticket provenance"))?;
             let descriptor = self
                 .catalog
                 .step(ticket.ticket.timeline_id(), ticket.ticket.step_id())
@@ -1124,13 +1119,6 @@ impl RuntimeTimeline {
                         ticket.ticket.id(),
                     ),
                 );
-            }
-            match ticket.status() {
-                TimelineTicketSnapshotStatus::Completed(outcome) => outcome
-                    .validate()
-                    .map_err(|_| RuntimeTimelineError::SnapshotInvariant("ticket outcome"))?,
-                TimelineTicketSnapshotStatus::Pending | TimelineTicketSnapshotStatus::Cancelled => {
-                }
             }
             if ticket.ticket.operation_bound() {
                 let Some(operation) = snapshot

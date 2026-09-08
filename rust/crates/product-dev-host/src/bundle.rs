@@ -629,7 +629,7 @@ mod tests {
             std::sync::Arc::clone(&body),
         )
         .unwrap();
-        let entries = product_dev_renderer_preload_entries(&[carried.clone()]).unwrap();
+        let entries = product_dev_renderer_preload_entries(std::slice::from_ref(&carried)).unwrap();
         let entry = entries
             .iter()
             .find(|entry| entry.path() == carried.path())

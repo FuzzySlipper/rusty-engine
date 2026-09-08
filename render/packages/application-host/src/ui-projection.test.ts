@@ -115,7 +115,7 @@ void test('rebind clears the snapshot, notifies but retains subscribers, and res
   assert.equal(projection.readout().subscriberCount, 0);
 });
 
-void test('projection rejects unbound, non-JSON, cyclic, and over-limit values', () => {
+void test('projection rejects unbound, non-JSON, and cyclic values', () => {
   const unbound = createRustyApplicationUiProjection({
     expectedStream: 'product.hud',
     expectedContract: 'product.hud.v1',
@@ -126,21 +126,13 @@ void test('projection rejects unbound, non-JSON, cyclic, and over-limit values',
       && error.code === 'runtime_unbound',
   );
 
-  const projection = createRustyApplicationUiProjection({
-    ...OPTIONS,
-    maximumNodes: 3,
-  });
+  const projection = createRustyApplicationUiProjection(OPTIONS);
   const cyclic: { self?: unknown } = {};
   cyclic.self = cyclic;
   assert.throws(
     () => projection.ingest(envelope('0', cyclic)),
     (error: unknown) => error instanceof RustyApplicationUiProjectionError
       && error.code === 'value_invalid',
-  );
-  assert.throws(
-    () => projection.ingest(envelope('0', { one: 1, two: 2, three: 3 })),
-    (error: unknown) => error instanceof RustyApplicationUiProjectionError
-      && error.code === 'value_limit_exceeded',
   );
   assert.throws(
     () => projection.ingest(envelope('0', new Date(0))),
@@ -159,6 +151,19 @@ void test('projection admits finite fractions but rejects unsafe integer-valued 
     (error: unknown) => error instanceof RustyApplicationUiProjectionError
       && error.code === 'value_invalid',
   );
+  projection.dispose();
+});
+
+void test('projection detaches deep and large JSON without a quota walk', () => {
+  const projection = createRustyApplicationUiProjection(OPTIONS);
+  let deep: unknown = null;
+  for (let index = 0; index < 1_024; index += 1) deep = [deep];
+  assert.equal(projection.ingest(envelope('0', {
+    deep,
+    text: 'x'.repeat(9_000),
+    array: Array.from({ length: 600 }, (_, index) => index),
+  })), true);
+  assert.ok(Object.isFrozen(projection.current()?.value));
   projection.dispose();
 });
 

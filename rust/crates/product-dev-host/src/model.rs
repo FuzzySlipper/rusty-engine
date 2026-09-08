@@ -2005,36 +2005,16 @@ impl ProductDevTimelineCompletion {
             ));
         }
         let outcome_data = match value.outcome {
-            ProductDevTimelineOutcomeWire::Success { data } => TimelineCompletionOutcome::Success(
-                data.map(RuntimeOpaqueData::new).transpose().map_err(|_| {
-                    ProductDevHostError::new(
-                        "DEV_HOST_TIMELINE_DATA",
-                        "timeline outcome data violates runtime-timeline bounds",
-                    )
-                })?,
-            ),
-            ProductDevTimelineOutcomeWire::Failure { data } => TimelineCompletionOutcome::Failure(
-                data.map(RuntimeOpaqueData::new).transpose().map_err(|_| {
-                    ProductDevHostError::new(
-                        "DEV_HOST_TIMELINE_DATA",
-                        "timeline outcome data violates runtime-timeline bounds",
-                    )
-                })?,
-            ),
+            ProductDevTimelineOutcomeWire::Success { data } => {
+                TimelineCompletionOutcome::Success(data.map(RuntimeOpaqueData::new))
+            }
+            ProductDevTimelineOutcomeWire::Failure { data } => {
+                TimelineCompletionOutcome::Failure(data.map(RuntimeOpaqueData::new))
+            }
         };
         let provenance = RuntimeProvenance::new(
             value.provenance.correlation,
-            value
-                .provenance
-                .detail
-                .map(RuntimeOpaqueData::new)
-                .transpose()
-                .map_err(|_| {
-                    ProductDevHostError::new(
-                        "DEV_HOST_TIMELINE_DATA",
-                        "timeline provenance data violates runtime-timeline bounds",
-                    )
-                })?,
+            value.provenance.detail.map(RuntimeOpaqueData::new),
         )
         .map_err(|_| {
             ProductDevHostError::new(
@@ -2456,13 +2436,17 @@ impl ProductDevRuntimeOutput {
                     .collect::<Result<Vec<_>, _>>()?,
             )),
             RuntimePublication::Frame(frame) => Ok(Self {
-                wire: ProductDevRuntimeOutputWire::Frame { frame },
+                wire: ProductDevRuntimeOutputWire::Frame {
+                    frame: frame.into_frame(),
+                },
             }),
             RuntimePublication::ViewComposition(composition) => Ok(Self {
                 wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
             }),
             RuntimePublication::Presentation(frame) => Ok(Self {
-                wire: ProductDevRuntimeOutputWire::Presentation { frame },
+                wire: ProductDevRuntimeOutputWire::Presentation {
+                    frame: frame.into_frame(),
+                },
             }),
             RuntimePublication::AnimationCueDefinitions(definitions) => {
                 let definitions = definitions

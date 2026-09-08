@@ -363,16 +363,11 @@ fn validate_provenance(asset: &VoxelAsset, diagnostics: &mut Vec<VoxelAssetDiagn
             "settingsSha256 must be `sha256:` followed by 64 lowercase hexadecimal digits",
         ));
     }
-    if asset.provenance.source_byte_count == 0
-        || asset.provenance.source_byte_count > crate::MAX_CONVERSION_SOURCE_BYTES
-    {
+    if asset.provenance.source_byte_count == 0 {
         diagnostics.push(diagnostic(
             "voxelAsset.resourceLimit",
             "provenance.sourceByteCount",
-            format!(
-                "sourceByteCount must be in 1..={}",
-                crate::MAX_CONVERSION_SOURCE_BYTES
-            ),
+            "sourceByteCount must be nonzero",
         ));
     }
 }

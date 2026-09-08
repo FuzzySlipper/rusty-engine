@@ -3745,10 +3745,10 @@ impl RuntimeAppearanceBridge {
             || (request.colors_len != 0 && request.colors_len != request.positions_len)
             || request.indices_len < 3
             || !request.indices_len.is_multiple_of(3)
-            || !(1..=256).contains(&request.groups_len)
-            || !(1..=256).contains(&request.bindings_len)
+            || request.groups_len == 0
+            || request.bindings_len == 0
         {
-            return Err(invalid("mesh requires at least 3 vertices, matching normals/optional UV/color streams, complete triangle indices, 1..256 groups/bindings"));
+            return Err(invalid("mesh requires at least 3 vertices, matching normals/optional UV/color streams, complete triangle indices, and nonempty groups/bindings"));
         }
         let positions = borrowed_slice(request.positions, request.positions_len, "mesh positions")?;
         let normals = borrowed_slice(request.normals, request.normals_len, "mesh normals")?;
@@ -9630,6 +9630,109 @@ pub(super) mod tests {
         assert!(!serde_json::to_string(&world.snapshot().frame)
             .unwrap()
             .contains("mesh/runtime-1"));
+    }
+
+    #[test]
+    fn generated_mesh_accepts_more_than_256_groups_and_bindings() {
+        const GROUP_COUNT: usize = 300;
+
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let material = bridge
+            .create_material(NativeMaterialRequest {
+                color: NativeColor {
+                    r: 0.2,
+                    g: 0.4,
+                    b: 0.6,
+                    a: 1.0,
+                },
+                texture: NativeRenderResourceHandle { value: 0 },
+                roughness: 0.7,
+                texture_tint: NativeColor {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: false,
+                alpha_mode: NativeMaterialAlphaMode::Opaque,
+                alpha_cutoff: 0.5,
+            })
+            .unwrap();
+        let positions = [
+            NativeVec3::default(),
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+        ];
+        let normals = [NativeVec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        }; 3];
+        let indices = (0..GROUP_COUNT)
+            .flat_map(|_| [0, 1, 2])
+            .collect::<Vec<u32>>();
+        let groups = (0..GROUP_COUNT)
+            .map(|group_index| NativeMeshGroup {
+                material_slot: group_index as u32,
+                start: (group_index * 3) as u32,
+                count: 3,
+            })
+            .collect::<Vec<_>>();
+        let bindings = (0..GROUP_COUNT)
+            .map(|group_index| NativeMeshMaterialBinding {
+                material_slot: group_index as u32,
+                material,
+            })
+            .collect::<Vec<_>>();
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: std::ptr::null(),
+            colors_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+        };
+
+        let resource = unsafe { bridge.create_mesh_resource(&request) }.unwrap();
+        assert_eq!(resource.value, 1);
+        let mut projector = bridge.staged_ref().unwrap().state.projector.clone();
+        let definition = &projector.resources_mut().static_meshes[0];
+        assert_eq!(definition.payload.groups.len(), GROUP_COUNT);
+        assert_eq!(definition.material_slots.len(), GROUP_COUNT);
+
+        let malformed = NativeMeshResourceCreateRequest {
+            bindings_len: bindings.len() - 1,
+            ..request
+        };
+        assert_eq!(
+            unsafe { bridge.create_mesh_resource(&malformed) }
+                .expect_err("missing material coverage must fail atomically")
+                .code(),
+            "CSHARP_MESH_ADMISSION"
+        );
+        assert_eq!(bridge.staged_ref().unwrap().state.mesh_resources.len(), 1);
+        let mut projector = bridge.staged_ref().unwrap().state.projector.clone();
+        assert_eq!(projector.resources_mut().static_meshes.len(), 1);
     }
 
     #[test]

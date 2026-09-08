@@ -8,12 +8,6 @@ export declare const RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM = 256;
 export declare const RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM = 256;
 export declare const RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM = 3;
 export declare const RUSTY_APPLICATION_INPUT_U64_MAXIMUM = 18446744073709551615n;
-/** Mirrors the Engine runtime's direct product-payload bound. */
-export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM = 65536;
-export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM = 32;
-export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM = 4096;
-export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_STRING_BYTES_MAXIMUM = 16384;
-export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM = 1024;
 export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM = 9007199254740991;
 export interface RustyApplicationRuntimeIdentity {
     /** Canonical unsigned 64-bit decimal text; never a lossy JavaScript number. */
@@ -187,9 +181,8 @@ export declare function normalizeRustyApplicationKeyboardControl(code: string): 
  */
 export declare function createRustyApplicationInputQueue(maximumQueue: number, initialSequence?: bigint): RustyApplicationInputQueue;
 /**
- * Clones only bounded plain JSON into an immutable data value. This lives at
- * the browser ingress boundary because `claim` is a public trusted-UI API;
- * Rust validates the same shape and budget again before adapter delivery.
+ * Clones only plain JSON into an immutable data value. This lives at the
+ * browser ingress boundary because `claim` queues data for later delivery.
  */
 export declare function snapshotRustyApplicationProductPayloadJson(value: unknown): RustyApplicationProductPayloadJson;
 export {};

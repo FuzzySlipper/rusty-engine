@@ -1305,7 +1305,7 @@ test('local transport hardens the JSON border before requests', async () => {
   wrongContentType.dispose();
 });
 
-test('local transport carries immutable bounded product payload intents', async () => {
+test('local transport carries immutable product payload intents without local quotas', async () => {
   const requestBodies: unknown[] = [];
   const adapter = createProductBrowserLocalHttpAdapter({
     fetch: async (_input, init) => {
@@ -1344,12 +1344,12 @@ test('local transport carries immutable bounded product payload intents', async 
   const inherited = Object.create({ inherited: true }) as Record<string, unknown>;
   inherited['value'] = 1;
   let deep: unknown = null;
-  for (let index = 0; index < 33; index += 1) deep = [deep];
-  const nodeOverflow = Object.fromEntries(Array.from(
+  for (let index = 0; index < 1_024; index += 1) deep = [deep];
+  const manyNodes = Object.fromEntries(Array.from(
     { length: 1_024 },
     (_unused, index) => [`entry${String(index)}`, [index, index, index]],
   ));
-  const byteOverflow = Array.from({ length: 1_024 }, () => 'x'.repeat(64));
+  const largeText = Array.from({ length: 1_024 }, () => 'x'.repeat(64));
 
   for (const rejected of [
     accessor,
@@ -1357,13 +1357,12 @@ test('local transport carries immutable bounded product payload intents', async 
     Number.NaN,
     Number.POSITIVE_INFINITY,
     9_007_199_254_740_992,
-    deep,
-    nodeOverflow,
-    byteOverflow,
   ]) {
     assert.throws(() => adapter.input(envelope(rejected)), (error: unknown) =>
       error instanceof TypeError || error instanceof RangeError);
   }
+  await Promise.all([deep, manyNodes, largeText].map((data) => adapter.input(envelope(data))));
+  assert.equal(requestBodies.length, 4);
   adapter.dispose();
 });
 

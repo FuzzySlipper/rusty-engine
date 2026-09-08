@@ -12,15 +12,8 @@ pub const MAX_TIMELINE_OPERATIONS: usize = 1_024;
 pub const MAX_TIMELINE_COMPLETION_TICKETS: usize = 1_024;
 /// Maximum number of released events returned from one call.
 pub const MAX_TIMELINE_RELEASE_PREFIX: usize = 256;
-/// Maximum compact JSON bytes in one opaque runtime data value.
-pub const MAX_RUNTIME_OPAQUE_DATA_BYTES: usize = 4_096;
 /// Maximum UTF-8 bytes in a caller correlation or provenance label.
 pub const MAX_RUNTIME_CORRELATION_BYTES: usize = runtime_lifecycle::MAX_RUNTIME_IDENTITY_BYTES;
-/// Maximum nesting depth in a retained timeline opaque value.
-///
-/// This remains a timeline-local data bound; it is deliberately independent
-/// from the direct-input payload and UI projection limits.
-pub const MAX_RUNTIME_OPAQUE_DATA_DEPTH: usize = 32;
 /// Maximum finite recurrence occurrences accepted for one operation.
 pub const MAX_RECURRENCE_OCCURRENCES: u32 = 1_024;
 /// Maximum number of operations or tickets represented by one typed snapshot.
@@ -142,28 +135,17 @@ impl RuntimeSourceKind {
     }
 }
 
-/// Bounded opaque JSON carried as data across the runtime boundary.
+/// Opaque JSON carried as data across the runtime boundary.
 ///
-/// This value is intentionally semantic-neutral. The runtime only bounds its
-/// JSON shape and bytes; product-owned meanings such as paths, URLs, tokens,
-/// or credentials are not interpreted here. Hosts must still avoid placing
-/// secrets in a product result contract.
+/// This value is intentionally semantic-neutral. Product-owned meanings such
+/// as paths, URLs, tokens, or credentials are not interpreted here. Hosts must
+/// still avoid placing secrets in a product result contract.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeOpaqueData(Value);
 
 impl RuntimeOpaqueData {
-    pub fn new(value: Value) -> Result<Self, RuntimeTimelineDataError> {
-        let bytes =
-            serde_json::to_vec(&value).map_err(|_| RuntimeTimelineDataError::OpaqueDataNotJson)?;
-        if bytes.len() > MAX_RUNTIME_OPAQUE_DATA_BYTES {
-            return Err(RuntimeTimelineDataError::OpaqueDataTooLarge {
-                actual: bytes.len(),
-                maximum: MAX_RUNTIME_OPAQUE_DATA_BYTES,
-            });
-        }
-        let mut nodes = 0usize;
-        validate_opaque_value(&value, &mut nodes, 0)?;
-        Ok(Self(value))
+    pub fn new(value: Value) -> Self {
+        Self(value)
     }
 
     pub fn value(&self) -> &Value {
@@ -172,13 +154,6 @@ impl RuntimeOpaqueData {
 
     pub fn into_value(self) -> Value {
         self.0
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), RuntimeTimelineDataError> {
-        // Snapshot candidates can be assembled from typed records rather than
-        // this constructor. Re-run the same structural bound without assigning
-        // any meaning to the product-owned JSON.
-        Self::new(self.0.clone()).map(|_| ())
     }
 }
 
@@ -209,14 +184,6 @@ impl RuntimeProvenance {
 
     pub fn detail(&self) -> Option<&RuntimeOpaqueData> {
         self.detail.as_ref()
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), RuntimeTimelineDataError> {
-        validate_runtime_identity(&self.correlation)?;
-        if let Some(detail) = &self.detail {
-            detail.validate()?;
-        }
-        Ok(())
     }
 }
 
@@ -385,16 +352,6 @@ impl TimelineCompletionOutcome {
     pub const fn is_failure(&self) -> bool {
         matches!(self, Self::Failure(_))
     }
-
-    pub(crate) fn validate(&self) -> Result<(), RuntimeTimelineDataError> {
-        let data = match self {
-            Self::Success(data) | Self::Failure(data) => data,
-        };
-        if let Some(data) = data {
-            data.validate()?;
-        }
-        Ok(())
-    }
 }
 
 /// A typed completion envelope returned by external work. It carries only the
@@ -454,10 +411,6 @@ pub enum RuntimeTimelineDataError {
     EmptyIdentity,
     InvalidIdentity,
     TextTooLarge { maximum: usize },
-    OpaqueDataNotJson,
-    OpaqueDataTooLarge { actual: usize, maximum: usize },
-    OpaqueDataTooDeep,
-    OpaqueDataTooManyNodes,
     ZeroRecurrenceInterval,
     InvalidRecurrenceCount { received: u32, maximum: u32 },
     DescriptorTooLarge { kind: &'static str, maximum: usize },
@@ -482,48 +435,4 @@ pub(crate) fn validate_runtime_identity(value: &str) -> Result<(), RuntimeTimeli
         return Err(RuntimeTimelineDataError::InvalidIdentity);
     }
     Ok(())
-}
-
-fn validate_opaque_value(
-    value: &Value,
-    nodes: &mut usize,
-    depth: usize,
-) -> Result<(), RuntimeTimelineDataError> {
-    if depth > MAX_RUNTIME_OPAQUE_DATA_DEPTH {
-        return Err(RuntimeTimelineDataError::OpaqueDataTooDeep);
-    }
-    *nodes = (*nodes)
-        .checked_add(1)
-        .ok_or(RuntimeTimelineDataError::OpaqueDataTooManyNodes)?;
-    if *nodes > 256 {
-        return Err(RuntimeTimelineDataError::OpaqueDataTooManyNodes);
-    }
-    match value {
-        Value::Null | Value::Bool(_) | Value::Number(_) => Ok(()),
-        Value::String(_) => Ok(()),
-        Value::Array(values) => {
-            if values.len() > 128 {
-                return Err(RuntimeTimelineDataError::OpaqueDataTooManyNodes);
-            }
-            let child_depth = depth
-                .checked_add(1)
-                .ok_or(RuntimeTimelineDataError::OpaqueDataTooDeep)?;
-            for value in values {
-                validate_opaque_value(value, nodes, child_depth)?;
-            }
-            Ok(())
-        }
-        Value::Object(values) => {
-            if values.len() > 128 {
-                return Err(RuntimeTimelineDataError::OpaqueDataTooManyNodes);
-            }
-            let child_depth = depth
-                .checked_add(1)
-                .ok_or(RuntimeTimelineDataError::OpaqueDataTooDeep)?;
-            for (_key, value) in values {
-                validate_opaque_value(value, nodes, child_depth)?;
-            }
-            Ok(())
-        }
-    }
 }

@@ -9,8 +9,6 @@ pub const MAX_TIMELINES: usize = 256;
 pub const MAX_TIMELINE_STEPS: usize = 256;
 /// Maximum total number of steps retained by one catalog.
 pub const MAX_TIMELINE_DESCRIPTOR_STEPS: usize = MAX_TIMELINES * MAX_TIMELINE_STEPS;
-/// Maximum compact inspection bytes for one catalog.
-pub const MAX_RUNTIME_TIMELINE_INSPECTION_BYTES: usize = 1_048_576;
 
 /// One caller-owned operation descriptor used by a retained timeline lane.
 ///
@@ -41,7 +39,7 @@ impl TimelineStepDescriptor {
         Ok(Self {
             id,
             operation,
-            payload: RuntimeOpaqueData::new(payload)?,
+            payload: RuntimeOpaqueData::new(payload),
         })
     }
 
@@ -186,12 +184,6 @@ impl TimelineCatalog {
             }
         }
         let inspection = RuntimeTimelineInspection::from_catalog(&timelines);
-        let encoded = inspection
-            .to_json_newline()
-            .map_err(RuntimeTimelineError::InspectionEncode)?;
-        if encoded.len() > MAX_RUNTIME_TIMELINE_INSPECTION_BYTES {
-            return Err(RuntimeTimelineError::BoundsExceeded("inspection bytes"));
-        }
         Ok(Self {
             timelines,
             inspection,

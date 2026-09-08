@@ -6,13 +6,6 @@ export const RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT =
 
 export const RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM = 'product.ui';
 
-export const RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES = 65_536;
-export const RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES = 262_144;
-export const RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES = 2_048;
-export const RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH = 16;
-export const RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES = 8_192;
-export const RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH = 512;
-export const RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS = 256;
 export const RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS = 64;
 export const RUSTY_APPLICATION_UI_PROJECTION_U64_MAXIMUM =
   18_446_744_073_709_551_615n;
@@ -76,13 +69,6 @@ export interface RustyApplicationUiProjectionOptions {
   /** Product/source-linked contract identity; the host never invents one. */
   readonly expectedContract: string;
   readonly binding?: RustyApplicationRuntimeIdentity;
-  readonly maximumBytes?: number;
-  readonly maximumWireBytes?: number;
-  readonly maximumNodes?: number;
-  readonly maximumDepth?: number;
-  readonly maximumStringBytes?: number;
-  readonly maximumArrayLength?: number;
-  readonly maximumObjectKeys?: number;
   readonly maximumSubscribers?: number;
 }
 
@@ -100,7 +86,6 @@ export type RustyApplicationUiProjectionErrorCode =
   | 'runtime_mismatch'
   | 'sequence_not_increasing'
   | 'value_invalid'
-  | 'value_limit_exceeded'
   | 'subscriber_limit_exceeded';
 
 export class RustyApplicationUiProjectionError extends Error {
@@ -114,13 +99,6 @@ export class RustyApplicationUiProjectionError extends Error {
 }
 
 interface ProjectionLimits {
-  readonly maximumBytes: number;
-  readonly maximumWireBytes: number;
-  readonly maximumNodes: number;
-  readonly maximumDepth: number;
-  readonly maximumStringBytes: number;
-  readonly maximumArrayLength: number;
-  readonly maximumObjectKeys: number;
   readonly maximumSubscribers: number;
 }
 
@@ -318,48 +296,6 @@ export function createRustyApplicationUiProjection(
 
 function normalizeLimits(options: RustyApplicationUiProjectionOptions): ProjectionLimits {
   return Object.freeze({
-    maximumBytes: boundedInteger(
-      options.maximumBytes ?? RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES,
-      256,
-      RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES,
-      'maximumBytes',
-    ),
-    maximumWireBytes: boundedInteger(
-      options.maximumWireBytes ?? RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES,
-      256,
-      RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES,
-      'maximumWireBytes',
-    ),
-    maximumNodes: boundedInteger(
-      options.maximumNodes ?? RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES,
-      1,
-      RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES,
-      'maximumNodes',
-    ),
-    maximumDepth: boundedInteger(
-      options.maximumDepth ?? RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH,
-      1,
-      RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH,
-      'maximumDepth',
-    ),
-    maximumStringBytes: boundedInteger(
-      options.maximumStringBytes ?? RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES,
-      1,
-      RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES,
-      'maximumStringBytes',
-    ),
-    maximumArrayLength: boundedInteger(
-      options.maximumArrayLength ?? RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH,
-      1,
-      RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH,
-      'maximumArrayLength',
-    ),
-    maximumObjectKeys: boundedInteger(
-      options.maximumObjectKeys ?? RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS,
-      1,
-      RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS,
-      'maximumObjectKeys',
-    ),
     maximumSubscribers: boundedInteger(
       options.maximumSubscribers ?? RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS,
       1,
@@ -424,10 +360,7 @@ function validateEnvelope(
     readDataProperty(raw, 'sequence', 'UI projection envelope'),
     'UI projection sequence',
   );
-  const value = detachJson(
-    readDataProperty(raw, 'value', 'UI projection envelope'),
-    limits,
-  );
+  const value = detachJson(readDataProperty(raw, 'value', 'UI projection envelope'));
   const envelope = {
     artifact: RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
     runtime,
@@ -436,178 +369,93 @@ function validateEnvelope(
     contract,
     value,
   } satisfies RustyApplicationUiProjectionEnvelope;
-  const encoded = JSON.stringify(envelope);
-  if (new TextEncoder().encode(encoded).byteLength > limits.maximumWireBytes) {
-    throw new RustyApplicationUiProjectionError(
-      'value_limit_exceeded',
-      `UI projection envelope exceeds ${String(limits.maximumWireBytes)} bytes`,
-    );
-  }
   return Object.freeze(envelope);
 }
 
-function detachJson(value: unknown, limits: ProjectionLimits): RustyApplicationUiProjectionJson {
-  let nodes = 0;
+function detachJson(value: unknown): RustyApplicationUiProjectionJson {
+  type JsonContainer = RustyApplicationUiProjectionJson[] | Record<string, RustyApplicationUiProjectionJson>;
+  type Work =
+    | { readonly kind: 'value'; readonly candidate: unknown; readonly path: string; readonly assign: (value: RustyApplicationUiProjectionJson) => void }
+    | { readonly kind: 'finish'; readonly source: object; readonly output: JsonContainer; readonly assign: (value: RustyApplicationUiProjectionJson) => void };
   const ancestors = new WeakSet<object>();
-  const textEncoder = new TextEncoder();
-  const visit = (candidate: unknown, depth: number, path: string): RustyApplicationUiProjectionJson => {
-    nodes += 1;
-    if (nodes > limits.maximumNodes) {
-      throw new RustyApplicationUiProjectionError(
-        'value_limit_exceeded',
-        `UI projection value exceeds ${String(limits.maximumNodes)} JSON nodes`,
-      );
+  const pending: Work[] = [];
+  let detached: RustyApplicationUiProjectionJson | undefined;
+  pending.push({ kind: 'value', candidate: value, path: 'value', assign: (next) => { detached = next; } });
+
+  while (pending.length > 0) {
+    const work = pending.pop()!;
+    if (work.kind === 'finish') {
+      ancestors.delete(work.source);
+      work.assign(Object.freeze(work.output));
+      continue;
     }
-    if (depth > limits.maximumDepth) {
-      throw new RustyApplicationUiProjectionError(
-        'value_limit_exceeded',
-        `UI projection value exceeds depth ${String(limits.maximumDepth)} at ${path}`,
-      );
-    }
-    if (candidate === null || typeof candidate === 'boolean') return candidate;
-    if (typeof candidate === 'string') {
-      if (textEncoder.encode(candidate).byteLength > limits.maximumStringBytes) {
-        throw new RustyApplicationUiProjectionError(
-          'value_limit_exceeded',
-          `UI projection string exceeds ${String(limits.maximumStringBytes)} bytes at ${path}`,
-        );
-      }
-      return candidate;
+    const { candidate, path, assign } = work;
+    if (candidate === null || typeof candidate === 'boolean' || typeof candidate === 'string') {
+      assign(candidate);
+      continue;
     }
     if (typeof candidate === 'number') {
-      if (!Number.isFinite(candidate)) {
-        throw new RustyApplicationUiProjectionError(
-          'value_invalid',
-          `UI projection number must be finite at ${path}`,
-        );
+      if (!Number.isFinite(candidate) || (Number.isInteger(candidate) && !Number.isSafeInteger(candidate))) {
+        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection number is not portable at ${path}`);
       }
-      if (Number.isInteger(candidate) && !Number.isSafeInteger(candidate)) {
-        throw new RustyApplicationUiProjectionError(
-          'value_invalid',
-          `UI projection integer must be a safe integer at ${path}`,
-        );
-      }
-      return candidate;
+      assign(candidate);
+      continue;
     }
     if (!isPlainRecord(candidate) && !Array.isArray(candidate)) {
-      throw new RustyApplicationUiProjectionError(
-        'value_invalid',
-        `UI projection value must contain only plain JSON at ${path}`,
-      );
+      throw new RustyApplicationUiProjectionError('value_invalid', `UI projection value must contain only plain JSON at ${path}`);
     }
     if (ancestors.has(candidate)) {
-      throw new RustyApplicationUiProjectionError(
-        'value_invalid',
-        `UI projection value cannot contain a cycle at ${path}`,
-      );
+      throw new RustyApplicationUiProjectionError('value_invalid', `UI projection value cannot contain a cycle at ${path}`);
     }
     ancestors.add(candidate);
-    try {
-      if (Array.isArray(candidate)) {
-        let prototype: object | null;
-        try {
-          prototype = Object.getPrototypeOf(candidate);
-        } catch (cause) {
-          throw new RustyApplicationUiProjectionError(
-            'value_invalid',
-            `UI projection array prototype could not be inspected at ${path}`,
-            { cause },
-          );
-        }
-        if (prototype !== Array.prototype) {
-          throw new RustyApplicationUiProjectionError(
-            'value_invalid',
-            `UI projection array must use the plain Array prototype at ${path}`,
-          );
-        }
-        const lengthDescriptor = Object.getOwnPropertyDescriptor(candidate, 'length');
-        if (lengthDescriptor === undefined || !('value' in lengthDescriptor)
-          || lengthDescriptor.enumerable !== false || typeof lengthDescriptor.value !== 'number') {
-          throw new RustyApplicationUiProjectionError(
-            'value_invalid',
-            `UI projection array length must be an intrinsic data property at ${path}`,
-          );
-        }
-        const length = lengthDescriptor.value;
-        if (length > limits.maximumArrayLength) {
-          throw new RustyApplicationUiProjectionError(
-            'value_limit_exceeded',
-            `UI projection array exceeds ${String(limits.maximumArrayLength)} entries at ${path}`,
-          );
-        }
-        const keys = Reflect.ownKeys(candidate);
-        if (keys.length !== length + 1 || !keys.includes('length')) {
-          throw new RustyApplicationUiProjectionError(
-            'value_invalid',
-            `UI projection array must contain only dense indexed entries at ${path}`,
-          );
-        }
-        const array: RustyApplicationUiProjectionJson[] = [];
-        for (let index = 0; index < length; index += 1) {
-          const key = String(index);
-          const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
-          if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
-            throw new RustyApplicationUiProjectionError(
-              'value_invalid',
-              `UI projection array must contain dense data entries at ${path}[${String(index)}]`,
-            );
-          }
-          array.push(visit(descriptor.value, depth + 1, `${path}[${String(index)}]`));
-        }
-        return Object.freeze(array);
+    if (Array.isArray(candidate)) {
+      let prototype: object | null;
+      try {
+        prototype = Object.getPrototypeOf(candidate);
+      } catch (cause) {
+        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array must use the plain Array prototype at ${path}`, { cause });
       }
+      if (prototype !== Array.prototype) {
+        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array must use the plain Array prototype at ${path}`);
+      }
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(candidate, 'length');
+      if (lengthDescriptor === undefined || !('value' in lengthDescriptor)
+        || lengthDescriptor.enumerable !== false || typeof lengthDescriptor.value !== 'number') {
+        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array length must be an intrinsic data property at ${path}`);
+      }
+      const length = lengthDescriptor.value;
       const keys = Reflect.ownKeys(candidate);
-      if (keys.some((key) => typeof key !== 'string')) {
-        throw new RustyApplicationUiProjectionError(
-          'value_invalid',
-          `UI projection object cannot contain symbol keys at ${path}`,
-        );
+      if (keys.length !== length + 1 || !keys.includes('length')) {
+        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array must contain only dense indexed entries at ${path}`);
       }
-      if (keys.length > limits.maximumObjectKeys) {
-        throw new RustyApplicationUiProjectionError(
-          'value_limit_exceeded',
-          `UI projection object exceeds ${String(limits.maximumObjectKeys)} keys at ${path}`,
-        );
-      }
-      const object: Record<string, RustyApplicationUiProjectionJson> = {};
-      for (const key of keys as string[]) {
-        const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      const output: RustyApplicationUiProjectionJson[] = new Array(length);
+      pending.push({ kind: 'finish', source: candidate, output, assign });
+      for (let index = length - 1; index >= 0; index -= 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
         if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
-          throw new RustyApplicationUiProjectionError(
-            'value_invalid',
-            `UI projection object must contain enumerable data entries at ${path}.${key}`,
-          );
+          throw new RustyApplicationUiProjectionError('value_invalid', `UI projection array must contain dense data entries at ${path}[${String(index)}]`);
         }
-        Object.defineProperty(object, key, {
-          configurable: true,
-          enumerable: true,
-          value: visit(descriptor.value, depth + 1, `${path}.${key}`),
-          writable: true,
-        });
+        pending.push({ kind: 'value', candidate: descriptor.value, path: `${path}[${String(index)}]`, assign: (next) => { output[index] = next; } });
       }
-      return Object.freeze(object);
-    } finally {
-      ancestors.delete(candidate);
+      continue;
     }
-  };
-  const detached = visit(value, 0, 'value');
-  let encoded: string;
-  try {
-    encoded = JSON.stringify(detached);
-  } catch (cause) {
-    throw new RustyApplicationUiProjectionError(
-      'value_invalid',
-      'UI projection value could not be encoded as JSON',
-      { cause },
-    );
+    const keys = Reflect.ownKeys(candidate);
+    if (keys.some((key) => typeof key !== 'string')) {
+      throw new RustyApplicationUiProjectionError('value_invalid', `UI projection object cannot contain symbol keys at ${path}`);
+    }
+    const output: Record<string, RustyApplicationUiProjectionJson> = {};
+    pending.push({ kind: 'finish', source: candidate, output, assign });
+    for (const key of [...keys as string[]].reverse()) {
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      if (descriptor === undefined || !('value' in descriptor) || descriptor.enumerable !== true) {
+        throw new RustyApplicationUiProjectionError('value_invalid', `UI projection object must contain enumerable data entries at ${path}.${key}`);
+      }
+      pending.push({ kind: 'value', candidate: descriptor.value, path: `${path}.${key}`, assign: (next) => {
+        Object.defineProperty(output, key, { configurable: true, enumerable: true, value: next, writable: true });
+      } });
+    }
   }
-  if (textEncoder.encode(encoded).byteLength > limits.maximumBytes) {
-    throw new RustyApplicationUiProjectionError(
-      'value_limit_exceeded',
-      `UI projection value exceeds ${String(limits.maximumBytes)} bytes`,
-    );
-  }
-  return detached;
+  return detached!;
 }
 
 function validateRuntimeIdentity(

@@ -29,8 +29,7 @@ pub use conversion::{
     conversion_settings_sha256, validate_conversion_request, VoxelConversionFitPolicy,
     VoxelConversionInputDiagnostic, VoxelConversionInputError, VoxelConversionMode,
     VoxelConversionOriginPolicy, VoxelConversionRequest, VoxelConversionSettings,
-    MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS, MAX_CONVERSION_SOURCE_BYTES,
-    MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
+    MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS,
 };
 pub use frame::{
     canonicalize_voxel_frame, represented_voxel_count, resolve_voxel_asset, resolve_voxel_frame,

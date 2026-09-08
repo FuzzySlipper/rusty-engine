@@ -137,6 +137,52 @@ impl RuntimeAnimationCueDefinition {
     }
 }
 
+/// An admitted publication snapshot. Its contents are read-only until consumed;
+/// obtaining a mutable frame again requires a fresh admission before publishing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeRenderFrame(RenderFrameDiff);
+
+impl RuntimeRenderFrame {
+    pub fn as_frame(&self) -> &RenderFrameDiff {
+        &self.0
+    }
+
+    pub fn into_frame(self) -> RenderFrameDiff {
+        self.0
+    }
+}
+
+impl std::ops::Deref for RuntimeRenderFrame {
+    type Target = RenderFrameDiff;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// An admitted publication snapshot. Its contents are read-only until consumed;
+/// obtaining a mutable frame again requires a fresh admission before publishing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimePresentationFrame(PresentationFrameDiff);
+
+impl RuntimePresentationFrame {
+    pub fn as_frame(&self) -> &PresentationFrameDiff {
+        &self.0
+    }
+
+    pub fn into_frame(self) -> PresentationFrameDiff {
+        self.0
+    }
+}
+
+impl std::ops::Deref for RuntimePresentationFrame {
+    type Target = PresentationFrameDiff;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// One logical output from a runtime operation.
 ///
 /// Progress pulses, readouts, and input-result receipts remain operation/host
@@ -153,9 +199,9 @@ pub enum RuntimePublication {
         runtime: RuntimeInputBinding,
         publication_frontiers: Vec<RuntimePublicationFrontier>,
     },
-    Frame(RenderFrameDiff),
+    Frame(RuntimeRenderFrame),
     ViewComposition(RendererViewComposition),
-    Presentation(PresentationFrameDiff),
+    Presentation(RuntimePresentationFrame),
     AnimationCueDefinitions(Vec<RuntimeAnimationCueDefinition>),
     UiProjection(RuntimeUiProjectionEnvelope),
 }
@@ -173,7 +219,7 @@ impl RuntimePublication {
         frame
             .validate()
             .map_err(|_| RuntimePublicationError::InvalidFrame)?;
-        Ok(Self::Frame(frame.clone()))
+        Ok(Self::Frame(RuntimeRenderFrame(frame.clone())))
     }
 
     pub fn view_composition(
@@ -189,7 +235,7 @@ impl RuntimePublication {
         frame
             .validate()
             .map_err(|_| RuntimePublicationError::InvalidPresentation)?;
-        Ok(Self::Presentation(frame.clone()))
+        Ok(Self::Presentation(RuntimePresentationFrame(frame.clone())))
     }
 
     pub fn animation_cue_definitions(
@@ -241,15 +287,11 @@ impl RuntimePublication {
                 publication_frontiers,
                 ..
             } => validate_frontiers(publication_frontiers),
-            Self::Frame(frame) => frame
-                .validate()
-                .map_err(|_| RuntimePublicationError::InvalidFrame),
+            // These snapshots cannot be mutated after their constructor admitted them.
+            Self::Frame(_) | Self::Presentation(_) => Ok(()),
             Self::ViewComposition(composition) => composition
                 .validate()
                 .map_err(|_| RuntimePublicationError::InvalidViewComposition),
-            Self::Presentation(frame) => frame
-                .validate()
-                .map_err(|_| RuntimePublicationError::InvalidPresentation),
             Self::AnimationCueDefinitions(definitions) => {
                 if definitions.len() > RuntimeAnimationCueDefinition::MAX_DEFINITIONS {
                     return Err(RuntimePublicationError::TooManyAnimationCueDefinitions);
@@ -408,6 +450,36 @@ mod tests {
         assert_eq!(
             RuntimePublication::binding(binding(), 11).binding_marker(),
             Some(binding())
+        );
+    }
+
+    #[test]
+    fn publication_snapshot_is_detached_and_mutable_frames_are_readmitted() {
+        let mut source = RenderFrameDiff::try_from_ops(vec![RenderDiff::Create {
+            handle: RenderHandle::new(1),
+            parent: None,
+            node: render_model::RenderNode::new(Geometry::Cube),
+        }])
+        .unwrap();
+        let publication = RuntimePublication::frame(&source).unwrap();
+        source.schema_version = u32::MAX;
+        assert_eq!(
+            RuntimePublication::frame(&source),
+            Err(RuntimePublicationError::InvalidFrame)
+        );
+        assert!(publication.validate().is_ok());
+        let RuntimePublication::Frame(snapshot) = publication else {
+            panic!("frame");
+        };
+        assert!(snapshot.as_frame().validate().is_ok());
+        let mut editable = snapshot.into_frame();
+        let RenderDiff::Create { node, .. } = &mut editable.ops[0] else {
+            unreachable!()
+        };
+        node.transform.translation[0] = f32::NAN;
+        assert_eq!(
+            RuntimePublication::frame(&editable),
+            Err(RuntimePublicationError::InvalidFrame)
         );
     }
 

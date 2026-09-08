@@ -621,16 +621,11 @@ fn validate_provenance(
             "settingsSha256 must be a canonical SHA-256 identity",
         ));
     }
-    if provenance.source_byte_count == 0
-        || provenance.source_byte_count > crate::MAX_CONVERSION_SOURCE_BYTES
-    {
+    if provenance.source_byte_count == 0 {
         diagnostics.push(diagnostic(
             "voxelObject.resourceLimit",
             "provenance.sourceByteCount",
-            format!(
-                "sourceByteCount must be in 1..={}",
-                crate::MAX_CONVERSION_SOURCE_BYTES
-            ),
+            "sourceByteCount must be nonzero",
         ));
     }
     if provenance.source_clips.len() > MAX_VOXEL_OBJECT_CLIPS {

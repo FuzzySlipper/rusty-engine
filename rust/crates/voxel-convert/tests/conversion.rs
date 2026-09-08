@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::fs::{self, File};
+use std::fs;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,8 +9,7 @@ use voxel_asset::{
 };
 use voxel_convert::{
     convert_and_install, convert_glb, decode_conversion_request, import_static_glb,
-    import_static_glb_scene, source_sha256, MAX_CONVERSION_REQUEST_BYTES,
-    MAX_CONVERSION_SOURCE_BYTES,
+    import_static_glb_scene, source_sha256,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -208,10 +207,13 @@ fn request_decode_is_strict_and_source_locatable() {
     let error = decode_conversion_request(&serde_json::to_string(&value).unwrap()).unwrap_err();
     assert_eq!(error.diagnostics()[0].code, "conversion.requestDecode");
     assert!(error.diagnostics()[0].path.starts_with("settings"));
+
+    let error = decode_conversion_request("{\"assetId\":").unwrap_err();
+    assert_eq!(error.diagnostics()[0].code, "conversion.requestDecode");
 }
 
 #[test]
-fn cli_bounds_request_and_sparse_source_before_conversion() {
+fn cli_accepts_a_valid_request_above_the_legacy_envelope_quota() {
     let directory = temporary_directory();
     fs::create_dir(&directory).unwrap();
     let request_path = directory.join("request.json");
@@ -220,24 +222,99 @@ fn cli_bounds_request_and_sparse_source_before_conversion() {
     fs::write(&source_path, SOURCE).unwrap();
     fs::write(&output_path, "known-good\n").unwrap();
 
-    fs::write(&request_path, vec![b' '; MAX_CONVERSION_REQUEST_BYTES + 1]).unwrap();
-    let oversized_request = run_cli(&request_path, &source_path, &output_path);
-    assert!(!oversized_request.status.success());
-    assert!(String::from_utf8_lossy(&oversized_request.stderr).contains("conversion.resourceLimit"));
-    assert_eq!(fs::read_to_string(&output_path).unwrap(), "known-good\n");
-
-    fs::write(&request_path, REQUEST).unwrap();
-    let sparse_source = File::create(&source_path).unwrap();
-    sparse_source
-        .set_len(MAX_CONVERSION_SOURCE_BYTES + 1)
-        .unwrap();
-    let oversized_source = run_cli(&request_path, &source_path, &output_path);
-    assert!(!oversized_source.status.success());
-    assert!(String::from_utf8_lossy(&oversized_source.stderr).contains("conversion.resourceLimit"));
-    assert_eq!(fs::read_to_string(&output_path).unwrap(), "known-good\n");
+    let request = padded_request(REQUEST, 1024 * 1024 + 1);
+    assert_eq!(
+        decode_conversion_request(&request).unwrap(),
+        decode_conversion_request(REQUEST).unwrap()
+    );
+    fs::write(&request_path, request).unwrap();
+    let converted = run_cli(&request_path, &source_path, &output_path);
+    assert!(
+        converted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&converted.stderr)
+    );
+    let asset = decode_voxel_asset(&fs::read_to_string(&output_path).unwrap()).unwrap();
+    assert_eq!(asset.provenance.source_byte_count, SOURCE.len() as u64);
+    assert_eq!(asset.provenance.source_sha256, source_sha256(SOURCE));
     assert!(!directory.join("known-good.voxel.json.pending").exists());
 
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn cli_accepts_a_valid_source_above_the_legacy_byte_quota() {
+    let directory = temporary_directory();
+    fs::create_dir(&directory).unwrap();
+    let request_path = directory.join("request.json");
+    let source_path = directory.join("source.glb");
+    let output_path = directory.join("known-good.voxel.json");
+
+    let source = glb_with_unused_buffer_bytes(64 * 1024 * 1024 + 4);
+    let mut request: serde_json::Value = serde_json::from_str(REQUEST).unwrap();
+    request["expectedSourceSha256"] = source_sha256(&source).into();
+    fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
+    fs::write(&source_path, &source).unwrap();
+    let converted = run_cli(&request_path, &source_path, &output_path);
+    assert!(
+        converted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&converted.stderr)
+    );
+    let asset = decode_voxel_asset(&fs::read_to_string(&output_path).unwrap()).unwrap();
+    assert_eq!(asset.provenance.source_byte_count, source.len() as u64);
+    assert_eq!(asset.provenance.source_sha256, source_sha256(&source));
+    assert!(!directory.join("known-good.voxel.json.pending").exists());
+
+    fs::remove_dir_all(directory).unwrap();
+}
+
+fn padded_request(request: &str, minimum_length: usize) -> String {
+    let mut padded = request.to_owned();
+    padded.push_str(&" ".repeat(minimum_length.saturating_sub(padded.len())));
+    padded
+}
+
+fn glb_with_unused_buffer_bytes(minimum_length: usize) -> Vec<u8> {
+    assert_eq!(&SOURCE[0..4], b"glTF");
+    assert_eq!(&SOURCE[16..20], b"JSON");
+    let json_length = u32::from_le_bytes(SOURCE[12..16].try_into().unwrap()) as usize;
+    let json_end = 20 + json_length;
+    let binary_length =
+        u32::from_le_bytes(SOURCE[json_end..json_end + 4].try_into().unwrap()) as usize;
+    assert_eq!(&SOURCE[json_end + 4..json_end + 8], b"BIN\0");
+    let binary = &SOURCE[json_end + 8..json_end + 8 + binary_length];
+
+    let mut document: serde_json::Value = serde_json::from_slice(&SOURCE[20..json_end]).unwrap();
+    let mut padded_binary_length = binary.len();
+    let json = loop {
+        document["buffers"][0]["byteLength"] = padded_binary_length.into();
+        let mut json = serde_json::to_vec(&document).unwrap();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let required_binary_length = minimum_length
+            .saturating_sub(20 + json.len() + 8)
+            .max(binary.len())
+            .next_multiple_of(4);
+        if required_binary_length == padded_binary_length {
+            break json;
+        }
+        padded_binary_length = required_binary_length;
+    };
+
+    let total_length = 20 + json.len() + 8 + padded_binary_length;
+    let mut glb = Vec::with_capacity(total_length);
+    glb.extend_from_slice(&SOURCE[0..8]);
+    glb.extend_from_slice(&(total_length as u32).to_le_bytes());
+    glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json);
+    glb.extend_from_slice(&(padded_binary_length as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(binary);
+    glb.resize(total_length, 0);
+    glb
 }
 
 fn run_cli(

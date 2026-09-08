@@ -6,9 +6,6 @@ use sha2::{Digest, Sha256};
 
 use crate::codec::{valid_sha256, MAX_MATERIAL_MAPPINGS, MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES};
 
-pub const MAX_CONVERSION_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
-pub const MAX_CONVERSION_SOURCE_VERTICES: usize = 2_000_000;
-pub const MAX_CONVERSION_SOURCE_INDICES: usize = 6_000_000;
 /// Largest lattice span representable by the durable +/-1,000,000-cell
 /// coordinate contract. Conversion work and retained output have independent,
 /// substantially tighter measured limits; this is not a product-tuning cap.
@@ -127,13 +124,11 @@ pub fn validate_conversion_request(
     if let Some(path) = &request.license_path {
         validate_string(path, "licensePath", &mut diagnostics);
     }
-    if source_byte_count == 0 || source_byte_count > MAX_CONVERSION_SOURCE_BYTES {
+    if source_byte_count == 0 {
         diagnostics.push(input_diagnostic(
             "conversion.resourceLimit",
             "source",
-            format!(
-                "source byte count {source_byte_count} is outside 1..={MAX_CONVERSION_SOURCE_BYTES}"
-            ),
+            "source byte count must be nonzero",
         ));
     }
 

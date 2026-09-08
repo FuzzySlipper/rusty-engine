@@ -3989,11 +3989,8 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
         RuntimeInputError::InvalidProductPayloadContract => {
             "CSHARP_INPUT_INVALID_PRODUCT_PAYLOAD_CONTRACT"
         }
-        RuntimeInputError::ProductPayloadTooLarge { .. } => {
-            "CSHARP_INPUT_PRODUCT_PAYLOAD_TOO_LARGE"
-        }
-        RuntimeInputError::ProductPayloadStructureOutOfBounds(_) => {
-            "CSHARP_INPUT_PRODUCT_PAYLOAD_STRUCTURE_OUT_OF_BOUNDS"
+        RuntimeInputError::ProductPayloadUnsafeInteger => {
+            "CSHARP_INPUT_PRODUCT_PAYLOAD_UNSAFE_INTEGER"
         }
         RuntimeInputError::ProductPayloadContractMismatch => {
             "CSHARP_INPUT_PRODUCT_PAYLOAD_CONTRACT_MISMATCH"
@@ -5322,7 +5319,7 @@ fn complete_voxel_baseline(
         let RuntimePublication::Frame(frame) = output else {
             continue;
         };
-        let frame = serde_json::to_value(frame).map_err(|error| {
+        let frame = serde_json::to_value(frame.as_frame()).map_err(|error| {
             CsharpProductRuntimeError::new("CSHARP_EXERCISE_ATTACH", error.to_string())
         })?;
         let operations = frame

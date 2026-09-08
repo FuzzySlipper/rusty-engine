@@ -15,9 +15,8 @@ mod model;
 mod runtime;
 
 pub use compile::{
-    TimelineCatalog, TimelineDescriptor, TimelineStep, TimelineStepDescriptor,
-    MAX_RUNTIME_TIMELINE_INSPECTION_BYTES, MAX_TIMELINES, MAX_TIMELINE_DESCRIPTOR_STEPS,
-    MAX_TIMELINE_STEPS,
+    TimelineCatalog, TimelineDescriptor, TimelineStep, TimelineStepDescriptor, MAX_TIMELINES,
+    MAX_TIMELINE_DESCRIPTOR_STEPS, MAX_TIMELINE_STEPS,
 };
 pub use error::RuntimeTimelineError;
 pub use inspection::{
@@ -33,8 +32,8 @@ pub use model::{
     TimelineCompletionTicketId, TimelineInsertionSequence, TimelineOperationIdentity,
     TimelineOperationReplacement, TimelineOperationRevision, TimelineOperationSpec,
     TimelineRecurrence, MAX_RECURRENCE_OCCURRENCES, MAX_RUNTIME_CORRELATION_BYTES,
-    MAX_RUNTIME_OPAQUE_DATA_BYTES, MAX_RUNTIME_OPAQUE_DATA_DEPTH, MAX_TIMELINE_COMPLETION_TICKETS,
-    MAX_TIMELINE_OPERATIONS, MAX_TIMELINE_RELEASE_PREFIX, MAX_TIMELINE_SNAPSHOT_ITEMS,
+    MAX_TIMELINE_COMPLETION_TICKETS, MAX_TIMELINE_OPERATIONS, MAX_TIMELINE_RELEASE_PREFIX,
+    MAX_TIMELINE_SNAPSHOT_ITEMS,
 };
 pub use runtime::{
     ReleasedCompletionStatus, ReleasedTimelineCompletion, ReleasedTimelineEvent,

@@ -78,7 +78,7 @@ void test('same-binding Engine cursor synchronization drops stale input and pres
   assert.equal(concurrent.drain()[0]?.sequence, '3');
 });
 
-void test('direct product payload claims are deeply plain, bounded, and immutable', () => {
+void test('direct product payload claims are deeply plain and immutable', () => {
   const queue = createRustyApplicationInputQueue(8);
   queue.bindRuntime(INITIAL);
   queue.claim('inventory.drop', {
@@ -117,6 +117,23 @@ void test('direct product payload claims are deeply plain, bounded, and immutabl
   assert.throws(() => queue.claim('inventory.drop', {
     kind: 'product-payload', contract: 'example.inventory.drop.v1', data: { slot: 9_007_199_254_740_992 },
   }));
+});
+
+void test('direct product payload claims detach deep JSON without recursive quota validation', () => {
+  const queue = createRustyApplicationInputQueue(8);
+  queue.bindRuntime(INITIAL);
+  let deep: unknown = null;
+  for (let index = 0; index < 1_024; index += 1) deep = [deep];
+  queue.claim('inventory.drop', {
+    kind: 'product-payload',
+    contract: 'example.inventory.drop.v1',
+    data: { deep: deep as never, array: Array.from({ length: 1_100 }, (_, index) => index) },
+  });
+  const [entry] = queue.drain();
+  assert.ok(entry !== undefined && 'value' in entry && entry.value.kind === 'product-payload');
+  if (entry !== undefined && 'value' in entry && entry.value.kind === 'product-payload') {
+    assert.ok(Object.isFrozen(entry.value.data));
+  }
 });
 
 void test('input ingress rebinding and context changes clear with the exact epoch ordering', () => {

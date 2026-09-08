@@ -13,15 +13,6 @@ pub const MAX_AXIS_MAGNITUDE: f32 = 8_192.0;
 pub const MAX_DIRECT_INTENT_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_BUTTON_VALUE: f32 = 1.0;
-/// Maximum canonical JSON bytes one direct product-payload intent may carry.
-pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES: usize = 65_536;
-pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES: usize =
-    MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES;
-pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_DEPTH: usize = 32;
-pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_NODES: usize = 4_096;
-pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_STRING_BYTES: usize = 16_384;
-pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_ARRAY_ENTRIES: usize = 1_024;
-pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_OBJECT_ENTRIES: usize = 1_024;
 pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 /// The retained host-neutral direct input value vocabulary.
@@ -381,7 +372,7 @@ impl RuntimeProductPayload {
         if !is_identity(&contract) {
             return Err(RuntimeInputError::InvalidProductPayloadContract);
         }
-        let bytes = validate_product_payload_json(&data)?;
+        let bytes = encode_product_payload_json(&data)?;
         Ok(Self {
             contract,
             data,
@@ -684,8 +675,7 @@ pub enum RuntimeInputError {
     InvalidAxisValue,
     InvalidDirectIntentAxisValue,
     InvalidProductPayloadContract,
-    ProductPayloadTooLarge { actual: usize, maximum: usize },
-    ProductPayloadStructureOutOfBounds(&'static str),
+    ProductPayloadUnsafeInteger,
     ProductPayloadContractMismatch,
     InvalidControllerAxisValue,
     InvalidControllerButtonValue,
@@ -784,94 +774,38 @@ impl RuntimeInputBatchReceipt {
     }
 }
 
-fn validate_product_payload_json(value: &serde_json::Value) -> Result<Vec<u8>, RuntimeInputError> {
-    let bytes = serde_json::to_vec(value).map_err(|_| RuntimeInputError::WireMalformed)?;
-    if bytes.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES {
-        return Err(RuntimeInputError::ProductPayloadTooLarge {
-            actual: bytes.len(),
-            maximum: MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES,
-        });
-    }
-    let mut nodes = 0usize;
-    validate_product_payload_value(value, 1, &mut nodes)?;
-    Ok(bytes)
+fn encode_product_payload_json(value: &serde_json::Value) -> Result<Vec<u8>, RuntimeInputError> {
+    validate_product_payload_numbers(value)?;
+    serde_json::to_vec(value).map_err(|_| RuntimeInputError::WireMalformed)
 }
 
-fn validate_product_payload_value(
-    value: &serde_json::Value,
-    depth: usize,
-    nodes: &mut usize,
-) -> Result<(), RuntimeInputError> {
-    if depth > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_DEPTH {
-        return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-            "depth",
-        ));
-    }
-    *nodes = nodes
-        .checked_add(1)
-        .ok_or(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-            "nodes",
-        ))?;
-    if *nodes > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_NODES {
-        return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-            "nodes",
-        ));
-    }
-    match value {
-        serde_json::Value::Null | serde_json::Value::Bool(_) => Ok(()),
-        serde_json::Value::String(value) => {
-            if value.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_STRING_BYTES {
-                Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-                    "string",
-                ))
-            } else {
-                Ok(())
+fn validate_product_payload_numbers(value: &serde_json::Value) -> Result<(), RuntimeInputError> {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::String(_) => {
             }
-        }
-        serde_json::Value::Number(value) => {
-            let Some(number) = value.as_f64() else {
-                return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-                    "number",
-                ));
-            };
-            if !number.is_finite()
-                || (number.fract() == 0.0
-                    && number.abs() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER as f64)
-            {
-                Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-                    "integer",
-                ))
-            } else {
-                Ok(())
-            }
-        }
-        serde_json::Value::Array(values) => {
-            if values.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_ARRAY_ENTRIES {
-                return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-                    "array",
-                ));
-            }
-            values
-                .iter()
-                .try_for_each(|value| validate_product_payload_value(value, depth + 1, nodes))
-        }
-        serde_json::Value::Object(values) => {
-            if values.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_OBJECT_ENTRIES {
-                return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-                    "object",
-                ));
-            }
-            for (key, value) in values {
-                if key.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_STRING_BYTES {
-                    return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
-                        "object-key",
-                    ));
+            serde_json::Value::Number(value) => {
+                let unsafe_integer = if let Some(value) = value.as_i64() {
+                    value.unsigned_abs() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER
+                } else if let Some(value) = value.as_u64() {
+                    value > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER
+                } else if let Some(value) = value.as_f64() {
+                    !value.is_finite()
+                        || (value.fract() == 0.0
+                            && value.abs() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_SAFE_INTEGER as f64)
+                } else {
+                    true
+                };
+                if unsafe_integer {
+                    return Err(RuntimeInputError::ProductPayloadUnsafeInteger);
                 }
-                validate_product_payload_value(value, depth + 1, nodes)?;
             }
-            Ok(())
+            serde_json::Value::Array(values) => pending.extend(values),
+            serde_json::Value::Object(values) => pending.extend(values.values()),
         }
     }
+    Ok(())
 }
 
 impl fmt::Display for RuntimeInputError {

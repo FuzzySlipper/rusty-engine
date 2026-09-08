@@ -2,7 +2,7 @@ use voxel_convert::{
     flatten_static_scene, import_mesh_source, import_static_glb, import_static_glb_scene,
     source_sha256, ImportedMaterial, ImportedModelMesh, ImportedModelNode, ImportedModelPrimitive,
     ImportedModelScene, ImportedPrimitiveGroup, ImportedTextureCoordinates, MeshSourceFormat,
-    MeshSourceImportRequest, MAX_IMPORTED_TEXCOORD_SETS,
+    MeshSourceImportRequest,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -16,6 +16,7 @@ const HIERARCHY_FIXTURE: &str = include_str!(concat!(
 const WIDE_SCENE_NODE_COUNT: usize = 17_000;
 const WIDE_SCENE_MESH_COUNT: usize = 4_100;
 const WIDE_SCENE_PRIMITIVES_PER_MESH: usize = 3;
+const DEEP_IMPORTED_CHAIN_NODE_COUNT: usize = 300;
 
 #[test]
 fn licensed_hierarchy_fixture_preserves_scene_mesh_primitive_and_uv_identity() {
@@ -145,6 +146,27 @@ fn hierarchy_primitive_and_external_buffer_rejections_are_source_locatable() {
 }
 
 #[test]
+fn deep_imported_scene_chain_preserves_leaf_world_transform() {
+    let scene = import_static_glb_scene(&deep_chain_fixture()).unwrap();
+    let leaf = scene.nodes.last().unwrap();
+
+    assert_eq!(scene.nodes.len(), DEEP_IMPORTED_CHAIN_NODE_COUNT);
+    assert_eq!(
+        leaf.source_node_index,
+        (DEEP_IMPORTED_CHAIN_NODE_COUNT - 1) as u32
+    );
+    assert_eq!(
+        leaf.parent_node_index,
+        Some((DEEP_IMPORTED_CHAIN_NODE_COUNT - 2) as u32)
+    );
+    assert_eq!(leaf.source_mesh_index, Some(0));
+    assert_eq!(
+        translation(leaf.model_transform),
+        [DEEP_IMPORTED_CHAIN_NODE_COUNT as f64, 0.0, 0.0]
+    );
+}
+
+#[test]
 fn wide_scene_preserves_shared_geometry_grouping_and_transforms() {
     let source = wide_scene_fixture();
     let scene = import_static_glb_scene(&source).unwrap();
@@ -226,18 +248,22 @@ fn wide_scene_preserves_shared_geometry_grouping_and_transforms() {
 }
 
 #[test]
-fn flattened_scene_rejects_a_union_of_too_many_texture_coordinate_sets() {
-    let first_sets = (0..MAX_IMPORTED_TEXCOORD_SETS as u32).collect::<Vec<_>>();
-    let second_sets = (MAX_IMPORTED_TEXCOORD_SETS as u32..(MAX_IMPORTED_TEXCOORD_SETS as u32 * 2))
-        .collect::<Vec<_>>();
-    let error =
-        flatten_static_scene(&scene_with_texture_sets(&first_sets, &second_sets)).unwrap_err();
-
-    assert_eq!(error.diagnostics()[0].code, "conversion.resourceLimit");
-    assert_eq!(
-        error.diagnostics()[0].path,
-        "source.meshes[0].primitives[1].attributes.TEXCOORD_8"
-    );
+fn flattened_scene_preserves_texture_sets_beyond_retired_union_limit() {
+    let first_sets = (0..8).collect::<Vec<_>>();
+    let second_sets = (8..16).collect::<Vec<_>>();
+    let mesh = flatten_static_scene(&scene_with_texture_sets(&first_sets, &second_sets)).unwrap();
+    assert_eq!(mesh.texture_coordinates.len(), 16);
+    for (index, set) in mesh.texture_coordinates.iter().enumerate() {
+        assert_eq!(set.source_set_index, index as u32);
+        assert_eq!(set.coordinates.len(), mesh.positions.len());
+        assert_eq!(
+            set.coordinates
+                .iter()
+                .filter(|value| value.is_some())
+                .count(),
+            3
+        );
+    }
 }
 
 #[test]
@@ -354,6 +380,27 @@ fn hierarchy_fixture() -> Vec<u8> {
         second_mesh["name"] = fixture["meshNames"][1].clone();
         document["meshes"] = serde_json::json!([first_mesh, second_mesh]);
         document["nodes"] = fixture["nodes"].clone();
+    })
+}
+
+fn deep_chain_fixture() -> Vec<u8> {
+    mutate_glb_json(|document| {
+        document["scenes"][0]["nodes"] = serde_json::json!([0]);
+        document["nodes"] = serde_json::Value::Array(
+            (0..DEEP_IMPORTED_CHAIN_NODE_COUNT)
+                .map(|node_index| {
+                    let mut node = serde_json::json!({
+                        "translation": [1.0, 0.0, 0.0],
+                    });
+                    if node_index + 1 < DEEP_IMPORTED_CHAIN_NODE_COUNT {
+                        node["children"] = serde_json::json!([node_index + 1]);
+                    } else {
+                        node["mesh"] = serde_json::json!(0);
+                    }
+                    node
+                })
+                .collect(),
+        );
     })
 }
 

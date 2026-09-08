@@ -13,6 +13,7 @@ use voxel_asset::{
 #[test]
 fn static_and_animated_objects_are_canonical_and_frame_resolvable() {
     let mut source = object();
+    source.provenance.source_byte_count = 64 * 1024 * 1024 + 1;
     source.material_palette.reverse();
     source.clips.reverse();
     source.provenance.source_clips.reverse();
@@ -45,6 +46,7 @@ fn static_and_animated_objects_are_canonical_and_frame_resolvable() {
     );
     assert_eq!(decoded.bounds.min, [0, 0, 0]);
     assert_eq!(decoded.bounds.max, [1, 1, 0]);
+    assert_eq!(decoded.provenance.source_byte_count, 64 * 1024 * 1024 + 1);
 }
 
 #[test]

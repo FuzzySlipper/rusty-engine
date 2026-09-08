@@ -1,13 +1,8 @@
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use voxel_convert::{
-    convert_and_install, decode_conversion_request, MAX_CONVERSION_REQUEST_BYTES,
-    MAX_CONVERSION_SOURCE_BYTES,
-};
+use voxel_convert::{convert_and_install, decode_conversion_request};
 
 fn main() -> ExitCode {
     match run() {
@@ -21,15 +16,13 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let arguments = Arguments::parse(std::env::args().skip(1))?;
-    let request_bytes = read_bounded(
-        &arguments.request,
-        MAX_CONVERSION_REQUEST_BYTES as u64,
-        "request",
-    )?;
+    let request_bytes = fs::read(&arguments.request)
+        .map_err(|error| format!("{}: {error}", arguments.request.display()))?;
     let request_text = String::from_utf8(request_bytes)
         .map_err(|_| format!("{}: request is not UTF-8", arguments.request.display()))?;
     let request = decode_conversion_request(&request_text).map_err(|error| error.to_string())?;
-    let source = read_bounded(&arguments.source, MAX_CONVERSION_SOURCE_BYTES, "source")?;
+    let source = fs::read(&arguments.source)
+        .map_err(|error| format!("{}: {error}", arguments.source.display()))?;
     let receipt = convert_and_install(&request, &source, &arguments.output)
         .map_err(|error| error.to_string())?;
     println!(
@@ -46,21 +39,6 @@ fn run() -> Result<(), String> {
         arguments.output.display()
     );
     Ok(())
-}
-
-fn read_bounded(path: &Path, max_bytes: u64, input_name: &str) -> Result<Vec<u8>, String> {
-    let file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mut bytes = Vec::new();
-    file.take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(format!(
-            "conversion.resourceLimit at {}: {input_name} exceeds the {max_bytes}-byte input limit",
-            path.display()
-        ));
-    }
-    Ok(bytes)
 }
 
 struct Arguments {

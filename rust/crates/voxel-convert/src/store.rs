@@ -6,19 +6,7 @@ use voxel_asset::VoxelConversionRequest;
 
 use crate::{convert_glb, ConversionError, ConversionReceipt};
 
-pub const MAX_CONVERSION_REQUEST_BYTES: usize = 1024 * 1024;
-
 pub fn decode_conversion_request(input: &str) -> Result<VoxelConversionRequest, ConversionError> {
-    if input.len() > MAX_CONVERSION_REQUEST_BYTES {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            "$",
-            format!(
-                "request has {} bytes; limit is {MAX_CONVERSION_REQUEST_BYTES}",
-                input.len()
-            ),
-        ));
-    }
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let request = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
         ConversionError::one(

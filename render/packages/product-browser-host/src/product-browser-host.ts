@@ -763,13 +763,6 @@ function retainedDefinitionSignature(operation: unknown): string | null {
 export interface ProductBrowserUiProjectionOptions {
   readonly expectedStream?: string;
   readonly expectedContract: string;
-  readonly maximumBytes?: number;
-  readonly maximumWireBytes?: number;
-  readonly maximumNodes?: number;
-  readonly maximumDepth?: number;
-  readonly maximumStringBytes?: number;
-  readonly maximumArrayLength?: number;
-  readonly maximumObjectKeys?: number;
   readonly maximumSubscribers?: number;
 }
 

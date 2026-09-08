@@ -1,13 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gltf::{buffer::Source as BufferSource, mesh::Mode, Semantic};
-use voxel_asset::{MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES};
 
 use super::{
     ensure_total_limit, identity_matrix, matrix_from_gltf, multiply_matrices,
     validate_affine_matrix, validate_imported_name, ImportedMaterial, ImportedModelMesh,
     ImportedModelNode, ImportedModelPrimitive, ImportedModelScene, ImportedTextureCoordinates,
-    MAX_IMPORTED_SCENE_DEPTH, MAX_IMPORTED_TEXCOORD_SETS,
+    MAX_SOURCE_STREAM_COUNT,
 };
 use crate::ConversionError;
 
@@ -275,9 +274,9 @@ fn traverse_root(
     model_transforms: &mut [[f64; 16]],
     ordered_indices: &mut Vec<usize>,
 ) -> Result<(), ConversionError> {
-    let mut stack = vec![(root, 0usize, 1usize)];
+    let mut stack = vec![(root, 0usize)];
     while !stack.is_empty() {
-        let (node_index, child_index, depth) = *stack.last().expect("checked non-empty stack");
+        let (node_index, child_index) = *stack.last().expect("checked non-empty stack");
         if child_index == source_nodes[node_index].child_node_indices.len() {
             states[node_index] = VisitState::Complete;
             stack.pop();
@@ -303,14 +302,6 @@ fn traverse_root(
             VisitState::Complete => return Err(ambiguous_node(child)),
             VisitState::Unseen => {}
         }
-        let child_depth = depth.saturating_add(1);
-        if child_depth > MAX_IMPORTED_SCENE_DEPTH {
-            return Err(ConversionError::one(
-                "conversion.resourceLimit",
-                format!("source.nodes[{child}]"),
-                format!("scene depth exceeds {MAX_IMPORTED_SCENE_DEPTH}"),
-            ));
-        }
         parents[child] = Some(node_index);
         model_transforms[child] = multiply_matrices(
             model_transforms[node_index],
@@ -322,7 +313,7 @@ fn traverse_root(
         )?;
         states[child] = VisitState::Visiting;
         ordered_indices.push(child);
-        stack.push((child, 0, child_depth));
+        stack.push((child, 0));
     }
     Ok(())
 }
@@ -471,7 +462,7 @@ fn import_primitive(
     ensure_total_limit(
         *total_vertices,
         positions.len(),
-        MAX_CONVERSION_SOURCE_VERTICES,
+        MAX_SOURCE_STREAM_COUNT,
         "source.positions",
     )?;
     *total_vertices += positions.len();
@@ -502,7 +493,7 @@ fn import_primitive(
     ensure_total_limit(
         *total_indices,
         indices.len(),
-        MAX_CONVERSION_SOURCE_INDICES,
+        MAX_SOURCE_STREAM_COUNT,
         "source.indices",
     )?;
     *total_indices += indices.len();
@@ -514,13 +505,6 @@ fn import_primitive(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    if texture_set_indices.len() > MAX_IMPORTED_TEXCOORD_SETS {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            format!("{primitive_path}.attributes"),
-            format!("primitive defines more than {MAX_IMPORTED_TEXCOORD_SETS} TEXCOORD sets"),
-        ));
-    }
     let mut texture_coordinates = Vec::with_capacity(texture_set_indices.len());
     for source_set_index in texture_set_indices {
         let coordinates = reader

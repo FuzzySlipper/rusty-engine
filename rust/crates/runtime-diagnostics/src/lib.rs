@@ -23,7 +23,6 @@ const MAX_FIELDS: usize = 8;
 const MAX_FIELD_KEY_BYTES: usize = 64;
 const MAX_FIELD_VALUE_BYTES: usize = 256;
 const MAX_BATCH_EVENTS: usize = 64;
-const MAX_BATCH_BYTES: usize = 128 * 1024;
 const MAX_RECOVERABLE_CODES: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -456,19 +455,10 @@ impl RuntimeDiagnosticsSink {
         let cursor = after.unwrap_or(0);
         let lagged = after.is_some_and(|cursor| cursor.saturating_add(1) < floor_sequence);
         let start = cursor.max(floor_sequence.saturating_sub(1));
-        let mut encoded_bytes = 0_usize;
         let events: Vec<_> = inner
             .events
             .iter()
             .filter(|event| event.sequence > start)
-            .take_while(|event| {
-                let bytes = serde_json::to_vec(event).map_or(MAX_BATCH_BYTES, |value| value.len());
-                if encoded_bytes.saturating_add(bytes) > MAX_BATCH_BYTES {
-                    return false;
-                }
-                encoded_bytes = encoded_bytes.saturating_add(bytes);
-                true
-            })
             .take(MAX_BATCH_EVENTS)
             .cloned()
             .collect();
@@ -571,6 +561,28 @@ fn bounded_text(
 mod tests {
     use super::*;
 
+    fn dense_event(index: usize) -> RuntimeDiagnosticEvent {
+        let mut event = RuntimeDiagnosticEvent::new(
+            RuntimeDiagnosticSeverity::Info,
+            RuntimeDiagnosticDisposition::Accepted,
+            "s".repeat(MAX_SOURCE_BYTES),
+            format!("DENSE_{index:03}"),
+            "m".repeat(MAX_MESSAGE_BYTES),
+        )
+        .unwrap()
+        .with_correlation("r".repeat(MAX_CORRELATION_BYTES))
+        .unwrap();
+        for field_index in 0..MAX_FIELDS {
+            event = event
+                .with_field(
+                    format!("{field_index}{}", "k".repeat(MAX_FIELD_KEY_BYTES - 1)),
+                    "v".repeat(MAX_FIELD_VALUE_BYTES),
+                )
+                .unwrap();
+        }
+        event
+    }
+
     #[test]
     fn bounded_ring_coalesces_and_reports_lagged_reader() {
         let sink =
@@ -597,5 +609,33 @@ mod tests {
         let batch = sink.read_after(Some(0));
         assert!(batch.lagged);
         assert_eq!(batch.events.len(), 2);
+    }
+
+    #[test]
+    fn count_pages_retained_events_without_serialization_preflight() {
+        let sink = RuntimeDiagnosticsSink::new(
+            RuntimeDiagnosticsConfig::default().with_ring_capacity(MAX_BATCH_EVENTS + 1),
+        )
+        .unwrap();
+        for index in 0..=MAX_BATCH_EVENTS {
+            sink.publish(dense_event(index)).unwrap();
+        }
+
+        let first = sink.read_after(None);
+        assert_eq!(first.events.len(), MAX_BATCH_EVENTS);
+        assert_eq!(first.events.first().unwrap().code(), "DENSE_000");
+        assert_eq!(first.events.last().unwrap().code(), "DENSE_063");
+        assert_eq!(first.next_cursor, MAX_BATCH_EVENTS as u64);
+        assert_eq!(first.through_sequence, (MAX_BATCH_EVENTS + 1) as u64);
+        assert!(!first.lagged);
+        assert_eq!(first.dropped_count, 0);
+        assert!(serde_json::to_vec(&first.events).unwrap().len() > 128 * 1024);
+
+        let second = sink.read_after(Some(first.next_cursor));
+        assert_eq!(second.events.len(), 1);
+        assert_eq!(second.events[0].code(), "DENSE_064");
+        assert_eq!(second.next_cursor, second.through_sequence);
+        assert!(!second.lagged);
+        assert_eq!(second.dropped_count, 0);
     }
 }

@@ -4,7 +4,7 @@ use runtime_lifecycle::{RuntimeLifecycle, RuntimePhaseToken, RuntimeState};
 use serde_json::Value;
 
 use crate::model::{
-    validate_identity, validate_value, RuntimeUiProjectionEnvelope, RuntimeUiProjectionError,
+    validate_identity, RuntimeUiProjectionEnvelope, RuntimeUiProjectionError,
     RuntimeUiProjectionReadout, RuntimeUiRuntimeBinding, MAX_RUNTIME_UI_PROJECTION_STREAMS,
 };
 
@@ -135,7 +135,6 @@ impl RuntimeUiProjection {
         value: Value,
     ) -> Result<PreparedRuntimeUiProjection, RuntimeUiProjectionError> {
         let prepared = self.prepare_token(lifecycle, token, stream.into(), contract.into())?;
-        validate_value(&value)?;
         let envelope = RuntimeUiProjectionEnvelope::new(
             prepared.runtime,
             prepared.sequence,

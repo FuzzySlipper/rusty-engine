@@ -9,6 +9,7 @@ use voxel_convert::{
 
 const CLIP_DURATION: u64 = 1_000_000;
 const MIDPOINT: u64 = CLIP_DURATION / 2;
+const DEEP_REVERSE_POSE_NODE_COUNT: usize = 2_048;
 
 #[test]
 fn node_poses_use_canonical_step_linear_and_tangent_aware_cubic_sampling() {
@@ -121,7 +122,7 @@ fn transforms_only_evaluation_accepts_morph_only_clips_and_matches_mesh_sampling
 }
 
 #[test]
-fn node_pose_evaluation_rejects_out_of_range_cycles_and_non_finite_values() {
+fn node_pose_evaluation_rejects_out_of_range_missing_parents_cycles_and_non_finite_values() {
     let model = pose_model();
     let error = evaluate_clip_node_poses(&model, "linear", CLIP_DURATION + 1).unwrap_err();
     assert_eq!(error.diagnostics()[0].code, "conversion.invalidSampleTime");
@@ -137,6 +138,21 @@ fn node_pose_evaluation_rejects_out_of_range_cycles_and_non_finite_values() {
     );
     assert!(error.diagnostics()[0].message.contains("cycle"));
 
+    let mut missing_parent = pose_model();
+    missing_parent.scene.nodes[1].parent_node_index = Some(99);
+    let error = evaluate_clip_node_poses(&missing_parent, "linear", MIDPOINT).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        "conversion.invalidSceneHierarchy"
+    );
+    assert_eq!(
+        error.diagnostics()[0].path,
+        "sample.nodes[1].parentNodeIndex"
+    );
+    assert!(error.diagnostics()[0]
+        .message
+        .contains("parent references missing node 99"));
+
     let mut non_finite = model;
     let AnimationChannelValues::Translations(values) = &mut non_finite.clips[1].channels[0].values
     else {
@@ -148,6 +164,24 @@ fn node_pose_evaluation_rejects_out_of_range_cycles_and_non_finite_values() {
         error.diagnostics()[0].code,
         "conversion.nonFiniteDeformation"
     );
+}
+
+#[test]
+fn reverse_ordered_deep_pose_chain_composes_every_parent_translation() {
+    let model = reverse_ordered_deep_pose_model();
+    let poses = evaluate_clip_node_poses(&model, "deep", 0).unwrap();
+
+    assert_eq!(poses.nodes.len(), DEEP_REVERSE_POSE_NODE_COUNT);
+    assert_eq!(poses.nodes[0].source_node_index, 0);
+    assert_eq!(
+        poses.nodes.last().unwrap().source_node_index,
+        (DEEP_REVERSE_POSE_NODE_COUNT - 1) as u32
+    );
+    assert_near(
+        poses.nodes[0].world_transform[12],
+        DEEP_REVERSE_POSE_NODE_COUNT as f64,
+    );
+    assert_near(poses.nodes.last().unwrap().world_transform[12], 1.0);
 }
 
 fn pose_model() -> ImportedAnimatedModel {
@@ -303,6 +337,40 @@ fn pose_model() -> ImportedAnimatedModel {
             ),
         ],
     }
+}
+
+fn reverse_ordered_deep_pose_model() -> ImportedAnimatedModel {
+    let mut model = pose_model();
+    model.scene.nodes = (0..DEEP_REVERSE_POSE_NODE_COUNT)
+        .map(|node_index| ImportedModelNode {
+            source_node_index: node_index as u32,
+            source_node_name: None,
+            parent_node_index: (node_index + 1 < DEEP_REVERSE_POSE_NODE_COUNT)
+                .then_some((node_index + 1) as u32),
+            child_node_indices: if node_index > 0 {
+                vec![(node_index - 1) as u32]
+            } else {
+                Vec::new()
+            },
+            source_mesh_index: (node_index == 0).then_some(0),
+            local_transform: identity_matrix(),
+            model_transform: identity_matrix(),
+        })
+        .collect();
+    model.nodes = (0..DEEP_REVERSE_POSE_NODE_COUNT)
+        .map(|node_index| ImportedAnimationNode {
+            source_node_index: node_index as u32,
+            source_skin_index: None,
+            base_transform: ImportedNodeTransform::Decomposed {
+                translation: [1.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+            base_morph_weights: Vec::new(),
+        })
+        .collect();
+    model.clips = vec![clip(0, "deep", Vec::new())];
+    model
 }
 
 fn clip(

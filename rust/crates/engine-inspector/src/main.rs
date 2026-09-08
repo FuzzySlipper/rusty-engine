@@ -11,7 +11,6 @@ use engine_inspector::{
 const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SCENE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ENTITY_STATE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_IMPORT_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 
 const USAGE: &str = "\
 rusty-inspect — read-only Rusty Engine content and state inspection
@@ -235,9 +234,16 @@ fn command_import_source<O: Write, E: Write>(args: &[String], out: &mut O, err: 
 }
 
 fn command_import_manifest<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
-    let Some((_, input)) = one_input(args, "import-manifest", MAX_IMPORT_MANIFEST_BYTES, err)
-    else {
-        return if args.len() == 1 { 2 } else { 3 };
+    let [path] = args else {
+        let _ = writeln!(err, "error: `import-manifest` requires one artifact path");
+        return 3;
+    };
+    let input = match std::fs::read_to_string(path) {
+        Ok(input) => input,
+        Err(error) => {
+            let _ = writeln!(err, "error: cannot read {path}: {error}");
+            return 2;
+        }
     };
     match inspect_import_manifest_json(&input) {
         Ok(report) => finish_report(report.to_text(), &report.diagnostics, out),
@@ -421,6 +427,27 @@ mod tests {
         assert_eq!(code, 2);
         assert!(out.is_empty());
         assert!(err.contains("inspection read limit"));
+        std::fs::remove_file(path.as_ref()).ok();
+    }
+
+    #[test]
+    fn import_manifest_accepts_a_valid_file_above_the_legacy_read_quota() {
+        let manifest = concat!(
+            "{\"schemaVersion\":1,\"sourceUri\":\"fixtures/wall.glb\",",
+            "\"sourceHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",",
+            "\"sourceSchemaVersion\":1,\"importerVersion\":2,",
+            "\"meshAssetId\":\"mesh/wall\",\"guid\":null,\"artifacts\":[]}"
+        );
+        let mut padded = manifest.to_owned();
+        padded.push_str(&" ".repeat((4 * 1024 * 1024 + 1usize).saturating_sub(padded.len())));
+        let path = temporary_file("large-import-manifest", &padded);
+        let path = path.to_string_lossy();
+
+        let (code, out, err) = run_text(&["import-manifest", &path]);
+
+        assert_eq!(code, 0);
+        assert!(err.is_empty());
+        assert!(out.contains("import-manifest schema=1"));
         std::fs::remove_file(path.as_ref()).ok();
     }
 }
