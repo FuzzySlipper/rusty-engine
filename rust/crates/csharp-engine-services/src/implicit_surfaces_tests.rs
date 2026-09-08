@@ -1,4 +1,4 @@
-use super::{RuntimeImplicitBridge, api as implicit_api};
+use super::{api as implicit_api, RuntimeImplicitBridge};
 use crate::{
     appearance::{self, RuntimeAppearanceBridge},
     composition::ABI_OK,
@@ -178,11 +178,9 @@ fn native_implicit_mesh_generation_keeps_renderer_owners_alive_until_released() 
     let diagnostic = unsafe { &*generate_error.diagnostics.diagnostics };
     let message =
         unsafe { std::slice::from_raw_parts(diagnostic.message.bytes, diagnostic.message.len) };
-    assert!(
-        std::str::from_utf8(message)
-            .unwrap()
-            .contains("budget exceeded")
-    );
+    assert!(std::str::from_utf8(message)
+        .unwrap()
+        .contains("budget exceeded"));
     assert_eq!(mesh.value, 0, "failed extraction never publishes a mesh");
     let lease = generate_error.diagnostics.handle;
     assert_eq!(

@@ -586,41 +586,33 @@ mod tests {
         assert_eq!(values, field.sample(repeat, &points).unwrap());
         assert_eq!(base, field.sample(zero, &points).unwrap());
         assert_ne!(values, field.sample(other, &points).unwrap());
-        assert!(
-            values
-                .iter()
-                .zip(&base)
-                .all(|(a, b)| (a - b).abs() <= options.amplitude + 1e-6)
-        );
+        assert!(values
+            .iter()
+            .zip(&base)
+            .all(|(a, b)| (a - b).abs() <= options.amplitude + 1e-6));
         let adjacent: Vec<_> = points.iter().map(|p| [p[0] + 1e-5, p[1], p[2]]).collect();
-        assert!(
-            values
-                .iter()
-                .zip(field.sample(rough, &adjacent).unwrap())
-                .all(|(a, b)| (a - b).abs() < 1e-3)
-        );
-        assert!(
-            field
-                .displace_waves(
-                    sphere,
-                    WaveDisplacement {
-                        octaves: 0,
-                        ..options
-                    }
-                )
-                .is_err()
-        );
-        assert!(
-            field
-                .displace_waves(
-                    sphere,
-                    WaveDisplacement {
-                        frequency: [f32::MAX; 3],
-                        ..options
-                    }
-                )
-                .is_err()
-        );
+        assert!(values
+            .iter()
+            .zip(field.sample(rough, &adjacent).unwrap())
+            .all(|(a, b)| (a - b).abs() < 1e-3));
+        assert!(field
+            .displace_waves(
+                sphere,
+                WaveDisplacement {
+                    octaves: 0,
+                    ..options
+                }
+            )
+            .is_err());
+        assert!(field
+            .displace_waves(
+                sphere,
+                WaveDisplacement {
+                    frequency: [f32::MAX; 3],
+                    ..options
+                }
+            )
+            .is_err());
         let mesh = field
             .generate(
                 rough,

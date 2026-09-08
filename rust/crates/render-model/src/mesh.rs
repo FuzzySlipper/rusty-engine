@@ -760,8 +760,7 @@ impl AnimationRigSignature {
     /// authored pose translations are separate typed facts: no root-motion
     /// meaning is inferred from a joint's name or from merely being a root.
     pub fn validate(&self) -> Result<(), AnimationRigSignatureError> {
-        if self.joints.is_empty() || !valid_sha256(&self.bind_rest_hash)
-        {
+        if self.joints.is_empty() || !valid_sha256(&self.bind_rest_hash) {
             return Err(AnimationRigSignatureError::Invalid);
         }
         let mut joints = BTreeSet::new();

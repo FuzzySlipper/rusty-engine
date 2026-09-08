@@ -1,16 +1,16 @@
 //! Staged general-purpose fields. Generated output uses the canonical Graphics
 //! mesh resource path, including renderer recovery and resource lifetimes.
 use crate::{
-    CsharpEngineServicesError,
     appearance::RuntimeAppearanceBridge,
-    composition::{ABI_OK, borrowed_slice},
+    composition::{borrowed_slice, ABI_OK},
+    CsharpEngineServicesError,
 };
 use csharp_engine_abi::*;
 use std::{collections::BTreeMap, ffi::c_void, sync::Arc, time::Instant};
 use svc_implicit::{
-    Bounds, Field, GenerateOptions, Geometry, Node,
     surface::{self, MaterialBoundaryMode, MaterialRegion, MaterialSampling, SurfaceOptions},
     volume::{SampledVolume, VolumeDescriptor},
+    Bounds, Field, GenerateOptions, Geometry, Node,
 };
 
 const DEFAULT_EXTRACTION_CAPACITY: u32 = 262_144;

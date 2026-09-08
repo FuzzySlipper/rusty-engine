@@ -67,11 +67,8 @@ pub use source::{
     ImportedAnimatedMeshSource, ImportedMeshSource, MeshSourceBounds, MeshSourceFormat,
     MeshSourceGroup, MeshSourceImportReceipt, MeshSourceImportRequest, MeshSourceMaterialSlot,
     MeshSourceMetadata, MeshSourceNode, MeshSourceRef, MeshSourceTextureCoordinates,
-    MAX_MESH_PRIMITIVE_BYTES, MAX_MESH_SOURCE_ASSET_ID_BYTES,
-    MAX_MESH_SOURCE_PATH_BYTES,
+    MAX_MESH_PRIMITIVE_BYTES, MAX_MESH_SOURCE_ASSET_ID_BYTES, MAX_MESH_SOURCE_PATH_BYTES,
 };
 pub use store::{convert_and_install, decode_conversion_request};
-pub use voxel_asset::{
-    MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS,
-};
+pub use voxel_asset::{MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS};
 pub use voxelize::MAX_GEOMETRIC_VOXELIZATION_WORK;
