@@ -8,7 +8,7 @@ operation into independently attributable layers:
   transactional C# call begins.
 - `managed-csharp-update` measures a stable allocation-free managed update
   without Rust or browser work.
-- `csharp-rust-crossover` measures the normal generated NativeAOT callback,
+- `csharp-rust-crossover` measures generated CoreCLR and NativeAOT callbacks,
   Engine service transaction, and output conversion.
 - `product-dev-host-http` adds the local product-host HTTP admission path.
 - `browser-renderer-submission` measures explicit submissions through the real
@@ -138,8 +138,19 @@ with the evidence. GPU strings may be privacy-sanitized by Firefox. Do not
 compare a software renderer or reduced-resolution run against a hardware run.
 
 
-The current crossover and HTTP fixture uses NativeAOT. Managed-update timing
-uses ordinary CoreCLR but does not cross into Engine. A canonical packaged
-CoreCLR crossover workload remains to be added; these records do not certify
-that path. The CPU wrapper repairs the legacy probe's obsolete binary name to
-`rusty-product-host`, without introducing another packaging implementation.
+The crossover and HTTP lanes use the same canonical staged Product under both
+CoreCLR and NativeAOT. `fixtures/csharp-crossover-performance` consumes the public
+SDK staging targets with an explicit Engine contributor override. The runner
+packs the current SDK, stages a Release bundle through `VerifyRustyEngineAot`,
+and launches the current Rust host with `--product` and each `--loader`. It does
+not handwrite manifests or ABI glue. This measures one small demand-mode UI
+publication; it is not a full game or graphics workload. Loader, runtime and
+workload identity keep the two lanes distinct, including from the old trial.
+
+An existing runtime browser shell is required at `target/runtime-pack/linux-x64`,
+or set `RUSTY_PERF_RUNTIME_PACK` to its runtime-pack root. The runner copies its
+browser shell into a disposable layout alongside the current source host; the
+HTTP probe does not execute browser JavaScript. No release pair is published.
+
+Measured camera/mesh followups and canonical crossover results are recorded in
+[the followup report](performance-baselines/2026-09-08/followups/README.md).

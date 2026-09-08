@@ -157,7 +157,13 @@ fn main() -> Result<(), String> {
     } else if let Some((iterations, durations)) = crossover_durations {
         println!(
             "RUSTY_PERF {}",
-            performance_summary("csharp-rust-crossover", iterations, &durations)
+            performance_summary(
+                "csharp-rust-crossover",
+                iterations,
+                &durations,
+                args.loader,
+                args.product.as_ref(),
+            )
         );
         let output_stream = open_fresh_output_stream(host.address())?;
         let mut host_durations = Vec::with_capacity(iterations as usize);
@@ -168,7 +174,13 @@ fn main() -> Result<(), String> {
         }
         println!(
             "RUSTY_PERF {}",
-            performance_summary("product-dev-host-http", iterations, &host_durations)
+            performance_summary(
+                "product-dev-host-http",
+                iterations,
+                &host_durations,
+                args.loader,
+                args.product.as_ref(),
+            )
         );
         drop(output_stream);
         host.shutdown().map_err(|error| error.to_string())?;
@@ -2749,7 +2761,13 @@ fn post_empty_json(address: SocketAddr, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn performance_summary(lane: &str, iterations: u32, durations: &[u128]) -> serde_json::Value {
+fn performance_summary(
+    lane: &str,
+    iterations: u32,
+    durations: &[u128],
+    loader: ProductLoader,
+    product: Option<&ProductBundle>,
+) -> serde_json::Value {
     let mut sorted = durations.to_vec();
     sorted.sort_unstable();
     let value_at = |fraction: f64| -> f64 {
@@ -2757,9 +2775,37 @@ fn performance_summary(lane: &str, iterations: u32, durations: &[u128]) -> serde
         sorted[index] as f64 / 1_000_000.0
     };
     let mean = sorted.iter().copied().sum::<u128>() as f64 / sorted.len() as f64 / 1_000_000.0;
+    let configuration = env::var("RUSTY_PERF_PRODUCT_CONFIGURATION")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unspecified".to_owned());
+    let workload = product.map_or_else(
+        || {
+            serde_json::json!({
+                "id": "legacy-source-launch",
+                "version": 1,
+                "configuration": configuration.as_str(),
+                "launch": "legacy",
+                "loader": loader.identifier(),
+            })
+        },
+        |product| {
+            serde_json::json!({
+                "id": product.id.as_str(),
+                "version": 1,
+                "configuration": configuration.as_str(),
+                "launch": "canonical-product-v1",
+                "lifecycle": product.lifecycle_mode,
+                "loader": loader.identifier(),
+            })
+        },
+    );
     serde_json::json!({
         "schemaVersion": 1,
         "lane": lane,
+        "loader": loader.identifier(),
+        "runtime": loader.label(),
+        "workload": workload,
         "iterations": iterations,
         "unit": "milliseconds",
         "minimum": value_at(0.0),
@@ -2847,6 +2893,13 @@ impl ProductLoader {
         match self {
             Self::NativeAot => "NativeAOT",
             Self::CoreClr => "CoreCLR",
+        }
+    }
+
+    const fn identifier(self) -> &'static str {
+        match self {
+            Self::NativeAot => "nativeaot",
+            Self::CoreClr => "coreclr",
         }
     }
 }
