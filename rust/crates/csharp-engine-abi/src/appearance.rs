@@ -579,6 +579,43 @@ pub struct NativeMeshResourceHandle {
     pub value: u64,
 }
 
+/// Prepared Engine-owned spatial partition of one admitted mesh resource.
+/// The source resource remains independently owned; each part is transferred
+/// into a new mesh resource through the named take operation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMeshPartitionHandle {
+    pub value: u64,
+}
+
+/// Selects a spatial partitioning operation over one retained mesh resource.
+/// `origin` is the cell-grid origin and `cell_size` gives the positive cell
+/// dimensions in source-mesh coordinates.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMeshPartitionRequest {
+    pub source: NativeMeshResourceHandle,
+    pub origin: NativeVec3,
+    pub cell_size: NativeVec3,
+}
+
+/// Copied count of parts currently represented by a prepared mesh partition.
+/// Taking a part consumes that slot, but the count remains the stable number
+/// of prepared slots for the partition.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeMeshPartitionReadout {
+    pub part_count: u32,
+}
+
+/// Selects one not-yet-consumed part from a prepared mesh partition.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMeshPartitionPartRequest {
+    pub partition: NativeMeshPartitionHandle,
+    pub index: u32,
+}
+
 /// Triangle streams are copied during this call. Groups must tile the indices;
 /// bindings supply every used material slot. Empty UV/color streams omit those
 /// attributes. The Engine bounds a fully attributed inline mesh to its named

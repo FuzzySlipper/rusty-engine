@@ -453,6 +453,23 @@ pub type NativeDestroyMeshResource =
     unsafe extern "C" fn(*mut c_void, NativeMeshResourceHandle) -> i32;
 pub type NativeCreateMeshAppearance =
     unsafe extern "C" fn(*mut c_void, NativeMeshResourceHandle, *mut NativeAppearanceHandle) -> i32;
+pub type NativePartitionMesh = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMeshPartitionRequest,
+    *mut NativeMeshPartitionHandle,
+) -> i32;
+pub type NativeReadMeshPartition = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMeshPartitionHandle,
+    *mut NativeMeshPartitionReadout,
+) -> i32;
+pub type NativeTakeMeshPartitionPart = unsafe extern "C" fn(
+    *mut c_void,
+    NativeMeshPartitionPartRequest,
+    *mut NativeMeshResourceHandle,
+) -> i32;
+pub type NativeDestroyMeshPartition =
+    unsafe extern "C" fn(*mut c_void, NativeMeshPartitionHandle) -> i32;
 
 pub type NativeCreateStaticMeshAppearance = unsafe extern "C" fn(
     *mut c_void,
@@ -948,6 +965,10 @@ pub struct NativeGraphicsApi {
     pub create_mesh_resource: NativeCreateMeshResource,
     pub destroy_mesh_resource: NativeDestroyMeshResource,
     pub create_mesh_appearance: NativeCreateMeshAppearance,
+    pub partition_mesh: NativePartitionMesh,
+    pub read_mesh_partition: NativeReadMeshPartition,
+    pub take_mesh_partition_part: NativeTakeMeshPartitionPart,
+    pub destroy_mesh_partition: NativeDestroyMeshPartition,
     pub create_static_mesh: NativeCreateStaticMeshAppearance,
     pub create_static_mesh_from_content: NativeCreateStaticMeshContentAppearance,
     pub replace_static_mesh: NativeReplaceStaticMeshAppearance,

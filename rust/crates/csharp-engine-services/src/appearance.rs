@@ -1363,6 +1363,8 @@ pub(crate) struct RuntimeAppearanceState {
     mesh_resources: BTreeMap<u64, RuntimeMeshResource>,
     mesh_appearances: BTreeMap<u64, u64>,
     next_mesh_resource: u64,
+    mesh_partitions: BTreeMap<u64, RuntimeMeshPartition>,
+    next_mesh_partition: u64,
     lights: BTreeMap<u64, RuntimeLightFact>,
     next_light: u64,
     materials: BTreeMap<u64, String>,
@@ -1401,6 +1403,12 @@ pub(crate) struct RuntimeAppearanceState {
     ghost_plate_projector: GhostPlateProjector,
     ghost_plates: BTreeMap<u64, RuntimeGhostPlatePresentation>,
     next_ghost_plate: u64,
+}
+
+#[derive(Clone)]
+struct RuntimeMeshPartition {
+    parts: Vec<Option<StaticMeshAsset>>,
+    material_handles: BTreeSet<u64>,
 }
 
 #[derive(Clone)]
@@ -1590,6 +1598,8 @@ impl RuntimeAppearanceBridge {
                 mesh_resources: BTreeMap::new(),
                 mesh_appearances: BTreeMap::new(),
                 next_mesh_resource: 1,
+                mesh_partitions: BTreeMap::new(),
+                next_mesh_partition: 1,
                 lights: BTreeMap::new(),
                 next_light: 1,
                 materials: BTreeMap::new(),
@@ -3439,6 +3449,11 @@ impl RuntimeAppearanceBridge {
             .any(|bindings| bindings.contains(&material.value))
             || staged
                 .state
+                .mesh_partitions
+                .values()
+                .any(|partition| partition.material_handles.contains(&material.value))
+            || staged
+                .state
                 .mesh_resources
                 .values()
                 .any(|mesh| mesh.material_handles.contains(&material.value))
@@ -3901,6 +3916,138 @@ impl RuntimeAppearanceBridge {
         );
         staged.state.next_mesh_resource = next;
         Ok(NativeMeshResourceHandle { value: handle })
+    }
+
+    fn partition_mesh(
+        &mut self,
+        request: NativeMeshPartitionRequest,
+    ) -> Result<NativeMeshPartitionHandle, CsharpEngineServicesError> {
+        let invalid =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message);
+        let staged = self.staged_mut()?;
+        let source = staged
+            .state
+            .mesh_resources
+            .get(&request.source.value)
+            .ok_or_else(|| invalid("partition source mesh is not live"))?;
+        let definition = staged
+            .state
+            .projector
+            .resources_mut()
+            .static_meshes
+            .iter()
+            .find(|asset| asset.asset == source.asset)
+            .ok_or_else(|| invalid("partition source mesh definition is unavailable"))?;
+        let payloads = partition_mesh_spatially(
+            &definition.payload,
+            native_vec3_array(request.origin),
+            native_vec3_array(request.cell_size),
+        )
+        .map_err(invalid)?;
+        let parts = payloads
+            .into_iter()
+            .map(|payload| {
+                let used: BTreeSet<_> = payload.groups.iter().map(|g| g.material_slot).collect();
+                Some(StaticMeshAsset {
+                    asset: String::new(),
+                    payload,
+                    material_slots: definition
+                        .material_slots
+                        .iter()
+                        .filter(|m| used.contains(&m.slot))
+                        .cloned()
+                        .collect(),
+                    collision: MeshCollisionPolicy::VisualOnly,
+                })
+            })
+            .collect();
+        let material_handles = source.material_handles.clone();
+        let handle = staged.state.next_mesh_partition;
+        staged.state.next_mesh_partition = handle
+            .checked_add(1)
+            .ok_or_else(|| invalid("mesh partition handle overflow"))?;
+        staged.state.mesh_partitions.insert(
+            handle,
+            RuntimeMeshPartition {
+                parts,
+                material_handles,
+            },
+        );
+        Ok(NativeMeshPartitionHandle { value: handle })
+    }
+
+    fn read_mesh_partition(
+        &self,
+        partition: NativeMeshPartitionHandle,
+    ) -> Result<NativeMeshPartitionReadout, CsharpEngineServicesError> {
+        let prepared = self
+            .staged_ref()?
+            .state
+            .mesh_partitions
+            .get(&partition.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_MESH_PARTITION",
+                    "mesh partition is not live",
+                )
+            })?;
+        Ok(NativeMeshPartitionReadout {
+            part_count: prepared.parts.len() as u32,
+        })
+    }
+
+    fn take_mesh_partition_part(
+        &mut self,
+        request: NativeMeshPartitionPartRequest,
+    ) -> Result<NativeMeshResourceHandle, CsharpEngineServicesError> {
+        let invalid =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message);
+        let staged = self.staged_mut()?;
+        let prepared = staged
+            .state
+            .mesh_partitions
+            .get_mut(&request.partition.value)
+            .ok_or_else(|| invalid("mesh partition is not live"))?;
+        let part = prepared
+            .parts
+            .get_mut(request.index as usize)
+            .ok_or_else(|| invalid("mesh partition index is out of range"))?;
+        let handle = staged.state.next_mesh_resource;
+        let next = handle
+            .checked_add(1)
+            .ok_or_else(|| invalid("mesh resource handle overflow"))?;
+        let mut definition = part
+            .take()
+            .ok_or_else(|| invalid("mesh partition part was already taken"))?;
+        let material_handles = prepared.material_handles.clone();
+        let asset = format!("mesh/runtime-{handle}");
+        definition.asset = asset.clone();
+        staged
+            .state
+            .projector
+            .resources_mut()
+            .static_meshes
+            .push(definition);
+        staged.state.mesh_resources.insert(
+            handle,
+            RuntimeMeshResource {
+                asset,
+                material_handles,
+            },
+        );
+        staged.state.next_mesh_resource = next;
+        Ok(NativeMeshResourceHandle { value: handle })
+    }
+
+    fn destroy_mesh_partition(
+        &mut self,
+        partition: NativeMeshPartitionHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?
+            .state
+            .mesh_partitions
+            .remove(&partition.value);
+        Ok(())
     }
 
     fn create_mesh_appearance(
@@ -7761,6 +7908,38 @@ pub(crate) unsafe extern "C" fn create_mesh_resource(
     })
 }
 
+pub(crate) unsafe extern "C" fn partition_mesh(
+    context: *mut c_void,
+    request: NativeMeshPartitionRequest,
+    result: *mut NativeMeshPartitionHandle,
+) -> i32 {
+    animation_result(context, result, |bridge| bridge.partition_mesh(request))
+}
+pub(crate) unsafe extern "C" fn read_mesh_partition(
+    context: *mut c_void,
+    partition: NativeMeshPartitionHandle,
+    result: *mut NativeMeshPartitionReadout,
+) -> i32 {
+    animation_result(context, result, |bridge| {
+        bridge.read_mesh_partition(partition)
+    })
+}
+pub(crate) unsafe extern "C" fn take_mesh_partition_part(
+    context: *mut c_void,
+    request: NativeMeshPartitionPartRequest,
+    result: *mut NativeMeshResourceHandle,
+) -> i32 {
+    animation_result(context, result, |bridge| {
+        bridge.take_mesh_partition_part(request)
+    })
+}
+pub(crate) unsafe extern "C" fn destroy_mesh_partition(
+    context: *mut c_void,
+    partition: NativeMeshPartitionHandle,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.destroy_mesh_partition(partition))
+}
+
 pub(crate) unsafe extern "C" fn create_mesh_appearance(
     context: *mut c_void,
     resource: NativeMeshResourceHandle,
@@ -9412,6 +9591,150 @@ pub(super) mod tests {
                 shadow_intent: NativeLightShadowIntent::Requested,
             },
         }
+    }
+
+    #[test]
+    fn mesh_partition_transfers_parts_and_retains_materials_independently() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let color = NativeColor {
+            r: 1.0,
+            g: 0.4,
+            b: 0.1,
+            a: 1.0,
+        };
+        let material = bridge
+            .create_material(NativeMaterialRequest {
+                color,
+                texture: NativeRenderResourceHandle { value: 0 },
+                roughness: 0.7,
+                texture_tint: color,
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: true,
+                alpha_mode: NativeMaterialAlphaMode::Mask,
+                alpha_cutoff: 0.4,
+            })
+            .unwrap();
+        let positions = [
+            NativeVec3::default(),
+            NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+        ];
+        let normals = [NativeVec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        }; 3];
+        let colors = [
+            NativeColor {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            NativeColor {
+                r: 0.0,
+                g: 1.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            NativeColor {
+                r: 0.0,
+                g: 0.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        ];
+        let indices = [0, 1, 2];
+        let groups = [NativeMeshGroup {
+            material_slot: 3,
+            start: 0,
+            count: 3,
+        }];
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 3,
+            material,
+        }];
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: colors.as_ptr(),
+            colors_len: colors.len(),
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+        };
+        let resource = unsafe { bridge.create_mesh_resource(&request) }.unwrap();
+        let partition = bridge
+            .partition_mesh(NativeMeshPartitionRequest {
+                source: resource,
+                origin: NativeVec3::default(),
+                cell_size: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            })
+            .unwrap();
+        assert_eq!(bridge.read_mesh_partition(partition).unwrap().part_count, 1);
+        bridge.destroy_mesh_resource(resource).unwrap();
+        assert!(
+            bridge.destroy_material(material).is_err(),
+            "prepared parts retain materials without the source"
+        );
+        let part_request = NativeMeshPartitionPartRequest {
+            partition,
+            index: 0,
+        };
+        let part = bridge.take_mesh_partition_part(part_request).unwrap();
+        assert!(
+            bridge.take_mesh_partition_part(part_request).is_err(),
+            "ownership transfers exactly once"
+        );
+        bridge.destroy_mesh_partition(partition).unwrap();
+        assert!(
+            bridge.destroy_material(material).is_err(),
+            "taken mesh retains its material independently"
+        );
+        let appearance = bridge.create_mesh_appearance(part).unwrap();
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        let mut world = render_presentation::PresentationWorld::default();
+        for output in &call.outputs {
+            if let RuntimeAppearanceCallOutput::Frame(frame) = output {
+                world.apply(frame).unwrap();
+            }
+        }
+        bridge.commit(Some(call));
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
+        bridge.destroy_appearance(appearance).unwrap();
+        bridge.destroy_mesh_resource(part).unwrap();
+        bridge.destroy_material(material).unwrap();
+        assert!(bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .mesh_partitions
+            .is_empty());
     }
 
     #[test]

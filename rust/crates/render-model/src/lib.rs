@@ -11,6 +11,7 @@ mod core;
 mod editor_grid;
 mod lighting;
 mod mesh;
+mod mesh_partition;
 mod mesh_resource;
 mod voxel_object;
 
@@ -19,5 +20,6 @@ pub use core::*;
 pub use editor_grid::*;
 pub use lighting::*;
 pub use mesh::*;
+pub use mesh_partition::*;
 pub use mesh_resource::*;
 pub use voxel_object::*;

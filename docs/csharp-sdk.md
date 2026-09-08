@@ -227,6 +227,23 @@ any separate spatial mechanism its gameplay needs. To change geometry, admit a
 new immutable resource and publish the replacement appearance. Product arrays
 may be reused immediately after admission.
 
+`Graphics.PartitionMesh(new MeshPartitionRequest(mesh, origin, cellSize))`
+prepares spatial render sections from an existing inline mesh. Origin and
+positive cell sizes are in mesh-local units. Whole triangles are assigned by
+centroid to deterministic grid bins; attributes, winding and material slots
+are preserved exactly, with shared vertices duplicated between sections.
+Bounds enclose actual vertices, including triangles crossing a grid boundary.
+This changes neither voxel extraction nor collision, and individual sections
+are not closed solids.
+
+The returned `MeshPartition` is disposable. `ReadMeshPartition(partition).PartCount`
+is the stable slot count. `TakeMeshPartitionPart(new MeshPartitionPartRequest(partition,
+index))` transfers each slot once into an ordinary owned `MeshResource`; create
+and publish its appearance through the usual APIs. Disposing the partition frees
+untaken sections; taken meshes remain independently owned. The source mesh may
+be released after preparation or retained as the unchanged collision source.
+Partitioning does not perform occlusion culling or promise fewer draw calls.
+
 Remove appearances from the published snapshot before disposing them, then
 dispose their mesh resource. Dispose bound materials after their resources and
 appearances. The Engine releases unused mesh definitions and GPU geometry;
