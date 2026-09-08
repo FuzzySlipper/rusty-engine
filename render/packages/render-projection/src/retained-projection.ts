@@ -149,6 +149,16 @@ export interface RenderProjectionSnapshot {
   readonly voxelObjects: readonly VoxelObjectRenderAsset[];
 }
 
+/** Cheap retained resource totals for diagnostics that do not need a full snapshot. */
+export interface RenderProjectionResourceCounts {
+  readonly textures: number;
+  readonly spriteAtlases: number;
+  readonly materials: number;
+  readonly staticMeshes: number;
+  readonly animatedMeshes: number;
+  readonly voxelObjects: number;
+}
+
 /**
  * Bounded diagnostics for the most recently committed fail-atomic frame stage.
  *
@@ -465,6 +475,18 @@ export class RenderProjection {
 
   voxelObjectRefCount(asset: string): number {
     return this.#voxelObjects.get(asset)?.refCount ?? 0;
+  }
+
+  /** Return detached retained resource totals without traversing or cloning resources. */
+  resourceCounts(): RenderProjectionResourceCounts {
+    return Object.freeze({
+      textures: this.#textures.size,
+      spriteAtlases: this.#spriteAtlases.size,
+      materials: this.#materials.size,
+      staticMeshes: this.#staticMeshes.size,
+      animatedMeshes: this.#animatedMeshes.size,
+      voxelObjects: this.#voxelObjects.size,
+    });
   }
 
   snapshot(): RenderProjectionSnapshot {

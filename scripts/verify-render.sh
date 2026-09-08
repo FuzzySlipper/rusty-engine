@@ -7,6 +7,7 @@ if [[ "${RUSTY_RENDER_DEPS_READY:-0}" != "1" ]]; then
   pnpm --dir "$REPO_ROOT/render" install --frozen-lockfile --ignore-scripts
 fi
 
+node --test "$REPO_ROOT/scripts/performance-results.test.mjs"
 pnpm --dir "$REPO_ROOT/render" run boundary
 "$REPO_ROOT/scripts/verify-render-artifacts.sh"
 pnpm --dir "$REPO_ROOT/render" run typecheck:browser

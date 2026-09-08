@@ -35,7 +35,7 @@ dotnet publish \
   --output "$PROBE_ROOT/product"
 
 cargo run -p csharp-product-runtime \
-  --bin csharp-product-runtime \
+  --bin rusty-product-host \
   --release \
   --locked -- \
   --library "$PROBE_ROOT/product/CsharpNativeAotTrial.so" \
@@ -48,7 +48,9 @@ cargo run -p csharp-product-runtime \
   --port 0 \
   --performance-probe "$ITERATIONS"
 
-PLAYWRIGHT_RENDER_PORT="$RENDER_PORT" pnpm --dir "$REPO_ROOT/render" exec playwright test \
-  browser/renderer-performance.browser.spec.ts \
-  --config playwright.config.ts \
-  --reporter=line
+if [[ "${RUSTY_PERF_SKIP_BROWSER:-0}" != "1" ]]; then
+  PLAYWRIGHT_RENDER_PORT="$RENDER_PORT" pnpm --dir "$REPO_ROOT/render" exec playwright test \
+    browser/renderer-performance.browser.spec.ts \
+    --config playwright.config.ts \
+    --reporter=line
+fi

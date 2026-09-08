@@ -1883,6 +1883,16 @@ var Pt, V = class extends Error {
 	voxelObjectRefCount(e) {
 		return this.#c.get(e)?.refCount ?? 0;
 	}
+	resourceCounts() {
+		return Object.freeze({
+			textures: this.#r.size,
+			spriteAtlases: this.#a.size,
+			materials: this.#n.size,
+			staticMeshes: this.#o.size,
+			animatedMeshes: this.#s.size,
+			voxelObjects: this.#c.size
+		});
+	}
 	snapshot() {
 		return {
 			skyBackground: H(this.#i) ?? null,
@@ -24125,7 +24135,7 @@ function yS(e, t, n = {}) {
 			hostAdmission: _.sample()
 		}),
 		diagnosticsReadout: () => {
-			let t = a.snapshot(), n = h;
+			let t = a.resourceCounts(), n = h;
 			if (n === null) throw Error("renderer surface has no completed submission");
 			let r = e.clientWidth, i = e.clientHeight, o = e.getContext("webgl2"), c = o?.getExtension("WEBGL_debug_renderer_info") ?? null, l = Object.freeze({
 				...s.automaticSubmissionPacing(),
@@ -24145,7 +24155,7 @@ function yS(e, t, n = {}) {
 				submission: n,
 				pacing: l,
 				resources: Object.freeze({
-					definedTextureCount: t.textures.length,
+					definedTextureCount: t.textures,
 					skyBackground: s.renderer.skyBackgroundReadout(),
 					realizedTextures: Object.freeze(s.renderer.textureResourceReadout().map((e) => Object.freeze({
 						id: e.id,
@@ -24153,7 +24163,7 @@ function yS(e, t, n = {}) {
 						encodedBytes: e.encodedBytes,
 						decodedBytes: e.decodedBytes
 					}))),
-					spriteAtlasCount: t.spriteAtlases.length,
+					spriteAtlasCount: t.spriteAtlases,
 					spriteFallbackCount: s.renderer.spriteFallbackCount,
 					materialFallbackCount: s.renderer.fallbackMaterialCount,
 					voxelSpecializedMaterialCount: s.renderer.voxelSurfaceMaterialReadout().length

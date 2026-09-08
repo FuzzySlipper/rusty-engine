@@ -1218,7 +1218,7 @@ function mountPreparedRendererSurface(
       hostAdmission: automaticSubmissionAdmission.sample(),
     }),
     diagnosticsReadout: () => {
-      const projectionSnapshot = projection.snapshot();
+      const resourceCounts = projection.resourceCounts();
       const submission = latestSubmission;
       if (submission === null) {
         throw new Error('renderer surface has no completed submission');
@@ -1249,7 +1249,7 @@ function mountPreparedRendererSurface(
         submission,
         pacing,
         resources: Object.freeze({
-          definedTextureCount: projectionSnapshot.textures.length,
+          definedTextureCount: resourceCounts.textures,
           skyBackground: backendSurface.renderer.skyBackgroundReadout(),
           realizedTextures: Object.freeze(backendSurface.renderer.textureResourceReadout()
             .map((texture) => Object.freeze({
@@ -1258,7 +1258,7 @@ function mountPreparedRendererSurface(
               encodedBytes: texture.encodedBytes,
               decodedBytes: texture.decodedBytes,
             }))),
-          spriteAtlasCount: projectionSnapshot.spriteAtlases.length,
+          spriteAtlasCount: resourceCounts.spriteAtlases,
           spriteFallbackCount: backendSurface.renderer.spriteFallbackCount,
           materialFallbackCount: backendSurface.renderer.fallbackMaterialCount,
           voxelSpecializedMaterialCount:

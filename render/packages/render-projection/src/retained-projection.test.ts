@@ -770,6 +770,72 @@ void test('applies every operation in the committed retained fixture', () => {
   assert.equal(projection.animatedMeshRefCount('mesh-animation/character'), 1);
 });
 
+void test('resource counts follow retained define, redefine, and release lifecycles without a full snapshot', () => {
+  const frame = decodeRenderFrameDiff(JSON.parse(readFileSync(
+    resolve(repoRoot, 'fixtures/render/retained-frame-v1.json'),
+    'utf8',
+  )) as unknown);
+  const texture = frame.ops.find((operation) => operation.op === 'defineTexture');
+  const material = frame.ops.find((operation) => operation.op === 'defineMaterial');
+  const spriteAtlas = frame.ops.find((operation) => operation.op === 'defineSpriteAtlas');
+  if (texture?.op !== 'defineTexture' || material?.op !== 'defineMaterial'
+    || spriteAtlas?.op !== 'defineSpriteAtlas') {
+    throw new Error('retained fixture must define a texture, material, and sprite atlas');
+  }
+
+  const projection = new RenderProjection();
+  assert.deepEqual(projection.resourceCounts(), {
+    textures: 0, spriteAtlases: 0, materials: 0,
+    staticMeshes: 0, animatedMeshes: 0, voxelObjects: 0,
+  });
+  projection.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      texture,
+      material,
+      spriteAtlas,
+      { op: 'defineStaticMesh', asset: meshAsset() },
+      { op: 'defineAnimatedMesh', asset: animatedMeshAsset() },
+      { op: 'defineVoxelObject', asset: voxelObjectAsset() },
+    ],
+  });
+  const defined = projection.resourceCounts();
+  assert.deepEqual(defined, {
+    textures: 1, spriteAtlases: 1, materials: 1,
+    staticMeshes: 1, animatedMeshes: 1, voxelObjects: 1,
+  });
+  assert.equal(Object.isFrozen(defined), true);
+
+  projection.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineTexture', texture: { ...texture.texture, version: texture.texture.version + 1 } },
+      { op: 'defineMaterial', material: { ...material.material } },
+      { op: 'defineSpriteAtlas', atlas: { ...spriteAtlas.atlas } },
+      { op: 'defineStaticMesh', asset: meshAsset() },
+      { op: 'defineAnimatedMesh', asset: animatedMeshAsset() },
+      { op: 'defineVoxelObject', asset: voxelObjectAsset() },
+    ],
+  });
+  assert.deepEqual(projection.resourceCounts(), defined);
+  projection.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'releaseStaticMesh', asset: 'mesh/crate' },
+      { op: 'releaseVoxelObject', asset: 'voxel-object/runner' },
+    ],
+  });
+  assert.deepEqual(projection.resourceCounts(), {
+    ...defined,
+    staticMeshes: 0,
+    voxelObjects: 0,
+  });
+  assert.deepEqual(defined, {
+    textures: 1, spriteAtlases: 1, materials: 1,
+    staticMeshes: 1, animatedMeshes: 1, voxelObjects: 1,
+  });
+});
+
 void test('texture versions are admitted once by the neutral retained projection', () => {
   const projection = new RenderProjection();
   const texture = {

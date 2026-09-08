@@ -69,3 +69,77 @@ Keep the warning in report-only captures. For a new occurrence, compare an empty
 WebGL control and instrument application readback calls before attributing it to
 Ghost Plate capture. This finding is not a blanket warning suppression or a
 claim that other readback stalls have the same source.
+
+## Repeatable baseline artifacts
+
+The baseline tools retain raw samples and repeat runs. Measurements are initially
+report-only; increases are candidates for investigation, not statistical proof
+of a regression. No new machine-independent CI timing gate is installed.
+
+CPU/service/voxel lanes (release builds):
+
+```sh
+./scripts/run-cpu-performance-baseline.sh /tmp/engine-cpu-baseline workstation-release
+```
+
+This repeats the existing service/C#/HTTP probes three times and adds three
+runs each of deterministic 32³ sculpted and 40³/56³ noisy/carved DC meshes. The
+voxel timing covers `mesh_scalar_samples` only; constructing the scalar field
+is outside the timed region. Output geometry counts and seeds are retained.
+It does not measure gameplay generation, erosion, or collision construction.
+
+Loaded renderer lanes:
+
+```sh
+node render/scripts/run-performance-baseline.mjs --serve \
+  --port 4191 --output /tmp/engine-gpu-baseline --environment den-srv-wolf-firefox
+```
+
+Open the printed page in the owned accelerated browser session. It measures
+256 retained cubes and relief meshes with 8,192 and 131,072 triangles at a fixed
+960×540 CSS canvas. Actual backing resolution is recorded; software pacing can
+reduce it. Three runs each use 30 warmup and 120 measured automatic submissions.
+Camera motion supplies demand inside the Engine callback, independently of measured progress. CPU submission time, diagnostic read cost, scene application cost, admitted-frame
+intervals, and available asynchronous GPU timers are distinct measurements.
+Absent GPU timing is not zero. The streamed video rate is not a GPU timer.
+
+For sub-millisecond Firefox CPU measurements, reach the server through container
+localhost forwarding. The server supplies COOP/COEP isolation headers; the
+artifact records `secureContext`, `crossOriginIsolated`, and the observed clock
+quantum. A zero timing below that quantum is unresolved, not free work. The
+installed browser preferences are not changed.
+
+The server saves raw browser records and `baseline.json`, then stops. The owner
+must still stop its GPU harness session. Current harness entry point:
+`/home/dev/crew-services/docs/playtest.md`; check `playtest status` before
+acquiring the single slot and preserve another owner's lease. No harness
+configuration is modified by the Engine runner. The ordinary Playwright probe
+continues to measure empty-scene software submission overhead separately.
+
+Compare artifacts from the same execution environment and workload:
+
+```sh
+node scripts/performance-results.mjs compare BASELINE.json CANDIDATE.json
+# Only after choosing a workload-appropriate policy:
+node scripts/performance-results.mjs compare BASELINE.json CANDIDATE.json --fail-percent 20
+```
+
+The comparison reports median/p95 changes and spread between complete runs.
+Different hardware/browser/backing size/workload configuration or missing lanes
+produce an incompatible result, not a pass. Exit 2 means incomplete/incompatible;
+exit 1 means the optional regression policy failed (or the command failed).
+Without a threshold, compatible measured increases remain report-only, exit 0.
+Repeat suspicious runs on an otherwise idle host before selecting a threshold.
+
+Artifacts identify the capture host's CPU/OS/Node and Git revision/dirty state.
+For remote browsers, this host is the collector, not the remote GPU machine;
+use a stable explicit environment label and retain remote hardware/stream setup
+with the evidence. GPU strings may be privacy-sanitized by Firefox. Do not
+compare a software renderer or reduced-resolution run against a hardware run.
+
+
+The current crossover and HTTP fixture uses NativeAOT. Managed-update timing
+uses ordinary CoreCLR but does not cross into Engine. A canonical packaged
+CoreCLR crossover workload remains to be added; these records do not certify
+that path. The CPU wrapper repairs the legacy probe's obsolete binary name to
+`rusty-product-host`, without introducing another packaging implementation.
