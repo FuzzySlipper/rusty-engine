@@ -13,6 +13,7 @@ use fidget::mesh::Mesh;
 use nalgebra::Vector3;
 
 pub(super) fn dual_polygons(mesh: Mesh) -> Mesh {
+    let arcs: std::collections::HashSet<_> = mesh.face_arc_vertices.iter().copied().collect();
     let mut fans: Vec<Vec<Vector3<usize>>> = Vec::new();
     let mut centers = HashMap::new();
     for triangle in mesh.triangles {
@@ -25,6 +26,15 @@ pub(super) fn dual_polygons(mesh: Mesh) -> Mesh {
     }
     let mut triangles = Vec::new();
     for fan in fans {
+        // A new diagonal between the two cell QEFs would identify the two
+        // distinct arcs of a checkerboard face again. Keep these local fans.
+        if fan
+            .iter()
+            .any(|t| arcs.contains(&t.x) || arcs.contains(&t.y))
+        {
+            triangles.extend(fan);
+            continue;
+        }
         let Some(ring) = boundary(&fan) else {
             // Do not reinterpret an unfamiliar/non-simple fan as a polygon.
             triangles.extend(fan);
@@ -73,7 +83,13 @@ pub(super) fn dual_polygons(mesh: Mesh) -> Mesh {
             *index = *mapped;
         }
     }
+    let face_arc_vertices = mesh
+        .face_arc_vertices
+        .into_iter()
+        .filter_map(|index| (remap[index] != usize::MAX).then_some(remap[index]))
+        .collect();
     Mesh {
+        face_arc_vertices,
         vertices,
         triangles,
     }
@@ -126,6 +142,7 @@ mod tests {
         // The sampled intersection lies outside the polygon. Its original
         // fan crosses the concavity; the QEF boundary itself remains valid.
         let mesh = Mesh {
+            face_arc_vertices: Vec::new(),
             vertices: vec![
                 Vector3::new(0.0, 0.0, 0.0),
                 Vector3::new(2.0, 0.0, 0.0),

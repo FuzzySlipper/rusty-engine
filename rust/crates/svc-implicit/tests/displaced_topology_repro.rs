@@ -1,8 +1,8 @@
 //! A compact, closed stress field derived from CraftSurvive's `Disrupt` bands.
 //!
 //! The enclosing rock solid keeps the generated surface away from the sampling
-//! domain. This records the known raw dual-contouring leaf-connectivity
-//! limitation; it is not a boundary cap or post-generation attribute seam.
+//! domain. These regressions exercise ambiguous face arcs and vertex links
+//! before attribute seams; no boundary caps or finer sampling hide defects.
 use svc_implicit::{Bounds, Field, GenerateOptions, TopologyReadout, WaveDisplacement};
 
 const BANDS: [([f32; 3], f32, u32, u64); 5] = [
@@ -55,29 +55,115 @@ fn disrupted_closed_field(seed: u64) -> (Field, svc_implicit::Node) {
 }
 
 #[test]
-fn five_band_disrupted_closed_field_records_known_nonmanifold_limitation() {
-    let (field, root) = disrupted_closed_field(10);
-    let mesh = field
-        .generate(
-            root,
-            GenerateOptions {
-                bounds: Bounds {
-                    min: [-2.0; 3],
-                    max: [2.0; 3],
+fn five_band_disrupted_closed_field_has_manifold_links() {
+    for seed in [10, 11, 29, 47] {
+        let (field, root) = disrupted_closed_field(seed);
+        let mesh = field
+            .generate(
+                root,
+                GenerateOptions {
+                    bounds: Bounds {
+                        min: [-2.0; 3],
+                        max: [2.0; 3],
+                    },
+                    cell_size: 0.125,
+                    max_vertices: 200_000,
+                    max_triangles: 400_000,
                 },
-                cell_size: 0.125,
-                max_vertices: 200_000,
-                max_triangles: 400_000,
-            },
-        )
-        .unwrap();
+            )
+            .unwrap();
 
-    assert_eq!(
-        mesh.topology(),
-        TopologyReadout {
-            boundary_edges: 0,
-            non_manifold_edges: 2,
-            inconsistent_winding_edges: 0,
+        assert_eq!(
+            mesh.topology(),
+            TopologyReadout {
+                boundary_edges: 0,
+                non_manifold_edges: 0,
+                inconsistent_winding_edges: 0,
+            }
+        );
+        assert_vertex_links(mesh.positions.len(), &mesh.triangles);
+    }
+}
+
+fn assert_vertex_links(vertex_count: usize, triangles: &[[u32; 3]]) {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut links = vec![BTreeMap::<u32, Vec<u32>>::new(); vertex_count];
+    for &[a, b, c] in triangles {
+        for (center, x, y) in [(a, b, c), (b, c, a), (c, a, b)] {
+            links[center as usize].entry(x).or_default().push(y);
+            links[center as usize].entry(y).or_default().push(x);
         }
-    );
+    }
+    for (vertex, link) in links.iter().enumerate() {
+        if link.is_empty() {
+            continue;
+        }
+        assert!(
+            link.values().all(|neighbors| neighbors.len() == 2),
+            "non-cyclic link at {vertex}"
+        );
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![*link.keys().next().unwrap()];
+        while let Some(v) = pending.pop() {
+            if visited.insert(v) {
+                pending.extend(&link[&v]);
+            }
+        }
+        assert_eq!(visited.len(), link.len(), "disconnected link at {vertex}");
+    }
+}
+
+#[test]
+fn raw_checkerboard_faces_keep_closed_links_across_axes_and_depths() {
+    use fidget::{
+        context::Tree,
+        jit::JitShape,
+        mesh::{Octree, Settings},
+    };
+    for depth in [4, 5] {
+        for permutation in 0..3 {
+            let axes = [Tree::x(), Tree::y(), Tree::z()];
+            let x = axes[permutation].clone();
+            let y = axes[(permutation + 1) % 3].clone();
+            let z = axes[(permutation + 2) % 3].clone();
+            let waves = ((x.clone() * 11.0 + 0.07).sin() * (y.clone() * 7.0 + 0.13).sin())
+                + (z.clone() * 9.0 + 0.17).sin() * 0.6;
+            let enclosure = x.abs().max(y.abs()).max(z.abs()) - 0.83;
+            let shape = JitShape::from(waves.max(enclosure));
+            let bound = shape.try_into().unwrap();
+            let mesh = Octree::build(
+                &bound,
+                &Settings {
+                    depth,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .walk_dual();
+            assert!(
+                !mesh.face_arc_vertices.is_empty(),
+                "fixture must exercise face arcs"
+            );
+            let triangles: Vec<_> = mesh
+                .triangles
+                .iter()
+                .map(|t| [t.x as u32, t.y as u32, t.z as u32])
+                .collect();
+            assert_vertex_links(mesh.vertices.len(), &triangles);
+            let mut edges = std::collections::BTreeMap::new();
+            for &[a, b, c] in &triangles {
+                for (a, b) in [(a, b), (b, c), (c, a)] {
+                    *edges.entry((a, b)).or_insert(0) += 1;
+                }
+            }
+            for (&(a, b), &count) in &edges {
+                assert_eq!(count, 1, "repeated raw directed edge at depth {depth}");
+                assert_eq!(
+                    edges.get(&(b, a)),
+                    Some(&1),
+                    "unpaired raw edge at depth {depth}"
+                );
+            }
+        }
+    }
 }

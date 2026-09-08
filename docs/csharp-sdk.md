@@ -565,9 +565,10 @@ Implicit generation readouts also report boundary, non-manifold, and inconsisten
 winding edges on extracted geometry before normal, UV, and material splitting.
 An entrance into a carved solid can still have a closed rock surface around its
 rim. These report-only counts diagnose index topology, not self-intersections,
-feature survival, or final attributed-mesh watertightness. Strongly displaced
-fields have a [known leaf-connectivity limitation](implicit-topology-diagnosis.md)
-tracked by Engine #7879: zero boundary edges does not establish manifold output.
+feature survival, or final attributed-mesh watertightness. The adaptive path
+[preserves distinct contour arcs on ambiguous faces](implicit-topology-diagnosis.md)
+(Engine #7879). Zero boundary edges alone still does not establish manifold output;
+vertex links and self-intersections are separate properties.
 
 
 ### Managed authoring vocabulary

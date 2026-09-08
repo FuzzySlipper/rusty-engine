@@ -372,7 +372,9 @@ impl Octree {
         for (i, &c) in cells.iter().enumerate() {
             let b = match c {
                 Cell::Leaf(Leaf { mask, .. }) => {
-                    if CELL_TO_VERT_TO_EDGES[mask.index()].len() > 1 {
+                    if CELL_TO_VERT_TO_EDGES[mask.index()].len() > 1
+                        || mask.has_ambiguous_face()
+                    {
                         return None;
                     }
                     (mask.index() & (1 << i) != 0) as u8
@@ -429,6 +431,14 @@ impl Octree {
                     return None;
                 }
             }
+        }
+
+        // Shared checkerboard faces carry two explicit contour arcs. Retain
+        // their cells on both sides: collapsing either side would erase the
+        // shared-face identity used by the edge walk. This is local topology
+        // preservation, not an increase in the requested sampling depth.
+        if CellMask::new(mask).has_ambiguous_face() {
+            return None;
         }
 
         // The outer cell must not be empty or full at this point; if it was

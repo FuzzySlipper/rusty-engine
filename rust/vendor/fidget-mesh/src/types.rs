@@ -319,3 +319,25 @@ impl<const N: usize> std::ops::BitAnd<Corner<N>> for CellMask<N> {
         (self.0 & (1 << c.index())) != 0
     }
 }
+
+impl CellMask<3> {
+    /// Whether a face has alternating filled/empty corners and two arcs.
+    pub(crate) fn has_ambiguous_face(self) -> bool {
+        let mask = self.index();
+        for axis in [1, 2, 4] {
+            let u = if axis == 4 { 1 } else { axis * 2 };
+            let v = 7 ^ axis ^ u;
+            for side in [0, axis] {
+                let filled =
+                    |corner: usize| mask & (1usize << corner) != 0usize;
+                if filled(side) == filled(side | u | v)
+                    && filled(side | u) == filled(side | v)
+                    && filled(side) != filled(side | u)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}

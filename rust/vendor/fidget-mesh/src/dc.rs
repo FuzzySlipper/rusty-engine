@@ -206,7 +206,18 @@ pub fn dc_edge<T: Frame>(
         let winding = if starting_sign { 3 } else { 1 };
         for j in 0..4 {
             if cs[j].index != cs[(j + winding) % 4].index {
-                out.triangle(vs[j], vs[(j + winding) % 4], i)
+                let k = (j + winding) % 4;
+                if let Some(arc) = out.face_arc(
+                    octree,
+                    [cs[j], cs[k]],
+                    [leafs[j], leafs[k]],
+                    [edges[j], edges[k]],
+                ) {
+                    out.triangle(vs[j], arc, i);
+                    out.triangle(arc, vs[k], i);
+                } else {
+                    out.triangle(vs[j], vs[k], i);
+                }
             }
         }
     } else {

@@ -71,6 +71,9 @@ pub struct Mesh {
     pub triangles: Vec<nalgebra::Vector3<usize>>,
     /// Vertex positions
     pub vertices: Vec<nalgebra::Vector3<f32>>,
+    /// Shared-face contour vertices that distinguish otherwise coincident
+    /// dual edges. Polygon simplification must preserve their incident fans.
+    pub face_arc_vertices: Vec<usize>,
 }
 
 impl Mesh {
