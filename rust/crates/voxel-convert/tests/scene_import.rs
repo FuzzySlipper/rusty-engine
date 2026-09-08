@@ -1,8 +1,8 @@
 use voxel_convert::{
     flatten_static_scene, import_mesh_source, import_static_glb, import_static_glb_scene,
     source_sha256, ImportedMaterial, ImportedModelMesh, ImportedModelNode, ImportedModelPrimitive,
-    ImportedModelScene, ImportedTextureCoordinates, MeshSourceFormat, MeshSourceImportRequest,
-    MAX_IMPORTED_SCENE_NODES, MAX_IMPORTED_TEXCOORD_SETS,
+    ImportedModelScene, ImportedPrimitiveGroup, ImportedTextureCoordinates, MeshSourceFormat,
+    MeshSourceImportRequest, MAX_IMPORTED_TEXCOORD_SETS,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -13,6 +13,9 @@ const HIERARCHY_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../fixtures/voxel-conversion/kenney-wall-hierarchy.fixture.json"
 ));
+const WIDE_SCENE_NODE_COUNT: usize = 17_000;
+const WIDE_SCENE_MESH_COUNT: usize = 4_100;
+const WIDE_SCENE_PRIMITIVES_PER_MESH: usize = 3;
 
 #[test]
 fn licensed_hierarchy_fixture_preserves_scene_mesh_primitive_and_uv_identity() {
@@ -142,17 +145,84 @@ fn hierarchy_primitive_and_external_buffer_rejections_are_source_locatable() {
 }
 
 #[test]
-fn scene_node_budget_is_checked_before_geometry_collection() {
-    let excessive = mutate_glb_json(|document| {
-        let nodes = document["nodes"].as_array_mut().unwrap();
-        nodes.extend(
-            (nodes.len()..=MAX_IMPORTED_SCENE_NODES)
-                .map(|index| serde_json::json!({"name": format!("unused-{index}")})),
-        );
-    });
-    let error = import_static_glb_scene(&excessive).unwrap_err();
-    assert_eq!(error.diagnostics()[0].code, "conversion.resourceLimit");
-    assert_eq!(error.diagnostics()[0].path, "source.nodes");
+fn wide_scene_preserves_shared_geometry_grouping_and_transforms() {
+    let source = wide_scene_fixture();
+    let scene = import_static_glb_scene(&source).unwrap();
+
+    assert_eq!(scene.nodes.len(), WIDE_SCENE_NODE_COUNT);
+    assert_eq!(scene.meshes.len(), WIDE_SCENE_MESH_COUNT);
+    assert_eq!(
+        scene.nodes[0].child_node_indices.len(),
+        WIDE_SCENE_NODE_COUNT - 1
+    );
+    assert_eq!(scene.nodes[1].source_mesh_index, Some(0));
+    assert_eq!(
+        scene.nodes[WIDE_SCENE_MESH_COUNT].source_mesh_index,
+        Some((WIDE_SCENE_MESH_COUNT - 1) as u32)
+    );
+    assert_eq!(
+        scene.nodes[WIDE_SCENE_MESH_COUNT + 1].source_mesh_index,
+        Some(0)
+    );
+    assert_eq!(
+        translation(scene.nodes[1].model_transform),
+        [11.0, 20.0, 30.0]
+    );
+    assert_eq!(
+        translation(scene.nodes[WIDE_SCENE_MESH_COUNT].model_transform),
+        [WIDE_SCENE_MESH_COUNT as f64 + 10.0, 20.0, 30.0]
+    );
+    assert!(scene.meshes.iter().all(|mesh| {
+        mesh.primitives
+            .iter()
+            .map(|primitive| primitive.source_primitive_index)
+            .eq(0..WIDE_SCENE_PRIMITIVES_PER_MESH as u32)
+    }));
+
+    let flattened = flatten_static_scene(&scene).unwrap();
+    let group_count = (WIDE_SCENE_NODE_COUNT - 1) * WIDE_SCENE_PRIMITIVES_PER_MESH;
+    assert_eq!(flattened.primitive_groups.len(), group_count);
+    assert_eq!(flattened.positions.len(), group_count * 3);
+    assert_eq!(flattened.triangles.len(), group_count);
+    assert_eq!(flattened.texture_coordinates.len(), 1);
+    assert_eq!(
+        flattened.texture_coordinates[0].coordinates.len(),
+        group_count * 3
+    );
+
+    assert_eq!(
+        flattened.primitive_groups[0],
+        ImportedPrimitiveGroup {
+            source_node_index: 1,
+            source_mesh_index: 0,
+            source_primitive_index: 0,
+            source_material_slot: 0,
+            triangle_start: 0,
+            triangle_count: 1,
+        }
+    );
+    let final_primitive_for_first_mesh = WIDE_SCENE_PRIMITIVES_PER_MESH - 1;
+    assert_eq!(
+        flattened.primitive_groups[final_primitive_for_first_mesh].source_primitive_index,
+        final_primitive_for_first_mesh as u32
+    );
+    let final_mesh_group = (WIDE_SCENE_MESH_COUNT - 1) * WIDE_SCENE_PRIMITIVES_PER_MESH;
+    assert_eq!(
+        (
+            flattened.primitive_groups[final_mesh_group].source_node_index,
+            flattened.primitive_groups[final_mesh_group].source_mesh_index,
+            flattened.primitive_groups[final_mesh_group].source_primitive_index,
+        ),
+        (
+            WIDE_SCENE_MESH_COUNT as u32,
+            (WIDE_SCENE_MESH_COUNT - 1) as u32,
+            0,
+        )
+    );
+    assert_eq!(
+        flattened.positions[final_mesh_group * 3],
+        [WIDE_SCENE_MESH_COUNT as f64 + 9.5, 20.0, 29.5]
+    );
 }
 
 #[test]
@@ -284,6 +354,57 @@ fn hierarchy_fixture() -> Vec<u8> {
         second_mesh["name"] = fixture["meshNames"][1].clone();
         document["meshes"] = serde_json::json!([first_mesh, second_mesh]);
         document["nodes"] = fixture["nodes"].clone();
+    })
+}
+
+fn wide_scene_fixture() -> Vec<u8> {
+    mutate_glb_json(|document| {
+        let triangle_accessor = serde_json::json!([
+            {
+                "bufferView": 0,
+                "componentType": 5126,
+                "count": 3,
+                "type": "VEC3",
+                "min": [-0.5, 0.0, -0.5],
+                "max": [0.5, 1.0, -0.5],
+            },
+            {"bufferView": 3, "componentType": 5126, "count": 3, "type": "VEC2"},
+            {"bufferView": 4, "componentType": 5121, "count": 3, "type": "SCALAR"},
+        ]);
+        let primitive = serde_json::json!({
+            "attributes": {"POSITION": 0, "TEXCOORD_0": 1},
+            "indices": 2,
+            "material": 0,
+        });
+        document["accessors"] = triangle_accessor;
+        document["meshes"] = serde_json::Value::Array(
+            (0..WIDE_SCENE_MESH_COUNT)
+                .map(|mesh_index| {
+                    serde_json::json!({
+                        "name": format!("shared-triangle-{mesh_index}"),
+                        "primitives": std::iter::repeat_n(
+                            primitive.clone(),
+                            WIDE_SCENE_PRIMITIVES_PER_MESH,
+                        ).collect::<Vec<_>>(),
+                    })
+                })
+                .collect(),
+        );
+        document["scenes"][0]["nodes"] = serde_json::json!([0]);
+        document["nodes"] = serde_json::Value::Array(
+            std::iter::once(serde_json::json!({
+                "name": "wide-root",
+                "translation": [10.0, 20.0, 30.0],
+                "children": (1..WIDE_SCENE_NODE_COUNT).collect::<Vec<_>>(),
+            }))
+            .chain((1..WIDE_SCENE_NODE_COUNT).map(|node_index| {
+                serde_json::json!({
+                    "mesh": (node_index - 1) % WIDE_SCENE_MESH_COUNT,
+                    "translation": [node_index as f64, 0.0, 0.0],
+                })
+            }))
+            .collect(),
+        );
     })
 }
 

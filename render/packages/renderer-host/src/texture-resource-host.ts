@@ -2,10 +2,6 @@ import type { TextureResourceSource } from '@rusty-engine/renderer-three/backend
 
 import { rendererResourceContentHash } from './resource-content-hash.js';
 
-export const RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_BYTES = 16 * 1024 * 1024;
-export const RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
-export const RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_COUNT = 256;
-
 export interface RendererTextureResourceDescriptor {
   readonly resource: string;
   readonly contentHash: string;
@@ -95,24 +91,20 @@ export async function loadRendererTextureResourceSource(
 }
 
 function validateManifest(manifest: RendererTextureResourceManifest): void {
-  if (manifest.kind !== 'rusty_renderer_texture_resources.v1'
-    || manifest.resources.length === 0
-    || manifest.resources.length > RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_COUNT) {
+  if (manifest.kind !== 'rusty_renderer_texture_resources.v1' || manifest.resources.length === 0) {
     throw resourceError(
       'texture_resource_manifest_invalid',
       null,
-      'texture resource manifest is empty, oversized, or unsupported',
+      'texture resource manifest is empty or unsupported',
     );
   }
   const identities = new Set<string>();
-  let totalBytes = 0;
   for (const descriptor of manifest.resources) {
     const digest = /^sha256:([0-9a-f]{64})$/u.exec(descriptor.contentHash)?.[1];
     if (digest === undefined
       || descriptor.resource !== `texture-resource/${digest}`
       || !Number.isSafeInteger(descriptor.byteLength)
       || descriptor.byteLength <= 0
-      || descriptor.byteLength > RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_BYTES
       || identities.has(descriptor.resource)) {
       throw resourceError(
         'texture_resource_manifest_invalid',
@@ -121,14 +113,6 @@ function validateManifest(manifest: RendererTextureResourceManifest): void {
       );
     }
     identities.add(descriptor.resource);
-    totalBytes += descriptor.byteLength;
-    if (totalBytes > RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_TOTAL_BYTES) {
-      throw resourceError(
-        'texture_resource_manifest_invalid',
-        descriptor.resource,
-        'texture resource manifest exceeds the aggregate byte bound',
-      );
-    }
   }
 }
 

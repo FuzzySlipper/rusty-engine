@@ -32,7 +32,6 @@ pub use animation::{
     MAX_ANIMATION_SAMPLE_FRAMES, MAX_ANIMATION_SAMPLE_RATE_HZ, MAX_IMPORTED_ANIMATION_CHANNELS,
     MAX_IMPORTED_ANIMATION_CLIPS, MAX_IMPORTED_ANIMATION_KEYFRAMES, MAX_IMPORTED_ANIMATION_VALUES,
     MAX_IMPORTED_JOINTS_PER_SKIN, MAX_IMPORTED_MORPH_POSITION_DELTAS, MAX_IMPORTED_MORPH_TARGETS,
-    MAX_IMPORTED_SKINS,
 };
 pub use convert::{convert_glb, ConversionReceipt, CONVERTER_ID, MAX_SURFACE_SAMPLE_WORK};
 pub use diagnostic::{ConversionDiagnostic, ConversionError};
@@ -41,9 +40,7 @@ pub use import::{
     texture_coordinate_source_hash, ImportedMaterial, ImportedModelMesh, ImportedModelNode,
     ImportedModelPrimitive, ImportedModelScene, ImportedPrimitiveGroup, ImportedStaticMesh,
     ImportedStaticTextureCoordinates, ImportedTextureCoordinates, ImportedTriangle,
-    MAX_IMPORTED_NAME_BYTES, MAX_IMPORTED_SCENE_DEPTH, MAX_IMPORTED_SCENE_EDGES,
-    MAX_IMPORTED_SCENE_MESHES, MAX_IMPORTED_SCENE_MESH_INSTANCES, MAX_IMPORTED_SCENE_NODES,
-    MAX_IMPORTED_SCENE_PRIMITIVES, MAX_IMPORTED_TEXCOORD_SETS,
+    MAX_IMPORTED_NAME_BYTES, MAX_IMPORTED_SCENE_DEPTH, MAX_IMPORTED_TEXCOORD_SETS,
 };
 pub use material::{
     ConversionMaterialPolicy, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
@@ -70,7 +67,7 @@ pub use source::{
     ImportedAnimatedMeshSource, ImportedMeshSource, MeshSourceBounds, MeshSourceFormat,
     MeshSourceGroup, MeshSourceImportReceipt, MeshSourceImportRequest, MeshSourceMaterialSlot,
     MeshSourceMetadata, MeshSourceNode, MeshSourceRef, MeshSourceTextureCoordinates,
-    MAX_MESH_IMPORT_REQUEST_BYTES, MAX_MESH_PRIMITIVE_BYTES, MAX_MESH_SOURCE_ASSET_ID_BYTES,
+    MAX_MESH_PRIMITIVE_BYTES, MAX_MESH_SOURCE_ASSET_ID_BYTES,
     MAX_MESH_SOURCE_PATH_BYTES,
 };
 pub use store::{convert_and_install, decode_conversion_request, MAX_CONVERSION_REQUEST_BYTES};

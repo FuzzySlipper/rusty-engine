@@ -9,7 +9,7 @@ use render_model::{
 };
 use serde::Serialize;
 
-use crate::{ProductDevHostError, MAX_BUNDLE_BYTES, MAX_BUNDLE_ENTRIES, MAX_BUNDLE_RESOURCE_BYTES};
+use crate::ProductDevHostError;
 
 /// The generated Product Bundle entry point served at the local origin root.
 pub const PRODUCT_DEV_INDEX_PATH: &str = "index.html";
@@ -58,11 +58,7 @@ impl ProductDevRendererResource {
             path,
             bytes,
         };
-        validate_bundle_entry_metadata(
-            &resource.path,
-            resource.media_type(),
-            resource.bytes.len(),
-        )?;
+        validate_bundle_entry_metadata(&resource.path, resource.media_type())?;
         Ok(resource)
     }
 
@@ -97,7 +93,7 @@ impl ProductDevRendererResource {
                 unreachable!("PNG admission constructs a resource-backed texture")
             }
         };
-        validate_bundle_entry_metadata(&path, "image/png", bytes.len())?;
+        validate_bundle_entry_metadata(&path, "image/png")?;
         Ok(Self {
             kind: ProductDevRendererResourceKind::Texture,
             identity,
@@ -125,7 +121,7 @@ impl ProductDevRendererResource {
                 .strip_prefix("sha256:")
                 .expect("Engine mesh hash uses SHA-256")
         );
-        validate_bundle_entry_metadata(&path, "application/octet-stream", bytes.len())?;
+        validate_bundle_entry_metadata(&path, "application/octet-stream")?;
         Ok(Self {
             kind: ProductDevRendererResourceKind::Mesh,
             identity,
@@ -149,7 +145,7 @@ impl ProductDevRendererResource {
                 "audio resource is not an admitted RIFF/WAVE body",
             ));
         }
-        validate_bundle_entry_metadata(&path, "audio/wav", bytes.len())?;
+        validate_bundle_entry_metadata(&path, "audio/wav")?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "audio-resource/{}",
@@ -182,7 +178,7 @@ impl ProductDevRendererResource {
                 "font resource is not an admitted WOFF2 body",
             ));
         }
-        validate_bundle_entry_metadata(&path, "font/woff2", bytes.len())?;
+        validate_bundle_entry_metadata(&path, "font/woff2")?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "font/{}",
@@ -215,7 +211,7 @@ impl ProductDevRendererResource {
                 "animated mesh preload is not a binary GLB resource",
             ));
         }
-        validate_bundle_entry_metadata(&path, "model/gltf-binary", bytes.len())?;
+        validate_bundle_entry_metadata(&path, "model/gltf-binary")?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "animated-mesh-resource/{}",
@@ -248,7 +244,7 @@ impl ProductDevRendererResource {
                 "animation clip-pack preload is not a binary GLB resource",
             ));
         }
-        validate_bundle_entry_metadata(&path, "model/gltf-binary", bytes.len())?;
+        validate_bundle_entry_metadata(&path, "model/gltf-binary")?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "clip-pack-resource/{}",
@@ -374,19 +370,12 @@ fn renderer_path(path: String, extension: &str) -> Result<String, ProductDevHost
 fn validate_bundle_entry_metadata(
     path: &str,
     content_type: &str,
-    byte_length: usize,
 ) -> Result<String, ProductDevHostError> {
     let path = normalize_path(path)?;
     if !is_allowed_content_type(content_type) {
         return Err(ProductDevHostError::new(
             "DEV_HOST_BUNDLE_CONTENT_TYPE",
             "bundle resource content type is not admitted",
-        ));
-    }
-    if byte_length > MAX_BUNDLE_RESOURCE_BYTES {
-        return Err(ProductDevHostError::new(
-            "DEV_HOST_BUNDLE_RESOURCE_BOUNDS",
-            "bundle resource exceeds the maximum byte length",
         ));
     }
     Ok(path)
@@ -408,7 +397,7 @@ impl ProductDevBundleEntry {
     ) -> Result<Self, ProductDevHostError> {
         let bytes = bytes.into();
         let content_type = content_type.into();
-        let path = validate_bundle_entry_metadata(&path.into(), &content_type, bytes.len())?;
+        let path = validate_bundle_entry_metadata(&path.into(), &content_type)?;
         Ok(Self {
             path,
             content_type,
@@ -444,10 +433,10 @@ pub struct ProductDevBundle {
 
 impl ProductDevBundle {
     pub fn new(entries: Vec<ProductDevBundleEntry>) -> Result<Self, ProductDevHostError> {
-        if entries.is_empty() || entries.len() > MAX_BUNDLE_ENTRIES {
+        if entries.is_empty() {
             return Err(ProductDevHostError::new(
                 "DEV_HOST_BUNDLE_ENTRY_BOUNDS",
-                "bundle must contain between one and 4096 resources",
+                "bundle must contain at least one resource",
             ));
         }
         let mut map = BTreeMap::new();
@@ -456,12 +445,6 @@ impl ProductDevBundle {
             total_bytes = total_bytes.checked_add(entry.bytes.len()).ok_or_else(|| {
                 ProductDevHostError::new("DEV_HOST_BUNDLE_BOUNDS", "bundle byte total overflowed")
             })?;
-            if total_bytes > MAX_BUNDLE_BYTES {
-                return Err(ProductDevHostError::new(
-                    "DEV_HOST_BUNDLE_BOUNDS",
-                    "bundle exceeds the maximum aggregate byte length",
-                ));
-            }
             if map.insert(entry.path.clone(), entry).is_some() {
                 return Err(ProductDevHostError::new(
                     "DEV_HOST_BUNDLE_DUPLICATE",
@@ -594,6 +577,40 @@ mod tests {
         let error = ProductDevBundleEntry::new("content/renderer/theme.ogg", "audio/ogg", vec![1])
             .expect_err("unadmitted media type");
         assert!(error.to_string().contains("DEV_HOST_BUNDLE_CONTENT_TYPE"));
+    }
+
+    #[test]
+    fn bundle_accepts_large_shared_resources_and_many_entries() {
+        let body: std::sync::Arc<[u8]> = vec![7; 64 * 1024 * 1024 + 1].into();
+        let mut entries =
+            vec![
+                ProductDevBundleEntry::new("index.html", "text/html; charset=utf-8", vec![])
+                    .unwrap(),
+            ];
+        for index in 0..4 {
+            entries.push(
+                ProductDevBundleEntry::new(
+                    format!("content/large-{index}.bin"),
+                    "application/octet-stream",
+                    body.clone(),
+                )
+                .unwrap(),
+            );
+        }
+        for index in 0..4096 {
+            entries.push(
+                ProductDevBundleEntry::new(
+                    format!("content/small-{index}.bin"),
+                    "application/octet-stream",
+                    vec![],
+                )
+                .unwrap(),
+            );
+        }
+        let bundle = super::ProductDevBundle::new(entries).unwrap();
+        assert_eq!(bundle.total_bytes(), 4 * body.len());
+        let served = bundle.get("/content/large-3.bin").unwrap();
+        assert!(std::sync::Arc::ptr_eq(&body, &served.shared_bytes()));
     }
 
     #[test]

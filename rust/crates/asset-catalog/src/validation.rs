@@ -6,8 +6,7 @@ use serde::Serialize;
 use crate::{
     AssetCatalog, AtlasRegionDefinition, CatalogEntry, DependencyGraph, TextureFilter, TextureWrap,
     VoxelAlphaMode, VoxelSurfaceMapping, MAX_AGGREGATE_ATLAS_REGIONS, MAX_ATLAS_PADDING,
-    MAX_ATLAS_REGIONS, MAX_TEXTURE_DIMENSION, MAX_TEXTURE_TEXELS, MAX_TILE_ORIGIN_CELLS,
-    MAX_TILE_SCALE_CELLS, MIN_TILE_SCALE_CELLS,
+    MAX_ATLAS_REGIONS, MAX_TILE_ORIGIN_CELLS, MAX_TILE_SCALE_CELLS, MIN_TILE_SCALE_CELLS,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -296,13 +295,7 @@ pub fn validate_catalog(catalog: &AssetCatalog) -> CatalogValidationReport {
 
         validate_payload_kind(entry, &mut errors);
         if let Some(texture) = &entry.texture {
-            let texels = u64::from(texture.width).checked_mul(u64::from(texture.height));
-            if texture.width == 0
-                || texture.height == 0
-                || texture.width > MAX_TEXTURE_DIMENSION
-                || texture.height > MAX_TEXTURE_DIMENSION
-                || texels.is_none_or(|value| value > MAX_TEXTURE_TEXELS)
-            {
+            if texture.width == 0 || texture.height == 0 {
                 errors.push(CatalogValidationError::InvalidTextureDimensions {
                     id: entry.id.clone(),
                 });

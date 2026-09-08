@@ -1,18 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gltf::{buffer::Source as BufferSource, mesh::Mode, Semantic};
-use voxel_asset::{
-    MAX_CONVERSION_SOURCE_BYTES, MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
-    MAX_MATERIAL_MAPPINGS,
-};
+use voxel_asset::{MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES};
 
 use super::{
     ensure_total_limit, identity_matrix, matrix_from_gltf, multiply_matrices,
     validate_affine_matrix, validate_imported_name, ImportedMaterial, ImportedModelMesh,
     ImportedModelNode, ImportedModelPrimitive, ImportedModelScene, ImportedTextureCoordinates,
-    MAX_IMPORTED_SCENE_DEPTH, MAX_IMPORTED_SCENE_EDGES, MAX_IMPORTED_SCENE_MESHES,
-    MAX_IMPORTED_SCENE_MESH_INSTANCES, MAX_IMPORTED_SCENE_NODES, MAX_IMPORTED_SCENE_PRIMITIVES,
-    MAX_IMPORTED_TEXCOORD_SETS,
+    MAX_IMPORTED_SCENE_DEPTH, MAX_IMPORTED_TEXCOORD_SETS,
 };
 use crate::ConversionError;
 
@@ -48,16 +43,6 @@ pub(super) fn parse_animated_glb(
 }
 
 fn parse_embedded_glb(source: &[u8]) -> Result<gltf::Gltf, ConversionError> {
-    if source.is_empty() || source.len() as u64 > MAX_CONVERSION_SOURCE_BYTES {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            "source",
-            format!(
-                "source byte count {} is outside 1..={MAX_CONVERSION_SOURCE_BYTES}",
-                source.len()
-            ),
-        ));
-    }
     let parsed = gltf::Gltf::from_slice(source).map_err(|error| {
         ConversionError::one(
             "conversion.invalidSource",
@@ -147,23 +132,22 @@ fn collect_source_nodes(
     allow_animated_features: bool,
 ) -> Result<Vec<SourceNode>, ConversionError> {
     let node_count = document.nodes().count();
-    if node_count == 0 || node_count > MAX_IMPORTED_SCENE_NODES {
+    if node_count == 0 {
         return Err(ConversionError::one(
             "conversion.resourceLimit",
             "source.nodes",
-            format!("node count must be in 1..={MAX_IMPORTED_SCENE_NODES}"),
+            "source must contain nodes",
         ));
     }
     let mesh_count = document.meshes().count();
-    if mesh_count == 0 || mesh_count > MAX_IMPORTED_SCENE_MESHES {
+    if mesh_count == 0 {
         return Err(ConversionError::one(
             "conversion.resourceLimit",
             "source.meshes",
-            format!("mesh count must be in 1..={MAX_IMPORTED_SCENE_MESHES}"),
+            "source must contain meshes",
         ));
     }
 
-    let mut edge_count = 0usize;
     document
         .nodes()
         .map(|node| {
@@ -179,14 +163,6 @@ fn collect_source_nodes(
                 .children()
                 .map(|child| child.index())
                 .collect::<Vec<_>>();
-            edge_count = edge_count
-                .checked_add(child_node_indices.len())
-                .ok_or_else(|| hierarchy_limit("scene edge count overflowed"))?;
-            if edge_count > MAX_IMPORTED_SCENE_EDGES {
-                return Err(hierarchy_limit(&format!(
-                    "scene contains more than {MAX_IMPORTED_SCENE_EDGES} child edges"
-                )));
-            }
             let local_transform = matrix_from_gltf(node.transform().matrix());
             validate_affine_matrix(
                 local_transform,
@@ -250,22 +226,11 @@ fn traverse_default_scene(
         )?;
     }
 
-    let mut mesh_instances = 0usize;
     let mut referenced_meshes = BTreeSet::new();
     let mut nodes = Vec::with_capacity(ordered_indices.len());
     for source_node_index in ordered_indices {
         let source = &source_nodes[source_node_index];
         if let Some(mesh_index) = source.source_mesh_index {
-            mesh_instances = mesh_instances.saturating_add(1);
-            if mesh_instances > MAX_IMPORTED_SCENE_MESH_INSTANCES {
-                return Err(ConversionError::one(
-                    "conversion.resourceLimit",
-                    "source.scene.meshInstances",
-                    format!(
-                        "selected scene contains more than {MAX_IMPORTED_SCENE_MESH_INSTANCES} mesh instances"
-                    ),
-                ));
-            }
             referenced_meshes.insert(mesh_index);
         }
         nodes.push(ImportedModelNode {
@@ -377,7 +342,6 @@ fn import_referenced_meshes(
     })?;
     let mut total_vertices = 0usize;
     let mut total_indices = 0usize;
-    let mut total_primitives = 0usize;
     let mut primitive_ordinal = 0u32;
     let mut meshes = Vec::new();
     let mut materials = BTreeMap::<u32, Option<String>>::new();
@@ -405,12 +369,6 @@ fn import_referenced_meshes(
             validate_imported_name(mesh.name(), format!("source.meshes[{mesh_index}].name"))?;
         let mut primitives = Vec::with_capacity(primitive_count);
         for primitive in mesh.primitives() {
-            total_primitives = total_primitives.saturating_add(1);
-            if total_primitives > MAX_IMPORTED_SCENE_PRIMITIVES {
-                return Err(primitive_limit(&format!(
-                    "selected scene contains more than {MAX_IMPORTED_SCENE_PRIMITIVES} primitives"
-                )));
-            }
             let imported = import_primitive(
                 mesh_index,
                 primitive,
@@ -434,11 +392,11 @@ fn import_referenced_meshes(
             primitives,
         });
     }
-    if materials.is_empty() || materials.len() > MAX_MATERIAL_MAPPINGS {
+    if materials.is_empty() {
         return Err(ConversionError::one(
             "conversion.resourceLimit",
             "source.materials",
-            format!("selected material count must be in 1..={MAX_MATERIAL_MAPPINGS}"),
+            "selected scene must contain a material",
         ));
     }
     Ok((

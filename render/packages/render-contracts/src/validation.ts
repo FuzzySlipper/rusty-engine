@@ -427,7 +427,7 @@ function meshPayload(input: unknown, path: string): void {
       fail(`${path}.source.resource`, 'must be the content-addressed mesh-resource identity');
     }
     const byteLength = integer(
-      source['byteLength'], `${path}.source.byteLength`, 16, 64 * 1024 * 1024,
+      source['byteLength'], `${path}.source.byteLength`, 16, 4_294_967_295,
     );
     const encoding = enumeration(source['encoding'], `${path}.source.encoding`,
       ['packedStreamsLeV1', 'packedStreamsLeV2', 'packedStreamsLeV3'] as const);
@@ -641,7 +641,7 @@ function validateAnimationRig(input: unknown, path: string): void {
   enumeration(rig['rootConvention'], `${path}.rootConvention`, ['inPlace', 'authoredRootTranslation'] as const);
   const rootJointId = jointId(rig['rootJointId'], `${path}.rootJointId`);
   const joints = list(rig['joints'], `${path}.joints`);
-  if (joints.length === 0 || joints.length > 256) fail(`${path}.joints`, 'must contain 1..=256 entries');
+  if (joints.length === 0) fail(`${path}.joints`, 'must contain at least one entry');
   const jointIds = new Set<string>();
   const parentIds: (string | null)[] = [];
   joints.forEach((jointValue, jointIndex) => {
@@ -692,9 +692,8 @@ function validateAnimationRig(input: unknown, path: string): void {
   }
 }
 
-function orderedJointIds(input: unknown, path: string, maxLength = 256): string[] {
+function orderedJointIds(input: unknown, path: string): string[] {
   const values = list(input, path);
-  if (values.length > maxLength) fail(path, `must contain at most ${String(maxLength)} entries`);
   const ids = values.map((value, index) => jointId(value, `${path}[${String(index)}]`));
   for (let index = 1; index < ids.length; index += 1) {
     if (ids[index - 1]! >= ids[index]!) fail(path, 'must be strictly sorted and unique');
@@ -933,9 +932,8 @@ function texture(input: unknown, path: string): void {
   const value = recordOptional(input, path,
     ['id', 'width', 'height', 'filter', 'wrap', 'contentHash', 'version'], ['payload']);
   nonEmptyText(value['id'], `${path}.id`);
-  const width = integer(value['width'], `${path}.width`, 1, 4_096);
-  const height = integer(value['height'], `${path}.height`, 1, 4_096);
-  if (width * height > 16_777_216) fail(path, 'texture texel quota exceeded');
+  integer(value['width'], `${path}.width`, 1, 4_294_967_295);
+  integer(value['height'], `${path}.height`, 1, 4_294_967_295);
   enumeration(value['filter'], `${path}.filter`, ['nearest', 'linear'] as const);
   enumeration(value['wrap'], `${path}.wrap`, ['clamp', 'repeat'] as const);
   nullable(value['contentHash'], `${path}.contentHash`, nonEmptyText);
@@ -951,7 +949,7 @@ function texture(input: unknown, path: string): void {
     if (digest === undefined || value['contentHash'] !== contentHash) {
       fail(`${path}.payload.contentHash`, 'must be the canonical texture content hash');
     }
-    const byteLength = integer(payload['byteLength'], `${path}.payload.byteLength`, 1, 16 * 1024 * 1024);
+    const byteLength = integer(payload['byteLength'], `${path}.payload.byteLength`, 1, 4_294_967_295);
     const source = looseRecord(payload['source'], `${path}.payload.source`);
     const kind = enumeration(source['kind'], `${path}.payload.source.kind`, ['inline', 'resource'] as const);
     if (kind === 'inline') {

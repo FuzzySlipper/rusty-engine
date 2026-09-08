@@ -498,9 +498,8 @@ pub enum TextureWrap {
     Repeat,
 }
 
-pub const MAX_TEXTURE_DIMENSION: u32 = 4_096;
-pub const MAX_TEXTURE_TEXELS: u64 = 16_777_216;
-pub const MAX_TEXTURE_ENCODED_BYTES: u32 = 16 * 1024 * 1024;
+/// Texture payload descriptors store encoded byte lengths as u32.
+pub const MAX_TEXTURE_ENCODED_BYTES: u32 = u32::MAX;
 pub const MAX_RETAINED_TEXTURES: usize = 256;
 pub const MAX_AGGREGATE_TEXTURE_ENCODED_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_AGGREGATE_TEXTURE_DECODED_BYTES: u64 = 256 * 1024 * 1024;
@@ -575,7 +574,7 @@ impl TextureDescriptor {
                 byte_length: u32::MAX,
             }
         })?;
-        if byte_length == 0 || byte_length > MAX_TEXTURE_ENCODED_BYTES {
+        if byte_length == 0 {
             return Err(TextureError::EncodedByteQuotaExceeded { byte_length });
         }
         let [width, height] = png_rgba8_dimensions(encoded_bytes)?;
@@ -612,18 +611,6 @@ impl TextureDescriptor {
                 width: self.width,
                 height: self.height,
             });
-        }
-        if self.width > MAX_TEXTURE_DIMENSION || self.height > MAX_TEXTURE_DIMENSION {
-            return Err(TextureError::DimensionQuotaExceeded {
-                width: self.width,
-                height: self.height,
-            });
-        }
-        let texels = u64::from(self.width)
-            .checked_mul(u64::from(self.height))
-            .ok_or(TextureError::TexelQuotaExceeded)?;
-        if texels > MAX_TEXTURE_TEXELS {
-            return Err(TextureError::TexelQuotaExceeded);
         }
         if self.version == 0 {
             return Err(TextureError::InvalidVersion);
@@ -669,8 +656,6 @@ fn png_rgba8_dimensions(bytes: &[u8]) -> Result<[u32; 2], TextureError> {
 pub enum TextureError {
     Asset(RenderAssetError),
     ZeroDimension { width: u32, height: u32 },
-    DimensionQuotaExceeded { width: u32, height: u32 },
-    TexelQuotaExceeded,
     InvalidVersion,
     EmptyContentHash,
     EncodedByteQuotaExceeded { byte_length: u32 },
@@ -687,7 +672,7 @@ fn validate_texture_payload(
     texture: &TextureDescriptor,
     payload: &TexturePayloadDescriptor,
 ) -> Result<(), TextureError> {
-    if payload.byte_length == 0 || payload.byte_length > MAX_TEXTURE_ENCODED_BYTES {
+    if payload.byte_length == 0 {
         return Err(TextureError::EncodedByteQuotaExceeded {
             byte_length: payload.byte_length,
         });
@@ -1347,11 +1332,11 @@ mod tests {
     }
 
     #[test]
-    fn texture_payload_resource_identity_and_bounds_fail_closed() {
+    fn texture_payload_resource_identity_and_large_dimensions_validate() {
         let descriptor = TextureDescriptor {
             id: "texture/checker".to_string(),
-            width: MAX_TEXTURE_DIMENSION,
-            height: MAX_TEXTURE_DIMENSION,
+            width: 8_192,
+            height: 8_192,
             filter: TextureFilter::Linear,
             wrap: TextureWrap::Clamp,
             content_hash: Some(CHECKER_HASH.to_string()),
@@ -1368,6 +1353,10 @@ mod tests {
         };
         assert_eq!(descriptor.validate(), Ok(()));
 
+        let mut large_payload = descriptor.clone();
+        large_payload.payload.as_mut().unwrap().byte_length = u32::MAX;
+        assert_eq!(large_payload.validate(), Ok(()));
+
         let mut wrong_resource = descriptor.clone();
         if let TexturePayloadSource::Resource { resource } =
             &mut wrong_resource.payload.as_mut().unwrap().source
@@ -1379,13 +1368,13 @@ mod tests {
             Err(TextureError::InvalidResourceIdentity)
         );
 
-        let mut too_wide = descriptor;
-        too_wide.width = MAX_TEXTURE_DIMENSION + 1;
+        let mut zero_width = descriptor;
+        zero_width.width = 0;
         assert_eq!(
-            too_wide.validate(),
-            Err(TextureError::DimensionQuotaExceeded {
-                width: MAX_TEXTURE_DIMENSION + 1,
-                height: MAX_TEXTURE_DIMENSION,
+            zero_width.validate(),
+            Err(TextureError::ZeroDimension {
+                width: 0,
+                height: 8_192,
             })
         );
     }

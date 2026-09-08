@@ -519,8 +519,8 @@ fn atlas_per_asset_and_aggregate_region_quotas_have_exact_boundaries() {
     let texture = CatalogEntry::new(id("texture/quota-atlas"), 1)
         .with_hash(AssetHash::parse("aa01").unwrap())
         .with_texture(TextureDefinition {
-            width: 4_096,
-            height: 4_096,
+            width: 8_192,
+            height: 8_192,
             filter: TextureFilter::Nearest,
             wrap: TextureWrap::Clamp,
         });
@@ -548,6 +548,38 @@ fn atlas_per_asset_and_aggregate_region_quotas_have_exact_boundaries() {
         .any(|error| matches!(
             error,
             CatalogValidationError::AggregateAtlasRegionQuotaExceeded
+        )));
+}
+
+#[test]
+fn texture_dimension_validation_defers_capacity_to_the_renderer() {
+    let mut catalog = surface_catalog();
+    {
+        let texture = catalog
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id.as_str() == "texture/stone-tile")
+            .and_then(|entry| entry.texture.as_mut())
+            .expect("fixture texture definition");
+        texture.width = u32::MAX;
+        texture.height = u32::MAX;
+    }
+    assert!(validate_catalog(&catalog).is_ok());
+
+    catalog
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id.as_str() == "texture/stone-tile")
+        .and_then(|entry| entry.texture.as_mut())
+        .expect("fixture texture definition")
+        .width = 0;
+    assert!(validate_catalog(&catalog)
+        .errors
+        .iter()
+        .any(|error| matches!(
+            error,
+            CatalogValidationError::InvalidTextureDimensions { id }
+                if id.as_str() == "texture/stone-tile"
         )));
 }
 

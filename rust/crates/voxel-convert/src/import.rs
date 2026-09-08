@@ -7,12 +7,7 @@ use crate::ConversionError;
 
 mod gltf_scene;
 
-pub const MAX_IMPORTED_SCENE_NODES: usize = 4_096;
 pub const MAX_IMPORTED_SCENE_DEPTH: usize = 256;
-pub const MAX_IMPORTED_SCENE_EDGES: usize = 16_384;
-pub const MAX_IMPORTED_SCENE_MESHES: usize = 4_096;
-pub const MAX_IMPORTED_SCENE_PRIMITIVES: usize = 8_192;
-pub const MAX_IMPORTED_SCENE_MESH_INSTANCES: usize = 4_096;
 pub const MAX_IMPORTED_TEXCOORD_SETS: usize = 8;
 pub const MAX_IMPORTED_NAME_BYTES: usize = 4_096;
 
@@ -196,23 +191,12 @@ pub(crate) fn flatten_model_scene(
     let mut triangles = Vec::new();
     let mut primitive_groups = Vec::new();
     let mut used_materials = BTreeSet::new();
-    let mut mesh_instance_count = 0usize;
     let mut source_index_count = 0usize;
 
     for node in &scene.nodes {
         let Some(mesh_index) = node.source_mesh_index else {
             continue;
         };
-        mesh_instance_count = mesh_instance_count.saturating_add(1);
-        if mesh_instance_count > MAX_IMPORTED_SCENE_MESH_INSTANCES {
-            return Err(ConversionError::one(
-                "conversion.resourceLimit",
-                "source.scene.meshInstances",
-                format!(
-                    "selected scene contains more than {MAX_IMPORTED_SCENE_MESH_INSTANCES} mesh instances"
-                ),
-            ));
-        }
         let mesh = scene
             .meshes
             .iter()

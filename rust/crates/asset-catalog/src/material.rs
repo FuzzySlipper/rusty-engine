@@ -1,7 +1,5 @@
 use core_assets::AssetReference;
 
-pub const MAX_TEXTURE_DIMENSION: u32 = 4_096;
-pub const MAX_TEXTURE_TEXELS: u64 = 16_777_216;
 pub const MAX_ATLAS_REGIONS: usize = 1_024;
 pub const MAX_AGGREGATE_ATLAS_REGIONS: usize = 4_096;
 pub const MAX_ATLAS_PADDING: u16 = 32;

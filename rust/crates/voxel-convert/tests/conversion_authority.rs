@@ -29,6 +29,18 @@ const REQUEST: &str = include_str!(concat!(
 const SOURCE_HASH: &str = "sha256:6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00";
 
 #[test]
+fn mesh_request_json_above_retired_envelope_quota_decodes_identically() {
+    let request = import_request();
+    let mut encoded = serde_json::to_vec(&request).unwrap();
+    encoded.resize(64 * 1024 * 1024 * 4 + 32_768 + 1, b' ');
+    let text = std::str::from_utf8(&encoded).unwrap();
+    assert_eq!(decode_mesh_source_import_request(text).unwrap(), request);
+    // The real JSON parser still rejects trailing non-whitespace input.
+    encoded.push(b'x');
+    assert!(decode_mesh_source_import_request(std::str::from_utf8(&encoded).unwrap()).is_err());
+}
+
+#[test]
 fn imported_source_has_hash_pinned_groups_materials_and_strict_shape() {
     let request = import_request();
     let imported = import_mesh_source(&request).expect("bounded imported source");

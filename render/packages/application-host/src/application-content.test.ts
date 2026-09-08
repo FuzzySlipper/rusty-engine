@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_COUNT } from '@rusty-engine/renderer-host';
+import { loadRendererTextureResourceSource } from '@rusty-engine/renderer-host';
 
 import {
   RustyApplicationContentError,
@@ -24,24 +24,28 @@ function textureContent(bytes = new Uint8Array([137, 80, 78, 71])): RustyApplica
   };
 }
 
-void test('application content snapshots caller bytes and derives private resource options', async () => {
-  const source = new Uint8Array([137, 80, 78, 71]);
+void test('application content borrows prepared bytes and renderer admission owns its snapshot', async () => {
+  const expected = new Uint8Array([137, 80, 78, 71]);
+  const source = expected.slice();
   const prepared = prepareRustyApplicationContent(textureContent(source));
   source.fill(0);
-  assert.deepEqual(
-    new Uint8Array(prepared.resources[0]!.bytes),
-    new Uint8Array([137, 80, 78, 71]),
-  );
+  assert.deepEqual(new Uint8Array(prepared.resources[0]!.bytes), expected);
   const options = rustyApplicationSurfaceResourceOptions(prepared);
-  const descriptor = options.textureResourceManifest?.resources[0];
-  assert.ok(descriptor !== undefined);
-  const resolved = await options.resolveTextureResource?.(descriptor);
-  assert.deepEqual(new Uint8Array(resolved!), new Uint8Array([137, 80, 78, 71]));
-  new Uint8Array(resolved!).fill(0);
-  assert.deepEqual(
-    new Uint8Array(prepared.resources[0]!.bytes),
-    new Uint8Array([137, 80, 78, 71]),
+  const manifest = options.textureResourceManifest;
+  const resolve = options.resolveTextureResource;
+  assert.ok(manifest !== undefined && resolve !== undefined);
+  const descriptor = manifest.resources[0]!;
+  const resolved = await resolve(descriptor);
+  assert.equal(resolved, prepared.resources[0]!.bytes);
+  assert.equal(await resolve(descriptor), resolved);
+  const admitted = await loadRendererTextureResourceSource(manifest, resolve);
+  // Once admitted, later changes by the prepared-content owner cannot change
+  // the renderer's resource under its already-verified identity.
+  new Uint8Array(prepared.resources[0]!.bytes).fill(0);
+  const acquired = admitted.acquireResource(
+    descriptor.resource, descriptor.contentHash, descriptor.byteLength,
   );
+  assert.deepEqual(acquired.bytes, expected);
 });
 
 void test('application content rejects duplicated identities without exposing renderer manifests', () => {
@@ -82,7 +86,7 @@ void test('application content rejects mismatched hashes, unsupported media, and
   );
 });
 
-void test('application content admits both closed resource families and enforces count bounds', () => {
+void test('application content admits closed resource families beyond retired texture and audio count caps', () => {
   const meshBytes = new Uint8Array(16);
   const meshDigest = createHash('sha256').update(meshBytes).digest('hex');
   const texture = textureContent().resources![0]!;
@@ -102,25 +106,30 @@ void test('application content admits both closed resource families and enforces
   assert.equal(options.meshResourceManifest?.resources.length, 1);
   assert.equal(options.textureResourceManifest?.resources.length, 1);
 
-  assert.throws(
-    () => prepareRustyApplicationContent({
-      frame: { schemaVersion: 1, ops: [] },
-      resources: Array.from(
-        { length: RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_COUNT + 1 },
-        (_, index) => {
-          const digest = index.toString(16).padStart(64, '0');
-          return {
-            identity: `texture-resource/${digest}`,
-            contentHash: `sha256:${digest}`,
-            mediaType: 'image/png',
-            bytes: new Uint8Array([index & 0xff]),
-          };
-        },
-      ),
-    }),
-    (error: unknown) => error instanceof RustyApplicationContentError
-      && error.code === 'resource_limit_exceeded',
-  );
+  const manyResources = prepareRustyApplicationContent({
+    frame: { schemaVersion: 1, ops: [] },
+    resources: [
+      ...Array.from({ length: 257 }, (_, index) => {
+        const digest = index.toString(16).padStart(64, '0');
+        return {
+          identity: `texture-resource/${digest}`,
+          contentHash: `sha256:${digest}`,
+          mediaType: 'image/png',
+          bytes: new Uint8Array([index & 0xff]),
+        };
+      }),
+      ...Array.from({ length: 65 }, (_, index) => {
+        const digest = (index + 512).toString(16).padStart(64, '0');
+        return {
+          identity: `audio-resource/${digest}`,
+          contentHash: `sha256:${digest}`,
+          mediaType: 'audio/wav',
+          bytes: new Uint8Array(44),
+        };
+      }),
+    ],
+  });
+  assert.equal(manyResources.resources.length, 322);
 });
 
 void test('application content admits bounded WAV resources and resolves immutable audio bytes', async () => {
@@ -200,7 +209,8 @@ void test('application content rejects unsupported and undersized audio resource
 });
 
 void test('application content composes animated GLB, packed mesh, and texture resources', async () => {
-  const animatedBytes = new Uint8Array(16).fill(7);
+  const animatedBytes = new Uint8Array(20).fill(7);
+  animatedBytes.set([0x67, 0x6c, 0x54, 0x46]);
   const animatedDigest = createHash('sha256').update(animatedBytes).digest('hex');
   const meshBytes = new Uint8Array(16).fill(3);
   const meshDigest = createHash('sha256').update(meshBytes).digest('hex');
@@ -233,15 +243,15 @@ void test('application content composes animated GLB, packed mesh, and texture r
     },
     resources: [
       {
-        identity: `mesh-resource/${animatedDigest}`,
+        identity: `animated-mesh-resource/${animatedDigest}`,
         contentHash: `sha256:${animatedDigest}`,
-        mediaType: 'application/octet-stream',
+        mediaType: 'model/gltf-binary',
         bytes: animatedBytes,
       },
       {
         identity: `clip-pack-resource/${animatedDigest}`,
         contentHash: `sha256:${animatedDigest}`,
-        mediaType: 'application/octet-stream',
+        mediaType: 'model/gltf-binary',
         bytes: animatedBytes,
       },
       {
@@ -256,7 +266,7 @@ void test('application content composes animated GLB, packed mesh, and texture r
   const options = rustyApplicationSurfaceResourceOptions(prepared);
   assert.equal(options.animatedMeshManifest?.resources.length, 1);
   assert.equal(options.animatedMeshManifest?.clipPacks?.length, 1);
-  assert.equal(options.meshResourceManifest?.resources.length, 2);
+  assert.equal(options.meshResourceManifest?.resources.length, 1);
   assert.equal(options.textureResourceManifest?.resources.length, 1);
   const descriptor = options.animatedMeshManifest?.resources[0];
   assert.deepEqual(descriptor, {

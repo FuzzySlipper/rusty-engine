@@ -110,16 +110,10 @@ export {
 } from './animated-mesh-host.js';
 
 export {
-  RUSTY_RENDERER_MESH_RESOURCE_MAX_BYTES,
-  RUSTY_RENDERER_MESH_RESOURCE_MAX_COUNT,
-  RUSTY_RENDERER_MESH_RESOURCE_MAX_TOTAL_BYTES,
   RendererMeshResourceError,
   loadRendererMeshResourceSource,
 } from './mesh-resource-host.js';
 export {
-  RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_BYTES,
-  RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_COUNT,
-  RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_TOTAL_BYTES,
   RendererTextureResourceError,
   loadRendererTextureResourceSource,
 } from './texture-resource-host.js';

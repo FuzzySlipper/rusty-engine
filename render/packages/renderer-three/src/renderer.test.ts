@@ -19,11 +19,7 @@ import {
   RenderApplyError,
   RendererTerminalError,
   RenderResourceError,
-  RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES,
-  RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES,
-  RUSTY_RENDERER_TEXTURE_MAX_RETAINED,
   ThreeRenderer,
-  admitRendererTextureResourceBudget,
   loadAnimatedMeshGlbResource,
   type MeshBufferView,
   type MeshBufferSource,
@@ -3032,44 +3028,44 @@ void test('voxel texture and material redefine is final-frame atomic without rem
   assert.equal(renderer.resourceStatistics().geometryResourceCount, beforeStats.geometryResourceCount);
 });
 
-void test('retained texture budget accepts every exact limit and rejects each one-over prospectively', () => {
-  const exact = {
-    count: RUSTY_RENDERER_TEXTURE_MAX_RETAINED - 1,
-    encodedBytes: RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES - 1,
-    decodedBytes: RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES - 4,
-  };
-  assert.deepEqual(
-    admitRendererTextureResourceBudget(exact, undefined, { encodedBytes: 1, decodedBytes: 4 }),
-    {
-      count: RUSTY_RENDERER_TEXTURE_MAX_RETAINED,
-      encodedBytes: RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES,
-      decodedBytes: RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES,
-    },
-  );
-  assert.throws(
-    () => admitRendererTextureResourceBudget(
-      { ...exact, count: RUSTY_RENDERER_TEXTURE_MAX_RETAINED },
-      undefined,
-      { encodedBytes: 1, decodedBytes: 4 },
-    ),
-    /retained texture quota exceeded/u,
-  );
-  assert.throws(
-    () => admitRendererTextureResourceBudget(
-      { ...exact, encodedBytes: RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES },
-      undefined,
-      { encodedBytes: 1, decodedBytes: 4 },
-    ),
-    /aggregate encoded texture byte quota exceeded/u,
-  );
-  assert.throws(
-    () => admitRendererTextureResourceBudget(
-      { ...exact, decodedBytes: RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES - 3 },
-      undefined,
-      { encodedBytes: 1, decodedBytes: 4 },
-    ),
-    /aggregate decoded texture byte quota exceeded/u,
-  );
+void test('texture admission uses device capacity before borrowing and isolated captures inherit it', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  let acquired = 0;
+  const renderer = new ThreeRenderer({ maximumTextureDimension: 2, textureResourceSource: {
+    acquireResource: () => { acquired += 1; return { bytes }; }, releaseResource: () => {},
+  } });
+  renderer.applyFrame({ schemaVersion: 1, ops: [{ op: 'defineTexture', texture: textureDescriptor(bytes, 1, 'resource') }] });
+  const before = renderer.resourceStatistics();
+  const texture = { ...textureDescriptor(bytes, 2, 'resource'), width: 3 };
+  const frame = { schemaVersion: 1 as const, ops: [{ op: 'defineTexture' as const, texture }] };
+  assert.throws(() => renderer.applyFrame(frame), /exceed device maximum 2/u);
+  assert.throws(() => renderer.createIsolatedCaptureScene(frame), /exceed device maximum 2/u);
+  assert.equal(acquired, 1, 'oversized textures must not acquire encoded bytes');
+  assert.deepEqual(renderer.resourceStatistics(), before);
+  renderer.dispose();
+});
+
+void test('a capable device admits and decodes a texture wider than the old 4096 policy', () => {
+  const width = 8192;
+  const bytes = rgbaPng(width, 1, Array.from({ length: width * 4 }, () => 255));
+  const renderer = new ThreeRenderer({ maximumTextureDimension: width });
+  renderer.applyFrame({ schemaVersion: 1, ops: [{ op: 'defineTexture', texture: {
+    ...textureDescriptor(bytes), width, height: 1,
+  } }] });
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 1);
+  renderer.dispose();
+});
+
+void test('retains more than 256 textures and releases them on disposal', () => {
+  const renderer = new ThreeRenderer();
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  renderer.applyFrame({ schemaVersion: 1, ops: Array.from({ length: 257 }, (_, index) => ({
+    op: 'defineTexture' as const,
+    texture: textureDescriptor(bytes, 1, 'inline', `texture/many-${String(index)}`),
+  })) });
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 257);
+  renderer.dispose();
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
 void test('malformed texture bytes reject the complete frame and release the resource borrow', () => {
@@ -3837,6 +3833,16 @@ function diagnosticSkinnedMeshSource(
   boneCount: number,
   weightRows: readonly (readonly [number, number, number, number])[],
 ): MapAnimatedMeshAssetSource {
+  return new MapAnimatedMeshAssetSource([
+    diagnosticSkinnedMeshResource(asset, boneCount, weightRows),
+  ]);
+}
+
+function diagnosticSkinnedMeshResource(
+  asset: AnimatedMeshAsset,
+  boneCount: number,
+  weightRows: readonly (readonly [number, number, number, number])[],
+) {
   const scene = new THREE.Group();
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(
@@ -3863,7 +3869,7 @@ function diagnosticSkinnedMeshSource(
   if (bones[0] !== undefined) mesh.add(bones[0]);
   mesh.bind(new THREE.Skeleton(bones));
   scene.add(mesh);
-  return new MapAnimatedMeshAssetSource([{
+  return {
     asset: asset.asset,
     contentHash: asset.contentHash,
     scene,
@@ -3872,7 +3878,7 @@ function diagnosticSkinnedMeshSource(
       clip.durationSeconds ?? 1,
       [],
     )),
-  }]);
+  };
 }
 
 function rewriteGlbJson(
@@ -4292,7 +4298,7 @@ void test('LoopOnce natural completion is mixer-event driven and rejects invalid
   registry.dispose();
 });
 
-void test('animated skinning inspection rejects an over-budget hierarchy before playback mutation', () => {
+void test('animated skinning inspection samples more than 256 named joints into the live pose', () => {
   const asset = animatedMeshAsset();
   const renderer = new ThreeRenderer({
     animatedMeshSource: diagnosticSkinnedMeshSource(asset, 257, [[1, 0, 0, 0]]),
@@ -4316,12 +4322,17 @@ void test('animated skinning inspection rejects an over-budget hierarchy before 
     },
   });
   renderer.advanceAnimation(0.25);
-  const before = renderer.animatedMeshPlayback(handle);
-  assert.throws(
-    () => renderer.sampleAnimatedMesh(handle, 'idle', 0.5),
-    /joint count exceeds 256/,
-  );
-  assert.deepEqual(renderer.animatedMeshPlayback(handle), before);
+  const sample = renderer.sampleAnimatedMesh(handle, 'idle', 0.5);
+  const playback = renderer.animatedMeshPlayback(handle);
+  assert.equal(sample.boneCount, 257);
+  assert.equal(sample.skinningFacts.joints.length, 257);
+  assert.equal(sample.skinningFacts.joints[0]?.name, 'joint-0');
+  assert.equal(sample.skinningFacts.joints[256]?.name, 'joint-256');
+  assert.equal(sample.skinningFacts.instanceRootDistinctFromTemplate, true);
+  assert.equal(sample.skinningFacts.skeletonsIndependentFromTemplate, true);
+  assert.equal(playback?.status, 'sampled');
+  assert.deepEqual(playback?.heldSample, { clip: 'idle', normalizedTime: 0.5 });
+  assert.ok(playback?.poseSample.hierarchyNodeCount && playback.poseSample.hierarchyNodeCount > 256);
   renderer.dispose();
 });
 
@@ -4329,8 +4340,9 @@ void test('a rejected initial animated sample preserves live texture/material re
   const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const source = new TestTextureResourceSource(bytes);
   const asset = animatedMeshAsset();
+  const animatedResource = diagnosticSkinnedMeshResource(asset, 1, [[1, 0, 0, 0]]);
   const renderer = new ThreeRenderer({
-    animatedMeshSource: diagnosticSkinnedMeshSource(asset, 257, [[1, 0, 0, 0]]),
+    animatedMeshSource: new MapAnimatedMeshAssetSource([animatedResource]),
     textureResourceSource: source,
   });
   const beforeTexture = textureDescriptor(bytes, 1, 'resource');
@@ -4344,6 +4356,7 @@ void test('a rejected initial animated sample preserves live texture/material re
     },
     { op: 'defineAnimatedMesh', asset },
   ] });
+  animatedResource.clips[0]!.duration = Number.NaN;
   const mesh = renderer.objectFor(renderHandle(4290)) as THREE.Mesh;
   const oldMaterial = mesh.material;
   const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
@@ -4351,6 +4364,7 @@ void test('a rejected initial animated sample preserves live texture/material re
   const beforeDescriptor = renderer.textureDescriptor(beforeTexture.id);
   const beforeResources = renderer.resourceStatistics();
   const beforeReadout = renderer.textureResourceReadout();
+  const priorAcquires = source.acquired.length;
 
   assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
     { op: 'defineTexture', texture: textureDescriptor(bytes, 2, 'resource') },
@@ -4369,7 +4383,7 @@ void test('a rejected initial animated sample preserves live texture/material re
         metadata: { sourceEntity: 88, sourceSceneNode: null, tags: [], label: 'must-not-publish' },
       },
     },
-  ] }), /joint count exceeds 256/u);
+  ] }), /clip idle has an invalid decoded duration/u);
 
   assert.equal(mesh.material, oldMaterial);
   assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
@@ -4378,6 +4392,7 @@ void test('a rejected initial animated sample preserves live texture/material re
   assert.deepEqual(renderer.textureDescriptor(beforeTexture.id), beforeDescriptor);
   assert.deepEqual(renderer.resourceStatistics(), beforeResources);
   assert.deepEqual(renderer.textureResourceReadout(), beforeReadout);
+  assert.equal(source.acquired.length, priorAcquires + 1, 'the rejected frame prepared its texture resource');
   assert.deepEqual(source.released, source.acquired, 'prepared resource borrows are always released');
   renderer.dispose();
 });
@@ -4438,8 +4453,9 @@ void test('a rejected animated sample update preserves live texture/material and
   const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const source = new TestTextureResourceSource(bytes);
   const asset = animatedMeshAsset();
+  const animatedResource = diagnosticSkinnedMeshResource(asset, 1, [[1, 0, 0, 0]]);
   const renderer = new ThreeRenderer({
-    animatedMeshSource: diagnosticSkinnedMeshSource(asset, 257, [[1, 0, 0, 0]]),
+    animatedMeshSource: new MapAnimatedMeshAssetSource([animatedResource]),
     textureResourceSource: source,
   });
   const beforeTexture = textureDescriptor(bytes, 1, 'resource');
@@ -4462,6 +4478,7 @@ void test('a rejected animated sample update preserves live texture/material and
       },
     },
   ] });
+  animatedResource.clips[0]!.duration = Number.NaN;
   const mesh = renderer.objectFor(renderHandle(4292)) as THREE.Mesh;
   const oldMaterial = mesh.material;
   const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
@@ -4469,6 +4486,7 @@ void test('a rejected animated sample update preserves live texture/material and
   const beforePlayback = renderer.animatedMeshPlayback(renderHandle(4293));
   const beforeDescriptor = renderer.textureDescriptor(beforeTexture.id);
   const beforeResources = renderer.resourceStatistics();
+  const priorAcquires = source.acquired.length;
 
   assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
     { op: 'defineTexture', texture: textureDescriptor(bytes, 2, 'resource') },
@@ -4477,7 +4495,7 @@ void test('a rejected animated sample update preserves live texture/material and
       op: 'setAnimatedMeshPlayback', handle: renderHandle(4293),
       playback: { kind: 'sample', clip: 'idle', normalizedTime: 0.5 },
     },
-  ] }), /joint count exceeds 256/u);
+  ] }), /clip idle has an invalid decoded duration/u);
 
   assert.equal(mesh.material, oldMaterial);
   assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
@@ -4485,6 +4503,7 @@ void test('a rejected animated sample update preserves live texture/material and
   assert.deepEqual(renderer.animatedMeshPlayback(renderHandle(4293)), beforePlayback);
   assert.deepEqual(renderer.textureDescriptor(beforeTexture.id), beforeDescriptor);
   assert.deepEqual(renderer.resourceStatistics(), beforeResources);
+  assert.equal(source.acquired.length, priorAcquires + 1, 'the rejected frame prepared its texture resource');
   assert.deepEqual(source.released, source.acquired, 'prepared resource borrows are always released');
   renderer.dispose();
 });

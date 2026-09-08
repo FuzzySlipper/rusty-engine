@@ -81,12 +81,6 @@ pub use worker::{
 pub const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024;
 /// Upper bound for one JSON request body or emitted JSON response body.
 pub const MAX_REQUEST_BODY_BYTES: usize = 512 * 1024;
-/// Upper bound for one immutable bundle resource.
-pub const MAX_BUNDLE_RESOURCE_BYTES: usize = render_model::MAX_MESH_RESOURCE_BYTES as usize;
-/// Upper bound for immutable entries admitted to one generated browser bundle.
-pub const MAX_BUNDLE_ENTRIES: usize = 4_096;
-/// Upper bound for all immutable bundle resource bytes.
-pub const MAX_BUNDLE_BYTES: usize = render_model::MAX_MESH_RESOURCE_AGGREGATE_BYTES;
 /// Target reconnect history length. A single larger incremental transfer is
 /// retained whole; this is not a maximum publication size.
 pub const MAX_OUTPUT_QUEUE_ITEMS: usize = 256;

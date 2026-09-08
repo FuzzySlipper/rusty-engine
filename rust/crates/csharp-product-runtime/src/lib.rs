@@ -86,9 +86,6 @@ const EXTERNAL_UPDATE_MODE: NativeProductUpdateMode = NativeProductUpdateMode::E
 // These are host admission bounds, before the immutable Content service owns
 // references. The per-file limit matches the Engine renderer resource limit;
 // the aggregate limit matches the existing product persistence payload limit.
-const MAX_CONTENT_FILES: usize = 8_192;
-const MAX_CONTENT_FILE_BYTES: u64 = product_dev_host::MAX_BUNDLE_RESOURCE_BYTES as u64;
-const MAX_CONTENT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DEBUG_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_DEBUG_RESULT_BYTES: usize = 64 * 1024;
 const MAX_PRODUCT_ERROR_BYTES: usize = 64 * 1024;
@@ -4426,82 +4423,6 @@ struct ContentFile {
 struct ContentCandidate {
     host_path: PathBuf,
     product_path: Vec<u8>,
-    byte_length: u64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ContentAdmissionLimits {
-    max_files: usize,
-    max_file_bytes: u64,
-    max_total_bytes: u64,
-}
-
-const CONTENT_ADMISSION_LIMITS: ContentAdmissionLimits = ContentAdmissionLimits {
-    max_files: MAX_CONTENT_FILES,
-    max_file_bytes: MAX_CONTENT_FILE_BYTES,
-    max_total_bytes: MAX_CONTENT_TOTAL_BYTES,
-};
-
-#[derive(Debug, Default)]
-struct ContentAdmissionQuota {
-    files: usize,
-    total_bytes: u64,
-}
-
-impl ContentAdmissionQuota {
-    fn admit(
-        &mut self,
-        path: &[u8],
-        byte_length: u64,
-        limits: ContentAdmissionLimits,
-    ) -> Result<(), CsharpProductRuntimeError> {
-        let files = self.files.checked_add(1).ok_or_else(|| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_LIMIT",
-                "content file count overflowed its admission limit",
-            )
-        })?;
-        if files > limits.max_files {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_LIMIT",
-                format!(
-                    "content contains more than {} files while admitting {}",
-                    limits.max_files,
-                    display_content_path(path)
-                ),
-            ));
-        }
-        if byte_length > limits.max_file_bytes {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_LIMIT",
-                format!(
-                    "content file {} has {} bytes, exceeding the {} byte limit",
-                    display_content_path(path),
-                    byte_length,
-                    limits.max_file_bytes
-                ),
-            ));
-        }
-        let total_bytes = self.total_bytes.checked_add(byte_length).ok_or_else(|| {
-            CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_LIMIT",
-                "content byte total overflowed its admission limit",
-            )
-        })?;
-        if total_bytes > limits.max_total_bytes {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_CONTENT_LIMIT",
-                format!(
-                    "content bytes total {total_bytes} exceeds the {} byte limit while admitting {}",
-                    limits.max_total_bytes,
-                    display_content_path(path)
-                ),
-            ));
-        }
-        self.files = files;
-        self.total_bytes = total_bytes;
-        Ok(())
-    }
 }
 
 /// Exact product content collected once before the native runtime and immutable
@@ -4527,26 +4448,12 @@ impl CsharpProductContent {
                 ),
             ));
         }
-        let candidates = discover_content(root, CONTENT_ADMISSION_LIMITS)?;
+        let candidates = discover_content(root)?;
         let mut files = Vec::with_capacity(candidates.len());
-        // The metadata pass establishes the advertised bounds before immutable
-        // content is retained. Recheck observed bytes after each read: a
-        // concurrent host change is rejected rather than retained over quota.
-        let mut observed_quota = ContentAdmissionQuota::default();
         for candidate in candidates {
             let bytes = fs::read(&candidate.host_path).map_err(|error| {
                 CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
             })?;
-            observed_quota.admit(
-                &candidate.product_path,
-                u64::try_from(bytes.len()).map_err(|_| {
-                    CsharpProductRuntimeError::new(
-                        "CSHARP_CONTENT_LIMIT",
-                        "content file length cannot be represented for admission",
-                    )
-                })?,
-                CONTENT_ADMISSION_LIMITS,
-            )?;
             files.push(ContentFile {
                 path: candidate.product_path,
                 bytes: Arc::from(bytes),
@@ -4565,16 +4472,12 @@ impl CsharpProductContent {
     }
 }
 
-fn discover_content(
-    root: &Path,
-    limits: ContentAdmissionLimits,
-) -> Result<Vec<ContentCandidate>, CsharpProductRuntimeError> {
+fn discover_content(root: &Path) -> Result<Vec<ContentCandidate>, CsharpProductRuntimeError> {
     let mut candidates = Vec::new();
-    discover_content_inner(root, root, limits, &mut candidates)?;
+    discover_content_inner(root, root, &mut candidates)?;
     candidates.sort_by(|left, right| left.product_path.cmp(&right.product_path));
 
     let mut paths = BTreeSet::new();
-    let mut quota = ContentAdmissionQuota::default();
     for candidate in &candidates {
         if !paths.insert(candidate.product_path.as_slice()) {
             return Err(CsharpProductRuntimeError::new(
@@ -4585,7 +4488,6 @@ fn discover_content(
                 ),
             ));
         }
-        quota.admit(&candidate.product_path, candidate.byte_length, limits)?;
     }
     Ok(candidates)
 }
@@ -4593,7 +4495,6 @@ fn discover_content(
 fn discover_content_inner(
     root: &Path,
     directory: &Path,
-    limits: ContentAdmissionLimits,
     candidates: &mut Vec<ContentCandidate>,
 ) -> Result<(), CsharpProductRuntimeError> {
     for entry in fs::read_dir(directory)
@@ -4614,18 +4515,11 @@ fn discover_content_inner(
             ));
         }
         if file_type.is_dir() {
-            discover_content_inner(root, &path, limits, candidates)?;
+            discover_content_inner(root, &path, candidates)?;
         } else if file_type.is_file() {
-            if candidates.len() == limits.max_files {
-                return Err(CsharpProductRuntimeError::new(
-                    "CSHARP_CONTENT_LIMIT",
-                    format!("content contains more than {} files", limits.max_files),
-                ));
-            }
             candidates.push(ContentCandidate {
                 product_path: canonical_content_path(root, &path)?,
                 host_path: path,
-                byte_length: metadata.len(),
             });
         } else {
             return Err(CsharpProductRuntimeError::new(
@@ -7284,6 +7178,21 @@ mod tests {
     }
 
     #[test]
+    fn content_admission_accepts_file_above_old_mesh_derived_limit() {
+        let root = content_fixture_root("large-content");
+        fs::create_dir_all(&root).unwrap();
+        let size = 64 * 1024 * 1024 + 1;
+        fs::File::create(root.join("large.bin"))
+            .unwrap()
+            .set_len(size)
+            .unwrap();
+        let content = CsharpProductContent::admit(&root).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(content.files.len(), 1);
+        assert_eq!(content.files[0].bytes.len() as u64, size);
+    }
+
+    #[test]
     fn content_admission_rejects_legacy_normalization_collision() {
         let root = content_fixture_root("noncanonical-content");
         fs::create_dir_all(root.join("nested")).expect("content root");
@@ -7298,38 +7207,6 @@ mod tests {
         fs::remove_dir_all(&root).expect("remove fixture");
 
         assert_eq!(error.code(), "CSHARP_CONTENT_PATH");
-    }
-
-    #[test]
-    fn content_admission_quota_is_checked_without_retaining_fixture_bytes() {
-        let limits = ContentAdmissionLimits {
-            max_files: 2,
-            max_file_bytes: 3,
-            max_total_bytes: 5,
-        };
-        let mut quota = ContentAdmissionQuota::default();
-        quota.admit(b"a", 3, limits).expect("first file at limit");
-        quota.admit(b"b", 2, limits).expect("aggregate byte limit");
-        assert_eq!(quota.files, 2);
-        assert_eq!(quota.total_bytes, 5);
-
-        let aggregate = quota
-            .admit(b"c", 0, limits)
-            .expect_err("third file exceeds count");
-        assert_eq!(aggregate.code(), "CSHARP_CONTENT_LIMIT");
-
-        let mut per_file = ContentAdmissionQuota::default();
-        let error = per_file
-            .admit(b"oversize", 4, limits)
-            .expect_err("per-file byte limit");
-        assert_eq!(error.code(), "CSHARP_CONTENT_LIMIT");
-
-        let mut total = ContentAdmissionQuota::default();
-        total.admit(b"first", 3, limits).expect("first file");
-        let error = total
-            .admit(b"second", 3, limits)
-            .expect_err("aggregate byte limit");
-        assert_eq!(error.code(), "CSHARP_CONTENT_LIMIT");
     }
 
     #[cfg(unix)]

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use voxel_convert::{
     import_animated_mesh_source_for_visual_metadata, import_mesh_source, AnimationChannelValues,
-    AnimationProperty, MeshSourceFormat, MeshSourceImportRequest, MAX_CONVERSION_SOURCE_BYTES,
+    AnimationProperty, MeshSourceFormat, MeshSourceImportRequest,
 };
 
 use crate::{
@@ -25,12 +25,6 @@ use crate::{
 };
 
 pub const SUPPORTED_ANIMATED_GLB_VERSION: u32 = 2;
-pub const MAX_ANIMATED_GLB_MATERIALS: usize = 256;
-pub const MAX_ANIMATED_GLB_TEXTURES: usize = 256;
-pub const MAX_ANIMATED_GLB_IMAGES: usize = 256;
-pub const MAX_ANIMATED_GLB_JOINTS: usize = 4_096;
-pub const MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 /// Three's admitted animated-mesh path realizes TEXCOORD_0 through TEXCOORD_3.
 pub const MAX_ANIMATED_GLB_TEXTURE_COORD_SET: u64 = 3;
 /// Keeps authored UV transforms finite and prevents extreme values from
@@ -272,7 +266,13 @@ pub fn import_animated_glb_asset(
     };
     let clip_count = clips.len();
     let embedded_material_slots =
-        embedded_material_slots(source_material_slots, parsed.document.materials().count());
+        match embedded_material_slots(source_material_slots, parsed.document.materials().count()) {
+            Ok(slots) => slots,
+            Err(diagnostic) => {
+                diagnostics.push(diagnostic);
+                return failed(diagnostics);
+            }
+        };
     let default_clip = clips
         .iter()
         .find(|clip| clip.id == "idle")
@@ -548,38 +548,33 @@ fn derive_animation_rig_signature(
 fn embedded_material_slots(
     source_material_slots: Vec<u32>,
     glb_material_count: usize,
-) -> Vec<AnimatedMeshEmbeddedMaterialSlot> {
-    let glb_material_count =
-        u32::try_from(glb_material_count).expect("animated GLB material admission bound fits u32");
+) -> Result<Vec<AnimatedMeshEmbeddedMaterialSlot>, ImportDiagnostic> {
     source_material_slots
         .into_iter()
-        .filter(|source_material_slot| *source_material_slot < glb_material_count)
+        .filter(|source_material_slot| u64::from(*source_material_slot) < glb_material_count as u64)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .enumerate()
-        .map(
-            |(slot, source_material_slot)| AnimatedMeshEmbeddedMaterialSlot {
-                slot: u16::try_from(slot)
-                    .expect("animated GLB material admission bound keeps dense slots in u16"),
-                source_material_slot: u16::try_from(source_material_slot)
-                    .expect("animated GLB material admission bound keeps source slots in u16"),
-            },
-        )
+        .map(|(slot, source_material_slot)| {
+            Ok(AnimatedMeshEmbeddedMaterialSlot {
+                slot: u16::try_from(slot).map_err(|_| {
+                    resource_limit(
+                        "source.materials",
+                        "used material slot exceeds renderer u16 representation",
+                    )
+                })?,
+                source_material_slot: u16::try_from(source_material_slot).map_err(|_| {
+                    resource_limit(
+                        "source.materials",
+                        "used source material index exceeds renderer u16 representation",
+                    )
+                })?,
+            })
+        })
         .collect()
 }
 
 fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportDiagnostic> {
-    if source.is_empty() || source.len() as u64 > MAX_CONVERSION_SOURCE_BYTES {
-        return Err(ImportDiagnostic::error(
-            ImportCode::SourceTooLarge,
-            locus,
-            format!(
-                "animated GLB byte count {} is outside 1..={MAX_CONVERSION_SOURCE_BYTES}",
-                source.len()
-            ),
-            "supply one bounded binary GLB source",
-        ));
-    }
     let json_document = glb_json_document(source, locus)?;
     for extension in extension_names(&json_document, "extensionsRequired")? {
         if !is_admitted_extension(&extension) {
@@ -648,28 +643,6 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
             "remove cameras from the exported actor resource",
         ));
     }
-    bounded_count(
-        "source.materials",
-        document.materials().count(),
-        MAX_ANIMATED_GLB_MATERIALS,
-    )?;
-    bounded_count(
-        "source.textures",
-        document.textures().count(),
-        MAX_ANIMATED_GLB_TEXTURES,
-    )?;
-    bounded_count(
-        "source.images",
-        document.images().count(),
-        MAX_ANIMATED_GLB_IMAGES,
-    )?;
-    let joint_count = document
-        .skins()
-        .map(|skin| skin.joints().count())
-        .try_fold(0usize, |total, count| total.checked_add(count))
-        .ok_or_else(|| resource_limit("source.skins", "joint count overflowed"))?;
-    bounded_count("source.skins.joints", joint_count, MAX_ANIMATED_GLB_JOINTS)?;
-    let mut embedded_image_bytes = 0usize;
     for image in document.images() {
         match image.source() {
             ImageSource::Uri { .. } => {
@@ -689,31 +662,14 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
                         "embed a PNG, JPEG, or WebP image",
                     ));
                 }
-                if view.length() == 0 || view.length() > MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES {
+                if view.length() == 0 {
                     return Err(resource_limit(
                         &format!("source.images[{}]", image.index()),
-                        &format!(
-                            "embedded image byte count {} is outside 1..={MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES}",
-                            view.length()
-                        ),
+                        "embedded image body is empty",
                     ));
                 }
-                embedded_image_bytes =
-                    embedded_image_bytes
-                        .checked_add(view.length())
-                        .ok_or_else(|| {
-                            resource_limit("source.images", "image byte count overflowed")
-                        })?;
             }
         }
-    }
-    if embedded_image_bytes > MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES {
-        return Err(resource_limit(
-            "source.images",
-            &format!(
-                "embedded image bytes {embedded_image_bytes} exceed {MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES}"
-            ),
-        ));
     }
     Ok(parsed)
 }
@@ -1030,16 +986,6 @@ fn render_bounds(
     Ok(MeshBoundsDescriptor { min, max })
 }
 
-fn bounded_count(path: &str, count: usize, limit: usize) -> Result<(), ImportDiagnostic> {
-    if count > limit {
-        return Err(resource_limit(
-            path,
-            &format!("count {count} exceeds {limit}"),
-        ));
-    }
-    Ok(())
-}
-
 fn resource_limit(path: &str, message: &str) -> ImportDiagnostic {
     ImportDiagnostic::error(
         ImportCode::ResourceLimit,
@@ -1101,6 +1047,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn embedded_material_slots_check_used_indices_at_renderer_representation() {
+        // Unused materials beyond u16 do not consume renderer override slots.
+        let slots = embedded_material_slots(vec![0, 65_535], 65_537).unwrap();
+        assert_eq!(slots.len(), 2);
+        assert_eq!(slots[1].slot, 1);
+        assert_eq!(slots[1].source_material_slot, u16::MAX);
+        let error = embedded_material_slots(vec![65_536], 65_537).unwrap_err();
+        assert_eq!(error.code, ImportCode::ResourceLimit);
+        assert!(error.message.contains("u16 representation"));
+    }
+
+    #[test]
     fn texture_transform_validation_covers_every_core_texture_info() {
         let transform = serde_json::json!({
             "offset": [-1_000_000.0, 1_000_000.0],
@@ -1136,5 +1094,43 @@ mod tests {
             assert_eq!(diagnostic.code, ImportCode::UnsupportedFeature);
             *document.pointer_mut(pointer).unwrap() = original;
         }
+    }
+}
+
+#[cfg(test)]
+mod image_capacity_tests {
+    use super::parse_and_preflight;
+
+    #[test]
+    fn shared_image_views_exceed_old_byte_and_count_quotas() {
+        // All images refer to one body: summing reference lengths is not memory use.
+        let body_length = 16 * 1024 * 1024 + 4;
+        let images = vec![serde_json::json!({"bufferView":0,"mimeType":"image/png"}); 257];
+        let textures = (0..257)
+            .map(|source| serde_json::json!({"source":source}))
+            .collect::<Vec<_>>();
+        let mut json = serde_json::to_vec(&serde_json::json!({
+            "asset":{"version":"2.0"},"buffers":[{"byteLength":body_length}],
+            "bufferViews":[{"buffer":0,"byteLength":body_length}],
+            "images":images,"textures":textures
+        }))
+        .unwrap();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let length = 12 + 8 + json.len() + 8 + body_length;
+        let mut glb = Vec::with_capacity(length);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(length as u32).to_le_bytes());
+        glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json);
+        glb.extend_from_slice(&(body_length as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.resize(length, 0);
+        let parsed = parse_and_preflight(&glb, "fixture").unwrap();
+        assert_eq!(parsed.document.images().count(), 257);
+        assert_eq!(parsed.document.textures().count(), 257);
     }
 }

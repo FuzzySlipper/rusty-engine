@@ -38,7 +38,6 @@ use std::{
 
 // Admission policy for immutable bundle-backed resource files. Generated mesh
 // definitions remain typed and do not use this file-resource byte ceiling.
-const MAX_RENDER_RESOURCE_BYTES: usize = MAX_MESH_RESOURCE_BYTES as usize;
 const MAX_ANIMATION_REALIZATION_FACTS: usize = 128;
 const MAX_ANIMATION_CUE_DEFINITIONS: usize = 128;
 const MAX_ANIMATION_CUE_TEXT_BYTES: usize = 96;
@@ -202,7 +201,6 @@ impl CsharpRenderResource {
                 ));
             }
         };
-        admit_bundle_resource(&path, &bytes)?;
         Ok(Self {
             kind: CsharpRenderResourceKind::Texture,
             identity: resource_identity,
@@ -229,7 +227,6 @@ impl CsharpRenderResource {
                 .strip_prefix("sha256:")
                 .expect("Engine mesh hash uses SHA-256")
         );
-        admit_bundle_resource(&path, &bytes)?;
         Ok(Self {
             kind: CsharpRenderResourceKind::Mesh,
             identity,
@@ -251,7 +248,6 @@ impl CsharpRenderResource {
                 "font resource is not an admitted WOFF2 body",
             ));
         }
-        admit_bundle_resource(&path, &bytes)?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "font/{}",
@@ -284,7 +280,6 @@ impl CsharpRenderResource {
                 "audio resource must be an admitted RIFF/WAVE body",
             ));
         }
-        admit_bundle_resource(&path, &bytes)?;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
         let identity = format!(
             "audio-resource/{}",
@@ -310,7 +305,6 @@ impl CsharpRenderResource {
         use sha2::{Digest, Sha256};
 
         let path = renderer_path(path, ".glb")?;
-        admit_bundle_resource(&path, &bytes)?;
         let relative_path = path
             .strip_prefix("content/")
             .expect("renderer path retains content prefix");
@@ -372,7 +366,6 @@ impl CsharpRenderResource {
         use sha2::{Digest, Sha256};
 
         let path = renderer_path(path, ".glb")?;
-        admit_bundle_resource(&path, &bytes)?;
         let relative_path = path
             .strip_prefix("content/")
             .expect("renderer path retains content prefix");
@@ -1284,20 +1277,6 @@ fn renderer_path(path: String, extension: &str) -> Result<String, CsharpEngineSe
         ));
     }
     normalize_bundle_path(&path)
-}
-
-fn admit_bundle_resource(path: &str, bytes: &[u8]) -> Result<(), CsharpEngineServicesError> {
-    // The old host conversion admitted this same path and byte body through a
-    // product-dev bundle entry after media validation. The service owns that
-    // selection-time decision now; the runtime conversion merely represents it.
-    normalize_bundle_path(path)?;
-    if bytes.len() > MAX_RENDER_RESOURCE_BYTES {
-        return Err(CsharpEngineServicesError::new(
-            "CSHARP_RENDER_RESOURCE_SIZE",
-            "renderer resource exceeds the maximum byte length",
-        ));
-    }
-    Ok(())
 }
 
 fn pack_animated_glb_closure(

@@ -4,11 +4,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{MeshDescriptorError, MeshPayloadDescriptor, MeshPayloadSource, MeshResourceEncoding};
 
-/// One resource remains comfortably inside the Studio host/browser allocation
-/// ceiling. Larger payload sets are partitioned deterministically.
-pub const MAX_MESH_RESOURCE_BYTES: u32 = 64 * 1024 * 1024;
-/// Matches the owning renderer-host admission ceiling for one retained set.
-pub const MAX_MESH_RESOURCE_AGGREGATE_BYTES: usize = 256 * 1024 * 1024;
+/// The packed format stores byte lengths and stream offsets as u32.
+pub const MAX_MESH_RESOURCE_BYTES: u32 = u32::MAX;
 pub const MESH_RESOURCE_HEADER_BYTES: u32 = 16;
 pub const MESH_RESOURCE_MAGIC: [u8; 8] = *b"RMSHLE01";
 pub const MESH_RESOURCE_MAGIC_V2: [u8; 8] = *b"RMSHLE02";
@@ -102,7 +99,9 @@ pub fn pack_mesh_resources(
     let mut start = 0;
     let mut current = MESH_RESOURCE_HEADER_BYTES as usize;
     for (index, stream_bytes) in stream_lengths.iter().copied().enumerate() {
-        let single = MESH_RESOURCE_HEADER_BYTES as usize + stream_bytes;
+        let single = (MESH_RESOURCE_HEADER_BYTES as usize)
+            .checked_add(stream_bytes)
+            .ok_or(MeshResourceError::ResourceTooLarge { bytes: usize::MAX })?;
         if single > maximum_resource_bytes as usize {
             return Err(MeshResourceError::MeshExceedsMaximum {
                 index,
@@ -111,7 +110,7 @@ pub fn pack_mesh_resources(
             });
         }
         if index > start
-            && (current + stream_bytes > maximum_resource_bytes as usize
+            && (stream_bytes > maximum_resource_bytes as usize - current
                 || stream_kinds[index] != stream_kinds[start])
         {
             ranges.push(start..index);
@@ -121,10 +120,6 @@ pub fn pack_mesh_resources(
         current += stream_bytes;
     }
     ranges.push(start..payloads.len());
-    validate_aggregate_resource_bytes(ranges.iter().map(|range| {
-        MESH_RESOURCE_HEADER_BYTES as usize + stream_lengths[range.clone()].iter().sum::<usize>()
-    }))?;
-
     let mut packed_payloads = payloads.to_vec();
     let mut resources_by_id = BTreeMap::new();
     for range in ranges {
@@ -553,28 +548,6 @@ fn push_f32s(bytes: &mut Vec<u8>, values: &[f32]) {
     }
 }
 
-fn validate_aggregate_resource_bytes(
-    resource_bytes: impl IntoIterator<Item = usize>,
-) -> Result<(), MeshResourceError> {
-    let mut total = 0_usize;
-    for bytes in resource_bytes {
-        total =
-            total
-                .checked_add(bytes)
-                .ok_or(MeshResourceError::AggregateResourceBytesExceeded {
-                    bytes: usize::MAX,
-                    maximum: MAX_MESH_RESOURCE_AGGREGATE_BYTES,
-                })?;
-        if total > MAX_MESH_RESOURCE_AGGREGATE_BYTES {
-            return Err(MeshResourceError::AggregateResourceBytesExceeded {
-                bytes: total,
-                maximum: MAX_MESH_RESOURCE_AGGREGATE_BYTES,
-            });
-        }
-    }
-    Ok(())
-}
-
 fn push_u32s(bytes: &mut Vec<u8>, values: &[u32]) {
     bytes.reserve(values.len() * 4);
     for value in values {
@@ -601,10 +574,6 @@ pub enum MeshResourceError {
     },
     ResourceTooLarge {
         bytes: usize,
-    },
-    AggregateResourceBytesExceeded {
-        bytes: usize,
-        maximum: usize,
     },
     InvalidPackedPayload {
         index: usize,
@@ -802,18 +771,18 @@ mod tests {
     }
 
     #[test]
-    fn v2_aggregate_admission_accepts_the_host_limit_and_rejects_one_over() {
-        assert_eq!(
-            validate_aggregate_resource_bytes([64 * 1024 * 1024; 4]),
-            Ok(())
-        );
-        assert_eq!(
-            validate_aggregate_resource_bytes([64 * 1024 * 1024; 4].into_iter().chain([1])),
-            Err(MeshResourceError::AggregateResourceBytesExceeded {
-                bytes: MAX_MESH_RESOURCE_AGGREGATE_BYTES + 1,
-                maximum: MAX_MESH_RESOURCE_AGGREGATE_BYTES,
-            })
-        );
+    fn packing_and_descriptors_accept_format_capacity_above_old_policy() {
+        let packed = pack_mesh_resources(&[triangle(0.0)], u32::MAX).unwrap();
+        let mut descriptor = packed.payloads[0].clone();
+        let MeshPayloadSource::Resource { byte_length, .. } = &mut descriptor.source else {
+            panic!("expected resource");
+        };
+        *byte_length = u32::MAX;
+        descriptor.validate().unwrap();
+        assert!(matches!(
+            pack_mesh_resources(&[triangle(0.0)], 16),
+            Err(MeshResourceError::MeshExceedsMaximum { .. })
+        ));
     }
 
     #[test]
@@ -856,6 +825,31 @@ mod tests {
         *content_hash = mesh_resource_content_hash(bytes);
         *resource = format!("mesh-resource/{}", &content_hash["sha256:".len()..]);
         *byte_length = u32::try_from(bytes.len()).unwrap();
+    }
+
+    #[test]
+    fn resource_decode_accepts_body_above_old_64_mib_ceiling() {
+        let original = triangle(0.0);
+        let mut packed = pack_mesh_resources(std::slice::from_ref(&original), u32::MAX).unwrap();
+        let resource = &mut packed.resources[0];
+        // A resource may carry padding/other streams beyond this descriptor's slice.
+        resource.bytes.resize(64 * 1024 * 1024 + 4, 0);
+        let length = resource.bytes.len() as u32;
+        resource.bytes[8..12].copy_from_slice(&length.to_le_bytes());
+        refresh_resource_identity(&mut packed.payloads[0], &resource.bytes);
+        let MeshPayloadSource::Resource {
+            resource: id,
+            content_hash,
+            ..
+        } = &packed.payloads[0].source
+        else {
+            unreachable!();
+        };
+        resource.resource = id.clone();
+        resource.content_hash = content_hash.clone();
+        resource.validate().unwrap();
+        let decoded = decode_mesh_resource_payload(&packed.payloads[0], &resource.bytes).unwrap();
+        assert_eq!(decoded.source, original.source);
     }
 
     #[test]

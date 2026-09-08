@@ -122,7 +122,9 @@ kept whole so it cannot evict its own prefix. Private baselines preserve every
 fragment until completion. Lost/interrupted transfers discard staging and use a
 fresh complete baseline. Size alone does not reconstruct a delta as a baseline.
 The worker frame retains its u32 byte-length representation; browser callers may
-choose an explicit per-batch byte budget. Resource-bundle limits are separate.
+choose an explicit per-batch byte budget. Immutable host bundles and C# content
+have no default file/count/aggregate byte quotas. Resource-format and browser
+loader restrictions remain separate.
 
 The TS `render-projection` model has no Three or DOM dependency. A mounted
 `renderer-host` surface and its `renderer-three` backend share one neutral

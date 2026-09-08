@@ -209,8 +209,12 @@ valid indices and material bindings are checked as part of the final mesh
 validation. There is no preliminary serialization solely to measure JSON size.
 The current 256-group/binding restriction remains a separate review candidate.
 
-Packed mesh resources still have 64 MiB per-resource / 256 MiB retained-set
-policies under review. Generated presentation output has no default aggregate
+Packed mesh resources use `u32` byte lengths and offsets; they have no 64 MiB
+per-resource or 256 MiB retained-set policy cap. Explicit pack sizing remains
+a caller choice. Texture/audio byte and collection quotas are removed; texture
+dimensions are checked against the active browser GPU before retained PNG
+decoding, with no fixed 4,096-pixel or texel-count policy in the model/catalog.
+Generated presentation output has no default aggregate
 byte/count cap: the host fragments large deltas without rebuilding the scene.
 Worker messages retain their actual `u32` byte-length representation constraint;
 allocation and browser/backend capacity still apply. Browser embedders may

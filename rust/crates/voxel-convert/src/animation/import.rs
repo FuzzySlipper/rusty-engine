@@ -5,7 +5,7 @@ use gltf::{buffer::Source as BufferSource, mesh::Semantic, scene::Transform};
 use super::{
     ImportedAnimatedModel, ImportedAnimationNode, ImportedNodeTransform,
     ImportedPrimitiveDeformation, ImportedSkin, MAX_IMPORTED_JOINTS_PER_SKIN,
-    MAX_IMPORTED_MORPH_POSITION_DELTAS, MAX_IMPORTED_MORPH_TARGETS, MAX_IMPORTED_SKINS,
+    MAX_IMPORTED_MORPH_POSITION_DELTAS, MAX_IMPORTED_MORPH_TARGETS,
 };
 use crate::import::{
     identity_matrix, import_animated_glb_scene, matrix_from_gltf, validate_affine_matrix,
@@ -402,14 +402,6 @@ fn import_skins(
     scene: &ImportedModelScene,
     nodes: &[ImportedAnimationNode],
 ) -> Result<Vec<ImportedSkin>, ConversionError> {
-    let skin_count = document.skins().count();
-    if skin_count > MAX_IMPORTED_SKINS {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            "source.skins",
-            format!("skin count exceeds {MAX_IMPORTED_SKINS}"),
-        ));
-    }
     let referenced = nodes
         .iter()
         .filter_map(|node| node.source_skin_index)

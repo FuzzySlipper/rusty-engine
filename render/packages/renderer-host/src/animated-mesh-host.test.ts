@@ -7,9 +7,6 @@ import test from 'node:test';
 import type { AnimationClipPack } from '@rusty-engine/render-contracts';
 import {
   loadRendererAnimatedMeshSource,
-  RendererHostError,
-  RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_COUNT,
-  RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_TOTAL_BYTES,
   type RendererAnimatedMeshResourceDescriptor,
   type RendererAnimatedMeshResourceManifest,
   type RendererAnimationClipPackResourceDescriptor,
@@ -23,11 +20,11 @@ const BASE_ASSET = 'mesh-animation/clip-pack-budget-base';
 const BASE_BYTES = fixtureBytes();
 const BASE_HASH = sha256(BASE_BYTES);
 
-void test('animated clip-pack count admits the exact boundary and rejects one over before resolving', async () => {
+void test('animated clip packs admit a set beyond the retired count cap', async () => {
   const restore = installGltfNodeGlobals();
   try {
     const packs = Array.from(
-      { length: RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_COUNT },
+      { length: 17 },
       (_, index) => packDescriptor(`clip-pack/count-${String(index)}`),
     );
     const source = await loadRendererAnimatedMeshSource(
@@ -37,63 +34,23 @@ void test('animated clip-pack count admits the exact boundary and rejects one ov
     for (const pack of packs) {
       assert.ok(source.getAnimationClipPackResource(asClipPack(pack)));
     }
-
-    const overPacks = [
-      ...packs,
-      packDescriptor('clip-pack/count-one-over'),
-    ];
-    let resolverCalls = 0;
-    await assert.rejects(
-      loadRendererAnimatedMeshSource(
-        manifest(overPacks),
-        () => {
-          resolverCalls += 1;
-          return Promise.resolve(BASE_BYTES.slice(0));
-        },
-      ),
-      (error: unknown) => error instanceof RendererHostError
-        && error.diagnostics[0]?.code === 'animated_mesh_clip_pack_budget_exceeded',
-    );
-    assert.equal(resolverCalls, 0, 'count rejection happens before any resource is resolved');
   } finally {
     restore();
   }
 });
 
-void test('animated clip-pack combined bytes admit the exact finite bound and reject one over without publishing a partial source', async () => {
+void test('animated clip packs admit bytes beyond the retired aggregate cap', async () => {
   const restore = installGltfNodeGlobals();
   try {
-    const exactBytes = paddedFixture(RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_TOTAL_BYTES);
-    const exactPack = packDescriptor('clip-pack/bytes-exact', sha256(exactBytes));
-    const exactSource = await loadRendererAnimatedMeshSource(
-      manifest([exactPack]),
+    const bytes = paddedFixture(32 * 1024 * 1024 + 1);
+    const pack = packDescriptor('clip-pack/large', sha256(bytes));
+    const source = await loadRendererAnimatedMeshSource(
+      manifest([pack]),
       (descriptor) => Promise.resolve(
-        descriptor.asset === BASE_ASSET ? BASE_BYTES.slice(0) : exactBytes.slice(0),
+        descriptor.asset === BASE_ASSET ? BASE_BYTES.slice(0) : bytes.slice(0),
       ),
     );
-    assert.ok(exactSource.getAnimationClipPackResource(asClipPack(exactPack)));
-
-    const overBytes = paddedFixture(RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_TOTAL_BYTES + 1);
-    const overPack = packDescriptor('clip-pack/bytes-one-over');
-    const callerBytes = new Uint8Array(overBytes).slice();
-    const unpublished = Symbol('unpublished');
-    let published: unknown = unpublished;
-    try {
-      published = await loadRendererAnimatedMeshSource(
-        manifest([overPack]),
-        (descriptor) => Promise.resolve(
-          descriptor.asset === BASE_ASSET ? BASE_BYTES.slice(0) : overBytes,
-        ),
-      );
-      assert.fail('one-over clip-pack bytes must reject');
-    } catch (error: unknown) {
-      assert.ok(
-        error instanceof RendererHostError
-          && error.diagnostics[0]?.code === 'animated_mesh_clip_pack_budget_exceeded',
-      );
-    }
-    assert.equal(published, unpublished, 'a previously resolved candidate is not published on rejection');
-    assert.deepEqual(new Uint8Array(overBytes), callerBytes, 'resolver-owned bytes remain untouched');
+    assert.ok(source.getAnimationClipPackResource(asClipPack(pack)));
   } finally {
     restore();
   }

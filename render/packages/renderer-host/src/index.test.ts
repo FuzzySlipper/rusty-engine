@@ -200,6 +200,27 @@ void test('mesh resource host admits exact bounded bytes and rejects drift', asy
   );
 });
 
+void test('mesh resource host admits a descriptor beyond retired per-resource and aggregate byte caps before resolver failure', async () => {
+  const digest = 'a'.repeat(64);
+  const manifest: RendererMeshResourceManifest = {
+    kind: 'rusty_renderer_mesh_resources.v1',
+    resources: [{
+      resource: `mesh-resource/${digest}`,
+      contentHash: `sha256:${digest}`,
+      byteLength: 256 * 1024 * 1024 + 1,
+    }],
+  };
+  let resolverCalls = 0;
+  await assert.rejects(
+    loadRendererMeshResourceSource(manifest, () => {
+      resolverCalls += 1;
+      return Promise.reject(new Error('fixture resolver does not allocate a 256 MiB buffer'));
+    }),
+    /fixture resolver/u,
+  );
+  assert.equal(resolverCalls, 1);
+});
+
 void test('mesh resource host snapshots resolver-owned bytes before admission', async () => {
   const expected = new Uint8Array(16);
   expected.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x31]);
@@ -268,6 +289,29 @@ void test('texture resource host admits canonical bounded bytes and snapshots re
     () => source.acquireResource(manifest.resources[0]!.resource, 'sha256:wrong', expected.byteLength),
     /does not match the admitted resource manifest/u,
   );
+});
+
+void test('texture resource host admits descriptors beyond retired byte, aggregate, and count caps before resolver failure', async () => {
+  const manifest: RendererTextureResourceManifest = {
+    kind: 'rusty_renderer_texture_resources.v1',
+    resources: Array.from({ length: 257 }, (_, index) => {
+      const digest = index.toString(16).padStart(64, '0');
+      return {
+        resource: `texture-resource/${digest}`,
+        contentHash: `sha256:${digest}`,
+        byteLength: 16 * 1024 * 1024 + 1,
+      };
+    }),
+  };
+  let resolverCalls = 0;
+  await assert.rejects(
+    loadRendererTextureResourceSource(manifest, () => {
+      resolverCalls += 1;
+      return Promise.reject(new Error('fixture resolver does not allocate a 16 MiB buffer'));
+    }),
+    /fixture resolver/u,
+  );
+  assert.equal(resolverCalls, manifest.resources.length);
 });
 
 void test('resource-backed game surface admits resources before backend mount', async () => {

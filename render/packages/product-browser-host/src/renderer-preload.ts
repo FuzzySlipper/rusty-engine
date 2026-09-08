@@ -3,15 +3,7 @@ import {
   type RustyApplicationContent,
 } from '@rusty-engine/application-host';
 
-const TEXTURE_MAX_COUNT = 256;
-const TEXTURE_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
-const TEXTURE_MAX_BYTES = 16 * 1024 * 1024;
-const AUDIO_MAX_COUNT = 64;
-const AUDIO_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
-const AUDIO_MAX_BYTES = 8 * 1024 * 1024;
-const MESH_MAX_COUNT = 1024;
-const MESH_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
-const MESH_MAX_BYTES = 64 * 1024 * 1024;
+const MAX_U32_BYTE_LENGTH = 4_294_967_295;
 
 interface RendererPreloadDescriptor {
   readonly artifact: 'rusty.product.renderer-preload.v1';
@@ -57,12 +49,6 @@ function decodeRendererPreload(value: unknown): RendererPreloadDescriptor {
     || !Array.isArray((value as { readonly resources?: unknown }).resources)) {
     throw new Error('Product renderer preload descriptor is invalid');
   }
-  let textureCount = 0;
-  let textureBytes = 0;
-  let audioCount = 0;
-  let audioBytes = 0;
-  let meshCount = 0;
-  let meshBytes = 0;
   const identities = new Set<string>();
   const paths = new Set<string>();
   const resources = (value as { readonly resources: readonly unknown[] }).resources.map(
@@ -99,26 +85,17 @@ function decodeRendererPreload(value: unknown): RendererPreloadDescriptor {
         throw new Error(`Product renderer preload resource ${String(index)} media is invalid`);
       }
       if (kind === 'texture') {
-        textureCount += 1;
-        textureBytes += resource.byteLength!;
-        if (textureCount > TEXTURE_MAX_COUNT || resource.byteLength === 0
-          || resource.byteLength! > TEXTURE_MAX_BYTES || textureBytes > TEXTURE_MAX_TOTAL_BYTES) {
-          throw new Error(`Product renderer preload texture ${String(index)} exceeds application-host bounds`);
+        if (resource.byteLength === 0) {
+          throw new Error(`Product renderer preload texture ${String(index)} has an invalid byte length`);
         }
       } else if (kind === 'audio') {
-        audioCount += 1;
-        audioBytes += resource.byteLength!;
-        if (audioCount > AUDIO_MAX_COUNT || resource.byteLength! < 44
-          || resource.byteLength! > AUDIO_MAX_BYTES || audioBytes > AUDIO_MAX_TOTAL_BYTES) {
-          throw new Error(`Product renderer preload audio ${String(index)} exceeds application-host bounds`);
+        if (resource.byteLength! < 44) {
+          throw new Error(`Product renderer preload audio ${String(index)} has an invalid WAV byte length`);
         }
       } else {
-        meshCount += 1;
-        meshBytes += resource.byteLength!;
         const minimumBytes = kind === 'animated-mesh' || kind === 'clip-pack' ? 20 : 16;
-        if (meshCount > MESH_MAX_COUNT || resource.byteLength! < minimumBytes
-          || resource.byteLength! > MESH_MAX_BYTES || meshBytes > MESH_MAX_TOTAL_BYTES) {
-          throw new Error(`Product renderer preload mesh ${String(index)} exceeds application-host bounds`);
+        if (resource.byteLength! < minimumBytes || resource.byteLength! > MAX_U32_BYTE_LENGTH) {
+          throw new Error(`Product renderer preload mesh ${String(index)} has an invalid format byte length`);
         }
       }
       return Object.freeze({

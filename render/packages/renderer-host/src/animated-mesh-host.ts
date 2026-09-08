@@ -21,7 +21,6 @@ export type RendererHostDiagnosticCode =
   | 'animated_mesh_missing_joint'
   | 'animated_mesh_malformed_channels'
   | 'animated_mesh_unsupported_root_policy'
-  | 'animated_mesh_clip_pack_budget_exceeded'
   | 'renderer_lighting_policy_rejected'
   | 'renderer_frame_rejected'
   | 'renderer_terminal'
@@ -77,10 +76,6 @@ export interface RendererAnimatedMeshResourceManifest {
   readonly resources: readonly RendererAnimatedMeshResourceDescriptor[];
   readonly clipPacks?: readonly RendererAnimationClipPackResourceDescriptor[];
 }
-
-/** Direct optional clip packs are deliberately bounded independently of base meshes. */
-export const RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_COUNT = 16;
-export const RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 
 export type RendererAnimatedMeshResourceResolver = (
   descriptor: RendererAnimatedMeshResourceDescriptor,
@@ -229,24 +224,15 @@ export async function loadRendererAnimatedMeshSource(
     }
     return resource;
   }));
-  // Packs are optional add-ons. Admit them sequentially so an unbounded
-  // Promise.all fanout cannot retain many decoded candidates before the first
-  // failing pack is observed.
+  // Packs are optional add-ons. Admit them sequentially so failures stop
+  // later resolver work and preserve ordered source construction.
   const packs = [];
-  let packBytes = 0;
   for (const descriptor of manifest.clipPacks ?? []) {
     let data: ArrayBuffer;
     try { data = await resolver(descriptor); } catch (cause) {
       throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
     }
     const immutableData = data.slice(0);
-    packBytes += immutableData.byteLength;
-    if (packBytes > RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_TOTAL_BYTES) {
-      throw hostError(
-        'animated_mesh_clip_pack_budget_exceeded', descriptor.asset, null,
-        `animated clip packs exceed ${String(RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_TOTAL_BYTES)} bytes`,
-      );
-    }
     const actualHash = await rendererResourceContentHash(immutableData, descriptor.contentHash);
     if (actualHash !== descriptor.contentHash) {
       throw hostError('animated_mesh_content_hash_mismatch', descriptor.asset, null, `expected ${descriptor.contentHash}, received ${actualHash}`);
@@ -428,9 +414,6 @@ function validateManifest(manifest: RendererAnimatedMeshResourceManifest): void 
     assets.add(resource.asset);
   }
   const packs = new Set<string>();
-  if ((manifest.clipPacks?.length ?? 0) > RUSTY_RENDERER_ANIMATED_CLIP_PACK_MAX_COUNT) {
-    throw hostError('animated_mesh_clip_pack_budget_exceeded', null, null, 'animated clip pack count exceeds the aggregate limit');
-  }
   for (const resource of manifest.clipPacks ?? []) {
     const validHash = /^(?:sha256:[0-9a-f]{64}|[0-9a-f]{16})$/u.test(resource.contentHash);
     const sourceNames = resource.clipSourceNames ?? resource.clipIds;

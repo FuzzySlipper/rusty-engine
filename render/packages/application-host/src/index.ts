@@ -6,9 +6,6 @@ export {
   mountRustyApplication,
 } from './application-host.js';
 export {
-  RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES,
-  RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT,
-  RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES,
   RustyApplicationContentError,
 } from './application-content.js';
 export function rendererResourceContentHash(

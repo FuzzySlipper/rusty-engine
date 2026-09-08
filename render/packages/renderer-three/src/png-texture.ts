@@ -86,6 +86,12 @@ function decodePngRgba8(bytes: Uint8Array, width: number, height: number): Decod
   }
   if (!sawHeader || !sawEnd || idat.length === 0) throw new PngTextureError('incomplete PNG stream');
 
+  const rowBytes = width * 4;
+  const expectedFiltered = height * (rowBytes + 1);
+  const pixelBytes = width * height * 4;
+  if (!Number.isSafeInteger(expectedFiltered) || !Number.isSafeInteger(pixelBytes)) {
+    throw new PngTextureError('decoded PNG byte lengths exceed integer representation');
+  }
   const compressedLength = idat.reduce((sum, chunk) => sum + chunk.byteLength, 0);
   const compressed = new Uint8Array(compressedLength);
   let cursor = 0;
@@ -99,12 +105,10 @@ function decodePngRgba8(bytes: Uint8Array, width: number, height: number): Decod
   } catch (cause) {
     throw new PngTextureError(`PNG deflate stream is invalid: ${cause instanceof Error ? cause.message : String(cause)}`);
   }
-  const rowBytes = width * 4;
-  const expectedFiltered = height * (rowBytes + 1);
   if (filtered.byteLength !== expectedFiltered) {
     throw new PngTextureError(`decoded PNG length ${String(filtered.byteLength)} does not match ${String(expectedFiltered)}`);
   }
-  const pixels = new Uint8Array(width * height * 4);
+  const pixels = new Uint8Array(pixelBytes);
   for (let row = 0; row < height; row++) {
     const filterOffset = row * (rowBytes + 1);
     const filter = filtered[filterOffset] as number;

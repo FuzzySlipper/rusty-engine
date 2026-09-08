@@ -19,8 +19,8 @@ pub const MAX_IMPORTED_ANIMATION_CLIPS: usize = 64;
 pub const MAX_IMPORTED_ANIMATION_CHANNELS: usize = 4_096;
 pub const MAX_IMPORTED_ANIMATION_KEYFRAMES: usize = 1_000_000;
 pub const MAX_IMPORTED_ANIMATION_VALUES: usize = 4_000_000;
-pub const MAX_IMPORTED_SKINS: usize = 128;
-pub const MAX_IMPORTED_JOINTS_PER_SKIN: usize = 256;
+/// JOINTS accessors address a skin-local table with unsigned 16-bit ordinals.
+pub const MAX_IMPORTED_JOINTS_PER_SKIN: usize = u16::MAX as usize + 1;
 pub const MAX_IMPORTED_MORPH_TARGETS: usize = 64;
 pub const MAX_IMPORTED_MORPH_POSITION_DELTAS: usize = 4_000_000;
 pub const MAX_ANIMATION_SAMPLE_RATE_HZ: u32 = 240;

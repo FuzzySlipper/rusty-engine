@@ -264,6 +264,9 @@ export async function loadAnimatedMeshGlbResource(
   contentHash?: string,
   embeddedMaterialSlots: readonly { readonly slot: number; readonly sourceMaterialSlot: number }[] = [],
 ): Promise<AnimatedMeshResource> {
+  if (data.byteLength > 4_294_967_295) {
+    throw new AnimatedMeshApplyError('loadAnimatedMeshGlbResource: GLB byte length exceeds its u32 representation');
+  }
   const loader = new GLTFLoader();
   const gltf = await new Promise<GLTF>((resolve, reject) => {
     loader.parse(data, '', resolve, reject);
@@ -1365,7 +1368,7 @@ function holdSample(
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new AnimatedMeshApplyError(`sampleAnimatedMesh: clip ${clipId} has an invalid duration`);
   }
-  // Skinning inspection is a bounded preflight. It must complete before the
+  // Skinning inspection is a preflight. It must complete before the
   // disposable mixer or playback record changes so rejection is fail-atomic.
   const skinningFacts = animatedMeshSkinningFacts(instance.object, asset.scene, action.getClip());
   invalidateNaturalCompletion(instance);
@@ -1797,7 +1800,6 @@ function diagnoseAnimatedMeshSample(
   };
 }
 
-const ANIMATED_MESH_SAMPLE_MAX_JOINTS = 256;
 const NORMALIZED_WEIGHT_TOLERANCE = 1e-4;
 
 function animatedMeshSkinningFacts(
@@ -1821,12 +1823,6 @@ function animatedMeshSkinningFacts(
       });
     }
   });
-  if (templateBones.size > ANIMATED_MESH_SAMPLE_MAX_JOINTS) {
-    throw new AnimatedMeshApplyError(
-      `sampleAnimatedMesh: joint count exceeds ${ANIMATED_MESH_SAMPLE_MAX_JOINTS}`,
-    );
-  }
-
   let skinnedMeshCount = 0;
   let inverseBindMatrixCount = 0;
   let inverseBindMatricesFinite = true;

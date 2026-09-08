@@ -336,6 +336,10 @@ export function mountRendererBrowserSurface(
   options: RendererBrowserSurfaceOptions = {},
 ): RendererBrowserSurface {
   const lighting = normalizeLightingOptions(options.lighting);
+  const constructionCleanup: (() => void)[] = [];
+  try {
+  const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
+  constructionCleanup.push(() => webgl.dispose());
   const renderer = new ThreeRenderer(
     {
       ...(options.animatedMeshSource === undefined
@@ -355,6 +359,7 @@ export function mountRendererBrowserSurface(
         createViewmodelLights: () => lighting.defaultLights.viewmodel === 'neutral'
           ? createNeutralLights([2, 3, 2]) : [],
       }),
+      maximumTextureDimension: webgl.capabilities.maxTextureSize,
       shadowsEnabled: lighting.shadows.enabled,
       maximumActiveShadowLights: lighting.shadows.maximumActiveLights,
     },
@@ -362,8 +367,7 @@ export function mountRendererBrowserSurface(
   // Mount has several independent WebGL owners. Keep their release actions in
   // one outer transaction so a context/allocation/configuration failure never
   // strands a renderer or canvas-backed context before the surface exists.
-  const constructionCleanup: (() => void)[] = [() => renderer.dispose()];
-  try {
+  constructionCleanup.push(() => renderer.dispose());
   if (options.fog !== undefined) {
     const { color, near, far } = options.fog;
     if (!Number.isInteger(color) || color < 0 || color > 0xff_ffff
@@ -393,8 +397,6 @@ export function mountRendererBrowserSurface(
     throw cause;
   }
 
-  const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
-  constructionCleanup.push(() => webgl.dispose());
   webgl.shadowMap.enabled = lighting.shadows.enabled;
   const webglContext = webgl.getContext();
   const gpuSubmissionClass = classifyGpuSubmissionRenderer(webglContext);

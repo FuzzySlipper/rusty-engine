@@ -135,6 +135,28 @@ void test('clip-pack joint identities use decoded Three binding names only', () 
   assert.throws(() => decodeRenderFrameDiff(frame), ContractDecodeError);
 });
 
+void test('clip-pack rigs admit more than 256 named joints when their hierarchy remains valid', () => {
+  const frame = mutableFixture('retained-frame-v1.json');
+  const operations = frame['ops'] as { op?: string; asset?: Record<string, unknown> }[];
+  const animated = operations.find((operation) => operation.op === 'defineAnimatedMesh');
+  assert.ok(animated?.asset);
+  const joints = Array.from({ length: 257 }, (_, index) => ({
+    id: `joint-${String(index)}`,
+    parent: index === 0 ? null : `joint-${String(index - 1)}`,
+  }));
+  animated.asset!['clipPacks'] = [{
+    asset: 'animation-clip-pack/large-rig', runtimeFormat: 'glb', contentHash: `sha256:${'a'.repeat(64)}`,
+    rig: {
+      joints, bindRestHash: `sha256:${'a'.repeat(64)}`,
+      bindRestConvention: 'localMatrixV1', rootConvention: 'inPlace', rootJointId: 'joint-0',
+      structuralRootIds: ['joint-0'], designatedMotionRootIds: [], authoredPoseTranslationJointIds: [],
+    },
+    clips: [{ id: 'wave', name: 'wave', durationSeconds: 1 }],
+    provenance: { producer: 'fixture', sourceHash: `sha256:${'a'.repeat(64)}`, targetHash: `sha256:${'a'.repeat(64)}`, license: 'CC0-1.0' },
+  }];
+  assert.equal(decodeRenderFrameDiff(frame).ops.length, operations.length);
+});
+
 void test('sky backgrounds decode as a narrow nullable texture reference', () => {
   const frame = decodeRenderFrameDiff({
     schemaVersion: 1,
@@ -355,8 +377,11 @@ void test('texture payload decoding is strict, bounded, and content-addressed', 
   assert.throws(() => decodeRenderFrameDiff(drift), /canonical texture content hash/u);
 
   const oversized = structuredClone(frame);
-  oversized.ops[0]!.texture.width = 4_097;
-  assert.throws(() => decodeRenderFrameDiff(oversized), /must be in 1\.\.=4096/u);
+  oversized.ops[0]!.texture.width = 8_192;
+  oversized.ops[0]!.texture.height = 8_192;
+  assert.equal(decodeRenderFrameDiff(oversized).ops.length, 1);
+  oversized.ops[0]!.texture.width = 4_294_967_296;
+  assert.throws(() => decodeRenderFrameDiff(oversized), /must be in 1\.\.=4294967295/u);
 
   const unknown = structuredClone(frame) as typeof frame & {
     ops: Array<{ texture: { payload: Record<string, unknown> } }>;
@@ -602,6 +627,14 @@ void test('content-addressed mesh resources validate identity, layout, and bound
     }],
   };
   assert.equal(decodeRenderFrameDiff(frame).ops.length, 1);
+
+  const beyondRetiredResourceLimit = structuredClone(frame);
+  beyondRetiredResourceLimit.ops[0]!.payload.source.byteLength = 64 * 1024 * 1024 + 1;
+  assert.equal(decodeRenderFrameDiff(beyondRetiredResourceLimit).ops.length, 1);
+
+  const beyondU32ResourceLimit = structuredClone(frame);
+  beyondU32ResourceLimit.ops[0]!.payload.source.byteLength = 4_294_967_296;
+  assert.throws(() => decodeRenderFrameDiff(beyondU32ResourceLimit), /must be in 16\.\.=4294967295/u);
 
   const wrongIdentity = structuredClone(frame);
   wrongIdentity.ops[0]!.payload.source.resource = `mesh-resource/${'2'.repeat(64)}`;

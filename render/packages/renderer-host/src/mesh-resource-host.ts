@@ -2,9 +2,7 @@ import type { MeshResourceSource } from '@rusty-engine/renderer-three/backend';
 
 import { rendererResourceContentHash } from './resource-content-hash.js';
 
-export const RUSTY_RENDERER_MESH_RESOURCE_MAX_BYTES = 64 * 1024 * 1024;
-export const RUSTY_RENDERER_MESH_RESOURCE_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
-export const RUSTY_RENDERER_MESH_RESOURCE_MAX_COUNT = 1024;
+const MAX_RMESH_BYTE_LENGTH = 4_294_967_295;
 
 export interface RendererMeshResourceDescriptor {
   readonly resource: string;
@@ -99,24 +97,21 @@ export async function loadRendererMeshResourceSource(
 }
 
 function validateManifest(manifest: RendererMeshResourceManifest): void {
-  if (manifest.kind !== 'rusty_renderer_mesh_resources.v1'
-    || manifest.resources.length === 0
-    || manifest.resources.length > RUSTY_RENDERER_MESH_RESOURCE_MAX_COUNT) {
+  if (manifest.kind !== 'rusty_renderer_mesh_resources.v1' || manifest.resources.length === 0) {
     throw resourceError(
       'mesh_resource_manifest_invalid',
       null,
-      'mesh resource manifest is empty, oversized, or unsupported',
+      'mesh resource manifest is empty or unsupported',
     );
   }
   const identities = new Set<string>();
-  let totalBytes = 0;
   for (const descriptor of manifest.resources) {
     const digest = /^sha256:([0-9a-f]{64})$/u.exec(descriptor.contentHash)?.[1];
     if (digest === undefined
       || descriptor.resource !== `mesh-resource/${digest}`
       || !Number.isSafeInteger(descriptor.byteLength)
       || descriptor.byteLength < 16
-      || descriptor.byteLength > RUSTY_RENDERER_MESH_RESOURCE_MAX_BYTES
+      || descriptor.byteLength > MAX_RMESH_BYTE_LENGTH
       || identities.has(descriptor.resource)) {
       throw resourceError(
         'mesh_resource_manifest_invalid',
@@ -125,14 +120,6 @@ function validateManifest(manifest: RendererMeshResourceManifest): void {
       );
     }
     identities.add(descriptor.resource);
-    totalBytes += descriptor.byteLength;
-    if (totalBytes > RUSTY_RENDERER_MESH_RESOURCE_MAX_TOTAL_BYTES) {
-      throw resourceError(
-        'mesh_resource_manifest_invalid',
-        descriptor.resource,
-        'mesh resource manifest exceeds the aggregate byte bound',
-      );
-    }
   }
 }
 

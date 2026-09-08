@@ -2,9 +2,6 @@ import { type RendererMeshResourceDescriptor, type RendererMeshResourceManifest,
 import type { RustyApplicationFrame } from './application-host.js';
 import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture';
-export declare const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES: number;
-export declare const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT = 64;
-export declare const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES: number;
 export interface RustyApplicationResource {
     readonly identity: string;
     readonly contentHash: string;
@@ -35,6 +32,8 @@ export interface PreparedRustyApplicationContent {
     readonly resourceBytes: number;
     readonly publicationFrontiers: readonly RenderPublicationFrontier[];
 }
+/** Renderer resolvers borrow prepared bytes. Consumers must not mutate or detach
+ * them; renderer resource loaders snapshot them when admitting resources. */
 export interface RustyApplicationSurfaceResourceOptions {
     readonly animatedMeshManifest?: RendererAnimatedMeshResourceManifest;
     readonly resolveAnimatedMeshResource?: RendererAnimatedMeshResourceResolver;

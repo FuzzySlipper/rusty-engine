@@ -2,7 +2,7 @@ use core_assets::{AssetId, AssetKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use voxel_asset::{
-    MAX_CONVERSION_SOURCE_BYTES, MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
+    MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
 };
 
 use crate::{
@@ -15,7 +15,6 @@ use crate::{
 pub const MAX_MESH_SOURCE_ASSET_ID_BYTES: usize = 1_024;
 pub const MAX_MESH_SOURCE_PATH_BYTES: usize = 8_192;
 pub const MAX_MESH_PRIMITIVE_BYTES: usize = 1_024;
-pub const MAX_MESH_IMPORT_REQUEST_BYTES: u64 = MAX_CONVERSION_SOURCE_BYTES * 4 + 32_768;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -348,16 +347,6 @@ fn select_primitive_group(
 pub fn decode_mesh_source_import_request(
     input: &str,
 ) -> Result<MeshSourceImportRequest, ConversionError> {
-    if input.len() as u64 > MAX_MESH_IMPORT_REQUEST_BYTES {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            "$",
-            format!(
-                "mesh import request has {} bytes; limit is {MAX_MESH_IMPORT_REQUEST_BYTES}",
-                input.len()
-            ),
-        ));
-    }
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let request = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
         ConversionError::one(
@@ -426,16 +415,11 @@ fn validate_import_request(
     if let Some(mesh_primitive) = &request.mesh_primitive {
         validate_string(mesh_primitive, "meshPrimitive", MAX_MESH_PRIMITIVE_BYTES)?;
     }
-    if request.source_bytes.is_empty()
-        || request.source_bytes.len() as u64 > MAX_CONVERSION_SOURCE_BYTES
-    {
+    if request.source_bytes.is_empty() {
         return Err(ConversionError::one(
-            "conversion.resourceLimit",
+            "conversion.invalidSource",
             "sourceBytes",
-            format!(
-                "source byte count {} is outside 1..={MAX_CONVERSION_SOURCE_BYTES}",
-                request.source_bytes.len()
-            ),
+            "source body is empty",
         ));
     }
     if let Some(expected) = &request.expected_source_sha256 {

@@ -219,9 +219,16 @@ fn command_content<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E
 }
 
 fn command_import_source<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
-    let Some((path, input)) = one_input(args, "import-source", asset_import::MAX_SOURCE_BYTES, err)
-    else {
-        return if args.len() == 1 { 2 } else { 3 };
+    let [path] = args else {
+        let _ = writeln!(err, "error: `import-source` requires one artifact path");
+        return 3;
+    };
+    let input = match std::fs::read_to_string(path) {
+        Ok(input) => input,
+        Err(error) => {
+            let _ = writeln!(err, "error: cannot read {path}: {error}");
+            return 2;
+        }
     };
     let report = inspect_import_source(&input, path, &ImportContext::default());
     finish_report(report.to_text(), &report.diagnostics, out)

@@ -19,9 +19,8 @@ mod source;
 
 pub use animated_glb::{
     import_animated_glb_asset, AnimatedGlbImportOutcome, AnimatedGlbImportReceipt,
-    GlbAnimationKind, ImportedAnimatedGlb, MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES,
-    MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES, MAX_ANIMATED_GLB_IMAGES, MAX_ANIMATED_GLB_JOINTS,
-    MAX_ANIMATED_GLB_MATERIALS, MAX_ANIMATED_GLB_TEXTURES, SUPPORTED_ANIMATED_GLB_VERSION,
+    GlbAnimationKind, ImportedAnimatedGlb,
+    SUPPORTED_ANIMATED_GLB_VERSION,
 };
 pub use artifact::{
     render_animated_glb_artifacts, render_artifacts, ArtifactRenderError, GeneratedArtifact,
@@ -29,8 +28,7 @@ pub use artifact::{
 pub use diagnostic::{ImportCode, ImportDiagnostic, ImportSeverity};
 pub use gltf_package::{
     admit_glb_source, admit_gltf_source, glb_relative_resource_uris, gltf_relative_resource_uris,
-    GlbSourceClosure, GltfResource, GltfSourceClosure, PackedGltfSource, MAX_GLTF_RESOURCE_BYTES,
-    MAX_GLTF_RESOURCE_COUNT, MAX_GLTF_TOTAL_RESOURCE_BYTES,
+    GlbSourceClosure, GltfResource, GltfSourceClosure, PackedGltfSource,
 };
 pub use importer::{import, import_with_context, ImportContext, ImportOutcome, ImportedAssets};
 pub use manifest::{
@@ -53,7 +51,7 @@ pub use sidecar::{
 };
 pub use source::{
     parse_source, SourceCollision, SourceGroup, SourceMaterial, SourceMesh, SourceParse,
-    MAX_SOURCE_BYTES, MAX_SOURCE_INDICES, MAX_SOURCE_VERTICES, SUPPORTED_SOURCE_SCHEMA,
+    MAX_SOURCE_INDICES, MAX_SOURCE_VERTICES, SUPPORTED_SOURCE_SCHEMA,
 };
 
 pub const IMPORTER_VERSION: u32 = 2;

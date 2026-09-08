@@ -275,43 +275,6 @@ export interface RendererSkyBackgroundReadout {
   readonly resource: string | null;
 }
 
-export const RUSTY_RENDERER_TEXTURE_MAX_RETAINED = 256;
-export const RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES = 128 * 1024 * 1024;
-export const RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES = 256 * 1024 * 1024;
-
-export interface RendererTextureResourceBudget {
-  readonly count: number;
-  readonly encodedBytes: number;
-  readonly decodedBytes: number;
-}
-
-/** Checked prospective admission shared by retained-frame preflight and quota proof. */
-export function admitRendererTextureResourceBudget(
-  current: RendererTextureResourceBudget,
-  previous: Pick<RendererTextureResourceReadout, 'encodedBytes' | 'decodedBytes'> | undefined,
-  next: Pick<RendererTextureResourceReadout, 'encodedBytes' | 'decodedBytes'> | undefined,
-): RendererTextureResourceBudget {
-  const count = current.count - (previous === undefined ? 0 : 1) + (next === undefined ? 0 : 1);
-  const encodedBytes = current.encodedBytes - (previous?.encodedBytes ?? 0)
-    + (next?.encodedBytes ?? 0);
-  const decodedBytes = current.decodedBytes - (previous?.decodedBytes ?? 0)
-    + (next?.decodedBytes ?? 0);
-  if (![count, encodedBytes, decodedBytes].every(Number.isSafeInteger)
-    || count < 0 || encodedBytes < 0 || decodedBytes < 0) {
-    throw new RenderApplyError('defineTexture: texture resource budget arithmetic is invalid');
-  }
-  if (count > RUSTY_RENDERER_TEXTURE_MAX_RETAINED) {
-    throw new RenderApplyError('defineTexture: retained texture quota exceeded');
-  }
-  if (encodedBytes > RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES) {
-    throw new RenderApplyError('defineTexture: aggregate encoded texture byte quota exceeded');
-  }
-  if (decodedBytes > RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES) {
-    throw new RenderApplyError('defineTexture: aggregate decoded texture byte quota exceeded');
-  }
-  return { count, encodedBytes, decodedBytes };
-}
-
 interface RetainedTextureResource {
   readonly texture: THREE.DataTexture;
   readonly readout: RendererTextureResourceReadout;
@@ -419,6 +382,7 @@ export class ThreeRenderer {
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
   readonly #maximumActiveShadowLights: number;
+  readonly #maximumTextureDimension: number | undefined;
   /**
    * The renderer realizes this neutral retained model. Mounted surfaces inject
    * their projection so the host and backend cannot advance independent
@@ -452,11 +416,18 @@ export class ThreeRenderer {
     isolatedCaptureLighting?: ThreeRendererIsolatedCaptureLighting;
     shadowsEnabled?: boolean;
     maximumActiveShadowLights?: number;
+    /** Active backend MAX_TEXTURE_SIZE; omitted for CPU-only realization. */
+    maximumTextureDimension?: number;
     /** Complete-replacement stream continuation points installed before the recovered frame. */
     publicationFrontiers?: readonly RenderPublicationFrontier[];
     /** Shared renderer-neutral retained state for one mounted surface. */
     projection?: RenderProjection;
   } = {}) {
+    this.#maximumTextureDimension = options.maximumTextureDimension;
+    if (this.#maximumTextureDimension !== undefined
+      && (!Number.isSafeInteger(this.#maximumTextureDimension) || this.#maximumTextureDimension < 1)) {
+      throw new RangeError('maximumTextureDimension must be a positive device capability');
+    }
     this.#meshBufferSource = options.meshBufferSource;
     this.#meshResourceSource = options.meshResourceSource;
     this.#textureResourceSource = options.textureResourceSource;
@@ -504,6 +475,7 @@ export class ThreeRenderer {
       ...(this.#meshResourceSource === undefined ? {} : { meshResourceSource: this.#meshResourceSource }),
       ...(this.#textureResourceSource === undefined ? {} : { textureResourceSource: this.#textureResourceSource }),
       ...(this.#animatedMeshSource === undefined ? {} : { animatedMeshSource: this.#animatedMeshSource }),
+      ...(this.#maximumTextureDimension === undefined ? {} : { maximumTextureDimension: this.#maximumTextureDimension }),
       shadowsEnabled: this.#shadowsEnabled,
       maximumActiveShadowLights: this.#maximumActiveShadowLights,
     });
@@ -933,12 +905,7 @@ export class ThreeRenderer {
     const materialDescriptors = new Map(
       [...this.#materials].map(([id, value]) => [id, structuredClone(value)]),
     );
-    const texturePayloads = new Map([...this.#textureResources].map(([id, value]) => [id, value.readout]));
-    let textureBudget: RendererTextureResourceBudget = {
-      count: texturePayloads.size,
-      encodedBytes: [...texturePayloads.values()].reduce((sum, value) => sum + value.encodedBytes, 0),
-      decodedBytes: [...texturePayloads.values()].reduce((sum, value) => sum + value.decodedBytes, 0),
-    };
+    const texturePayloads = new Set(this.#textureResources.keys());
     try {
       for (let index = 0; index < frame.ops.length; index += 1) {
         const operation = frame.ops[index]!;
@@ -965,29 +932,18 @@ export class ThreeRenderer {
             this.#meshResourceSource,
           ));
         } else if (operation.op === 'defineTexture') {
-          const previous = texturePayloads.get(operation.texture.id);
           const payload = operation.texture.payload;
           if (payload === undefined) {
-            textureBudget = admitRendererTextureResourceBudget(textureBudget, previous, undefined);
             texturePayloads.delete(operation.texture.id);
             prepared.textures.set(index, null);
           } else {
-            const nextDecoded = operation.texture.width * operation.texture.height * 4;
-            const prospective = {
-              encodedBytes: payload.byteLength,
-              decodedBytes: nextDecoded,
-            };
-            textureBudget = admitRendererTextureResourceBudget(
-              textureBudget,
-              previous,
-              prospective,
-            );
             const retained = prepareTextureResource(
               operation.texture,
               this.#textureResourceSource,
               'defineTexture',
+              this.#maximumTextureDimension,
             );
-            texturePayloads.set(operation.texture.id, retained.readout);
+            texturePayloads.add(operation.texture.id);
             prepared.textures.set(index, retained);
           }
           textureDescriptors.set(operation.texture.id, structuredClone(operation.texture));
@@ -3170,7 +3126,12 @@ function prepareTextureResource(
   descriptor: TextureDescriptor,
   resourceSource: TextureResourceSource | undefined,
   ctx: string,
+  maximumTextureDimension: number | undefined,
 ): RetainedTextureResource {
+  if (maximumTextureDimension !== undefined
+    && (descriptor.width > maximumTextureDimension || descriptor.height > maximumTextureDimension)) {
+    throw new RenderApplyError(`${ctx}: texture ${descriptor.id} dimensions ${String(descriptor.width)}x${String(descriptor.height)} exceed device maximum ${String(maximumTextureDimension)}`);
+  }
   const payload = descriptor.payload;
   if (payload === undefined) {
     throw new RenderApplyError(`${ctx}: texture ${descriptor.id} has no retained payload`);

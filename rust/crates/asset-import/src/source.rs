@@ -3,7 +3,6 @@ use serde::Deserialize;
 use crate::{ImportCode, ImportDiagnostic};
 
 pub const SUPPORTED_SOURCE_SCHEMA: u32 = 1;
-pub const MAX_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_SOURCE_VERTICES: usize = 16_000_000;
 pub const MAX_SOURCE_INDICES: usize = 48_000_000;
 
@@ -99,17 +98,6 @@ struct StoredProxy {
 }
 
 pub fn parse_source(text: &str, locus: &str) -> SourceParse {
-    if text.len() > MAX_SOURCE_BYTES {
-        return failed(ImportDiagnostic::error(
-            ImportCode::SourceTooLarge,
-            locus,
-            format!(
-                "source is {} bytes; limit is {MAX_SOURCE_BYTES}",
-                text.len()
-            ),
-            "split or simplify the offline source asset",
-        ));
-    }
     let mut deserializer = serde_json::Deserializer::from_str(text);
     let stored: StoredSource = match serde_path_to_error::deserialize(&mut deserializer) {
         Ok(value) => value,

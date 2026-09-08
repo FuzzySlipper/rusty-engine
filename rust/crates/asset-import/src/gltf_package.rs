@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -5,11 +6,7 @@ use gltf::{buffer::Source as BufferSource, image::Source as ImageSource};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::{ImportCode, ImportDiagnostic, MAX_SOURCE_BYTES};
-
-pub const MAX_GLTF_RESOURCE_COUNT: usize = 256;
-pub const MAX_GLTF_RESOURCE_BYTES: usize = 64 * 1024 * 1024;
-pub const MAX_GLTF_TOTAL_RESOURCE_BYTES: usize = 128 * 1024 * 1024;
+use crate::{ImportCode, ImportDiagnostic};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GltfResource {
@@ -80,7 +77,7 @@ fn relative_resource_uris(parsed: &gltf::Gltf) -> Result<Vec<String>, ImportDiag
 /// it into the Engine's existing self-contained GLB runtime contract.
 pub fn admit_gltf_source(source: &GltfSourceClosure) -> Result<PackedGltfSource, ImportDiagnostic> {
     let parsed = parse_root(&source.root_json)?;
-    let expected_uris = gltf_relative_resource_uris(&source.root_json)?;
+    let expected_uris = relative_resource_uris(&parsed)?;
     let resources = validate_resources(&source.resources)?;
     let supplied_uris = resources.keys().cloned().collect::<Vec<_>>();
     if expected_uris != supplied_uris {
@@ -108,7 +105,7 @@ pub fn admit_gltf_source(source: &GltfSourceClosure) -> Result<PackedGltfSource,
             ImportCode::ExternalResource,
             path,
             message,
-            "provide exactly the bounded resource closure referenced by the root document",
+            "provide exactly the complete resource closure referenced by the root document",
         ));
     }
 
@@ -139,7 +136,7 @@ pub fn admit_gltf_source(source: &GltfSourceClosure) -> Result<PackedGltfSource,
                     ImportCode::InvalidContainer,
                     format!("source.buffers[{}]", buffer.index()),
                     "JSON glTF cannot refer to an embedded GLB BIN chunk",
-                    "use a relative or bounded data URI for each JSON glTF buffer",
+                    "use a relative or data URI for each JSON glTF buffer",
                 ));
             }
             BufferSource::Uri(uri) => resolve_uri_bytes(
@@ -195,11 +192,11 @@ pub fn admit_gltf_source(source: &GltfSourceClosure) -> Result<PackedGltfSource,
 }
 
 /// Validates a complete immutable binary GLB closure and packs its embedded
-/// BIN chunk plus any bounded relative buffers/images into one self-contained
+/// BIN chunk plus any relative buffers/images into one self-contained
 /// GLB for the ordinary renderer resource path.
 pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, ImportDiagnostic> {
     let parsed = parse_glb_root(&source.root_glb)?;
-    let expected_uris = glb_relative_resource_uris(&source.root_glb)?;
+    let expected_uris = relative_resource_uris(&parsed)?;
     let resources = validate_resources(&source.resources)?;
     require_exact_resources(&expected_uris, &resources)?;
 
@@ -213,7 +210,7 @@ pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, I
         )
     })?;
 
-    let embedded = parsed.blob.clone().ok_or_else(|| {
+    let embedded = parsed.blob.as_deref().ok_or_else(|| {
         error(
             ImportCode::InvalidContainer,
             "source",
@@ -229,7 +226,7 @@ pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, I
         let bytes = match buffer.source() {
             BufferSource::Bin if !embedded_seen => {
                 embedded_seen = true;
-                embedded.clone()
+                Cow::Borrowed(embedded)
             }
             BufferSource::Bin => {
                 return Err(error(
@@ -299,7 +296,7 @@ pub fn admit_glb_source(source: &GlbSourceClosure) -> Result<PackedGltfSource, I
 
 fn require_exact_resources(
     expected_uris: &[String],
-    resources: &BTreeMap<String, Vec<u8>>,
+    resources: &BTreeMap<String, &[u8]>,
 ) -> Result<(), ImportDiagnostic> {
     let supplied_uris = resources.keys().cloned().collect::<Vec<_>>();
     if expected_uris == supplied_uris {
@@ -323,22 +320,11 @@ fn require_exact_resources(
         ImportCode::ExternalResource,
         "source.resources",
         message,
-        "provide exactly the bounded resource closure referenced by the root document",
+        "provide exactly the complete resource closure referenced by the root document",
     ))
 }
 
 fn parse_root(root_json: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
-    if root_json.is_empty() || root_json.len() > MAX_SOURCE_BYTES {
-        return Err(error(
-            ImportCode::SourceTooLarge,
-            "source",
-            format!(
-                "glTF root byte count {} is outside 1..={MAX_SOURCE_BYTES}",
-                root_json.len()
-            ),
-            "supply one bounded glTF JSON root",
-        ));
-    }
     let parsed = gltf::Gltf::from_slice(root_json).map_err(|failure| {
         error(
             ImportCode::InvalidContainer,
@@ -360,16 +346,18 @@ fn parse_root(root_json: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
 }
 
 fn parse_glb_root(root_glb: &[u8]) -> Result<gltf::Gltf, ImportDiagnostic> {
-    if root_glb.is_empty() || root_glb.len() > MAX_SOURCE_BYTES {
-        return Err(error(
-            ImportCode::SourceTooLarge,
-            "source",
-            format!(
-                "GLB root byte count {} is outside 1..={MAX_SOURCE_BYTES}",
-                root_glb.len()
-            ),
-            "supply one bounded binary GLB root",
-        ));
+    if root_glb.len() >= 12 && &root_glb[..4] == b"glTF" {
+        let declared_length =
+            u32::from_le_bytes(root_glb[8..12].try_into().expect("fixed GLB header slice"))
+                as usize;
+        if declared_length != root_glb.len() {
+            return Err(error(
+                ImportCode::InvalidContainer,
+                "source",
+                "GLB header declared length does not match input byte count",
+                "export a valid binary glTF 2.0 file",
+            ));
+        }
     }
     let parsed = gltf::Gltf::from_slice(root_glb).map_err(|failure| {
         error(
@@ -428,20 +416,8 @@ fn document_resource_uris(parsed: &gltf::Gltf) -> Vec<(String, &str)> {
 
 fn validate_resources(
     resources: &[GltfResource],
-) -> Result<BTreeMap<String, Vec<u8>>, ImportDiagnostic> {
-    if resources.len() > MAX_GLTF_RESOURCE_COUNT {
-        return Err(error(
-            ImportCode::ResourceLimit,
-            "source.resources",
-            format!(
-                "resource count {} exceeds {MAX_GLTF_RESOURCE_COUNT}",
-                resources.len()
-            ),
-            "reduce the external glTF resource closure",
-        ));
-    }
+) -> Result<BTreeMap<String, &[u8]>, ImportDiagnostic> {
     let mut result = BTreeMap::new();
-    let mut total = 0usize;
     for (index, resource) in resources.iter().enumerate() {
         let canonical =
             canonical_resource_uri(&resource.uri, &format!("source.resources[{index}].uri"))?;
@@ -453,28 +429,16 @@ fn validate_resources(
                 "pass canonical project-relative resource identities",
             ));
         }
-        if resource.bytes.is_empty() || resource.bytes.len() > MAX_GLTF_RESOURCE_BYTES {
+        if resource.bytes.is_empty() {
             return Err(error(
-                ImportCode::ResourceLimit,
+                ImportCode::MalformedSource,
                 format!("source.resources[{index}].bytes"),
-                format!(
-                    "resource byte count {} is outside 1..={MAX_GLTF_RESOURCE_BYTES}",
-                    resource.bytes.len()
-                ),
-                "reduce the external resource below the per-resource limit",
-            ));
-        }
-        total = total.checked_add(resource.bytes.len()).ok_or_else(|| {
-            resource_limit("source.resources", "total resource byte count overflowed")
-        })?;
-        if total > MAX_GLTF_TOTAL_RESOURCE_BYTES {
-            return Err(resource_limit(
-                "source.resources",
-                &format!("total resource bytes {total} exceed {MAX_GLTF_TOTAL_RESOURCE_BYTES}"),
+                "external resource is empty",
+                "provide the referenced buffer or image bytes",
             ));
         }
         if result
-            .insert(canonical.clone(), resource.bytes.clone())
+            .insert(canonical.clone(), resource.bytes.as_slice())
             .is_some()
         {
             return Err(error(
@@ -556,24 +520,27 @@ enum DataKind {
     Image,
 }
 
-fn resolve_uri_bytes(
+fn resolve_uri_bytes<'a>(
     uri: &str,
     path: &str,
-    resources: &BTreeMap<String, Vec<u8>>,
+    resources: &BTreeMap<String, &'a [u8]>,
     kind: DataKind,
-) -> Result<Vec<u8>, ImportDiagnostic> {
+) -> Result<Cow<'a, [u8]>, ImportDiagnostic> {
     if uri.starts_with("data:") {
-        return decode_data_uri(uri, path, kind).map(|(_, bytes)| bytes);
+        return decode_data_uri(uri, path, kind).map(|(_, bytes)| Cow::Owned(bytes));
     }
     let canonical = canonical_resource_uri(uri, path)?;
-    resources.get(&canonical).cloned().ok_or_else(|| {
-        error(
-            ImportCode::ExternalResource,
-            path,
-            format!("referenced resource `{canonical}` is missing"),
-            "provide the complete immutable glTF resource closure",
-        )
-    })
+    resources
+        .get(&canonical)
+        .map(|bytes| Cow::Borrowed(*bytes))
+        .ok_or_else(|| {
+            error(
+                ImportCode::ExternalResource,
+                path,
+                format!("referenced resource `{canonical}` is missing"),
+                "provide the complete immutable glTF resource closure",
+            )
+        })
 }
 
 fn decode_data_uri(
@@ -603,13 +570,12 @@ fn decode_data_uri(
     let bytes = BASE64
         .decode(encoded)
         .map_err(|_| malformed_data_uri(path))?;
-    if bytes.is_empty() || bytes.len() > MAX_GLTF_RESOURCE_BYTES {
-        return Err(resource_limit(
+    if bytes.is_empty() {
+        return Err(error(
+            ImportCode::MalformedSource,
             path,
-            &format!(
-                "decoded data URI byte count {} is outside 1..={MAX_GLTF_RESOURCE_BYTES}",
-                bytes.len()
-            ),
+            "decoded data URI is empty",
+            "provide the referenced buffer or image bytes",
         ));
     }
     Ok((mime.to_owned(), bytes))
@@ -647,7 +613,7 @@ fn rewrite_buffer_views(
 fn embed_uri_images(
     root: &mut Map<String, Value>,
     parsed: &gltf::Gltf,
-    resources: &BTreeMap<String, Vec<u8>>,
+    resources: &BTreeMap<String, &[u8]>,
     packed_bin: &mut Vec<u8>,
 ) -> Result<(), ImportDiagnostic> {
     for image in parsed.document.images() {
@@ -656,7 +622,8 @@ fn embed_uri_images(
         };
         let path = format!("source.images[{}].uri", image.index());
         let (resolved_mime, bytes) = if uri.starts_with("data:") {
-            decode_data_uri(uri, &path, DataKind::Image)?
+            let (mime, bytes) = decode_data_uri(uri, &path, DataKind::Image)?;
+            (mime, Cow::Owned(bytes))
         } else {
             let canonical = canonical_resource_uri(uri, &path)?;
             let inferred = image_mime(&canonical).ok_or_else(|| {
@@ -677,14 +644,17 @@ fn embed_uri_images(
             }
             (
                 inferred.to_owned(),
-                resources.get(&canonical).cloned().ok_or_else(|| {
-                    error(
-                        ImportCode::ExternalResource,
-                        path.clone(),
-                        format!("referenced image `{canonical}` is missing"),
-                        "provide the complete immutable glTF resource closure",
-                    )
-                })?,
+                resources
+                    .get(&canonical)
+                    .map(|bytes| Cow::Borrowed(*bytes))
+                    .ok_or_else(|| {
+                        error(
+                            ImportCode::ExternalResource,
+                            path.clone(),
+                            format!("referenced image `{canonical}` is missing"),
+                            "provide the complete immutable glTF resource closure",
+                        )
+                    })?,
             )
         };
         align_four(packed_bin);
@@ -760,7 +730,7 @@ fn encode_glb(mut json: Vec<u8>, mut bin: Vec<u8>) -> Result<Vec<u8>, ImportDiag
     Ok(output)
 }
 
-fn closure_hash(root: &[u8], resources: &BTreeMap<String, Vec<u8>>) -> String {
+fn closure_hash(root: &[u8], resources: &BTreeMap<String, &[u8]>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"rusty-engine.gltf-source-closure.v1\0");
     hash_field(&mut hasher, b"root", root);
@@ -860,7 +830,7 @@ fn malformed_data_uri(path: &str) -> ImportDiagnostic {
         ImportCode::MalformedSource,
         path,
         "data URI must contain a supported MIME type and valid base64 payload",
-        "use a bounded base64 data URI",
+        "use a valid base64 data URI",
     )
 }
 
@@ -878,7 +848,7 @@ fn resource_limit(path: &str, message: &str) -> ImportDiagnostic {
         ImportCode::ResourceLimit,
         path,
         message,
-        "reduce the glTF source package below the documented limits",
+        "keep the packed GLB and offsets within their format representation",
     )
 }
 
