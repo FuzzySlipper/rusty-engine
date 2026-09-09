@@ -634,3 +634,5 @@ include exterior samples around closed solids. Dense extraction has explicit
 cell, temporary-memory, and mesh budgets, so not every retained volume can be
 meshed in one request. Partition large products deliberately. This foundation
 does not implement erosion, world streaming, or efficient sparse edits.
+
+For opt-in FPS controls and shared human/agent targeting, see [controller and interaction composition](controller-interaction.md).

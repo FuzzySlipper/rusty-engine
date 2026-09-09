@@ -354,6 +354,8 @@ void test('controller pressure survives subthreshold changes, neutral, rebaselin
     { kind: 'controller-button-value', button: 'button-7', value: 0.75 },
     { kind: 'controller-button', button: 'button-7', edge: 'pressed' },
   ]);
+  ingress.sampleController();
+  assert.deepEqual(ingress.drain(), []);
   pressure = 0;
   ingress.sampleController();
   assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
@@ -371,6 +373,158 @@ void test('controller pressure survives subthreshold changes, neutral, rebaselin
   ingress.sampleController();
   assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
     { kind: 'clear', reason: 'interaction-mode-loss' },
+  ]);
+  ingress.dispose();
+});
+
+void test('selected controller disconnect neutralizes held stick, trigger pressure, and button edges', () => {
+  const eventTarget = createListenerTarget();
+  const windowTarget = createListenerTarget();
+  const canvas = {} as HTMLCanvasElement;
+  let connected = true;
+  const axes = [0.6, -0.25, 0, 0];
+  const buttons = Array.from({ length: 16 }, (_, index) => ({
+    value: index === 0 ? 1 : index === 7 ? 0.8 : 0,
+    pressed: index === 0 || index === 7,
+  }));
+  const gamepad = {
+    index: 0,
+    get connected() { return connected; },
+    axes,
+    buttons,
+  } as unknown as Gamepad;
+  const document = {
+    ...createListenerTarget(),
+    activeElement: canvas,
+    pointerLockElement: null,
+    defaultView: windowTarget,
+  } as unknown as Document;
+  const ingress = createRustyApplicationInputIngress({
+    binding: INITIAL,
+    selectedController: { index: 0 },
+  }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => true,
+    interactionMode: () => 'gameplay',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [gamepad],
+  });
+
+  assert.equal(ingress.sampleController(), 6);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'controller-axis', axis: 'axis-0', value: 0.6 },
+    { kind: 'controller-axis', axis: 'axis-1', value: -0.25 },
+    { kind: 'controller-button-value', button: 'button-0', value: 1 },
+    { kind: 'controller-button', button: 'button-0', edge: 'pressed' },
+    { kind: 'controller-button-value', button: 'button-7', value: 0.8 },
+    { kind: 'controller-button', button: 'button-7', edge: 'pressed' },
+  ]);
+
+  connected = false;
+  windowTarget.emit('gamepaddisconnected', { gamepad } as unknown as GamepadEvent);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'clear', reason: 'interaction-mode-loss' },
+  ]);
+  assert.equal(ingress.sampleController(), 0);
+  assert.deepEqual(ingress.drain(), []);
+
+  connected = true;
+  axes[0] = 0;
+  axes[1] = 0;
+  buttons[0]!.value = 0;
+  buttons[0]!.pressed = false;
+  buttons[7]!.value = 0;
+  buttons[7]!.pressed = false;
+  assert.equal(ingress.sampleController(), 0);
+  assert.deepEqual(ingress.drain(), []);
+
+  axes[0] = 0.6;
+  axes[1] = -0.25;
+  buttons[0]!.value = 1;
+  buttons[0]!.pressed = true;
+  buttons[7]!.value = 0.8;
+  buttons[7]!.pressed = true;
+  assert.equal(ingress.sampleController(), 6);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'controller-axis', axis: 'axis-0', value: 0.6 },
+    { kind: 'controller-axis', axis: 'axis-1', value: -0.25 },
+    { kind: 'controller-button-value', button: 'button-0', value: 1 },
+    { kind: 'controller-button', button: 'button-0', edge: 'pressed' },
+    { kind: 'controller-button-value', button: 'button-7', value: 0.8 },
+    { kind: 'controller-button', button: 'button-7', edge: 'pressed' },
+  ]);
+  ingress.dispose();
+});
+
+void test('controller sampling clears on focus loss, skips gamepad reads while unfocused, and rebaselines on refocus', () => {
+  const eventTarget = createListenerTarget();
+  const windowTarget = createListenerTarget();
+  const canvas = {} as HTMLCanvasElement;
+  let focused = true;
+  let gamepadReads = 0;
+  const axes = [0.4, 0, 0, 0];
+  const buttons = Array.from({ length: 16 }, (_, index) => ({
+    value: index === 7 ? 0.6 : 0,
+    pressed: index === 7,
+  }));
+  const gamepad = {
+    index: 0,
+    connected: true,
+    axes,
+    buttons,
+  } as unknown as Gamepad;
+  const document = {
+    ...createListenerTarget(),
+    get activeElement() { return focused ? canvas : null; },
+    pointerLockElement: null,
+    defaultView: windowTarget,
+  } as unknown as Document;
+  const ingress = createRustyApplicationInputIngress({
+    binding: INITIAL,
+    selectedController: { index: 0 },
+  }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => true,
+    interactionMode: () => 'gameplay',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => {
+      gamepadReads += 1;
+      return [gamepad];
+    },
+  });
+
+  assert.equal(ingress.sampleController(), 3);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'controller-axis', axis: 'axis-0', value: 0.4 },
+    { kind: 'controller-button-value', button: 'button-7', value: 0.6 },
+    { kind: 'controller-button', button: 'button-7', edge: 'pressed' },
+  ]);
+
+  focused = false;
+  windowTarget.emit('blur', {} as Event);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'clear', reason: 'focus-loss' },
+  ]);
+  assert.equal(gamepadReads, 1);
+
+  axes[0] = 0.8;
+  buttons[7]!.value = 0.9;
+  assert.equal(ingress.sampleController(), 0);
+  assert.equal(gamepadReads, 1);
+  assert.ok(ingress.drain().every((entry) => 'fact' in entry && entry.fact.kind === 'clear'));
+
+  focused = true;
+  assert.equal(ingress.sampleController(), 3);
+  assert.deepEqual(ingress.drain().map((entry) => 'fact' in entry ? entry.fact : entry), [
+    { kind: 'controller-axis', axis: 'axis-0', value: 0.8 },
+    { kind: 'controller-button-value', button: 'button-7', value: 0.9 },
+    { kind: 'controller-button', button: 'button-7', edge: 'pressed' },
   ]);
   ingress.dispose();
 });
