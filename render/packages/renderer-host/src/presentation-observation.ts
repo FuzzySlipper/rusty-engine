@@ -49,3 +49,10 @@ export function observeRendererPresentation<TFrame extends RendererSubmittedFron
     gpuCompletion: 'unavailable', captureCorrelation: 'unavailable',
   });
 }
+
+/** Opaque surface identity across reloads/tabs, including ordinary LAN HTTP. */
+export function createPresentationSurfaceId(): string {
+  const values = new Uint32Array(4);
+  globalThis.crypto.getRandomValues(values);
+  return `surface-${[...values].map((value) => value.toString(16).padStart(8, '0')).join('')}`;
+}

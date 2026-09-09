@@ -30,7 +30,7 @@ import {
   type MeshResourceSource,
   type TextureResourceSource,
 } from '@rusty-engine/renderer-three/backend';
-import { observeRendererPresentation, type RendererPresentationObservation, type RendererSubmittedFrontier } from './presentation-observation.js';
+import { createPresentationSurfaceId, observeRendererPresentation, type RendererPresentationObservation, type RendererSubmittedFrontier } from './presentation-observation.js';
 import type { RendererParticleSceneSink } from './particle-host.js';
 import {
   animationPlaybackReadout,
@@ -838,7 +838,7 @@ function mountPreparedRendererSurface(
   let latestPresentation: RendererSubmittedPresentation | null = null;
   let pendingRealizations = 0;
   let presentationSubmissionRequested = true;
-  const presentationSurfaceId = globalThis.crypto.randomUUID();
+  const presentationSurfaceId = createPresentationSurfaceId();
   const captureViewport = () => Object.freeze({
     cssWidth: canvas.clientWidth, cssHeight: canvas.clientHeight,
     backingWidth: canvas.width, backingHeight: canvas.height,

@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -436,14 +436,14 @@ async function rendererHash(viewport: Locator): Promise<string> {
 }
 
 async function readMeshResourceIdentity(page: Page): Promise<readonly string[]> {
-  return page.evaluate(async (protocolVersion) => {
+  return page.evaluate(async ({ protocolVersion, requestId }) => {
     const response = await fetch('/api/studio-adapter', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         type: 'readProject',
         protocolVersion,
-        requestId: `surface-resource-${crypto.randomUUID()}`,
+        requestId,
       }),
     });
     const decoded = await response.json() as {
@@ -462,7 +462,7 @@ async function readMeshResourceIdentity(page: Page): Promise<readonly string[]> 
     return (decoded.project?.meshResources ?? [])
       .map((resource) => `${resource.resource ?? ''}|${resource.contentHash ?? ''}|${String(resource.byteLength ?? '')}`)
       .sort();
-  }, STUDIO_ADAPTER_PROTOCOL_VERSION);
+  }, { protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION, requestId: `surface-resource-${randomUUID()}` });
 }
 
 async function requiredAttribute(locator: Locator, name: string): Promise<string> {

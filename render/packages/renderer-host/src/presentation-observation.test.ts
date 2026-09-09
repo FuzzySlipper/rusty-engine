@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 
 import {
+  createPresentationSurfaceId,
   observeRendererPresentation,
   type RendererSubmittedFrontier,
 } from './presentation-observation.js';
@@ -116,4 +117,17 @@ void test('a requested redraw remains pending even without a new publication or 
   assert.equal(observeRendererPresentation(
     'surface-1', true, 0, [FRONTIER_1], 4, VIEWPORT, submitted, true,
   ).state, 'pending');
+});
+
+test('surface identities work without secure-context randomUUID and differ across surfaces', (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {
+    getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto),
+  } });
+  t.after(() => Object.defineProperty(globalThis, 'crypto', descriptor!));
+  assert.equal(globalThis.crypto.randomUUID, undefined);
+  const first = createPresentationSurfaceId();
+  const second = createPresentationSurfaceId();
+  assert.match(first, /^surface-[0-9a-f]{32}$/u);
+  assert.notEqual(first, second);
 });
