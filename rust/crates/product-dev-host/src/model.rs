@@ -1405,6 +1405,10 @@ impl ProductDevDebugCatalog {
                 "Show the latest compact browser renderer timing, pacing, canvas, and resource summary",
             ),
             (
+                "engine.renderer.presentation",
+                "Read submitted presentation revisions, camera and viewport; remote capture correlation remains unavailable",
+            ),
+            (
                 "engine.renderer.detail",
                 "Show bounded renderer admission, callback phase, cadence, pacing, and texture details",
             ),

@@ -498,6 +498,11 @@ export class RenderProjection {
     });
   }
 
+  /** Successfully realized Rust-owned stream revisions; no geometry snapshot is needed. */
+  publicationFrontiers(): readonly RenderPublicationFrontier[] {
+    return Object.freeze([...this.#publishedRevisions].map(([stream, revision]) => Object.freeze({ stream, revision })));
+  }
+
   snapshot(): RenderProjectionSnapshot {
     return {
       skyBackground: clone(this.#skyBackground) ?? null,

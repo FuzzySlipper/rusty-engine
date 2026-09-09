@@ -30,6 +30,7 @@ import {
   type MeshResourceSource,
   type TextureResourceSource,
 } from '@rusty-engine/renderer-three/backend';
+import { observeRendererPresentation, type RendererPresentationObservation, type RendererSubmittedFrontier } from './presentation-observation.js';
 import type { RendererParticleSceneSink } from './particle-host.js';
 import {
   animationPlaybackReadout,
@@ -195,7 +196,16 @@ export interface RendererSurfaceAutomaticSubmissionPacingSample {
   readonly hostAdmission: RendererSurfaceAutomaticSubmissionAdmissionSample;
 }
 
+export interface RendererSubmittedPresentation extends RendererSubmittedFrontier {
+  readonly renderSequence: number;
+  readonly sourceTimeMs: number;
+  readonly fallbackCamera: { readonly pose: RendererSurfaceCameraPose; readonly projection: PerspectiveProjection };
+  readonly views: ReturnType<RendererBrowserSurface['viewCompositionReadout']>;
+  readonly resources: { readonly spriteFallbackCount: number; readonly materialFallbackCount: number };
+}
+
 export interface RendererSurfaceDiagnosticsReadout {
+  readonly presentation?: RendererPresentationObservation<RendererSubmittedPresentation>;
   readonly schemaVersion: 1;
   readonly renderer: string | null;
   readonly vendor: string | null;
@@ -825,6 +835,14 @@ function mountPreparedRendererSurface(
   let lastRenderTimeMs: number | null = null;
   const timing = new RendererSurfaceTimingTracker();
   let latestSubmission: RendererSurfaceSubmissionSample | null = null;
+  let latestPresentation: RendererSubmittedPresentation | null = null;
+  let pendingRealizations = 0;
+  let presentationSubmissionRequested = true;
+  const presentationSurfaceId = globalThis.crypto.randomUUID();
+  const captureViewport = () => Object.freeze({
+    cssWidth: canvas.clientWidth, cssHeight: canvas.clientHeight,
+    backingWidth: canvas.width, backingHeight: canvas.height,
+  });
   const submissionDemand = new RendererSurfaceSubmissionDemand(surfaceViewport(canvas));
   const automaticSubmissionAdmission =
     new RendererSurfaceAutomaticSubmissionAdmissionObservation();
@@ -864,6 +882,7 @@ function mountPreparedRendererSurface(
     retainedAnimation: hasRetainedAnimation(latestSubmission),
   });
   const requestAutomaticSubmission = (): void => {
+    presentationSubmissionRequested = true;
     submissionDemand.request();
   };
   const notifyContextEvent = (contextEvent: RendererSurfaceContextEvent): void => {
@@ -934,6 +953,21 @@ function mountPreparedRendererSurface(
       backendSubmissionStartedMs,
       backendSubmissionEndedMs,
     }), backendStatistics);
+    const views = backendSurface.viewCompositionReadout();
+    latestPresentation = Object.freeze({
+      renderSequence: latestSubmission.renderSequence,
+      sourceTimeMs: timeMs,
+      publicationFrontiers: projection.publicationFrontiers(),
+      viewRevision: views.revision,
+      viewport: captureViewport(),
+      fallbackCamera: { pose: controls.cameraPose(), projection: backendSurface.cameraProjection() },
+      views,
+      resources: {
+        spriteFallbackCount: backendSurface.renderer.spriteFallbackCount,
+        materialFallbackCount: backendSurface.renderer.fallbackMaterialCount,
+      },
+    });
+    presentationSubmissionRequested = false;
     submissionDemand.submitted(surfaceViewport(canvas));
     return {
       submission: latestSubmission,
@@ -1186,8 +1220,13 @@ function mountPreparedRendererSurface(
     applyPresentation: async (presentationFrame) => {
       if (disposed) throw new Error('renderer surface is disposed');
       projection.validatePublication(presentationFrame.publication, presentationFrame.ops.length);
-      const receipt = await (presentationHosts ?? new RendererPresentationHostSet({}))
-        .apply(presentationFrame);
+      pendingRealizations += 1;
+      let receipt: RendererPresentationFrameReceipt;
+      try {
+        receipt = await (presentationHosts ?? new RendererPresentationHostSet({})).apply(presentationFrame);
+      } finally {
+        pendingRealizations -= 1;
+      }
       if (disposed) throw new Error('renderer surface was disposed during presentation');
       // An absent optional capability is explicit, but a configured host that
       // failed to realize its operations needs a fresh committed baseline.
@@ -1222,6 +1261,11 @@ function mountPreparedRendererSurface(
       });
       return Object.freeze({
         schemaVersion: 1 as const,
+        presentation: observeRendererPresentation(
+          presentationSurfaceId, !disposed && cadenceState === 'ready', pendingRealizations,
+          projection.publicationFrontiers(), backendSurface.viewCompositionReadout().revision,
+          captureViewport(), latestPresentation, presentationSubmissionRequested,
+        ),
         renderer: gl === null || extension === null
           ? null
           : String(gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)),

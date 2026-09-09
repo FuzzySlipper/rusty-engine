@@ -1065,9 +1065,11 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
 }): ProductBrowserRendererDiagnosticsReporter {
   let currentBinding: RustyApplicationRuntimeIdentity | null = options.initialRuntime ?? null;
   let lastRenderSequence: number | null = null;
+  let lastPresentationState: string | null = null;
   const bindRuntime = (runtime: RustyApplicationRuntimeIdentity): void => {
     if (currentBinding === null || !sameRuntimeBinding(currentBinding, runtime)) {
       lastRenderSequence = null;
+      lastPresentationState = null;
     }
     currentBinding = runtime;
   };
@@ -1075,7 +1077,11 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
     const binding = currentBinding;
     if (binding === null) return;
     const rendererSnapshot = options.renderer.diagnosticsReadout();
-    if (rendererSnapshot.submission.renderSequence === lastRenderSequence) return;
+    const presentation = rendererSnapshot.presentation;
+    const presentationState = presentation === undefined ? null
+      : `${presentation.surfaceId}:${presentation.state}:${presentation.pendingRealizations}:${presentation.realizedViewRevision}`;
+    if (rendererSnapshot.submission.renderSequence === lastRenderSequence
+      && presentationState === lastPresentationState) return;
     const snapshot = options.productFrames === undefined
       ? rendererSnapshot
       : Object.freeze({ ...rendererSnapshot, productFrames: options.productFrames() });
@@ -1093,6 +1099,7 @@ export function createProductBrowserRendererDiagnosticsReporter(options: {
       throw new ProductBrowserHostError('transport_failed', result.diagnostic ?? 'renderer diagnostics were rejected by the runtime');
     }
     lastRenderSequence = snapshot.submission.renderSequence;
+    lastPresentationState = presentationState;
     options.onObservation?.(snapshot.submission.renderSequence);
   };
   return Object.freeze({ bindRuntime, flush });

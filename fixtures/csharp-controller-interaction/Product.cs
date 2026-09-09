@@ -27,6 +27,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly CharacterControllerConfig characterConfig;
     private ulong sequence;
     private bool locked;
+    private string viewpoint = "free";
     private int uses;
     private InteractionReason lastUse = InteractionReason.NoCandidate;
     private readonly FpsInput input = new(FpsInputConfig.Standard);
@@ -37,6 +38,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         float dt = (float)(update.Facts.FixedDeltaSeconds * update.Facts.AdmittedStepCount);
         FpsInputFrame frame = input.Consume(update.Input, dt);
+        if (frame.Movement != Vector2.Zero || frame.PointerDelta != Vector2.Zero || frame.ControllerLookRadians != Vector2.Zero)
+            viewpoint = "free";
         InteractionTarget? useTarget = focus.Selected;
         look = input.IntegrateLook(look,frame).After;
         if (input.Physical.Pressed(KeyboardControl.KeyK)) { locked = !locked; revisions[0]++; }
@@ -108,6 +111,27 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.Graphics.PublishSnapshot(visuals.Select(v=>new AppearanceFact(v.Id,false,0,v.Transform,v.Id is >=11 and <=13 ? (opened[(int)v.Id-11] ? openedAppearance : focus.Selected?.Id==v.Id ? focusedAppearance : v.Appearance) : v.Appearance,true,RenderLayer.Scene)).ToArray());
         engine.CameraView.UpdateCamera(new(camera,CameraDescriptor()));
     }
+    [DebugCommand("viewpoint.visit",Description="Visit a product-owned inspection pose: entrance, near, or side. This explicitly moves the player; it is not ordinary-input evidence.")]
+    public string Visit(string name)
+    {
+        Vector3 destination = name switch {
+            "entrance" => new(0,.92f,0),
+            "near" => new(0,.92f,-2.6f),
+            "side" => new(-2,.92f,-2),
+            _ => throw new ArgumentException("Unknown viewpoint; choose entrance, near, or side.",nameof(name)),
+        };
+        if (!CameraQueries.TryLookAtPose(destination+Vector3.UnitY*EyeHeight,new(0,1.2f,-5),0,out var pose))
+            throw new InvalidOperationException("Viewpoint does not define a look direction.");
+        position = destination;
+        motion = new(Vector3.Zero,Vector3.Zero,false,CharacterStance.Standing,0,0,0,false,0,Vector3.Zero,Vector3.Zero,Quaternion.Identity,Vector3.Zero,position.Y,position.Y,0,0);
+        look = new((float)double.DegreesToRadians(pose.YawDegrees),(float)double.DegreesToRadians(pose.PitchDegrees));
+        input.Physical.Clear();
+        focus.Clear();
+        viewpoint = name;
+        Publish();
+        return Observe();
+    }
+
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     [DebugCommand("interaction.query",Description="Read-only reticle candidates; semantic targeting enabled, look assistance disabled.")]
     public string Observe() => Format(focus.Observe(Candidates(),Reticle),"reticle");
@@ -118,7 +142,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Format(focus.Observe(Candidates(),Query(ray.Origin,ray.Direction)),"free-cursor");
     }
     private string Format(InteractionReadout result,string mode) => JsonSerializer.Serialize(new {
-        mode, semanticTargeting=true,lookAssistance=false,position=new[]{position.X,position.Y,position.Z},yaw=look.YawRadians,pitch=look.PitchRadians,
+        mode, viewpoint, semanticTargeting=true,lookAssistance=false,position=new[]{position.X,position.Y,position.Z},yaw=look.YawRadians,pitch=look.PitchRadians,
         selected=result.Selected?.Id,reason=result.Reason.ToString(),uses,lastUse=lastUse.ToString(),
         candidates=result.Candidates.Select(x=>new { id=x.Candidate.Target.Id,revision=x.Candidate.Target.Revision,label=x.Candidate.Label,
             point=new[]{x.Candidate.Point.X,x.Candidate.Point.Y,x.Candidate.Point.Z},distance=x.Distance,angleRadians=x.AngleRadians,

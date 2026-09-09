@@ -130,6 +130,7 @@ pub fn product_host_runtime_identity() -> ProductHostRuntimeIdentity {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RendererDebugCommand {
+    Presentation,
     Read,
     Detail,
     Show,
@@ -143,6 +144,7 @@ enum RendererDebugCommand {
 fn renderer_debug_command(command: &str) -> Option<RendererDebugCommand> {
     match command.trim() {
         "engine.renderer" => Some(RendererDebugCommand::Read),
+        "engine.renderer.presentation" => Some(RendererDebugCommand::Presentation),
         "engine.renderer.detail" => Some(RendererDebugCommand::Detail),
         "engine.renderer.show" => Some(RendererDebugCommand::Show),
         "engine.renderer.hide" => Some(RendererDebugCommand::Hide),
@@ -2621,12 +2623,26 @@ impl CsharpProductRuntime {
             RendererDebugCommand::Toggle => {
                 self.renderer_metrics_visible = !self.renderer_metrics_visible
             }
-            RendererDebugCommand::Read
+            RendererDebugCommand::Presentation
+            | RendererDebugCommand::Read
             | RendererDebugCommand::Detail
             | RendererDebugCommand::Status => {}
         }
         let snapshot = self.services.renderer_diagnostics_json();
-        let summary = if action == RendererDebugCommand::Detail {
+        let summary = if action == RendererDebugCommand::Presentation {
+            let observation = snapshot
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                .and_then(|value| value.get("presentation").cloned());
+            serde_json::json!({
+                "schemaVersion": 1,
+                "runtime": self.binding(),
+                "available": observation.is_some(),
+                "observationAgeMs": self.renderer_diagnostics_received_at.map(|time| time.elapsed().as_millis()),
+                "presentation": observation,
+                "captureCorrelation": "unavailable",
+                "worldReadiness": "unavailable",
+            })
+        } else if action == RendererDebugCommand::Detail {
             renderer_diagnostics_detail(
                 snapshot,
                 self.renderer_metrics_visible,
@@ -2654,7 +2670,8 @@ impl CsharpProductRuntime {
             RendererDebugCommand::Show
             | RendererDebugCommand::Hide
             | RendererDebugCommand::Toggle
-            | RendererDebugCommand::Status => true,
+            | RendererDebugCommand::Status
+            | RendererDebugCommand::Presentation => true,
         };
         ProductDevDebugResult::new(succeeded, message).map_err(host_runtime_error)
     }
@@ -5528,6 +5545,20 @@ mod tests {
     fn renderer_debug_commands_publish_widget_state_without_a_product_debug_callback() {
         let _guard = DROP_FIXTURE_GATE.lock().expect("drop fixture gate");
         let (mut runtime, root) = drop_fixture_runtime("renderer-debug-commands");
+        let (unavailable, _) = runtime
+            .execute_debug("engine.renderer.presentation")
+            .expect("presentation query without a browser completes")
+            .into_parts();
+        assert!(unavailable.succeeded());
+        let unavailable: serde_json::Value = serde_json::from_str(unavailable.message()).unwrap();
+        assert_eq!(unavailable["available"], false);
+        assert_eq!(unavailable["presentation"], serde_json::Value::Null);
+        assert_eq!(unavailable["captureCorrelation"], "unavailable");
+        assert_eq!(
+            unavailable["runtime"],
+            serde_json::to_value(runtime.binding()).unwrap()
+        );
+
         let (shown, _) = runtime
             .execute_debug("engine.renderer.show")
             .expect("Engine show command completes")
@@ -5576,6 +5607,19 @@ mod tests {
             .expect("catalog commands")
             .iter()
             .any(|command| command["name"] == "engine.renderer.detail"));
+        runtime.report_renderer_diagnostics(ProductDevRendererDiagnosticsFeedback {
+            runtime: runtime.binding(),
+            snapshot: serde_json::json!({"schemaVersion":1,"presentation":{"state":"pending","submitted":null}}),
+        }).expect("current browser feedback is admitted");
+        let (pending, _) = runtime
+            .execute_debug("engine.renderer.presentation")
+            .expect("pending presentation query completes")
+            .into_parts();
+        let pending: serde_json::Value = serde_json::from_str(pending.message()).unwrap();
+        assert_eq!(pending["available"], true);
+        assert_eq!(pending["presentation"]["state"], "pending");
+        assert_eq!(pending["captureCorrelation"], "unavailable");
+        assert!(pending["observationAgeMs"].is_number());
         drop(runtime);
         fs::remove_dir_all(root).expect("remove renderer debug fixture content");
     }

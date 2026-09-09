@@ -6,6 +6,7 @@ const double Epsilon = 0.0001d;
 ExercisePerspectiveRoundTrip();
 ExerciseOrthographicRoundTrip();
 ExerciseDerivedYawAndPose();
+ExerciseLookAtPose();
 ExerciseExplicitBasisAndPose();
 ExerciseVisibilityFacts();
 ExerciseAspect();
@@ -51,6 +52,36 @@ static void ExerciseDerivedYawAndPose()
         "positive derived yaw did not face canonical positive X");
     RequireClose(projection.Depth, 7d, "derived yaw did not preserve nonzero camera position");
     RequireRayContains(ray, point, "derived yaw ray did not match the renderer convention");
+}
+
+static void ExerciseLookAtPose()
+{
+    Vector3 position = new(5f, 2f, 1f);
+    Vector3 target = new(12f, 5f, -3f);
+    Require(CameraQueries.TryLookAtPose(position, target, 15d, out CameraPose pose),
+        "look-at pose rejected a finite distinct target");
+
+    CameraDescriptor camera = DerivedCamera(CameraProjectionKind.Perspective, fovYDegrees: 70d, verticalSize: 0d) with
+    {
+        Pose = pose,
+    };
+    RequireRayContains(CameraQueries.Ray(camera, 1d, new Vector2(0.5f, 0.5f)), target,
+        "look-at pose did not preserve the derived camera convention");
+
+    Require(CameraQueries.TryLookAtPose(position, position + Vector3.UnitX, 0d, out CameraPose positiveX),
+        "look-at pose rejected canonical positive X");
+    RequireClose(positiveX.PitchDegrees, 0d, "look-at pose did not level canonical positive X");
+    RequireClose(positiveX.YawDegrees, 90d, "look-at pose did not map canonical positive X to positive yaw");
+
+    Require(CameraQueries.TryLookAtPose(position, position + Vector3.UnitY, 37d, out CameraPose vertical),
+        "look-at pose rejected a vertical target");
+    RequireClose(vertical.PitchDegrees, 90d, "look-at pose did not map vertical target to pitch");
+    RequireClose(vertical.YawDegrees, 37d, "look-at pose did not retain the supplied vertical yaw");
+
+    Require(!CameraQueries.TryLookAtPose(position, position, 0d, out _),
+        "look-at pose accepted coincident points");
+    Require(!CameraQueries.TryLookAtPose(position, new Vector3(float.NaN, 0f, 0f), 0d, out _),
+        "look-at pose accepted non-finite target data");
 }
 
 static void ExerciseExplicitBasisAndPose()

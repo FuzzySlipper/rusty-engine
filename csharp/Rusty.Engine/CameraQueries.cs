@@ -27,6 +27,46 @@ public static class CameraQueries
     private const double MinimumBasisLengthSquared = 1e-12d;
 
     /// <summary>
+    /// Derives a <see cref="CameraBasisMode.Derived"/> pose that faces <paramref name="target"/>
+    /// from <paramref name="position"/>. The result uses the same degrees, yaw direction, and
+    /// pitch convention as camera presentation: zero yaw faces negative Z and positive yaw faces
+    /// positive X. When the target is directly above or below the position,
+    /// <paramref name="verticalYawDegrees"/> supplies the otherwise indeterminate yaw.
+    /// Returns <see langword="false"/> with a default pose for non-finite inputs or coincident
+    /// points.
+    /// </summary>
+    public static bool TryLookAtPose(
+        Vector3 position,
+        Vector3 target,
+        double verticalYawDegrees,
+        out CameraPose pose)
+    {
+        pose = default;
+        if (!IsFinite(position) || !IsFinite(target) || !double.IsFinite(verticalYawDegrees))
+        {
+            return false;
+        }
+
+        double x = (double)target.X - position.X;
+        double y = (double)target.Y - position.Y;
+        double z = (double)target.Z - position.Z;
+        double lengthSquared = x * x + y * y + z * z;
+        if (lengthSquared == 0d)
+        {
+            return false;
+        }
+
+        double inverseLength = 1d / Math.Sqrt(lengthSquared);
+        double horizontalLengthSquared = x * x + z * z;
+        double pitchDegrees = Math.Asin(Math.Clamp(y * inverseLength, -1d, 1d)) / DegreesToRadians;
+        double yawDegrees = horizontalLengthSquared == 0d
+            ? verticalYawDegrees
+            : Math.Atan2(x, -z) / DegreesToRadians;
+        pose = new CameraPose(position, pitchDegrees, yawDegrees);
+        return true;
+    }
+
+    /// <summary>
     /// Projects <paramref name="worldPoint"/> into the caller-selected viewport aspect.
     /// <see cref="CameraProjectionResult.InClip"/> includes both the camera near/far range and
     /// viewport bounds; offscreen and behind points still return their mathematical projection.
@@ -271,11 +311,14 @@ public static class CameraQueries
 
     private static void RequireFinite(Vector3 value, string parameterName)
     {
-        if (!float.IsFinite(value.X) || !float.IsFinite(value.Y) || !float.IsFinite(value.Z))
+        if (!IsFinite(value))
         {
             throw new ArgumentException("Camera query inputs must be finite.", parameterName);
         }
     }
+
+    private static bool IsFinite(Vector3 value) =>
+        float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
 
     private readonly record struct CameraFrame(
         Vector3 Position,

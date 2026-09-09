@@ -38,3 +38,10 @@ dotnet run --project ../../csharp/Rusty.Engine.Input.Example
 dotnet run --project ../../csharp/Rusty.Engine.Interaction.Example
 dotnet run --project ../../csharp/Rusty.Engine.CameraQueries.Example
 ```
+
+Repeatable inspection uses `viewpoint.visit entrance`, `viewpoint.visit near`,
+and `viewpoint.visit side`. These explicitly move the player and are labelled
+viewpoint-assisted evidence. Query `engine.renderer.presentation` to inspect
+submitted camera/view/viewport and canonical publication frontiers. See
+[the capture contract](../../docs/presentation-capture.md) for pending states
+and the distinction between renderer submission and remote screenshot identity.

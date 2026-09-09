@@ -112,3 +112,6 @@ new managed helpers fill composition gaps; they add no native handles, ABI
 protocol, renderer or browser gameplay state. Menu navigation, remapping UI,
 haptics, multiple-player device assignment and optional look assistance are
 separate extensions, not hidden behavior of this baseline.
+
+For repeatable product-owned inspection poses and renderer submission facts,
+see [viewpoints and presentation observations](presentation-capture.md).
