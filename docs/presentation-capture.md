@@ -18,7 +18,9 @@ The built-in `engine.renderer.presentation` debug command returns the latest
 browser observation through the existing renderer feedback and debug transports:
 
 - `runtime` is the Rust-owned instance/generation/control identity. Feedback is
-  fenced against a different runtime binding.
+  fenced against a different runtime binding. `observationRuntime` retains the
+  binding of the stored feedback; after control replacement the old observation
+  is unavailable until feedback for the current binding arrives.
 - `available: false` and `presentation: null` mean no supporting browser
   observation has arrived. This is a successful query with unavailable data.
 - `observationAgeMs` is time since Rust received the feedback, not screenshot

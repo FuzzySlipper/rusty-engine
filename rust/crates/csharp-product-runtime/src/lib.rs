@@ -996,6 +996,7 @@ pub struct CsharpProductRuntime {
     render_resources: Vec<ProductDevRendererResource>,
     renderer_metrics_visible: bool,
     renderer_diagnostics_received_at: Option<Instant>,
+    renderer_diagnostics_runtime: Option<ProductDevRuntimeBinding>,
     shutdown_called: bool,
     /// A product callback crossed into managed code and did not complete its
     /// host contract. Its managed state and this retained EngineServiceSet can
@@ -1236,6 +1237,7 @@ impl CsharpProductRuntime {
             render_resources,
             renderer_metrics_visible: false,
             renderer_diagnostics_received_at: None,
+            renderer_diagnostics_runtime: None,
             shutdown_called: false,
             tainted: false,
             diagnostics: config.diagnostics,
@@ -2632,10 +2634,12 @@ impl CsharpProductRuntime {
         let summary = if action == RendererDebugCommand::Presentation {
             let observation = snapshot
                 .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
-                .and_then(|value| value.get("presentation").cloned());
+                .and_then(|value| value.get("presentation").cloned())
+                .filter(|_| self.renderer_diagnostics_runtime == Some(self.binding()));
             serde_json::json!({
                 "schemaVersion": 1,
                 "runtime": self.binding(),
+                "observationRuntime": self.renderer_diagnostics_runtime,
                 "available": observation.is_some(),
                 "observationAgeMs": self.renderer_diagnostics_received_at.map(|time| time.elapsed().as_millis()),
                 "presentation": observation,
@@ -3328,6 +3332,7 @@ impl ProductDevRuntime for CsharpProductRuntime {
             .ingest_renderer_diagnostics(&feedback.snapshot)
             .map_err(|error| self.runtime_error(error.into()))?;
         self.renderer_diagnostics_received_at = Some(Instant::now());
+        self.renderer_diagnostics_runtime = Some(feedback.runtime);
         let result = ProductDevRendererDiagnosticsFeedbackResult::accepted(self.binding());
         ProductDevRuntimeReceipt::new(result, Vec::new()).map_err(host_runtime_error)
     }
@@ -5620,6 +5625,28 @@ mod tests {
         assert_eq!(pending["presentation"]["state"], "pending");
         assert_eq!(pending["captureCorrelation"], "unavailable");
         assert!(pending["observationAgeMs"].is_number());
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start fixture");
+        let observed_binding = runtime.binding();
+        runtime
+            .control(
+                product_dev_host::ProductDevControlOperation::Replace,
+                observed_binding,
+            )
+            .expect("replace control");
+        let (replaced, _) = runtime
+            .execute_debug("engine.renderer.presentation")
+            .expect("query after control replacement")
+            .into_parts();
+        let replaced: serde_json::Value = serde_json::from_str(replaced.message()).unwrap();
+        assert_eq!(replaced["available"], false);
+        assert_eq!(replaced["presentation"], serde_json::Value::Null);
+        assert_eq!(
+            replaced["observationRuntime"],
+            serde_json::to_value(observed_binding).unwrap()
+        );
+        assert_ne!(replaced["runtime"], replaced["observationRuntime"]);
         drop(runtime);
         fs::remove_dir_all(root).expect("remove renderer debug fixture content");
     }

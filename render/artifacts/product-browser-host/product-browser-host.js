@@ -24199,7 +24199,7 @@ function wS(e, t, n = {}) {
 				--_;
 			}
 			if (C) throw Error("renderer surface was disposed during presentation");
-			return t.domains.every((e) => !e.configured || e.outcome === "applied") && a.commitPublication(e.publication, e.ops.length), t.applied > 0 && j(), t;
+			return t.domains.every((e) => !e.configured || e.outcome === "applied") && (a.commitPublication(e.publication, e.ops.length), j()), t.applied > 0 && j(), t;
 		},
 		audioRealizedFacts: () => l?.readAudioRealizedFacts() ?? null,
 		animationRealizedFacts: () => l?.readAnimationRealizedFacts() ?? null,

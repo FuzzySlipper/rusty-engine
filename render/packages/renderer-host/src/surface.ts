@@ -1232,6 +1232,9 @@ function mountPreparedRendererSurface(
       // failed to realize its operations needs a fresh committed baseline.
       if (receipt.domains.every((domain) => !domain.configured || domain.outcome === 'applied')) {
         projection.commitPublication(presentationFrame.publication, presentationFrame.ops.length);
+        // Even an explicitly absent optional host advances the shared frontier.
+        // Submit once so that frontier obtains actual draw provenance.
+        requestAutomaticSubmission();
       }
       if (receipt.applied > 0) {
         requestAutomaticSubmission();
