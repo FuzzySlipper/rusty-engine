@@ -5612,6 +5612,9 @@ mod tests {
             .expect("catalog commands")
             .iter()
             .any(|command| command["name"] == "engine.renderer.detail"));
+        runtime
+            .lifecycle(ProductDevLifecycleOperation::Start)
+            .expect("start fixture");
         runtime.report_renderer_diagnostics(ProductDevRendererDiagnosticsFeedback {
             runtime: runtime.binding(),
             snapshot: serde_json::json!({"schemaVersion":1,"presentation":{"state":"pending","submitted":null}}),
@@ -5625,9 +5628,6 @@ mod tests {
         assert_eq!(pending["presentation"]["state"], "pending");
         assert_eq!(pending["captureCorrelation"], "unavailable");
         assert!(pending["observationAgeMs"].is_number());
-        runtime
-            .lifecycle(ProductDevLifecycleOperation::Start)
-            .expect("start fixture");
         let observed_binding = runtime.binding();
         runtime
             .control(
