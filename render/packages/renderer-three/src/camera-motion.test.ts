@@ -67,3 +67,18 @@ void test('jitter and snapshot republication do not rewind presentation; timelin
   close(camera.position.x, 200);
   assert.equal(motion.needsFrame(), false);
 });
+
+void test('a paused source timeline reanchors so subsequent samples still interpolate', () => {
+  const motion = new CameraMotion();
+  const camera = new THREE.Camera();
+  motion.receive(sample(1, 0, 0), 0);
+  motion.receive(sample(2, 0.1, 10), 0.1);
+  motion.apply(camera, 10);
+  close(camera.position.x, 10);
+  motion.receive(sample(3, 0.2, 20), 10);
+  motion.apply(camera, 10);
+  close(camera.position.x, 20);
+  motion.receive(sample(4, 0.3, 30), 10.1);
+  motion.apply(camera, 10.15);
+  close(camera.position.x, 25);
+});

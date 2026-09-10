@@ -32,7 +32,11 @@ export class CameraMotion {
       time: motion?.sampleTimeSeconds ?? 0,
       position: camera.position.clone(), orientation: camera.quaternion.clone(),
     };
-    const reset = motion === undefined || this.#motion === undefined || motion.cut
+    // A paused source clock (or delivery stall beyond the buffer) must not
+    // leave the local clock permanently ahead, bypassing interpolation forever.
+    const clockDiscontinuity = motion !== undefined && this.#latest !== undefined
+      && arrivalSeconds - this.#receivedAt - (next.time - this.#latest.time) > 2 * motion.delaySeconds;
+    const reset = clockDiscontinuity || motion === undefined || this.#motion === undefined || motion.cut
       || next.time <= (this.#latest?.time ?? -Infinity)
       || motion.interpolation !== this.#motion.interpolation
       || motion.delaySeconds !== this.#motion.delaySeconds;

@@ -278,7 +278,10 @@ Pass `cut: 1` on teleports, origin rebases, and discontinuities; ordinary sample
 use `cut: 0`. Camera replacement, browser runtime recovery, timeline regression,
 and interpolation-mode/delay changes discard history. Repeated retained snapshots
 do not create new samples. Missing samples hold the latest pose without
-extrapolation. The renderer keeps at most 64 recent samples per camera; a delay
+extrapolation. If receipt time advances more than the source timeline by twice
+the configured delay, the recovered sample resets the clock mapping; a paused
+source clock cannot permanently disable interpolation. The renderer keeps at
+most 64 recent samples per camera; a delay
 requiring older history holds the oldest available pose until it can interpolate.
 The renderer maps the product timeline to its local clock; its receipt/sample
 timestamps are not cross-process latency measurements.
