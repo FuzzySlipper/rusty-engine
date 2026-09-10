@@ -1393,11 +1393,13 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
         Err(response) => {
             // No request reached dispatch. A speculative browser connection may
             // close normally, so retain attribution without making it a warning.
+            // Do not use RejectedRecoverable: its once-per-code admission
+            // warning policy would discard the later socket attribution.
             // This body is our fixed parser diagnostic, never request contents.
             publish_host_diagnostic(
                 &state.diagnostics,
                 ProductDevLogSeverity::Info,
-                ProductDevLogDisposition::RejectedRecoverable,
+                ProductDevLogDisposition::Degraded,
                 "DEV_HOST_REQUEST_READ_REJECTED",
                 "connection ended or failed before a complete request reached dispatch",
                 [
