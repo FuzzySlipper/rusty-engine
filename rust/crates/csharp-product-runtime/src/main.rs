@@ -2008,6 +2008,19 @@ fn elapsed_us(started: Instant) -> u64 {
     started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
+// Advance the observation clock independently of callback/output cost. Missed
+// wakeups are coalesced: runtime-lifecycle alone admits bounded fixed-step catchup.
+fn next_worker_tick(previous: Instant, interval: Duration, finished: Instant) -> Instant {
+    let next = previous + interval;
+    if next > finished {
+        next
+    } else {
+        // Lifecycle intervals are <= one second (positive integer hertz).
+        let remainder = finished.duration_since(next).as_nanos() % interval.as_nanos();
+        finished + interval - Duration::from_nanos(remainder as u64)
+    }
+}
+
 fn worker_scheduler(
     owner: Arc<ProductDevOperationOwner<CsharpProductRuntime>>,
     mailbox: Arc<WorkerInputMailbox>,
@@ -2018,10 +2031,12 @@ fn worker_scheduler(
     publication_gate: Arc<Mutex<()>>,
 ) {
     let started = Instant::now();
+    let mut next_tick = None;
     while !shutdown.load(Ordering::Acquire) {
         let interval = match owner.realtime_schedule_interval() {
             Ok(Some(interval)) => interval,
             _ => {
+                next_tick = None;
                 thread::sleep(Duration::from_millis(25));
                 continue;
             }
@@ -2030,8 +2045,16 @@ fn worker_scheduler(
             owner.realtime_schedule_state(),
             Ok(ProductDevRuntimeScheduleState::Running)
         ) {
+            next_tick = None;
             thread::sleep(Duration::from_millis(10));
             continue;
+        }
+        if let Some(deadline) = next_tick {
+            let now = Instant::now();
+            if now < deadline {
+                thread::sleep(deadline.duration_since(now));
+                continue;
+            }
         }
         let publication = match publication_gate.lock() {
             Ok(publication) => publication,
@@ -2041,8 +2064,14 @@ fn worker_scheduler(
                 return;
             }
         };
-        let observed =
-            CanonicalU64::new(started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+        let observed_at = Instant::now();
+        let deadline = *next_tick.get_or_insert(observed_at);
+        let observed = CanonicalU64::new(
+            observed_at
+                .duration_since(started)
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
+        );
         let mut input_outputs = Vec::new();
         let mut update_outputs = Vec::new();
         let mut readout = None;
@@ -2175,7 +2204,7 @@ fn worker_scheduler(
             }
         }
         drop(publication);
-        thread::sleep(interval);
+        next_tick = Some(next_worker_tick(deadline, interval, Instant::now()));
     }
 }
 
@@ -3635,6 +3664,72 @@ fn content_type(path: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_deadlines_do_not_accumulate_callback_and_output_cost() {
+        let origin = Instant::now();
+        let interval = Duration::from_nanos(16_666_667);
+        let mut deadline = origin;
+        for tick in 1..=600 {
+            let cost = Duration::from_micros(if tick % 2 == 0 { 2500 } else { 1300 });
+            deadline = next_worker_tick(deadline, interval, deadline + cost);
+            assert_eq!(deadline.duration_since(origin), interval * tick);
+        }
+    }
+
+    #[test]
+    fn worker_deadlines_admit_fixed_steps_with_wakeup_jitter_and_bounded_overrun() {
+        use runtime_lifecycle::{
+            HostMonotonicTime, RealtimeLifecycleConfig, RuntimeInstanceId, RuntimeLifecycle,
+            RuntimeLifecycleConfig,
+        };
+        let mut lifecycle = RuntimeLifecycle::new(
+            RuntimeInstanceId::new(1),
+            RuntimeLifecycleConfig::Realtime(RealtimeLifecycleConfig::new(60, 4).unwrap()),
+        );
+        lifecycle.start().unwrap();
+        lifecycle
+            .advance_realtime(HostMonotonicTime::from_nanoseconds(0))
+            .unwrap();
+        let origin = Instant::now();
+        let interval = Duration::from_nanos(1_000_000_000_u64.div_ceil(60));
+        let mut deadline = origin;
+        let mut finished = origin;
+        for tick in 0..600 {
+            deadline = next_worker_tick(deadline, interval, finished);
+            let observed = deadline + Duration::from_micros(if tick % 2 == 0 { 150 } else { 20 });
+            let advance = lifecycle
+                .advance_realtime(HostMonotonicTime::from_nanoseconds(
+                    observed.duration_since(origin).as_nanos() as u64,
+                ))
+                .unwrap();
+            assert_eq!(advance.simulation().unwrap().step_count(), 1);
+            finished = observed + Duration::from_millis(2);
+        }
+        finished += Duration::from_secs(1);
+        deadline = next_worker_tick(deadline, interval, finished);
+        let advance = lifecycle
+            .advance_realtime(HostMonotonicTime::from_nanoseconds(
+                deadline.duration_since(origin).as_nanos() as u64,
+            ))
+            .unwrap();
+        assert_eq!(advance.simulation().unwrap().step_count(), 4);
+        assert!(advance.dropped_steps() > 0);
+    }
+
+    #[test]
+    fn worker_deadlines_skip_missed_wakeups_without_a_burst_or_phase_drift() {
+        let origin = Instant::now();
+        let interval = Duration::from_millis(10);
+        assert_eq!(
+            next_worker_tick(origin, interval, origin + Duration::from_millis(37)),
+            origin + Duration::from_millis(40)
+        );
+        assert_eq!(
+            next_worker_tick(origin, interval, origin + Duration::from_secs(10)),
+            origin + Duration::from_millis(10_010)
+        );
+    }
 
     struct SerializeAfterSettlement(Arc<AtomicBool>);
 

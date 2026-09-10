@@ -2708,9 +2708,10 @@ impl ProductDevRuntime for CsharpProductRuntime {
         };
         // The host cadence is derived from the admitted lifecycle setting. The
         // standard 60 Hz value belongs only to standard_realtime_config(); it
-        // is not a second scheduler policy here.
+        // is not a second scheduler policy here. Round up so an observation
+        // deadline never precedes the exact fixed-step boundary.
         Some(std::time::Duration::from_nanos(
-            1_000_000_000_u64 / u64::from(config.fixed_step_hz()),
+            1_000_000_000_u64.div_ceil(u64::from(config.fixed_step_hz())),
         ))
     }
 
@@ -7373,7 +7374,7 @@ mod tests {
         );
         assert_eq!(
             realtime.realtime_schedule_interval(),
-            Some(std::time::Duration::from_nanos(33_333_333))
+            Some(std::time::Duration::from_nanos(33_333_334))
         );
 
         realtime

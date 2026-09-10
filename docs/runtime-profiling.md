@@ -57,6 +57,24 @@ backpressure is excluded from worker execution deadlines. The last displayed
 sample continues aging while delivery waits. Retirement may discard old-worker
 observations, and replacement clears that worker's timing state.
 
+## Simulation and display cadence
+
+The CoreCLR worker schedules realtime observations against absolute deadlines.
+Callback, output conversion and delivery time consume the tick budget instead
+of adding another full interval after each operation. A missed deadline skips
+host wakeups to the next future boundary; lifecycle admission still owns the
+fixed-step catch-up cap and dropped-step accounting. Pausing resets the host
+schedule phase. Observation intervals round up to avoid waking before an exact
+fixed-step boundary.
+
+Browser RAF and GPU submission run independently. Configured product cameras
+currently hold the latest published pose until another publication arrives;
+there is no general simulation-pose interpolation or variable-rate C# camera
+callback. Fast GPU timing therefore does not establish smooth camera delivery.
+Compare fresh `engine.renderer.detail` product-frame receipt/applied intervals
+with worker progress and callback cost. Do not infer a fixed simulation rate
+from either the RAF rate or the number of batched C# callbacks.
+
 ## Optimized Linux native capture
 
 Runtime packs now build Rust with release optimization and `line-tables-only`
