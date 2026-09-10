@@ -2012,7 +2012,7 @@ fn elapsed_us(started: Instant) -> u64 {
 // wakeups are coalesced: runtime-lifecycle alone admits bounded fixed-step catchup.
 fn next_worker_tick(previous: Instant, interval: Duration, finished: Instant) -> Instant {
     let next = previous + interval;
-    if next > finished {
+    if next >= finished {
         next
     } else {
         // Lifecycle intervals are <= one second (positive integer hertz).
@@ -3721,6 +3721,10 @@ mod tests {
     fn worker_deadlines_skip_missed_wakeups_without_a_burst_or_phase_drift() {
         let origin = Instant::now();
         let interval = Duration::from_millis(10);
+        assert_eq!(
+            next_worker_tick(origin, interval, origin + interval),
+            origin + interval
+        );
         assert_eq!(
             next_worker_tick(origin, interval, origin + Duration::from_millis(37)),
             origin + Duration::from_millis(40)
