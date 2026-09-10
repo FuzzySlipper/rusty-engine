@@ -1385,9 +1385,30 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
     if state.shutdown.load(Ordering::Acquire) {
         return;
     }
+    let peer = stream
+        .peer_addr()
+        .map_or_else(|_| "unknown".to_owned(), |peer| peer.to_string());
     let request = match read_request(&mut stream) {
         Ok(request) => request,
         Err(response) => {
+            // No request reached dispatch. A speculative browser connection may
+            // close normally, so retain attribution without making it a warning.
+            // This body is our fixed parser diagnostic, never request contents.
+            publish_host_diagnostic(
+                &state.diagnostics,
+                ProductDevLogSeverity::Info,
+                ProductDevLogDisposition::RejectedRecoverable,
+                "DEV_HOST_REQUEST_READ_REJECTED",
+                "connection ended or failed before a complete request reached dispatch",
+                [
+                    ("peer", peer),
+                    ("http-status", response.status.to_string()),
+                    (
+                        "diagnostic",
+                        String::from_utf8_lossy(&response.body).into_owned(),
+                    ),
+                ],
+            );
             let _ = write_response(&mut stream, response);
             return;
         }
@@ -1424,6 +1445,7 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
         .unwrap_or_else(|| "none".to_owned());
     let response = dispatch_request(&state, request);
     let delivery_certainty = response.delivery_certainty;
+    let response_status = response.status;
     if let Err(error) = write_response(&mut stream, response) {
         if let Some(certainty) = delivery_certainty {
             publish_host_diagnostic(
@@ -1434,9 +1456,25 @@ fn handle_connection<R: ProductDevRuntime>(mut stream: TcpStream, state: Arc<Hos
                 "response delivery failed after a confirmed host admission; preserve its delivery certainty and do not replay the request",
                 [
                     ("error-kind", format!("{:?}", error.kind())),
+                    ("peer", peer),
                     ("attachment-id", attachment_id),
                     ("request-path", request_path),
                     ("response-certainty", certainty.as_field().to_owned()),
+                ],
+            );
+        } else {
+            publish_host_diagnostic(
+                &state.diagnostics,
+                ProductDevLogSeverity::Info,
+                ProductDevLogDisposition::Degraded,
+                "DEV_HOST_RESPONSE_WRITE_UNAVAILABLE",
+                "response socket failed without a confirmed admission receipt; do not infer mutation outcome",
+                [
+                    ("error-kind", format!("{:?}", error.kind())),
+                    ("peer", peer),
+                    ("attachment-id", attachment_id),
+                    ("request-path", request_path),
+                    ("http-status", response_status.to_string()),
                 ],
             );
         }
