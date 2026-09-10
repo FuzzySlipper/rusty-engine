@@ -12,3 +12,6 @@
 /render/voxel-vignette-playtest/assets/**/*.glb
 *.log
 .DS_Store
+
+# Local validation audit reports
+/artifacts/validation-audit-787*/
