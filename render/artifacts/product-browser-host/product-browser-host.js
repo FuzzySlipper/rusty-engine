@@ -28718,7 +28718,7 @@ async function bD(e, t) {
 		let r = g;
 		if (r === null || !Ie(t, r.uncertainBinding)) return !1;
 		let i = M();
-		return oe?.bindRuntime(t), se?.bindRuntime(t), ce?.bindRuntime(t), le?.bindRuntime(t), h = t, i.input?.rebaselineRuntime({
+		return i.renderer.resetCameraMotion(), oe?.bindRuntime(t), se?.bindRuntime(t), ce?.bindRuntime(t), le?.bindRuntime(t), h = t, i.input?.rebaselineRuntime({
 			runtime: t,
 			context: e.inputContext ?? "gameplay.default",
 			nextSequence: n
@@ -28811,7 +28811,7 @@ async function bD(e, t) {
 						Ie(t.runtime, g.uncertainBinding) && Le(t.runtime, t.nextInputSequence);
 						return;
 					}
-					oe?.bindRuntime(t.runtime), se?.bindRuntime(t.runtime), ce?.bindRuntime(t.runtime), le?.bindRuntime(t.runtime), h = t.runtime, s.input?.bindRuntime({
+					h !== null && !ED(h, t.runtime) && s.renderer.resetCameraMotion(), oe?.bindRuntime(t.runtime), se?.bindRuntime(t.runtime), ce?.bindRuntime(t.runtime), le?.bindRuntime(t.runtime), h = t.runtime, s.input?.bindRuntime({
 						runtime: t.runtime,
 						context: e.inputContext ?? "gameplay.default",
 						nextSequence: t.nextInputSequence

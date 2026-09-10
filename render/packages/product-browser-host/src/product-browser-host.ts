@@ -1672,6 +1672,7 @@ export async function mountProductBrowserHostWithApplication(
     const pending = inputRecovery;
     if (pending === null || !hasFreshRecoveryBinding(runtime, pending.uncertainBinding)) return false;
     const host = requireApplication();
+    host.renderer.resetCameraMotion();
     audioFeedbackReporter?.bindRuntime(runtime);
     animationFeedbackReporter?.bindRuntime(runtime);
     ghostPlateFeedbackReporter?.bindRuntime(runtime);
@@ -1841,6 +1842,9 @@ export async function mountProductBrowserHostWithApplication(
               completeInputRecovery(output.runtime, output.nextInputSequence);
             }
             return;
+          }
+          if (currentInputBinding !== null && !sameRuntimeBinding(currentInputBinding, output.runtime)) {
+            host.renderer.resetCameraMotion();
           }
           audioFeedbackReporter?.bindRuntime(output.runtime);
           animationFeedbackReporter?.bindRuntime(output.runtime);

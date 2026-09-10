@@ -248,6 +248,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
     let emitOutputs: ProductBrowserRuntimeOutputBatchListener | null = null;
     const baselines: unknown[] = [];
     const boundRuntimes: unknown[] = [];
+    let cameraResets = 0;
     let controlAttempts = 0;
     let timelineCalls = 0;
     let inputAvailable = true;
@@ -290,7 +291,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => undefined,
-        resetCameraMotion: () => undefined,
+        resetCameraMotion: () => { cameraResets += 1; },
         resetAnimationRealizationOwner: () => undefined,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,
@@ -323,6 +324,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
     publishOutputs([{ kind: 'binding', runtime: oldRuntime, nextInputSequence: '4' }], {
       epoch: 1, baseline: false, recovery: 'none',
     });
+    assert.equal(cameraResets, 0);
     assert.deepEqual(boundRuntimes, [{
       runtime: oldRuntime,
       context: 'gameplay.default',
@@ -340,6 +342,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
       epoch: 1, baseline: false, recovery: 'none',
     });
     assert.equal(host.readout().state, 'ready');
+    assert.equal(cameraResets, 1, 'replacement control binding resets presentation history');
     assert.deepEqual(baselines, [{
       runtime: freshRuntime,
       context: 'gameplay.default',
@@ -358,6 +361,14 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
     }], { epoch: 1, baseline: false, recovery: 'none' });
     assert.equal(baselines.length, 1);
     assert.equal(boundRuntimes.length, 1, 'late old input result cannot rebind the fresh control revision');
+    publishOutputs([{ kind: 'binding', runtime: freshRuntime, nextInputSequence: '1' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    assert.equal(cameraResets, 1, 'same binding republication keeps history');
+    publishOutputs([{ kind: 'binding', runtime: { ...freshRuntime, generation: '999' }, nextInputSequence: '1' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    assert.equal(cameraResets, 2, 'ordinary runtime replacement also resets history');
     await host.dispose();
   } finally {
     Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
