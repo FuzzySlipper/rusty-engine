@@ -30158,7 +30158,7 @@ function BO(e = {}) {
 				}
 			}, e.onerror = (e) => {
 				if (!a()) return;
-				y ? T === 0n && le(mO.freshOutputs).catch(() => void 0) : (f = null, b = [], p = null);
+				y ? le(mO.freshOutputs).catch(() => void 0) : (f = null, b = [], p = null);
 				let t = new Q("stream_failed", `Product Browser local runtime output stream failed${e instanceof Error ? `: ${e.message}` : ""}`, { route: mO.outputs });
 				ee(t);
 			};

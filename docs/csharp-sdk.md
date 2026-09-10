@@ -666,3 +666,9 @@ meshed in one request. Partition large products deliberately. This foundation
 does not implement erosion, world streaming, or efficient sparse edits.
 
 For opt-in FPS controls and shared human/agent targeting, see [controller and interaction composition](controller-interaction.md).
+
+An interrupted development-host output subscription reattaches through a fresh
+retained baseline, even after receiving numbered output. SSE cursors are local
+to a host process; they are never reused after interruption against a potentially
+replaced process. Input and product mutations are not replayed during this
+recovery. The browser remains gated until the replacement projection is applied.

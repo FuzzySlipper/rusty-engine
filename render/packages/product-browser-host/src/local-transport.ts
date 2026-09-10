@@ -1207,12 +1207,12 @@ export function createProductBrowserLocalHttpAdapter(
             pendingFragment = null;
             pendingConnectionOutputs = [];
             currentOutputBinding = null;
-          } else if (observedOutputSequence === 0n) {
-            // An unnumbered completed baseline still fences a renderer
-            // projection: active publishers may advance before EventSource
-            // reconnects. Reuse the existing single-flight fresh-output path
-            // so the replacement baseline becomes a new output epoch instead
-            // of being discarded as a duplicate detached attach.
+          } else {
+            // A cursor belongs to this host process, not merely its URL. After
+            // interruption the server may be a new process whose counter is
+            // below OR above ours. Attach a complete retained baseline instead
+            // of allowing EventSource to reuse Last-Event-ID across incarnations.
+            // Only output is recovered; no mutation or input is replayed.
             void recoverFreshOutputsOrTerminal(ROUTES.freshOutputs).catch(() => undefined);
           }
           const error = new ProductBrowserLocalTransportError(
@@ -1220,8 +1220,9 @@ export function createProductBrowserLocalHttpAdapter(
             `Product Browser local runtime output stream failed${event instanceof Error ? `: ${event.message}` : ''}`,
             { route: ROUTES.outputs },
           );
-          // EventSource owns same-URL retry semantics. Keep the stream and
-          // listeners alive so a transient local-server restart can recover.
+          // Before a baseline completes, EventSource retries the fresh URL.
+          // Established subscriptions were replaced above with that same
+          // cursor-free path; a down server need not be retried by product code.
           reportTransportError(error);
         };
       } catch (cause) {

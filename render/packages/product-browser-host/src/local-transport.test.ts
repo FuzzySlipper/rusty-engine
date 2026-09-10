@@ -476,60 +476,73 @@ test('local transport marks a successful response with no commit boundary outcom
   adapter.dispose();
 });
 
-test('cursorless disconnect replaces the baseline in a new output epoch', async () => {
-  FakeEventSource.instances.length = 0;
-  const adapter = createProductBrowserLocalHttpAdapter({
-    fetch: async () => response(result('advance-realtime')),
-    eventSource: FakeEventSource,
-  });
-  const outputs: unknown[] = [];
-  const batches: { readonly outputs: readonly unknown[]; readonly metadata: unknown }[] = [];
-  const unsubscribe = adapter.subscribeOutputs((output) => outputs.push(output));
-  const unsubscribeBatches = adapter.subscribeOutputBatches?.((output, metadata) => {
-    batches.push({ outputs: [...output], metadata });
-  });
-  const stream = FakeEventSource.instances[0]!;
-  stream.open();
-  const connection = adapter.connect?.();
-  stream.emit({
-    kind: 'binding', runtime: RUNTIME, nextInputSequence: '1',
-    publicationFrontiers: [{ stream: 'voxel:active', revision: 1 }],
-  }, '');
-  stream.emit({ kind: 'runtime-readout', readout: READOUT }, '');
-  stream.emitBaseline(result('connect'), '');
-  await connection;
-  assert.equal(outputs.length, 2);
+for (const cursor of ['', '5', '50000']) {
+  test(`disconnect at cursor ${cursor || 'none'} replaces the baseline across host incarnations`, async () => {
+    FakeEventSource.instances.length = 0;
+    let mutations = 0;
+    const adapter = createProductBrowserLocalHttpAdapter({
+      fetch: async () => { mutations += 1; return response(result('advance-realtime')); },
+      eventSource: FakeEventSource,
+    });
+    const outputs: unknown[] = [];
+    const batches: { readonly outputs: readonly unknown[]; readonly metadata: unknown }[] = [];
+    const unsubscribe = adapter.subscribeOutputs((output) => outputs.push(output));
+    const unsubscribeBatches = adapter.subscribeOutputBatches?.((output, metadata) => {
+      batches.push({ outputs: [...output], metadata });
+    });
+    const stream = FakeEventSource.instances[0]!;
+    stream.open();
+    const connection = adapter.connect?.();
+    stream.emit({
+      kind: 'binding', runtime: RUNTIME, nextInputSequence: '1',
+      publicationFrontiers: [{ stream: 'voxel:active', revision: 1 }],
+    }, '');
+    stream.emit({ kind: 'runtime-readout', readout: READOUT }, '');
+    stream.emitBaseline(result('connect'), '');
+    await connection;
+    assert.equal(outputs.length, 2);
 
-  stream.onerror?.(new Error('cursorless reconnect'));
-  assert.equal(stream.closed, true);
-  assert.equal(FakeEventSource.instances.length, 2);
-  const replacement = FakeEventSource.instances[1]!;
-  replacement.emit({
-    kind: 'binding', runtime: RUNTIME, nextInputSequence: '1',
-    publicationFrontiers: [{ stream: 'voxel:active', revision: 2 }],
-  }, '');
-  replacement.emit({ kind: 'runtime-readout', readout: READOUT }, '');
-  replacement.emitBaseline(result('connect'), '');
-  assert.equal(outputs.length, 4);
-  assert.deepEqual(batches.map((batch) => batch.metadata), [
-    { epoch: 1, baseline: true, recovery: 'none' },
-    { epoch: 1, baseline: false, recovery: 'fresh-baseline-required' },
-    { epoch: 2, baseline: true, recovery: 'none' },
-  ]);
+    if (cursor !== '') stream.emit({ kind: 'runtime-readout', readout: READOUT }, cursor);
+    const previousCount = outputs.length;
+    stream.onerror?.(new Error('host disconnected'));
+    assert.equal(stream.closed, true);
+    assert.equal(FakeEventSource.instances.length, 2);
+    const replacement = FakeEventSource.instances[1]!;
+    // A down host can fail repeatedly before returning; retain the one new
+    // EventSource, whose request has no retired process cursor.
+    replacement.onerror?.(new Error('host still offline'));
+    assert.equal(FakeEventSource.instances.length, 2);
+    const nextRuntime = { ...RUNTIME, instanceId: '8' };
+    replacement.emit({
+      kind: 'binding', runtime: nextRuntime, nextInputSequence: '1',
+      publicationFrontiers: [{ stream: 'voxel:active', revision: 2 }],
+    }, '');
+    replacement.emit({ kind: 'runtime-readout', readout: READOUT }, '');
+    replacement.emitBaseline({ ...result('connect'), binding: nextRuntime }, '');
+    assert.equal(outputs.length, previousCount + 2);
+    assert.deepEqual(batches.map((batch) => batch.metadata), [
+      { epoch: 1, baseline: true, recovery: 'none' },
+      ...(cursor === '' ? [] : [{ epoch: 1, baseline: false, recovery: 'none' }]),
+      { epoch: 1, baseline: false, recovery: 'fresh-baseline-required' },
+      { epoch: 2, baseline: true, recovery: 'none' },
+    ]);
 
-  replacement.emit({
-    kind: 'frame',
-    frame: {
-      schemaVersion: 1,
-      publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
-      ops: [],
-    },
-  }, '1');
-  assert.equal(outputs.length, 5);
-  unsubscribeBatches?.();
-  unsubscribe();
-  adapter.dispose();
-});
+    replacement.emit({
+      kind: 'frame',
+      frame: {
+        schemaVersion: 1,
+        publication: { stream: 'voxel:active', baseRevision: 2, revision: 3, operationCount: 0 },
+        ops: [],
+      },
+    }, '20');
+    assert.equal(outputs.length, previousCount + 3);
+    assert.equal(mutations, 0, 'output recovery must not replay any mutation');
+    unsubscribeBatches?.();
+    unsubscribe();
+    adapter.dispose();
+  });
+
+}
 
 test('local transport decodes Rust-host realtime progress output', () => {
   FakeEventSource.instances.length = 0;
