@@ -2212,6 +2212,7 @@ export async function mountProductBrowserHostWithApplication(
         // retained presentation state must be realized with the replacement.
         host.renderer.resetAudioRealizationOwner();
         host.renderer.resetAnimationRealizationOwner();
+        host.renderer.resetCameraMotion();
         audioFeedbackReporter = createProductBrowserAudioFeedbackReporter({
           renderer: host.renderer,
           report: transport.reportAudioFeedback,

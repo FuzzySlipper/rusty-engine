@@ -717,6 +717,8 @@ pub type NativeCreateCamera = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeUpdateCamera =
     unsafe extern "C" fn(*mut c_void, *const NativeCameraUpdateRequest) -> i32;
+pub type NativeUpdateCameraSample =
+    unsafe extern "C" fn(*mut c_void, *const NativeCameraSampleRequest) -> i32;
 pub type NativeReplaceCamera = unsafe extern "C" fn(
     *mut c_void,
     *const NativeCameraReplaceRequest,
@@ -1142,6 +1144,7 @@ pub struct NativeCameraViewApi {
     pub context: *mut c_void,
     pub create_camera: NativeCreateCamera,
     pub update_camera: NativeUpdateCamera,
+    pub update_camera_sample: NativeUpdateCameraSample,
     pub replace_camera: NativeReplaceCamera,
     pub destroy_camera: NativeDestroyCamera,
     pub create_camera_target: NativeCreateCameraTarget,

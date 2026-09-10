@@ -2385,6 +2385,11 @@ fn handle_sse<R: ProductDevRuntime>(
         );
         return;
     }
+    // Like the worker stream, publish each small real-time event without waiting
+    // for an ACK of its predecessor. Flush alone does not disable TCP Nagle.
+    if stream.set_nodelay(true).is_err() {
+        return;
+    }
     if !try_acquire(&state.subscribers, MAX_SSE_SUBSCRIBERS) {
         let _ = write_response(
             &mut stream,

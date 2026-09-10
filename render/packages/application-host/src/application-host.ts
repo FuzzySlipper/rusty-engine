@@ -367,6 +367,7 @@ export interface RustyApplicationRendererPort {
   /** Invalidate the realized-audio owner when a product runtime binding changes. */
   readonly resetAudioRealizationOwner: () => boolean;
   readonly resetAnimationRealizationOwner: () => boolean;
+  readonly resetCameraMotion: () => void;
   readonly configureViews: (
     composition: RustyApplicationViewComposition,
   ) => RustyApplicationViewCompositionReceipt;
@@ -1144,6 +1145,7 @@ export async function mountRustyApplicationWithEnvironment(
     acknowledgeAnimationRealizedFacts: (throughFactId: number) =>
       requireActive().acknowledgeAnimationRealizedFacts(throughFactId),
     resetAnimationRealizationOwner: () => requireActive().resetAnimationRealizationOwner(),
+    resetCameraMotion: () => requireActive().resetCameraMotion(),
     resetAudioRealizationOwner: () => requireActive().resetAudioRealizationOwner(),
     setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
     configureViews: (composition: RustyApplicationViewComposition) => {

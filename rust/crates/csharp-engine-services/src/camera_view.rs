@@ -2,8 +2,9 @@ use std::{collections::BTreeMap, ffi::c_void};
 
 use csharp_engine_abi::*;
 use render_host_contracts::{
-    RendererCameraBasis, RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
-    RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
+    RendererCameraBasis, RendererCameraInterpolation, RendererCameraMotion, RendererCameraPose,
+    RendererCameraProjection, RendererCompositionCamera, RendererCompositionView,
+    RendererViewComposition, RendererViewTarget, RendererViewport,
     RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
 };
 use render_model::{RenderDiff, RenderFrameDiff, SkyBackgroundDescriptor};
@@ -16,7 +17,7 @@ use crate::{
 
 #[derive(Clone)]
 struct CameraState {
-    cameras: BTreeMap<u64, NativeCameraDescriptor>,
+    cameras: BTreeMap<u64, CameraEntry>,
     targets: BTreeMap<u64, CameraTargetState>,
     views: Vec<NativeCameraCompositionView>,
     presentations: Vec<NativeCameraCompositionPresentation>,
@@ -26,6 +27,15 @@ struct CameraState {
     sky_texture: Option<u64>,
     next_camera: u64,
     next_target: u64,
+}
+
+#[derive(Clone)]
+struct CameraEntry {
+    descriptor: NativeCameraDescriptor,
+    motion: Option<RendererCameraMotion>,
+    /// Starts at one because zero is never a renderer sample identity. This
+    /// identity is retained per live camera, not supplied by the product.
+    next_sample_id: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -146,7 +156,14 @@ impl RuntimeCameraViewBridge {
         staged.state.next_camera = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle overflow")
         })?;
-        staged.state.cameras.insert(handle, descriptor);
+        staged.state.cameras.insert(
+            handle,
+            CameraEntry {
+                descriptor,
+                motion: None,
+                next_sample_id: 1,
+            },
+        );
         stage_composition(staged)?;
         Ok(NativeCameraHandle { value: handle })
     }
@@ -164,7 +181,46 @@ impl RuntimeCameraViewBridge {
             .ok_or_else(|| {
                 CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle is not live")
             })?;
-        *camera = request.descriptor;
+        camera.descriptor = request.descriptor;
+        // The established immediate update path explicitly drops retained
+        // sampling state, so it cannot accidentally keep smoothing a new pose.
+        camera.motion = None;
+        if staged.state.active_camera == Some(request.camera.value) {
+            if let Some(view) = staged.state.views.first_mut() {
+                view.viewport = request.descriptor.viewport;
+            }
+        }
+        stage_composition(staged)
+    }
+
+    fn update_sample(
+        &mut self,
+        request: NativeCameraSampleRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        validate_descriptor(request.descriptor)?;
+        let motion = sample_motion(request)?;
+        let staged = self.staged_mut()?;
+        let camera = staged
+            .state
+            .cameras
+            .get_mut(&request.camera.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle is not live")
+            })?;
+        if let Some(mut motion) = motion {
+            let next_sample_id = camera.next_sample_id.checked_add(1).ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_CAMERA_SAMPLE_ID",
+                    "camera sample identity overflow",
+                )
+            })?;
+            motion.sample_id = camera.next_sample_id.to_string();
+            camera.next_sample_id = next_sample_id;
+            camera.motion = Some(motion);
+        } else {
+            camera.motion = None;
+        }
+        camera.descriptor = request.descriptor;
         if staged.state.active_camera == Some(request.camera.value) {
             if let Some(view) = staged.state.views.first_mut() {
                 view.viewport = request.descriptor.viewport;
@@ -189,10 +245,14 @@ impl RuntimeCameraViewBridge {
         staged.state.next_camera = replacement.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle overflow")
         })?;
-        staged
-            .state
-            .cameras
-            .insert(replacement, request.replacement);
+        staged.state.cameras.insert(
+            replacement,
+            CameraEntry {
+                descriptor: request.replacement,
+                motion: None,
+                next_sample_id: 1,
+            },
+        );
         for view in &mut staged.state.views {
             if view.camera == request.camera {
                 view.camera = NativeCameraHandle { value: replacement };
@@ -370,6 +430,7 @@ impl RuntimeCameraViewBridge {
                 .cameras
                 .get(&camera.value)
                 .expect("live camera was checked")
+                .descriptor
                 .viewport,
             order: 0,
         }];
@@ -419,7 +480,7 @@ fn stage_composition(staged: &mut RuntimeCameraViewCall) -> Result<(), CsharpEng
             .state
             .cameras
             .get(&view.camera.value)
-            .copied()
+            .cloned()
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_CAMERA_COMPOSITION_CAMERA",
@@ -535,8 +596,9 @@ fn composition_target(
 
 fn composition_camera(
     id: String,
-    descriptor: NativeCameraDescriptor,
+    camera: CameraEntry,
 ) -> Result<RendererCompositionCamera, CsharpEngineServicesError> {
+    let descriptor = camera.descriptor;
     let projection = match descriptor.projection.kind {
         NativeCameraProjectionKind::Perspective => RendererCameraProjection::Perspective {
             fov_y_degrees: descriptor.projection.fov_y_degrees,
@@ -565,6 +627,7 @@ fn composition_camera(
             }),
         },
         projection,
+        motion: camera.motion,
     })
 }
 
@@ -581,12 +644,49 @@ fn viewport(value: NativeCameraViewport) -> RendererViewport {
     }
 }
 
+fn sample_motion(
+    request: NativeCameraSampleRequest,
+) -> Result<Option<RendererCameraMotion>, CsharpEngineServicesError> {
+    if !request.sample_time_seconds.is_finite() || request.sample_time_seconds < 0.0 {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_CAMERA_SAMPLE_TIME",
+            "camera sample time must be finite and non-negative",
+        ));
+    }
+    let interpolation = match request.interpolation {
+        NativeCameraInterpolation::Latest => return Ok(None),
+        NativeCameraInterpolation::Position => RendererCameraInterpolation::Position,
+        NativeCameraInterpolation::Pose => RendererCameraInterpolation::Pose,
+    };
+    if !request.delay_seconds.is_finite() || request.delay_seconds <= 0.0 {
+        return Err(CsharpEngineServicesError::new(
+            "CSHARP_CAMERA_SAMPLE_DELAY",
+            "interpolated camera delay must be finite and positive",
+        ));
+    }
+    Ok(Some(RendererCameraMotion {
+        // `update_sample` installs the checked, per-camera Engine identity.
+        sample_id: String::new(),
+        sample_time_seconds: request.sample_time_seconds,
+        delay_seconds: request.delay_seconds,
+        interpolation,
+        cut: request.cut != 0,
+    }))
+}
+
 fn validate_descriptor(
     descriptor: NativeCameraDescriptor,
 ) -> Result<(), CsharpEngineServicesError> {
     let composition = RendererViewComposition {
         schema_version: RENDERER_VIEW_COMPOSITION_SCHEMA_VERSION,
-        cameras: vec![composition_camera("validate".to_owned(), descriptor)?],
+        cameras: vec![composition_camera(
+            "validate".to_owned(),
+            CameraEntry {
+                descriptor,
+                motion: None,
+                next_sample_id: 1,
+            },
+        )?],
         targets: Vec::new(),
         views: vec![RendererCompositionView {
             id: "validate-view".to_owned(),
@@ -693,6 +793,23 @@ pub(crate) unsafe extern "C" fn update_camera(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.update(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn update_camera_sample(
+    context: *mut c_void,
+    request: *const NativeCameraSampleRequest,
+) -> i32 {
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.update_sample(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.callback_error = Some(error);
@@ -936,6 +1053,173 @@ mod tests {
             depth: NativeCameraTargetDepth::Depth24,
             sampling: NativeCameraTargetSampling::Linear,
         }
+    }
+
+    fn sample_request(
+        camera: NativeCameraHandle,
+        descriptor: NativeCameraDescriptor,
+        interpolation: NativeCameraInterpolation,
+        cut: bool,
+    ) -> NativeCameraSampleRequest {
+        NativeCameraSampleRequest {
+            camera,
+            descriptor,
+            sample_time_seconds: 42.0,
+            delay_seconds: 1.0 / 60.0,
+            interpolation,
+            cut: u8::from(cut),
+        }
+    }
+
+    #[test]
+    fn sampled_camera_metadata_survives_snapshots_and_immediate_updates_clear_it() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        bridge.begin_call();
+        let camera = bridge
+            .create(camera_descriptor(NativeCameraViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            }))
+            .expect("camera");
+        bridge.set_active(camera).expect("active camera");
+        let initial = bridge.take_staged_call().expect("initial camera");
+        bridge.commit(initial);
+
+        bridge.begin_call();
+        bridge
+            .update_sample(sample_request(
+                camera,
+                camera_descriptor(NativeCameraViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                }),
+                NativeCameraInterpolation::Position,
+                false,
+            ))
+            .expect("position sample");
+        let first = bridge.take_staged_call().expect("first sample");
+        let first_motion = first.composition.as_ref().unwrap().cameras[0]
+            .motion
+            .as_ref()
+            .expect("position metadata")
+            .clone();
+        assert_eq!(first_motion.sample_id, "1");
+        assert_eq!(
+            first_motion.interpolation,
+            RendererCameraInterpolation::Position
+        );
+        assert!(!first_motion.cut);
+        bridge.commit(first);
+
+        let snapshot = bridge.snapshot_composition().expect("retained snapshot");
+        assert_eq!(snapshot.cameras[0].motion.as_ref(), Some(&first_motion));
+
+        bridge.begin_call();
+        bridge
+            .update_sample(sample_request(
+                camera,
+                camera_descriptor(NativeCameraViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                }),
+                NativeCameraInterpolation::Pose,
+                true,
+            ))
+            .expect("pose sample");
+        let second = bridge.take_staged_call().expect("second sample");
+        let second_motion = second.composition.as_ref().unwrap().cameras[0]
+            .motion
+            .as_ref()
+            .expect("pose metadata");
+        assert_eq!(second_motion.sample_id, "2");
+        assert_eq!(
+            second_motion.interpolation,
+            RendererCameraInterpolation::Pose
+        );
+        assert!(second_motion.cut);
+        bridge.commit(second);
+
+        bridge.begin_call();
+        bridge
+            .update(NativeCameraUpdateRequest {
+                camera,
+                descriptor: camera_descriptor(NativeCameraViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                }),
+            })
+            .expect("immediate update");
+        let immediate = bridge.take_staged_call().expect("immediate composition");
+        assert!(immediate.composition.as_ref().unwrap().cameras[0]
+            .motion
+            .is_none());
+    }
+
+    #[test]
+    fn sampled_camera_rejects_invalid_timeline_math() {
+        let mut bridge = RuntimeCameraViewBridge::new();
+        bridge.begin_call();
+        let descriptor = camera_descriptor(NativeCameraViewport {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        });
+        let camera = bridge.create(descriptor).expect("camera");
+        let mut invalid_time = sample_request(
+            camera,
+            descriptor,
+            NativeCameraInterpolation::Position,
+            false,
+        );
+        invalid_time.sample_time_seconds = f64::NAN;
+        assert_eq!(
+            bridge
+                .update_sample(invalid_time)
+                .expect_err("invalid time")
+                .code(),
+            "CSHARP_CAMERA_SAMPLE_TIME"
+        );
+        let mut invalid_delay =
+            sample_request(camera, descriptor, NativeCameraInterpolation::Pose, false);
+        invalid_delay.delay_seconds = 0.0;
+        assert_eq!(
+            bridge
+                .update_sample(invalid_delay)
+                .expect_err("invalid delay")
+                .code(),
+            "CSHARP_CAMERA_SAMPLE_DELAY"
+        );
+
+        bridge
+            .staged
+            .as_mut()
+            .unwrap()
+            .state
+            .cameras
+            .get_mut(&camera.value)
+            .unwrap()
+            .next_sample_id = u64::MAX;
+        assert_eq!(
+            bridge
+                .update_sample(sample_request(
+                    camera,
+                    descriptor,
+                    NativeCameraInterpolation::Position,
+                    false,
+                ))
+                .expect_err("sample identity overflow")
+                .code(),
+            "CSHARP_CAMERA_SAMPLE_ID"
+        );
     }
 
     #[test]

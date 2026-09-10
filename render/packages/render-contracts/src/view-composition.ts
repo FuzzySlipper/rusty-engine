@@ -36,6 +36,14 @@ export interface RendererCompositionCamera {
   readonly id: RendererCompositionIdentifier;
   readonly pose: RendererCompositionCameraPose;
   readonly basis?: RendererCompositionCameraBasis;
+  /** Opt-in presentation samples. Omission applies the authoritative pose immediately. */
+  readonly motion?: {
+    readonly sampleId: string;
+    readonly sampleTimeSeconds: number;
+    readonly delaySeconds: number;
+    readonly interpolation: 'position' | 'pose';
+    readonly cut: boolean;
+  };
   readonly projection: RendererCompositionProjection;
 }
 
@@ -134,6 +142,17 @@ export function validateRendererViewComposition(
       if (lengthSquared(camera.basis.forward) <= Number.EPSILON
         || lengthSquared(camera.basis.up) <= Number.EPSILON) {
         fail(`${path}.basis`, 'forward and up must be non-zero');
+      }
+    }
+    if (camera.motion !== undefined) {
+      const motion = camera.motion;
+      finite(motion.sampleTimeSeconds, `${path}.motion.sampleTimeSeconds`);
+      finite(motion.delaySeconds, `${path}.motion.delaySeconds`);
+      if (motion.sampleTimeSeconds < 0 || motion.delaySeconds <= 0
+        || typeof motion.sampleId !== 'string' || motion.sampleId.length === 0
+        || (motion.interpolation !== 'position' && motion.interpolation !== 'pose')
+        || typeof motion.cut !== 'boolean') {
+        fail(`${path}.motion`, 'requires a sample identity, nonnegative time, positive delay, and position or pose interpolation');
       }
     }
     projection(camera.projection, `${path}.projection`);

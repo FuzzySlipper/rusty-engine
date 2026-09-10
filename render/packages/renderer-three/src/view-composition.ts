@@ -9,6 +9,7 @@ import {
 
 import type { RendererVisibilityReadout, ThreeRenderer } from './three-renderer.js';
 import { applyRendererThreeCameraBasis, applyRendererThreeCameraPose } from './camera-pose.js';
+import { CameraMotion } from './camera-motion.js';
 import { synchronizeCameraRelativeViewmodelCamera } from './viewmodel-camera.js';
 
 export type RendererViewCompositionDiagnosticCode =
@@ -34,6 +35,8 @@ export interface RendererViewCompositionReadout {
   readonly schemaVersion: 1;
   readonly revision: number;
   readonly cameras: RendererViewComposition['cameras'];
+  readonly cameraSamples: readonly (ReturnType<CameraMotion['readout']> & { readonly cameraId: string })[];
+  readonly sourceCameras: RendererViewComposition['cameras'];
   readonly targets: readonly (RendererCompositionTarget & {
     readonly lastRefreshedSubmission: number | null;
     readonly status: 'current' | 'never_rendered' | 'stale';
@@ -106,6 +109,8 @@ export class RendererViewCompositionBackend {
   readonly #viewmodelCamera: THREE.PerspectiveCamera;
   readonly #webgl: THREE.WebGLRenderer;
   readonly #prepareSceneForCamera: (camera: THREE.Camera, view: object) => void;
+  #motions = new Map<string, CameraMotion>();
+  readonly #now: () => number;
   #viewIdentities = new Map<string, object>();
   #cameras: ReadonlyMap<string, THREE.Camera> = new Map();
   #composition = EMPTY_COMPOSITION;
@@ -120,7 +125,9 @@ export class RendererViewCompositionBackend {
     projection: ThreeRenderer,
     viewmodelCamera = new THREE.PerspectiveCamera(),
     prepareSceneForCamera: (camera: THREE.Camera, view: object) => void = () => undefined,
+    now: () => number = () => performance.now(),
   ) {
+    this.#now = now;
     this.#webgl = webgl;
     this.#projection = projection;
     this.#viewmodelCamera = viewmodelCamera;
@@ -171,7 +178,20 @@ export class RendererViewCompositionBackend {
     return Object.freeze({
       schemaVersion: 1,
       revision: this.#revision,
-      cameras: this.#composition.cameras,
+      cameras: Object.freeze(this.#composition.cameras.map(descriptor => {
+        const camera = this.#cameras.get(descriptor.id);
+        if (camera === undefined || descriptor.motion === undefined) return descriptor;
+        const rotation = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+        const vector = (x: number, y: number, z: number): [number, number, number] =>
+          new THREE.Vector3(x, y, z).applyQuaternion(camera.quaternion).toArray();
+        return freezeValue({ ...descriptor,
+          pose: { position: camera.position.toArray(), pitchDegrees: THREE.MathUtils.radToDeg(rotation.x),
+            yawDegrees: -THREE.MathUtils.radToDeg(rotation.y) },
+          basis: { forward: vector(0, 0, -1), right: vector(1, 0, 0), up: vector(0, 1, 0) },
+        });
+      })),
+      sourceCameras: this.#composition.cameras,
+      cameraSamples: Object.freeze([...this.#motions].map(([cameraId, motion]) => Object.freeze({ cameraId, ...motion.readout() }))),
       targets: Object.freeze(targets),
       views: this.#composition.views,
       presentations: this.#composition.presentations,
@@ -211,9 +231,27 @@ export class RendererViewCompositionBackend {
     }
   }
 
-  render(submission: number, primaryWidth: number, primaryHeight: number): void {
+  requiresAnimationFrame(): boolean {
+    return [...this.#motions.values()].some(motion => motion.needsFrame());
+  }
+
+  resetCameraMotion(): void {
+    this.#motions.clear();
+    for (const descriptor of this.#composition.cameras) {
+      const motion = new CameraMotion();
+      motion.receive(descriptor, this.#now() / 1000);
+      const camera = this.#cameras.get(descriptor.id);
+      if (camera !== undefined) motion.apply(camera, this.#now() / 1000);
+    }
+  }
+
+  render(submission: number, primaryWidth: number, primaryHeight: number, timeMs = this.#now()): void {
     if (this.#disposed || this.#composition.views.length === 0) return;
 
+    for (const [id, motion] of this.#motions) {
+      const camera = this.#cameras.get(id);
+      if (camera !== undefined) motion.apply(camera, timeMs / 1000);
+    }
     const offscreenViews = this.#composition.views
       .filter((view) => view.target.kind === 'offscreen')
       .sort(compareOrdered);
@@ -284,6 +322,7 @@ export class RendererViewCompositionBackend {
     this.#cameras = new Map();
     this.#composition = EMPTY_COMPOSITION;
     this.#viewIdentities.clear();
+    this.#motions.clear();
     this.#presentations = new Map();
     this.#targets = new Map();
     this.#disposed = true;
@@ -331,6 +370,13 @@ export class RendererViewCompositionBackend {
     // identity so camera-dependent realization can retain per-view hysteresis.
     this.#viewIdentities = new Map(prepared.composition.views.map(view =>
       [view.id, this.#viewIdentities.get(view.id) ?? {}]));
+    const arrivalSeconds = this.#now() / 1000;
+    this.#motions = new Map(prepared.composition.cameras.map(descriptor => {
+      const motion = this.#motions.get(descriptor.id) ?? new CameraMotion();
+      motion.receive(descriptor, arrivalSeconds);
+      motion.apply(prepared.cameras.get(descriptor.id)!, arrivalSeconds);
+      return [descriptor.id, motion];
+    }));
     this.#cameras = prepared.cameras;
     this.#composition = prepared.composition;
     this.#presentations = prepared.presentations;

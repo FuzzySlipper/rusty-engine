@@ -170,6 +170,33 @@ pub struct NativeCameraUpdateRequest {
     pub descriptor: NativeCameraDescriptor,
 }
 
+/// Selects the opt-in renderer presentation sampling applied to a camera
+/// update. `Latest` publishes the descriptor immediately; the interpolation
+/// variants retain the supplied product timeline facts for the renderer.
+/// The generated safe C# API exposes only these values; raw table consumers
+/// must likewise pass one of these declared discriminants.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeCameraInterpolation {
+    Latest = 0,
+    Position = 1,
+    Pose = 2,
+}
+
+/// One camera descriptor update with an optional renderer sampling contract.
+/// The product supplies its admitted timeline and explicit cuts; the Engine
+/// owns retained metadata and the opaque sample identity.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCameraSampleRequest {
+    pub camera: NativeCameraHandle,
+    pub descriptor: NativeCameraDescriptor,
+    pub sample_time_seconds: f64,
+    pub delay_seconds: f64,
+    pub interpolation: NativeCameraInterpolation,
+    pub cut: u8,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCameraReplaceRequest {

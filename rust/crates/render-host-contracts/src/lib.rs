@@ -50,6 +50,26 @@ pub enum RendererCameraProjection {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RendererCameraInterpolation {
+    Position,
+    Pose,
+}
+
+/// Renderer-owned retained sampling metadata for an opt-in camera update.
+/// Camera state remains authoritative at its published descriptor; this only
+/// describes how the host may present it between product updates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RendererCameraMotion {
+    pub sample_id: String,
+    pub sample_time_seconds: f64,
+    pub delay_seconds: f64,
+    pub interpolation: RendererCameraInterpolation,
+    pub cut: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RendererCompositionCamera {
@@ -58,6 +78,8 @@ pub struct RendererCompositionCamera {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub basis: Option<RendererCameraBasis>,
     pub projection: RendererCameraProjection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<RendererCameraMotion>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +197,9 @@ impl RendererViewComposition {
                 validate_basis(basis)?;
             }
             validate_projection(camera.projection)?;
+            if let Some(motion) = &camera.motion {
+                validate_camera_motion(motion)?;
+            }
         }
         let mut target_pixels = 0_u64;
         for target in &self.targets {
@@ -388,6 +413,19 @@ fn validate_projection(
         && near > 0.0
         && far.is_finite()
         && far > near
+    {
+        Ok(())
+    } else {
+        Err(RendererHostContractError::InvalidNumber)
+    }
+}
+
+fn validate_camera_motion(motion: &RendererCameraMotion) -> Result<(), RendererHostContractError> {
+    validate_identifier(&motion.sample_id)?;
+    if motion.sample_time_seconds.is_finite()
+        && motion.sample_time_seconds >= 0.0
+        && motion.delay_seconds.is_finite()
+        && motion.delay_seconds > 0.0
     {
         Ok(())
     } else {

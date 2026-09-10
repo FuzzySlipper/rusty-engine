@@ -273,6 +273,8 @@ export interface RendererBrowserSurface {
   readonly lightingReadout: () => RendererBrowserSurfaceLightingReadout;
   readonly visibilityReadout: () => RendererBrowserSurfaceVisibilityReadout;
   readonly configureViews: (composition: RendererViewComposition) => RendererViewCompositionReceipt;
+  readonly cameraMotionRequiresAnimationFrame: () => boolean;
+  readonly resetCameraMotion: () => void;
   readonly viewCompositionReadout: () => RendererViewCompositionReadout;
   readonly projectWorldPoint: (
     position: readonly [number, number, number],
@@ -548,7 +550,7 @@ export function mountRendererBrowserSurface(
         deltaSeconds,
       );
       submissionSequence += 1;
-      viewComposition.render(submissionSequence, canvas.width, canvas.height);
+      viewComposition.render(submissionSequence, canvas.width, canvas.height, timeMs);
     } catch (cause) {
       gpuSubmissionDuty.aborted();
       throw cause;
@@ -693,6 +695,8 @@ export function mountRendererBrowserSurface(
       viewComposition.invalidate();
     },
     configureViews: (composition) => viewComposition.configure(composition),
+    cameraMotionRequiresAnimationFrame: () => viewComposition.requiresAnimationFrame(),
+    resetCameraMotion: () => viewComposition.resetCameraMotion(),
     cameraPose: () => currentCameraPose,
     cameraProjection: () => cameraProjection,
     lightingReadout: () => {

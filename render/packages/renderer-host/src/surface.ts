@@ -629,6 +629,7 @@ export interface RendererSurface {
   readonly resetAudioRealizationOwner: () => boolean;
   /** Invalidate animation feedback ownership for a replaced runtime binding. */
   readonly resetAnimationRealizationOwner: () => boolean;
+  readonly resetCameraMotion: () => void;
   /** Submit one explicit frame and return its immutable renderer-owned sample. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceSubmissionSample;
   readonly resetCamera: () => void;
@@ -878,7 +879,8 @@ function mountPreparedRendererSurface(
   });
   const continuousDemand = () => ({
     controls: controls.requiresAnimationFrame(),
-    presentation: presentationHosts?.requiresAnimationFrame() ?? false,
+    presentation: (presentationHosts?.requiresAnimationFrame() ?? false)
+      || backendSurface.cameraMotionRequiresAnimationFrame(),
     retainedAnimation: hasRetainedAnimation(latestSubmission),
   });
   const requestAutomaticSubmission = (): void => {
@@ -1335,6 +1337,7 @@ function mountPreparedRendererSurface(
       presentationHosts?.acknowledgeAnimationRealizedFacts(throughFactId) ?? false,
     resetAudioRealizationOwner: () => presentationHosts?.resetAudioRealizationOwner() ?? false,
     resetAnimationRealizationOwner: () => presentationHosts?.resetAnimationRealizationOwner() ?? false,
+    resetCameraMotion: () => { backendSurface.resetCameraMotion(); requestAutomaticSubmission(); },
     renderOnce,
     resetCamera: () => {
       controls.resetCamera();

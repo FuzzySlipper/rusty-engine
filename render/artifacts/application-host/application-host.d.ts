@@ -269,6 +269,7 @@ export interface RustyApplicationRendererPort {
     /** Invalidate the realized-audio owner when a product runtime binding changes. */
     readonly resetAudioRealizationOwner: () => boolean;
     readonly resetAnimationRealizationOwner: () => boolean;
+    readonly resetCameraMotion: () => void;
     readonly configureViews: (composition: RustyApplicationViewComposition) => RustyApplicationViewCompositionReceipt;
     /** Replace product content with the Engine-owned empty/default retained frame. */
     readonly clear: () => Promise<void>;

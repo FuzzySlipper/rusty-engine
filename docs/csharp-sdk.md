@@ -263,6 +263,33 @@ use a target as an arbitrary mesh texture. `SetActiveCamera` remains the
 single-primary-view convenience over this same retained composition. Use
 `CameraViewports` for ordinary full, split, and inset normalized rectangles.
 
+`UpdateCamera` still applies immediately. Opt into render-time sampling with
+`UpdateCameraSample(new CameraSampleRequest(camera, descriptor, sampleTimeSeconds,
+delaySeconds, CameraInterpolation.Position, cut))`. Use the admitted simulation
+facts for a monotonic sample timeline; a useful end-of-batch timestamp is
+`(facts.SimulationStep + facts.AdmittedStepCount) * facts.FixedDeltaSeconds`.
+`Position` interpolates translation while using the latest published orientation;
+`Pose` also interpolates orientation, including explicit-basis roll. `Latest`
+returns to immediate presentation. A one-step delay is a starting point, not an
+Engine-wide policy. Look remains limited by its publication cadence in position
+mode: this API does not predict input or run gameplay in the browser.
+
+Pass `cut: 1` on teleports, origin rebases, and discontinuities; ordinary samples
+use `cut: 0`. Camera replacement, browser runtime recovery, timeline regression,
+and interpolation-mode/delay changes discard history. Repeated retained snapshots
+do not create new samples. Missing samples hold the latest pose without
+extrapolation. The renderer keeps at most 64 recent samples per camera; a delay
+requiring older history holds the oldest available pose until it can interpolate.
+The renderer maps the product timeline to its local clock; its receipt/sample
+timestamps are not cross-process latency measurements.
+
+This is presentation only. Gameplay rays and selection continue to use the
+product's authoritative camera. A delayed image may therefore differ from a
+current gameplay hit, especially while moving close to objects. Products choose
+whether this tradeoff is appropriate. Renderer submission diagnostics expose the
+actual presented camera separately from `sourceCameras` and camera sample timing;
+they establish CPU submission, not GPU completion or streamed-frame correlation.
+
 ### Atlas sprite playback
 
 `Graphics.CreateSpritePlayback` retains one admitted sequence for an

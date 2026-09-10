@@ -272,3 +272,31 @@ void test('target allocation failure leaves the prior composition unchanged', ()
   assert.deepEqual(manager.readout(), before);
   assert.equal(manager.configure(composition(3, 128)).outcome, 'terminal');
 });
+
+void test('camera samples survive republication but reset across runtime replacement with reused identities', () => {
+  let now = 0;
+  const manager = new RendererViewCompositionBackend(
+    { initRenderTarget: () => undefined } as unknown as THREE.WebGLRenderer,
+    {} as ThreeRenderer, undefined, undefined, () => now,
+  );
+  const sampled = (sampleId: string, time: number, x: number) => {
+    const base = primaryComposition([x, 0, 0], 0);
+    return { ...base, cameras: base.cameras.map(camera => ({ ...camera, motion: {
+      sampleId, sampleTimeSeconds: time, delaySeconds: 0.1, interpolation: 'position' as const, cut: false,
+    } })) };
+  };
+  assert.equal(manager.configure(sampled('1', 0, 0)).applied, true);
+  now = 100;
+  assert.equal(manager.configure(sampled('2', 0.1, 10)).applied, true);
+  now = 150;
+  assert.equal(manager.configure(sampled('2', 0.1, 10)).applied, true);
+  assert.ok(Math.abs(manager.readout().cameras[0]!.pose.position[0] - 5) < 1e-8);
+  assert.equal(manager.readout().sourceCameras[0]!.pose.position[0], 10);
+  assert.equal(manager.requiresAnimationFrame(), true);
+  manager.resetCameraMotion();
+  assert.equal(manager.configure(sampled('2', 0.1, 100)).applied, true);
+  assert.equal(manager.readout().cameras[0]!.pose.position[0], 100);
+  assert.equal(manager.requiresAnimationFrame(), false);
+  manager.dispose();
+  assert.deepEqual(manager.readout().cameraSamples, []);
+});

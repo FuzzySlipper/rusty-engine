@@ -162,6 +162,7 @@ fn engine_api(
             context: (camera_view_bridge as *mut RuntimeCameraViewBridge).cast(),
             create_camera: crate::camera_view::create_camera,
             update_camera: crate::camera_view::update_camera,
+            update_camera_sample: crate::camera_view::update_camera_sample,
             replace_camera: crate::camera_view::replace_camera,
             destroy_camera: crate::camera_view::destroy_camera,
             create_camera_target: crate::camera_view::create_camera_target,

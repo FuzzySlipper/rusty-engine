@@ -290,6 +290,7 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => undefined,
+        resetCameraMotion: () => undefined,
         resetAnimationRealizationOwner: () => undefined,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,
@@ -417,6 +418,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => undefined,
+        resetCameraMotion: () => undefined,
         resetAnimationRealizationOwner: () => undefined,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,
@@ -653,6 +655,7 @@ test('a fresh projection baseline received during mount is applied before readin
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => undefined,
+        resetCameraMotion: () => undefined,
         resetAnimationRealizationOwner: () => undefined,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,
@@ -779,6 +782,7 @@ test('a transient retained baseline rejection retries with backoff and settles t
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => undefined,
+        resetCameraMotion: () => undefined,
         resetAnimationRealizationOwner: () => undefined,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,
@@ -885,6 +889,7 @@ test('projection recovery keeps the host gated until retained presentation reali
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => undefined,
+        resetCameraMotion: () => undefined,
         resetAnimationRealizationOwner: () => undefined,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,
@@ -1015,6 +1020,7 @@ test('active Engine canvas context loss and restoration share one fresh projecti
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => undefined,
+        resetCameraMotion: () => undefined,
         resetAnimationRealizationOwner: () => undefined,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,
@@ -1311,6 +1317,7 @@ test('preload mounting preserves deltas after a coalesced complete baseline enve
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => true,
+        resetCameraMotion: () => undefined,
         resetAnimationRealizationOwner: () => true,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,
@@ -1432,6 +1439,7 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     const fakeApplication = {
       renderer: {
         resetAudioRealizationOwner: () => true,
+        resetCameraMotion: () => undefined,
         resetAnimationRealizationOwner: () => true,
         audioRealizedFacts: () => null,
         animationRealizedFacts: () => null,

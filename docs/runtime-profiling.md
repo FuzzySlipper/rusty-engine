@@ -68,9 +68,14 @@ schedule phase. Observation intervals round up to avoid waking before an exact
 fixed-step boundary.
 
 Browser RAF and GPU submission run independently. Configured product cameras
-currently hold the latest published pose until another publication arrives;
-there is no general simulation-pose interpolation or variable-rate C# camera
-callback. Fast GPU timing therefore does not establish smooth camera delivery.
+hold the latest published pose by default. The opt-in `CameraView.UpdateCameraSample`
+path samples translation or full camera pose at render time; see [camera
+composition](csharp-sdk.md#retained-camera-composition). This does not introduce
+a variable-rate C# callback or move simulation into RAF. Rust work invoked
+synchronously from an update still consumes that update's budget, even if it
+uses worker threads internally. Work that should finish later needs an explicit
+asynchronous job/result boundary; waiting for it inside a fixed update keeps it
+on the critical path. Fast GPU timing does not establish smooth camera delivery.
 Compare fresh `engine.renderer.detail` product-frame receipt/applied intervals
 with worker progress and callback cost. Do not infer a fixed simulation rate
 from either the RAF rate or the number of batched C# callbacks.
