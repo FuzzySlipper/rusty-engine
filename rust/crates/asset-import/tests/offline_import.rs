@@ -285,7 +285,10 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
     );
     assert_eq!(descriptor.default_clip.as_deref(), Some("idle"));
     assert_eq!(
-        descriptor.rig.as_ref().map(|rig| rig.bind_rest_hash.as_str()),
+        descriptor
+            .rig
+            .as_ref()
+            .map(|rig| rig.bind_rest_hash.as_str()),
         Some("sha256:2e004c1c044c1e473e86227610b2057a81a03ef175a529058a027605bfb4a6f9"),
         "must match the canonical Three.js decode of this admitted GLB",
     );
@@ -1013,7 +1016,6 @@ fn animated_glb_reimport_and_settings_are_closed_and_structural() {
             .any(|diagnostic| diagnostic.code == ImportCode::InvalidImportSettings));
     }
 }
-
 
 #[test]
 fn animated_glb_rejects_external_over_quota_and_non_finite_sources_without_artifacts() {

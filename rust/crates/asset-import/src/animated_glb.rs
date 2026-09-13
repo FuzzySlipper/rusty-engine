@@ -371,8 +371,7 @@ fn derive_animation_rig_signature(
         .map(|node| (node.source_node_index, node))
         .collect::<BTreeMap<_, _>>();
     let mut inverse_binds = BTreeMap::<u32, [f64; 16]>::new();
-    let root = glb_json_document(source, "source")
-        .map_err(|diagnostic| diagnostic.message)?;
+    let root = glb_json_document(source, "source").map_err(|diagnostic| diagnostic.message)?;
     let raw_nodes = root
         .get("nodes")
         .and_then(serde_json::Value::as_array)
@@ -614,11 +613,7 @@ fn json_number_array<const N: usize>(
         .map_err(|_| format!("GLB node {field} must contain {N} numeric values"))
 }
 
-fn three_compose_matrix(
-    translation: [f64; 3],
-    rotation: [f64; 4],
-    scale: [f64; 3],
-) -> [f64; 16] {
+fn three_compose_matrix(translation: [f64; 3], rotation: [f64; 4], scale: [f64; 3]) -> [f64; 16] {
     let [x, y, z, w] = rotation;
     let x2 = x + x;
     let y2 = y + y;
@@ -704,8 +699,7 @@ fn three_matrix_determinant(matrix: [f64; 16]) -> f64 {
     let t21 = n21 * n34 - n24 * n31;
     let t22 = n21 * n33 - n23 * n31;
     let t23 = n21 * n32 - n22 * n31;
-    n11 * (n42 * t11 - n43 * t12 + n44 * t13)
-        - n12 * (n41 * t11 - n43 * t21 + n44 * t22)
+    n11 * (n42 * t11 - n43 * t12 + n44 * t13) - n12 * (n41 * t11 - n43 * t21 + n44 * t22)
         + n13 * (n41 * t12 - n42 * t21 + n44 * t23)
         - n14 * (n41 * t13 - n42 * t22 + n43 * t23)
 }
@@ -1288,12 +1282,7 @@ mod tests {
         });
         assert_eq!(
             three_local_rest_matrix(&node).unwrap(),
-            [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                3.0, -2.0, 7.0, 1.0,
-            ],
+            [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 3.0, -2.0, 7.0, 1.0,],
         );
     }
 
