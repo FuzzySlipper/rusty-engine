@@ -1563,6 +1563,7 @@ test('a normal fresh attachment installs its complete frontier baseline before t
         },
         retainResources: (resources: ReadonlySet<string>) => {
           retainedResources.push([...resources]);
+          rendererOperations.push(`retain:${[...resources].join(',')}`);
         },
         replaceFrame: async (frame: unknown, frontiers: readonly { readonly revision: number }[] = []) => {
           rendererOperations.push('replace');
@@ -1644,6 +1645,26 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     assert.deepEqual(retainedResources, [[resourceIdentity], []], 'inventory-only retirement prunes without a synthetic runtime output');
     assert.equal(replacements.length, 1);
     assert.equal(applied.length, 1);
+    // A single idle product callback may create, use, and release an asset.
+    // Delivery retains its body until every publication has applied, then the
+    // final inventory prunes it without another callback or renderer disposal.
+    rendererOperations.length = 0;
+    publish([
+      {
+        kind: 'frame', rendererResources: [resourceIdentity],
+        frame: { schemaVersion: 1, ops: [{ op: 'create', handle: 2 }] },
+      },
+      { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'destroy', handle: 2 }] } },
+      { kind: 'renderer-resources', rendererResources: [] },
+    ], { epoch: 1, baseline: false, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(rendererOperations, [
+      'fetch', `admit:${resourceIdentity}`, 'apply', `retain:${resourceIdentity}`,
+      'admit:', 'apply', 'admit:', 'retain:',
+    ], 'transient body is available for the frames and pruned at the end of their batch');
+    assert.deepEqual(retainedResources.at(-1), []);
+    assert.equal(applied.length, 3);
+    assert.equal(recoveries, 0);
     assert.equal(host.readout().state, 'ready');
     await host.dispose();
   } finally {

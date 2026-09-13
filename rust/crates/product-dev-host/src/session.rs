@@ -292,23 +292,17 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         runtime: &mut R,
         result: Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
     ) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError> {
-        let mut inventory = runtime.renderer_resource_ids();
+        let inventory = runtime.renderer_resource_ids();
         let resources = runtime.take_retired_renderer_resources();
-        if let Some(inventory) = &mut inventory {
-            inventory.extend(
-                resources
-                    .iter()
-                    .map(|resource| resource.identity().to_owned()),
-            );
-            inventory.sort();
-            inventory.dedup();
-        }
         result.map(|receipt| {
             let mut previous = self
                 .resource_inventory
                 .lock()
                 .expect("inventory is only accessed under runtime serialization");
-            let changed = receipt.resource_baseline() || *previous != inventory;
+            // A retired body may be needed by this call's publications, but
+            // must not become part of the authoritative retained inventory.
+            let changed =
+                receipt.resource_baseline() || *previous != inventory || !resources.is_empty();
             *previous = inventory.clone();
             receipt.with_resources(resources, if changed { inventory } else { None })
         })
@@ -367,7 +361,10 @@ mod tests {
     use runtime_publication::RuntimePublication;
 
     #[derive(Default)]
-    struct FixtureRuntime;
+    struct FixtureRuntime {
+        inventory: Option<Vec<String>>,
+        retired: Vec<ProductDevRendererResource>,
+    }
 
     impl FixtureRuntime {
         fn operation(
@@ -409,6 +406,14 @@ mod tests {
     }
 
     impl ProductDevRuntime for FixtureRuntime {
+        fn renderer_resource_ids(&self) -> Option<Vec<String>> {
+            self.inventory.clone()
+        }
+
+        fn take_retired_renderer_resources(&mut self) -> Vec<ProductDevRendererResource> {
+            std::mem::take(&mut self.retired)
+        }
+
         fn lifecycle(
             &mut self,
             operation: ProductDevLifecycleOperation,
@@ -486,8 +491,51 @@ mod tests {
     }
 
     #[test]
+    fn final_release_publishes_empty_retention_in_the_same_call() {
+        for initially_loaded in [false, true] {
+            let resource = ProductDevRendererResource::admit_font(
+                "content/font.woff2",
+                b"wOF2fixture".to_vec(),
+            )
+            .unwrap();
+            let identity = resource.identity().to_owned();
+            let owner = ProductDevOperationOwner::new(FixtureRuntime {
+                inventory: Some(if initially_loaded {
+                    vec![identity.clone()]
+                } else {
+                    vec![]
+                }),
+                retired: vec![],
+            });
+            // Establish the previous mounted inventory without a binding baseline.
+            owner
+                .with_runtime(|_| Ok(ProductDevRuntimeReceipt::new((), vec![]).unwrap()))
+                .unwrap();
+            let receipt = owner
+                .with_runtime(|runtime| {
+                    runtime.inventory = Some(vec![]);
+                    runtime.retired.push(resource);
+                    Ok(ProductDevRuntimeReceipt::new((), vec![]).unwrap())
+                })
+                .unwrap();
+            let (_, outputs) = receipt.into_wire_parts().unwrap();
+            assert_eq!(outputs.len(), 2);
+            assert_eq!(
+                serde_json::to_value(&outputs[0]).unwrap()["rendererResources"],
+                serde_json::json!([identity])
+            );
+            assert_eq!(
+                serde_json::to_value(&outputs[1]).unwrap()["rendererResources"],
+                serde_json::json!([])
+            );
+            assert_eq!(outputs[0].resources()[0].bytes(), b"wOF2fixture");
+            assert_eq!(*owner.resource_inventory.lock().unwrap(), Some(vec![]));
+        }
+    }
+
+    #[test]
     fn rejected_lifecycle_and_control_preserve_queued_input_fence() {
-        let owner = ProductDevOperationOwner::new(FixtureRuntime);
+        let owner = ProductDevOperationOwner::new(FixtureRuntime::default());
         let cleared = std::cell::Cell::new(false);
         let result = owner
             .lifecycle_with_input_fence(
@@ -508,7 +556,7 @@ mod tests {
 
     #[test]
     fn direct_and_json_operations_return_owner_receipts() {
-        let session = ProductDevOperationOwner::new(FixtureRuntime);
+        let session = ProductDevOperationOwner::new(FixtureRuntime::default());
         assert_eq!(
             session
                 .lifecycle(ProductDevLifecycleOperation::Start)
@@ -558,7 +606,7 @@ mod tests {
 
     #[test]
     fn json_admission_rejects_malformed_and_trailing_payloads() {
-        let session = ProductDevOperationOwner::new(FixtureRuntime);
+        let session = ProductDevOperationOwner::new(FixtureRuntime::default());
         let input = session.input_json(br#"[] trailing"#).unwrap_err();
         assert_eq!(input.code(), "DEV_HOST_INPUT_DECODE");
         let time = session.advance_realtime_json(br#"01"#).unwrap_err();

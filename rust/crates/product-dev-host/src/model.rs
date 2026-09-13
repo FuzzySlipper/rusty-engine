@@ -3122,15 +3122,6 @@ impl<T> ProductDevRuntimeReceipt<T> {
                 .map(|resource| (resource.identity().to_owned(), resource)),
         );
         let resources: Vec<_> = combined.into_values().collect();
-        if let Some(inventory) = &mut inventory {
-            inventory.extend(
-                resources
-                    .iter()
-                    .map(|resource| resource.identity().to_owned()),
-            );
-            inventory.sort();
-            inventory.dedup();
-        }
         self.renderer_resources = inventory;
         self.resources = resources.into();
         self
@@ -3181,9 +3172,30 @@ impl<T> ProductDevRuntimeReceipt<T> {
         if outputs.is_empty() && (!resources.is_empty() || inventory.is_some()) {
             outputs.push(ProductDevRuntimeOutput::resource_inventory());
         }
+        // Retired bodies can be referenced by an earlier publication in this
+        // call (including create/use/release in one callback). Admit them before
+        // applying the group, then publish the true retained closure after the
+        // last publication. No later product callback is required to prune them.
+        let delivery_inventory = inventory.as_ref().map(|inventory| {
+            let mut delivery = inventory.clone();
+            delivery.extend(
+                resources
+                    .iter()
+                    .map(|resource| resource.identity().to_owned()),
+            );
+            delivery.sort();
+            delivery.dedup();
+            delivery
+        });
+        let prune_after_publications = delivery_inventory != inventory;
         if let Some(output) = outputs.first_mut() {
             output.resources = resources;
+            output.renderer_resources = delivery_inventory;
+        }
+        if prune_after_publications {
+            let mut output = ProductDevRuntimeOutput::resource_inventory();
             output.renderer_resources = inventory;
+            outputs.push(output);
         }
         ProductDevRuntimeOutput::validate_output_group(&outputs)?;
         Ok((result, outputs))
@@ -3432,6 +3444,56 @@ mod tests {
         let browser = serde_json::to_value(&outputs[0]).unwrap();
         assert_eq!(browser["rendererResources"], serde_json::json!([identity]));
         assert!(browser.get("__retiredResources").is_none());
+    }
+
+    #[test]
+    fn worker_roundtrip_keeps_transient_bodies_until_all_publications_then_prunes() {
+        let resource = crate::ProductDevRendererResource::admit_font(
+            "content/font.woff2",
+            b"wOF2fixture".to_vec(),
+        )
+        .unwrap();
+        let identity = resource.identity().to_owned();
+        let frame =
+            render_model::RenderFrameDiff::try_from_ops(vec![render_model::RenderDiff::Destroy {
+                handle: render_model::RenderHandle::new(17),
+            }])
+            .unwrap();
+        let receipt = ProductDevRuntimeReceipt::new(
+            (),
+            vec![
+                RuntimePublication::frame(&frame).unwrap(),
+                RuntimePublication::frame(&frame).unwrap(),
+            ],
+        )
+        .unwrap()
+        .with_resources(vec![resource], Some(vec![]));
+        let (_, outputs) = receipt.into_wire_parts().unwrap();
+        let decoded = outputs
+            .into_iter()
+            .map(|output| {
+                ProductDevRuntimeOutput::from_worker_value(output.to_worker_value().unwrap())
+                    .unwrap()
+            })
+            .collect();
+        let (_, outputs) = ProductDevRuntimeReceipt::from_wire_outputs((), decoded)
+            .unwrap()
+            .with_resources(vec![], None)
+            .into_wire_parts()
+            .unwrap();
+        assert_eq!(outputs.len(), 3);
+        assert_eq!(
+            serde_json::to_value(&outputs[0]).unwrap()["rendererResources"],
+            serde_json::json!([identity])
+        );
+        assert_eq!(outputs[0].resources()[0].bytes(), b"wOF2fixture");
+        assert!(matches!(
+            outputs[1].wire,
+            ProductDevRuntimeOutputWire::Frame { .. }
+        ));
+        let prune = serde_json::to_value(&outputs[2]).unwrap();
+        assert_eq!(prune["kind"], "renderer-resources");
+        assert_eq!(prune["rendererResources"], serde_json::json!([]));
     }
 
     #[test]
