@@ -114,6 +114,7 @@ pub(crate) struct RuntimeImplicitBridge {
     next_audit: u64,
     next_audit_report: u64,
     audit_reports: BTreeMap<u64, Vec<NativeImplicitAuditDiagnostic>>,
+    analysis_reports: BTreeMap<u64, AnalysisLease>,
 }
 impl RuntimeImplicitBridge {
     pub(crate) fn new() -> Self {
@@ -132,6 +133,7 @@ impl RuntimeImplicitBridge {
             next_audit: 1,
             next_audit_report: 1,
             audit_reports: BTreeMap::new(),
+            analysis_reports: BTreeMap::new(),
         }
     }
     pub(crate) fn begin_call(&mut self) {
@@ -465,6 +467,10 @@ pub(crate) fn api(
         capture_audit_piece,
         read_audit,
         destroy_audit_report_lease,
+        read_mesh_integrity,
+        read_expected_join,
+        read_enclosure,
+        destroy_analysis_report_lease,
     }
 }
 fn call<T>(

@@ -461,6 +461,10 @@ pub struct NativeImplicitSurfacesApi {
     pub capture_audit_piece: NativeCaptureImplicitAuditPiece,
     pub read_audit: NativeReadImplicitAudit,
     pub destroy_audit_report_lease: NativeDestroyImplicitAuditReportLease,
+    pub read_mesh_integrity: NativeReadImplicitIntegrity,
+    pub read_expected_join: NativeReadImplicitJoin,
+    pub read_enclosure: NativeReadImplicitEnclosure,
+    pub destroy_analysis_report_lease: NativeDestroyImplicitAnalysisReportLease,
 }
 
 /// Opt-in authoring collection; captured fields and mesh facts outlive sources.
@@ -544,3 +548,117 @@ pub type NativeReadImplicitAudit = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyImplicitAuditReportLease =
     unsafe extern "C" fn(*mut c_void, NativeImplicitAuditReportLeaseHandle) -> i32;
+
+/// World-space declaration of an intentionally open/clipped mesh region.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAuditOpenRegion {
+    pub piece_id: u64,
+    pub minimum: NativeVec3,
+    pub maximum: NativeVec3,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitIntegrityRequest {
+    pub audit: NativeImplicitAuditHandle,
+    pub openings: *const NativeImplicitAuditOpenRegion,
+    pub openings_len: usize,
+}
+/// Expected contact rectangle: world center, two perpendicular half axes,
+/// normal search radius, extraction-relative tolerance and explicit work budget.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitJoinRequest {
+    pub audit: NativeImplicitAuditHandle,
+    pub piece_a: u64,
+    pub piece_b: u64,
+    pub center: NativeVec3,
+    pub half_u: NativeVec3,
+    pub half_v: NativeVec3,
+    pub search_distance: f32,
+    pub tolerance_cells: f32,
+    pub sample_spacing: f32,
+    pub max_samples: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitEnclosureOpening {
+    pub minimum: NativeVec3,
+    pub maximum: NativeVec3,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitEnclosureRequest {
+    pub audit: NativeImplicitAuditHandle,
+    pub minimum: NativeVec3,
+    pub maximum: NativeVec3,
+    pub interior: NativeVec3,
+    pub openings: *const NativeImplicitEnclosureOpening,
+    pub openings_len: usize,
+    pub sample_spacing: f32,
+    pub max_samples: u64,
+}
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeImplicitAnalysisClassification {
+    OpenBoundary = 0,
+    IntentionalBoundary = 1,
+    NonManifold = 2,
+    DegenerateTriangle = 3,
+    JoinGap = 4,
+    MissingJoinSurface = 5,
+    EnclosureLeak = 6,
+    IntentionalOpening = 7,
+    IncompleteCoverage = 8,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAnalysisDiagnostic {
+    pub piece_a: u64,
+    pub piece_b: u64,
+    pub classification: NativeImplicitAnalysisClassification,
+    pub minimum: NativeVec3,
+    pub maximum: NativeVec3,
+    pub approximate_width: f64,
+    pub approximate_length: f64,
+    pub approximate_area: f64,
+    pub resolution: f32,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAnalysisReportLeaseHandle {
+    pub value: u64,
+}
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAnalysisReportLease {
+    pub handle: NativeImplicitAnalysisReportLeaseHandle,
+    pub sampled: u64,
+    /// One means the declared discrete query completed, not sub-resolution proof.
+    pub complete: u8,
+    pub resolution: f32,
+    pub diagnostics: *const NativeImplicitAnalysisDiagnostic,
+    pub diagnostics_len: usize,
+    pub path: *const NativeVec3,
+    pub path_len: usize,
+}
+pub type NativeReadImplicitIntegrity = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeImplicitIntegrityRequest,
+    *mut NativeImplicitAnalysisReportLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadImplicitJoin = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitJoinRequest,
+    *mut NativeImplicitAnalysisReportLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadImplicitEnclosure = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeImplicitEnclosureRequest,
+    *mut NativeImplicitAnalysisReportLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyImplicitAnalysisReportLease =
+    unsafe extern "C" fn(*mut c_void, NativeImplicitAnalysisReportLeaseHandle) -> i32;

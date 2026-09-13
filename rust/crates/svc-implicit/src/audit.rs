@@ -23,6 +23,10 @@ use nalgebra::{Matrix4, Quaternion, UnitQuaternion, Vector3};
 
 use crate::{Bounds, Error, Field, Node};
 
+pub mod continuity;
+pub mod integrity;
+pub use continuity::{AnalysisClassification, AnalysisDiagnostic, AnalysisReport, OpenRegion};
+
 const PARALLEL_DOT: f64 = 0.999;
 const COINCIDENT_FRACTION: f64 = 0.125;
 const AREA_EPSILON: f64 = 1.0e-10;
@@ -608,10 +612,6 @@ fn validate_mesh(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Result<(), E
         {
             return Err(Error("audit piece triangle index is out of bounds".into()));
         }
-        let points = triangle.map(|index| to_f64(positions[index as usize]));
-        if triangle_normal(points).is_err() {
-            return Err(Error("audit piece contains a degenerate triangle".into()));
-        }
     }
     Ok(())
 }
@@ -1089,3 +1089,6 @@ mod tests {
         assert!((exposed.approximate_area - 1.46).abs() < 0.1, "{report:?}");
     }
 }
+
+#[cfg(test)]
+mod continuity_tests;

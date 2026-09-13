@@ -850,3 +850,56 @@ boundaries, and partial buried-face coverage can make bounds/areas approximate
 or contacts unreported. A clean report is not a mesh-validity certificate.
 Camera depth precision, extreme near/far ratios, shadows, transparency sorting,
 texture aliasing and shader artifacts are outside this audit's guarantees.
+
+The same collection supports three separate continuity queries:
+
+- `ReadMeshIntegrity(new(audit, openings))` examines every captured triangle's
+  exact-position connectivity. It reports open edges, edges with more than two
+  incident faces, disconnected vertex fans and zero-area triangles. Duplicate
+  vertex positions share connectivity; nearby positions are never welded.
+  `ImplicitAuditOpenRegion` declares a world-space box for one stable piece ID;
+  an edge is intentional only when both endpoints lie inside it. Use this first
+  on malformed meshes; the overlap analysis requires nondegenerate facets.
+- `ReadExpectedJoin(new(audit, pieceA, pieceB, center, halfU, halfV,
+  searchDistance, toleranceCells, sampleSpacing, maxSamples))` samples an authored
+  rectangular contact patch. Its perpendicular half axes set orientation and
+  size. Along the patch normal, the query finds each named mesh's nearest
+  intersection within the search radius. It reports separation above the
+  extraction-relative tolerance when the midpoint is outside both source fields
+  (solid overlaps are not air gaps), or `MissingJoinSurface` when either side is
+  absent. Choose the patch and radius to identify the intended surfaces, avoiding
+  unrelated faces of the same pieces. Width is maximum sampled separation;
+  affected area is the sum of failed patch cells. This is not inferred intent.
+- `ReadEnclosure(new(audit, minimum, maximum, interior, openings,
+  sampleSpacing, maxSamples))` searches a bounded six-neighbor world grid from
+  the declared interior point. Segment/triangle intersections block traversal.
+  A leak returns one interior-to-outside `Path` and exit bounds; it does not
+  enumerate every leak. Declare intentional door/window volumes as
+  `ImplicitEnclosureOpening` entries: these virtually cap those openings while
+  searching for other routes. `IntentionalOpening` means a declared virtual cap
+  was encountered, not that a physical door was proved open. Capture moving
+  doors at the pose being audited;
+  use a separate collection for another pose. The query examines mesh barriers,
+  not field distances or an assumed union of closed solids.
+
+Continuity reports copy diagnostics and path points before releasing their
+native lease. `Complete != 0` means the declared discrete query completed (or
+found a witness); it is not proof below `Resolution`. For joins/enclosures,
+`Sampled` counts patch samples/visited cells. An insufficient `maxSamples`
+budget returns `IncompleteCoverage` and `Complete == 0`, never a clean result.
+An enclosure seed whose connection to its grid cell crosses geometry also
+returns incomplete coverage. Seeds must be authored in empty interior space.
+Thin passages, diagonal connectivity, small missing triangles and contacts
+between samples can be missed. Repeat at finer spacing when a feature is near
+resolution; exact topology findings and sampled enclosure findings are distinct.
+A leak path's reported width is the grid spacing, not measured clearance.
+Enclosure diagnostics use zero piece IDs for collection-wide connectivity;
+the declared region and returned path identify their scope.
+
+These are synchronous authoring operations. For full-scene capture and analysis
+that exceeds development worker deadlines, launch the packaged product with
+`rusty dev --project <product.csproj> --debugger` before requesting the audit.
+That supported lane disables worker startup/callback deadlines for the session;
+it does not make analysis asynchronous or increase geometric coverage. Keep
+analysis behind an explicit authoring switch or debug command, and stop the
+owned host after the report is collected.
