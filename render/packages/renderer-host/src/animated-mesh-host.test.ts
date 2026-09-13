@@ -7,6 +7,7 @@ import test from 'node:test';
 import type { AnimationClipPack } from '@rusty-engine/render-contracts';
 import {
   loadRendererAnimatedMeshSource,
+  RendererMutableAnimatedMeshResourceSource,
   type RendererAnimatedMeshResourceDescriptor,
   type RendererAnimatedMeshResourceManifest,
   type RendererAnimationClipPackResourceDescriptor,
@@ -19,6 +20,25 @@ const FIXTURE = resolve(
 const BASE_ASSET = 'mesh-animation/clip-pack-budget-base';
 const BASE_BYTES = fixtureBytes();
 const BASE_HASH = sha256(BASE_BYTES);
+
+void test('mutable animated source releases retired immutable GLBs and reloads the same hash', async () => {
+  const restore = installGltfNodeGlobals();
+  try {
+    const source = new RendererMutableAnimatedMeshResourceSource();
+    const descriptor: RendererAnimatedMeshResourceDescriptor = {
+      asset: 'mesh-animation/mutable', contentHash: BASE_HASH, clipIds: ['idle'],
+    };
+    await source.admitAnimatedMesh(descriptor, BASE_BYTES.slice(0));
+    assert.equal(source.resourceCounts().animatedMeshes, 1);
+    const identity = `animated-mesh-resource/${BASE_HASH.slice('sha256:'.length)}`;
+    source.retainOnly(new Set([identity]));
+    assert.equal(source.resourceCounts().animatedMeshes, 1, 'live identity remains available');
+    source.retainOnly(new Set());
+    assert.equal(source.resourceCounts().animatedMeshes, 0, 'retired source body is released');
+    await source.admitAnimatedMesh(descriptor, BASE_BYTES.slice(0));
+    assert.equal(source.resourceCounts().animatedMeshes, 1, 'same immutable body reloads after release');
+  } finally { restore(); }
+});
 
 void test('animated clip packs admit a set beyond the retired count cap', async () => {
   const restore = installGltfNodeGlobals();

@@ -185,6 +185,8 @@ interface AnimatedMeshAssetRecord {
   readonly packs: readonly AnimationClipPackResource[];
   readonly generation: number;
   refCount: number;
+  /** Detached capture appearances still borrow this template's shared resources. */
+  captureCount: number;
 }
 
 interface AnimatedMeshInstanceRecord {
@@ -255,6 +257,38 @@ export class MapAnimatedMeshAssetSource implements AnimatedMeshAssetSource {
 
   getAnimationClipPackResource(pack: AnimationClipPack): AnimationClipPackResource | undefined {
     return this.#packs.get(pack.asset);
+  }
+
+  admitAnimatedMeshResource(resource: AnimatedMeshResource): void {
+    const existing = this.#resources.get(resource.asset);
+    if (existing !== undefined && existing.contentHash !== resource.contentHash) {
+      throw new AnimatedMeshApplyError(`animated mesh resource ${resource.asset} changed immutable content`);
+    }
+    this.#resources.set(resource.asset, resource);
+  }
+
+  admitAnimationClipPackResource(resource: AnimationClipPackResource): void {
+    const existing = this.#packs.get(resource.asset);
+    if (existing !== undefined && existing.contentHash !== resource.contentHash) {
+      throw new AnimatedMeshApplyError(`animation clip pack ${resource.asset} changed immutable content`);
+    }
+    this.#packs.set(resource.asset, resource);
+  }
+
+  releaseAnimatedMeshResource(asset: string): AnimatedMeshResource | undefined {
+    const resource = this.#resources.get(asset);
+    this.#resources.delete(asset);
+    return resource;
+  }
+
+  releaseAnimationClipPackResource(asset: string): AnimationClipPackResource | undefined {
+    const resource = this.#packs.get(asset);
+    this.#packs.delete(asset);
+    return resource;
+  }
+
+  resourceCounts(): { readonly animatedMeshes: number; readonly clipPacks: number } {
+    return { animatedMeshes: this.#resources.size, clipPacks: this.#packs.size };
   }
 }
 
@@ -353,14 +387,19 @@ export async function loadAnimationClipPackGlbResource(
 
 export class AnimatedMeshRegistry {
   readonly #assetSource: AnimatedMeshAssetSource | undefined;
+  readonly #onCaptureReleased: (() => void) | undefined;
   readonly #assets = new Map<string, AnimatedMeshAssetRecord>();
   readonly #instances = new Map<RenderHandle, AnimatedMeshInstanceRecord>();
   readonly #assetGenerations = new Map<string, number>();
   readonly #nextGenerationByObject = new Map<number, number>();
   readonly #naturalCompletionListeners = new Set<(completion: AnimatedMeshNaturalCompletion) => void>();
 
-  constructor(assetSource: AnimatedMeshAssetSource | undefined) {
+  constructor(
+    assetSource: AnimatedMeshAssetSource | undefined,
+    onCaptureReleased?: () => void,
+  ) {
     this.#assetSource = assetSource;
+    this.#onCaptureReleased = onCaptureReleased;
   }
 
   get instanceCount(): number {
@@ -377,9 +416,9 @@ export class AnimatedMeshRegistry {
 
   define(asset: AnimatedMeshAsset): void {
     const existing = this.#assets.get(asset.asset);
-    if (existing && existing.refCount > 0) {
+    if (existing && (existing.refCount > 0 || existing.captureCount > 0)) {
       throw new AnimatedMeshApplyError(
-        `defineAnimatedMesh: asset ${asset.asset} is in use by ${existing.refCount} instance(s)`,
+        `defineAnimatedMesh: asset ${asset.asset} is in use by ${existing.refCount} instance(s) and ${existing.captureCount} capture(s)`,
       );
     }
     const { resource, packs } = this.#validatedResource(asset);
@@ -397,7 +436,21 @@ export class AnimatedMeshRegistry {
       packs,
       generation,
       refCount: 0,
+      captureCount: 0,
     });
+  }
+
+  /** Drop resource-backed templates that the host no longer retains.
+   * Live instances and detached ghost/capture appearances keep their template
+   * alive until their own exact release path runs. */
+  retainResources(identities: ReadonlySet<string>): void {
+    for (const [asset, record] of this.#assets) {
+      if (record.refCount !== 0 || record.captureCount !== 0) continue;
+      const resources = animatedMeshResourceIdentities(record.asset);
+      if (resources.length === 0 || resources.every((identity) => identities.has(identity))) continue;
+      disposeAnimatedMeshAssetScene(record.scene);
+      this.#assets.delete(asset);
+    }
   }
 
   validateDefinition(asset: AnimatedMeshAsset): void {
@@ -732,6 +785,7 @@ export class AnimatedMeshRegistry {
     const pack = origin === 'pack'
       ? record.asset.clipPacks?.find((candidate) => candidate.clips.some((candidateClip) => candidateClip.id === clipId))
       : undefined;
+    record.captureCount += 1;
     let disposed = false;
     return Object.freeze({
       object,
@@ -767,6 +821,10 @@ export class AnimatedMeshRegistry {
           if (node instanceof THREE.SkinnedMesh) node.skeleton.dispose();
         });
         captureOwnedMaterials.forEach((material) => material.dispose());
+        if (record.generation === this.#assets.get(record.asset.asset)?.generation) {
+          record.captureCount = Math.max(0, record.captureCount - 1);
+          this.#onCaptureReleased?.();
+        }
       },
     });
   }
@@ -858,6 +916,7 @@ function createAnimatedMeshAssetScene(
   const scene = SkeletonUtils.clone(source);
   const geometries = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
   const materials = new Map<THREE.Material, THREE.Material>();
+  const textures = new Map<THREE.Texture, THREE.Texture>();
   scene.traverse((object) => {
     const mesh = object as THREE.Mesh;
     if (mesh.geometry instanceof THREE.BufferGeometry) {
@@ -870,9 +929,9 @@ function createAnimatedMeshAssetScene(
       mesh.geometry = geometry;
     }
     if (Array.isArray(mesh.material)) {
-      mesh.material = mesh.material.map((material) => cloneSharedMaterial(material, materials));
+      mesh.material = mesh.material.map((material) => cloneSharedMaterial(material, materials, textures));
     } else if (mesh.material instanceof THREE.Material) {
-      mesh.material = cloneSharedMaterial(mesh.material, materials);
+      mesh.material = cloneSharedMaterial(mesh.material, materials, textures);
     }
   });
   const embeddedMaterialSlots = new Map<number, AnimatedMeshEmbeddedMaterial>();
@@ -996,10 +1055,12 @@ function cloneCaptureOverrideMaterials(
 function cloneSharedMaterial(
   source: THREE.Material,
   materials: Map<THREE.Material, THREE.Material>,
+  textures: Map<THREE.Texture, THREE.Texture>,
 ): THREE.Material {
   let material = materials.get(source);
   if (material === undefined) {
     material = source.clone();
+    cloneMaterialTextures(source, material, textures);
     materials.set(source, material);
   }
   return material;
@@ -1008,19 +1069,96 @@ function cloneSharedMaterial(
 function disposeAnimatedMeshAssetScene(scene: THREE.Object3D): void {
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
+  const textures = new Set<THREE.Texture>();
   scene.traverse((object) => {
     const mesh = object as THREE.Mesh;
     if (mesh.geometry instanceof THREE.BufferGeometry) {
       geometries.add(mesh.geometry);
     }
     if (Array.isArray(mesh.material)) {
-      mesh.material.forEach((material) => materials.add(material));
+      mesh.material.forEach((material) => {
+        materials.add(material);
+        materialTextures(material).forEach((texture) => textures.add(texture));
+      });
     } else if (mesh.material instanceof THREE.Material) {
       materials.add(mesh.material);
+      materialTextures(mesh.material).forEach((texture) => textures.add(texture));
     }
   });
   geometries.forEach((geometry) => geometry.dispose());
   materials.forEach((material) => material.dispose());
+  textures.forEach((texture) => texture.dispose());
+}
+
+function cloneMaterialTextures(
+  source: THREE.Material,
+  material: THREE.Material,
+  textures: Map<THREE.Texture, THREE.Texture>,
+): void {
+  const sourceRecord = source as unknown as Record<string, unknown>;
+  const record = material as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(sourceRecord)) {
+    if (value instanceof THREE.Texture) {
+      disposeTransientTexture(record[key], value);
+      record[key] = cloneTexture(value, textures);
+    } else if (Array.isArray(value)) {
+      const prior = Array.isArray(record[key]) ? record[key] : [];
+      record[key] = value.map((candidate, index) => {
+        if (!(candidate instanceof THREE.Texture)) return candidate;
+        disposeTransientTexture(prior[index], candidate);
+        return cloneTexture(candidate, textures);
+      });
+    }
+  }
+}
+
+function disposeTransientTexture(candidate: unknown, source: THREE.Texture): void {
+  if (candidate instanceof THREE.Texture && candidate !== source) candidate.dispose();
+}
+
+function cloneTexture(
+  source: THREE.Texture,
+  textures: Map<THREE.Texture, THREE.Texture>,
+): THREE.Texture {
+  let texture = textures.get(source);
+  if (texture === undefined) {
+    texture = source.clone();
+    textures.set(source, texture);
+  }
+  return texture;
+}
+
+function materialTextures(material: THREE.Material): ReadonlySet<THREE.Texture> {
+  const textures = new Set<THREE.Texture>();
+  for (const value of Object.values(material)) {
+    if (value instanceof THREE.Texture) {
+      textures.add(value);
+    } else if (Array.isArray(value)) {
+      value.forEach((candidate) => {
+        if (candidate instanceof THREE.Texture) textures.add(candidate);
+      });
+    }
+  }
+  return textures;
+}
+
+function animatedMeshResourceIdentities(asset: AnimatedMeshAsset): readonly string[] {
+  const identities: string[] = [];
+  const primary = contentResourceIdentity('animated-mesh-resource', asset.contentHash);
+  if (primary !== null) identities.push(primary);
+  for (const pack of asset.clipPacks ?? []) {
+    const identity = contentResourceIdentity('clip-pack-resource', pack.contentHash);
+    if (identity !== null) identities.push(identity);
+  }
+  return identities;
+}
+
+function contentResourceIdentity(
+  kind: 'animated-mesh-resource' | 'clip-pack-resource',
+  contentHash: string | null,
+): string | null {
+  const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash ?? '')?.[1];
+  return digest === undefined ? null : `${kind}/${digest}`;
 }
 
 function assertClipDescriptors(asset: AnimatedMeshAsset, resource: AnimatedMeshResource): void {

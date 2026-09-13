@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   ProductBrowserHostError,
@@ -526,6 +527,7 @@ test('host swaps a recovered output projection before applying current-epoch tra
         ghostPlateReadout: () => null,
         acknowledgeAudioRealizedFacts: () => undefined,
         acknowledgeAnimationRealizedFacts: () => undefined,
+        admitResources: async () => undefined,
         replaceFrame: async (frame: unknown, frontiers: unknown) => {
           replacedFrames.push(frame);
           replacementFrontiers.push(frontiers);
@@ -763,6 +765,7 @@ test('a fresh projection baseline received during mount is applied before readin
         ghostPlateReadout: () => null,
         acknowledgeAudioRealizedFacts: () => undefined,
         acknowledgeAnimationRealizedFacts: () => undefined,
+        admitResources: async () => undefined,
         replaceFrame: async (frame: unknown) => {
           replacedFrames.push(frame);
           return { applied: true, outcome: 'applied' as const, diagnostics: [] };
@@ -890,6 +893,7 @@ test('a transient retained baseline rejection retries with backoff and settles t
         ghostPlateReadout: () => null,
         acknowledgeAudioRealizedFacts: () => undefined,
         acknowledgeAnimationRealizedFacts: () => undefined,
+        admitResources: async () => undefined,
         replaceFrame: async () => {
           replacementAttempts += 1;
           if (replacementAttempts < 3) {
@@ -997,6 +1001,7 @@ test('projection recovery keeps the host gated until retained presentation reali
         ghostPlateReadout: () => null,
         acknowledgeAudioRealizedFacts: () => undefined,
         acknowledgeAnimationRealizedFacts: () => undefined,
+        admitResources: async () => undefined,
         replaceFrame: async () => ({ applied: true, outcome: 'applied' as const, diagnostics: [] }),
         applyPresentation: async () => {
           presentationStarted = true;
@@ -1128,6 +1133,7 @@ test('active Engine canvas context loss and restoration share one fresh projecti
         ghostPlateReadout: () => null,
         acknowledgeAudioRealizedFacts: () => undefined,
         acknowledgeAnimationRealizedFacts: () => undefined,
+        admitResources: async () => undefined,
         replaceFrame: async (frame: unknown) => {
           replacedFrames.push(frame);
           if (rejectRecoveryCandidates) {
@@ -1425,6 +1431,7 @@ test('preload mounting preserves deltas after a coalesced complete baseline enve
         ghostPlateReadout: () => null,
         acknowledgeAudioRealizedFacts: () => true,
         acknowledgeAnimationRealizedFacts: () => true,
+        admitResources: async () => undefined,
         replaceContent: async (content: { readonly publicationFrontiers?: readonly { readonly revision: number }[] }) => {
           replacedContent.push(content);
           activeRevision = content.publicationFrontiers?.[0]?.revision ?? 0;
@@ -1508,6 +1515,10 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     let activeRevision = 0;
     const replacements: unknown[] = [];
     const applied: unknown[] = [];
+    const rendererOperations: string[] = [];
+    const retainedResources: string[][] = [];
+    const resourceBytes = new Uint8Array([137, 80, 78, 71]);
+    const resourceIdentity = `texture-resource/${createHash('sha256').update(resourceBytes).digest('hex')}`;
     const confirmations: Array<{epoch: number; applied: number; replacements: number}> = [];
     const diagnosticConfirmations: number[] = [];
     let acknowledgeInitialReport: (() => void) | undefined;
@@ -1547,12 +1558,20 @@ test('a normal fresh attachment installs its complete frontier baseline before t
         ghostPlateReadout: () => null,
         acknowledgeAudioRealizedFacts: () => true,
         acknowledgeAnimationRealizedFacts: () => true,
+        admitResources: async (resources: readonly { readonly identity: string }[]) => {
+          rendererOperations.push(`admit:${resources.map((resource) => resource.identity).join(',')}`);
+        },
+        retainResources: (resources: ReadonlySet<string>) => {
+          retainedResources.push([...resources]);
+        },
         replaceFrame: async (frame: unknown, frontiers: readonly { readonly revision: number }[] = []) => {
+          rendererOperations.push('replace');
           replacements.push({ frame, frontiers });
           activeRevision = frontiers[0]?.revision ?? 0;
           return { applied: true, outcome: 'applied' as const, diagnostics: [] };
         },
         applyFrame: (frame: { readonly publication?: { readonly baseRevision: number; readonly revision: number } }) => {
+          rendererOperations.push('apply');
           applied.push(frame);
           const publication = frame.publication;
           if (publication === undefined || publication.baseRevision === activeRevision) {
@@ -1575,12 +1594,19 @@ test('a normal fresh attachment installs its complete frontier baseline before t
       lifecycleMode: 'demand',
       mountUi: async () => undefined,
       autoStart: false,
+      dynamicRendererResourceFetcher: async (input) => {
+        assert.match(String(input), new RegExp(`identity=${encodeURIComponent(resourceIdentity)}`));
+        assert.match(String(input), /generation=1/u);
+        rendererOperations.push('fetch');
+        return new Response(resourceBytes);
+      },
     }, async () => fakeApplication as never);
     const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
     publish([
       {
         kind: 'binding', runtime, nextInputSequence: '1',
         publicationFrontiers: [{ stream: 'presentation-world', revision: 7 }],
+        rendererResources: [resourceIdentity],
       },
       { kind: 'frame', frame: { schemaVersion: 1, ops: [{ op: 'create', handle: 1 }] } },
     ], { epoch: 1, baseline: true, recovery: 'none' });
@@ -1599,6 +1625,10 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     assert.equal(replacements.length, 1);
     assert.equal(applied.length, 1);
     assert.equal(recoveries, 0);
+    assert.deepEqual(rendererOperations.slice(0, 3), [
+      'fetch', `admit:${resourceIdentity}`, 'replace',
+    ], 'fresh attachment fetches and admits its inventory before replacing the baseline frame');
+    assert.deepEqual(retainedResources, [[resourceIdentity]], 'baseline replacement retains its authoritative resource closure');
     assert.deepEqual(confirmations, [{ epoch: 1, applied: 1, replacements: 1 }]);
     // The first ready report began before the baseline was realized. Its late
     // acknowledgement must still trigger a report with confirmed evidence.
@@ -1606,6 +1636,14 @@ test('a normal fresh attachment installs its complete frontier baseline before t
     acknowledgeInitialReport?.();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(diagnosticConfirmations, [0, 1]);
+    publish([{
+      kind: 'renderer-resources',
+      rendererResources: [],
+    }], { epoch: 1, baseline: false, recovery: 'none' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(retainedResources, [[resourceIdentity], []], 'inventory-only retirement prunes without a synthetic runtime output');
+    assert.equal(replacements.length, 1);
+    assert.equal(applied.length, 1);
     assert.equal(host.readout().state, 'ready');
     await host.dispose();
   } finally {
@@ -1667,7 +1705,9 @@ test('audio feedback claims the initial owner, retries without loss, and acknowl
   facts.push({
     kind: 'diagnostic',
     factId: 2,
-    diagnostic: { code: 'decodeFailed', sequence: 4, handle: null, message: 'test-only' },
+    diagnostic: {
+      code: 'decodeFailed', sequence: 4, handle: null, signalHandle: 19, message: 'test-only',
+    },
   });
   assert.ok(deferred.resolve);
   deferred.resolve({ accepted: true, ...ACCEPTED_FAULT, runtime: AUDIO_RUNTIME, acceptedThroughFactId: '1' });
@@ -1678,6 +1718,7 @@ test('audio feedback claims the initial owner, retries without loss, and acknowl
 
   await reporter.flush();
   assert.deepEqual((reports[3]!['facts'] as Array<Record<string, unknown>>).map((fact) => fact['factId']), ['2']);
+  assert.equal((reports[3]!['facts'] as Array<Record<string, unknown>>)[0]?.['signalHandle'], '19');
   assert.deepEqual(acknowledgements, [1, 2]);
 });
 

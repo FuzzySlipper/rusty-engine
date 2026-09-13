@@ -1,7 +1,7 @@
-import { type RendererMeshResourceDescriptor, type RendererMeshResourceManifest, type RendererAudioResourceResolver, type RendererAnimatedMeshResourceManifest, type RendererAnimatedMeshResourceResolver, type RendererTextureResourceDescriptor, type RendererTextureResourceManifest } from '@rusty-engine/renderer-host';
+import { type RendererMeshResourceDescriptor, type RendererMeshResourceManifest, type RendererAudioResourceResolver, type RendererAnimatedMeshResourceManifest, type RendererAnimatedMeshResourceResolver, type RendererTextureResourceDescriptor, type RendererTextureResourceManifest, RendererMutableAnimatedMeshResourceSource, RendererMutableMeshResourceSource, RendererMutableTextureResourceSource } from '@rusty-engine/renderer-host';
 import type { RustyApplicationFrame } from './application-host.js';
 import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
-export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture';
+export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture' | 'font';
 export interface RustyApplicationResource {
     readonly identity: string;
     readonly contentHash: string;
@@ -43,5 +43,25 @@ export interface RustyApplicationSurfaceResourceOptions {
     readonly resolveTextureResource?: (descriptor: RendererTextureResourceDescriptor) => Promise<ArrayBuffer>;
 }
 export declare function prepareRustyApplicationContent(content: RustyApplicationContent): PreparedRustyApplicationContent;
+/** One mutable Engine-owned resource catalog shared by a mounted surface and
+ * its presentation hosts. Product Browser admits immutable bytes here before
+ * applying the output group that names them. */
+export declare class RustyApplicationResourceCatalog {
+    #private;
+    readonly meshSource: RendererMutableMeshResourceSource;
+    readonly textureSource: RendererMutableTextureResourceSource;
+    readonly animatedSource: RendererMutableAnimatedMeshResourceSource;
+    admit(resources: readonly (RustyApplicationResource | PreparedRustyApplicationResource)[], frame?: RustyApplicationFrame): Promise<void>;
+    resource(identity: string, hash?: string): PreparedRustyApplicationResource | undefined;
+    snapshot(): readonly PreparedRustyApplicationResource[];
+    retainOnly(identities: ReadonlySet<string>): void;
+    readout(): {
+        readonly resources: number;
+        readonly animated: number;
+        readonly clipPacks: number;
+    };
+    clear(): void;
+    audioResolver(): RendererAudioResourceResolver;
+}
 export declare function rustyApplicationAudioResourceResolver(content: PreparedRustyApplicationContent): RendererAudioResourceResolver;
 export declare function rustyApplicationSurfaceResourceOptions(content: PreparedRustyApplicationContent): RustyApplicationSurfaceResourceOptions;

@@ -16,7 +16,8 @@ use serde_json::Value;
 
 use crate::{
     ProductDevHostError, ProductDevInvalidatedScope, ProductDevMutationCertainty,
-    ProductDevNextAction, ProductDevRuntimeError, ProductDevRuntimeRecovery,
+    ProductDevNextAction, ProductDevRendererResource, ProductDevRuntimeError,
+    ProductDevRuntimeRecovery,
 };
 
 /// Fixed Engine-owned local-runtime route prefix consumed by product-browser-host.
@@ -216,6 +217,7 @@ pub enum ProductDevAudioFeedbackFact {
         fact_id: CanonicalU64,
         code: render_presentation::AudioProjectionDiagnosticCode,
         sequence: u32,
+        signal_handle: Option<CanonicalU64>,
         voice_handle: Option<CanonicalU64>,
     },
 }
@@ -255,6 +257,9 @@ enum ProductDevAudioFeedbackFactWire {
         fact_id: CanonicalU64,
         code: render_presentation::AudioProjectionDiagnosticCode,
         sequence: u32,
+        #[serde(default)]
+        signal_handle: Option<CanonicalU64>,
+        #[serde(default)]
         voice_handle: Option<CanonicalU64>,
     },
 }
@@ -305,11 +310,13 @@ where
                 fact_id,
                 code,
                 sequence,
+                signal_handle,
                 voice_handle,
             } => Ok(ProductDevAudioFeedbackFact::Diagnostic {
                 fact_id,
                 code,
                 sequence,
+                signal_handle,
                 voice_handle,
             }),
         })
@@ -2237,6 +2244,8 @@ impl ProductDevTimelineCompletionResult {
 /// One Rust-authoritative output pushed to the local browser projection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductDevRuntimeOutput {
+    renderer_resources: Option<Vec<String>>,
+    resources: std::sync::Arc<[crate::ProductDevRendererResource]>,
     wire: ProductDevRuntimeOutputWire,
 }
 
@@ -2272,6 +2281,8 @@ impl ProductDevRendererPublicationFrontier {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ProductDevRuntimeOutputWire {
+    /// Resource inventory/lease change without a gameplay or scheduling operation.
+    RendererResources,
     Binding {
         runtime: ProductDevRuntimeBinding,
         #[serde(rename = "nextInputSequence")]
@@ -2382,6 +2393,75 @@ impl ProductDevAnimationCueDefinition {
 }
 
 impl ProductDevRuntimeOutput {
+    pub fn resource_inventory() -> Self {
+        Self {
+            wire: ProductDevRuntimeOutputWire::RendererResources,
+            resources: Default::default(),
+            renderer_resources: None,
+        }
+    }
+
+    pub fn resources(&self) -> &std::sync::Arc<[crate::ProductDevRendererResource]> {
+        &self.resources
+    }
+
+    pub fn with_resources(
+        mut self,
+        resources: std::sync::Arc<[crate::ProductDevRendererResource]>,
+    ) -> Self {
+        self.resources = resources;
+        self
+    }
+
+    /// Worker-only sidecar. Normal Serialize remains the byte-free browser wire schema.
+    pub fn to_worker_value(&self) -> Result<serde_json::Value, ProductDevHostError> {
+        let mut value = serde_json::to_value(self).map_err(|_| {
+            ProductDevHostError::new(
+                "DEV_HOST_RESOURCE_ENCODE",
+                "worker output could not be encoded",
+            )
+        })?;
+        if !self.resources.is_empty() {
+            value
+                .as_object_mut()
+                .expect("output wire is an object")
+                .insert(
+                    "__retiredResources".to_owned(),
+                    serde_json::Value::Array(
+                        self.resources
+                            .iter()
+                            .map(crate::ProductDevRendererResource::to_worker_value)
+                            .collect(),
+                    ),
+                );
+        }
+        Ok(value)
+    }
+
+    pub fn from_worker_value(mut value: serde_json::Value) -> Result<Self, ProductDevHostError> {
+        let resources = value
+            .as_object_mut()
+            .and_then(|value| value.remove("__retiredResources"));
+        let mut output: Self = serde_json::from_value(value).map_err(|_| {
+            ProductDevHostError::new("DEV_HOST_WORKER_OUTPUT_DECODE", "invalid worker output")
+        })?;
+        if let Some(resources) = resources {
+            let resources = resources.as_array().ok_or_else(|| {
+                ProductDevHostError::new(
+                    "DEV_HOST_RESOURCE_DECODE",
+                    "resource leases must be an array",
+                )
+            })?;
+            output.resources = resources
+                .iter()
+                .cloned()
+                .map(crate::ProductDevRendererResource::from_worker_value)
+                .collect::<Result<Vec<_>, _>>()?
+                .into();
+        }
+        Ok(output)
+    }
+
     /// Decodes one worker-retained output through the same bounded JSON
     /// representation used by the browser projection. Delivery owns framing;
     /// typed decoding does not impose an unrelated aggregate byte budget.
@@ -2440,14 +2520,20 @@ impl ProductDevRuntimeOutput {
                     .collect::<Result<Vec<_>, _>>()?,
             )),
             RuntimePublication::Frame(frame) => Ok(Self {
+                renderer_resources: None,
+                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::Frame {
                     frame: frame.into_frame(),
                 },
             }),
             RuntimePublication::ViewComposition(composition) => Ok(Self {
+                renderer_resources: None,
+                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
             }),
             RuntimePublication::Presentation(frame) => Ok(Self {
+                renderer_resources: None,
+                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::Presentation {
                     frame: frame.into_frame(),
                 },
@@ -2460,6 +2546,8 @@ impl ProductDevRuntimeOutput {
                 Self::animation_cue_definitions(definitions)
             }
             RuntimePublication::UiProjection(envelope) => Ok(Self {
+                renderer_resources: None,
+                resources: Default::default(),
                 wire: ProductDevRuntimeOutputWire::UiProjection { envelope },
             }),
         }
@@ -2525,7 +2613,8 @@ impl ProductDevRuntimeOutput {
             ProductDevRuntimeOutputWire::UiProjection { envelope } => {
                 RuntimePublication::ui_projection(&envelope).map_err(publication_error)
             }
-            ProductDevRuntimeOutputWire::RuntimeReadout { .. }
+            ProductDevRuntimeOutputWire::RendererResources
+            | ProductDevRuntimeOutputWire::RuntimeReadout { .. }
             | ProductDevRuntimeOutputWire::RuntimeInputResult { .. }
             | ProductDevRuntimeOutputWire::RuntimeProgress { .. } => Err(ProductDevHostError::new(
                 "DEV_HOST_OUTPUT_LOGICAL_VARIANT",
@@ -2547,12 +2636,16 @@ impl ProductDevRuntimeOutput {
             ..Default::default()
         };
         Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::Frame { frame },
         }
     }
 
     pub fn binding(runtime: ProductDevRuntimeBinding, next_input_sequence: CanonicalU64) -> Self {
         Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::Binding {
                 runtime,
                 next_input_sequence,
@@ -2566,6 +2659,8 @@ impl ProductDevRuntimeOutput {
             .map_err(|_| ProductDevHostError::new("DEV_HOST_RENDER_FRAME", "frame is invalid"))?;
         let frame = frame.clone();
         Ok(Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::Frame { frame },
         })
     }
@@ -2580,6 +2675,8 @@ impl ProductDevRuntimeOutput {
         })?;
         let composition = composition.clone();
         Ok(Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::ViewComposition { composition },
         })
     }
@@ -2605,6 +2702,8 @@ impl ProductDevRuntimeOutput {
         })?;
         let frame = frame.clone();
         Ok(Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::Presentation { frame },
         })
     }
@@ -2650,6 +2749,8 @@ impl ProductDevRuntimeOutput {
             ));
         }
         Ok(Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::AnimationCueDefinitions { definitions },
         })
     }
@@ -2658,11 +2759,15 @@ impl ProductDevRuntimeOutput {
     ) -> Result<Self, ProductDevHostError> {
         let envelope = envelope.clone();
         Ok(Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::UiProjection { envelope },
         })
     }
     pub fn runtime_readout(readout: ProductDevRuntimeReadout) -> Self {
         Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::RuntimeReadout { readout },
         }
     }
@@ -2672,6 +2777,8 @@ impl ProductDevRuntimeOutput {
     /// admission; this is the later runtime-owned receipt.
     pub fn runtime_input_result(result: ProductDevInputResult) -> Self {
         Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::RuntimeInputResult { result },
         }
     }
@@ -2680,6 +2787,8 @@ impl ProductDevRuntimeOutput {
     /// Browser hosts use this to update progress without becoming the clock.
     pub fn runtime_progress() -> Self {
         Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::RuntimeProgress {
                 owner: "rust-host".to_owned(),
             },
@@ -2697,6 +2806,8 @@ impl ProductDevRuntimeOutput {
         publication_frontiers: Vec<ProductDevRendererPublicationFrontier>,
     ) -> Self {
         Self {
+            renderer_resources: None,
+            resources: Default::default(),
             wire: ProductDevRuntimeOutputWire::CompleteBaseline {
                 runtime,
                 publication_frontiers,
@@ -2850,13 +2961,36 @@ fn neutral_animation_cue_definition(
 
 impl Serialize for ProductDevRuntimeOutput {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.wire.serialize(serializer)
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            #[serde(flatten)]
+            wire: &'a ProductDevRuntimeOutputWire,
+            #[serde(rename = "rendererResources", skip_serializing_if = "Option::is_none")]
+            renderer_resources: &'a Option<Vec<String>>,
+        }
+        Envelope {
+            wire: &self.wire,
+            renderer_resources: &self.renderer_resources,
+        }
+        .serialize(serializer)
     }
 }
 
 impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        ProductDevRuntimeOutputWire::deserialize(deserializer).map(|wire| Self { wire })
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let resources = value
+            .as_object_mut()
+            .and_then(|value| value.remove("rendererResources"))
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let wire = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            wire,
+            renderer_resources: resources,
+            resources: Default::default(),
+        })
     }
 }
 
@@ -2864,6 +2998,9 @@ impl<'de> Deserialize<'de> for ProductDevRuntimeOutput {
 /// separate server-side output mutation/callback path.
 #[derive(Debug, Clone)]
 pub struct ProductDevRuntimeReceipt<T> {
+    resource_baseline: bool,
+    renderer_resources: Option<Vec<String>>,
+    resources: std::sync::Arc<[crate::ProductDevRendererResource]>,
     receipt: runtime_publication::RuntimeReceipt<T>,
     connection_output_cursor: Option<u64>,
 }
@@ -2928,9 +3065,86 @@ impl<T> ProductDevRuntimeReceipt<T> {
             output.validate().map_err(publication_error)?;
         }
         Ok(Self {
+            resource_baseline: outputs
+                .iter()
+                .any(|output| matches!(output, RuntimePublication::Binding { .. })),
+            renderer_resources: None,
+            resources: Default::default(),
             receipt: runtime_session::RuntimeReceipt::new(result, outputs),
             connection_output_cursor: None,
         })
+    }
+
+    pub(crate) fn resource_baseline(&self) -> bool {
+        self.resource_baseline
+    }
+
+    /// Reconstitute a worker receipt without losing its private resource leases
+    /// or browser inventory while converting the typed publications.
+    pub fn from_wire_outputs(
+        result: T,
+        outputs: Vec<ProductDevRuntimeOutput>,
+    ) -> Result<Self, ProductDevHostError> {
+        let mut publications = Vec::new();
+        let mut resources = std::collections::BTreeMap::new();
+        let mut inventory = None;
+        for mut output in outputs {
+            for resource in output.resources.iter() {
+                resources.insert(resource.identity().to_owned(), resource.clone());
+            }
+            if output.renderer_resources.is_some() {
+                inventory = output.renderer_resources.take();
+            }
+            if !matches!(output.wire, ProductDevRuntimeOutputWire::RendererResources) {
+                publications.push(output.into_publication()?);
+            }
+        }
+        Ok(Self::new(result, publications)?
+            .with_resources(resources.into_values().collect(), inventory))
+    }
+
+    pub fn with_resources(
+        mut self,
+        resources: Vec<crate::ProductDevRendererResource>,
+        mut inventory: Option<Vec<String>>,
+    ) -> Self {
+        if inventory.is_none() {
+            inventory = self.renderer_resources.take();
+        }
+        let mut combined: std::collections::BTreeMap<_, _> = self
+            .resources
+            .iter()
+            .map(|resource| (resource.identity().to_owned(), resource.clone()))
+            .collect();
+        combined.extend(
+            resources
+                .into_iter()
+                .map(|resource| (resource.identity().to_owned(), resource)),
+        );
+        let resources: Vec<_> = combined.into_values().collect();
+        if let Some(inventory) = &mut inventory {
+            inventory.extend(
+                resources
+                    .iter()
+                    .map(|resource| resource.identity().to_owned()),
+            );
+            inventory.sort();
+            inventory.dedup();
+        }
+        self.renderer_resources = inventory;
+        self.resources = resources.into();
+        self
+    }
+
+    pub fn into_parts_with_resources(
+        self,
+    ) -> (
+        T,
+        Vec<RuntimePublication>,
+        std::sync::Arc<[crate::ProductDevRendererResource]>,
+    ) {
+        let (result, outputs) = self.receipt.into_parts();
+        (result, outputs, self.resources)
     }
 
     pub fn result(&self) -> &T {
@@ -2958,11 +3172,19 @@ impl<T> ProductDevRuntimeReceipt<T> {
     /// Encode only at the serving/worker edge. Runtime receipts retain typed
     /// Engine facts; byte budgets and JSON conversion belong to this adapter.
     pub fn into_wire_parts(self) -> Result<(T, Vec<ProductDevRuntimeOutput>), ProductDevHostError> {
-        let (result, publications) = self.into_parts();
-        let outputs = publications
+        let inventory = self.renderer_resources.clone();
+        let (result, publications, resources) = self.into_parts_with_resources();
+        let mut outputs = publications
             .into_iter()
             .map(ProductDevRuntimeOutput::from_publication)
             .collect::<Result<Vec<_>, _>>()?;
+        if outputs.is_empty() && (!resources.is_empty() || inventory.is_some()) {
+            outputs.push(ProductDevRuntimeOutput::resource_inventory());
+        }
+        if let Some(output) = outputs.first_mut() {
+            output.resources = resources;
+            output.renderer_resources = inventory;
+        }
         ProductDevRuntimeOutput::validate_output_group(&outputs)?;
         Ok((result, outputs))
     }
@@ -2974,6 +3196,23 @@ impl<T> ProductDevRuntimeReceipt<T> {
 /// input, schedule, timeline, mutation, and projection authority. They return
 /// exact output receipts, so this trait has no subscription/callback method.
 pub trait ProductDevRuntime: Send + 'static {
+    fn renderer_resource_ids(&self) -> Option<Vec<String>> {
+        None
+    }
+    fn take_retired_renderer_resources(&mut self) -> Vec<crate::ProductDevRendererResource> {
+        Vec::new()
+    }
+    /// Returns a currently retained renderer body for the exact runtime
+    /// generation. Browser delivery uses this read-only path only when a
+    /// preload/baseline resource must be fetched; it does not publish output.
+    fn renderer_resource(
+        &mut self,
+        _identity: &str,
+        _generation: u64,
+    ) -> Result<Option<ProductDevRendererResource>, ProductDevRuntimeError> {
+        Ok(None)
+    }
+
     /// Takes the one completed update-callback attribution sample, if this
     /// runtime exposes it. The host copies it after the callback, outside its
     /// diagnostics read path; older runtimes remain source-compatible.
@@ -3162,6 +3401,38 @@ pub trait ProductDevRuntime: Send + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_receipt_conversion_preserves_resource_inventory_and_retired_leases() {
+        let resource = crate::ProductDevRendererResource::admit_font(
+            "content/font.woff2",
+            b"wOF2fixture".to_vec(),
+        )
+        .unwrap();
+        let identity = resource.identity().to_owned();
+        let receipt = ProductDevRuntimeReceipt::new((), Vec::new())
+            .unwrap()
+            .with_resources(vec![resource], Some(vec![identity.clone()]));
+        let (_, outputs) = receipt.into_wire_parts().unwrap();
+        let decoded = outputs
+            .into_iter()
+            .map(|output| {
+                ProductDevRuntimeOutput::from_worker_value(output.to_worker_value().unwrap())
+                    .unwrap()
+            })
+            .collect();
+        let receipt = ProductDevRuntimeReceipt::from_wire_outputs((), decoded)
+            .unwrap()
+            // The outer operation owner has no local resource store: it must
+            // preserve the sidecars already supplied by its worker receipt.
+            .with_resources(Vec::new(), None);
+        let (_, outputs) = receipt.into_wire_parts().unwrap();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].resources()[0].bytes(), b"wOF2fixture");
+        let browser = serde_json::to_value(&outputs[0]).unwrap();
+        assert_eq!(browser["rendererResources"], serde_json::json!([identity]));
+        assert!(browser.get("__retiredResources").is_none());
+    }
 
     #[test]
     fn browser_attachment_report_uses_bounded_typed_baseline_facts() {

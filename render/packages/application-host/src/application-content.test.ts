@@ -5,6 +5,7 @@ import { loadRendererTextureResourceSource } from '@rusty-engine/renderer-host';
 
 import {
   RustyApplicationContentError,
+  RustyApplicationResourceCatalog,
   prepareRustyApplicationContent,
   rustyApplicationAudioResourceResolver,
   rustyApplicationSurfaceResourceOptions,
@@ -46,6 +47,22 @@ void test('application content borrows prepared bytes and renderer admission own
     descriptor.resource, descriptor.contentHash, descriptor.byteLength,
   );
   assert.deepEqual(acquired.bytes, expected);
+});
+
+void test('resource catalog prunes a retired dynamic resource and admits its immutable identity again', async () => {
+  const catalog = new RustyApplicationResourceCatalog();
+  const content = textureContent();
+  await catalog.admit(content.resources!);
+  assert.deepEqual(catalog.readout(), { resources: 1, animated: 0, clipPacks: 0 });
+  assert.equal(catalog.snapshot()[0]?.identity, content.resources![0]!.identity);
+
+  catalog.retainOnly(new Set());
+  assert.deepEqual(catalog.readout(), { resources: 0, animated: 0, clipPacks: 0 });
+  assert.deepEqual(catalog.snapshot(), []);
+
+  await catalog.admit(content.resources!);
+  assert.deepEqual(catalog.readout(), { resources: 1, animated: 0, clipPacks: 0 });
+  assert.equal(catalog.snapshot()[0]?.identity, content.resources![0]!.identity);
 });
 
 void test('application content rejects duplicated identities without exposing renderer manifests', () => {

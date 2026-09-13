@@ -17,6 +17,40 @@ export type RendererTextureResourceResolver = (
   descriptor: RendererTextureResourceDescriptor,
 ) => Promise<ArrayBuffer>;
 
+/** Mutable Engine source used when immutable ProductContent arrives after mount. */
+export class RendererMutableTextureResourceSource implements TextureResourceSource {
+  readonly #resources = new Map<string, { readonly contentHash: string; readonly bytes: Uint8Array }>();
+
+  async admit(resource: string, contentHash: string, data: ArrayBuffer): Promise<void> {
+    validateManifest({ kind: 'rusty_renderer_texture_resources.v1', resources: [{
+      resource, contentHash, byteLength: data.byteLength,
+    }] });
+    const bytes = new Uint8Array(data.slice(0));
+    const actual = await rendererResourceContentHash(bytes.buffer, contentHash);
+    if (actual !== contentHash) throw resourceError('texture_resource_content_hash_mismatch', resource, 'immutable body hash mismatch');
+    const existing = this.#resources.get(resource);
+    if (existing !== undefined && existing.contentHash !== contentHash) {
+      throw resourceError('texture_resource_manifest_invalid', resource, 'resource identity was admitted with a different hash');
+    }
+    this.#resources.set(resource, { contentHash, bytes });
+  }
+
+  acquireResource(resource: string, contentHash: string, byteLength: number): { readonly bytes: Uint8Array } {
+    const entry = this.#resources.get(resource);
+    if (entry === undefined) throw resourceError('texture_resource_unavailable', resource, 'resource was not admitted');
+    if (entry.contentHash !== contentHash || entry.bytes.byteLength !== byteLength) {
+      throw resourceError('texture_resource_manifest_invalid', resource, 'retained descriptor does not match admitted resource');
+    }
+    return { bytes: entry.bytes };
+  }
+
+  releaseResource(): void {}
+
+  retainOnly(identities: ReadonlySet<string>): void {
+    for (const identity of this.#resources.keys()) if (!identities.has(identity)) this.#resources.delete(identity);
+  }
+}
+
 export type RendererTextureResourceErrorCode =
   | 'texture_resource_manifest_invalid'
   | 'texture_resource_unavailable'

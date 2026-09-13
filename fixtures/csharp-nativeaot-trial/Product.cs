@@ -181,7 +181,7 @@ public sealed class Product : IEngineProduct
             "trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
         RenderResourceInfo repeatedAlias = _engine.Graphics.OpenResource(new RenderResourceRequest(
             "content/trial.png", TextureFilter.Nearest, TextureWrap.Repeat));
-        Require(clampedTexture.Handle != repeatedTexture.Handle && repeatedTexture.Handle == repeatedAlias.Handle,
+        Require(clampedTexture.Handle.Handle != repeatedTexture.Handle.Handle && repeatedTexture.Handle.Handle == repeatedAlias.Handle,
             "texture sampler variants must retain distinct assets over shared content");
         _appearance = _engine.Graphics.CreatePrimitive(new PrimitiveAppearanceRequest(PrimitiveGeometry.Cube, false, new Color(0.25f, 0.75f, 1.0f, 1.0f)));
         Material createdMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
@@ -193,12 +193,15 @@ public sealed class Product : IEngineProduct
             0,
             false));
         _engine.Graphics.UpdateMaterial(new MaterialUpdateRequest(createdMaterial, new MaterialRequest(
-            new Color(0.5f, 0.5f, 1, 1), new RenderResourceHandle(0), 0.25f, new Color(1, 1, 1, 1), Vector3.Zero, 0, true)));
+            new Color(0.5f, 0.5f, 1, 1), default(RenderResourceReference), 0.25f, new Color(1, 1, 1, 1), Vector3.Zero, 0, true)));
         _material = _engine.Graphics.ReplaceMaterial(new MaterialUpdateRequest(createdMaterial, new MaterialRequest(
-            new Color(1, 1, 1, 1), new RenderResourceHandle(0), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false)));
+            new Color(1, 1, 1, 1), default(RenderResourceReference), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false)));
         createdMaterial.Dispose();
+        clampedTexture.Handle.Dispose();
+        repeatedTexture.Handle.Dispose();
+        repeatedAlias.Handle.Dispose();
         _voxelTopMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
-            new Color(0.2f, 0.9f, 0.2f, 1), new RenderResourceHandle(0), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false));
+            new Color(0.2f, 0.9f, 0.2f, 1), default(RenderResourceReference), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false));
         ExerciseMagicaVoxelAdmission();
         CameraDescriptor initialCamera = new(
             new CameraPose(new Vector3(0, 1, 3), 0, 0),

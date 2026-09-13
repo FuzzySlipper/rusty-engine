@@ -31,6 +31,7 @@ use voxel_object_runtime::{
 use crate::{
     appearance::RuntimeAppearanceBridge,
     composition::{borrowed_slice, borrowed_utf8, ABI_OK},
+    content::{RetainedContent, RuntimeContentBridge},
     magica_vox::{
         admit_magica_vox, MagicaVoxelAdmissionOptions, MagicaVoxelError, MagicaVoxelPaletteRow,
     },
@@ -161,6 +162,7 @@ pub(crate) struct RuntimeVoxelContentBridge {
     staged_presentation: Option<RuntimeVoxelContentCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
     spatial: Option<*mut RuntimeSpatialBridge>,
+    content: Option<*const RuntimeContentBridge>,
 }
 
 impl RuntimeVoxelContentBridge {
@@ -190,11 +192,25 @@ impl RuntimeVoxelContentBridge {
             staged_presentation: None,
             appearance: None,
             spatial: None,
+            content: None,
         }
     }
 
     pub(crate) fn bind_spatial(&mut self, spatial: &mut RuntimeSpatialBridge) {
         self.spatial = Some(spatial as *mut RuntimeSpatialBridge);
+    }
+
+    /// Content references stay owned by the sibling Engine Content service;
+    /// this bridge only clones immutable retained entries during admission.
+    pub(crate) fn bind_content(&mut self, content: &RuntimeContentBridge) {
+        self.content = Some(content as *const RuntimeContentBridge);
+    }
+
+    fn retained_content(&self, reference: NativeContentReferenceHandle) -> Option<RetainedContent> {
+        // SAFETY: EngineServiceSet owns the boxed content bridge for the
+        // voxel bridge's lifetime and serializes generated service calls.
+        let content = unsafe { self.content?.as_ref()? };
+        content.retained_content(reference)
     }
 
     fn insert_asset(&mut self, asset: VoxelAsset) -> Option<NativeVoxelAssetHandle> {
@@ -1083,12 +1099,15 @@ fn api_impl(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentApi {
     NativeVoxelContentApi {
         context: (bridge as *mut RuntimeVoxelContentBridge).cast(),
         admit_asset,
+        load_asset_from_content,
         destroy_asset,
         read_asset,
         publish_asset_to_spatial,
         destroy_asset_spatial_publish_lease,
         admit_object,
+        load_object_from_content,
         admit_magica_voxel_object,
+        load_magica_voxel_from_content,
         read_magica_voxel_palette,
         destroy_magica_voxel_palette_lease,
         destroy_object,
@@ -1109,6 +1128,7 @@ fn api_impl(bridge: &mut RuntimeVoxelContentBridge) -> NativeVoxelContentApi {
         update_object_presentation,
         destroy_object_presentation,
         admit_annotation,
+        load_annotation_from_content,
         destroy_annotation,
         query_annotation,
         destroy_annotation_region_lease,
@@ -1139,6 +1159,36 @@ unsafe extern "C" fn admit_asset(
         Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    match bridge.insert_asset(asset) {
+        Some(handle) => {
+            unsafe { *output = handle };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+
+unsafe extern "C" fn load_asset_from_content(
+    context: *mut c_void,
+    request: *const NativeLoadVoxelAssetFromContentRequest,
+    output: *mut NativeVoxelAssetHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let Some(content) = bridge.retained_content(request.content) else {
+        return 0;
+    };
+    let body = match std::str::from_utf8(&content.bytes) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let asset = match decode_voxel_asset(body) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
     match bridge.insert_asset(asset) {
         Some(handle) => {
             unsafe { *output = handle };
@@ -1282,6 +1332,36 @@ unsafe extern "C" fn admit_object(
     }
 }
 
+unsafe extern "C" fn load_object_from_content(
+    context: *mut c_void,
+    request: *const NativeLoadVoxelObjectFromContentRequest,
+    output: *mut NativeVoxelObjectHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let Some(content) = bridge.retained_content(request.content) else {
+        return 0;
+    };
+    let body = match std::str::from_utf8(&content.bytes) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let object = match admit_voxel_object_json(body, Default::default()) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    match bridge.insert_object(object) {
+        Some(handle) => {
+            unsafe { *output = handle };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+
 unsafe extern "C" fn admit_magica_voxel_object(
     context: *mut c_void,
     request: *const NativeAdmitMagicaVoxelObjectRequest,
@@ -1315,25 +1395,77 @@ unsafe extern "C" fn admit_magica_voxel_object(
         Ok(value) => value.to_owned(),
         Err(_) => return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32,
     };
-    let admission = match admit_magica_vox(
-        bytes,
-        asset_id,
-        source_path,
-        MagicaVoxelAdmissionOptions {
-            cell_size: request.cell_size,
-            pivot_policy: request.pivot_policy,
-            explicit_pivot: [request.pivot_x, request.pivot_y, request.pivot_z],
-            orientation: request.orientation,
-            max_source_bytes: request.max_source_bytes,
-            max_dimension: request.max_dimension,
-            max_voxel_count: request.max_voxel_count,
-            max_chunk_count: request.max_chunk_count,
-            max_material_slots: request.max_material_slots,
-        },
-    ) {
-        Ok(value) => value,
-        Err(error) => return magica_status(error),
+    let options = MagicaVoxelAdmissionOptions {
+        cell_size: request.cell_size,
+        pivot_policy: request.pivot_policy,
+        explicit_pivot: [request.pivot_x, request.pivot_y, request.pivot_z],
+        orientation: request.orientation,
+        max_source_bytes: request.max_source_bytes,
+        max_dimension: request.max_dimension,
+        max_voxel_count: request.max_voxel_count,
+        max_chunk_count: request.max_chunk_count,
+        max_material_slots: request.max_material_slots,
     };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let handle = match admit_magica_bytes(bridge, bytes, asset_id, source_path, options) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    unsafe { *output = handle };
+    ABI_OK
+}
+
+unsafe extern "C" fn load_magica_voxel_from_content(
+    context: *mut c_void,
+    request: *const NativeLoadMagicaVoxelFromContentRequest,
+    output: *mut NativeVoxelObjectHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32;
+    }
+    let request = unsafe { &*request };
+    let asset_id = match unsafe {
+        borrowed_utf8(
+            request.asset_id.bytes,
+            request.asset_id.len,
+            "magicaVoxel.assetId",
+        )
+    } {
+        Ok(value) => value.to_owned(),
+        Err(_) => return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32,
+    };
+    let options = MagicaVoxelAdmissionOptions {
+        cell_size: request.cell_size,
+        pivot_policy: request.pivot_policy,
+        explicit_pivot: [request.pivot_x, request.pivot_y, request.pivot_z],
+        orientation: request.orientation,
+        max_source_bytes: request.max_source_bytes,
+        max_dimension: request.max_dimension,
+        max_voxel_count: request.max_voxel_count,
+        max_chunk_count: request.max_chunk_count,
+        max_material_slots: request.max_material_slots,
+    };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let Some(content) = bridge.retained_content(request.content) else {
+        return NativeMagicaVoxelAdmissionStatus::InvalidRequest as i32;
+    };
+    let handle = match admit_magica_bytes(bridge, &content.bytes, asset_id, content.path, options) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    unsafe { *output = handle };
+    ABI_OK
+}
+
+fn admit_magica_bytes(
+    bridge: &mut RuntimeVoxelContentBridge,
+    bytes: &[u8],
+    asset_id: String,
+    source_path: String,
+    options: MagicaVoxelAdmissionOptions,
+) -> Result<NativeVoxelObjectHandle, i32> {
+    let admission =
+        admit_magica_vox(bytes, asset_id, source_path, options).map_err(magica_status)?;
     let palette = RetainedMagicaVoxelPalette {
         rows: admission.palette,
         source_hash: admission.source_hash,
@@ -1342,16 +1474,11 @@ unsafe extern "C" fn admit_magica_voxel_object(
     let object =
         match voxel_object_runtime::admit_voxel_object(&admission.object, Default::default()) {
             Ok(value) => value,
-            Err(_) => return NativeMagicaVoxelAdmissionStatus::CanonicalObject as i32,
+            Err(_) => return Err(NativeMagicaVoxelAdmissionStatus::CanonicalObject as i32),
         };
-    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
-    match bridge.insert_object_with_magica_palette(object, Some(palette)) {
-        Some(handle) => {
-            unsafe { *output = handle };
-            ABI_OK
-        }
-        None => NativeMagicaVoxelAdmissionStatus::HandleExhausted as i32,
-    }
+    bridge
+        .insert_object_with_magica_palette(object, Some(palette))
+        .ok_or(NativeMagicaVoxelAdmissionStatus::HandleExhausted as i32)
 }
 
 unsafe extern "C" fn read_magica_voxel_palette(
@@ -1440,6 +1567,43 @@ unsafe extern "C" fn admit_annotation(
         Err(_) => return 0,
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let asset = match bridge.asset_arc(request.asset) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    if validate_annotation_layer(&layer, Some(&asset), Default::default()).is_err() {
+        return 0;
+    }
+    match bridge.insert_annotation(asset, layer) {
+        Some(handle) => {
+            unsafe { *output = handle };
+            ABI_OK
+        }
+        None => 0,
+    }
+}
+
+unsafe extern "C" fn load_annotation_from_content(
+    context: *mut c_void,
+    request: *const NativeLoadVoxelAnnotationFromContentRequest,
+    output: *mut NativeVoxelAnnotationHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || output.is_null() {
+        return 0;
+    }
+    let request = unsafe { &*request };
+    let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
+    let Some(content) = bridge.retained_content(request.content) else {
+        return 0;
+    };
+    let body = match std::str::from_utf8(&content.bytes) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    let layer = match decode_annotation_layer(body) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
     let asset = match bridge.asset_arc(request.asset) {
         Ok(value) => value,
         Err(_) => return 0,
@@ -2427,6 +2591,123 @@ mod tests {
     };
 
     #[test]
+    fn content_admissions_retain_asset_object_and_annotation_after_reference_release() {
+        let asset_value = annotation_asset();
+        let asset_body = encode_voxel_asset(&asset_value)
+            .expect("canonical asset")
+            .into_bytes();
+        let object_body = encode_voxel_object(&object())
+            .expect("canonical object")
+            .into_bytes();
+        let annotation_body = encode_annotation_layer(&annotation(&asset_value))
+            .expect("canonical annotation")
+            .into_bytes();
+        let mut catalog = BTreeMap::new();
+        catalog.insert("bundle/asset.json".to_owned(), Arc::from(asset_body));
+        catalog.insert("bundle/object.json".to_owned(), Arc::from(object_body));
+        catalog.insert(
+            "bundle/annotation.json".to_owned(),
+            Arc::from(annotation_body),
+        );
+        let mut content = RuntimeContentBridge::new(catalog);
+        let content_api = crate::content::api(&mut content);
+        let asset_reference = open_content_reference(content_api, "bundle/asset.json");
+        let object_reference = open_content_reference(content_api, "bundle/object.json");
+        let annotation_reference = open_content_reference(content_api, "bundle/annotation.json");
+
+        let mut bridge = RuntimeVoxelContentBridge::new();
+        bridge.bind_content(&content);
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let api = super::api(&mut bridge, &mut appearance);
+        let mut asset_handle = NativeVoxelAssetHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.load_asset_from_content)(
+                    api.context,
+                    &NativeLoadVoxelAssetFromContentRequest {
+                        content: asset_reference,
+                    },
+                    &mut asset_handle,
+                )
+            },
+            ABI_OK
+        );
+        let mut object_handle = NativeVoxelObjectHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.load_object_from_content)(
+                    api.context,
+                    &NativeLoadVoxelObjectFromContentRequest {
+                        content: object_reference,
+                    },
+                    &mut object_handle,
+                )
+            },
+            ABI_OK
+        );
+        let mut annotation_handle = NativeVoxelAnnotationHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.load_annotation_from_content)(
+                    api.context,
+                    &NativeLoadVoxelAnnotationFromContentRequest {
+                        asset: asset_handle,
+                        content: annotation_reference,
+                    },
+                    &mut annotation_handle,
+                )
+            },
+            ABI_OK
+        );
+        for reference in [asset_reference, object_reference, annotation_reference] {
+            assert_eq!(
+                unsafe { (content_api.destroy_reference)(content_api.context, reference) },
+                ABI_OK
+            );
+        }
+
+        let mut asset_readout = NativeVoxelAssetReadout::default();
+        assert_eq!(
+            unsafe { (api.read_asset)(api.context, asset_handle, &mut asset_readout) },
+            ABI_OK
+        );
+        let mut object_readout = NativeVoxelObjectReadout::default();
+        assert_eq!(
+            unsafe { (api.read_object)(api.context, object_handle, &mut object_readout) },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe { (api.destroy_asset)(api.context, asset_handle) },
+            ABI_OK
+        );
+        assert!(
+            bridge.annotation(annotation_handle).is_ok(),
+            "the annotation independently retains its admitted target"
+        );
+    }
+
+    fn open_content_reference(api: NativeContentApi, path: &str) -> NativeContentReferenceHandle {
+        let mut reference = NativeContentReferenceHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.open_reference)(
+                    api.context,
+                    &NativeContentOpenRequest {
+                        path: NativeUtf8Slice {
+                            bytes: path.as_ptr(),
+                            len: path.len(),
+                        },
+                    },
+                    &mut reference,
+                )
+            },
+            ABI_OK
+        );
+        reference
+    }
+
+    #[test]
     fn retained_voxel_object_presentation_rebases_for_fresh_attachment_and_releases_exactly() {
         let mut bridge = RuntimeVoxelContentBridge::new();
         let mut appearance =
@@ -2467,7 +2748,7 @@ mod tests {
                             b: 0.75,
                             a: 1.0,
                         },
-                        texture: NativeRenderResourceHandle::default(),
+                        texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,
@@ -2691,7 +2972,7 @@ mod tests {
                             b: 0.5,
                             a: 1.0,
                         },
-                        texture: NativeRenderResourceHandle::default(),
+                        texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,

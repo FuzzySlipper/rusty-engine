@@ -92,6 +92,10 @@ fn engine_api(
         graphics: NativeGraphicsApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
+            destroy_resource: crate::appearance::destroy_render_resource,
+            open_resource_from_content: crate::appearance::open_render_resource_from_content,
+            create_static_mesh_from_content_reference:
+                crate::appearance::create_static_mesh_from_content_reference,
             create_material,
             update_material,
             replace_material,
@@ -252,6 +256,7 @@ pub(crate) unsafe fn borrowed_utf8<'a>(
 /// The runtime drives call boundaries; this owner stages and commits only
 /// Engine-facing effects created through the generated function tables.
 pub struct EngineServiceSet {
+    retired_resources: BTreeMap<String, crate::appearance::CsharpRenderResource>,
     call_elapsed_seconds: f64,
     presentation_world: render_presentation::PresentationWorld,
     diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge,
@@ -260,7 +265,7 @@ pub struct EngineServiceSet {
     authored_content: RuntimeAuthoredContentBridge,
     content_store: Box<crate::content_store::RuntimeContentStoreBridge>,
     audio: RuntimeAudioBridge,
-    camera_view: RuntimeCameraViewBridge,
+    camera_view: Box<RuntimeCameraViewBridge>,
     dynamics: RuntimeDynamicsBridge,
     spatial: RuntimeSpatialBridge,
     perception: crate::perception::RuntimePerceptionBridge,
@@ -335,11 +340,18 @@ impl EngineServiceSet {
         authored_content.bind_content_store(&mut content_store);
         let voxel_scene_presentation =
             RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        let camera_view = Box::new(RuntimeCameraViewBridge::new());
         let mut appearance = crate::appearance::create(catalog.0, content_resources.clone());
+        appearance.bind_camera_view(&camera_view);
         appearance.bind_diagnostics_sink(diagnostics_sink.clone());
+        appearance.bind_content(&content);
         let mut audio = RuntimeAudioBridge::new(content_resources);
         audio.bind_diagnostics_sink(diagnostics_sink.clone());
+        audio.bind_content(&content);
+        let mut voxel_content = RuntimeVoxelContentBridge::new();
+        voxel_content.bind_content(&content);
         Ok(Self {
+            retired_resources: BTreeMap::new(),
             call_elapsed_seconds: 0.0,
             presentation_world: render_presentation::PresentationWorld::default(),
             diagnostics: crate::diagnostics::RuntimeDiagnosticsBridge::new(diagnostics_sink),
@@ -348,11 +360,11 @@ impl EngineServiceSet {
             authored_content,
             content_store,
             audio,
-            camera_view: RuntimeCameraViewBridge::new(),
+            camera_view,
             dynamics,
             spatial,
             perception,
-            voxel_content: RuntimeVoxelContentBridge::new(),
+            voxel_content,
             voxel_scene_presentation,
             implicit: crate::implicit_surfaces::RuntimeImplicitBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
@@ -614,7 +626,24 @@ impl EngineServiceSet {
         Ok(call)
     }
 
+    pub fn take_retired_resources(&mut self) -> Vec<crate::appearance::CsharpRenderResource> {
+        std::mem::take(&mut self.retired_resources)
+            .into_values()
+            .collect()
+    }
+
     pub fn commit_call(&mut self, call: CsharpEngineCall) {
+        for resource in call
+            .appearance
+            .as_ref()
+            .into_iter()
+            .flat_map(|call| call.retired_resources.iter())
+            .chain(call.audio.retired_resources.iter())
+        {
+            self.retired_resources
+                .insert(resource.identity().to_owned(), resource.clone());
+        }
+
         self.presentation_world = call.presentation_world;
         self.appearance.commit(call.appearance);
         self.implicit.commit_call(call.implicit);
@@ -630,6 +659,31 @@ impl EngineServiceSet {
     pub fn seal_resource_selection(&mut self) {
         self.appearance.seal_resource_selection();
         self.audio.seal_resource_selection();
+    }
+
+    pub fn renderer_resource_ids(&self) -> Vec<String> {
+        self.appearance
+            .state
+            .render_resources
+            .iter()
+            .chain(self.audio.render_resources())
+            .map(|resource| resource.identity().to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    pub fn renderer_resource(
+        &self,
+        identity: &str,
+    ) -> Option<crate::appearance::CsharpRenderResource> {
+        self.appearance
+            .state
+            .render_resources
+            .iter()
+            .chain(self.audio.render_resources())
+            .find(|resource| resource.identity() == identity)
+            .cloned()
     }
 
     pub fn render_resources(&self) -> Vec<CsharpRenderResource> {

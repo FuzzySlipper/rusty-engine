@@ -9,12 +9,14 @@ internal static unsafe class Program
 {
     private static readonly Dictionary<ulong, (nint Entries, nint Observations, nint Label, nint Payload)> Leases = [];
     private static readonly Dictionary<ulong, nint> SummaryLeases = [];
+    private static readonly HashSet<ulong> OwnedFixtures = [];
     private static readonly Dictionary<ulong, (nint Diagnostics, nint Code, nint Message, nint Source, nint Service, nint Operation)> DiagnosticLeases = [];
     private static readonly List<(string Value, byte[] Payload)> ReplacedTags = [];
     private static ulong _nextLease = 1;
     private static int _destroyed;
     private static int _diagnosticDestroyed;
     private static int _summaryDestroyed;
+    private static int _ownedFixtureDestroyed;
 
     private static void Main()
     {
@@ -23,9 +25,13 @@ internal static unsafe class Program
             context = null,
             read_items = new NativeReadLeaseFixtureItems { Pointer = &ReadItems },
             read_summary = new NativeReadLeaseFixtureSummary { Pointer = &ReadSummary },
+            read_owned_fixture = new NativeReadOwnedFixture { Pointer = &ReadOwnedFixture },
+            read_invalid_owned_fixture = new NativeReadInvalidOwnedFixture { Pointer = &ReadInvalidOwnedFixture },
+            read_optional_owned_fixture = new NativeReadOptionalOwnedFixture { Pointer = &ReadOptionalOwnedFixture },
             replace_tags = new NativeReplaceLeaseFixtureTags { Pointer = &ReplaceTags },
             destroy_item_lease = new NativeDestroyLeaseFixtureItemLease { Pointer = &DestroyItemLease },
             destroy_summary_lease = new NativeDestroyLeaseFixtureSummaryLease { Pointer = &DestroySummaryLease },
+            destroy_owned_fixture = new NativeDestroyOwnedFixture { Pointer = &DestroyOwnedFixture },
             destroy_operation_diagnostic_lease = new NativeDestroyLeaseFixtureOperationDiagnosticLease { Pointer = &DestroyOperationDiagnosticLease },
         };
         LeaseFixtureServiceImplementation service = new(api);
@@ -33,6 +39,29 @@ internal static unsafe class Program
         LeaseFixtureSummaryLeaseReceipt summary = service.ReadSummary();
         Require(summary.Label == "owned summary" && summary.Revision == 55, "metadata-only lease was not copied");
         Require(_summaryDestroyed == 1 && SummaryLeases.Count == 0, "metadata-only lease was not released exactly once");
+
+        OwnedFixtureInfo requiredOwned = service.ReadOwnedFixture();
+        Require(requiredOwned.Handle.Handle.Value != 0 && requiredOwned.Revision == 41 && requiredOwned.Label == "owned", "required owned output field was not retained");
+        requiredOwned.Handle.Dispose();
+        Require(_ownedFixtureDestroyed == 1 && OwnedFixtures.Count == 0, "required owned output field was not released exactly once");
+
+        try
+        {
+            service.ReadInvalidOwnedFixture();
+            throw new InvalidOperationException("owned output conversion did not reject an invalid inline label");
+        }
+        catch (InvalidOperationException error) when (error.Message.Contains("Inline animation feedback text", StringComparison.Ordinal))
+        {
+        }
+        Require(_ownedFixtureDestroyed == 2 && OwnedFixtures.Count == 0, "failed owned output conversion did not release its handle");
+
+        OptionalOwnedFixtureReceipt missingOptional = service.ReadOptionalOwnedFixture(0);
+        Require(missingOptional.Handle is null && missingOptional.AdmittedCount == 0, "zero optional owned field was not preserved as null");
+        OptionalOwnedFixtureReceipt admittedOptional = service.ReadOptionalOwnedFixture(1);
+        Require(admittedOptional.Handle is not null && admittedOptional.AdmittedCount == 1, "optional owned output field was not retained");
+        OwnedFixture admittedHandle = admittedOptional.Handle ?? throw new InvalidOperationException("admitted optional handle was absent");
+        admittedHandle.Dispose();
+        Require(_ownedFixtureDestroyed == 3 && OwnedFixtures.Count == 0, "optional owned output field was not released exactly once");
 
         byte[] payload = [0x00, 0xC3, 0xA9, 0xFF];
         service.ReplaceTags(new ReplaceLeaseFixtureTagsRequest(new LeaseFixtureTag[] {
@@ -109,6 +138,57 @@ internal static unsafe class Program
             handle = new NativeLeaseFixtureSummaryLeaseHandle { value = handle },
             label = new NativeUtf8Slice { bytes = label, len = (nuint)labelSource.Length },
             revision = 55,
+        };
+        return 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ReadOwnedFixture(void* _, NativeOwnedFixtureInfo* result)
+    {
+        if (result is null) return 0;
+        ulong handle = _nextLease++;
+        OwnedFixtures.Add(handle);
+        *result = new NativeOwnedFixtureInfo
+        {
+            handle = new NativeOwnedFixtureHandle { value = handle },
+            revision = 41,
+            label = FeedbackText("owned"),
+        };
+        return 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ReadInvalidOwnedFixture(void* _, NativeOwnedFixtureInfo* result)
+    {
+        if (result is null) return 0;
+        ulong handle = _nextLease++;
+        OwnedFixtures.Add(handle);
+        NativeAnimationFeedbackText invalidLabel = default;
+        invalidLabel.len = 97;
+        *result = new NativeOwnedFixtureInfo
+        {
+            handle = new NativeOwnedFixtureHandle { value = handle },
+            revision = 42,
+            label = invalidLabel,
+        };
+        return 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ReadOptionalOwnedFixture(void* _, uint admitted, NativeOptionalOwnedFixtureReceipt* result)
+    {
+        if (result is null || admitted > 1) return 0;
+        if (admitted == 0)
+        {
+            *result = new NativeOptionalOwnedFixtureReceipt { admitted_count = 0 };
+            return 1;
+        }
+        ulong handle = _nextLease++;
+        OwnedFixtures.Add(handle);
+        *result = new NativeOptionalOwnedFixtureReceipt
+        {
+            handle = new NativeOwnedFixtureHandle { value = handle },
+            admitted_count = 1,
         };
         return 1;
     }
@@ -231,6 +311,23 @@ internal static unsafe class Program
         NativeMemory.Free((void*)label);
         _summaryDestroyed++;
         return 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int DestroyOwnedFixture(void* _, NativeOwnedFixtureHandle handle)
+    {
+        if (!OwnedFixtures.Remove(handle.value)) return 0;
+        _ownedFixtureDestroyed++;
+        return 1;
+    }
+
+    private static NativeAnimationFeedbackText FeedbackText(string value)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        NativeAnimationFeedbackText result = default;
+        result.len = (nuint)bytes.Length;
+        bytes.CopyTo(MemoryMarshal.CreateSpan(ref result.bytes.e0, bytes.Length));
+        return result;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

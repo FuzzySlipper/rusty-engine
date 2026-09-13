@@ -115,7 +115,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                 internal EngineContext(NativeEngineApi native, LeaseReleaseCoordinator leaseReleases)
                 {
                     Diagnostics = new DiagnosticsServiceImplementation(native.diagnostics);
-                    Audio = new AudioServiceImplementation(native.audio);
+                    Audio = new AudioServiceImplementation(native.audio, leaseReleases);
                     Dynamics = new DynamicsServiceImplementation(native.dynamics, leaseReleases);
                     Motion = new MotionServiceImplementation(native.motion);
                     Kinematic = new KinematicServiceImplementation(native.kinematic);
@@ -131,7 +131,7 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     Graphics = new GraphicsServiceImplementation(native.graphics, leaseReleases);
                     ImplicitSurfaces = new ImplicitSurfacesServiceImplementation(native.implicit_surfaces, native.graphics, leaseReleases);
                     Presentation = new PresentationServiceImplementation(native.presentation, leaseReleases);
-                    Animation = new AnimationServiceImplementation(native.animation);
+                    Animation = new AnimationServiceImplementation(native.animation, native.graphics, leaseReleases);
                     CameraView = new CameraViewServiceImplementation(native.camera_view, leaseReleases);
                     Random = new RngServiceImplementation(native.rng);
                     Persistence = new PersistenceServiceImplementation(native.persistence);

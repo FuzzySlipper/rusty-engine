@@ -9,7 +9,7 @@ internal static class ProductContentBundleChecks
     {
         ProductContent content = context.Content;
         Require(content.Files.Length == 1 && content.ReadText("trial.txt").Contains("package-only"), "legacy snapshot excludes bundle bodies and inventory");
-        Require(content.ListBundles().Single().Id == "rules", "metadata discovery");
+        Require(content.ListBundles().Single(bundle => bundle.Id == "rules").Id == "rules", "rules metadata discovery");
         ProductContentBundle bundle = content.OpenBundle("rules");
         Require(bundle.Entries.Length == 4, "file inventory");
         Require(bundle.ReadDirectory().Select(file => file.Name).SequenceEqual(new[] { "_index.json", "large.bin", "renamed.json" }), "directory boundary/order");

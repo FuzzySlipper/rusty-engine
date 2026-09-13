@@ -4,7 +4,7 @@
 //! through its retained presentation projectors; neither renderer handles nor
 //! presentation frames cross the ABI.
 
-use crate::{NativeColor, NativeRenderResourceHandle, NativeUtf8Slice, NativeVec3};
+use crate::{NativeColor, NativeRenderResourceReference, NativeUtf8Slice, NativeVec3};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -77,7 +77,7 @@ pub struct NativePresentationBillboardStatusCue {
     pub label_key: NativeUtf8Slice,
     pub label_fallback_text: NativeUtf8Slice,
     pub has_icon: bool,
-    pub icon: NativeRenderResourceHandle,
+    pub icon: NativeRenderResourceReference,
 }
 
 #[repr(C)]
@@ -169,9 +169,9 @@ pub struct NativePresentationBillboardDescriptor {
     pub value: NativeUtf8Slice,
     pub unit_key: NativeUtf8Slice,
     pub fallback_unit: NativeUtf8Slice,
-    pub texture: NativeRenderResourceHandle,
+    pub texture: NativeRenderResourceReference,
     pub font_kind: NativePresentationFontKind,
-    pub font_asset: NativeRenderResourceHandle,
+    pub font_asset: NativeRenderResourceReference,
     pub font_family: NativeUtf8Slice,
     pub height_pixels: f32,
     pub color: NativeColor,
@@ -192,7 +192,7 @@ pub struct NativePresentationStructuredBillboardDescriptor {
     pub label_key: NativeUtf8Slice,
     pub label_fallback_text: NativeUtf8Slice,
     pub has_icon: bool,
-    pub icon: NativeRenderResourceHandle,
+    pub icon: NativeRenderResourceReference,
     pub accessible_label_key: NativeUtf8Slice,
     pub accessible_fallback_text: NativeUtf8Slice,
     pub meters: *const NativePresentationBillboardMeter,
@@ -205,7 +205,7 @@ pub struct NativePresentationStructuredBillboardDescriptor {
     pub style: NativePresentationBillboardStyle,
     pub layout: NativePresentationBillboardLayout,
     pub font_kind: NativePresentationFontKind,
-    pub font_asset: NativeRenderResourceHandle,
+    pub font_asset: NativeRenderResourceReference,
     pub font_family: NativeUtf8Slice,
     pub height_pixels: f32,
     pub color: NativeColor,
@@ -290,7 +290,7 @@ pub struct NativePresentationParticleDescriptor {
     pub signal_id: NativeUtf8Slice,
     pub anchor: NativePresentationAnchor,
     pub visual: NativePresentationParticleVisual,
-    pub sprite: NativeRenderResourceHandle,
+    pub sprite: NativeRenderResourceReference,
     pub sprite_frame_count: u16,
     pub rate_per_second: f32,
     pub burst_count: u32,

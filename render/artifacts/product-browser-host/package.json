@@ -13,6 +13,7 @@
   "files": [
     "index.js",
     "index.d.ts",
+    "dynamic-renderer-resources.d.ts",
     "local-transport.d.ts",
     "product-browser-host.d.ts",
     "product-browser-host.js",

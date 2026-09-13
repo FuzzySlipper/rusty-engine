@@ -310,6 +310,8 @@ export interface ThreeRendererIsolatedCaptureLighting {
 interface StaticMeshDef {
   readonly geometry: THREE.BufferGeometry;
   readonly materials: THREE.Material[];
+  /** Immutable source identity when this definition came from Product content. */
+  readonly resource: string | null;
   /** material slot index → position in `materials`. */
   readonly slotIndex: Map<number, number>;
   readonly materialSlots: readonly MeshMaterialSlot[];
@@ -396,6 +398,8 @@ export class ThreeRenderer {
   readonly #textureResourceReferences = new Map<THREE.Texture, number>();
   readonly #textureResourceObjects = new Set<THREE.Texture>();
   readonly #textureResources = new Map<string, RetainedTextureResource>();
+  /** Latest host inventory; absent until the host explicitly begins pruning. */
+  #retainedResourceIdentities: ReadonlySet<string> | null = null;
   #skyBackgroundTextureId: string | null = null;
   #skyBackgroundTexture: THREE.Texture | null = null;
   /**
@@ -438,7 +442,10 @@ export class ThreeRenderer {
     this.#textureResourceSource = options.textureResourceSource;
     this.#animatedMeshSource = options.animatedMeshSource;
     this.#isolatedCaptureLighting = options.isolatedCaptureLighting;
-    this.#animatedMeshes = new AnimatedMeshRegistry(this.#animatedMeshSource);
+    this.#animatedMeshes = new AnimatedMeshRegistry(
+      this.#animatedMeshSource,
+      () => this.#pruneRetiredResources(),
+    );
     this.#shadowsEnabled = options.shadowsEnabled ?? false;
     this.#maximumActiveShadowLights = options.maximumActiveShadowLights
       ?? RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS;
@@ -690,7 +697,11 @@ export class ThreeRenderer {
         throw this.#enterTerminal('shadow_realization', cause);
       }
     }
-
+    // Product Browser admits bytes and realizes this frame before it publishes
+    // the frame's authoritative inventory. Remember only definitions introduced
+    // here so pruning cannot discard them under the prior inventory in between.
+    this.#rememberFrameResources(frame);
+    this.#pruneRetiredResources();
   }
 
   #enterTerminal(
@@ -1095,6 +1106,83 @@ export class ThreeRenderer {
       textureResourceCount: this.#textureResourceObjects.size,
       animatedInstanceCount: this.#animatedMeshes.instanceCount,
     });
+  }
+
+  /**
+   * Release resource-backed definitions that the application no longer retains.
+   * This keeps the mounted renderer and its monotonic handle history intact:
+   * only definitions with no live instance (or captured animated appearance)
+   * can leave the backend cache.
+   */
+  retainResources(identities: ReadonlySet<string>): void {
+    if (this.#disposed) throw new RendererDisposedError();
+    if (this.#terminalError !== null) throw this.#terminalError;
+    this.#retainedResourceIdentities = new Set(identities);
+    this.#pruneRetiredResources();
+  }
+
+  #pruneRetiredResources(): void {
+    const identities = this.#retainedResourceIdentities;
+    if (this.#disposed || identities === null) return;
+
+    for (const [asset, definition] of this.#staticMeshes) {
+      if (definition.refCount !== 0 || definition.resource === null || identities.has(definition.resource)) {
+        continue;
+      }
+      this.#disposeStaticMeshDefinition(definition);
+      this.#staticMeshes.delete(asset);
+    }
+
+    this.#animatedMeshes.retainResources(identities);
+
+    for (const [id, retained] of [...this.#textureResources]) {
+      const resource = retained.readout.resource;
+      if (resource === null || identities.has(resource)) continue;
+      // Shared static/voxel definition materials are cache entries rather than
+      // live scene users. Rebuild unused definitions after removing this
+      // texture so their material disposal releases the final texture reference.
+      this.#textureResources.delete(id);
+      this.#detachUnusedDefinitionTextureReferences(id);
+      if (this.#skyBackgroundTextureId === id
+        || (this.#textureResourceReferences.get(retained.texture) ?? 0) !== 0) {
+        this.#textureResources.set(id, retained);
+        continue;
+      }
+      retained.texture.dispose();
+    }
+  }
+
+  /**
+   * Preserve resource identities newly realized by an accepted frame until the
+   * host's following retainResources call replaces this provisional snapshot.
+   * Existing live definitions intentionally do not extend the snapshot: an
+   * already-retired resource must still leave when its final owner releases.
+   */
+  #rememberFrameResources(frame: RenderFrameDiff): void {
+    const retained = this.#retainedResourceIdentities;
+    if (retained === null) return;
+    const next = new Set(retained);
+    for (const op of frame.ops) {
+      if (op.op === 'defineTexture' && op.texture.payload?.source.kind === 'resource') {
+        next.add(op.texture.payload.source.resource);
+      } else if (op.op === 'defineStaticMesh') {
+        const resource = meshResourceIdentity(op.asset.payload);
+        if (resource !== null) next.add(resource);
+        for (const slot of op.asset.materialSlots) {
+          const texture = this.#materials.get(slot.material)?.texture;
+          const textureResource = texture === null || texture === undefined
+            ? undefined
+            : this.#textureResources.get(texture);
+          const resource = textureResource?.readout.resource;
+          if (resource !== null && resource !== undefined) {
+            next.add(resource);
+          }
+        }
+      } else if (op.op === 'defineAnimatedMesh') {
+        animatedMeshResourceIdentities(op.asset).forEach((identity) => next.add(identity));
+      }
+    }
+    this.#retainedResourceIdentities = next;
   }
 
   #trackObjectResources(root: THREE.Object3D): void {
@@ -1734,6 +1822,7 @@ export class ThreeRenderer {
     this.#staticMeshes.set(asset.asset, {
       geometry,
       materials,
+      resource: meshResourceIdentity(asset.payload),
       slotIndex,
       materialSlots: asset.materialSlots,
       collision: asset.collision,
@@ -1810,9 +1899,13 @@ export class ThreeRenderer {
         `releaseStaticMesh: ${asset} is in use by ${definition.refCount} instance(s)`,
       );
     }
+    this.#disposeStaticMeshDefinition(definition);
+    this.#staticMeshes.delete(asset);
+  }
+
+  #disposeStaticMeshDefinition(definition: StaticMeshDef): void {
     definition.geometry.dispose();
     definition.materials.forEach((material) => material.dispose());
-    this.#staticMeshes.delete(asset);
   }
 
   // ── Animated mesh assets + named playback (projection-only) ────────────────
@@ -2336,6 +2429,33 @@ export class ThreeRenderer {
       changed.add(descriptor.id);
     }
     previous?.texture.dispose();
+  }
+
+  #detachUnusedDefinitionTextureReferences(texture: string): void {
+    for (const definition of this.#staticMeshes.values()) {
+      if (definition.refCount !== 0) continue;
+      for (let index = 0; index < definition.materialSlots.length; index += 1) {
+        const slot = definition.materialSlots[index]!;
+        if (this.#materials.get(slot.material)?.texture !== texture) continue;
+        const previous = definition.materials[index]!;
+        definition.materials[index] = this.#materialFor(
+          slot,
+          undefined,
+          definition.geometry.hasAttribute('color'),
+        );
+        previous.dispose();
+      }
+    }
+    for (const definition of this.#voxelObjects.values()) {
+      if (definition.refCount !== 0) continue;
+      for (let index = 0; index < definition.materialSlots.length; index += 1) {
+        const slot = definition.materialSlots[index]!;
+        if (this.#materials.get(slot.material)?.texture !== texture) continue;
+        const previous = definition.materials[index]!;
+        definition.materials[index] = this.#materialFor(slot);
+        previous.dispose();
+      }
+    }
   }
 
   #syncSkyBackground(): void {
@@ -3603,6 +3723,29 @@ function resourceStreams(
     throw classifyResourceError(cause, source.resource, ctx, 'release failed');
   }
   return streams;
+}
+
+function meshResourceIdentity(payload: MeshPayloadDescriptor): string | null {
+  return payload.source.kind === 'resource' ? payload.source.resource : null;
+}
+
+function animatedMeshResourceIdentities(asset: AnimatedMeshAsset): readonly string[] {
+  const identities: string[] = [];
+  const primary = contentResourceIdentity('animated-mesh-resource', asset.contentHash);
+  if (primary !== null) identities.push(primary);
+  for (const pack of asset.clipPacks ?? []) {
+    const identity = contentResourceIdentity('clip-pack-resource', pack.contentHash);
+    if (identity !== null) identities.push(identity);
+  }
+  return identities;
+}
+
+function contentResourceIdentity(
+  kind: 'animated-mesh-resource' | 'clip-pack-resource',
+  contentHash: string | null,
+): string | null {
+  const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash ?? '')?.[1];
+  return digest === undefined ? null : `${kind}/${digest}`;
 }
 
 function validatePackedResourceHeader(

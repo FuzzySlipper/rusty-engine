@@ -1188,7 +1188,7 @@ mod tests {
                     (appearance as *mut RuntimeAppearanceBridge).cast(),
                     NativeMaterialRequest {
                         color,
-                        texture: NativeRenderResourceHandle::default(),
+                        texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,
@@ -2191,7 +2191,9 @@ mod tests {
                             b: 1.0,
                             a: 1.0,
                         },
-                        texture: resource.handle,
+                        texture: NativeRenderResourceReference {
+                            value: resource.handle.value,
+                        },
                         roughness: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,

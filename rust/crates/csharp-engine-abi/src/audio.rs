@@ -1,10 +1,9 @@
 //! Typed audio presentation values crossing the trusted NativeAOT boundary.
 //!
-//! Audio clips are immutable Engine-admitted product resources and remain
-//! available for the whole product runtime. Retained voices are the only
-//! disposable audio owners.
+//! Audio clips are immutable Engine-admitted product resources. Callers may
+//! release an acquired clip after dependent voices and one-shots are terminal.
 
-use crate::{NativeUtf8Slice, NativeVec3};
+use crate::{NativeContentReferenceHandle, NativeUtf8Slice, NativeVec3};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -91,6 +90,16 @@ pub struct NativeAudioClipRequest {
     /// A normalized product-content WAV path. The selected bytes are copied
     /// into Engine-owned preload storage before the direct call returns.
     pub path: NativeUtf8Slice,
+}
+
+/// Opens one immutable WAV clip from an already-retained ProductContent
+/// reference. The Engine copies and validates the selected bytes before the
+/// direct call returns, so the reference and its originating bundle can be
+/// released independently afterwards.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioClipFromContentRequest {
+    pub content: NativeContentReferenceHandle,
 }
 
 /// The outcome of attempting to retain an explicitly optional audio preload.

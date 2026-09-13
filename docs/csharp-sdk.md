@@ -150,8 +150,32 @@ cascade-delete resources or invalidate consumers. Retained reference identity
 uses the original content-root-relative path and hash; `ResolveReference` can
 resolve it while its owning bundle is open. Cross-bundle dependencies are
 explicit product composition: open the required bundles and pass their content
-references to the existing typed services. No implicit dependency loader,
-path override, or catalog merge is introduced.
+references to the typed services. A reference also retains its source
+collection's immutable dependency context: GLB companion images/buffers resolve
+relative to that GLB inside the same bundle. Opening an unrelated bundle cannot
+change resolution. After admission, the Engine resource retains its own payload;
+it no longer needs the source reference or bundle.
+
+Use the same asset admissions during Create or a later product update:
+
+| Asset | Bundle consumer | Existing format |
+| --- | --- | --- |
+| Images and textures | `Graphics.OpenResourceFromContent` | RGBA PNG |
+| Packed static geometry | `Graphics.OpenResourceFromContent` | `.rmesh` |
+| Authored static mesh | `Graphics.CreateStaticMeshFromContentReference` | StaticMeshAsset JSON with inline payload |
+| Animated meshes and animation packs | `Animation.OpenAnimatedMeshFromContent`, `OpenAnimationClipPackFromContent` | GLB, including same-bundle relative dependencies |
+| Fonts | `Graphics.OpenResourceFromContent` | WOFF2 |
+| Audio clips | `Audio.OpenClipFromContent` | WAV |
+| Voxel assets, objects and annotations | `VoxelContent.LoadAssetFromContent`, `LoadObjectFromContent`, `LoadAnnotationFromContent` | Existing typed JSON formats |
+| Imported voxel models | `VoxelContent.LoadMagicaVoxelFromContent` | MagicaVoxel `.vox` |
+| Authored catalogs/prefabs/scenes and spatial artifacts | Existing typed ContentReference consumers | Their existing Engine document formats |
+| Text and arbitrary bytes | Bundle `ReadText`, `ReadBytes`, `ReadDirectory`, or Content reference reads | No asset decoder required |
+
+The bundle is a source container; an admission still applies the relevant
+Engine format rules. It does not make arbitrary image, model or audio formats
+supported. The Engine supplies admitted resource bytes to its renderer/audio
+host, including assets first loaded after startup and fresh client attachments.
+Products do not extract bundle files or build renderer URLs.
 
 Missing bundles/files report their logical names. A bundle whose files no
 longer match its staged inventory fails to open; rebuild/restage it. This is a

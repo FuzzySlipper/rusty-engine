@@ -7,7 +7,7 @@ use render_model::{
     mesh_resource_content_hash, validate_mesh_resource_header, TextureDescriptor, TextureFilter,
     TexturePayloadSource, TextureWrap,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::ProductDevHostError;
 
@@ -30,7 +30,8 @@ pub struct ProductDevRendererResource {
     bytes: Arc<[u8]>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum ProductDevRendererResourceKind {
     Texture,
     Mesh,
@@ -281,7 +282,44 @@ impl ProductDevRendererResource {
         &self.bytes
     }
 
-    fn media_type(&self) -> &'static str {
+    pub fn shared_bytes(&self) -> Arc<[u8]> {
+        Arc::clone(&self.bytes)
+    }
+
+    /// Encodes a retained resource once for the private worker pipe. The HTTP
+    /// route decodes it back to the original raw bytes; normal publications
+    /// and SSE never carry this body.
+    pub fn to_worker_value(&self) -> serde_json::Value {
+        serde_json::to_value(ProductDevWorkerRendererResource {
+            kind: self.kind,
+            identity: &self.identity,
+            content_hash: &self.content_hash,
+            path: &self.path,
+            body_base64: base64_encode(&self.bytes),
+        })
+        .expect("closed worker renderer resource encodes")
+    }
+
+    pub fn from_worker_value(value: serde_json::Value) -> Result<Self, ProductDevHostError> {
+        let wire = serde_json::from_value::<ProductDevWorkerRendererResourceOwned>(value).map_err(
+            |_| {
+                ProductDevHostError::new(
+                    "DEV_HOST_WORKER_RENDERER_RESOURCE",
+                    "worker renderer resource is not a closed encoded body",
+                )
+            },
+        )?;
+        let bytes = base64_decode(&wire.body_base64)?;
+        Self::from_retained(
+            wire.kind,
+            wire.identity,
+            wire.content_hash,
+            wire.path,
+            Arc::from(bytes),
+        )
+    }
+
+    pub fn media_type(&self) -> &'static str {
         match self.kind {
             ProductDevRendererResourceKind::Texture => "image/png",
             ProductDevRendererResourceKind::Mesh => "application/octet-stream",
@@ -295,6 +333,101 @@ impl ProductDevRendererResource {
     fn bundle_entry(&self) -> Result<ProductDevBundleEntry, ProductDevHostError> {
         ProductDevBundleEntry::new(self.path.clone(), self.media_type(), self.bytes.clone())
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductDevWorkerRendererResource<'a> {
+    kind: ProductDevRendererResourceKind,
+    identity: &'a str,
+    content_hash: &'a str,
+    path: &'a str,
+    body_base64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProductDevWorkerRendererResourceOwned {
+    kind: ProductDevRendererResourceKind,
+    identity: String,
+    content_hash: String,
+    path: String,
+    body_base64: String,
+}
+
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = *chunk.get(1).unwrap_or(&0);
+        let third = *chunk.get(2).unwrap_or(&0);
+        encoded.push(BASE64[(first >> 2) as usize] as char);
+        encoded.push(BASE64[((first & 0x03) << 4 | second >> 4) as usize] as char);
+        encoded.push(if chunk.len() > 1 {
+            BASE64[((second & 0x0f) << 2 | third >> 6) as usize] as char
+        } else {
+            '='
+        });
+        encoded.push(if chunk.len() > 2 {
+            BASE64[(third & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    encoded
+}
+
+fn base64_decode(value: &str) -> Result<Vec<u8>, ProductDevHostError> {
+    if !value.len().is_multiple_of(4) {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_WORKER_RENDERER_RESOURCE",
+            "worker renderer resource body is not base64 padded",
+        ));
+    }
+    let mut decoded = Vec::with_capacity(value.len() / 4 * 3);
+    for chunk in value.as_bytes().as_chunks::<4>().0 {
+        let first = base64_value(chunk[0])?;
+        let second = base64_value(chunk[1])?;
+        let third = if chunk[2] == b'=' {
+            None
+        } else {
+            Some(base64_value(chunk[2])?)
+        };
+        let fourth = if chunk[3] == b'=' {
+            None
+        } else {
+            Some(base64_value(chunk[3])?)
+        };
+        if third.is_none() && fourth.is_some() {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_WORKER_RENDERER_RESOURCE",
+                "worker renderer resource base64 padding is invalid",
+            ));
+        }
+        decoded.push(first << 2 | second >> 4);
+        if let Some(third) = third {
+            decoded.push((second & 0x0f) << 4 | third >> 2);
+            if let Some(fourth) = fourth {
+                decoded.push((third & 0x03) << 6 | fourth);
+            }
+        }
+    }
+    Ok(decoded)
+}
+
+fn base64_value(value: u8) -> Result<u8, ProductDevHostError> {
+    BASE64
+        .iter()
+        .position(|candidate| *candidate == value)
+        .map(|index| index as u8)
+        .ok_or_else(|| {
+            ProductDevHostError::new(
+                "DEV_HOST_WORKER_RENDERER_RESOURCE",
+                "worker renderer resource body is not base64",
+            )
+        })
 }
 
 /// Encode the fixed browser preload descriptor and its exact immutable resource bodies.
@@ -570,6 +703,20 @@ mod tests {
             .expect("font body");
         assert_eq!(body.content_type(), "font/woff2");
         assert_eq!(body.bytes(), b"wOF2font-body");
+    }
+
+    #[test]
+    fn worker_renderer_body_round_trips_base64_once_to_raw_bytes() {
+        let original = ProductDevRendererResource::admit_font(
+            "content/fonts/ui.woff2",
+            b"wOF2worker-body".to_vec(),
+        )
+        .expect("admitted font");
+        let carried = ProductDevRendererResource::from_worker_value(original.to_worker_value())
+            .expect("closed worker resource");
+        assert_eq!(carried.identity(), original.identity());
+        assert_eq!(carried.media_type(), "font/woff2");
+        assert_eq!(carried.bytes(), b"wOF2worker-body");
     }
 
     #[test]

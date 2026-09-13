@@ -19,6 +19,7 @@ use render_presentation::MAX_AUDIO_DIAGNOSTICS;
 use crate::{
     appearance::CsharpRenderResource,
     composition::{borrowed_utf8, ABI_OK},
+    content::{RetainedContent, RuntimeContentBridge},
     CsharpEngineServicesError,
 };
 
@@ -32,6 +33,9 @@ struct AudioClip {
     content_hash: String,
     duration_seconds: Option<f64>,
     resource: CsharpRenderResource,
+    /// Every successful clip admission acquires one product owner. A shared
+    /// native handle remains valid until all callers release it.
+    owners: u32,
 }
 
 #[derive(Clone)]
@@ -40,6 +44,11 @@ struct AudioState {
     clips: BTreeMap<u64, AudioClip>,
     assets: BTreeMap<String, ResolvedRenderAsset>,
     voices: BTreeMap<u64, AudioHandle>,
+    voice_clips: BTreeMap<u64, u64>,
+    one_shot_clips: BTreeMap<u64, u64>,
+    /// A browser feedback overflow loses one or more terminal identities.
+    /// Pending one-shots remain protected until an owner reset cancels them.
+    one_shot_feedback_lost: bool,
     next_clip: u64,
     next_voice: u64,
     next_signal: u64,
@@ -64,6 +73,7 @@ pub enum AudioRealizationFact {
         fact_id: u64,
         code: NativeAudioDiagnosticCode,
         sequence: u32,
+        signal_handle: Option<u64>,
         voice_handle: Option<u64>,
     },
 }
@@ -109,13 +119,14 @@ impl AudioRealizationFact {
                 fact_id,
                 code,
                 sequence,
+                signal_handle,
                 voice_handle,
             } => NativeAudioRealizationFactAtReceipt {
                 present: true,
                 kind: NativeAudioRealizationFactKind::Diagnostic,
                 fact_id,
                 sequence,
-                signal_handle: 0,
+                signal_handle: signal_handle.unwrap_or(0),
                 voice_value: voice_handle.unwrap_or(0),
                 code,
             },
@@ -126,15 +137,18 @@ impl AudioRealizationFact {
 pub(crate) struct RuntimeAudioCall {
     state: AudioState,
     pub(crate) frame: Option<render_presentation::PresentationFrameDiff>,
+    /// Resources released from the final state after emitting a same-call
+    /// operation remain available to that call's renderer publication.
+    /// This is intentionally not committed into the persistent audio state.
+    pub(crate) retired_resources: Vec<CsharpRenderResource>,
 }
 
-/// Engine-owned audio admission and projector bridge. Audio resource selection
-/// is permitted during product Create only; selected WAV bytes are retained by
-/// the product runtime and realized only by the Engine browser host.
+/// Engine-owned audio admission and projector bridge. WAV resources are
+/// admitted from immutable Engine content and realized only by the browser
+/// host; post-Create admission retains the selected body in this owner.
 pub(crate) struct RuntimeAudioBridge {
     state: AudioState,
     content_resources: BTreeMap<String, Arc<[u8]>>,
-    selection_sealed: bool,
     staged: Option<RuntimeAudioCall>,
     callback_error: Option<CsharpEngineServicesError>,
     realized_facts: VecDeque<AudioRealizationFact>,
@@ -143,6 +157,7 @@ pub(crate) struct RuntimeAudioBridge {
     accepted_through_fact_id: Option<u64>,
     diagnostics_sink: Option<RuntimeDiagnosticsSink>,
     reported_recoverable_codes: BTreeSet<&'static str>,
+    content: Option<*const RuntimeContentBridge>,
 }
 
 impl RuntimeAudioBridge {
@@ -153,12 +168,14 @@ impl RuntimeAudioBridge {
                 clips: BTreeMap::new(),
                 assets: BTreeMap::new(),
                 voices: BTreeMap::new(),
+                voice_clips: BTreeMap::new(),
+                one_shot_clips: BTreeMap::new(),
+                one_shot_feedback_lost: false,
                 next_clip: 1,
                 next_voice: 1,
                 next_signal: 1,
             },
             content_resources,
-            selection_sealed: false,
             staged: None,
             callback_error: None,
             realized_facts: VecDeque::new(),
@@ -167,7 +184,14 @@ impl RuntimeAudioBridge {
             accepted_through_fact_id: None,
             diagnostics_sink: None,
             reported_recoverable_codes: BTreeSet::new(),
+            content: None,
         }
+    }
+
+    /// Composition supplies the stable boxed content owner. Audio retains
+    /// copied resource bytes and never borrows through this pointer.
+    pub(crate) fn bind_content(&mut self, content: &RuntimeContentBridge) {
+        self.content = Some(content as *const RuntimeContentBridge);
     }
 
     /// Replaces or incrementally admits a browser-owned snapshot between C#
@@ -195,8 +219,13 @@ impl RuntimeAudioBridge {
             self.renderer_evicted_fact_count = evicted_fact_count;
             self.local_evicted_fact_count = 0;
             self.accepted_through_fact_id = None;
+            // Historical one-shots are not replayed into a fresh host, so
+            // their resources no longer have an active realization owner.
+            self.state.one_shot_clips.clear();
+            self.state.one_shot_feedback_lost = false;
         } else if evicted_fact_count > self.renderer_evicted_fact_count {
             self.renderer_evicted_fact_count = evicted_fact_count;
+            self.state.one_shot_feedback_lost = !self.state.one_shot_clips.is_empty();
         }
         for fact in facts {
             if self
@@ -208,6 +237,16 @@ impl RuntimeAudioBridge {
             if self.realized_facts.len() == 128 {
                 self.realized_facts.pop_front();
                 self.local_evicted_fact_count = self.local_evicted_fact_count.saturating_add(1);
+            }
+            match &fact {
+                AudioRealizationFact::NaturalCompletionOneShot { signal_handle, .. }
+                | AudioRealizationFact::Diagnostic {
+                    signal_handle: Some(signal_handle),
+                    ..
+                } => {
+                    self.state.one_shot_clips.remove(signal_handle);
+                }
+                _ => {}
             }
             let fact_id = fact.fact_id();
             self.realized_facts.push_back(fact);
@@ -221,6 +260,10 @@ impl RuntimeAudioBridge {
         self.renderer_evicted_fact_count = 0;
         self.local_evicted_fact_count = 0;
         self.accepted_through_fact_id = None;
+        // An exact runtime binding reset also resets the browser audio owner,
+        // cancelling active one-shots before the next feedback owner starts.
+        self.state.one_shot_clips.clear();
+        self.state.one_shot_feedback_lost = false;
     }
 
     pub(crate) fn bind_diagnostics_sink(&mut self, sink: RuntimeDiagnosticsSink) {
@@ -231,6 +274,7 @@ impl RuntimeAudioBridge {
         self.staged = Some(RuntimeAudioCall {
             state: self.state.clone(),
             frame: None,
+            retired_resources: Vec::new(),
         });
         self.callback_error = None;
     }
@@ -269,12 +313,25 @@ impl RuntimeAudioBridge {
         self.state = call.state;
     }
     pub(crate) fn seal_resource_selection(&mut self) {
-        self.selection_sealed = true;
         self.content_resources.clear();
     }
 
     pub(crate) fn render_resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         self.state.clips.values().map(|clip| &clip.resource)
+    }
+
+    /// Resources required to realize this call. In addition to the final
+    /// retained clip set, this includes a clip released after its same-call
+    /// voice operations were staged.
+    #[cfg(test)]
+    pub(crate) fn publication_resources(
+        call: &RuntimeAudioCall,
+    ) -> impl Iterator<Item = &CsharpRenderResource> {
+        call.state
+            .clips
+            .values()
+            .map(|clip| &clip.resource)
+            .chain(call.retired_resources.iter())
     }
 
     /// Reconstructs the retained audio intent on a fresh realization. This
@@ -388,43 +445,101 @@ impl RuntimeAudioBridge {
         }
     }
 
-    fn open_clip(
-        &mut self,
-        request: &NativeAudioClipRequest,
-    ) -> Result<NativeAudioClipHandle, CsharpEngineServicesError> {
-        let requested_path =
-            unsafe { borrowed_utf8(request.path.bytes, request.path.len, "audio resource path")? }
-                .to_owned();
-        let relative_path = requested_path
-            .strip_prefix("content/")
-            .unwrap_or(&requested_path)
-            .to_owned();
-        let browser_path = format!("content/{relative_path}");
-        if let Some((handle, _)) = self
-            .staged_mut()?
-            .state
-            .clips
-            .iter()
-            .find(|(_, clip)| clip.resource.path() == browser_path)
-        {
-            return Ok(NativeAudioClipHandle { value: *handle });
-        }
-        if self.selection_sealed {
+    fn clip_source_from_retained(
+        &self,
+        content: RetainedContent,
+    ) -> Result<(String, Arc<[u8]>), CsharpEngineServicesError> {
+        if content.path.is_empty() {
             return Err(CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_RESOURCE_SELECTION_CLOSED",
-                "audio clips must be selected during product Create",
+                "CSHARP_AUDIO_RESOURCE_PATH",
+                "audio content reference has no canonical path",
             ));
         }
-        let bytes = self
-            .content_resources
-            .get(&relative_path)
-            .cloned()
+        Ok((content.path, content.bytes))
+    }
+
+    fn clip_source_from_path(
+        &self,
+        requested_path: &str,
+    ) -> Result<(String, Arc<[u8]>), CsharpEngineServicesError> {
+        let relative_path = requested_path
+            .strip_prefix("content/")
+            .unwrap_or(requested_path);
+        let retained = self
+            .content
+            .and_then(|content| unsafe { content.as_ref() })
+            .and_then(|content| content.retained_path(relative_path))
+            .map(|content| self.clip_source_from_retained(content))
+            .transpose()?
+            .or_else(|| {
+                self.content_resources
+                    .get(relative_path)
+                    .cloned()
+                    .map(|bytes| (relative_path.to_owned(), bytes))
+            });
+        retained.ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_RESOURCE_UNKNOWN",
+                format!("product content has no audio resource `{requested_path}`"),
+            )
+        })
+    }
+
+    fn clip_source_from_reference(
+        &self,
+        reference: NativeContentReferenceHandle,
+    ) -> Result<(String, Arc<[u8]>), CsharpEngineServicesError> {
+        let content = self
+            .content
+            .and_then(|content| unsafe { content.as_ref() })
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
-                    "CSHARP_AUDIO_RESOURCE_UNKNOWN",
-                    format!("product content has no audio resource `{requested_path}`"),
+                    "CSHARP_AUDIO_CONTENT",
+                    "audio content references are not composed",
+                )
+            })?
+            .retained_content(reference)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_AUDIO_CONTENT",
+                    "audio content reference is not retained",
                 )
             })?;
+        self.clip_source_from_retained(content)
+    }
+
+    fn acquire_existing_clip(
+        &mut self,
+        resource_identity: &str,
+    ) -> Result<Option<NativeAudioClipHandle>, CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let Some((handle, clip)) = staged
+            .state
+            .clips
+            .iter_mut()
+            .find(|(_, clip)| clip.resource.identity() == resource_identity)
+        else {
+            return Ok(None);
+        };
+        clip.owners = clip.owners.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_CLIP_OWNERS",
+                "audio clip owner count exhausted",
+            )
+        })?;
+        Ok(Some(NativeAudioClipHandle { value: *handle }))
+    }
+
+    fn admit_clip(
+        &mut self,
+        relative_path: String,
+        bytes: Arc<[u8]>,
+    ) -> Result<NativeAudioClipHandle, CsharpEngineServicesError> {
+        let browser_path = format!("content/{relative_path}");
+        let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
+        if let Some(handle) = self.acquire_existing_clip(resource.identity())? {
+            return Ok(handle);
+        }
         if bytes.len() > MAX_AUDIO_RESOURCE_BYTES {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_AUDIO_RESOURCE_SIZE",
@@ -450,10 +565,14 @@ impl RuntimeAudioBridge {
                 "audio resources exceed the Engine browser-host total preload limit",
             ));
         }
-        let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
         let duration_seconds = wav_duration_seconds(resource.bytes());
-        let asset = format!("audio/{relative_path}");
         let content_hash = resource.content_hash().to_owned();
+        let asset = format!(
+            "audio/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("audio resource identity has a SHA-256 hash")
+        );
         let handle = staged.state.next_clip;
         staged.state.next_clip = handle.checked_add(1).ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -477,9 +596,28 @@ impl RuntimeAudioBridge {
                 content_hash,
                 duration_seconds,
                 resource,
+                owners: 1,
             },
         );
         Ok(NativeAudioClipHandle { value: handle })
+    }
+
+    fn open_clip(
+        &mut self,
+        request: &NativeAudioClipRequest,
+    ) -> Result<NativeAudioClipHandle, CsharpEngineServicesError> {
+        let requested_path =
+            unsafe { borrowed_utf8(request.path.bytes, request.path.len, "audio resource path")? };
+        let (relative_path, bytes) = self.clip_source_from_path(requested_path)?;
+        self.admit_clip(relative_path, bytes)
+    }
+
+    fn open_clip_from_content(
+        &mut self,
+        request: NativeAudioClipFromContentRequest,
+    ) -> Result<NativeAudioClipHandle, CsharpEngineServicesError> {
+        let (relative_path, bytes) = self.clip_source_from_reference(request.content)?;
+        self.admit_clip(relative_path, bytes)
     }
 
     fn preload_optional(
@@ -489,44 +627,30 @@ impl RuntimeAudioBridge {
         let requested_path =
             unsafe { borrowed_utf8(request.path.bytes, request.path.len, "audio resource path")? }
                 .to_owned();
-        let relative_path = requested_path
-            .strip_prefix("content/")
-            .unwrap_or(&requested_path)
-            .to_owned();
-        let browser_path = format!("content/{relative_path}");
-        if let Some((handle, _)) = self
-            .staged_ref()?
-            .state
-            .clips
-            .iter()
-            .find(|(_, clip)| clip.resource.path() == browser_path)
-        {
-            return self.optional_preload_receipt(
-                NativeAudioOptionalPreloadOutcome::Admitted,
-                NativeAudioClipHandle { value: *handle },
-            );
-        }
-        if self.selection_sealed {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_RESOURCE_SELECTION_CLOSED",
-                "audio clips must be selected during product Create",
-            ));
-        }
-        let Some(bytes) = self.content_resources.get(&relative_path).cloned() else {
-            let receipt = self.optional_preload_receipt(
-                NativeAudioOptionalPreloadOutcome::SkippedMissing,
-                NativeAudioClipHandle::default(),
-            )?;
-            self.report_optional_preload_skip(
-                "CSHARP_AUDIO_PRELOAD_SKIPPED_MISSING",
-                "optional audio preload was skipped because the content resource is absent",
-            );
-            return Ok(receipt);
+        let (relative_path, bytes) = match self.clip_source_from_path(&requested_path) {
+            Ok(source) => source,
+            Err(error) if error.code() == "CSHARP_AUDIO_RESOURCE_UNKNOWN" => {
+                let receipt = self.optional_preload_receipt(
+                    NativeAudioOptionalPreloadOutcome::SkippedMissing,
+                    NativeAudioClipHandle::default(),
+                )?;
+                self.report_optional_preload_skip(
+                    "CSHARP_AUDIO_PRELOAD_SKIPPED_MISSING",
+                    "optional audio preload was skipped because the content resource is absent",
+                );
+                return Ok(receipt);
+            }
+            Err(error) => return Err(error),
         };
+        let browser_path = format!("content/{relative_path}");
         // A present resource must be structurally admitted before an optional
         // capacity receipt is allowed. Otherwise a corrupt oversized body
         // could masquerade as routine budget pressure.
         let resource = CsharpRenderResource::admit_audio(browser_path, bytes.to_vec())?;
+        if let Some(handle) = self.acquire_existing_clip(resource.identity())? {
+            return self
+                .optional_preload_receipt(NativeAudioOptionalPreloadOutcome::Admitted, handle);
+        }
         let duration_seconds = wav_duration_seconds(resource.bytes());
         let (admitted_clip_count, admitted_bytes) = {
             let state = &self.staged_ref()?.state;
@@ -553,8 +677,13 @@ impl RuntimeAudioBridge {
             );
             return Ok(receipt);
         }
-        let asset = format!("audio/{relative_path}");
         let content_hash = resource.content_hash().to_owned();
+        let asset = format!(
+            "audio/{}",
+            content_hash
+                .strip_prefix("sha256:")
+                .expect("audio resource identity has a SHA-256 hash")
+        );
         let handle = {
             let staged = self.staged_mut()?;
             let handle = staged.state.next_clip;
@@ -580,6 +709,7 @@ impl RuntimeAudioBridge {
                     content_hash,
                     duration_seconds,
                     resource,
+                    owners: 1,
                 },
             );
             handle
@@ -689,6 +819,10 @@ impl RuntimeAudioBridge {
             signal_id,
             descriptor,
         })?;
+        self.staged_mut()?
+            .state
+            .one_shot_clips
+            .insert(signal_handle.value, request.descriptor.clip.value);
         Ok(signal_handle)
     }
 
@@ -696,6 +830,7 @@ impl RuntimeAudioBridge {
         &mut self,
         descriptor: NativeAudioSourceDescriptor,
     ) -> Result<NativeAudioVoiceHandle, CsharpEngineServicesError> {
+        let clip = descriptor.clip.value;
         let descriptor = self.descriptor(descriptor)?;
         let voice = {
             let staged = self.staged_mut()?;
@@ -707,6 +842,7 @@ impl RuntimeAudioBridge {
                 )
             })?;
             staged.state.voices.insert(voice, AudioHandle::new(voice));
+            staged.state.voice_clips.insert(voice, clip);
             voice
         };
         self.stage_op(AudioProjectionOp::Create {
@@ -770,6 +906,7 @@ impl RuntimeAudioBridge {
         &mut self,
         request: NativeAudioVoiceReplaceRequest,
     ) -> Result<NativeAudioVoiceHandle, CsharpEngineServicesError> {
+        let replacement_clip = request.descriptor.clip.value;
         let descriptor = self.descriptor(request.descriptor)?;
         let old = self
             .staged_mut()?
@@ -782,13 +919,18 @@ impl RuntimeAudioBridge {
                     "audio voice handle is not live",
                 )
             })?;
+        self.staged_mut()?
+            .state
+            .voice_clips
+            .remove(&request.voice.value);
         self.stage_op(AudioProjectionOp::Destroy { handle: old })?;
-        self.create_voice_native(descriptor)
+        self.create_voice_native(descriptor, replacement_clip)
     }
 
     fn create_voice_native(
         &mut self,
         descriptor: AudioSourceDescriptor,
+        clip: u64,
     ) -> Result<NativeAudioVoiceHandle, CsharpEngineServicesError> {
         let voice = {
             let staged = self.staged_mut()?;
@@ -800,6 +942,7 @@ impl RuntimeAudioBridge {
                 )
             })?;
             staged.state.voices.insert(voice, AudioHandle::new(voice));
+            staged.state.voice_clips.insert(voice, clip);
             voice
         };
         self.stage_op(AudioProjectionOp::Create {
@@ -816,7 +959,65 @@ impl RuntimeAudioBridge {
         let Some(handle) = self.staged_mut()?.state.voices.remove(&voice.value) else {
             return Ok(());
         };
+        self.staged_mut()?.state.voice_clips.remove(&voice.value);
         self.stage_op(AudioProjectionOp::Destroy { handle })
+    }
+
+    fn destroy_clip(
+        &mut self,
+        clip: NativeAudioClipHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let Some(current) = staged.state.clips.get(&clip.value) else {
+            return Ok(());
+        };
+        if current.owners > 1 {
+            staged
+                .state
+                .clips
+                .get_mut(&clip.value)
+                .expect("checked clip")
+                .owners -= 1;
+            return Ok(());
+        }
+        if staged
+            .state
+            .voice_clips
+            .values()
+            .any(|owner| *owner == clip.value)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_CLIP_IN_USE",
+                "dispose or replace retained voices before disposing their clip",
+            ));
+        }
+        if staged
+            .state
+            .one_shot_clips
+            .values()
+            .any(|owner| *owner == clip.value)
+        {
+            let (code, detail) = if staged.state.one_shot_feedback_lost {
+                (
+                    "CSHARP_AUDIO_CLIP_FEEDBACK_LOST",
+                    "one-shot feedback overflowed; reset the runtime audio owner before disposing its clip",
+                )
+            } else {
+                (
+                    "CSHARP_AUDIO_CLIP_PENDING_SIGNAL",
+                    "wait for the one-shot terminal realization before disposing its clip",
+                )
+            };
+            return Err(CsharpEngineServicesError::new(code, detail));
+        }
+        let clip = staged
+            .state
+            .clips
+            .remove(&clip.value)
+            .expect("checked clip");
+        staged.state.assets.remove(&clip.asset);
+        staged.retired_resources.push(clip.resource);
+        Ok(())
     }
 
     fn control_voice(
@@ -1106,6 +1307,29 @@ pub(crate) unsafe extern "C" fn open_audio_clip(
     }
 }
 
+pub(crate) unsafe extern "C" fn open_audio_clip_from_content(
+    context: *mut c_void,
+    request: *const NativeAudioClipFromContentRequest,
+    result: *mut NativeAudioClipHandle,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.open_clip_from_content(unsafe { *request }) {
+        Ok(value) => {
+            unsafe {
+                *result = value;
+            }
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
 pub(crate) unsafe extern "C" fn preload_optional_audio_clip(
     context: *mut c_void,
     request: *const NativeAudioClipRequest,
@@ -1218,6 +1442,23 @@ pub(crate) unsafe extern "C" fn destroy_audio_voice(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
     match bridge.destroy_voice(voice) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn destroy_audio_clip(
+    context: *mut c_void,
+    clip: NativeAudioClipHandle,
+) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.destroy_clip(clip) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.callback_error = Some(error);
@@ -1418,6 +1659,8 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
     NativeAudioApi {
         context: (bridge as *mut RuntimeAudioBridge).cast(),
         open_clip: open_audio_clip,
+        open_clip_from_content: open_audio_clip_from_content,
+        destroy_clip: destroy_audio_clip,
         preload_optional: preload_optional_audio_clip,
         emit: emit_audio,
         create_voice: create_audio_voice,
@@ -1925,5 +2168,272 @@ mod tests {
                 .expect("replacement owner readout"),
             NativeAudioRealizationReadout::default()
         );
+    }
+
+    #[test]
+    fn admits_content_references_after_selection_and_releases_shared_clips() {
+        let mut resources = BTreeMap::new();
+        resources.insert("audio/bundle.wav".to_owned(), wav());
+        let mut content = Box::new(RuntimeContentBridge::new(resources));
+        let content_api = crate::content::api(&mut content);
+        let mut reference = NativeContentReferenceHandle::default();
+        let path = b"audio/bundle.wav";
+        assert_eq!(
+            unsafe {
+                (content_api.open_reference)(
+                    content_api.context,
+                    &NativeContentOpenRequest {
+                        path: NativeUtf8Slice {
+                            bytes: path.as_ptr(),
+                            len: path.len(),
+                        },
+                    },
+                    &mut reference,
+                )
+            },
+            ABI_OK
+        );
+
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        bridge.bind_content(&content);
+        bridge.seal_resource_selection();
+        bridge.begin_call();
+        let first = bridge
+            .open_clip_from_content(NativeAudioClipFromContentRequest { content: reference })
+            .expect("reference admission after Create selection");
+        let second = bridge
+            .open_clip_from_content(NativeAudioClipFromContentRequest { content: reference })
+            .expect("same immutable clip has another owner");
+        assert_eq!(first, second);
+        assert_eq!(
+            unsafe { (content_api.destroy_reference)(content_api.context, reference) },
+            ABI_OK,
+            "audio has copied its Engine-owned retained resource"
+        );
+        let voice = bridge
+            .create_voice(descriptor(first, NativeAudioBus::Sfx))
+            .expect("retained voice");
+        bridge.destroy_clip(first).expect("first owner releases");
+        assert!(
+            bridge.destroy_clip(second).is_err(),
+            "voice keeps final clip owner live"
+        );
+        bridge.destroy_voice(voice).expect("voice release");
+        bridge
+            .destroy_clip(second)
+            .expect("final owner releases resource");
+        let call = bridge.take_staged_call().expect("staged resource release");
+        bridge.commit(call);
+        assert_eq!(bridge.render_resources().count(), 0);
+    }
+
+    #[test]
+    fn publication_keeps_same_call_retired_clip_for_its_voice_operations() {
+        let mut resources = BTreeMap::new();
+        resources.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(resources);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("clip");
+        let voice = bridge
+            .create_voice(descriptor(clip, NativeAudioBus::Sfx))
+            .expect("retained voice");
+        bridge.destroy_voice(voice).expect("voice release");
+        bridge
+            .destroy_clip(clip)
+            .expect("final clip release after same-call voice operations");
+
+        let call = bridge.take_staged_call().expect("publication call");
+        assert_eq!(
+            RuntimeAudioBridge::publication_resources(&call).count(),
+            1,
+            "the staged create and destroy operations still have their clip body"
+        );
+        assert_eq!(
+            call.frame.as_ref().expect("audio frame").ops.len(),
+            2,
+            "same-call voice create and destroy are both published"
+        );
+        bridge.commit(call);
+        assert_eq!(bridge.render_resources().count(), 0);
+    }
+
+    #[test]
+    fn waits_for_one_shot_completion_before_releasing_final_clip_owner() {
+        let mut resources = BTreeMap::new();
+        resources.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(resources);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("clip");
+        let signal = bridge
+            .emit(NativeAudioEmitRequest {
+                signal_id: NativeUtf8Slice {
+                    bytes: b"release-after-completion".as_ptr(),
+                    len: b"release-after-completion".len(),
+                },
+                descriptor: descriptor(clip, NativeAudioBus::Ui),
+            })
+            .expect("one-shot");
+        let call = bridge.take_staged_call().expect("initial call");
+        bridge.commit(call);
+        bridge.begin_call();
+        assert!(
+            bridge.destroy_clip(clip).is_err(),
+            "pending one-shot owns final clip"
+        );
+        bridge.discard_call();
+        bridge
+            .ingest_realized_feedback(
+                false,
+                0,
+                [AudioRealizationFact::NaturalCompletionOneShot {
+                    fact_id: 1,
+                    sequence: 0,
+                    signal_handle: signal.value,
+                }],
+            )
+            .expect("completion feedback");
+        bridge.begin_call();
+        bridge
+            .destroy_clip(clip)
+            .expect("completed signal releases clip");
+        let call = bridge.take_staged_call().expect("release call");
+        bridge.commit(call);
+        assert_eq!(bridge.render_resources().count(), 0);
+    }
+
+    #[test]
+    fn terminal_one_shot_diagnostic_releases_only_its_matching_clip() {
+        let mut resources = BTreeMap::new();
+        resources.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(resources);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("clip");
+        let signal = bridge
+            .emit(NativeAudioEmitRequest {
+                signal_id: NativeUtf8Slice {
+                    bytes: b"failed-one-shot".as_ptr(),
+                    len: b"failed-one-shot".len(),
+                },
+                descriptor: descriptor(clip, NativeAudioBus::Ui),
+            })
+            .expect("one-shot");
+        let call = bridge.take_staged_call().expect("initial call");
+        bridge.commit(call);
+        bridge
+            .ingest_realized_feedback(
+                false,
+                0,
+                [AudioRealizationFact::Diagnostic {
+                    fact_id: 1,
+                    code: NativeAudioDiagnosticCode::DecodeFailed,
+                    sequence: 0,
+                    signal_handle: Some(signal.value),
+                    voice_handle: None,
+                }],
+            )
+            .expect("terminal signal diagnostic");
+        bridge.begin_call();
+        assert_eq!(
+            bridge
+                .read_realization_fact_at(NativeAudioRealizationFactAtRequest { index: 0 })
+                .expect("diagnostic readout")
+                .signal_handle,
+            signal.value,
+            "the public realization receipt retains the terminal signal identity"
+        );
+        bridge
+            .destroy_clip(clip)
+            .expect("signal-specific terminal diagnostic releases clip");
+    }
+
+    #[test]
+    fn admits_distinct_content_versions_at_one_path_as_distinct_audio_assets() {
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        let first = wav();
+        let mut second = first.to_vec();
+        second[44] = 7;
+        bridge.begin_call();
+        let first = bridge
+            .admit_clip("audio/revision.wav".to_owned(), first)
+            .expect("first content version");
+        let second = bridge
+            .admit_clip("audio/revision.wav".to_owned(), Arc::from(second))
+            .expect("second content version");
+        assert_ne!(
+            first, second,
+            "path does not alias immutable content versions"
+        );
+        let state = &bridge.staged_ref().expect("audio call").state;
+        assert_eq!(state.assets.len(), 2);
+        assert_ne!(
+            state.clips[&first.value].asset, state.clips[&second.value].asset,
+            "render assets are keyed by immutable body identity"
+        );
+    }
+
+    #[test]
+    fn feedback_overflow_requires_owner_reset_before_pending_one_shot_release() {
+        let mut resources = BTreeMap::new();
+        resources.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(resources);
+        bridge.begin_call();
+        let path = b"content/audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("clip");
+        bridge
+            .emit(NativeAudioEmitRequest {
+                signal_id: NativeUtf8Slice {
+                    bytes: b"lost-terminal-fact".as_ptr(),
+                    len: b"lost-terminal-fact".len(),
+                },
+                descriptor: descriptor(clip, NativeAudioBus::Ui),
+            })
+            .expect("one-shot");
+        let call = bridge.take_staged_call().expect("initial call");
+        bridge.commit(call);
+        bridge
+            .ingest_realized_feedback(false, 1, [])
+            .expect("host feedback overflow observation");
+        bridge.begin_call();
+        let error = bridge
+            .destroy_clip(clip)
+            .expect_err("unknown terminal fact stays live");
+        assert_eq!(error.code(), "CSHARP_AUDIO_CLIP_FEEDBACK_LOST");
+        bridge.discard_call();
+        bridge.reset_realized_feedback();
+        bridge.begin_call();
+        bridge
+            .destroy_clip(clip)
+            .expect("owner reset cancels outstanding browser one-shots");
     }
 }

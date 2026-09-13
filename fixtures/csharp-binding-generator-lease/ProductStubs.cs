@@ -1,7 +1,11 @@
-namespace Rusty.Engine;
+namespace Rusty.Engine
+{
 
+public sealed class ProductContent { }
 public readonly record struct ProductUpdateFacts;
+public readonly record struct ProductTimelineOutcome;
 public readonly record struct StructuredValueNode;
+public enum ProductUpdateResult : uint { None }
 public enum InputValueKind : uint { None }
 public enum InputTriggerKind : uint { None }
 public enum InputEdge : uint { None }
@@ -16,3 +20,10 @@ public enum InputChannel : uint { None }
 public enum InputClearReason : uint { None }
 public enum InputPhase : uint { None }
 public enum InputProvenance : uint { None }
+}
+
+namespace Rusty.Engine.Debugging
+{
+
+public sealed class DebugExecutionContext { }
+}

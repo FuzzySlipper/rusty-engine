@@ -192,6 +192,7 @@ export class RendererAudioHost {
     ui: { volume: 1, muted: false },
   };
   readonly #cache = new Map<string, Promise<unknown>>();
+  #retainedResourceHashes: ReadonlySet<string> | null = null;
   readonly #retained = new Map<number, RendererRetainedVoice>();
   readonly #oneShots = new Set<RendererAudioSourceGraph>();
   readonly #seenSignals = new Set<string>();
@@ -307,6 +308,23 @@ export class RendererAudioHost {
     return this.#receipt(applied, diagnostics);
   }
 
+  /** Release decoded clips after their Engine owners and active playback release them. */
+  retainResources(hashes: ReadonlySet<string>): void {
+    this.#retainedResourceHashes = new Set(hashes);
+    this.#pruneDecodedClips();
+  }
+
+  #pruneDecodedClips(): void {
+    if (this.#retainedResourceHashes === null) return;
+    const active = new Set([
+      ...[...this.#retained.values()].map((voice) => voice.descriptor.clip.contentHash),
+      ...[...this.#oneShots].map((graph) => graph.descriptor.clip.contentHash),
+    ]);
+    for (const hash of this.#cache.keys()) {
+      if (!this.#retainedResourceHashes.has(hash) && !active.has(hash)) this.#cache.delete(hash);
+    }
+  }
+
   readout(): AudioProjectionReadout {
     return {
       activeSources: this.#retained.size,
@@ -349,6 +367,8 @@ export class RendererAudioHost {
     for (const graph of [...retainedGraphs, ...this.#oneShots]) disposeGraph(graph);
     this.#retained.clear();
     this.#oneShots.clear();
+    this.#cache.clear();
+    this.#retainedResourceHashes = null;
     this.#seenSignals.clear();
     this.#emittedSignals = 0;
     this.#diagnostics.length = 0;
@@ -418,7 +438,7 @@ export class RendererAudioHost {
       }
       if (op.op === 'create') {
         if (this.#retained.has(op.handle as number)) {
-          return operationDiagnostic('duplicateHandle', meta, op.handle, 'audio handle is active');
+          return operationDiagnostic('duplicateHandle', meta, op.handle, undefined, 'audio handle is active');
         }
         const voice: RendererRetainedVoice = {
           descriptor: op.descriptor,
@@ -436,7 +456,7 @@ export class RendererAudioHost {
       }
       if (op.op === 'restore') {
         if (this.#retained.has(op.handle as number)) {
-          return operationDiagnostic('duplicateHandle', meta, op.handle, 'audio handle is active');
+          return operationDiagnostic('duplicateHandle', meta, op.handle, undefined, 'audio handle is active');
         }
         const voice: RendererRetainedVoice = {
           descriptor: op.descriptor,
@@ -457,10 +477,11 @@ export class RendererAudioHost {
       if (op.op === 'destroy') {
         const voice = this.#retained.get(op.handle as number);
         if (voice === undefined) {
-          return operationDiagnostic('unknownHandle', meta, op.handle, 'audio handle is unknown');
+          return operationDiagnostic('unknownHandle', meta, op.handle, undefined, 'audio handle is unknown');
         }
         this.#retained.delete(op.handle as number);
         disposeGraph(voice.graph);
+        this.#pruneDecodedClips();
         return null;
       }
       if (op.op === 'voiceControl') {
@@ -479,6 +500,7 @@ export class RendererAudioHost {
         classifyHostError(error),
         meta,
         operationHandle(op),
+        operationSignalHandle(op),
         errorMessage(error, 'audio host operation failed'),
       );
     }
@@ -492,7 +514,7 @@ export class RendererAudioHost {
   ): Promise<AudioProjectionDiagnostic | null> {
     const voice = this.#retained.get(handle as number);
     if (voice === undefined) {
-      return operationDiagnostic('unknownHandle', meta, handle, 'audio handle is unknown');
+      return operationDiagnostic('unknownHandle', meta, handle, undefined, 'audio handle is unknown');
     }
     const next = patchedDescriptor(voice.descriptor, patch);
     const graph = voice.graph;
@@ -506,6 +528,7 @@ export class RendererAudioHost {
       const replacement = await this.#createGraph(next, meta.sequence, epoch);
       this.#assertCurrentEpoch(epoch);
       disposeGraph(graph);
+      this.#pruneDecodedClips();
       voice.graph = replacement;
       voice.descriptor = next;
       voice.sequence = meta.sequence;
@@ -528,7 +551,7 @@ export class RendererAudioHost {
   ): Promise<AudioProjectionDiagnostic | null> {
     const voice = this.#retained.get(handle as number);
     if (voice === undefined) {
-      return operationDiagnostic('unknownHandle', meta, handle, 'audio handle is unknown');
+      return operationDiagnostic('unknownHandle', meta, handle, undefined, 'audio handle is unknown');
     }
     voice.sequence = meta.sequence;
     if (control === 'pause') {
@@ -694,6 +717,7 @@ export class RendererAudioHost {
     const duplicate = this.#diagnostics.findIndex((candidate) => (
       candidate.code === diagnostic.code
       && candidate.handle === diagnostic.handle
+      && candidate.signalHandle === diagnostic.signalHandle
       && candidate.message === diagnostic.message
     ));
     if (duplicate >= 0) {
@@ -733,6 +757,7 @@ export class RendererAudioHost {
         });
       }
       disposeGraph(graph);
+      this.#pruneDecodedClips();
     };
     startGraph(graph, 0, this.#context.currentTime);
   }
@@ -953,13 +978,24 @@ function operationHandle(op: AudioProjectionOp): AudioHandle | null {
   return op.op === 'emit' || op.op === 'busControl' ? null : op.handle;
 }
 
+function operationSignalHandle(op: AudioProjectionOp): AudioSignalHandle | undefined {
+  return op.op === 'emit' ? op.signalHandle : undefined;
+}
+
 function operationDiagnostic(
   code: AudioProjectionDiagnostic['code'],
   meta: Extract<PresentationOp, { readonly domain: 'audio' }>['meta'],
   handle: AudioHandle | null,
+  signalHandle: AudioSignalHandle | undefined,
   message: string,
 ): AudioProjectionDiagnostic {
-  return { code, sequence: meta.sequence, handle, message };
+  return {
+    code,
+    sequence: meta.sequence,
+    handle,
+    ...(signalHandle === undefined ? {} : { signalHandle }),
+    message,
+  };
 }
 
 function hostDiagnostic(

@@ -2,8 +2,8 @@ use runtime_session::RuntimeSession;
 
 use crate::{
     CanonicalU64, ProductDevDebugResult, ProductDevHostError, ProductDevInputBatch,
-    ProductDevLifecycleOperation, ProductDevOperationResult, ProductDevRuntime,
-    ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeReceipt,
+    ProductDevLifecycleOperation, ProductDevOperationResult, ProductDevRendererResource,
+    ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeError, ProductDevRuntimeReceipt,
     ProductDevRuntimeScheduleState, ProductDevTimelineCompletion,
     ProductDevTimelineCompletionResult, ProductDevUpdateAttribution,
 };
@@ -14,12 +14,14 @@ use crate::{
 /// result and output batch.
 pub struct ProductDevOperationOwner<R> {
     session: RuntimeSession<R>,
+    resource_inventory: std::sync::Mutex<Option<Vec<String>>>,
 }
 
 impl<R> ProductDevOperationOwner<R> {
     pub fn new(runtime: R) -> Self {
         Self {
             session: RuntimeSession::new(runtime),
+            resource_inventory: std::sync::Mutex::new(None),
         }
     }
 
@@ -31,6 +33,18 @@ impl<R> ProductDevOperationOwner<R> {
 }
 
 impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
+    /// Reads an exact renderer body under the same runtime serialization fence
+    /// as every lifecycle and product operation.
+    pub fn renderer_resource(
+        &self,
+        identity: &str,
+        generation: u64,
+    ) -> Result<Option<ProductDevRendererResource>, ProductDevRuntimeError> {
+        self.session
+            .with_locked(|runtime| runtime.renderer_resource(identity, generation))
+            .map_err(|_| runtime_poisoned())?
+    }
+
     /// Drains call-local attribution while the outer publisher holds its
     /// operation/publication order (used by the disposable worker adapter).
     pub fn take_update_attribution(
@@ -279,7 +293,29 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         F: FnOnce(&mut R) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
     {
         self.session
-            .with_locked(call)
+            .with_locked(|runtime| {
+                let result = call(runtime);
+                let mut inventory = runtime.renderer_resource_ids();
+                let resources = runtime.take_retired_renderer_resources();
+                if let Some(inventory) = &mut inventory {
+                    inventory.extend(
+                        resources
+                            .iter()
+                            .map(|resource| resource.identity().to_owned()),
+                    );
+                    inventory.sort();
+                    inventory.dedup();
+                }
+                result.map(|receipt| {
+                    let mut previous = self
+                        .resource_inventory
+                        .lock()
+                        .expect("inventory is only accessed under runtime serialization");
+                    let changed = receipt.resource_baseline() || *previous != inventory;
+                    *previous = inventory.clone();
+                    receipt.with_resources(resources, if changed { inventory } else { None })
+                })
+            })
             .map_err(|_| runtime_poisoned())
             .and_then(|result| result)
     }

@@ -19,9 +19,11 @@ import {
   RustyApplicationContentError,
   prepareRustyApplicationContent,
   rustyApplicationAudioResourceResolver,
+  RustyApplicationResourceCatalog,
   rustyApplicationSurfaceResourceOptions,
   type PreparedRustyApplicationContent,
   type RustyApplicationContent,
+  type RustyApplicationResource,
 } from './application-content.js';
 import {
   resolvePresentationFrameGeometry,
@@ -228,6 +230,8 @@ export interface RustyApplicationAudioDiagnostic {
   readonly code: RustyApplicationAudioDiagnosticCode;
   readonly sequence: number;
   readonly handle: number | null;
+  /** Present only when a one-shot terminal diagnostic identifies its signal. */
+  readonly signalHandle?: number;
   readonly message: string;
 }
 
@@ -374,6 +378,12 @@ export interface RustyApplicationRendererPort {
   /** Replace product content with the Engine-owned empty/default retained frame. */
   readonly clear: () => Promise<void>;
   readonly renderOnce: (timeMs?: number) => void;
+  /** Admit immutable bytes into the live Engine renderer without replacing its surface. */
+  readonly admitResources: (
+    resources: readonly RustyApplicationResource[],
+    frame?: RustyApplicationFrame,
+  ) => Promise<void>;
+  readonly retainResources: (identities: ReadonlySet<string>) => void;
   /** Atomically replace the immutable resource catalog and complete retained frame. */
   readonly replaceContent: (
     content: RustyApplicationContent,
@@ -601,6 +611,7 @@ export async function mountRustyApplicationWithEnvironment(
   let interactionMode = options.initialInteractionMode ?? 'interface';
   let activeCanvas = layout.canvas;
   let activeContent: PreparedRustyApplicationContent | null = null;
+  let resourceCatalog = new RustyApplicationResourceCatalog();
   let activeAudio: RendererAudioHost | null = null;
   let activeAnimation: RendererAnimationHost | null = null;
   let activeBillboard: RendererBillboardHost | null = null;
@@ -654,6 +665,7 @@ export async function mountRustyApplicationWithEnvironment(
   const mountSurface = async (
     canvas: HTMLCanvasElement,
     content: PreparedRustyApplicationContent,
+    catalog: RustyApplicationResourceCatalog,
   ): Promise<{
     readonly audio: RendererAudioHost;
     readonly animation: RendererAnimationHost;
@@ -684,12 +696,14 @@ export async function mountRustyApplicationWithEnvironment(
           }),
       ...(options.renderer?.pixelRatio === undefined
         ? {} : { pixelRatio: options.renderer.pixelRatio }),
-      ...rustyApplicationSurfaceResourceOptions(content),
+      animatedMeshSource: catalog.animatedSource,
+      meshResourceSource: catalog.meshSource,
+      textureResourceSource: catalog.textureSource,
       ...(options.renderer?.onCadence === undefined
         ? {}
         : { onAnimationFrame: options.renderer.onCadence }),
     });
-    const resolveAudio = rustyApplicationAudioResourceResolver(content);
+    const resolveAudio = catalog.audioResolver();
     const presentationUrls = new Set<string>();
     let audio: RendererAudioHost | null = null;
     let animation: RendererAnimationHost | null = null;
@@ -706,10 +720,6 @@ export async function mountRustyApplicationWithEnvironment(
       // well as audio. Product Browser therefore observes only fixed typed
       // renderer facts, never a downstream animation substitute.
       animation = new RendererAnimationHost(mounted.animationProjection);
-      const resources = new Map(content.resources.map((resource) => [resource.identity, resource]));
-      const resourcesByHash = new Map(
-        content.resources.map((resource) => [resource.contentHash, resource]),
-      );
       billboard = new RendererBillboardHost({
         container: layout.indicators,
         projectWorld: (position) => ({
@@ -719,25 +729,44 @@ export async function mountRustyApplicationWithEnvironment(
         }),
         resolveEntityPosition: options.renderer?.resolveIndicatorEntityPosition ?? (() => null),
         resolveResource: async (identity, contentHash) => {
-          const resource = resources.get(identity)
-            ?? (contentHash === undefined ? undefined : resourcesByHash.get(contentHash));
+          const resource = catalog.resource(identity, contentHash);
           if (resource === undefined) return null;
           const bytes = resource.bytes.slice(0);
           if (resource.kind !== 'texture') return { bytes };
           const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
           presentationUrls.add(url);
-          return { bytes, url };
+          let released = false;
+          return {
+            bytes,
+            url,
+            release: () => {
+              if (released) return;
+              released = true;
+              presentationUrls.delete(url);
+              URL.revokeObjectURL(url);
+            },
+          };
         },
       });
       particle = new RendererParticleHost({
         resolveEntityPosition: options.renderer?.resolveParticleEntityPosition ?? (() => null),
         resolveResource: async (sprite) => {
-          const resource = resourcesByHash.get(sprite.contentHash);
+          const resource = catalog.resource('', sprite.contentHash);
           if (resource?.kind !== 'texture') return null;
           const bytes = resource.bytes.slice(0);
           const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
           presentationUrls.add(url);
-          return { bytes, url };
+          let released = false;
+          return {
+            bytes,
+            url,
+            release: () => {
+              if (released) return;
+              released = true;
+              presentationUrls.delete(url);
+              URL.revokeObjectURL(url);
+            },
+          };
         },
         sink: mounted.createParticleSink(),
       });
@@ -832,6 +861,7 @@ export async function mountRustyApplicationWithEnvironment(
         return;
       }
       const oldCanvas = activeCanvas;
+      const oldCatalog = resourceCatalog;
       let candidateCanvas: HTMLCanvasElement | null = null;
       let inputRebindAttempted = false;
       let candidateSurface: RendererSurface | null = null;
@@ -847,7 +877,9 @@ export async function mountRustyApplicationWithEnvironment(
         candidateCanvas = createRendererCanvas(document);
         const candidateContent = candidate();
         const priorViewComposition = oldSurface.viewCompositionReadout();
-        const mounted = await mountSurface(candidateCanvas, candidateContent);
+        const candidateCatalog = new RustyApplicationResourceCatalog();
+        await candidateCatalog.admit(candidateContent.resources, candidateContent.frame);
+        const mounted = await mountSurface(candidateCanvas, candidateContent, candidateCatalog);
         candidateSurface = mounted.surface;
         candidateAudio = mounted.audio;
         candidateAnimation = mounted.animation;
@@ -881,6 +913,7 @@ export async function mountRustyApplicationWithEnvironment(
         activeParticle = candidateParticle;
         activeBillboardUrls = candidateBillboardUrls;
         activeContent = candidateContent;
+        resourceCatalog = candidateCatalog;
         contentRevision += 1;
         activeCanvas = candidateCanvas;
         rendererTerminal = false;
@@ -909,6 +942,7 @@ export async function mountRustyApplicationWithEnvironment(
         } catch {
           // Billboard cleanup is best-effort after the replacement commits.
         }
+        oldCatalog.clear();
         receipt = Object.freeze({ applied: true, outcome: 'applied', diagnostics: [] });
       } catch (cause) {
         if (inputRebindAttempted) {
@@ -983,16 +1017,50 @@ export async function mountRustyApplicationWithEnvironment(
       if (current === null) {
         throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
       }
+      const resources = resourceCatalog.snapshot();
       return Object.freeze({
         frame: prepared.frame,
         publicationFrontiers: prepared.publicationFrontiers,
-        resources: current.resources,
-        resourceBytes: current.resourceBytes,
+        resources,
+        resourceBytes: resources.reduce((total, resource) => total + resource.bytes.byteLength, 0),
       });
     });
   };
 
   const renderer: RustyApplicationRendererPort = Object.freeze({
+    admitResources: async (
+      resources: readonly RustyApplicationResource[],
+      frame?: RustyApplicationFrame,
+    ) => {
+      requireActive();
+      await resourceCatalog.admit(resources, frame);
+    },
+    retainResources: (identities: ReadonlySet<string>) => {
+      const retainedHashes = new Set<string>();
+      for (const identity of identities) {
+        const resource = resourceCatalog.resource(identity);
+        if (resource !== undefined) retainedHashes.add(resource.contentHash);
+      }
+      activeBillboard?.retainResources(retainedHashes);
+      activeParticle?.retainResources(retainedHashes);
+      requireActive().retainResources(identities);
+      resourceCatalog.retainOnly(identities);
+      if (activeContent !== null) {
+        const resources = resourceCatalog.snapshot();
+        activeContent = Object.freeze({
+          ...activeContent,
+          resources,
+          resourceBytes: resources.reduce((total, resource) => total + resource.bytes.byteLength, 0),
+        });
+      }
+      const audioHashes = new Set(
+        [...identities]
+          .map((identity) => /^audio(?:-resource)?\/([0-9a-f]{64})$/u.exec(identity)?.[1])
+          .filter((hash): hash is string => hash !== undefined)
+          .map((hash) => `sha256:${hash}`),
+      );
+      activeAudio?.retainResources(audioHashes);
+    },
     applyFrame: (frame: RustyApplicationFrame) => {
       if (rendererTerminal) return terminalFrameReceipt('renderer_terminal');
       if (replacementPending > 0) {
@@ -1195,7 +1263,8 @@ export async function mountRustyApplicationWithEnvironment(
         resources: [],
       },
     );
-    const surfaceMount = await mountSurface(layout.canvas, initialContent);
+    await resourceCatalog.admit(initialContent.resources, initialContent.frame);
+    const surfaceMount = await mountSurface(layout.canvas, initialContent, resourceCatalog);
     surface = surfaceMount.surface;
     activeAudio = surfaceMount.audio;
     activeAnimation = surfaceMount.animation;
@@ -1232,6 +1301,7 @@ export async function mountRustyApplicationWithEnvironment(
         ui.allowsGameplayInput(event);
         input?.clear('focus-loss');
       },
+      () => { void activeAudio?.resume(); },
     );
     setInteractionMode(interactionMode);
     const uiContext: RustyApplicationUiContext = Object.freeze({
@@ -1313,6 +1383,7 @@ export async function mountRustyApplicationWithEnvironment(
           layout.host,
           removePresentationResizeListener,
         );
+        resourceCatalog.clear();
         uiOwner = null;
         input = null;
         surface = null;
@@ -1489,10 +1560,12 @@ function installInputArbitration(
   focusGameplay: () => void,
   coreOwnsPrimaryFocus: boolean,
   clearRuntimeInputForFocus: (event: FocusEvent) => void,
+  resumeAudio: () => void,
 ): () => void {
   const document = host.ownerDocument;
   const onPointerDown = (event: PointerEvent): void => {
     if (!isArbitratedHostPointerEvent(event, uiRoot, surface().canvas)) return;
+    resumeAudio();
     if (isInteractiveUiEvent(event, uiRoot)) {
       surface().releaseInput();
       return;
@@ -1510,14 +1583,17 @@ function installInputArbitration(
     host.dataset['pointerLocked'] = String(document.pointerLockElement === surface().canvas);
   };
   const onBlur = (): void => surface().releaseInput();
+  const onKeyDown = (): void => resumeAudio();
 
   host.addEventListener('pointerdown', onPointerDown, true);
+  host.addEventListener('keydown', onKeyDown, true);
   host.addEventListener('focusin', onFocusIn, true);
   document.addEventListener('pointerlockchange', onPointerLockChange);
   document.defaultView?.addEventListener('blur', onBlur);
   onPointerLockChange();
   return () => {
     host.removeEventListener('pointerdown', onPointerDown, true);
+    host.removeEventListener('keydown', onKeyDown, true);
     host.removeEventListener('focusin', onFocusIn, true);
     document.removeEventListener('pointerlockchange', onPointerLockChange);
     document.defaultView?.removeEventListener('blur', onBlur);

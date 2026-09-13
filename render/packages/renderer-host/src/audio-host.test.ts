@@ -396,6 +396,25 @@ void test('audio realization and diagnostic retention are bounded while fact IDs
   assert.equal(audio.realizedFacts().evictedFactCount, 1);
 });
 
+void test('failed one-shot diagnostics retain the exact signal correlation', async () => {
+  const context = new FakeContext();
+  const audio = new RendererAudioHost({
+    createContext: () => context as unknown as RendererAudioContext,
+    resolveResource: async () => { throw new Error('fixture audio resource unavailable'); },
+  });
+  const signal = audioSignalHandle(73);
+  const receipt = await audio.applyPresentation(frame([
+    operation(0, {
+      op: 'emit', signalHandle: signal, signalId: 'failed-one-shot', descriptor: descriptor(),
+    }),
+  ]));
+  assert.equal(receipt.applied, 0);
+  assert.equal(receipt.diagnostics[0]?.signalHandle, signal);
+  assert.deepEqual(audio.realizedFacts().facts, [{
+    kind: 'diagnostic', factId: 1, diagnostic: receipt.diagnostics[0],
+  }]);
+});
+
 void test('listener updates after disposal retain a diagnostic without writing Web Audio state', async () => {
   const context = new FakeContext();
   const audio = host(context);
@@ -542,7 +561,7 @@ void test('reset and disposal fence pending decode before an old graph can enter
   assert.equal(resetReceipt.applied, 0);
   assert.equal(resetContext.sources.length, 0, 'stale decode must not allocate a source graph');
   assert.deepEqual(resetAudio.readout(), {
-    activeSources: 0, cachedClips: 1, emittedSignals: 0,
+    activeSources: 0, cachedClips: 0, emittedSignals: 0,
     retainedDiagnosticCount: 0, evictedDiagnosticCount: 0, diagnostics: [],
   });
   assert.deepEqual(resetAudio.realizedFacts().facts, []);
@@ -559,6 +578,21 @@ void test('reset and disposal fence pending decode before an old graph can enter
   assert.equal(disposeReceipt.applied, 0);
   assert.equal(disposeContext.sources.length, 0, 'disposed host must reject its delayed graph');
   assert.deepEqual(disposeAudio.realizedFacts().facts, []);
+});
+
+void test('resource retention evicts decoded clips only after active voice release', async () => {
+  const context = new FakeContext();
+  const audio = host(context);
+  const clip = descriptor();
+  await audio.applyPresentation(frame([
+    operation(0, { op: 'create', handle: audioHandle(91), descriptor: clip }),
+  ]));
+  audio.retainResources(new Set());
+  assert.equal(audio.readout().cachedClips, 1, 'active voice pins its decoded clip after catalog release');
+  await audio.applyPresentation(frame([
+    operation(1, { op: 'destroy', handle: audioHandle(91) }),
+  ]));
+  assert.equal(audio.readout().cachedClips, 0, 'destroyed voice releases an unretained decoded clip');
 });
 
 void test('fixed bus controls own existing and future graph gain state', async () => {

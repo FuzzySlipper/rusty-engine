@@ -510,6 +510,86 @@ void test('retained emitter create update destroy owns continuous simulation and
   assert.equal(sink.destroyed.length, 2);
 });
 
+void test('particle sprite leases survive an emitter visual update until old particles expire', async () => {
+  const sink = new FakeParticleSink();
+  const firstBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+  const secondBytes = new Uint8Array([5, 6, 7, 8]).buffer;
+  const secondHash = '55e5509f8052998294266ee5b50cb592938191fb5d67f73cac2e60b0276b1bdd';
+  let firstReleases = 0;
+  let secondReleases = 0;
+  const particles = new RendererParticleHost({
+    resolveEntityPosition: () => [0, 0, 0],
+    resolveResource: async (sprite) => ({
+      bytes: sprite.contentHash === SPRITE_HASH ? firstBytes : secondBytes,
+      url: `/sprites/${sprite.asset}.png`,
+      release: sprite.contentHash === SPRITE_HASH
+        ? () => { firstReleases += 1; }
+        : () => { secondReleases += 1; },
+    }),
+    sink,
+  });
+  const handle = particleEmitterHandle(22);
+  const created = await particles.applyPresentation(frame([
+    operation(0, {
+      op: 'create',
+      handle,
+      descriptor: descriptor({
+        burstCount: 1,
+        ratePerSecond: 0,
+        lifetimeSeconds: [1, 1],
+      }),
+    }),
+  ]));
+  assert.equal(created.diagnostics.length, 0);
+  assert.equal(created.readout.activeParticles, 1);
+
+  const updated = await particles.applyPresentation(frame([
+    operation(0, {
+      op: 'update',
+      handle,
+      patch: {
+        anchor: null,
+        visual: {
+          kind: 'billboard',
+          sprite: {
+            asset: 'sprite/second-fire-spark',
+            contentHash: secondHash,
+            frameCount: 1,
+          },
+        },
+        sprite: null,
+        ratePerSecond: null,
+        burstCount: null,
+        lifetimeSeconds: null,
+        velocityMin: null,
+        velocityMax: null,
+        acceleration: null,
+        sizeCurve: null,
+        colorCurve: null,
+        flipbookFramesPerSecond: null,
+        maxParticles: null,
+        visible: null,
+        collision: null,
+      },
+    }),
+  ]));
+  assert.equal(updated.diagnostics.length, 0);
+  assert.equal(firstReleases, 0, 'the live particle still owns the old sprite');
+  assert.equal(secondReleases, 0, 'the emitter owns the new sprite');
+
+  particles.advance(1);
+  assert.equal(particles.readout().activeParticles, 0);
+  assert.equal(firstReleases, 1, 'the old sprite releases after its particle expires');
+  assert.equal(secondReleases, 0);
+
+  const destroyed = await particles.applyPresentation(frame([
+    operation(0, { op: 'destroy', handle }),
+  ]));
+  assert.equal(destroyed.diagnostics.length, 0);
+  assert.equal(secondReleases, 1);
+  particles.dispose();
+});
+
 void test('missing anchor budgets and unavailable host degrade independently after scene', async () => {
   const sink = new FakeParticleSink();
   const particles = host(sink, 2);

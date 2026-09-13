@@ -20,6 +20,14 @@ pub struct NativeRenderResourceHandle {
     pub value: u64,
 }
 
+/// A copied optional resource selector. Unlike `NativeRenderResourceHandle`,
+/// this never transfers or disposes the caller's resource owner.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeRenderResourceReference {
+    pub value: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeRngHandle {
@@ -231,8 +239,8 @@ pub enum NativeSpriteShadowPolicy {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSpriteMaterialDescriptor {
     pub lighting: NativeSpriteLightingMode,
-    pub normal_texture: NativeRenderResourceHandle,
-    pub depth_texture: NativeRenderResourceHandle,
+    pub normal_texture: NativeRenderResourceReference,
+    pub depth_texture: NativeRenderResourceReference,
     pub normal_strength: f32,
     pub normal_bias: f32,
     pub alpha_mode: NativeSpriteAlphaMode,
@@ -244,8 +252,8 @@ impl Default for NativeSpriteMaterialDescriptor {
     fn default() -> Self {
         Self {
             lighting: NativeSpriteLightingMode::Unlit,
-            normal_texture: NativeRenderResourceHandle::default(),
-            depth_texture: NativeRenderResourceHandle::default(),
+            normal_texture: NativeRenderResourceReference::default(),
+            depth_texture: NativeRenderResourceReference::default(),
             normal_strength: 1.0,
             normal_bias: 0.0,
             alpha_mode: NativeSpriteAlphaMode::Blend,
@@ -534,7 +542,7 @@ pub struct NativeSpritePlaybackAdvanceLease {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMaterialRequest {
     pub color: NativeColor,
-    pub texture: NativeRenderResourceHandle,
+    pub texture: NativeRenderResourceReference,
     pub roughness: f32,
     pub texture_tint: NativeColor,
     pub emission_color: NativeVec3,
@@ -552,7 +560,7 @@ pub struct NativeMaterialRequest {
 pub struct NativeAuthoredMaterialAppearanceRequest {
     pub catalog: NativeAuthoredCatalogHandle,
     pub material_id: NativeUtf8Slice,
-    pub texture: NativeRenderResourceHandle,
+    pub texture: NativeRenderResourceReference,
 }
 
 #[repr(C)]
@@ -746,4 +754,26 @@ pub struct NativePresentationReadout {
     pub appearance_count: u32,
     pub material_count: u32,
     pub resource_count: u32,
+}
+
+/// Renderer admission from an independently retained product content reference.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeRenderResourceContentRequest {
+    pub content: NativeContentReferenceHandle,
+    pub filter: NativeTextureFilter,
+    pub wrap: NativeTextureWrap,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationContentRequest {
+    pub content: NativeContentReferenceHandle,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeStaticMeshContentReferenceRequest {
+    pub content: NativeContentReferenceHandle,
+    pub color: NativeColor,
 }

@@ -25,6 +25,8 @@ type ParticlePresentationOp = Extract<PresentationOp, { readonly domain: 'partic
 export interface RendererParticleResource {
   readonly bytes: ArrayBuffer;
   readonly url: string;
+  /** Release a URL/blob or other resolver-owned resource when no host owner remains. */
+  readonly release?: () => void;
 }
 
 export type RendererParticleResourceResolver = (
@@ -94,6 +96,7 @@ export interface RendererParticleFrameReceipt {
 interface ActiveEmitter {
   descriptor: ParticleEmitterDescriptor;
   preparedVisual: RendererParticlePreparedVisual;
+  visualResource: ParticleResourceLease | null;
   readonly key: string;
   readonly handle: ParticleEmitterHandle | null;
   randomState: number;
@@ -106,6 +109,7 @@ interface ActiveParticle {
   readonly emitterKey: string;
   readonly descriptor: ParticleEmitterDescriptor;
   readonly visual: RendererParticlePreparedVisual;
+  readonly resource: ParticleResourceLease | null;
   ageSeconds: number;
   readonly lifetimeSeconds: number;
   position: [number, number, number];
@@ -113,6 +117,24 @@ interface ActiveParticle {
   readonly collisionOrigin: Vec3;
   impactCount: number;
   sleeping: boolean;
+}
+
+interface ParticleResourceEntry {
+  readonly hash: string;
+  readonly url: string;
+  readonly releaseResource?: () => void;
+  references: number;
+}
+
+interface ParticleResourceLease {
+  readonly url: string;
+  readonly retain: () => ParticleResourceLease;
+  readonly release: () => void;
+}
+
+interface PreparedParticleVisual {
+  readonly visual: RendererParticlePreparedVisual;
+  readonly resource: ParticleResourceLease | null;
 }
 
 export class RendererParticleHost {
@@ -125,8 +147,10 @@ export class RendererParticleHost {
   readonly #burstEmitters = new Map<string, ActiveEmitter>();
   readonly #particles = new Map<number, ActiveParticle>();
   readonly #seenSignals = new Set<string>();
-  readonly #spriteUrls = new Map<string, Promise<string>>();
+  readonly #spriteResources = new Map<string, ParticleResourceEntry>();
   readonly #diagnostics: ParticleProjectionDiagnostic[] = [];
+  #retainedResourceHashes: ReadonlySet<string> | null = null;
+  #generation = 0;
   #nextParticleId = 1;
   #emittedBursts = 0;
   #droppedParticles = 0;
@@ -212,7 +236,7 @@ export class RendererParticleHost {
     return {
       activeEmitters: this.#emitters.size,
       activeParticles: this.#particles.size,
-      loadedSprites: this.#spriteUrls.size,
+      loadedSprites: this.#spriteResources.size,
       emittedBursts: this.#emittedBursts,
       droppedParticles: this.#droppedParticles,
       collisionTests: this.#collisionTests,
@@ -225,18 +249,36 @@ export class RendererParticleHost {
   }
 
   cleanup(): void {
+    this.#generation += 1;
+    const failures: unknown[] = [];
     for (const particle of [...this.#particles.values()]) {
-      this.#destroyParticle(particle);
+      try {
+        this.#destroyParticle(particle);
+      } catch (cause) {
+        failures.push(cause);
+      }
     }
+    for (const emitter of this.#emitters.values()) emitter.visualResource?.release();
+    for (const emitter of this.#burstEmitters.values()) emitter.visualResource?.release();
     this.#emitters.clear();
     this.#burstEmitters.clear();
     this.#seenSignals.clear();
+    this.#retainedResourceHashes = null;
+    this.#dropAllResources();
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'renderer particle cleanup failed');
+    }
   }
 
   dispose(): void {
     this.cleanup();
-    this.#spriteUrls.clear();
     this.#diagnostics.length = 0;
+  }
+
+  /** Keep zero-reference sprite resources while their Engine publication is retained. */
+  retainResources(hashes: ReadonlySet<string>): void {
+    this.#retainedResourceHashes = new Set(hashes);
+    this.#pruneResources();
   }
 
   #advanceParticle(particle: ActiveParticle, deltaSeconds: number): boolean {
@@ -290,25 +332,39 @@ export class RendererParticleHost {
     if (this.#seenSignals.has(op.signalId)) {
       return null;
     }
-    const preparedVisual = await this.#prepareVisual(op.descriptor);
+    const generation = this.#generation;
+    const prepared = await this.#prepareVisual(op.descriptor);
+    if (generation !== this.#generation) {
+      prepared.resource?.release();
+      return operationDiagnostic(
+        'hostFailure', meta, null, 'particle host lifecycle changed while resources were loading',
+      );
+    }
     const emitter = createEmitter(
       `signal:${op.signalId}`,
       null,
       op.descriptor,
-      preparedVisual,
+      prepared.visual,
+      prepared.resource,
     );
-    const diagnostic = this.#spawn(
-      emitter,
-      op.descriptor.burstCount,
-      meta.sequence,
-    );
-    if (diagnostic?.code === 'anchorMissing') {
+    try {
+      const diagnostic = this.#spawn(
+        emitter,
+        op.descriptor.burstCount,
+        meta.sequence,
+      );
+      if (diagnostic?.code === 'anchorMissing') {
+        emitter.visualResource?.release();
+        return diagnostic;
+      }
+      this.#seenSignals.add(op.signalId);
+      this.#burstEmitters.set(emitter.key, emitter);
+      this.#emittedBursts += 1;
       return diagnostic;
+    } catch (error) {
+      emitter.visualResource?.release();
+      throw error;
     }
-    this.#seenSignals.add(op.signalId);
-    this.#burstEmitters.set(emitter.key, emitter);
-    this.#emittedBursts += 1;
-    return diagnostic;
   }
 
   async #create(
@@ -326,18 +382,27 @@ export class RendererParticleHost {
         'budgetExceeded', meta, op.handle, 'particle emitter budget is exhausted',
       );
     }
-    const preparedVisual = await this.#prepareVisual(op.descriptor);
+    const generation = this.#generation;
+    const prepared = await this.#prepareVisual(op.descriptor);
+    if (generation !== this.#generation) {
+      prepared.resource?.release();
+      return operationDiagnostic(
+        'hostFailure', meta, op.handle, 'particle host lifecycle changed while resources were loading',
+      );
+    }
     const emitter = createEmitter(
       `handle:${rawHandle}`,
       op.handle,
       op.descriptor,
-      preparedVisual,
+      prepared.visual,
+      prepared.resource,
     );
     this.#emitters.set(rawHandle, emitter);
     try {
       return this.#spawn(emitter, op.descriptor.burstCount, meta.sequence);
     } catch (error) {
       this.#emitters.delete(rawHandle);
+      emitter.visualResource?.release();
       throw error;
     }
   }
@@ -353,8 +418,19 @@ export class RendererParticleHost {
       );
     }
     const descriptor = applyParticlePatch(emitter.descriptor, op.patch);
-    emitter.preparedVisual = await this.#prepareVisual(descriptor);
+    const generation = this.#generation;
+    const prepared = await this.#prepareVisual(descriptor);
+    if (generation !== this.#generation || this.#emitters.get(op.handle as number) !== emitter) {
+      prepared.resource?.release();
+      return operationDiagnostic(
+        'hostFailure', meta, op.handle, 'particle host lifecycle changed while resources were loading',
+      );
+    }
+    const previousResource = emitter.visualResource;
+    emitter.preparedVisual = prepared.visual;
+    emitter.visualResource = prepared.resource;
     emitter.descriptor = descriptor;
+    previousResource?.release();
     return null;
   }
 
@@ -369,12 +445,19 @@ export class RendererParticleHost {
       );
     }
     this.#emitters.delete(op.handle as number);
+    const failures: unknown[] = [];
     for (const id of [...emitter.particleIds]) {
       const particle = this.#particles.get(id);
       if (particle !== undefined) {
-        this.#destroyParticle(particle);
+        try {
+          this.#destroyParticle(particle);
+        } catch (cause) {
+          failures.push(cause);
+        }
       }
     }
+    emitter.visualResource?.release();
+    if (failures.length > 0) throw new AggregateError(failures, 'particle emitter cleanup failed');
     return null;
   }
 
@@ -412,10 +495,8 @@ export class RendererParticleHost {
       this.#droppedParticles += dropped;
     } catch (error) {
       for (const particle of created.reverse()) {
-        this.#particles.delete(particle.id);
-        emitter.particleIds.delete(particle.id);
         try {
-          this.#sink.destroy(particle.id);
+          this.#destroyParticle(particle);
         } catch {
           // Preserve the original sink failure while completing host rollback.
         }
@@ -445,6 +526,7 @@ export class RendererParticleHost {
       emitterKey: emitter.key,
       descriptor,
       visual: emitter.preparedVisual,
+      resource: emitter.visualResource?.retain() ?? null,
       ageSeconds: 0,
       lifetimeSeconds: lifetime,
       position: [...anchor],
@@ -457,52 +539,108 @@ export class RendererParticleHost {
 
   #destroyParticle(particle: ActiveParticle): void {
     this.#particles.delete(particle.id);
-    this.#sink.destroy(particle.id);
-    this.#emitters.get(Number(particle.emitterKey.slice(7)))?.particleIds.delete(particle.id);
-    this.#burstEmitters.get(particle.emitterKey)?.particleIds.delete(particle.id);
+    try {
+      this.#sink.destroy(particle.id);
+    } finally {
+      particle.resource?.release();
+      this.#emitters.get(Number(particle.emitterKey.slice(7)))?.particleIds.delete(particle.id);
+      this.#burstEmitters.get(particle.emitterKey)?.particleIds.delete(particle.id);
+    }
   }
 
   #cleanupFinishedBursts(): void {
     for (const [key, emitter] of this.#burstEmitters) {
       if (emitter.particleIds.size === 0) {
         this.#burstEmitters.delete(key);
+        emitter.visualResource?.release();
       }
     }
   }
 
-  async #prepareSprite(sprite: ParticleSpriteRef): Promise<string> {
-    const key = spriteKey(sprite);
-    const existing = this.#spriteUrls.get(key);
+  async #prepareSprite(sprite: ParticleSpriteRef): Promise<ParticleResourceLease> {
+    const key = sprite.contentHash;
+    const existing = this.#spriteResources.get(key);
     if (existing !== undefined) {
-      return existing;
+      return this.#retainResource(key, existing);
     }
-    const prepared = this.#resolveResource(sprite).then(async (resource) => {
-      if (resource === null) {
-        throw new RendererParticleResourceError(
-          'spriteLoadFailed', `particle sprite ${sprite.asset} is unavailable`,
-        );
-      }
-      await validateResourceHash(resource.bytes, sprite.contentHash);
-      return resource.url;
-    });
-    this.#spriteUrls.set(key, prepared);
+    const resource = await this.#resolveResource(sprite);
+    if (resource === null) {
+      throw new RendererParticleResourceError(
+        'spriteLoadFailed', `particle sprite ${sprite.asset} is unavailable`,
+      );
+    }
     try {
-      return await prepared;
+      await validateResourceHash(resource.bytes, sprite.contentHash);
     } catch (error) {
-      this.#spriteUrls.delete(key);
+      releaseParticleResource(resource.release);
       throw error;
     }
+    const duplicate = this.#spriteResources.get(key);
+    if (duplicate !== undefined) {
+      releaseParticleResource(resource.release);
+      return this.#retainResource(key, duplicate);
+    }
+    const entry: ParticleResourceEntry = {
+      hash: sprite.contentHash,
+      url: resource.url,
+      ...(resource.release === undefined ? {} : { releaseResource: resource.release }),
+      references: 0,
+    };
+    this.#spriteResources.set(key, entry);
+    return this.#retainResource(key, entry);
+  }
+
+  #retainResource(key: string, entry: ParticleResourceEntry): ParticleResourceLease {
+    if (this.#spriteResources.get(key) !== entry) {
+      let inert!: ParticleResourceLease;
+      inert = particleResourceLease(entry.url, () => inert, () => undefined);
+      return inert;
+    }
+    entry.references += 1;
+    return particleResourceLease(
+      entry.url,
+      () => this.#retainResource(key, entry),
+      () => this.#releaseResource(key, entry),
+    );
+  }
+
+  #releaseResource(key: string, entry: ParticleResourceEntry): void {
+    if (entry.references > 0) entry.references -= 1;
+    if (entry.references !== 0 || this.#retainedResourceHashes?.has(entry.hash)) return;
+    if (this.#spriteResources.get(key) !== entry) return;
+    this.#spriteResources.delete(key);
+    releaseParticleResource(entry.releaseResource);
+  }
+
+  #pruneResources(): void {
+    for (const [key, entry] of this.#spriteResources) {
+      if (entry.references === 0 && !this.#retainedResourceHashes?.has(entry.hash)) {
+        this.#spriteResources.delete(key);
+        releaseParticleResource(entry.releaseResource);
+      }
+    }
+  }
+
+  #dropAllResources(): void {
+    for (const entry of this.#spriteResources.values()) {
+      releaseParticleResource(entry.releaseResource);
+    }
+    this.#spriteResources.clear();
   }
 
   async #prepareVisual(
     descriptor: ParticleEmitterDescriptor,
-  ): Promise<RendererParticlePreparedVisual> {
+  ): Promise<PreparedParticleVisual> {
     const visual = descriptorVisual(descriptor);
-    if (visual.kind === 'cube') return visual;
+    if (visual.kind === 'cube') return { visual, resource: null };
+    const resource = await this.#prepareSprite(visual.sprite);
     return {
-      kind: 'billboard',
-      frameCount: visual.sprite.frameCount,
-      spriteUrl: await this.#prepareSprite(visual.sprite),
+      visual: {
+        kind: 'billboard',
+        frameCount: visual.sprite.frameCount,
+        spriteUrl: resource.url,
+      },
+      resource,
     };
   }
 
@@ -532,10 +670,12 @@ function createEmitter(
   handle: ParticleEmitterHandle | null,
   descriptor: ParticleEmitterDescriptor,
   preparedVisual: RendererParticlePreparedVisual,
+  visualResource: ParticleResourceLease | null,
 ): ActiveEmitter {
   return {
     descriptor,
     preparedVisual,
+    visualResource,
     key,
     handle,
     randomState: normalizeSeed(descriptor.seed),
@@ -874,6 +1014,31 @@ async function validateResourceHash(bytes: ArrayBuffer, expected: string): Promi
     throw new RendererParticleResourceError(
       'contentHashMismatch', `particle sprite hash ${actual} does not match ${expected}`,
     );
+  }
+}
+
+function particleResourceLease(
+  url: string,
+  retain: () => ParticleResourceLease,
+  release: () => void,
+): ParticleResourceLease {
+  let released = false;
+  return {
+    url,
+    retain,
+    release: () => {
+      if (released) return;
+      released = true;
+      release();
+    },
+  };
+}
+
+function releaseParticleResource(release: (() => void) | undefined): void {
+  try {
+    release?.();
+  } catch {
+    // Resolver-owned cleanup must not strand the remaining particle owners.
   }
 }
 

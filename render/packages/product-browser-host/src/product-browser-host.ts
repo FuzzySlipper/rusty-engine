@@ -18,6 +18,7 @@ import {
 } from '@rusty-engine/application-host';
 import { type RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { createProductBrowserCadence, type ProductBrowserCadence } from './realtime-cadence.js';
+import { ProductBrowserDynamicRendererResources, type ProductBrowserDynamicRendererResourceFetcher } from './dynamic-renderer-resources.js';
 
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export const PRODUCT_BROWSER_HOST_ARTIFACT = 'rusty.product.browser-host' as const;
@@ -131,6 +132,7 @@ export type ProductBrowserAudioFeedbackFact =
       readonly code: string;
       readonly sequence: number;
       readonly voiceHandle: string | null;
+      readonly signalHandle: string | null;
     };
 
 export interface ProductBrowserAudioFeedback {
@@ -290,32 +292,39 @@ export interface ProductBrowserRuntimeBindingOutput {
    * before any new-epoch trailing frame is allowed through.
    */
   readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
+  /** Immutable renderer identities required by this output group, without bytes. */
+  readonly rendererResources?: readonly string[];
 }
 
 export type ProductBrowserRuntimeOutput =
   | ProductBrowserRuntimeBindingOutput
   /** Fixed host evidence that one Rust-owned realtime advance was accepted. */
-  | { readonly kind: 'runtime-progress'; readonly owner: 'rust-host' }
+  | { readonly kind: 'runtime-progress'; readonly owner: 'rust-host'; readonly rendererResources?: readonly string[] }
   /** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
   | {
       readonly kind: 'runtime-input-result';
       readonly result: ProductBrowserRuntimeInputResult;
+      readonly rendererResources?: readonly string[];
     }
-  | { readonly kind: 'frame'; readonly frame: RustyApplicationFrame }
-  | { readonly kind: 'view-composition'; readonly composition: RustyApplicationViewComposition }
+  | { readonly kind: 'frame'; readonly frame: RustyApplicationFrame; readonly rendererResources?: readonly string[] }
+  | { readonly kind: 'view-composition'; readonly composition: RustyApplicationViewComposition; readonly rendererResources?: readonly string[] }
   | {
       readonly kind: 'animation-cue-definitions';
       readonly definitions: readonly RustyApplicationAnimationCueDefinition[];
+      readonly rendererResources?: readonly string[];
     }
   | {
       readonly kind: 'presentation';
       readonly frame: RustyApplicationPresentationFrame;
+      readonly rendererResources?: readonly string[];
     }
   | {
       readonly kind: 'ui-projection';
       readonly envelope: RustyApplicationUiProjectionEnvelope;
+      readonly rendererResources?: readonly string[];
     }
-  | { readonly kind: 'runtime-readout'; readonly readout: ProductBrowserRuntimeReadout };
+  | { readonly kind: 'runtime-readout'; readonly readout: ProductBrowserRuntimeReadout; readonly rendererResources?: readonly string[] }
+  | { readonly kind: 'renderer-resources'; readonly rendererResources?: readonly string[] };
 
 /**
  * Buffers semantic runtime outputs while the renderer is mounting. Realtime
@@ -629,6 +638,7 @@ export interface ProductBrowserHostOptions {
   readonly failureLabel?: string;
   /** Start the Rust runtime after the Engine host has mounted. Defaults true. */
   readonly autoStart?: boolean;
+  readonly dynamicRendererResourceFetcher?: ProductBrowserDynamicRendererResourceFetcher;
 }
 
 const PRODUCT_BROWSER_INITIAL_RENDERER_FRAME_TIMEOUT_MS = 10_000;
@@ -1314,6 +1324,9 @@ export async function mountProductBrowserHostWithApplication(
   let recoveryFailure: ProductBrowserHostError | null = null;
   let recoveryDiagnosticReported = false;
   let currentInputBinding: RustyApplicationRuntimeIdentity | null = options.runtimeInput?.binding ?? null;
+  const dynamicRendererResources = new ProductBrowserDynamicRendererResources(
+    options.dynamicRendererResourceFetcher,
+  );
   let inputRecovery: {
     readonly uncertainBinding: RustyApplicationRuntimeIdentity;
     inFlight: boolean;
@@ -1805,6 +1818,23 @@ export async function mountProductBrowserHostWithApplication(
     return nextTail;
   };
 
+  const admitOutputResources = async (
+    host: RustyApplicationHost,
+    output: ProductBrowserRuntimeOutput,
+  ): Promise<void> => {
+    if (output.rendererResources === undefined) {
+      if (output.kind === 'frame') await host.renderer.admitResources([], output.frame);
+      return;
+    }
+    const runtime = output.kind === 'binding' ? output.runtime : currentInputBinding;
+    if (runtime === null) {
+      throw new ProductBrowserHostError('output_failed', 'renderer resource closure arrived before a runtime binding');
+    }
+    const resources = await dynamicRendererResources.ensure(output.rendererResources, runtime.generation);
+    await host.renderer.admitResources(resources, output.kind === 'frame' ? output.frame : undefined);
+    dynamicRendererResources.retainOnly(new Set(output.rendererResources), runtime.generation);
+  };
+
   const applyOutput = (
     output: ProductBrowserRuntimeOutput,
     outputEpoch = acceptedProjectionEpoch,
@@ -1833,6 +1863,15 @@ export async function mountProductBrowserHostWithApplication(
     if (state === 'failed' || state === 'disposed') return;
     try {
       const host = requireApplication();
+      if (output.rendererResources !== undefined
+        && output.kind !== 'binding'
+        && output.kind !== 'frame'
+        && output.kind !== 'presentation') {
+        enqueueRendererOutput(async () => {
+          await admitOutputResources(host, output);
+          host.renderer.retainResources(new Set(output.rendererResources));
+        });
+      }
       switch (output.kind) {
         case 'binding':
           if (inputRecovery !== null) {
@@ -1858,6 +1897,7 @@ export async function mountProductBrowserHostWithApplication(
             nextSequence: output.nextInputSequence,
           });
           host.uiProjection?.bindRuntime(output.runtime);
+          enqueueRendererOutput(() => admitOutputResources(host, output));
           return;
         case 'runtime-progress':
           if (options.lifecycleMode !== 'realtime' || realtimeAdvanceOwner !== 'rust-host') {
@@ -1874,12 +1914,15 @@ export async function mountProductBrowserHostWithApplication(
             publishHealth(false, [], false);
           }
           return;
+        case 'renderer-resources':
+          return;
         case 'runtime-input-result':
           applyInputResult(output.result);
           return;
         case 'frame': {
           const receivedAtMs = productFrameObservation.received();
           enqueueRendererOutput(() => {
+            return admitOutputResources(host, output).then(() => {
             const receipt = host.renderer.applyFrame(output.frame);
             if (receipt.outcome === 'rejected_atomic' && output.frame['publication'] !== undefined) {
               const diagnostic = receipt.diagnostics.map((entry) => entry.message).join('; ')
@@ -1894,6 +1937,8 @@ export async function mountProductBrowserHostWithApplication(
               );
             }
             if (receipt.outcome === 'applied') productFrameObservation.applied(receivedAtMs);
+            if (output.rendererResources !== undefined) host.renderer.retainResources(new Set(output.rendererResources));
+            });
           });
           return;
         }
@@ -1923,6 +1968,7 @@ export async function mountProductBrowserHostWithApplication(
         }
         case 'presentation':
           enqueueRendererOutput(async () => {
+            await admitOutputResources(host, output);
             const receipt = await host.renderer.applyPresentation(output.frame);
             // `unavailableHost` is emitted only for a domain without a host.
             // It is an optional realization capability and does not invalidate
@@ -1960,6 +2006,7 @@ export async function mountProductBrowserHostWithApplication(
                 'renderer presentation reported a terminal outcome',
               );
             }
+            if (output.rendererResources !== undefined) host.renderer.retainResources(new Set(output.rendererResources));
             scheduleRendererFeedbackFlush();
           });
           return;
@@ -2195,6 +2242,17 @@ export async function mountProductBrowserHostWithApplication(
         || state === 'failed'
         || state === 'disposed') return;
       try {
+        const resourceBinding = outputs.find((output) => output.kind === 'binding');
+        const inventory = outputs.find((output) => output.rendererResources !== undefined)?.rendererResources;
+        if (inventory !== undefined) {
+          const runtime = resourceBinding?.runtime ?? currentInputBinding;
+          if (runtime === null) throw new ProductBrowserHostError('output_failed', 'baseline resources arrived without a runtime binding');
+          const resources = await dynamicRendererResources.ensure(inventory, runtime.generation);
+          await host.renderer.admitResources(resources, retainedFrame);
+          dynamicRendererResources.retainOnly(new Set(inventory), runtime.generation);
+        } else {
+          await host.renderer.admitResources([], retainedFrame);
+        }
         const receipt = await host.renderer.replaceFrame(retainedFrame, publicationFrontiers);
         // A normal incremental frame may continue after rejected_atomic, but
         // a recovery baseline is not installed until the replacement applied.
@@ -2210,6 +2268,8 @@ export async function mountProductBrowserHostWithApplication(
           publishHealth();
           return;
         }
+
+        if (inventory !== undefined) host.renderer.retainResources(new Set(inventory));
 
         // Replacement is now visible. Recreate only the fixed realization
         // reporters and then switch the other retained facets in original
@@ -2970,6 +3030,9 @@ function snapshotAudioFeedbackFact(
     voiceHandle: value.diagnostic.handle === null
       ? null
       : canonicalSafeU64(value.diagnostic.handle, 'audio feedback diagnostic voiceHandle'),
+    signalHandle: value.diagnostic.signalHandle === undefined
+      ? null
+      : canonicalSafeU64(value.diagnostic.signalHandle, 'audio feedback diagnostic signalHandle'),
   });
 }
 

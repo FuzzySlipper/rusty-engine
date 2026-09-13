@@ -14,9 +14,10 @@ use product_dev_host::{
     ProductDevBundleEntry, ProductDevDebugCatalog, ProductDevDebugResult, ProductDevHost,
     ProductDevHostConfig, ProductDevInputBatch, ProductDevInputResult,
     ProductDevLifecycleOperation, ProductDevLog, ProductDevOperationKind,
-    ProductDevOperationResult, ProductDevRuntime, ProductDevRuntimeBinding, ProductDevRuntimeMode,
-    ProductDevRuntimeReadout, ProductDevRuntimeReceipt, ProductDevRuntimeState,
-    ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+    ProductDevOperationResult, ProductDevRendererResource, ProductDevRuntime,
+    ProductDevRuntimeBinding, ProductDevRuntimeMode, ProductDevRuntimeReadout,
+    ProductDevRuntimeReceipt, ProductDevRuntimeState, ProductDevTimelineCompletion,
+    ProductDevTimelineCompletionResult,
 };
 use render_model::RenderFrameDiff;
 use runtime_input::RuntimeInputBinding;
@@ -27,6 +28,7 @@ use runtime_publication::RuntimePublication;
 struct FixtureRuntime {
     recovery_calls: Arc<AtomicUsize>,
     fail_lifecycle: bool,
+    renderer_resource: Option<ProductDevRendererResource>,
 }
 
 struct ReconnectRuntime {
@@ -228,6 +230,18 @@ impl ProductDevRuntime for ReconnectRuntime {
 }
 
 impl ProductDevRuntime for FixtureRuntime {
+    fn renderer_resource(
+        &mut self,
+        identity: &str,
+        generation: u64,
+    ) -> Result<Option<ProductDevRendererResource>, product_dev_host::ProductDevRuntimeError> {
+        Ok((generation == Self::binding().generation.get())
+            .then_some(self.renderer_resource.as_ref())
+            .flatten()
+            .filter(|resource| resource.identity() == identity)
+            .cloned())
+    }
+
     fn lifecycle(
         &mut self,
         operation: ProductDevLifecycleOperation,
@@ -603,6 +617,54 @@ fn start() -> product_dev_host::RunningProductDevHost {
         ProductDevHostConfig::new(0, bundle),
     )
     .unwrap()
+}
+
+#[test]
+fn renderer_resource_route_serves_raw_bytes_and_fences_runtime_generation() {
+    let resource = ProductDevRendererResource::admit_font(
+        "content/fonts/runtime.woff2",
+        b"wOF2runtime-body".to_vec(),
+    )
+    .unwrap();
+    let identity = resource.identity().to_owned();
+    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    let host = ProductDevHost::start(
+        FixtureRuntime {
+            renderer_resource: Some(resource),
+            ..Default::default()
+        },
+        ProductDevHostConfig::new(0, bundle),
+    )
+    .unwrap();
+    let origin = host.origin();
+    let encoded_identity = identity.replace('/', "%2F").replace(':', "%3A");
+    let response = request(
+        &origin,
+        &format!(
+            "GET /__rusty/product/runtime/resource?identity={encoded_identity}&generation=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(response.contains("Content-Type: font/woff2\r\n"));
+    assert!(response.ends_with("wOF2runtime-body"));
+    let stale = request(
+        &origin,
+        &format!(
+            "GET /__rusty/product/runtime/resource?identity={encoded_identity}&generation=2 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    assert!(stale.starts_with("HTTP/1.1 404 Not Found\r\n"));
+    let missing = request(
+        &origin,
+        "GET /__rusty/product/runtime/resource?identity=font%2Fmissing&generation=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(missing.starts_with("HTTP/1.1 404 Not Found\r\n"));
 }
 
 fn start_debug() -> product_dev_host::RunningProductDevHost {

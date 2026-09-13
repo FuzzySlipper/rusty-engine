@@ -6,7 +6,7 @@ const artifact = new URL('artifacts/product-browser-host/', renderRoot);
 
 mkdirSync(artifact, { recursive: true });
 copyFileSync(new URL('index.d.ts', declarations), new URL('index.d.ts', artifact));
-for (const file of ['local-transport.d.ts', 'product-browser-host.d.ts', 'renderer-preload.d.ts']) {
+for (const file of ['dynamic-renderer-resources.d.ts', 'local-transport.d.ts', 'product-browser-host.d.ts', 'renderer-preload.d.ts']) {
   copyFileSync(new URL(file, declarations), new URL(file, artifact));
 }
 writeFileSync(new URL('index.js', artifact), "export * from './product-browser-host.js';\n");
@@ -27,6 +27,7 @@ writeFileSync(
     files: [
       'index.js',
       'index.d.ts',
+      'dynamic-renderer-resources.d.ts',
       'local-transport.d.ts',
       'product-browser-host.d.ts',
       'product-browser-host.js',

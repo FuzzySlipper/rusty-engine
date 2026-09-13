@@ -7,7 +7,7 @@ public readonly partial record struct MaterialRequest
 {
     public MaterialRequest(
         Color color,
-        RenderResourceHandle texture,
+        RenderResourceReference texture,
         float roughness,
         Color textureTint,
         Vector3 emissionColor,
@@ -44,7 +44,7 @@ public readonly partial record struct MeshResourceCreateRequest
 public readonly partial record struct SpriteAppearanceRequest
 {
     public SpriteAppearanceRequest(
-        RenderResourceHandle texture,
+        RenderResource texture,
         Vector2 uvMin,
         Vector2 uvMax,
         Vector2 pivot,

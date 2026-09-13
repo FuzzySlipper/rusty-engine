@@ -1422,6 +1422,48 @@ fn normalize_bundle_path(value: &str) -> Result<String, CsharpEngineServicesErro
     Ok(value.to_owned())
 }
 
+/// Monotonic slots keep stale handles invalid while released payloads leave memory.
+#[derive(Clone, Default)]
+pub(crate) struct RenderResourceSlots {
+    entries: BTreeMap<usize, CsharpRenderResource>,
+    next: usize,
+}
+impl RenderResourceSlots {
+    fn get(&self, index: usize) -> Option<&CsharpRenderResource> {
+        self.entries.get(&index)
+    }
+    fn get_mut(&mut self, index: usize) -> Option<&mut CsharpRenderResource> {
+        self.entries.get_mut(&index)
+    }
+    fn remove(&mut self, index: usize) -> Option<CsharpRenderResource> {
+        self.entries.remove(&index)
+    }
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &CsharpRenderResource> {
+        self.entries.values()
+    }
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    #[cfg(test)]
+    pub(crate) fn first(&self) -> Option<&CsharpRenderResource> {
+        self.entries.values().next()
+    }
+    fn push(&mut self, resource: CsharpRenderResource) {
+        self.entries.insert(self.next, resource);
+        self.next += 1;
+    }
+}
+impl std::ops::Index<usize> for RenderResourceSlots {
+    type Output = CsharpRenderResource;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.entries[&index]
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RuntimeAppearanceState {
     projector: RuntimeAppearanceProjector,
@@ -1440,9 +1482,19 @@ pub(crate) struct RuntimeAppearanceState {
     next_material: u64,
     retained_object_count: u32,
     retained_light_count: u32,
-    pub(crate) render_resources: Vec<CsharpRenderResource>,
+    pub(crate) render_resources: RenderResourceSlots,
     resource_paths: BTreeMap<(String, NativeTextureFilter, NativeTextureWrap), u64>,
     resource_identities: BTreeMap<String, u64>,
+    /// Each explicit resource admission gives the caller one releasable owner.
+    resource_open_counts: BTreeMap<u64, u32>,
+    /// Direct users hold exact resource handles, never projector catalog entries.
+    appearance_resources: BTreeMap<u64, BTreeSet<u64>>,
+    material_resources: BTreeMap<u64, BTreeSet<u64>>,
+    sprite_atlas_resources: BTreeMap<u64, BTreeSet<u64>>,
+    animation_graph_resources: BTreeMap<u64, BTreeSet<u64>>,
+    animation_clip_pack_resources: BTreeMap<u64, BTreeSet<u64>>,
+    billboard_resources: BTreeMap<u64, BTreeSet<u64>>,
+    emitter_resources: BTreeMap<u64, BTreeSet<u64>>,
     sprite_atlases: BTreeMap<u64, RuntimeSpriteAtlas>,
     sprite_atlas_appearances: BTreeMap<u64, BTreeSet<u64>>,
     sprite_appearance_atlases: BTreeMap<u64, u64>,
@@ -1545,6 +1597,9 @@ pub(crate) struct RuntimeAppearanceCall {
     pub(crate) frame: Option<render_model::RenderFrameDiff>,
     pub(crate) extra_frames: Vec<render_model::RenderFrameDiff>,
     pub(crate) presentation: Vec<PresentationFrameDiff>,
+    /// Payloads released in this callback remain available through delivery of
+    /// its already-staged renderer operations, then may be dropped.
+    pub(crate) retired_resources: Vec<CsharpRenderResource>,
 }
 
 #[derive(Clone)]
@@ -1640,7 +1695,8 @@ pub(crate) type CollisionMeshGeometry = (Vec<[f64; 3]>, Vec<[u32; 3]>);
 pub(crate) struct RuntimeAppearanceBridge {
     pub(crate) state: RuntimeAppearanceState,
     content_resources: BTreeMap<String, Arc<[u8]>>,
-    selection_sealed: bool,
+    content: Option<*const crate::content::RuntimeContentBridge>,
+    camera_view: Option<*const crate::camera_view::RuntimeCameraViewBridge>,
     staged: Option<RuntimeAppearanceCall>,
     callback_error: Option<CsharpEngineServicesError>,
     presentation_diagnostics: Vec<StoredPresentationDiagnostic>,
@@ -1675,9 +1731,17 @@ impl RuntimeAppearanceBridge {
                 next_material: 1,
                 retained_object_count: 0,
                 retained_light_count: 0,
-                render_resources: Vec::new(),
+                render_resources: RenderResourceSlots::default(),
                 resource_paths: BTreeMap::new(),
                 resource_identities: BTreeMap::new(),
+                resource_open_counts: BTreeMap::new(),
+                appearance_resources: BTreeMap::new(),
+                material_resources: BTreeMap::new(),
+                sprite_atlas_resources: BTreeMap::new(),
+                animation_graph_resources: BTreeMap::new(),
+                animation_clip_pack_resources: BTreeMap::new(),
+                billboard_resources: BTreeMap::new(),
+                emitter_resources: BTreeMap::new(),
                 sprite_atlases: BTreeMap::new(),
                 sprite_atlas_appearances: BTreeMap::new(),
                 sprite_appearance_atlases: BTreeMap::new(),
@@ -1707,7 +1771,8 @@ impl RuntimeAppearanceBridge {
                 next_ghost_plate: 1,
             },
             content_resources,
-            selection_sealed: false,
+            content: None,
+            camera_view: None,
             staged: None,
             callback_error: None,
             presentation_diagnostics: Vec::new(),
@@ -1718,6 +1783,58 @@ impl RuntimeAppearanceBridge {
             diagnostics_sink: None,
             reported_recoverable_codes: BTreeSet::new(),
         }
+    }
+
+    pub(crate) fn bind_content(&mut self, content: &crate::content::RuntimeContentBridge) {
+        self.content = Some(content);
+    }
+
+    pub(crate) fn bind_camera_view(
+        &mut self,
+        camera_view: &crate::camera_view::RuntimeCameraViewBridge,
+    ) {
+        // The composed service set owns this boxed bridge for Appearance's lifetime.
+        self.camera_view = Some(camera_view);
+    }
+
+    fn content_reference(
+        &self,
+        reference: NativeContentReferenceHandle,
+    ) -> Result<crate::content::RetainedContent, CsharpEngineServicesError> {
+        // EngineServiceSet keeps the boxed content bridge alive and immobile.
+        self.content
+            .and_then(|content| unsafe { &*content }.retained_content(reference))
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_RENDER_CONTENT_REFERENCE",
+                    "renderer content reference is not live",
+                )
+            })
+    }
+
+    fn content_path(
+        &self,
+        path: &str,
+    ) -> Result<crate::content::RetainedContent, CsharpEngineServicesError> {
+        if let Some(content) = self
+            .content
+            .and_then(|content| unsafe { &*content }.retained_path(path))
+        {
+            return Ok(content);
+        }
+        let path = path.strip_prefix("content/").unwrap_or(path);
+        let bytes = self.content_resources.get(path).cloned().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_UNKNOWN",
+                format!("product content has no renderer resource `{path}`"),
+            )
+        })?;
+        Ok(crate::content::RetainedContent {
+            path: path.to_owned(),
+            sha256: NativeContentSha256::default(),
+            bytes,
+            files: Arc::new(self.content_resources.clone()),
+        })
     }
 
     pub(crate) fn bind_authored_content(
@@ -1758,6 +1875,7 @@ impl RuntimeAppearanceBridge {
             frame: None,
             extra_frames: Vec::new(),
             presentation: Vec::new(),
+            retired_resources: Vec::new(),
         });
         self.callback_error = None;
     }
@@ -1838,7 +1956,8 @@ impl RuntimeAppearanceBridge {
     }
 
     pub(crate) fn seal_resource_selection(&mut self) {
-        self.selection_sealed = true;
+        // Product content has moved to RuntimeContentBridge. This only drops
+        // the legacy constructor snapshot after composition is complete.
         self.content_resources.clear();
     }
 
@@ -1935,6 +2054,7 @@ impl RuntimeAppearanceBridge {
         self.presentation_create_billboard_descriptor(
             request.logical_id,
             self.presentation_billboard_descriptor(request)?,
+            resource_set([request.texture.value, request.font_asset.value]),
         )
     }
 
@@ -1942,9 +2062,24 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: &NativePresentationStructuredBillboardDescriptor,
     ) -> Result<NativePresentationBillboardHandle, CsharpEngineServicesError> {
+        let status_cues = unsafe {
+            borrowed_slice(
+                request.status_cues,
+                request.status_cues_len,
+                "structured billboard status cues",
+            )?
+        };
+        let mut resources = resource_set([request.icon.value, request.font_asset.value]);
+        resources.extend(
+            status_cues
+                .iter()
+                .filter(|cue| cue.has_icon)
+                .map(|cue| cue.icon.value),
+        );
         self.presentation_create_billboard_descriptor(
             request.logical_id,
             self.presentation_structured_billboard_descriptor(request)?,
+            resources,
         )
     }
 
@@ -1952,6 +2087,7 @@ impl RuntimeAppearanceBridge {
         &mut self,
         logical_id: u64,
         descriptor: BillboardDescriptor,
+        resources: BTreeSet<u64>,
     ) -> Result<NativePresentationBillboardHandle, CsharpEngineServicesError> {
         if logical_id == 0 {
             return Err(CsharpEngineServicesError::new(
@@ -1965,6 +2101,10 @@ impl RuntimeAppearanceBridge {
             .state
             .billboards
             .insert(handle.raw(), handle);
+        self.staged_mut()?
+            .state
+            .billboard_resources
+            .insert(logical_id, resources);
         Ok(NativePresentationBillboardHandle { value: logical_id })
     }
 
@@ -1977,6 +2117,7 @@ impl RuntimeAppearanceBridge {
             owner,
             request.logical_id,
             self.presentation_billboard_descriptor(request)?,
+            resource_set([request.texture.value, request.font_asset.value]),
         )
     }
 
@@ -1985,10 +2126,25 @@ impl RuntimeAppearanceBridge {
         owner: NativePresentationBillboardHandle,
         request: &NativePresentationStructuredBillboardDescriptor,
     ) -> Result<(), CsharpEngineServicesError> {
+        let status_cues = unsafe {
+            borrowed_slice(
+                request.status_cues,
+                request.status_cues_len,
+                "structured billboard status cues",
+            )?
+        };
+        let mut resources = resource_set([request.icon.value, request.font_asset.value]);
+        resources.extend(
+            status_cues
+                .iter()
+                .filter(|cue| cue.has_icon)
+                .map(|cue| cue.icon.value),
+        );
         self.presentation_update_billboard_descriptor(
             owner,
             request.logical_id,
             self.presentation_structured_billboard_descriptor(request)?,
+            resources,
         )
     }
 
@@ -1997,6 +2153,7 @@ impl RuntimeAppearanceBridge {
         owner: NativePresentationBillboardHandle,
         logical_id: u64,
         descriptor: BillboardDescriptor,
+        resources: BTreeSet<u64>,
     ) -> Result<(), CsharpEngineServicesError> {
         let handle = self
             .staged_mut()?
@@ -2028,7 +2185,12 @@ impl RuntimeAppearanceBridge {
             visible: Some(descriptor.visible),
             layout: descriptor.layout,
         };
-        self.stage_billboard(BillboardProjectionOp::Update { handle, patch })
+        self.stage_billboard(BillboardProjectionOp::Update { handle, patch })?;
+        self.staged_mut()?
+            .state
+            .billboard_resources
+            .insert(owner.value, resources);
+        Ok(())
     }
 
     pub(crate) fn presentation_destroy_billboard(
@@ -2049,6 +2211,10 @@ impl RuntimeAppearanceBridge {
             })?;
         self.stage_billboard(BillboardProjectionOp::Destroy { handle })?;
         self.staged_mut()?.state.billboards.remove(&owner.value);
+        self.staged_mut()?
+            .state
+            .billboard_resources
+            .remove(&owner.value);
         Ok(())
     }
 
@@ -2149,6 +2315,13 @@ impl RuntimeAppearanceBridge {
             .state
             .emitters
             .insert(handle.raw(), handle);
+        self.staged_mut()?.state.emitter_resources.insert(
+            handle.raw(),
+            matches!(request.visual, NativePresentationParticleVisual::Billboard)
+                .then_some(request.sprite.value)
+                .into_iter()
+                .collect(),
+        );
         Ok(NativePresentationEmitterHandle {
             value: request.logical_id,
         })
@@ -2195,7 +2368,15 @@ impl RuntimeAppearanceBridge {
             visible: Some(descriptor.visible),
             collision: Some(descriptor.collision),
         };
-        self.stage_particle(ParticleProjectionOp::Update { handle, patch })
+        self.stage_particle(ParticleProjectionOp::Update { handle, patch })?;
+        self.staged_mut()?.state.emitter_resources.insert(
+            owner.value,
+            matches!(request.visual, NativePresentationParticleVisual::Billboard)
+                .then_some(request.sprite.value)
+                .into_iter()
+                .collect(),
+        );
+        Ok(())
     }
 
     pub(crate) fn presentation_destroy_emitter(
@@ -2216,6 +2397,10 @@ impl RuntimeAppearanceBridge {
             })?;
         self.stage_particle(ParticleProjectionOp::Destroy { handle })?;
         self.staged_mut()?.state.emitters.remove(&owner.value);
+        self.staged_mut()?
+            .state
+            .emitter_resources
+            .remove(&owner.value);
         Ok(())
     }
 
@@ -2853,7 +3038,7 @@ impl RuntimeAppearanceBridge {
 
     fn presentation_texture_ref(
         &self,
-        resource: NativeRenderResourceHandle,
+        resource: NativeRenderResourceReference,
     ) -> Result<BillboardTextureRef, CsharpEngineServicesError> {
         let resource = self.resource(resource.value)?;
         if resource.kind() != CsharpRenderResourceKind::Texture {
@@ -2871,7 +3056,7 @@ impl RuntimeAppearanceBridge {
     fn presentation_font_ref(
         &self,
         kind: NativePresentationFontKind,
-        asset: NativeRenderResourceHandle,
+        asset: NativeRenderResourceReference,
         family: NativeUtf8Slice,
     ) -> Result<BillboardFontRef, CsharpEngineServicesError> {
         let family = native_presentation_text(family, "billboard font family")?;
@@ -3045,46 +3230,19 @@ impl RuntimeAppearanceBridge {
         let requested_path = unsafe {
             borrowed_utf8(request.path.bytes, request.path.len, "resource path")?.to_owned()
         };
-        let (filter, wrap) = if requested_path.ends_with(".png") {
-            (request.filter, request.wrap)
-        } else {
-            (NativeTextureFilter::Nearest, NativeTextureWrap::Clamp)
-        };
-        if let Some(handle) = self
-            .staged
-            .as_ref()
-            .and_then(|staged| {
-                staged
-                    .state
-                    .resource_paths
-                    .get(&(requested_path.clone(), filter, wrap))
-            })
-            .copied()
-        {
-            return self.resource_info(handle);
-        }
-        if self.selection_sealed {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_SELECTION_CLOSED",
-                format!(
-                    "renderer resource `{requested_path}` was not selected during product Create"
-                ),
-            ));
-        }
-        let relative_path = requested_path
-            .strip_prefix("content/")
-            .unwrap_or(&requested_path)
-            .to_owned();
-        let bytes = self
-            .content_resources
-            .get(&relative_path)
-            .cloned()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_RENDER_RESOURCE_UNKNOWN",
-                    format!("product content has no renderer resource `{requested_path}`"),
-                )
-            })?;
+        let content = self.content_path(&requested_path)?;
+        self.admit_resource(content, request.filter, request.wrap)
+    }
+
+    fn admit_resource(
+        &mut self,
+        content: crate::content::RetainedContent,
+        filter: NativeTextureFilter,
+        wrap: NativeTextureWrap,
+    ) -> Result<NativeRenderResourceInfo, CsharpEngineServicesError> {
+        let relative_path = content.path;
+        let requested_path = relative_path.clone();
+        let bytes = content.bytes;
         let browser_path = format!("content/{relative_path}");
         let resource = match () {
             _ if relative_path.ends_with(".png") => {
@@ -3105,9 +3263,85 @@ impl RuntimeAppearanceBridge {
                 ));
             }
         }?;
-        let handle =
-            self.stage_resource(resource, [browser_path, relative_path, requested_path])?;
+        let handle = self.stage_resource(resource, [])?;
+        self.acquire_resource_owner(handle)?;
         self.resource_info(handle)
+    }
+
+    fn acquire_resource_owner(&mut self, handle: u64) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        if staged
+            .state
+            .render_resources
+            .get(resource_slot(handle)?)
+            .is_none()
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_HANDLE",
+                "unknown resource handle",
+            ));
+        }
+        let count = staged.state.resource_open_counts.entry(handle).or_default();
+        *count = count.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_OWNER",
+                "renderer resource owner count overflowed",
+            )
+        })?;
+        Ok(())
+    }
+
+    fn destroy_resource(
+        &mut self,
+        resource: NativeRenderResourceHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let handle = resource.value;
+        let sky_uses_resource = self
+            .camera_view
+            .is_some_and(|camera_view| unsafe { (&*camera_view).uses_sky_texture(handle) });
+        let staged = self.staged_mut()?;
+        if staged
+            .state
+            .render_resources
+            .get(resource_slot(handle)?)
+            .is_none()
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_HANDLE",
+                "renderer resource is not live",
+            ));
+        }
+        let count = staged
+            .state
+            .resource_open_counts
+            .get(&handle)
+            .copied()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_RENDER_RESOURCE_OWNER",
+                    "renderer resource has no caller-owned admission",
+                )
+            })?;
+        if count > 1 {
+            staged.state.resource_open_counts.insert(handle, count - 1);
+            return Ok(());
+        }
+        if let Some(owner) = resource_live_owner(&staged.state, handle) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_IN_USE",
+                format!("dispose the live {owner} before releasing this renderer resource"),
+            ));
+        }
+        if sky_uses_resource {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_RENDER_RESOURCE_IN_USE",
+                "clear the active sky background before releasing its texture resource",
+            ));
+        }
+        staged.state.resource_open_counts.remove(&handle);
+        let retired = remove_resource(&mut staged.state, handle)?;
+        staged.retired_resources.push(retired);
+        Ok(())
     }
 
     fn stage_resource(
@@ -3139,7 +3373,7 @@ impl RuntimeAppearanceBridge {
         {
             handle
         } else {
-            let handle = u64::try_from(staged.state.render_resources.len())
+            let handle = u64::try_from(staged.state.render_resources.next)
                 .map_err(|_| {
                     CsharpEngineServicesError::new(
                         "CSHARP_RENDER_RESOURCE_HANDLE",
@@ -3244,6 +3478,36 @@ impl RuntimeAppearanceBridge {
         Ok(NativeAppearanceHandle { value: handle })
     }
 
+    fn set_appearance_resources(
+        &mut self,
+        appearance: u64,
+        resources: impl IntoIterator<Item = u64>,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let resources = resources
+            .into_iter()
+            .filter(|handle| *handle != 0)
+            .collect::<BTreeSet<_>>();
+        let staged = self.staged_mut()?;
+        for resource in &resources {
+            if staged
+                .state
+                .render_resources
+                .get(resource_slot(*resource)?)
+                .is_none()
+            {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_RENDER_RESOURCE_HANDLE",
+                    "appearance selected an unavailable resource",
+                ));
+            }
+        }
+        staged
+            .state
+            .appearance_resources
+            .insert(appearance, resources);
+        Ok(())
+    }
+
     fn create_light(
         &mut self,
         request: NativeLightRequest,
@@ -3346,6 +3610,10 @@ impl RuntimeAppearanceBridge {
         }
         resources.materials.push(descriptor);
         staged.state.materials.insert(handle, id);
+        staged
+            .state
+            .material_resources
+            .insert(handle, resource_set([request.texture.value]));
         Ok(NativeMaterialHandle { value: handle })
     }
 
@@ -3451,6 +3719,10 @@ impl RuntimeAppearanceBridge {
         }
         resources.materials.push(material.clone());
         staged.state.materials.insert(handle, material.id);
+        staged
+            .state
+            .material_resources
+            .insert(handle, resource_set([request.texture.value]));
         Ok(NativeMaterialHandle { value: handle })
     }
 
@@ -3488,6 +3760,10 @@ impl RuntimeAppearanceBridge {
                 CsharpEngineServicesError::new("CSHARP_MATERIAL", "material catalog drifted")
             })?;
         *material = descriptor;
+        staged.state.material_resources.insert(
+            request.material.value,
+            resource_set([request.replacement.texture.value]),
+        );
         Ok(())
     }
 
@@ -3533,6 +3809,7 @@ impl RuntimeAppearanceBridge {
         }
         let resources = staged.state.projector.resources_mut();
         resources.materials.retain(|candidate| candidate.id != id);
+        staged.state.material_resources.remove(&material.value);
         Ok(())
     }
 
@@ -3579,6 +3856,7 @@ impl RuntimeAppearanceBridge {
             // then owner disposal is safe and has no renderer side channel.
             return Ok(());
         };
+        staged.state.appearance_resources.remove(&appearance.value);
         staged.state.appearance_materials.remove(&appearance.value);
         staged.state.mesh_appearances.remove(&appearance.value);
         staged.state.animated_appearances.remove(&appearance.value);
@@ -3596,6 +3874,46 @@ impl RuntimeAppearanceBridge {
             }
         }
         staged.state.projector.remove_appearance(&identity);
+        // Inline/content static meshes and legacy sprites synthesize renderer
+        // catalog entries per appearance. Once the owner is gone those entries
+        // must not become invisible resource retainers.
+        let suffix = appearance.value.to_string();
+        let mesh_asset = format!("mesh/native-{suffix}");
+        if staged
+            .state
+            .projector
+            .resources_mut()
+            .static_meshes
+            .iter()
+            .any(|mesh| mesh.asset == mesh_asset)
+        {
+            let projection = staged
+                .state
+                .projector
+                .release_static_mesh(&mesh_asset)
+                .map_err(|error| {
+                    CsharpEngineServicesError::new("CSHARP_MESH_RELEASE", format!("{error:?}"))
+                })?;
+            push_extra_frame(staged, projection.frame);
+        }
+        let resources = staged.state.projector.resources_mut();
+        resources
+            .static_meshes
+            .retain(|mesh| mesh.asset != format!("mesh/native-{suffix}"));
+        resources.materials.retain(|material| {
+            !material
+                .id
+                .starts_with(&format!("material/native-{suffix}-"))
+        });
+        resources
+            .textures
+            .retain(|texture| texture.id != format!("texture/native-{suffix}"));
+        resources
+            .sprite_atlases
+            .retain(|atlas| atlas.id != format!("sprite/native-{suffix}"));
+        staged
+            .retired_resources
+            .extend(release_unowned_internal_resources(&mut staged.state));
         Ok(())
     }
 
@@ -4362,10 +4680,12 @@ impl RuntimeAppearanceBridge {
             resources.materials.extend(materials);
             resources.static_meshes.push(asset);
         }
-        self.allocate_appearance(Appearance::StaticMesh {
+        let appearance = self.allocate_appearance(Appearance::StaticMesh {
             asset: mesh_id,
             material_overrides: Vec::new(),
-        })
+        })?;
+        self.set_appearance_resources(appearance.value, [request.resource.value])?;
+        Ok(appearance)
     }
 
     fn create_static_mesh_from_content(
@@ -4381,24 +4701,16 @@ impl RuntimeAppearanceBridge {
             )?
             .to_owned()
         };
-        if self.selection_sealed {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_SELECTION_CLOSED",
-                format!(
-                    "static mesh content `{requested_path}` was not selected during product Create"
-                ),
-            ));
-        }
-        let relative_path = requested_path
-            .strip_prefix("content/")
-            .unwrap_or(&requested_path)
-            .to_owned();
-        let bytes = self.content_resources.get(&relative_path).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_STATIC_MESH_CONTENT_UNKNOWN",
-                format!("product content has no static mesh document `{requested_path}`"),
-            )
-        })?;
+        let content = self.content_path(&requested_path)?;
+        self.admit_static_mesh(content, request.color)
+    }
+
+    fn admit_static_mesh(
+        &mut self,
+        content: crate::content::RetainedContent,
+        color: NativeColor,
+    ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+        let bytes = content.bytes.as_ref();
         let asset = serde_json::from_slice::<StaticMeshAsset>(bytes).map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_STATIC_MESH_CONTENT_JSON", error.to_string())
         })?;
@@ -4439,8 +4751,10 @@ impl RuntimeAppearanceBridge {
         let browser_path = format!("content/engine-mesh/{content_hash}.rmesh");
         let resource =
             CsharpRenderResource::admit_mesh(browser_path.clone(), packed_resource.bytes)?;
-        self.stage_resource(resource, [browser_path])?;
-        self.create_retained_static_mesh(payload, asset.material_slots, request.color)
+        let resource = self.stage_resource(resource, [browser_path])?;
+        let appearance = self.create_retained_static_mesh(payload, asset.material_slots, color)?;
+        self.set_appearance_resources(appearance.value, [resource])?;
+        Ok(appearance)
     }
 
     fn create_retained_static_mesh(
@@ -4558,6 +4872,10 @@ impl RuntimeAppearanceBridge {
             .state
             .sprite_atlas_appearances
             .insert(handle, BTreeSet::new());
+        staged
+            .state
+            .sprite_atlas_resources
+            .insert(handle, BTreeSet::from([request.texture.value]));
         Ok(NativeSpriteAtlasHandle { value: handle })
     }
 
@@ -4600,6 +4918,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         staged.state.sprite_atlases.remove(&atlas.value);
+        staged.state.sprite_atlas_resources.remove(&atlas.value);
         staged.state.sprite_atlas_appearances.remove(&atlas.value);
         staged.state.sprite_playbacks_by_atlas.remove(&atlas.value);
         let resources = staged.state.projector.resources_mut();
@@ -4637,7 +4956,7 @@ impl RuntimeAppearanceBridge {
         &self,
         value: NativeSpriteMaterialDescriptor,
     ) -> Result<SpriteMaterialDescriptor, CsharpEngineServicesError> {
-        let resolve_texture = |handle: NativeRenderResourceHandle,
+        let resolve_texture = |handle: NativeRenderResourceReference,
                                label: &str|
          -> Result<Option<String>, CsharpEngineServicesError> {
             if handle.value == 0 {
@@ -4751,6 +5070,13 @@ impl RuntimeAppearanceBridge {
         let (_, sprite) = self.sprite_from_atlas(request)?;
         self.retain_sprite_material_textures(request.material)?;
         let appearance = self.allocate_appearance(Appearance::Sprite { sprite })?;
+        self.set_appearance_resources(
+            appearance.value,
+            [
+                request.material.normal_texture.value,
+                request.material.depth_texture.value,
+            ],
+        )?;
         let staged = self.staged_mut()?;
         staged
             .state
@@ -5491,7 +5817,16 @@ impl RuntimeAppearanceBridge {
             resources.textures.push(texture);
             resources.sprite_atlases.push(atlas);
         }
-        self.allocate_appearance(Appearance::Sprite { sprite })
+        let appearance = self.allocate_appearance(Appearance::Sprite { sprite })?;
+        self.set_appearance_resources(
+            appearance.value,
+            [
+                request.texture.value,
+                request.material.normal_texture.value,
+                request.material.depth_texture.value,
+            ],
+        )?;
+        Ok(appearance)
     }
 
     fn replace_sprite(
@@ -5516,52 +5851,21 @@ impl RuntimeAppearanceBridge {
             )?
             .to_owned()
         };
-        if let Some(handle) = self
-            .staged
-            .as_ref()
-            .and_then(|staged| {
-                staged.state.resource_paths.get(&(
-                    requested_path.clone(),
-                    NativeTextureFilter::Nearest,
-                    NativeTextureWrap::Clamp,
-                ))
-            })
-            .copied()
-        {
-            if self.resource(handle)?.kind() == CsharpRenderResourceKind::AnimatedMesh {
-                return Ok(NativeRenderResourceHandle { value: handle });
-            }
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_RESOURCE_KIND",
-                "this content path is already admitted as a different renderer resource kind",
-            ));
-        }
-        if self.selection_sealed {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_RESOURCE_SELECTION_CLOSED",
-                "animated GLB resources must be selected during product Create",
-            ));
-        }
-        let relative_path = requested_path
-            .strip_prefix("content/")
-            .unwrap_or(&requested_path)
-            .to_owned();
-        let bytes = self
-            .content_resources
-            .get(&relative_path)
-            .cloned()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_RESOURCE_UNKNOWN",
-                    format!("product content has no animated GLB `{requested_path}`"),
-                )
-            })?;
+        let content = self.content_path(&requested_path)?;
+        self.admit_animated_mesh(content)
+    }
+
+    fn admit_animated_mesh(
+        &mut self,
+        content: crate::content::RetainedContent,
+    ) -> Result<NativeRenderResourceHandle, CsharpEngineServicesError> {
+        let relative_path = content.path;
+        let bytes = content.bytes;
         let browser_path = format!("content/{relative_path}");
-        let packed =
-            pack_animated_glb_closure(&relative_path, bytes.as_ref(), &self.content_resources)?;
+        let packed = pack_animated_glb_closure(&relative_path, bytes.as_ref(), &content.files)?;
         let resource = CsharpRenderResource::admit_animated_mesh(browser_path.clone(), packed)?;
-        let handle =
-            self.stage_resource(resource, [browser_path, relative_path, requested_path])?;
+        let handle = self.stage_resource(resource, [])?;
+        self.acquire_resource_owner(handle)?;
         Ok(NativeRenderResourceHandle { value: handle })
     }
 
@@ -5577,53 +5881,22 @@ impl RuntimeAppearanceBridge {
             )?
             .to_owned()
         };
-        if let Some(handle) = self
-            .staged
-            .as_ref()
-            .and_then(|staged| {
-                staged.state.resource_paths.get(&(
-                    requested_path.clone(),
-                    NativeTextureFilter::Nearest,
-                    NativeTextureWrap::Clamp,
-                ))
-            })
-            .copied()
-        {
-            if self.resource(handle)?.kind() == CsharpRenderResourceKind::AnimationClipPack {
-                return Ok(NativeRenderResourceHandle { value: handle });
-            }
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_CLIP_PACK_RESOURCE_KIND",
-                "this content path is already admitted as a different renderer resource kind",
-            ));
-        }
-        if self.selection_sealed {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_RESOURCE_SELECTION_CLOSED",
-                "animation clip-pack GLB resources must be selected during product Create",
-            ));
-        }
-        let relative_path = requested_path
-            .strip_prefix("content/")
-            .unwrap_or(&requested_path)
-            .to_owned();
-        let bytes = self
-            .content_resources
-            .get(&relative_path)
-            .cloned()
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_CLIP_PACK_RESOURCE_UNKNOWN",
-                    format!("product content has no animation clip-pack GLB `{requested_path}`"),
-                )
-            })?;
+        let content = self.content_path(&requested_path)?;
+        self.admit_animation_clip_pack(content)
+    }
+
+    fn admit_animation_clip_pack(
+        &mut self,
+        content: crate::content::RetainedContent,
+    ) -> Result<NativeRenderResourceHandle, CsharpEngineServicesError> {
+        let relative_path = content.path;
+        let bytes = content.bytes;
         let browser_path = format!("content/{relative_path}");
-        let packed =
-            pack_animated_glb_closure(&relative_path, bytes.as_ref(), &self.content_resources)?;
+        let packed = pack_animated_glb_closure(&relative_path, bytes.as_ref(), &content.files)?;
         let resource =
             CsharpRenderResource::admit_animation_clip_pack(browser_path.clone(), packed)?;
-        let handle =
-            self.stage_resource(resource, [browser_path, relative_path, requested_path])?;
+        let handle = self.stage_resource(resource, [])?;
+        self.acquire_resource_owner(handle)?;
         Ok(NativeRenderResourceHandle { value: handle })
     }
 
@@ -5743,6 +6016,12 @@ impl RuntimeAppearanceBridge {
         *primary_resource
             .animated_mesh_mut()
             .expect("validated primary descriptor") = assembled;
+        staged
+            .state
+            .animation_clip_pack_resources
+            .entry(request.primary_mesh.value)
+            .or_default()
+            .insert(request.clip_pack.value);
         Ok(())
     }
 
@@ -5790,6 +6069,7 @@ impl RuntimeAppearanceBridge {
             .state
             .animated_appearances
             .insert(appearance.value, request.resource.value);
+        self.set_appearance_resources(appearance.value, [request.resource.value])?;
         Ok(appearance)
     }
 
@@ -6046,6 +6326,10 @@ impl RuntimeAppearanceBridge {
                 state_order: Vec::new(),
             },
         );
+        staged
+            .state
+            .animation_graph_resources
+            .insert(handle, BTreeSet::from([request.resource.value]));
         Ok(NativeAnimationGraphHandle { value: handle })
     }
 
@@ -6068,6 +6352,7 @@ impl RuntimeAppearanceBridge {
         if staged.state.animation_graphs.remove(&graph.value).is_none() {
             return Ok(());
         }
+        staged.state.animation_graph_resources.remove(&graph.value);
         staged
             .state
             .animation_transitions
@@ -7264,7 +7549,7 @@ impl RuntimeAppearanceBridge {
     }
 }
 
-fn animation_assets(resources: &[CsharpRenderResource]) -> BTreeMap<String, ResolvedRenderAsset> {
+fn animation_assets(resources: &RenderResourceSlots) -> BTreeMap<String, ResolvedRenderAsset> {
     resources
         .iter()
         .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
@@ -7283,9 +7568,7 @@ fn animation_assets(resources: &[CsharpRenderResource]) -> BTreeMap<String, Reso
         .collect()
 }
 
-fn presentation_assets(
-    resources: &[CsharpRenderResource],
-) -> BTreeMap<String, ResolvedRenderAsset> {
+fn presentation_assets(resources: &RenderResourceSlots) -> BTreeMap<String, ResolvedRenderAsset> {
     resources
         .iter()
         .filter(|resource| {
@@ -7501,7 +7784,7 @@ fn native_particle_diagnostic_code(
     }
 }
 
-fn animation_asset_clips(resources: &[CsharpRenderResource], asset: &str) -> Vec<String> {
+fn animation_asset_clips(resources: &RenderResourceSlots, asset: &str) -> Vec<String> {
     resources
         .iter()
         .filter(|resource| resource.kind() == CsharpRenderResourceKind::AnimatedMesh)
@@ -7521,7 +7804,7 @@ fn animation_asset_clips(resources: &[CsharpRenderResource], asset: &str) -> Vec
         .unwrap_or_default()
 }
 
-fn animation_asset_has_clip(resources: &[CsharpRenderResource], asset: &str, clip: &str) -> bool {
+fn animation_asset_has_clip(resources: &RenderResourceSlots, asset: &str, clip: &str) -> bool {
     animation_asset_clips(resources, asset)
         .iter()
         .any(|candidate| candidate == clip)
@@ -7987,6 +8270,13 @@ pub(crate) unsafe extern "C" fn open_render_resource(
             0
         }
     }
+}
+
+pub(crate) unsafe extern "C" fn destroy_render_resource(
+    context: *mut c_void,
+    resource: NativeRenderResourceHandle,
+) -> i32 {
+    appearance_void(context, |bridge| bridge.destroy_resource(resource))
 }
 
 pub(crate) unsafe extern "C" fn create_primitive_appearance(
@@ -8970,6 +9260,8 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
     NativeAnimationApi {
         context: (bridge as *mut RuntimeAppearanceBridge).cast(),
         open_animated_mesh,
+        open_animated_mesh_from_content,
+        open_animation_clip_pack_from_content,
         open_animation_clip_pack,
         associate_animation_clip_pack,
         create_animated_mesh_appearance,
@@ -9382,10 +9674,115 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
     }
 }
 
+fn resource_slot(handle: u64) -> Result<usize, CsharpEngineServicesError> {
+    usize::try_from(handle.checked_sub(1).ok_or_else(|| {
+        CsharpEngineServicesError::new("CSHARP_RENDER_RESOURCE_HANDLE", "invalid resource handle")
+    })?)
+    .map_err(|_| {
+        CsharpEngineServicesError::new(
+            "CSHARP_RENDER_RESOURCE_HANDLE",
+            "renderer resource handle overflowed",
+        )
+    })
+}
+
+fn resource_set(handles: impl IntoIterator<Item = u64>) -> BTreeSet<u64> {
+    handles.into_iter().filter(|handle| *handle != 0).collect()
+}
+
+fn resource_live_owner(state: &RuntimeAppearanceState, handle: u64) -> Option<&'static str> {
+    if state
+        .appearance_resources
+        .values()
+        .any(|resources| resources.contains(&handle))
+    {
+        return Some("appearance");
+    }
+    if state
+        .material_resources
+        .values()
+        .any(|resources| resources.contains(&handle))
+    {
+        return Some("material");
+    }
+    if state
+        .sprite_atlas_resources
+        .values()
+        .any(|resources| resources.contains(&handle))
+    {
+        return Some("sprite atlas");
+    }
+    if state
+        .animation_graph_resources
+        .values()
+        .any(|resources| resources.contains(&handle))
+    {
+        return Some("animation graph");
+    }
+    if state
+        .animation_clip_pack_resources
+        .values()
+        .any(|resources| resources.contains(&handle))
+    {
+        return Some("animation clip-pack association");
+    }
+    if state
+        .billboard_resources
+        .values()
+        .any(|resources| resources.contains(&handle))
+    {
+        return Some("billboard");
+    }
+    if state
+        .emitter_resources
+        .values()
+        .any(|resources| resources.contains(&handle))
+    {
+        return Some("particle emitter");
+    }
+    None
+}
+
+fn remove_resource(
+    state: &mut RuntimeAppearanceState,
+    handle: u64,
+) -> Result<CsharpRenderResource, CsharpEngineServicesError> {
+    let index = resource_slot(handle)?;
+    let resource = state.render_resources.remove(index).ok_or_else(|| {
+        CsharpEngineServicesError::new(
+            "CSHARP_RENDER_RESOURCE_HANDLE",
+            "renderer resource is not live",
+        )
+    })?;
+    state.resource_identities.remove(resource.asset_identity());
+    state.resource_paths.retain(|_, mapped| *mapped != handle);
+    state.resource_open_counts.remove(&handle);
+    state.animation_clip_pack_resources.remove(&handle);
+    Ok(resource)
+}
+
+fn release_unowned_internal_resources(
+    state: &mut RuntimeAppearanceState,
+) -> Vec<CsharpRenderResource> {
+    let mut retired = Vec::new();
+    loop {
+        let orphan = state.resource_identities.values().copied().find(|handle| {
+            !state.resource_open_counts.contains_key(handle)
+                && resource_live_owner(state, *handle).is_none()
+        });
+        let Some(handle) = orphan else { break };
+        // The handle came from a monotonic internal slot and has no exposed
+        // owner. `resource_live_owner` establishes that no retained fact can
+        // still name it.
+        retired.push(remove_resource(state, handle).expect("live internal resource slot"));
+    }
+    retired
+}
+
 fn material_descriptor(
     id: String,
     request: NativeMaterialRequest,
-    resources: &[CsharpRenderResource],
+    resources: &RenderResourceSlots,
 ) -> Result<RenderMaterialDescriptor, CsharpEngineServicesError> {
     let texture = if request.texture.value == 0 {
         None
@@ -9468,7 +9865,7 @@ fn retarget_voxel_surface(surface: &mut VoxelSurfaceDescriptor, texture_id: &str
 
 fn texture_descriptor_for_material(
     material: &RenderMaterialDescriptor,
-    resources: &[CsharpRenderResource],
+    resources: &RenderResourceSlots,
 ) -> Result<Option<TextureDescriptor>, CsharpEngineServicesError> {
     let Some(identity) = material.texture.as_deref() else {
         return Ok(None);
@@ -9502,6 +9899,74 @@ fn retain_texture_descriptor(
     }
     textures.push(texture);
     Ok(())
+}
+
+pub(crate) unsafe extern "C" fn open_render_resource_from_content(
+    context: *mut c_void,
+    request: *const NativeRenderResourceContentRequest,
+    result: *mut NativeRenderResourceInfo,
+) -> i32 {
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+    let request = unsafe { *request };
+    match bridge
+        .content_reference(request.content)
+        .and_then(|content| bridge.admit_resource(content, request.filter, request.wrap))
+    {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.callback_error = Some(error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn create_static_mesh_from_content_reference(
+    context: *mut c_void,
+    request: *const NativeStaticMeshContentReferenceRequest,
+    result: *mut NativeAppearanceHandle,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    let request = unsafe { *request };
+    appearance_result(context, result, |bridge| {
+        let content = bridge.content_reference(request.content)?;
+        bridge.admit_static_mesh(content, request.color)
+    })
+}
+
+pub(crate) unsafe extern "C" fn open_animated_mesh_from_content(
+    context: *mut c_void,
+    request: *const NativeAnimationContentRequest,
+    result: *mut NativeRenderResourceHandle,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    animation_result(context, result, |bridge| {
+        let content = bridge.content_reference(unsafe { (*request).content })?;
+        bridge.admit_animated_mesh(content)
+    })
+}
+
+pub(crate) unsafe extern "C" fn open_animation_clip_pack_from_content(
+    context: *mut c_void,
+    request: *const NativeAnimationContentRequest,
+    result: *mut NativeRenderResourceHandle,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    animation_result(context, result, |bridge| {
+        let content = bridge.content_reference(unsafe { (*request).content })?;
+        bridge.admit_animation_clip_pack(content)
+    })
 }
 
 #[cfg(test)]
@@ -9726,7 +10191,7 @@ pub(super) mod tests {
         let material = bridge
             .create_material(NativeMaterialRequest {
                 color,
-                texture: NativeRenderResourceHandle { value: 0 },
+                texture: NativeRenderResourceReference { value: 0 },
                 roughness: 0.7,
                 texture_tint: color,
                 emission_color: NativeVec3::default(),
@@ -9870,7 +10335,7 @@ pub(super) mod tests {
         let material = bridge
             .create_material(NativeMaterialRequest {
                 color,
-                texture: NativeRenderResourceHandle { value: 0 },
+                texture: NativeRenderResourceReference { value: 0 },
                 roughness: 0.7,
                 texture_tint: color,
                 emission_color: NativeVec3::default(),
@@ -10089,7 +10554,7 @@ pub(super) mod tests {
                     b: 0.6,
                     a: 1.0,
                 },
-                texture: NativeRenderResourceHandle { value: 0 },
+                texture: NativeRenderResourceReference { value: 0 },
                 roughness: 0.7,
                 texture_tint: NativeColor {
                     r: 1.0,
@@ -10757,7 +11222,9 @@ pub(super) mod tests {
                         b: 1.0,
                         a: 1.0,
                     },
-                    texture: resource.handle,
+                    texture: NativeRenderResourceReference {
+                        value: resource.handle.value,
+                    },
                     roughness: 1.0,
                     texture_tint: NativeColor {
                         r: 1.0,
@@ -10834,8 +11301,10 @@ pub(super) mod tests {
         let mut request = atlas_sprite_request(atlas, 7);
         request.material = NativeSpriteMaterialDescriptor {
             lighting: NativeSpriteLightingMode::AuthoredNormal,
-            normal_texture: normal_texture.handle,
-            depth_texture: NativeRenderResourceHandle::default(),
+            normal_texture: NativeRenderResourceReference {
+                value: normal_texture.handle.value,
+            },
+            depth_texture: NativeRenderResourceReference::default(),
             normal_strength: 1.5,
             normal_bias: 0.1,
             alpha_mode: NativeSpriteAlphaMode::Mask,
@@ -10929,24 +11398,126 @@ pub(super) mod tests {
             .is_err());
         bridge.discard_call();
         assert_eq!(bridge.state.render_resources.len(), 1);
+    }
 
-        bridge.seal_resource_selection();
+    #[test]
+    fn render_resource_release_counts_owners_guards_live_materials_and_reopens_fresh_slot() {
+        let mut content = BTreeMap::new();
+        content.insert("release.png".to_owned(), Arc::from(RGBA_PNG));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+
+        bridge.begin_call();
+        let first = bridge
+            .open_resource(&resource_request("release.png"))
+            .unwrap();
+        let duplicate = bridge
+            .open_resource(&resource_request("release.png"))
+            .unwrap();
+        assert_eq!(first.handle, duplicate.handle);
+        bridge
+            .destroy_resource(first.handle)
+            .expect("one duplicate owner released");
+        assert!(bridge.resource(first.handle.value).is_ok());
+        bridge
+            .create_material(NativeMaterialRequest {
+                color: NativeColor {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                texture: NativeRenderResourceReference {
+                    value: first.handle.value,
+                },
+                roughness: 1.0,
+                texture_tint: NativeColor {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: false,
+                alpha_mode: NativeMaterialAlphaMode::Opaque,
+                alpha_cutoff: 0.5,
+            })
+            .unwrap();
+        assert_eq!(
+            bridge.destroy_resource(first.handle).unwrap_err().code(),
+            "CSHARP_RENDER_RESOURCE_IN_USE"
+        );
+        bridge
+            .destroy_material(NativeMaterialHandle { value: 1 })
+            .unwrap();
+        bridge.destroy_resource(first.handle).unwrap();
+        assert!(bridge.resource(first.handle.value).is_err());
+        assert_eq!(
+            bridge.staged.as_ref().unwrap().retired_resources.len(),
+            1,
+            "same-call publication retains the released payload"
+        );
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        bridge.commit(Some(call));
+
+        bridge.begin_call();
+        let reopened = bridge
+            .open_resource(&resource_request("release.png"))
+            .unwrap();
+        assert_ne!(
+            reopened.handle, first.handle,
+            "released handles stay tombstoned"
+        );
+    }
+
+    #[test]
+    fn render_resource_release_waits_for_the_staged_or_retained_sky() {
+        let mut content = BTreeMap::new();
+        content.insert("sky.png".to_owned(), Arc::from(RGBA_PNG));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        let mut camera = crate::camera_view::RuntimeCameraViewBridge::new();
+        bridge.bind_camera_view(&camera);
+
+        bridge.begin_call();
+        let sky = bridge.open_resource(&resource_request("sky.png")).unwrap();
+        let call = bridge.take_staged_call().unwrap().unwrap();
+        bridge.commit(Some(call));
+
+        camera.begin_call();
+        assert_eq!(
+            unsafe {
+                crate::camera_view::set_sky_background(
+                    (&mut camera as *mut crate::camera_view::RuntimeCameraViewBridge).cast(),
+                    sky.handle,
+                )
+            },
+            ABI_OK
+        );
+        let call = camera.take_staged_call().unwrap();
+        camera.commit(call);
+
         bridge.begin_call();
         assert_eq!(
-            bridge
-                .open_resource(&resource_request("selected.png"))
-                .expect("already selected resource")
-                .handle
-                .value,
-            selected.handle.value
+            bridge.destroy_resource(sky.handle).unwrap_err().code(),
+            "CSHARP_RENDER_RESOURCE_IN_USE"
         );
+        bridge.discard_call();
+
+        camera.begin_call();
+        let clear = NativeClearSkyBackgroundRequest::default();
         assert_eq!(
-            bridge
-                .open_resource(&resource_request("unselected.png"))
-                .expect_err("new selection is closed")
-                .code(),
-            "CSHARP_RENDER_RESOURCE_SELECTION_CLOSED"
+            unsafe {
+                crate::camera_view::clear_sky_background(
+                    (&mut camera as *mut crate::camera_view::RuntimeCameraViewBridge).cast(),
+                    &clear,
+                )
+            },
+            ABI_OK
         );
+        let call = camera.take_staged_call().unwrap();
+        camera.commit(call);
+        bridge.begin_call();
+        bridge.destroy_resource(sky.handle).unwrap();
     }
 
     #[test]
@@ -11016,12 +11587,14 @@ pub(super) mod tests {
         };
 
         bridge.begin_call();
-        bridge
+        let first = bridge
             .create_static_mesh_from_content(&request)
             .expect("first retained appearance");
-        bridge
+        let second = bridge
             .create_static_mesh_from_content(&request)
             .expect("second retained appearance");
+        let fact = appearance_fact(first);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.expect("publish the first mesh");
         let staged = bridge.take_staged_call().expect("staged static meshes");
         bridge.commit(staged);
 
@@ -11029,6 +11602,32 @@ pub(super) mod tests {
         let resources = bridge.state.projector.resources_mut();
         assert_eq!(resources.static_meshes.len(), 2);
         assert_eq!(resources.materials.len(), 2);
+
+        bridge.begin_call();
+        unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.expect("remove visible mesh");
+        bridge
+            .destroy_appearance(first)
+            .expect("first static appearance release");
+        assert_eq!(
+            bridge.staged.as_ref().unwrap().state.render_resources.len(),
+            1
+        );
+        bridge
+            .destroy_appearance(second)
+            .expect("last static appearance release");
+        let staged = bridge.staged.as_mut().unwrap();
+        assert!(staged.state.render_resources.is_empty());
+        assert!(staged.extra_frames.iter().any(|frame| frame.ops.iter().any(|op| {
+            matches!(op, render_model::RenderDiff::ReleaseStaticMesh { asset } if asset == &format!("mesh/native-{}", first.value))
+        })), "disposing the published appearance releases its GPU mesh definition");
+        assert_eq!(
+            staged.retired_resources.len(),
+            1,
+            "the final body survives for queued publication delivery"
+        );
+        let resources = staged.state.projector.resources_mut();
+        assert!(resources.static_meshes.is_empty());
+        assert!(resources.materials.is_empty());
     }
 
     #[test]
@@ -11359,7 +11958,7 @@ pub(super) mod tests {
                     b: 0.1,
                     a: 1.0,
                 },
-                texture: NativeRenderResourceHandle { value: 0 },
+                texture: NativeRenderResourceReference { value: 0 },
                 roughness: 0.5,
                 texture_tint: NativeColor {
                     r: 1.0,
@@ -11775,9 +12374,9 @@ pub(super) mod tests {
                 value: empty,
                 unit_key: empty,
                 fallback_unit: empty,
-                texture: NativeRenderResourceHandle::default(),
+                texture: NativeRenderResourceReference::default(),
                 font_kind: NativePresentationFontKind::System,
-                font_asset: NativeRenderResourceHandle::default(),
+                font_asset: NativeRenderResourceReference::default(),
                 font_family: slice(font),
                 height_pixels: 16.0,
                 color,
@@ -11807,7 +12406,7 @@ pub(super) mod tests {
                 signal_id: empty,
                 anchor,
                 visual: NativePresentationParticleVisual::Cube,
-                sprite: NativeRenderResourceHandle::default(),
+                sprite: NativeRenderResourceReference::default(),
                 sprite_frame_count: 0,
                 rate_per_second: 1.0,
                 burst_count: 1,
@@ -11842,9 +12441,9 @@ pub(super) mod tests {
                     value: empty,
                     unit_key: empty,
                     fallback_unit: empty,
-                    texture: NativeRenderResourceHandle::default(),
+                    texture: NativeRenderResourceReference::default(),
                     font_kind: NativePresentationFontKind::System,
-                    font_asset: NativeRenderResourceHandle::default(),
+                    font_asset: NativeRenderResourceReference::default(),
                     font_family: slice(font),
                     height_pixels: 18.0,
                     color,
@@ -11863,7 +12462,7 @@ pub(super) mod tests {
                     signal_id: slice(b"burst-1"),
                     anchor,
                     visual: NativePresentationParticleVisual::Cube,
-                    sprite: NativeRenderResourceHandle::default(),
+                    sprite: NativeRenderResourceReference::default(),
                     sprite_frame_count: 0,
                     rate_per_second: 0.0,
                     burst_count: 1,
@@ -11977,9 +12576,9 @@ pub(super) mod tests {
             value: empty,
             unit_key: empty,
             fallback_unit: empty,
-            texture: NativeRenderResourceHandle::default(),
+            texture: NativeRenderResourceReference::default(),
             font_kind: NativePresentationFontKind::System,
-            font_asset: NativeRenderResourceHandle::default(),
+            font_asset: NativeRenderResourceReference::default(),
             font_family: slice(font),
             height_pixels: 16.0,
             color: NativeColor {
@@ -12078,9 +12677,11 @@ pub(super) mod tests {
                 value: empty,
                 unit_key: empty,
                 fallback_unit: empty,
-                texture: NativeRenderResourceHandle::default(),
+                texture: NativeRenderResourceReference::default(),
                 font_kind: NativePresentationFontKind::Asset,
-                font_asset: font.handle,
+                font_asset: NativeRenderResourceReference {
+                    value: font.handle.value,
+                },
                 font_family: slice(family),
                 height_pixels: 16.0,
                 color: NativeColor {
@@ -12147,7 +12748,7 @@ pub(super) mod tests {
             label_key: slice(cue_id),
             label_fallback_text: slice(cue_label),
             has_icon: false,
-            icon: NativeRenderResourceHandle::default(),
+            icon: NativeRenderResourceReference::default(),
         }];
         let descriptor = || NativePresentationStructuredBillboardDescriptor {
             logical_id: 99,
@@ -12161,7 +12762,7 @@ pub(super) mod tests {
             label_key: slice(key),
             label_fallback_text: slice(fallback),
             has_icon: false,
-            icon: NativeRenderResourceHandle::default(),
+            icon: NativeRenderResourceReference::default(),
             accessible_label_key: slice(key),
             accessible_fallback_text: slice(fallback),
             meters: meters.as_ptr(),
@@ -12193,7 +12794,7 @@ pub(super) mod tests {
                 overlap_behavior: NativePresentationBillboardOverlapBehavior::Stack,
             },
             font_kind: NativePresentationFontKind::System,
-            font_asset: NativeRenderResourceHandle::default(),
+            font_asset: NativeRenderResourceReference::default(),
             font_family: slice(font),
             height_pixels: 16.0,
             color,
@@ -12296,7 +12897,7 @@ pub(super) mod tests {
                     offset: NativeVec3::default(),
                 },
                 visual: NativePresentationParticleVisual::Cube,
-                sprite: NativeRenderResourceHandle::default(),
+                sprite: NativeRenderResourceReference::default(),
                 sprite_frame_count: 0,
                 rate_per_second: 1.0,
                 burst_count: 2,

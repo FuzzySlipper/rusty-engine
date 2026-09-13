@@ -993,7 +993,6 @@ pub struct CsharpProductRuntime {
     pending_recovery_outputs: Vec<RuntimePublication>,
     services: Box<EngineServiceSet>,
     initial_output: Option<CsharpEngineCallOutput>,
-    render_resources: Vec<ProductDevRendererResource>,
     renderer_metrics_visible: bool,
     renderer_diagnostics_received_at: Option<Instant>,
     renderer_diagnostics_runtime: Option<ProductDevRuntimeBinding>,
@@ -1015,9 +1014,10 @@ unsafe impl Send for CsharpProductRuntime {}
 /// Callback state remains Engine-owned for the complete loaded-product lifetime.
 /// A C# call only borrows its value arena; Rust copies it into envelopes and commits
 impl CsharpProductRuntime {
-    /// Renderer resources selected by product creation before host startup.
-    pub fn render_resources(&self) -> &[ProductDevRendererResource] {
-        &self.render_resources
+    /// Current renderer resources for explicit legacy preload consumers.
+    pub fn render_resources(&self) -> Vec<ProductDevRendererResource> {
+        admit_renderer_resources(&self.services.render_resources())
+            .expect("committed Engine resources were validated during admission")
     }
 
     /// Loads one NativeAOT C# library and creates its authoritative product state.
@@ -1214,8 +1214,8 @@ impl CsharpProductRuntime {
         complete_product_call(&api, handle, true, false);
         observe_product_runtime(&api, handle, lifecycle.readout());
         services.seal_resource_selection();
-        let render_resources = match admit_renderer_resources(&services.render_resources()) {
-            Ok(resources) => resources,
+        match admit_renderer_resources(&services.render_resources()) {
+            Ok(_) => (),
             Err(error) => {
                 complete_product_call(&api, handle, false, true);
                 // SAFETY: create returned this owned handle and admission
@@ -1236,7 +1236,6 @@ impl CsharpProductRuntime {
             pending_recovery_outputs: Vec::new(),
             services,
             initial_output,
-            render_resources,
             renderer_metrics_visible: false,
             renderer_diagnostics_received_at: None,
             renderer_diagnostics_runtime: None,
@@ -2684,6 +2683,32 @@ impl CsharpProductRuntime {
 }
 
 impl ProductDevRuntime for CsharpProductRuntime {
+    fn renderer_resource_ids(&self) -> Option<Vec<String>> {
+        Some(self.services.renderer_resource_ids())
+    }
+    fn take_retired_renderer_resources(&mut self) -> Vec<ProductDevRendererResource> {
+        admit_renderer_resources(&self.services.take_retired_resources())
+            .expect("retired resources were already admitted by Engine")
+    }
+
+    fn renderer_resource(
+        &mut self,
+        identity: &str,
+        generation: u64,
+    ) -> Result<Option<ProductDevRendererResource>, ProductDevRuntimeError> {
+        if self.binding().generation.get() != generation {
+            return Ok(None);
+        }
+        let resource = self.services.renderer_resource(identity);
+        resource
+            .map(|resource| admit_renderer_resource(&resource))
+            .transpose()
+            .map_err(|error| {
+                ProductDevRuntimeError::new(error.code(), error.to_string())
+                    .expect("resource error is bounded")
+            })
+    }
+
     fn take_update_attribution(&mut self) -> Option<ProductDevUpdateAttribution> {
         self.pending_update_attribution.take()
     }
@@ -3544,11 +3569,13 @@ fn audio_realization_fact(
             fact_id,
             code,
             sequence,
+            signal_handle,
             voice_handle,
         } => AudioRealizationFact::Diagnostic {
             fact_id: fact_id.get(),
             code: native_audio_diagnostic_code(code),
             sequence,
+            signal_handle: signal_handle.map(CanonicalU64::get),
             voice_handle: voice_handle.map(CanonicalU64::get),
         },
     })
@@ -6156,7 +6183,7 @@ mod tests {
                             b: 0.75,
                             a: 1.0,
                         },
-                        texture: NativeRenderResourceHandle::default(),
+                        texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,

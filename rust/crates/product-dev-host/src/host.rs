@@ -1489,6 +1489,16 @@ fn dispatch_request<R: ProductDevRuntime>(
 ) -> HttpResponse {
     let _projection = state.projection_gate.read().ok();
     if request.method == "GET" {
+        if let Some((identity, generation)) = renderer_resource_query(&request.path) {
+            if !request.body.is_empty() {
+                return HttpResponse::error(
+                    400,
+                    "DEV_HOST_GET_BODY",
+                    "GET requests cannot carry a body",
+                );
+            }
+            return invoke_renderer_resource(state, &identity, generation);
+        }
         if request.path == "/__rusty/product/runtime/debug/catalog" {
             if !state.live_debug_enabled {
                 return HttpResponse::error(
@@ -1590,6 +1600,104 @@ fn dispatch_request<R: ProductDevRuntime>(
             invoke_browser_diagnostics(state, &request.body)
         }
         _ => HttpResponse::error(404, "DEV_HOST_ROUTE_NOT_FOUND", "route is not admitted"),
+    }
+}
+
+fn invoke_renderer_resource<R: ProductDevRuntime>(
+    state: &HostState<R>,
+    identity: &str,
+    generation: u64,
+) -> HttpResponse {
+    let live = match state.runtime.renderer_resource(identity, generation) {
+        Ok(resource) => resource,
+        Err(error) => return HttpResponse::error(503, error.code(), error.diagnostic()),
+    };
+    let resource = live.or_else(|| {
+        state
+            .outputs
+            .lock()
+            .ok()
+            .and_then(|outputs| outputs.renderer_resource(identity, generation))
+    });
+    let Some(resource) = resource else {
+        return HttpResponse::error(
+            404,
+            "DEV_HOST_RENDERER_RESOURCE_NOT_FOUND",
+            "renderer resource is not retained for the requested runtime generation",
+        );
+    };
+    if resource.identity() != identity {
+        return HttpResponse::error(
+            500,
+            "DEV_HOST_RENDERER_RESOURCE_IDENTITY",
+            "renderer resource lookup returned a mismatched identity",
+        );
+    }
+    HttpResponse::bytes(200, resource.media_type(), resource.shared_bytes()).with_observation()
+}
+
+fn renderer_resource_query(path: &str) -> Option<(String, u64)> {
+    let (route, query) = path.split_once('?')?;
+    if route != "/__rusty/product/runtime/resource" {
+        return None;
+    }
+    let mut identity = None;
+    let mut generation = None;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=')?;
+        match key {
+            "identity" if identity.is_none() => identity = percent_decode(value),
+            "generation" if generation.is_none() => {
+                generation = value
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|generation| *generation != 0)
+            }
+            _ => return None,
+        }
+    }
+    identity
+        .filter(|identity| valid_renderer_identity(identity))
+        .zip(generation)
+}
+
+fn valid_renderer_identity(identity: &str) -> bool {
+    !identity.is_empty()
+        && identity.len() <= 512
+        && identity.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b':' | b'.' | b'-' | b'_')
+        })
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(value.len());
+    let source = value.as_bytes();
+    let mut index = 0;
+    while index < source.len() {
+        match source[index] {
+            b'%' => {
+                let high = *source.get(index + 1)?;
+                let low = *source.get(index + 2)?;
+                bytes.push(hex_value(high)? << 4 | hex_value(low)?);
+                index += 3;
+            }
+            b'+' => return None,
+            byte if byte.is_ascii() => {
+                bytes.push(byte);
+                index += 1;
+            }
+            _ => return None,
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -2725,6 +2833,8 @@ struct PendingBaseline {
 
 #[derive(Clone)]
 struct OutputEvent {
+    generation: u64,
+    resources: Arc<[crate::ProductDevRendererResource]>,
     id: u64,
     publication_end_id: u64,
     event: Option<&'static str>,
@@ -2737,6 +2847,23 @@ struct OutputSnapshot {
 }
 
 impl OutputBus {
+    fn renderer_resource(
+        &self,
+        identity: &str,
+        generation: u64,
+    ) -> Option<crate::ProductDevRendererResource> {
+        if self.active_binding?.generation.get() != generation {
+            return None;
+        }
+        self.events
+            .iter()
+            .rev()
+            .filter(|event| event.generation == generation)
+            .flat_map(|event| event.resources.iter())
+            .find(|resource| resource.identity() == identity)
+            .cloned()
+    }
+
     fn private_baseline() -> Self {
         Self {
             retained_event_limit: usize::MAX,
@@ -2752,6 +2879,8 @@ impl OutputBus {
                 .iter()
                 .filter(|event| event.id > cursor)
                 .map(|event| OutputEvent {
+                    generation: event.generation,
+                    resources: Arc::clone(&event.resources),
                     id: event.id,
                     publication_end_id: event.publication_end_id,
                     event: event.event,
@@ -2984,6 +3113,12 @@ fn append_staged_output_events(
     binding: crate::ProductDevRuntimeBinding,
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<(), ProductDevHostError> {
+    let resources: Arc<[crate::ProductDevRendererResource]> = outputs
+        .iter()
+        .flat_map(|output| output.resources().iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
     let mut encoded_events = Vec::new();
     let mut next_transfer_id = staged.next_transfer_id;
     #[derive(Serialize)]
@@ -3040,6 +3175,8 @@ fn append_staged_output_events(
     for encoded in encoded_events {
         staged.next_id += 1;
         staged.new_events.push_back(OutputEvent {
+            generation: binding.generation.get(),
+            resources: Arc::clone(&resources),
             id: staged.next_id,
             publication_end_id: final_id,
             event: encoded.event,
@@ -3136,6 +3273,24 @@ mod tests {
         let unclassified =
             HttpResponse::bytes(200, "application/json", Vec::new()).with_resync_required();
         assert!(unclassified.delivery_certainty.is_none());
+    }
+
+    #[test]
+    fn renderer_resource_route_decodes_identity_and_runtime_generation() {
+        assert_eq!(
+            renderer_resource_query(
+                "/__rusty/product/runtime/resource?identity=font%2Fsha256%3Aabc&generation=7"
+            ),
+            Some(("font/sha256:abc".to_owned(), 7))
+        );
+        assert!(renderer_resource_query(
+            "/__rusty/product/runtime/resource?identity=font%2Fsha256%3Aabc&generation=0"
+        )
+        .is_none());
+        assert!(renderer_resource_query(
+            "/__rusty/product/runtime/resource?identity=font&generation=7&generation=8"
+        )
+        .is_none());
     }
 
     #[test]
@@ -3555,6 +3710,52 @@ mod tests {
         release.send(()).expect("release runtime owner");
         input_thread.join().expect("input worker");
         owner_thread.join().expect("owner worker");
+    }
+
+    #[test]
+    fn retired_resource_leases_follow_replay_history_without_entering_sse() {
+        let resource = crate::ProductDevRendererResource::admit_font(
+            "content/font.woff2",
+            b"wOF2fixture".to_vec(),
+        )
+        .unwrap();
+        let identity = resource.identity().to_owned();
+        let weak = Arc::downgrade(&resource.shared_bytes());
+        let output =
+            ProductDevRuntimeOutput::runtime_progress().with_resources(vec![resource].into());
+        let encoded_worker = output.to_worker_value().unwrap();
+        assert!(encoded_worker.get("__retiredResources").is_some());
+        let decoded_worker = ProductDevRuntimeOutput::from_worker_value(encoded_worker).unwrap();
+        assert_eq!(decoded_worker.resources()[0].bytes(), b"wOF2fixture");
+        drop(decoded_worker);
+        let mut bus = OutputBus {
+            active_binding: Some(binding()),
+            retained_event_limit: 1,
+            ..OutputBus::default()
+        };
+        append_output_events(&mut bus, binding(), vec![output]).unwrap();
+        assert!(weak.upgrade().is_some());
+        assert_eq!(
+            bus.renderer_resource(&identity, binding().generation.get())
+                .unwrap()
+                .bytes(),
+            b"wOF2fixture"
+        );
+        assert!(bus
+            .renderer_resource(&identity, binding().generation.get() + 1)
+            .is_none());
+        assert!(!bus.events[0].json.contains("__retiredResources"));
+        assert!(!bus.events[0].json.contains("bodyBase64"));
+        append_output_events(
+            &mut bus,
+            binding(),
+            vec![ProductDevRuntimeOutput::runtime_progress()],
+        )
+        .unwrap();
+        assert!(bus
+            .renderer_resource(&identity, binding().generation.get())
+            .is_none());
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]
@@ -4309,13 +4510,13 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpResponse> {
 fn valid_request_path(path: &str) -> bool {
     path.starts_with('/')
         && path.len() <= 512
-        && !path.contains('?')
         && !path.contains('#')
         && !path.contains("//")
         && !path.split('/').any(|part| part == "." || part == "..")
-        && path
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'-' | b'_'))
+        && path.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'/' | b'.' | b'-' | b'_' | b'?' | b'&' | b'=' | b'%')
+        })
 }
 
 fn has_admitted_origin(request: &HttpRequest, bind_host: Ipv4Addr, expected_port: u16) -> bool {

@@ -1769,13 +1769,16 @@ function snapshotAudioFeedbackFact(value: unknown): ProductBrowserAudioFeedbackF
     throw new TypeError('audio feedback natural completion source is invalid');
   }
   if (record.kind === 'diagnostic') {
-    requireKnownFields(record, ['kind', 'factId', 'code', 'sequence', 'voiceHandle'], 'audio feedback diagnostic');
+    requireKnownFields(record, ['kind', 'factId', 'code', 'sequence', 'voiceHandle', 'signalHandle'], 'audio feedback diagnostic');
     return Object.freeze({
       kind: 'diagnostic', ...common,
       code: requireCatalogValue<string>(record.code, 'audio feedback diagnostic code', AUDIO_DIAGNOSTIC_CODES),
       voiceHandle: record.voiceHandle === null
         ? null
         : requireU64Text(record.voiceHandle, 'audio feedback diagnostic voiceHandle'),
+      signalHandle: record.signalHandle === null
+        ? null
+        : requireU64Text(record.signalHandle, 'audio feedback diagnostic signalHandle'),
     });
   }
   throw new TypeError('audio feedback fact kind is not admitted');
@@ -2564,7 +2567,7 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
   const record = requireRecord(value, 'runtime output');
   switch (record.kind) {
     case 'binding':
-      requireKnownFields(record, ['kind', 'runtime', 'nextInputSequence', 'publicationFrontiers'], 'binding output');
+      requireKnownFields(record, ['kind', 'runtime', 'nextInputSequence', 'publicationFrontiers', 'rendererResources'], 'binding output');
       return {
         kind: 'binding',
         runtime: decodeRuntimeIdentity(record.runtime),
@@ -2572,40 +2575,61 @@ function decodeRuntimeOutput(value: unknown): ProductBrowserRuntimeOutput {
         ...(record['publicationFrontiers'] === undefined
           ? {}
           : { publicationFrontiers: decodeRenderPublicationFrontiers(record['publicationFrontiers']) }),
+        ...optionalRendererResources(record),
       };
     case 'frame':
-      requireKnownFields(record, ['kind', 'frame'], 'frame output');
-      return { kind: 'frame', frame: decodeFrame(record.frame, 'frame') };
+      requireKnownFields(record, ['kind', 'frame', 'rendererResources'], 'frame output');
+      return { kind: 'frame', frame: decodeFrame(record.frame, 'frame'), ...optionalRendererResources(record) };
     case 'view-composition':
-      requireKnownFields(record, ['kind', 'composition'], 'view composition output');
-      return { kind: 'view-composition', composition: decodeViewComposition(record.composition) };
+      requireKnownFields(record, ['kind', 'composition', 'rendererResources'], 'view composition output');
+      return { kind: 'view-composition', composition: decodeViewComposition(record.composition), ...optionalRendererResources(record) };
     case 'animation-cue-definitions':
-      requireKnownFields(record, ['kind', 'definitions'], 'animation cue definitions output');
-      return { kind: 'animation-cue-definitions', definitions: decodeAnimationCueDefinitions(record['definitions']) };
+      requireKnownFields(record, ['kind', 'definitions', 'rendererResources'], 'animation cue definitions output');
+      return { kind: 'animation-cue-definitions', definitions: decodeAnimationCueDefinitions(record['definitions']), ...optionalRendererResources(record) };
     case 'presentation':
-      requireKnownFields(record, ['kind', 'frame'], 'presentation output');
-      return { kind: 'presentation', frame: decodeFrame(record.frame, 'presentation') };
+      requireKnownFields(record, ['kind', 'frame', 'rendererResources'], 'presentation output');
+      return { kind: 'presentation', frame: decodeFrame(record.frame, 'presentation'), ...optionalRendererResources(record) };
     case 'ui-projection':
-      requireKnownFields(record, ['kind', 'envelope'], 'UI projection output');
-      return { kind: 'ui-projection', envelope: decodeUiProjection(record.envelope) };
+      requireKnownFields(record, ['kind', 'envelope', 'rendererResources'], 'UI projection output');
+      return { kind: 'ui-projection', envelope: decodeUiProjection(record.envelope), ...optionalRendererResources(record) };
     case 'runtime-readout':
-      requireKnownFields(record, ['kind', 'readout'], 'runtime readout output');
-      return { kind: 'runtime-readout', readout: decodeRuntimeReadout(record.readout) };
+      requireKnownFields(record, ['kind', 'readout', 'rendererResources'], 'runtime readout output');
+      return { kind: 'runtime-readout', readout: decodeRuntimeReadout(record.readout), ...optionalRendererResources(record) };
+    case 'renderer-resources':
+      requireKnownFields(record, ['kind', 'rendererResources'], 'renderer resources output');
+      return { kind: 'renderer-resources', ...optionalRendererResources(record) };
     case 'runtime-progress':
-      requireKnownFields(record, ['kind', 'owner'], 'runtime progress output');
+      requireKnownFields(record, ['kind', 'owner', 'rendererResources'], 'runtime progress output');
       if (record['owner'] !== 'rust-host') {
         throw new TypeError('runtime progress owner is invalid');
       }
-      return { kind: 'runtime-progress', owner: 'rust-host' };
+      return { kind: 'runtime-progress', owner: 'rust-host', ...optionalRendererResources(record) };
     case 'runtime-input-result':
-      requireKnownFields(record, ['kind', 'result'], 'runtime input result output');
+      requireKnownFields(record, ['kind', 'result', 'rendererResources'], 'runtime input result output');
       return {
         kind: 'runtime-input-result',
         result: decodeInputResult(record['result']),
+        ...optionalRendererResources(record),
       };
     default:
       throw new TypeError('runtime output kind is not admitted');
   }
+}
+
+function optionalRendererResources(record: Record<string, unknown>): {
+  readonly rendererResources?: readonly string[];
+} {
+  if (record['rendererResources'] === undefined) return {};
+  const values = requirePlainArray(record['rendererResources'], 'renderer resource identities');
+  const identities = values.map((value) => requireBoundedString(value, 'renderer resource identity'));
+  const seen = new Set<string>();
+  for (const identity of identities) {
+    if (!/^(?:(?:animated-mesh|audio|mesh|clip-pack|texture)-resource\/[0-9a-f]{64}|font\/[0-9a-f]{64})$/u.test(identity)
+      || !seen.add(identity)) {
+      throw new TypeError('renderer resource identity is invalid or duplicated');
+    }
+  }
+  return { rendererResources: Object.freeze(identities) };
 }
 
 function decodeRuntimeOutputBatch(value: unknown): readonly ProductBrowserRuntimeOutput[] {

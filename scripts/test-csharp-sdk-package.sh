@@ -117,6 +117,7 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$package_version" />
     <RustyEngineContentBundle Include="rules" />
+    <RustyEngineContentBundle Include="mixed" />
     <RustyEngineProductInputIntent Include="runtime.exercise" Value="payload:runtime.exercise.payload" />
     <RustyEngineProductInputIntent Include="runtime.exercise.move" Value="digital" />
     <RustyEngineProductInputMapping Include="runtime.exercise.move" Intent="runtime.exercise.move" Trigger="key:key-w:held" />
@@ -155,6 +156,7 @@ cp "$consumer_dir/Library.cs" "$source_override_dir/Library.cs"
 cp "$repo_root/scripts/fixtures/ImplicitRecipeChecks.cs" "$consumer_dir/ImplicitRecipeChecks.cs"
 cp "$repo_root/scripts/fixtures/ImplicitAuditChecks.cs" "$consumer_dir/ImplicitAuditChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
+cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_dir/ProductContentMixedBundleChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
@@ -167,6 +169,7 @@ public sealed class Product : IEngineProduct
     private readonly Material _voxelMaterial;
     private readonly SpatialSession _spatial;
     private readonly VoxelScenePresentation _voxelPresentation;
+    private readonly ProductContentMixedBundleChecks _mixedBundleChecks;
     private ulong _sequence;
 
     public Product(ProductCreateContext context)
@@ -174,10 +177,12 @@ public sealed class Product : IEngineProduct
         ImplicitRecipeChecks.Run();
         ImplicitAuditChecks.Run(context.Engine);
         ProductContentBundleChecks.Run(context);
+        _mixedBundleChecks = new ProductContentMixedBundleChecks(context);
         _engine = context.Engine;
         _stream = _engine.Ui.OpenStream(new UiStreamRequest("sdk-package", "sdk.package.smoke"));
         _voxelMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
-            new Color(0.3f, 0.6f, 0.9f, 1), default, 1, new Color(1, 1, 1, 1), default, 0, false));
+            new Color(0.3f, 0.6f, 0.9f, 1), default, 1, new Color(1, 1, 1, 1), default, 0, false,
+            MaterialAlphaMode.Opaque, 0.5f));
         _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1, 8, VoxelSurfaceMode.GreedyCubes));
         VoxelSceneReadout scene = _engine.Voxel.ReadScene(new VoxelSceneReadRequest(_spatial));
         _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
@@ -191,6 +196,7 @@ public sealed class Product : IEngineProduct
     public void Attach() { }
     public ProductUpdateResult Update(ProductUpdate update)
     {
+        _mixedBundleChecks.Update();
         PublishUi();
         foreach (ProductInputEvent input in update.Input)
         {
@@ -211,6 +217,7 @@ public sealed class Product : IEngineProduct
     public bool CompleteTimeline(ProductTimelineCompletion completion) => completion.Ticket == 7;
     public void Dispose()
     {
+        _mixedBundleChecks.Dispose();
         _voxelPresentation.Dispose();
         _spatial.Dispose();
         _voxelMaterial.Dispose();
@@ -224,16 +231,71 @@ public sealed class Product : IEngineProduct
     }
 }
 EOF
-mkdir -p "$consumer_dir/product-ui/assets" "$consumer_dir/content"
+mkdir -p "$consumer_dir/product-ui/assets" "$consumer_dir/content/rules/nested" "$consumer_dir/content/mixed"
 cat > "$consumer_dir/product-ui/main.js" <<'EOF'
 // package-only staged product UI
 EOF
 printf 'package-only staged content\n' > "$consumer_dir/content/trial.txt"
-mkdir -p "$consumer_dir/content/rules/nested"
 printf '{"order":["enemy"]}' > "$consumer_dir/content/rules/_index.json"
 printf '{"id":"enemy"}' > "$consumer_dir/content/rules/renamed.json"
 printf '{}' > "$consumer_dir/content/rules/nested/other.json"
 dd if=/dev/zero of="$consumer_dir/content/rules/large.bin" bs=1048589 count=1 status=none
+cp "$repo_root/fixtures/csharp-nativeaot-trial/content/trial.png" "$consumer_dir/content/mixed/texture.png"
+cp "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" "$consumer_dir/content/mixed/character.glb"
+python3 - "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" "$consumer_dir/content/mixed/clip-pack.glb" <<'PY'
+import json
+import struct
+import sys
+
+source_path, target_path = sys.argv[1:]
+source = open(source_path, "rb").read()
+magic, version, total_length = struct.unpack_from("<4sII", source, 0)
+if magic != b"glTF" or version != 2 or total_length != len(source):
+    raise SystemExit("source animated fixture is not a complete GLB 2 file")
+json_length, json_kind = struct.unpack_from("<II", source, 12)
+if json_kind != 0x4E4F534A:
+    raise SystemExit("source animated fixture has no leading JSON chunk")
+json_start = 20
+json_end = json_start + json_length
+json_bytes = source[json_start:json_end]
+document = json.loads(json_bytes)
+names = [animation.get("name") for animation in document.get("animations", [])]
+if names != ["idle", "run", "jump"]:
+    raise SystemExit(f"unexpected source animation names: {names!r}")
+
+# Change only the three animation-name tokens. The binary chunk and every
+# other JSON byte (including its original whitespace padding) remain intact.
+rewritten = json_bytes.decode("utf-8")
+for name in names:
+    original = f'"name": "{name}"'
+    replacement = f'"name": "bundle-{name}"'
+    if rewritten.count(original) != 1:
+        raise SystemExit(f"expected one animation name token for {name!r}")
+    rewritten = rewritten.replace(original, replacement, 1)
+rewritten_bytes = rewritten.encode("utf-8")
+rewritten_bytes += b" " * (-len(rewritten_bytes) % 4)
+json.loads(rewritten_bytes)
+
+remainder = source[json_end:]
+result = struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(rewritten_bytes) + len(remainder))
+result += struct.pack("<II", len(rewritten_bytes), 0x4E4F534A)
+result += rewritten_bytes + remainder
+open(target_path, "wb").write(result)
+PY
+cp "$repo_root/fixtures/render/assets/noto-sans/NotoSans-Regular.woff2" "$consumer_dir/content/mixed/NotoSans-Regular.woff2"
+cp "$repo_root/fixtures/render/assets/noto-sans/LICENSE" "$consumer_dir/content/mixed/NotoSans-LICENSE.txt"
+cp "$repo_root/content/assets/kenney-wall-a.voxel.json" "$consumer_dir/content/mixed/wall.voxel.json"
+printf 'bundle general bytes\000\377' > "$consumer_dir/content/mixed/general.bin"
+printf 'bundle text body\n' > "$consumer_dir/content/mixed/readme.txt"
+# A one-sample PCM WAV fixture. It keeps the package consumer portable while
+# exercising real RIFF/WAVE admission rather than a filename-only branch.
+printf 'RIFF\045\000\000\000WAVEfmt \020\000\000\000\001\000\001\000\100\037\000\000\100\037\000\000\001\000\010\000data\001\000\000\000\200' > "$consumer_dir/content/mixed/tone.wav"
+# StaticMeshAsset is the authored JSON contract whose inline payload the
+# Engine packs on admission. The collision importer fixture remains a separate
+# source-format test and is not substituted for this runtime asset contract.
+cat > "$consumer_dir/content/mixed/triangle.static-mesh.json" <<'EOF'
+{"asset":"mesh/bundle-triangle","payload":{"layout":{"vertexCount":3,"indexCount":3,"indexWidth":"u32","attributes":[{"name":"position","components":3,"kind":"f32"},{"name":"normal","components":3,"kind":"f32"}]},"groups":[{"materialSlot":0,"start":0,"count":3}],"bounds":{"min":[0,0,0],"max":[1,1,0]},"source":{"kind":"inline","positions":[0,0,0,1,0,0,0,1,0],"normals":[0,0,1,0,0,1,0,0,1],"indices":[0,1,2]},"provenance":"staticAsset"},"materialSlots":[{"slot":0,"material":"material/bundle-triangle"}],"collision":{"kind":"visualOnly"}}
+EOF
 
 # The only available package source is the fresh local feed. The SDK's source
 # tree is not an input to restore or build; consumer assets must not name it.
@@ -299,8 +361,15 @@ fi
     echo "test-csharp-sdk-package: CoreCLR staging did not retain its managed dependency closure." >&2
     exit 1
 }
-[[ -f "$staged_product_directory/ui/main.js" && -f "$staged_product_directory/content/trial.txt" ]] || {
+[[ -f "$staged_product_directory/ui/main.js" && -f "$staged_product_directory/content/trial.txt" && -f "$staged_product_directory/content/mixed/texture.png" && -f "$staged_product_directory/content/mixed/character.glb" && -f "$staged_product_directory/content/mixed/clip-pack.glb" && -f "$staged_product_directory/content/mixed/NotoSans-Regular.woff2" && -f "$staged_product_directory/content/mixed/tone.wav" ]] || {
     echo "test-csharp-sdk-package: Product UI/content were not staged." >&2
+    exit 1
+}
+jq -e '.bundles | map(.id) == ["mixed", "rules"] and
+       ([.[] | select(.id == "mixed") | .files[].path] | sort) ==
+         ["NotoSans-LICENSE.txt", "NotoSans-Regular.woff2", "character.glb", "clip-pack.glb", "general.bin", "readme.txt", "texture.png", "tone.wav", "triangle.static-mesh.json", "wall.voxel.json"]' \
+    "$staged_product_directory/content/.rusty-bundles.json" >/dev/null || {
+    echo "test-csharp-sdk-package: SDK staging did not generate the mixed bundle inventory." >&2
     exit 1
 }
 jq -e '.coreclr.assembly == "coreclr/Rusty.Engine.Product.dll" and (.nativeAot | not)' \

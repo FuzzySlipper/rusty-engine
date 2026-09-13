@@ -2760,6 +2760,124 @@ void test('texture redefine is stale-safe and disposes replaced and final GPU re
   assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
+void test('retained resource pruning preserves live texture users, then disposes and reloads their GPU texture', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const descriptor = textureDescriptor(bytes, 1, 'resource');
+  const source = new TestTextureResourceSource(bytes);
+  const renderer = new ThreeRenderer({ textureResourceSource: source });
+  const handle = renderHandle(304);
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: descriptor },
+    { op: 'defineMaterial', material: texturedMaterial() },
+    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
+    { op: 'createStaticMeshInstance', handle, parent: null, instance: crateInstance('mesh/textured-plank') },
+  ] });
+  const first = renderer.textureObjectFor(descriptor.id)!;
+  let disposals = 0;
+  first.addEventListener('dispose', () => { disposals += 1; });
+
+  renderer.retainResources(new Set());
+  assert.equal(renderer.textureObjectFor(descriptor.id), first, 'the live static instance keeps its texture');
+  assert.equal(disposals, 0);
+
+  renderer.applyDiff({ op: 'destroy', handle });
+  renderer.retainResources(new Set());
+  assert.equal(renderer.textureObjectFor(descriptor.id), undefined);
+  assert.equal(disposals, 1, 'the unused decoded GPU texture is disposed exactly once');
+
+  const textureIdentity = descriptor.payload?.source;
+  if (textureIdentity?.kind !== 'resource') throw new Error('resource texture fixture is malformed');
+  renderer.retainResources(new Set([textureIdentity.resource]));
+  renderer.applyDiff({ op: 'defineTexture', texture: { ...descriptor, version: 2 } });
+  const reloaded = renderer.textureObjectFor(descriptor.id)!;
+  assert.notEqual(reloaded, first);
+  renderer.applyDiff({
+    op: 'createStaticMeshInstance', handle: renderHandle(305), parent: null,
+    instance: crateInstance('mesh/textured-plank'),
+  });
+  assert.equal(
+    ((renderer.objectFor(renderHandle(305)) as THREE.Mesh).material as THREE.MeshStandardMaterial).map,
+    reloaded,
+  );
+});
+
+void test('retained resource pruning releases unused static definitions and admits a later reload', () => {
+  const source = new MapResourceSource();
+  source.resources.set(RESOURCE_ID, quadResourceBytes());
+  const asset = { ...crateAsset(), payload: { ...quadResourcePayload(), provenance: 'staticAsset' as const } };
+  const renderer = new ThreeRenderer({ meshResourceSource: source });
+  const firstHandle = renderHandle(306);
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineStaticMesh', asset },
+    { op: 'createStaticMeshInstance', handle: firstHandle, parent: null, instance: crateInstance(asset.asset) },
+  ] });
+  assert.equal(renderer.resourceStatistics().geometryResourceCount, 1);
+
+  renderer.retainResources(new Set());
+  assert.equal(renderer.instanceCountFor(asset.asset), 1, 'the live instance defers its definition eviction');
+  assert.equal(renderer.resourceStatistics().geometryResourceCount, 1);
+
+  renderer.applyDiff({ op: 'destroy', handle: firstHandle });
+  assert.equal(renderer.resourceStatistics().geometryResourceCount, 0);
+
+  renderer.retainResources(new Set([RESOURCE_ID]));
+  renderer.applyDiff({ op: 'defineStaticMesh', asset });
+  renderer.applyDiff({
+    op: 'createStaticMeshInstance', handle: renderHandle(307), parent: null, instance: crateInstance(asset.asset),
+  });
+  assert.equal(renderer.instanceCountFor(asset.asset), 1);
+});
+
+void test('retained resource pruning keeps an animated ghost capture alive until its lease releases', () => {
+  const asset = animatedMeshAsset();
+  const sourceTexture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  let sourceTextureDisposals = 0;
+  sourceTexture.addEventListener('dispose', () => { sourceTextureDisposals += 1; });
+  const scene = new THREE.Group();
+  scene.add(new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ map: sourceTexture }),
+  ));
+  const renderer = new ThreeRenderer({
+    animatedMeshSource: new MapAnimatedMeshAssetSource([{
+      asset: asset.asset,
+      contentHash: asset.contentHash,
+      scene,
+      clips: asset.clips.map((clip) => new THREE.AnimationClip(
+        clip.name ?? clip.id,
+        clip.durationSeconds ?? 1,
+        [],
+      )),
+    }]),
+  });
+  const handle = renderHandle(307);
+  const instance = {
+    asset: asset.asset,
+    transform: { translation: [0, 0, 0] as const, rotation: [0, 0, 0, 1] as const, scale: [1, 1, 1] as const },
+    visible: true,
+    materialOverrides: [],
+    playback: null,
+    metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'captured animated asset' },
+  };
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineAnimatedMesh', asset },
+    { op: 'createAnimatedMeshInstance', handle, parent: null, instance },
+  ] });
+  const templateTexture = (firstMesh(renderer.objectFor(handle)!)
+    .material as THREE.MeshStandardMaterial).map!;
+  assert.notEqual(templateTexture, sourceTexture, 'the template owns a clone of the admitted texture');
+  let templateTextureDisposals = 0;
+  templateTexture.addEventListener('dispose', () => { templateTextureDisposals += 1; });
+  const capture = renderer.createAnimatedMeshCaptureAppearance(handle, 'idle', 0.5);
+  renderer.applyDiff({ op: 'destroy', handle });
+  renderer.retainResources(new Set());
+  assert.equal(templateTextureDisposals, 0, 'the pending capture keeps its template texture alive');
+
+  capture.dispose();
+  assert.equal(templateTextureDisposals, 1, 'capture release retries the pending resource prune');
+  assert.equal(sourceTextureDisposals, 0, 'the admitted source texture remains owned by its resource source');
+});
+
 void test('sky background flips asymmetric equirectangular content without changing its retained source', () => {
   const beforePixels = [
     255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,

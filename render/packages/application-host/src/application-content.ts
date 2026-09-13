@@ -8,12 +8,15 @@ import {
   type RendererAnimatedMeshResourceResolver,
   type RendererTextureResourceDescriptor,
   type RendererTextureResourceManifest,
+  RendererMutableAnimatedMeshResourceSource,
+  RendererMutableMeshResourceSource,
+  RendererMutableTextureResourceSource,
 } from '@rusty-engine/renderer-host';
 
 import type { RustyApplicationFrame } from './application-host.js';
 import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 
-export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture';
+export type RustyApplicationResourceKind = 'animatedMesh' | 'audio' | 'mesh' | 'clipPack' | 'texture' | 'font';
 
 export interface RustyApplicationResource {
   readonly identity: string;
@@ -76,7 +79,7 @@ export interface RustyApplicationSurfaceResourceOptions {
   ) => Promise<ArrayBuffer>;
 }
 
-const SHA256_IDENTITY = /^(animated-mesh|audio|mesh|clip-pack|texture)-resource\/([0-9a-f]{64})$/u;
+const SHA256_IDENTITY = /^(?:(animated-mesh|audio|mesh|clip-pack|texture)-resource|font)\/([0-9a-f]{64})$/u;
 const MAX_U32_BYTE_LENGTH = 4_294_967_295;
 
 export function prepareRustyApplicationContent(
@@ -121,10 +124,17 @@ export function prepareRustyApplicationContent(
       );
     }
     identities.add(resource.identity);
-    const kind = match[1] === 'clip-pack' ? 'clipPack'
+    const kind = resource.identity.startsWith('font/') ? 'font'
+      : match[1] === 'clip-pack' ? 'clipPack'
       : match[1] === 'animated-mesh' ? 'animatedMesh'
         : match[1] as RustyApplicationResourceKind;
-    if (kind === 'audio') {
+    if (kind === 'font') {
+      if (resource.mediaType !== 'font/woff2' || resource.bytes.byteLength < 4
+        || resource.bytes[0] !== 0x77 || resource.bytes[1] !== 0x4f
+        || resource.bytes[2] !== 0x46 || resource.bytes[3] !== 0x32) {
+        throw contentError('resource_media_type_unsupported', resource.identity, 'font resources must use WOFF2');
+      }
+    } else if (kind === 'audio') {
       if (resource.mediaType !== 'audio/wav') {
         throw contentError(
           'resource_media_type_unsupported',
@@ -204,6 +214,82 @@ export function prepareRustyApplicationContent(
     resourceBytes: resources.reduce((total, resource) => total + resource.bytes.byteLength, 0),
     publicationFrontiers,
   });
+}
+
+/** One mutable Engine-owned resource catalog shared by a mounted surface and
+ * its presentation hosts. Product Browser admits immutable bytes here before
+ * applying the output group that names them. */
+export class RustyApplicationResourceCatalog {
+  readonly #resources = new Map<string, PreparedRustyApplicationResource>();
+  readonly #byHash = new Map<string, PreparedRustyApplicationResource>();
+  readonly meshSource = new RendererMutableMeshResourceSource();
+  readonly textureSource = new RendererMutableTextureResourceSource();
+  readonly animatedSource = new RendererMutableAnimatedMeshResourceSource();
+
+  async admit(
+    resources: readonly (RustyApplicationResource | PreparedRustyApplicationResource)[],
+    frame?: RustyApplicationFrame,
+  ): Promise<void> {
+    const prepared = resources.length === 0 || resources[0]!.bytes instanceof Uint8Array
+      ? prepareRustyApplicationContent({
+          frame: frame ?? { schemaVersion: 1, ops: [] },
+          resources: resources as readonly RustyApplicationResource[],
+        }).resources
+      : resources as readonly PreparedRustyApplicationResource[];
+    for (const resource of prepared) {
+      const existing = this.#resources.get(resource.identity);
+      if (existing !== undefined) continue;
+      if (resource.kind === 'mesh') await this.meshSource.admit(resource.identity, resource.contentHash, resource.bytes);
+      if (resource.kind === 'texture') await this.textureSource.admit(resource.identity, resource.contentHash, resource.bytes);
+      this.#resources.set(resource.identity, resource);
+      this.#byHash.set(resource.contentHash, resource);
+    }
+    if (frame === undefined) return;
+    for (const descriptor of animatedMeshDescriptors(frame)) {
+      const resource = this.#byHash.get(descriptor.contentHash);
+      if (resource !== undefined) await this.animatedSource.admitAnimatedMesh(descriptor, resource.bytes);
+    }
+    for (const descriptor of animationClipPacks(frame)) {
+      const resource = this.#byHash.get(descriptor.contentHash);
+      if (resource !== undefined) await this.animatedSource.admitClipPack(descriptor, resource.bytes);
+    }
+  }
+
+  resource(identity: string, hash?: string): PreparedRustyApplicationResource | undefined {
+    return this.#resources.get(identity) ?? (hash === undefined ? undefined : this.#byHash.get(hash));
+  }
+
+  snapshot(): readonly PreparedRustyApplicationResource[] {
+    return Object.freeze([...this.#resources.values()]);
+  }
+
+  retainOnly(identities: ReadonlySet<string>): void {
+    for (const [identity, resource] of this.#resources) {
+      if (identities.has(identity)) continue;
+      this.#resources.delete(identity);
+    }
+    this.#byHash.clear();
+    for (const resource of this.#resources.values()) this.#byHash.set(resource.contentHash, resource);
+    this.meshSource.retainOnly(identities);
+    this.textureSource.retainOnly(identities);
+    this.animatedSource.retainOnly(identities);
+  }
+
+  readout(): { readonly resources: number; readonly animated: number; readonly clipPacks: number } {
+    const counts = this.animatedSource.resourceCounts();
+    return { resources: this.#resources.size, animated: counts.animatedMeshes, clipPacks: counts.clipPacks };
+  }
+
+  clear(): void { this.retainOnly(new Set()); }
+
+  audioResolver(): RendererAudioResourceResolver {
+    return (clip) => {
+      const resource = this.#byHash.get(clip.contentHash);
+      return resource?.kind === 'audio'
+        ? Promise.resolve({ bytes: resource.bytes.slice(0), contentHash: resource.contentHash })
+        : Promise.reject(new Error(`audio resource ${clip.asset} (${clip.contentHash}) is unavailable`));
+    };
+  }
 }
 
 export function rustyApplicationAudioResourceResolver(

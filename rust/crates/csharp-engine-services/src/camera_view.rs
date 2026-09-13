@@ -120,6 +120,17 @@ impl RuntimeCameraViewBridge {
         self.state = staged.state;
     }
 
+    /// Appearance resource release must observe a sky selected earlier in the
+    /// same product callback as well as the committed retained selection.
+    pub(crate) fn uses_sky_texture(&self, resource: u64) -> bool {
+        self.staged
+            .as_ref()
+            .map(|staged| &staged.state)
+            .unwrap_or(&self.state)
+            .sky_texture
+            == Some(resource)
+    }
+
     /// Rebuilds the current retained camera composition without entering a
     /// product callback or changing camera handles. Sky is retained by the
     /// presentation world alongside graphics resources.

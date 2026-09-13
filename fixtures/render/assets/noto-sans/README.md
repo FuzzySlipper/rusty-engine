@@ -1,0 +1,1 @@
+Noto Sans Regular, version 2.015 (font revision 132055), from the installed Noto font distribution. The source font embeds the Noto Project Authors copyright and SIL Open Font License 1.1, preserved in LICENSE. Converted from NotoSans-Regular.ttf with woff2_compress without changing glyphs; retained as an Engine font admission and browser realization fixture.

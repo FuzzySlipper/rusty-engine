@@ -16,6 +16,7 @@ export {
   createProductBrowserLocalHttpAdapter,
 } from './local-transport.js';
 export { loadProductBrowserRendererInitialContent } from './renderer-preload.js';
+export { ProductBrowserDynamicRendererResources } from './dynamic-renderer-resources.js';
 export function rendererResourceContentHash(
   data: ArrayBuffer,
   expected: string,
@@ -69,3 +70,4 @@ export type {
   ProductBrowserLocalTransportErrorCode,
   ProductBrowserLocalTransportOptions,
 } from './local-transport.js';
+export type { ProductBrowserDynamicRendererResourceFetcher } from './dynamic-renderer-resources.js';

@@ -112,6 +112,11 @@ pub enum ProductDevWorkerRequest {
         operation: ProductDevWorkerFeedbackOperation,
         payload: Value,
     },
+    RendererResource {
+        request_id: u64,
+        identity: String,
+        generation: u64,
+    },
     Health {
         request_id: u64,
     },
@@ -412,6 +417,21 @@ mod tests {
         assert_eq!(
             read_worker_frame::<ProductDevWorkerEvent>(&mut bytes.as_slice()).unwrap(),
             settled
+        );
+    }
+
+    #[test]
+    fn worker_frames_keep_renderer_resource_generation_explicit() {
+        let request = ProductDevWorkerRequest::RendererResource {
+            request_id: 9,
+            identity: "font/sha256:abc".to_owned(),
+            generation: 7,
+        };
+        let mut bytes = Vec::new();
+        write_worker_frame(&mut bytes, &request).unwrap();
+        assert_eq!(
+            read_worker_frame::<ProductDevWorkerRequest>(&mut bytes.as_slice()).unwrap(),
+            request
         );
     }
 

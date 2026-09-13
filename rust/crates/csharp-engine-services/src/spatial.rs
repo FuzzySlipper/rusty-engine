@@ -5212,7 +5212,7 @@ mod tests {
                             b: 0.8,
                             a: 1.0,
                         },
-                        texture: NativeRenderResourceHandle::default(),
+                        texture: NativeRenderResourceReference::default(),
                         roughness: 1.0,
                         texture_tint: NativeColor {
                             r: 1.0,

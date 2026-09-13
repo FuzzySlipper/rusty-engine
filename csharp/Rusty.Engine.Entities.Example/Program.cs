@@ -907,6 +907,8 @@ sealed class GraphicsServiceFake : IGraphicsService
     public ReadOnlyMemory<AppearanceFact> LastSnapshot => _lastSnapshot;
 
     public RenderResourceInfo OpenResource(RenderResourceRequest arg0) => throw new NotSupportedException();
+    public RenderResourceInfo OpenResourceFromContent(RenderResourceContentRequest arg0) => throw new NotSupportedException();
+    public Appearance CreateStaticMeshFromContentReference(StaticMeshContentReferenceRequest arg0) => throw new NotSupportedException();
     public Material CreateMaterial(MaterialRequest arg0) => throw new NotSupportedException();
     public Material CreateAuthoredMaterial(AuthoredMaterialAppearanceRequest arg0) => throw new NotSupportedException();
     public void UpdateMaterial(MaterialUpdateRequest arg0) => throw new NotSupportedException();

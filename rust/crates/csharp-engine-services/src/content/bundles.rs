@@ -103,7 +103,7 @@ impl ProductContentBundles {
 
     fn load(&self, id: &str) -> Option<BTreeMap<String, AdmittedContent>> {
         let bundle = self.bundles.iter().find(|b| b.id == id)?;
-        let mut files = BTreeMap::new();
+        let mut bodies = BTreeMap::new();
         for file in &bundle.files {
             let path = self.content_root.join(&bundle.root).join(&file.path);
             if !fs::symlink_metadata(&path).ok()?.file_type().is_file() {
@@ -115,16 +115,31 @@ impl ProductContentBundles {
             {
                 return None;
             }
-            files.insert(
-                file.path.clone(),
-                AdmittedContent {
-                    path: format!("{}/{}", bundle.root, file.path),
-                    sha256: sha256(&bytes),
-                    bytes: Arc::from(bytes),
-                },
+            bodies.insert(
+                format!("{}/{}", bundle.root, file.path),
+                Arc::<[u8]>::from(bytes),
             );
         }
-        Some(files)
+        let bodies = Arc::new(bodies);
+        Some(
+            bundle
+                .files
+                .iter()
+                .map(|file| {
+                    let path = format!("{}/{}", bundle.root, file.path);
+                    let bytes = Arc::clone(&bodies[&path]);
+                    (
+                        file.path.clone(),
+                        AdmittedContent {
+                            path,
+                            sha256: sha256(&bytes),
+                            bytes,
+                            files: Arc::clone(&bodies),
+                        },
+                    )
+                })
+                .collect(),
+        )
     }
 }
 
@@ -426,6 +441,41 @@ mod tests {
             0
         );
         assert!(bridge.bundles.open.is_empty());
+    }
+
+    #[test]
+    fn retained_source_keeps_only_its_own_dependency_collection() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut definitions = Vec::new();
+        for root in ["actors", "other"] {
+            fs::create_dir(directory.path().join(root)).unwrap();
+            let mut files = Vec::new();
+            for (path, bytes) in [
+                ("model.glb", b"model".as_slice()),
+                ("skin.png", root.as_bytes()),
+            ] {
+                fs::write(directory.path().join(root).join(path), bytes).unwrap();
+                files.push(serde_json::json!({"path": path, "byteLength": bytes.len(), "sha256": format!("{:x}", Sha256::digest(bytes))}));
+            }
+            definitions.push(serde_json::json!({"id": root, "root": root, "files": files}));
+        }
+        fs::write(
+            directory.path().join(INDEX),
+            serde_json::to_vec(&serde_json::json!({"bundles": definitions})).unwrap(),
+        )
+        .unwrap();
+        let source = ProductContentBundles::admit(directory.path()).unwrap();
+        let actors = source.load("actors").unwrap();
+        let other = source.load("other").unwrap();
+        let retained = actors["model.glb"].clone();
+        let dependency = Arc::downgrade(&retained.files["actors/skin.png"]);
+        drop(actors);
+        drop(other);
+        assert_eq!(retained.files["actors/skin.png"].as_ref(), b"actors");
+        assert!(!retained.files.contains_key("other/skin.png"));
+        assert!(dependency.upgrade().is_some());
+        drop(retained);
+        assert!(dependency.upgrade().is_none());
     }
 
     #[test]

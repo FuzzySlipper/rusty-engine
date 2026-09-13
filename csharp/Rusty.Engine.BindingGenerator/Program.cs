@@ -640,10 +640,15 @@ internal static class Emit
                 continue;
             }
             if (HasBorrowedFields(model, value)) continue;
-            string assignments = string.Join(", ", value.Fields.Select(field => $"{RawIdentifier(field.Name)} = {ToNativeExpression(field, $"value.{Pascal(field.Name)}")}"));
+            string assignments = string.Join(", ", value.Fields.Select(field => $"{RawIdentifier(field.Name)} = {ToNativeFieldExpression(model, value, field, $"value.{Pascal(field.Name)}")}"));
             string arguments = string.Join(", ", value.Fields.Select(field => FromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
             output.AppendLine($"    internal static {value.Name} ToNative({safe} value) => new() {{ {assignments} }};");
-            if (!HasDisposableHandleField(model, value)) output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => new({arguments});");
+            if (HasDisposableHandleField(model, value))
+            {
+                if (IsOwnedHandleOutputStructure(model, value)) EmitOwnedHandleFieldConversion(output, model, value);
+                continue;
+            }
+            output.AppendLine($"    internal static {safe} FromNative({value.Name} value) => new({arguments});");
         }
         foreach (Struct value in LeaseMetadataStructures(model))
         {
@@ -714,6 +719,64 @@ internal static class Emit
         output.AppendLine("}").AppendLine();
     }
 
+    private static void EmitOwnedHandleFieldConversion(StringBuilder output, BindingModel model, Struct value)
+    {
+        string safe = SafeType(value.Name);
+        Field[] ownedFields = DisposableHandleFields(model, value).ToArray();
+        string factories = string.Join(", ", ownedFields.Select(field =>
+            $"Func<{BindingModel.Bare(field.Type)}, {OwnerType(BindingModel.Bare(field.Type))}> Create{Pascal(field.Name)}"));
+        output.AppendLine($"    internal static {safe} FromNative({value.Name} value, {factories})").AppendLine("    {");
+        foreach (Field field in ownedFields)
+        {
+            string owner = OwnerType(BindingModel.Bare(field.Type));
+            output.AppendLine($"        {owner}? owned{Pascal(field.Name)} = null;");
+        }
+        output.AppendLine("        try").AppendLine("        {");
+        foreach (Field field in ownedFields)
+        {
+            string raw = $"value.{RawIdentifier(field.Name)}";
+            string local = $"owned{Pascal(field.Name)}";
+            string factory = $"Create{Pascal(field.Name)}";
+            if (IsOptionalOwnedHandleField(value, field))
+            {
+                output.AppendLine($"            {local} = {raw}.value == 0 ? null : {factory}({raw});");
+            }
+            else
+            {
+                output.AppendLine($"            if ({raw}.value == 0) throw new InvalidOperationException(\"Native {value.Name}.{field.Name} returned an absent owning handle.\");");
+                output.AppendLine($"            {local} = {factory}({raw});");
+            }
+        }
+        string arguments = string.Join(", ", value.Fields.Select(field => IsDisposableHandle(model, BindingModel.Bare(field.Type))
+            ? $"owned{Pascal(field.Name)}{(IsOptionalOwnedHandleField(value, field) ? string.Empty : "!")}"
+            : FromNativeExpression(field, $"value.{RawIdentifier(field.Name)}")));
+        output.AppendLine($"            return new({arguments});");
+        output.AppendLine("        }").AppendLine("        catch").AppendLine("        {");
+        foreach (Field field in ownedFields.Reverse()) output.AppendLine($"            owned{Pascal(field.Name)}?.Dispose();");
+        output.AppendLine("            throw;").AppendLine("        }").AppendLine("    }");
+    }
+
+    private static void EmitOwnedHandleFieldResult(StringBuilder output, BindingModel model, Service service, string result)
+    {
+        Struct value = model.Structs[BindingModel.Bare(result)];
+        output.AppendLine($"        {RawType(result)} ownedResult = rawResult;");
+        output.AppendLine("        return NativeConversions.FromNative(ownedResult,");
+        Field[] fields = DisposableHandleFields(model, value).ToArray();
+        for (int index = 0; index < fields.Length; index++)
+        {
+            Field field = fields[index];
+            string handle = BindingModel.Bare(field.Type);
+            string owner = OwnerType(handle);
+            DestroyOperation destroy = DestroyFor(model, service, handle);
+            output.AppendLine($"            raw{Pascal(field.Name)} => new {owner}(NativeConversions.FromNative(raw{Pascal(field.Name)}), () =>");
+            output.AppendLine("            {");
+            EmitDestroy(output, model, service, destroy, $"raw{Pascal(field.Name)}", "                ");
+            output.AppendLine(UsesCommitAwareRelease(destroy.Owner)
+                ? $"            }}, _leaseReleases.IsTerminal, _leaseReleases.Stage){(index + 1 == fields.Length ? ");" : ",")}"
+                : $"            }}){(index + 1 == fields.Length ? ");" : ",")}");
+        }
+    }
+
     private static string EmitServiceMethod(BindingModel model, Service service, string operation, Callback callback)
     {
         string returnType = SafeReturn(model, callback);
@@ -745,6 +808,10 @@ internal static class Emit
             output.AppendLine("        finally").AppendLine("        {");
             EmitDestroy(output, model, service, destroy, "ownedResult.handle", "            ");
             output.AppendLine("        }");
+        }
+        else if (HasDisposableHandleField(model, model.Structs[BindingModel.Bare(result)]))
+        {
+            EmitOwnedHandleFieldResult(output, model, service, result);
         }
         else if (returnType != SafeType(BindingModel.Bare(result)))
         {
@@ -778,14 +845,14 @@ internal static class Emit
     // today. Other generated owners retain the established immediate local
     // disposal path so a later product-call rollback never revives a native
     // handle that was already destroyed.
-    private static bool UsesCommitAwareRelease(Service service) => service.Name is "Graphics" or "CameraView" or "Ui" or "Dynamics" or "Presentation" or "ImplicitSurfaces";
+    private static bool UsesCommitAwareRelease(Service service) => service.Name is "Audio" or "Graphics" or "CameraView" or "Ui" or "Dynamics" or "Presentation" or "ImplicitSurfaces";
 
     private static bool RequiresCommitAwareRelease(BindingModel model, Service service) =>
         UsesCommitAwareRelease(service)
         || service.Operations.Select(operation => model.Callbacks[operation.Callback])
             .Select(ResultParameter)
-            .Where(result => result is not null && !BindingModel.IsLeaseResult(result, model.Structs) && IsDisposableHandle(model, result))
-            .Select(result => DestroyFor(model, service, result!))
+            .Where(result => result is not null && !BindingModel.IsLeaseResult(result, model.Structs))
+            .SelectMany(result => OwnedResultDestroyOperations(model, service, result!))
             .Any(destroy => UsesCommitAwareRelease(destroy.Owner));
 
     private static string EmitBorrowedRequestMethod(BindingModel model, Service service, string operation, Callback callback, string returnType, string signature, string requestName, string result, string[] leading)
@@ -872,6 +939,10 @@ internal static class Emit
             output.AppendLine("        finally").AppendLine("        {");
             EmitDestroy(output, model, service, destroy, "ownedResult.handle", "            ");
             output.AppendLine("        }");
+        }
+        else if (HasDisposableHandleField(model, model.Structs[BindingModel.Bare(result)]))
+        {
+            EmitOwnedHandleFieldResult(output, model, service, result);
         }
         else if (returnType != SafeType(BindingModel.Bare(result)))
         {
@@ -997,6 +1068,13 @@ internal static class Emit
     }
 
     private static string ToNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) is "bool" or "_Bool" ? $"ToNativeBool({value})" : $"ToNative({value})";
+    private static string ToNativeFieldExpression(BindingModel model, Struct value, Field field, string source)
+    {
+        string converted = ToNativeExpression(field, source);
+        return IsDisposableHandle(model, BindingModel.Bare(field.Type)) && IsOptionalOwnedHandleField(value, field)
+            ? $"{source} is null ? default : {converted}"
+            : converted;
+    }
     private static string FromNativeExpression(Field field, string value) => BindingModel.Bare(field.Type) is "bool" or "_Bool" ? $"FromNativeBool({value})" : $"FromNative({value})";
     private static string LeaseElementFromNativeExpression(BindingModel model, Field field, string value) => BindingModel.Bare(field.Type) switch
     {
@@ -1073,7 +1151,22 @@ internal static class Emit
         }
         return false;
     }
-    private static bool HasDisposableHandleField(BindingModel model, Struct value) => value.Fields.Any(field => IsDisposableHandle(model, BindingModel.Bare(field.Type)));
+    private static IEnumerable<Field> DisposableHandleFields(BindingModel model, Struct value) => value.Fields.Where(field => IsDisposableHandle(model, BindingModel.Bare(field.Type)));
+    private static bool HasDisposableHandleField(BindingModel model, Struct value) => DisposableHandleFields(model, value).Any();
+    private static bool IsOwnedHandleOutputStructure(BindingModel model, Struct value) => model.Services
+        .SelectMany(service => service.Operations.Select(operation => model.Callbacks[operation.Callback]))
+        .Select(ResultParameter)
+        .Any(result => result == value.Name);
+    // A receipt whose ABI type explicitly says Optional represents an absent
+    // retained handle as zero. Other output records require an owning value.
+    private static bool IsOptionalOwnedHandleField(Struct value, Field field) => value.Name.Contains("Optional", StringComparison.Ordinal);
+    private static IEnumerable<DestroyOperation> OwnedResultDestroyOperations(BindingModel model, Service service, string result)
+    {
+        if (IsDisposableHandle(model, result)) return [DestroyFor(model, service, result)];
+        return model.Structs.TryGetValue(result, out Struct? value)
+            ? DisposableHandleFields(model, value).Select(field => DestroyFor(model, service, BindingModel.Bare(field.Type)))
+            : [];
+    }
     private static DestroyOperation DestroyFor(BindingModel model, Service service, string handle) => ResolveDestroy(model, service, handle);
     private static DestroyOperation DestroyLeaseFor(BindingModel model, Service service, string lease)
     {
@@ -1113,7 +1206,7 @@ internal static class Emit
             string? result = ResultParameter(callback);
             if (result is null) continue;
             if (BindingModel.IsLeaseResult(result, model.Structs)) names.Add(DestroyLeaseFor(model, service, result).Owner.Name);
-            else if (IsDisposableHandle(model, result)) names.Add(DestroyFor(model, service, result).Owner.Name);
+            else foreach (DestroyOperation destroy in OwnedResultDestroyOperations(model, service, result)) names.Add(destroy.Owner.Name);
         }
         names.Remove(service.Name);
         return model.Services.Where(candidate => names.Contains(candidate.Name));
@@ -1138,7 +1231,9 @@ internal static class Emit
                 if (index + 1 >= value.Fields.Count || !(value.Fields[index + 1].Name == $"{field.Name}_len" || value.Fields[index + 1].Name == $"{field.Name}_count")) throw new InvalidOperationException($"unsupported value field {value.Name}.{field.Name} ({field.Type}): pointer values require an adjacent _len or _count field.");
                 fields.Add((field, $"ReadOnlyMemory<{SafeType(model, BindingModel.Bare(field.Type))}>")); index++; continue;
             }
-            fields.Add((field, SafeType(model, BindingModel.Bare(field.Type))));
+            string fieldType = SafeType(model, BindingModel.Bare(field.Type));
+            if (IsDisposableHandle(model, BindingModel.Bare(field.Type)) && IsOptionalOwnedHandleField(value, field)) fieldType += "?";
+            fields.Add((field, fieldType));
         }
         return fields;
     }

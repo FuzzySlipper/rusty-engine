@@ -298,6 +298,8 @@ class RendererSurfaceBackendRenderError extends Error {
 const MAX_RETAINED_CADENCE_FAILURES = 64;
 
 export interface RendererSurfaceOptions {
+  /** Engine-owned mutable source for resources admitted after surface mount. */
+  readonly animatedMeshSource?: AnimatedMeshAssetSource;
   readonly autoStart?: boolean;
   /** Optional observer on the one Engine-owned animation cadence. */
   readonly onAnimationFrame?: (timeMs: number) => void;
@@ -312,11 +314,15 @@ export interface RendererSurfaceOptions {
   readonly fog?: RendererSurfaceFogOptions;
   readonly lighting?: RendererSurfaceLightingOptions;
   readonly meshBufferSource?: RendererSurfaceMeshBufferSource;
+  /** Engine-owned mutable source for resources admitted after surface mount. */
+  readonly meshResourceSource?: MeshResourceSource;
   readonly pixelRatio?: number;
   readonly presentationHosts?: RendererPresentationHostSet;
   readonly projection?: PerspectiveProjection;
   /** Active publisher continuation points installed before this surface admits later frames. */
   readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
+  /** Engine-owned mutable source for resources admitted after surface mount. */
+  readonly textureResourceSource?: TextureResourceSource;
   readonly viewComposition?: RendererViewComposition;
 }
 
@@ -630,6 +636,8 @@ export interface RendererSurface {
   /** Invalidate animation feedback ownership for a replaced runtime binding. */
   readonly resetAnimationRealizationOwner: () => boolean;
   readonly resetCameraMotion: () => void;
+  /** Release backend resource realizations no longer retained by Product content. */
+  readonly retainResources: (identities: ReadonlySet<string>) => void;
   /** Submit one explicit frame and return its immutable renderer-owned sample. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceSubmissionSample;
   readonly resetCamera: () => void;
@@ -786,19 +794,22 @@ function mountPreparedRendererSurface(
 ): RendererSurface {
   const lighting = normalizeSurfaceLighting(options.lighting);
   const frame = options.frame ?? createRendererDefaultSurfaceFrame();
+  const animatedMeshSource = resources.animatedMeshSource ?? options.animatedMeshSource;
+  const meshResourceSource = resources.meshResourceSource ?? options.meshResourceSource;
+  const textureResourceSource = resources.textureResourceSource ?? options.textureResourceSource;
   const projection = new RenderProjection();
   const controls = createRendererSurfaceFirstPersonControls(canvas, options.controls);
   let backendSurface: RendererBrowserSurface;
   try {
     backendSurface = mountRendererBrowserSurface(canvas, {
       autoStart: false,
-      ...(resources.animatedMeshSource === undefined
-        ? {} : { animatedMeshSource: resources.animatedMeshSource }),
+      ...(animatedMeshSource === undefined
+        ? {} : { animatedMeshSource }),
       ...(options.meshBufferSource === undefined ? {} : { meshBufferSource: options.meshBufferSource }),
-      ...(resources.meshResourceSource === undefined
-        ? {} : { meshResourceSource: resources.meshResourceSource }),
-      ...(resources.textureResourceSource === undefined
-        ? {} : { textureResourceSource: resources.textureResourceSource }),
+      ...(meshResourceSource === undefined
+        ? {} : { meshResourceSource }),
+      ...(textureResourceSource === undefined
+        ? {} : { textureResourceSource }),
       projection,
       ...(options.publicationFrontiers === undefined
         ? {} : { publicationFrontiers: options.publicationFrontiers }),
@@ -1338,6 +1349,10 @@ function mountPreparedRendererSurface(
     resetAudioRealizationOwner: () => presentationHosts?.resetAudioRealizationOwner() ?? false,
     resetAnimationRealizationOwner: () => presentationHosts?.resetAnimationRealizationOwner() ?? false,
     resetCameraMotion: () => { backendSurface.resetCameraMotion(); requestAutomaticSubmission(); },
+    retainResources: (identities) => {
+      if (disposed) return;
+      backendSurface.renderer.retainResources(identities);
+    },
     renderOnce,
     resetCamera: () => {
       controls.resetCamera();

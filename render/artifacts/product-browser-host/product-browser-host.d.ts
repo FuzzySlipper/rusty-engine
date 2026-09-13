@@ -1,5 +1,6 @@
 import { mountRustyApplication, type RustyApplicationFrame, type RustyApplicationAnimationCueDefinition, type RustyApplicationHost, type RustyApplicationHostReadout, type RustyApplicationPresentationFrame, type RustyApplicationRendererOptions, type RustyApplicationRuntimeIdentity, type RustyApplicationRuntimeInputEnvelope, type RustyApplicationRuntimeInputOptions, type RustyApplicationUiMount, type RustyApplicationUiProjectionEnvelope, type RustyApplicationPresentationAspectBounds, type RustyApplicationViewComposition } from '@rusty-engine/application-host';
 import { type RenderPublicationFrontier } from '@rusty-engine/render-contracts';
+import { type ProductBrowserDynamicRendererResourceFetcher } from './dynamic-renderer-resources.js';
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export declare const PRODUCT_BROWSER_HOST_ARTIFACT: "rusty.product.browser-host";
 export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
@@ -95,6 +96,7 @@ export type ProductBrowserAudioFeedbackFact = {
     readonly code: string;
     readonly sequence: number;
     readonly voiceHandle: string | null;
+    readonly signalHandle: string | null;
 };
 export interface ProductBrowserAudioFeedback {
     readonly runtime: RustyApplicationRuntimeIdentity;
@@ -278,35 +280,48 @@ export interface ProductBrowserRuntimeBindingOutput {
      * before any new-epoch trailing frame is allowed through.
      */
     readonly publicationFrontiers?: readonly RenderPublicationFrontier[];
+    /** Immutable renderer identities required by this output group, without bytes. */
+    readonly rendererResources?: readonly string[];
 }
 export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
 /** Fixed host evidence that one Rust-owned realtime advance was accepted. */
  | {
     readonly kind: 'runtime-progress';
     readonly owner: 'rust-host';
+    readonly rendererResources?: readonly string[];
 }
 /** Later Engine admission receipt for an input batch accepted by the Rust-host mailbox. */
  | {
     readonly kind: 'runtime-input-result';
     readonly result: ProductBrowserRuntimeInputResult;
+    readonly rendererResources?: readonly string[];
 } | {
     readonly kind: 'frame';
     readonly frame: RustyApplicationFrame;
+    readonly rendererResources?: readonly string[];
 } | {
     readonly kind: 'view-composition';
     readonly composition: RustyApplicationViewComposition;
+    readonly rendererResources?: readonly string[];
 } | {
     readonly kind: 'animation-cue-definitions';
     readonly definitions: readonly RustyApplicationAnimationCueDefinition[];
+    readonly rendererResources?: readonly string[];
 } | {
     readonly kind: 'presentation';
     readonly frame: RustyApplicationPresentationFrame;
+    readonly rendererResources?: readonly string[];
 } | {
     readonly kind: 'ui-projection';
     readonly envelope: RustyApplicationUiProjectionEnvelope;
+    readonly rendererResources?: readonly string[];
 } | {
     readonly kind: 'runtime-readout';
     readonly readout: ProductBrowserRuntimeReadout;
+    readonly rendererResources?: readonly string[];
+} | {
+    readonly kind: 'renderer-resources';
+    readonly rendererResources?: readonly string[];
 };
 /**
  * Buffers semantic runtime outputs while the renderer is mounting. Realtime
@@ -465,6 +480,7 @@ export interface ProductBrowserHostOptions {
     readonly failureLabel?: string;
     /** Start the Rust runtime after the Engine host has mounted. Defaults true. */
     readonly autoStart?: boolean;
+    readonly dynamicRendererResourceFetcher?: ProductBrowserDynamicRendererResourceFetcher;
 }
 /** @internal Reports whether admitted animation bytes still need their first semantic frame. */
 export declare function productBrowserInitialRendererFrameRequired(renderer: ProductBrowserHostOptions['renderer']): boolean;

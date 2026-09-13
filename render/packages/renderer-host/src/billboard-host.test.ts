@@ -410,6 +410,89 @@ void test('font and icon resources are SHA-256 validated cached and fail with ty
   assert.equal(missingFont.readout.activeBillboards, 0);
 });
 
+void test('billboard resource leases unload and reload fonts and icons by retained hash', async () => {
+  const container = new FakeContainer();
+  const fontBytes = new Uint8Array([1, 2, 3]).buffer;
+  const iconBytes = new Uint8Array([4, 5, 6]).buffer;
+  const fontHash = await sha256(fontBytes);
+  const iconHash = await sha256(iconBytes);
+  let fontLoads = 0;
+  let fontReleases = 0;
+  let iconResolutions = 0;
+  let iconReleases = 0;
+  const host = new RendererBillboardHost({
+    container,
+    createElement: () => new FakeElement(),
+    loadFont: async () => {
+      fontLoads += 1;
+      return () => { fontReleases += 1; };
+    },
+    resolveEntityPosition: () => [0, 0, 0],
+    projectWorld: () => ({
+      xPixels: 0,
+      yPixels: 0,
+      depth: 0,
+      distance: 0,
+      insideViewport: true,
+      occluded: false,
+    }),
+    resolveResource: async (asset) => {
+      if (asset.startsWith('font/')) return { bytes: fontBytes };
+      iconResolutions += 1;
+      return {
+        bytes: iconBytes,
+        url: `/icon-${String(iconResolutions)}.png`,
+        release: () => { iconReleases += 1; },
+      };
+    },
+  });
+  const assetDescriptor: BillboardDescriptor = {
+    ...descriptor(10),
+    font: { kind: 'asset', asset: 'font/ui-sans', contentHash: fontHash, family: 'Renderer UI' },
+    content: {
+      kind: 'icon',
+      texture: { asset: 'texture/alert', contentHash: iconHash },
+      altKey: 'alert',
+      fallbackAlt: 'Alert',
+    },
+  };
+
+  const created = await host.applyPresentation(presentation([
+    operation(0, { op: 'create', handle: billboardHandle(1), descriptor: assetDescriptor }),
+  ]));
+  assert.equal(created.diagnostics.length, 0);
+  assert.equal(created.readout.loadedFonts, 1);
+  assert.equal(created.readout.loadedIcons, 1);
+
+  // Retention keeps an idle resource available for replay, while the active
+  // descriptor remains protected regardless of the retained set.
+  host.retainResources(new Set([fontHash, iconHash]));
+  const destroyed = await host.applyPresentation(presentation([
+    operation(0, { op: 'destroy', handle: billboardHandle(1) }),
+  ]));
+  assert.equal(destroyed.diagnostics.length, 0);
+  assert.equal(fontReleases, 0);
+  assert.equal(iconReleases, 0);
+  assert.equal(host.readout().loadedFonts, 1);
+  assert.equal(host.readout().loadedIcons, 1);
+
+  host.retainResources(new Set());
+  assert.equal(fontReleases, 1);
+  assert.equal(iconReleases, 1);
+  assert.equal(host.readout().loadedFonts, 0);
+  assert.equal(host.readout().loadedIcons, 0);
+
+  const reloaded = await host.applyPresentation(presentation([
+    operation(0, { op: 'create', handle: billboardHandle(2), descriptor: assetDescriptor }),
+  ]));
+  assert.equal(reloaded.diagnostics.length, 0);
+  assert.equal(fontLoads, 2);
+  assert.equal(iconResolutions, 2);
+  host.dispose();
+  assert.equal(fontReleases, 2);
+  assert.equal(iconReleases, 2);
+});
+
 void test('a missing billboard host is isolated with an explicit domain receipt', async () => {
   const receipt = await new RendererPresentationHostSet({}).apply(presentation([
     operation(0, { op: 'create', handle: billboardHandle(1), descriptor: descriptor(10) }),

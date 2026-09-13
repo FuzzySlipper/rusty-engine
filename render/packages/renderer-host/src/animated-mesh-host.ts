@@ -81,6 +81,56 @@ export type RendererAnimatedMeshResourceResolver = (
   descriptor: RendererAnimatedMeshResourceDescriptor,
 ) => Promise<ArrayBuffer>;
 
+/** Mutable Engine source for GLB resources admitted after surface mount. */
+export class RendererMutableAnimatedMeshResourceSource extends MapAnimatedMeshAssetSource {
+  readonly #animated = new Map<string, string>();
+  readonly #packs = new Map<string, string>();
+
+  constructor() { super([]); }
+
+  async admitAnimatedMesh(
+    descriptor: RendererAnimatedMeshResourceDescriptor,
+    data: ArrayBuffer,
+  ): Promise<void> {
+    const resource = await loadAnimatedMeshGlbResource(
+      descriptor.asset,
+      data.slice(0),
+      descriptor.contentHash,
+      descriptor.embeddedMaterialSlots ?? [],
+    );
+    this.admitAnimatedMeshResource(resource);
+    this.#animated.set(descriptor.asset, descriptor.contentHash.slice('sha256:'.length));
+  }
+
+  async admitClipPack(
+    descriptor: RendererAnimationClipPackResourceDescriptor,
+    data: ArrayBuffer,
+  ): Promise<void> {
+    const resource = await loadAnimationClipPackGlbResource(
+      descriptor.asset,
+      data.slice(0),
+      descriptor.contentHash,
+    );
+    this.admitAnimationClipPackResource(resource);
+    this.#packs.set(descriptor.asset, descriptor.contentHash.slice('sha256:'.length));
+  }
+
+  retainOnly(identities: ReadonlySet<string>): void {
+    for (const [asset, hash] of this.#animated) {
+      if (!identities.has(`animated-mesh-resource/${hash}`)) {
+        this.releaseAnimatedMeshResource(asset);
+        this.#animated.delete(asset);
+      }
+    }
+    for (const [asset, hash] of this.#packs) {
+      if (!identities.has(`clip-pack-resource/${hash}`)) {
+        this.releaseAnimationClipPackResource(asset);
+        this.#packs.delete(asset);
+      }
+    }
+  }
+}
+
 export interface RendererAnimatedMeshFrameReceipt {
   readonly applied: boolean;
   /** Whether a later operation may reuse this renderer owner. */

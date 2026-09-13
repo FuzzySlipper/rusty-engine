@@ -104,6 +104,7 @@ export { sampleCameraTransition } from './camera-transition.js';
 
 export {
   RendererAnimationProjectionRejectedError,
+  RendererMutableAnimatedMeshResourceSource,
   RendererHostError,
   createRendererAnimatedMeshProjection,
   validEmbeddedMaterialSlots,
@@ -111,10 +112,12 @@ export {
 
 export {
   RendererMeshResourceError,
+  RendererMutableMeshResourceSource,
   loadRendererMeshResourceSource,
 } from './mesh-resource-host.js';
 export {
   RendererTextureResourceError,
+  RendererMutableTextureResourceSource,
   loadRendererTextureResourceSource,
 } from './texture-resource-host.js';
 export { rendererResourceContentHash } from './resource-content-hash.js';

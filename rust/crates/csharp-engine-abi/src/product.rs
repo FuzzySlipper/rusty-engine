@@ -367,6 +367,12 @@ pub type NativeOpenAudioClip = unsafe extern "C" fn(
     *const NativeAudioClipRequest,
     *mut NativeAudioClipHandle,
 ) -> i32;
+pub type NativeOpenAudioClipFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioClipFromContentRequest,
+    *mut NativeAudioClipHandle,
+) -> i32;
+pub type NativeDestroyAudioClip = unsafe extern "C" fn(*mut c_void, NativeAudioClipHandle) -> i32;
 pub type NativePreloadOptionalAudioClip = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioClipRequest,
@@ -960,6 +966,9 @@ pub struct NativeUiApi {
 pub struct NativeGraphicsApi {
     pub context: *mut c_void,
     pub open_resource: NativeOpenRenderResource,
+    pub destroy_resource: NativeDestroyRenderResource,
+    pub open_resource_from_content: NativeOpenRenderResourceFromContent,
+    pub create_static_mesh_from_content_reference: NativeCreateStaticMeshFromContentReference,
     pub create_material: NativeCreateMaterial,
     pub update_material: NativeUpdateMaterial,
     pub replace_material: NativeReplaceMaterial,
@@ -1093,6 +1102,8 @@ pub struct NativeAuthoredContentApi {
 pub struct NativeAnimationApi {
     pub context: *mut c_void,
     pub open_animated_mesh: NativeOpenAnimatedMesh,
+    pub open_animated_mesh_from_content: NativeOpenAnimationResourceFromContent,
+    pub open_animation_clip_pack_from_content: NativeOpenAnimationResourceFromContent,
     pub open_animation_clip_pack: NativeOpenAnimationClipPack,
     pub associate_animation_clip_pack: NativeAssociateAnimationClipPack,
     pub create_animated_mesh_appearance: NativeCreateAnimatedMeshAppearance,
@@ -1127,6 +1138,8 @@ pub struct NativeAnimationApi {
 pub struct NativeAudioApi {
     pub context: *mut c_void,
     pub open_clip: NativeOpenAudioClip,
+    pub open_clip_from_content: NativeOpenAudioClipFromContent,
+    pub destroy_clip: NativeDestroyAudioClip,
     pub preload_optional: NativePreloadOptionalAudioClip,
     pub emit: NativeEmitAudio,
     pub create_voice: NativeCreateAudioVoice,
@@ -1471,3 +1484,22 @@ pub type NativeProductBindV1 = unsafe extern "C" fn(
     *const NativeProductAbiHandshakeV1,
     *mut NativeProductAbiHandshakeV1,
 ) -> i32;
+
+pub type NativeOpenRenderResourceFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeRenderResourceContentRequest,
+    *mut NativeRenderResourceInfo,
+) -> i32;
+pub type NativeOpenAnimationResourceFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationContentRequest,
+    *mut NativeRenderResourceHandle,
+) -> i32;
+pub type NativeCreateStaticMeshFromContentReference = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeStaticMeshContentReferenceRequest,
+    *mut NativeAppearanceHandle,
+) -> i32;
+
+pub type NativeDestroyRenderResource =
+    unsafe extern "C" fn(*mut c_void, NativeRenderResourceHandle) -> i32;

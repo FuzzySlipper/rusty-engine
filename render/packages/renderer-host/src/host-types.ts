@@ -1,6 +1,7 @@
 import type {
   AnimationProjectionHandle,
   AudioHandle,
+  AudioSignalHandle,
   BillboardHandle,
   CameraBasis,
   CameraPose,
@@ -27,6 +28,8 @@ export interface AudioProjectionDiagnostic {
   readonly code: AudioProjectionDiagnosticCode;
   readonly sequence: number;
   readonly handle: AudioHandle | null;
+  /** Present only when an emitted one-shot failed before it could complete. */
+  readonly signalHandle?: AudioSignalHandle;
   readonly message: string;
 }
 

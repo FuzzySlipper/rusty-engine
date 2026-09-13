@@ -6,7 +6,9 @@
 //! fresh canonical Spatial session through the named asset-to-scene operation;
 //! object presentation remains a separate renderer-neutral capability.
 
-use crate::{NativeByteSlice, NativeSpatialSessionHandle, NativeUtf8Slice};
+use crate::{
+    NativeByteSlice, NativeContentReferenceHandle, NativeSpatialSessionHandle, NativeUtf8Slice,
+};
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -173,11 +175,27 @@ pub struct NativeAdmitVoxelAssetRequest {
     pub bytes: NativeByteSlice,
 }
 
+/// Loads an already-admitted immutable content reference without copying its
+/// bytes through the managed boundary.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLoadVoxelAssetFromContentRequest {
+    pub content: NativeContentReferenceHandle,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAdmitVoxelObjectRequest {
     /// A complete bounded voxel-object artifact borrowed for this call only.
     pub bytes: NativeByteSlice,
+}
+
+/// Loads one voxel-object JSON artifact from an immutable Engine content
+/// reference. The object retains owned admitted data, not this reference.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLoadVoxelObjectFromContentRequest {
+    pub content: NativeContentReferenceHandle,
 }
 
 /// One bounded trusted-product request for a single ordinary MagicaVoxel v150
@@ -189,6 +207,27 @@ pub struct NativeAdmitMagicaVoxelObjectRequest {
     pub bytes: NativeByteSlice,
     pub asset_id: NativeUtf8Slice,
     pub source_path: NativeUtf8Slice,
+    pub cell_size: f64,
+    pub pivot_policy: NativeMagicaVoxelPivotPolicy,
+    pub pivot_x: f64,
+    pub pivot_y: f64,
+    pub pivot_z: f64,
+    pub orientation: NativeMagicaVoxelOrientation,
+    pub max_source_bytes: u64,
+    pub max_dimension: u32,
+    pub max_voxel_count: u64,
+    pub max_chunk_count: u32,
+    pub max_material_slots: u32,
+}
+
+/// Loads one ordinary MagicaVoxel v150 model from an immutable content
+/// reference. The Engine derives `source_path` from that reference; the
+/// product-owned asset identity remains explicit.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLoadMagicaVoxelFromContentRequest {
+    pub content: NativeContentReferenceHandle,
+    pub asset_id: NativeUtf8Slice,
     pub cell_size: f64,
     pub pivot_policy: NativeMagicaVoxelPivotPolicy,
     pub pivot_x: f64,
@@ -241,6 +280,14 @@ pub struct NativeMagicaVoxelPaletteLease {
 pub struct NativeAdmitVoxelAnnotationRequest {
     pub asset: NativeVoxelAssetHandle,
     pub bytes: NativeByteSlice,
+}
+
+/// Loads one annotation layer from an immutable Engine content reference.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLoadVoxelAnnotationFromContentRequest {
+    pub asset: NativeVoxelAssetHandle,
+    pub content: NativeContentReferenceHandle,
 }
 
 /// One typed bounded annotation query. Only fields selected by `mode` are
@@ -580,6 +627,11 @@ pub type NativeAdmitVoxelAsset = unsafe extern "C" fn(
     *const NativeAdmitVoxelAssetRequest,
     *mut NativeVoxelAssetHandle,
 ) -> i32;
+pub type NativeLoadVoxelAssetFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeLoadVoxelAssetFromContentRequest,
+    *mut NativeVoxelAssetHandle,
+) -> i32;
 pub type NativeDestroyVoxelAsset = unsafe extern "C" fn(*mut c_void, NativeVoxelAssetHandle) -> i32;
 pub type NativeReadVoxelAsset =
     unsafe extern "C" fn(*mut c_void, NativeVoxelAssetHandle, *mut NativeVoxelAssetReadout) -> i32;
@@ -595,9 +647,19 @@ pub type NativeAdmitVoxelObject = unsafe extern "C" fn(
     *const NativeAdmitVoxelObjectRequest,
     *mut NativeVoxelObjectHandle,
 ) -> i32;
+pub type NativeLoadVoxelObjectFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeLoadVoxelObjectFromContentRequest,
+    *mut NativeVoxelObjectHandle,
+) -> i32;
 pub type NativeAdmitMagicaVoxelObject = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAdmitMagicaVoxelObjectRequest,
+    *mut NativeVoxelObjectHandle,
+) -> i32;
+pub type NativeLoadMagicaVoxelFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeLoadMagicaVoxelFromContentRequest,
     *mut NativeVoxelObjectHandle,
 ) -> i32;
 pub type NativeReadMagicaVoxelPalette = unsafe extern "C" fn(
@@ -610,6 +672,11 @@ pub type NativeDestroyMagicaVoxelPaletteLease =
 pub type NativeAdmitVoxelAnnotation = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAdmitVoxelAnnotationRequest,
+    *mut NativeVoxelAnnotationHandle,
+) -> i32;
+pub type NativeLoadVoxelAnnotationFromContent = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeLoadVoxelAnnotationFromContentRequest,
     *mut NativeVoxelAnnotationHandle,
 ) -> i32;
 pub type NativeDestroyVoxelAnnotation =
@@ -714,12 +781,15 @@ pub type NativeDestroyVoxelObjectPresentation =
 pub struct NativeVoxelContentApi {
     pub context: *mut c_void,
     pub admit_asset: NativeAdmitVoxelAsset,
+    pub load_asset_from_content: NativeLoadVoxelAssetFromContent,
     pub destroy_asset: NativeDestroyVoxelAsset,
     pub read_asset: NativeReadVoxelAsset,
     pub publish_asset_to_spatial: NativePublishVoxelAssetToSpatial,
     pub destroy_asset_spatial_publish_lease: NativeDestroyVoxelAssetSpatialPublishLease,
     pub admit_object: NativeAdmitVoxelObject,
+    pub load_object_from_content: NativeLoadVoxelObjectFromContent,
     pub admit_magica_voxel_object: NativeAdmitMagicaVoxelObject,
+    pub load_magica_voxel_from_content: NativeLoadMagicaVoxelFromContent,
     pub read_magica_voxel_palette: NativeReadMagicaVoxelPalette,
     pub destroy_magica_voxel_palette_lease: NativeDestroyMagicaVoxelPaletteLease,
     pub destroy_object: NativeDestroyVoxelObject,
@@ -740,6 +810,7 @@ pub struct NativeVoxelContentApi {
     pub update_object_presentation: NativeUpdateVoxelObjectPresentation,
     pub destroy_object_presentation: NativeDestroyVoxelObjectPresentation,
     pub admit_annotation: NativeAdmitVoxelAnnotation,
+    pub load_annotation_from_content: NativeLoadVoxelAnnotationFromContent,
     pub destroy_annotation: NativeDestroyVoxelAnnotation,
     pub query_annotation: NativeQueryVoxelAnnotation,
     pub destroy_annotation_region_lease: NativeDestroyVoxelAnnotationRegionLease,

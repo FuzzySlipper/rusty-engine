@@ -15,7 +15,7 @@ fn opaque_material() -> NativeMaterialRequest {
             b: 0.2,
             a: 1.0,
         },
-        texture: NativeRenderResourceHandle::default(),
+        texture: NativeRenderResourceReference::default(),
         roughness: 0.85,
         texture_tint: NativeColor {
             r: 1.0,

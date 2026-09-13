@@ -14,13 +14,15 @@ dotnet run --project "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engi
     "$output_dir/EngineContracts.g.cs" \
     "$output_dir/EngineValues.g.cs" \
     "$output_dir/GeneratedInputs" \
-    "$(clang -print-resource-dir)"
+    "$(clang -print-resource-dir)" \
+    "$output_dir/generated_abi_identity.rs"
 if dotnet run --project "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.Engine.BindingGenerator.csproj" --no-restore -- \
     "$fixture_dir/lease-fixture-invalid-outer-borrow.h" \
     "$invalid_output_dir/EngineContracts.g.cs" \
     "$invalid_output_dir/EngineValues.g.cs" \
     "$invalid_output_dir/GeneratedInputs" \
-    "$(clang -print-resource-dir)" >"$invalid_output_dir/rejected.txt" 2>&1; then
+    "$(clang -print-resource-dir)" \
+    "$invalid_output_dir/generated_abi_identity.rs" >"$invalid_output_dir/rejected.txt" 2>&1; then
     echo "expected borrowed lease metadata to be rejected" >&2
     exit 1
 fi
@@ -30,7 +32,8 @@ if dotnet run --project "$repo_root/csharp/Rusty.Engine.BindingGenerator/Rusty.E
     "$invalid_output_dir/EngineContracts.g.cs" \
     "$invalid_output_dir/EngineValues.g.cs" \
     "$invalid_output_dir/GeneratedInputs" \
-    "$(clang -print-resource-dir)" >"$invalid_output_dir/borrowed-span-rejected.txt" 2>&1; then
+    "$(clang -print-resource-dir)" \
+    "$invalid_output_dir/generated_abi_identity.rs" >"$invalid_output_dir/borrowed-span-rejected.txt" 2>&1; then
     echo "expected nested borrowed span pointer to be rejected" >&2
     exit 1
 fi

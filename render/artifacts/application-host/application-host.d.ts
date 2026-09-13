@@ -1,6 +1,6 @@
 import type { RenderPublicationFrontier } from '@rusty-engine/render-contracts';
 import { type RendererSurface, type RendererSurfaceDiagnosticsReadout, type RendererSurfaceOptions, type RendererSurfaceResourceOptions } from '@rusty-engine/renderer-host';
-import { type RustyApplicationContent } from './application-content.js';
+import { type RustyApplicationContent, type RustyApplicationResource } from './application-content.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
 import { type RustyApplicationInputPort, type RustyApplicationRuntimeInputOptions, type RustyApplicationRuntimeIntentValue } from './input-ingress.js';
 import { type RustyApplicationUiProjectionOptions, type RustyApplicationUiProjectionPort, type RustyApplicationUiProjectionReadout, type RustyApplicationUiProjectionView } from './ui-projection.js';
@@ -168,6 +168,8 @@ export interface RustyApplicationAudioDiagnostic {
     readonly code: RustyApplicationAudioDiagnosticCode;
     readonly sequence: number;
     readonly handle: number | null;
+    /** Present only when a one-shot terminal diagnostic identifies its signal. */
+    readonly signalHandle?: number;
     readonly message: string;
 }
 export type RustyApplicationAudioRealizedFact = {
@@ -274,6 +276,9 @@ export interface RustyApplicationRendererPort {
     /** Replace product content with the Engine-owned empty/default retained frame. */
     readonly clear: () => Promise<void>;
     readonly renderOnce: (timeMs?: number) => void;
+    /** Admit immutable bytes into the live Engine renderer without replacing its surface. */
+    readonly admitResources: (resources: readonly RustyApplicationResource[], frame?: RustyApplicationFrame) => Promise<void>;
+    readonly retainResources: (identities: ReadonlySet<string>) => void;
     /** Atomically replace the immutable resource catalog and complete retained frame. */
     readonly replaceContent: (content: RustyApplicationContent) => Promise<RustyApplicationFrameReceipt>;
     /** Prepare and atomically publish a complete Rust-projected retained frame. */

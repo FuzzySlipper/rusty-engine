@@ -17,6 +17,7 @@ struct AdmittedContent {
     path: String,
     sha256: NativeContentSha256,
     bytes: Arc<[u8]>,
+    files: Arc<BTreeMap<String, Arc<[u8]>>>,
 }
 
 #[derive(Clone)]
@@ -24,6 +25,8 @@ pub(crate) struct RetainedContent {
     pub(crate) path: String,
     pub(crate) sha256: NativeContentSha256,
     pub(crate) bytes: Arc<[u8]>,
+    /// Immutable dependency context of this source, never other open bundles.
+    pub(crate) files: Arc<BTreeMap<String, Arc<[u8]>>>,
 }
 
 struct ContentReferenceInfoLease {
@@ -45,6 +48,7 @@ pub(crate) struct RuntimeContentBridge {
 
 impl RuntimeContentBridge {
     pub(crate) fn new(content_resources: BTreeMap<String, Arc<[u8]>>) -> Self {
+        let files = Arc::new(content_resources.clone());
         let catalog = content_resources
             .into_iter()
             .map(|(path, bytes)| {
@@ -55,6 +59,7 @@ impl RuntimeContentBridge {
                         path,
                         sha256,
                         bytes,
+                        files: Arc::clone(&files),
                     },
                 )
             })
@@ -100,7 +105,22 @@ impl RuntimeContentBridge {
                 path: content.path.clone(),
                 sha256: content.sha256,
                 bytes: Arc::clone(&content.bytes),
+                files: Arc::clone(&content.files),
             })
+    }
+
+    /// Compatibility lookup for ordinary loose content; bundles require a
+    /// reference so another open collection cannot change path resolution.
+    pub(crate) fn retained_path(&self, path: &str) -> Option<RetainedContent> {
+        let content = self
+            .catalog
+            .get(path.strip_prefix("content/").unwrap_or(path))?;
+        Some(RetainedContent {
+            path: content.path.clone(),
+            sha256: content.sha256,
+            bytes: Arc::clone(&content.bytes),
+            files: Arc::clone(&content.files),
+        })
     }
 
     fn read_info(

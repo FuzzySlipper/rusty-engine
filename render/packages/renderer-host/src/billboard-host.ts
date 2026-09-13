@@ -23,6 +23,8 @@ type BillboardPresentationOp = Extract<PresentationOp, { readonly domain: 'billb
 export interface RendererBillboardResource {
   readonly bytes: ArrayBuffer;
   readonly url?: string;
+  /** Release a URL/blob or other resolver-owned resource when no host owner remains. */
+  readonly release?: () => void;
 }
 
 export type RendererBillboardResourceResolver = (
@@ -90,7 +92,7 @@ export type RendererBillboardElementFactory = () => RendererBillboardElement;
 export type RendererBillboardFontLoader = (
   family: string,
   bytes: ArrayBuffer,
-) => Promise<void>;
+) => Promise<(() => void) | void>;
 
 export interface RendererBillboardHostOptions {
   readonly container: RendererBillboardContainer;
@@ -111,7 +113,20 @@ export interface RendererBillboardFrameReceipt {
 interface ActiveBillboard {
   descriptor: BillboardDescriptor;
   readonly element: RendererBillboardElement;
+  resources: readonly BillboardResourceLease[];
   placement: { readonly x: number; readonly y: number; readonly scale: number } | null;
+}
+
+interface BillboardResourceEntry {
+  readonly hash: string;
+  readonly releaseResource?: () => void;
+  readonly releaseFont?: () => void;
+  readonly aliases: Set<string>;
+  references: number;
+}
+
+interface BillboardResourceLease {
+  readonly release: () => void;
 }
 
 interface LayoutCandidate {
@@ -143,10 +158,11 @@ export class RendererBillboardHost {
   readonly #resolveEntityPosition: RendererBillboardEntityPositionResolver;
   readonly #resolveResource: RendererBillboardResourceResolver;
   readonly #active = new Map<BillboardHandle, ActiveBillboard>();
-  readonly #loadedFonts = new Set<string>();
-  readonly #loadedIcons = new Set<string>();
+  readonly #fonts = new Map<string, BillboardResourceEntry>();
+  readonly #icons = new Map<string, BillboardResourceEntry>();
   readonly #iconUrls = new Map<string, string>();
   readonly #diagnostics: BillboardProjectionDiagnostic[] = [];
+  #retainedResourceHashes: ReadonlySet<string> | null = null;
   #culledBillboards = 0;
   #generation = 0;
 
@@ -321,11 +337,17 @@ export class RendererBillboardHost {
   readout(): BillboardProjectionReadout {
     return {
       activeBillboards: this.#active.size,
-      loadedFonts: this.#loadedFonts.size,
-      loadedIcons: this.#loadedIcons.size,
+      loadedFonts: this.#fonts.size,
+      loadedIcons: this.#icons.size,
       culledBillboards: this.#culledBillboards,
       diagnostics: [...this.#diagnostics],
     };
+  }
+
+  /** Keep zero-reference presentation resources while their Engine publication is retained. */
+  retainResources(hashes: ReadonlySet<string>): void {
+    this.#retainedResourceHashes = new Set(hashes);
+    this.#pruneResources();
   }
 
   #recordDiagnostics(diagnostics: readonly BillboardProjectionDiagnostic[]): void {
@@ -343,18 +365,26 @@ export class RendererBillboardHost {
 
   cleanup(): void {
     this.#generation += 1;
+    const failures: unknown[] = [];
     for (const active of this.#active.values()) {
-      active.element.remove();
+      try {
+        active.element.remove();
+      } catch (cause) {
+        failures.push(cause);
+      }
+      releaseBillboardLeases(active.resources);
     }
     this.#active.clear();
+    this.#retainedResourceHashes = null;
+    this.#dropAllResources();
     this.#culledBillboards = 0;
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'renderer billboard cleanup failed');
+    }
   }
 
   dispose(): void {
     this.cleanup();
-    this.#loadedFonts.clear();
-    this.#loadedIcons.clear();
-    this.#iconUrls.clear();
     this.#diagnostics.length = 0;
   }
 
@@ -402,33 +432,40 @@ export class RendererBillboardHost {
     }
     validateBillboardDescriptorInvariant(op.descriptor);
     const generation = this.#generation;
-    await this.#prepareResources(op.descriptor);
-    if (generation !== this.#generation) {
-      return this.#diagnostic(
-        'hostFailure',
-        meta.sequence,
-        op.handle,
-        'billboard host lifecycle changed while resources were loading',
-      );
+    const resources = await this.#prepareResources(op.descriptor);
+    let committed = false;
+    try {
+      if (generation !== this.#generation) {
+        return this.#diagnostic(
+          'hostFailure',
+          meta.sequence,
+          op.handle,
+          'billboard host lifecycle changed while resources were loading',
+        );
+      }
+      if (this.#active.has(op.handle)) {
+        return this.#diagnostic(
+          'duplicateHandle',
+          meta.sequence,
+          op.handle,
+          'billboard handle became active while resources were loading',
+        );
+      }
+      const element = this.#createElement();
+      element.setAttribute('data-rusty-billboard-handle', String(op.handle as number));
+      this.#applyElementDescriptor(element, op.descriptor);
+      appendBillboardElement(this.#container, element);
+      this.#active.set(op.handle, {
+        descriptor: op.descriptor,
+        element,
+        resources,
+        placement: null,
+      });
+      committed = true;
+      return null;
+    } finally {
+      if (!committed) releaseBillboardLeases(resources);
     }
-    if (this.#active.has(op.handle)) {
-      return this.#diagnostic(
-        'duplicateHandle',
-        meta.sequence,
-        op.handle,
-        'billboard handle became active while resources were loading',
-      );
-    }
-    const element = this.#createElement();
-    element.setAttribute('data-rusty-billboard-handle', String(op.handle as number));
-    this.#applyElementDescriptor(element, op.descriptor);
-    appendBillboardElement(this.#container, element);
-    this.#active.set(op.handle, {
-      descriptor: op.descriptor,
-      element,
-      placement: null,
-    });
-    return null;
   }
 
   async #update(
@@ -447,18 +484,27 @@ export class RendererBillboardHost {
     const descriptor = applyBillboardPatch(active.descriptor, op.patch);
     validateBillboardDescriptorInvariant(descriptor);
     const generation = this.#generation;
-    await this.#prepareResources(descriptor);
-    if (generation !== this.#generation || this.#active.get(op.handle) !== active) {
-      return this.#diagnostic(
-        'hostFailure',
-        meta.sequence,
-        op.handle,
-        'billboard host lifecycle changed while resources were loading',
-      );
+    const resources = await this.#prepareResources(descriptor);
+    let committed = false;
+    try {
+      if (generation !== this.#generation || this.#active.get(op.handle) !== active) {
+        return this.#diagnostic(
+          'hostFailure',
+          meta.sequence,
+          op.handle,
+          'billboard host lifecycle changed while resources were loading',
+        );
+      }
+      this.#applyElementDescriptor(active.element, descriptor);
+      const previousResources = active.resources;
+      active.descriptor = descriptor;
+      active.resources = resources;
+      committed = true;
+      releaseBillboardLeases(previousResources);
+      return null;
+    } finally {
+      if (!committed) releaseBillboardLeases(resources);
     }
-    this.#applyElementDescriptor(active.element, descriptor);
-    active.descriptor = descriptor;
-    return null;
   }
 
   #destroy(
@@ -474,58 +520,167 @@ export class RendererBillboardHost {
         'billboard handle is not active',
       );
     }
-    active.element.remove();
-    this.#active.delete(op.handle);
+    try {
+      active.element.remove();
+    } finally {
+      this.#active.delete(op.handle);
+      releaseBillboardLeases(active.resources);
+    }
     return null;
   }
 
-  async #prepareResources(descriptor: BillboardDescriptor): Promise<void> {
-    await this.#prepareFont(descriptor.font);
-    if (descriptor.content.kind === 'icon') {
-      await this.#prepareTexture(descriptor.content.texture);
-    } else if (descriptor.content.kind === 'structured') {
-      const textures = [
-        descriptor.content.indicator.icon,
-        ...descriptor.content.indicator.statusCues.map((cue) => cue.icon),
-      ].filter((texture) => texture !== null);
-      for (const texture of textures) {
-        await this.#prepareTexture(texture);
-      }
+  async #prepareResources(descriptor: BillboardDescriptor): Promise<readonly BillboardResourceLease[]> {
+    const resources: BillboardResourceLease[] = [];
+    try {
+      resources.push(await this.#prepareFont(descriptor.font));
+      const textures = descriptor.content.kind === 'icon'
+        ? [descriptor.content.texture]
+        : descriptor.content.kind === 'structured'
+          ? [
+              descriptor.content.indicator.icon,
+              ...descriptor.content.indicator.statusCues.map((cue) => cue.icon),
+            ].filter((texture): texture is NonNullable<typeof texture> => texture !== null)
+          : [];
+      for (const texture of textures) resources.push(await this.#prepareTexture(texture));
+      return resources;
+    } catch (cause) {
+      releaseBillboardLeases(resources);
+      throw cause;
     }
   }
 
-  async #prepareFont(font: BillboardFontRef): Promise<void> {
+  async #prepareFont(font: BillboardFontRef): Promise<BillboardResourceLease> {
     if (font.kind === 'system') {
-      return;
+      return { release: () => undefined };
     }
-    const cacheKey = `${font.asset}:${font.contentHash}`;
-    if (this.#loadedFonts.has(cacheKey)) {
-      return;
+    const cacheKey = `${font.family}:${font.contentHash}`;
+    const existing = this.#fonts.get(cacheKey);
+    if (existing !== undefined) {
+      existing.references += 1;
+      return billboardLease(() => this.#releaseFont(cacheKey, existing));
     }
     const resource = await this.#resolveResource(font.asset, font.contentHash);
     if (resource === null) {
       throw new RendererBillboardResourceError('fontLoadFailed', `font resource ${font.asset} is unavailable`);
     }
-    await validateResourceHash(resource.bytes, font.contentHash);
-    await this.#loadFont(font.family, resource.bytes);
-    this.#loadedFonts.add(cacheKey);
+    let releaseFont: (() => void) | void;
+    try {
+      await validateResourceHash(resource.bytes, font.contentHash);
+      releaseFont = await this.#loadFont(font.family, resource.bytes);
+    } catch (cause) {
+      releaseBillboardResource(resource.release);
+      throw cause;
+    }
+    const duplicate = this.#fonts.get(cacheKey);
+    if (duplicate !== undefined) {
+      if (releaseFont !== undefined) releaseBillboardResource(releaseFont);
+      releaseBillboardResource(resource.release);
+      duplicate.references += 1;
+      return billboardLease(() => this.#releaseFont(cacheKey, duplicate));
+    }
+    const entry: BillboardResourceEntry = {
+      hash: font.contentHash,
+      ...(resource.release === undefined ? {} : { releaseResource: resource.release }),
+      ...(releaseFont === undefined ? {} : { releaseFont }),
+      aliases: new Set(),
+      references: 1,
+    };
+    this.#fonts.set(cacheKey, entry);
+    return billboardLease(() => this.#releaseFont(cacheKey, entry));
   }
 
-  async #prepareTexture(texture: { readonly asset: string; readonly contentHash: string }): Promise<void> {
-    const cacheKey = `${texture.asset}:${texture.contentHash}`;
-    if (this.#loadedIcons.has(cacheKey)) {
-      return;
+  async #prepareTexture(
+    texture: { readonly asset: string; readonly contentHash: string },
+  ): Promise<BillboardResourceLease> {
+    const resourceKey = `texture:${texture.contentHash}`;
+    const aliasKey = `${texture.asset}:${texture.contentHash}`;
+    const existing = this.#icons.get(resourceKey);
+    if (existing !== undefined) {
+      existing.references += 1;
+      existing.aliases.add(aliasKey);
+      this.#iconUrls.set(aliasKey, this.#entryUrl(existing));
+      return billboardLease(() => this.#releaseIcon(resourceKey, existing));
     }
     const resource = await this.#resolveResource(texture.asset, texture.contentHash);
     if (resource === null || resource.url === undefined) {
+      if (resource !== null) releaseBillboardResource(resource.release);
       throw new RendererBillboardResourceError(
         'iconLoadFailed',
         `icon resource ${texture.asset} is unavailable or has no host URL`,
       );
     }
-    await validateResourceHash(resource.bytes, texture.contentHash);
-    this.#loadedIcons.add(cacheKey);
-    this.#iconUrls.set(cacheKey, resource.url);
+    try {
+      await validateResourceHash(resource.bytes, texture.contentHash);
+    } catch (cause) {
+      releaseBillboardResource(resource.release);
+      throw cause;
+    }
+    const duplicate = this.#icons.get(resourceKey);
+    if (duplicate !== undefined) {
+      releaseBillboardResource(resource.release);
+      duplicate.references += 1;
+      duplicate.aliases.add(aliasKey);
+      this.#iconUrls.set(aliasKey, this.#entryUrl(duplicate));
+      return billboardLease(() => this.#releaseIcon(resourceKey, duplicate));
+    }
+    const entry: BillboardResourceEntry = {
+      hash: texture.contentHash,
+      ...(resource.release === undefined ? {} : { releaseResource: resource.release }),
+      aliases: new Set([aliasKey]),
+      references: 1,
+    };
+    this.#icons.set(resourceKey, entry);
+    this.#iconUrls.set(aliasKey, resource.url);
+    entry.aliases.add(aliasKey);
+    return billboardLease(() => this.#releaseIcon(resourceKey, entry));
+  }
+
+  #entryUrl(entry: BillboardResourceEntry): string {
+    for (const alias of entry.aliases) {
+      const url = this.#iconUrls.get(alias);
+      if (url !== undefined) return url;
+    }
+    throw new RendererBillboardResourceError('iconLoadFailed', 'billboard icon resource URL is unavailable');
+  }
+
+  #releaseFont(key: string, entry: BillboardResourceEntry): void {
+    if (entry.references > 0) entry.references -= 1;
+    if (entry.references !== 0 || this.#shouldRetain(entry.hash)) return;
+    if (this.#fonts.get(key) === entry) this.#fonts.delete(key);
+    releaseBillboardResource(entry.releaseFont);
+    releaseBillboardResource(entry.releaseResource);
+  }
+
+  #releaseIcon(key: string, entry: BillboardResourceEntry): void {
+    if (entry.references > 0) entry.references -= 1;
+    if (entry.references !== 0 || this.#shouldRetain(entry.hash)) return;
+    if (this.#icons.get(key) === entry) this.#icons.delete(key);
+    for (const alias of entry.aliases) this.#iconUrls.delete(alias);
+    releaseBillboardResource(entry.releaseResource);
+  }
+
+  #shouldRetain(hash: string): boolean {
+    return this.#retainedResourceHashes?.has(hash) ?? false;
+  }
+
+  #pruneResources(): void {
+    for (const [key, entry] of this.#fonts) {
+      if (entry.references === 0 && !this.#shouldRetain(entry.hash)) this.#releaseFont(key, entry);
+    }
+    for (const [key, entry] of this.#icons) {
+      if (entry.references === 0 && !this.#shouldRetain(entry.hash)) this.#releaseIcon(key, entry);
+    }
+  }
+
+  #dropAllResources(): void {
+    for (const entry of this.#fonts.values()) {
+      releaseBillboardResource(entry.releaseFont);
+      releaseBillboardResource(entry.releaseResource);
+    }
+    for (const entry of this.#icons.values()) releaseBillboardResource(entry.releaseResource);
+    this.#fonts.clear();
+    this.#icons.clear();
+    this.#iconUrls.clear();
   }
 
   #applyElementDescriptor(element: RendererBillboardElement, descriptor: BillboardDescriptor): void {
@@ -997,12 +1152,38 @@ function appendBillboardElement(
   (container as RendererBillboardContainerPort).appendChild(element);
 }
 
-async function loadBrowserFont(family: string, bytes: ArrayBuffer): Promise<void> {
+async function loadBrowserFont(family: string, bytes: ArrayBuffer): Promise<(() => void)> {
   if (globalThis.FontFace === undefined || globalThis.document?.fonts === undefined) {
     throw new RendererBillboardResourceError('fontLoadFailed', 'browser FontFace host is unavailable');
   }
   const font = await new globalThis.FontFace(family, bytes).load();
   globalThis.document.fonts.add(font);
+  return () => {
+    globalThis.document?.fonts?.delete(font);
+  };
+}
+
+function billboardLease(release: () => void): BillboardResourceLease {
+  let released = false;
+  return {
+    release: () => {
+      if (released) return;
+      released = true;
+      release();
+    },
+  };
+}
+
+function releaseBillboardLeases(leases: readonly BillboardResourceLease[]): void {
+  for (const lease of leases) lease.release();
+}
+
+function releaseBillboardResource(release: (() => void) | undefined): void {
+  try {
+    release?.();
+  } catch {
+    // Resolver-owned cleanup must not strand the remaining host resources.
+  }
 }
 
 class RendererBillboardResourceError extends Error {

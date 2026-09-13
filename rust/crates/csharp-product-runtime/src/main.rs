@@ -100,14 +100,10 @@ fn main() -> Result<(), String> {
     }
     .map_err(|error| error.to_string())?;
     let bundle = match &args.product {
-        Some(product) => load_bundle(
-            &runtime_browser_root()?,
-            product,
-            runtime.render_resources(),
-        )?,
+        Some(product) => load_bundle(&runtime_browser_root()?, product, &[])?,
         None => load_legacy_bundle(
             args.bundle_dir.as_deref().expect("legacy bundle path"),
-            runtime.render_resources(),
+            &runtime.render_resources(),
         )?,
     };
     if args.exercise {
@@ -1120,7 +1116,7 @@ fn invoke_connection_inner<T: serde::de::DeserializeOwned>(
             "worker response did not match the requested result family",
         )
     })?;
-    let outputs = match worker_publications(response.outputs) {
+    let outputs = match worker_outputs(response.outputs) {
         Ok(outputs) => outputs,
         Err(error) => {
             stop_worker(connection);
@@ -1128,7 +1124,8 @@ fn invoke_connection_inner<T: serde::de::DeserializeOwned>(
             return Err(error);
         }
     };
-    let receipt = ProductDevRuntimeReceipt::new(result, outputs).map_err(worker_host_error)?;
+    let receipt =
+        ProductDevRuntimeReceipt::from_wire_outputs(result, outputs).map_err(worker_host_error)?;
     Ok(match connection_output_cursor {
         Some(cursor) => receipt.with_connection_output_cursor(cursor),
         None => receipt,
@@ -1496,17 +1493,8 @@ fn worker_bundle(bundle: ProductDevWorkerBundle) -> Result<ProductDevBundle, Str
 fn worker_output(
     value: serde_json::Value,
 ) -> Result<ProductDevRuntimeOutput, ProductDevRuntimeError> {
-    serde_json::from_value(value)
+    ProductDevRuntimeOutput::from_worker_value(value)
         .map_err(|error| worker_runtime_error("DEV_HOST_WORKER_OUTPUT_DECODE", error.to_string()))
-}
-
-fn worker_publications(
-    values: Vec<serde_json::Value>,
-) -> Result<Vec<runtime_publication::RuntimePublication>, ProductDevRuntimeError> {
-    worker_outputs(values)?
-        .into_iter()
-        .map(|output| output.into_publication().map_err(worker_host_error))
-        .collect()
 }
 
 /// Decode the worker output group and check baseline marker coherence.
@@ -1539,6 +1527,25 @@ fn worker_fault_error(fault: ProductDevWorkerFault) -> ProductDevRuntimeError {
 }
 
 impl ProductDevRuntime for WorkerRuntime {
+    fn renderer_resource(
+        &mut self,
+        identity: &str,
+        generation: u64,
+    ) -> Result<Option<ProductDevRendererResource>, ProductDevRuntimeError> {
+        let receipt: ProductDevRuntimeReceipt<Option<serde_json::Value>> =
+            self.invoke(|request_id| ProductDevWorkerRequest::RendererResource {
+                request_id,
+                identity: identity.to_owned(),
+                generation,
+            })?;
+        receipt
+            .result()
+            .clone()
+            .map(ProductDevRendererResource::from_worker_value)
+            .transpose()
+            .map_err(worker_host_error)
+    }
+
     fn take_update_attribution(&mut self) -> Option<product_dev_host::ProductDevUpdateAttribution> {
         self.connection.lock().ok()?.pending_attribution.take()
     }
@@ -1814,14 +1821,10 @@ fn run_worker(args: Arguments) -> Result<(), String> {
     }
     .map_err(|error| error.to_string())?;
     let bundle = match &args.product {
-        Some(product) => load_bundle(
-            &runtime_browser_root()?,
-            product,
-            runtime.render_resources(),
-        )?,
+        Some(product) => load_bundle(&runtime_browser_root()?, product, &[])?,
         None => load_legacy_bundle(
             args.bundle_dir.as_deref().expect("legacy bundle path"),
-            runtime.render_resources(),
+            &runtime.render_resources(),
         )?,
     };
     let address = args
@@ -1841,7 +1844,9 @@ fn run_worker(args: Arguments) -> Result<(), String> {
     let initial = owner.connect();
     let (outputs, fault) = match initial {
         Ok(receipt) => {
-            let (_, outputs) = receipt.into_parts();
+            let (_, outputs) = receipt
+                .into_wire_parts()
+                .map_err(|error| error.to_string())?;
             (outputs, None)
         }
         Err(error) => (Vec::new(), Some(error)),
@@ -1860,7 +1865,7 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             })
             .collect(),
     };
-    let outputs = worker_publication_values(outputs)?;
+    let outputs = worker_output_values(outputs)?;
     write_worker_frame(
         &mut channel,
         &ProductDevWorkerEvent::Ready {
@@ -1912,12 +1917,14 @@ fn run_worker(args: Arguments) -> Result<(), String> {
             write?;
             continue;
         }
+        // Resource misses must wait for earlier retirement publications to
+        // reach the shell journal before its HTTP fallback is consulted.
         let connection = matches!(
             request,
             ProductDevWorkerRequest::Lifecycle {
                 operation: ProductDevWorkerLifecycleOperation::Connect,
                 ..
-            }
+            } | ProductDevWorkerRequest::RendererResource { .. }
         );
         let publication = publication_gate
             .lock()
@@ -2096,11 +2103,15 @@ fn worker_scheduler(
             },
             observed,
             |receipt| {
-                let (result, receipt_outputs) = receipt.into_parts();
+                let (result, receipt_outputs) = receipt
+                    .into_wire_parts()
+                    .expect("Engine publications validated before commit");
                 input_outputs.push((result, receipt_outputs));
             },
             |receipt| {
-                let (result, receipt_outputs) = receipt.into_parts();
+                let (result, receipt_outputs) = receipt
+                    .into_wire_parts()
+                    .expect("Engine publications validated before commit");
                 readout = result.readout().cloned();
                 update_outputs.extend(receipt_outputs);
             },
@@ -2123,16 +2134,17 @@ fn worker_scheduler(
                         .map(ProductDevWorkerDiagnostic::from_runtime_error),
                 );
                 let conversion_started = Instant::now();
-                let outputs = match (|| -> Result<_, String> {
+                let encoded_outputs = {
                     let mut outputs = Vec::new();
                     for (result, publications) in input_outputs {
                         outputs.push(ProductDevRuntimeOutput::runtime_input_result(result));
-                        outputs.extend(publication_wire_outputs(publications)?);
+                        outputs.extend(publications);
                     }
-                    outputs.extend(publication_wire_outputs(update_outputs)?);
+                    outputs.extend(update_outputs);
                     outputs.push(ProductDevRuntimeOutput::runtime_progress());
                     worker_output_values(outputs)
-                })() {
+                };
+                let outputs = match encoded_outputs {
                     Ok(outputs) => outputs,
                     Err(detail) => {
                         let error = worker_runtime_error("DEV_HOST_WORKER_OUTPUT_ENCODE", detail);
@@ -2278,31 +2290,17 @@ fn drain_worker_diagnostics_shared(
     drain_worker_diagnostics(diagnostics, &mut cursor)
 }
 
-fn publication_wire_outputs(
-    publications: Vec<runtime_publication::RuntimePublication>,
-) -> Result<Vec<ProductDevRuntimeOutput>, String> {
-    publications
-        .into_iter()
-        .map(|publication| {
-            ProductDevRuntimeOutput::from_publication(publication)
-                .map_err(|error| error.to_string())
-        })
-        .collect()
-}
-
-fn worker_publication_values(
-    publications: Vec<runtime_publication::RuntimePublication>,
-) -> Result<Vec<serde_json::Value>, String> {
-    worker_output_values(publication_wire_outputs(publications)?)
-}
-
 fn worker_output_values(
     outputs: Vec<ProductDevRuntimeOutput>,
 ) -> Result<Vec<serde_json::Value>, String> {
     ProductDevRuntimeOutput::validate_output_group(&outputs).map_err(|error| error.to_string())?;
     let mut values = Vec::with_capacity(outputs.len());
     for output in outputs {
-        values.push(serde_json::to_value(output).map_err(|error| error.to_string())?);
+        values.push(
+            output
+                .to_worker_value()
+                .map_err(|error| error.to_string())?,
+        );
     }
     Ok(values)
 }
@@ -2434,6 +2432,26 @@ fn worker_request(
             ),
             None => worker_receipt(request_id, owner.describe_debug(), settle_request)?,
         },
+        ProductDevWorkerRequest::RendererResource {
+            identity,
+            generation,
+            ..
+        } => {
+            let result = owner
+                .renderer_resource(&identity, generation)
+                .map(|resource| resource.map(|resource| resource.to_worker_value()));
+            settle_request(request_id)?;
+            match result {
+                Ok(result) => ProductDevWorkerResponse {
+                    attribution: None,
+                    request_id,
+                    result: Some(result.unwrap_or(serde_json::Value::Null)),
+                    outputs: Vec::new(),
+                    error: None,
+                },
+                Err(error) => worker_fault_response(request_id, error),
+            }
+        }
         ProductDevWorkerRequest::Health { .. } => ProductDevWorkerResponse {
             attribution: None,
             request_id,
@@ -2500,6 +2518,7 @@ fn worker_request_id(request: &ProductDevWorkerRequest) -> u64 {
         | ProductDevWorkerRequest::Update { request_id, .. }
         | ProductDevWorkerRequest::Debug { request_id, .. }
         | ProductDevWorkerRequest::Feedback { request_id, .. }
+        | ProductDevWorkerRequest::RendererResource { request_id, .. }
         | ProductDevWorkerRequest::Health { request_id }
         | ProductDevWorkerRequest::Activate { request_id }
         | ProductDevWorkerRequest::Shutdown { request_id } => *request_id,
@@ -2539,12 +2558,12 @@ fn worker_receipt<T: serde::Serialize>(
     settle_request(request_id)?;
     Ok(match result {
         Ok(receipt) => {
-            let (result, outputs) = receipt.into_parts();
+            let (result, outputs) = receipt
+                .into_wire_parts()
+                .map_err(|error| error.to_string())?;
             let response = serde_json::to_value(result)
                 .map_err(|error| error.to_string())
-                .and_then(|result| {
-                    worker_publication_values(outputs).map(|outputs| (result, outputs))
-                });
+                .and_then(|result| worker_output_values(outputs).map(|outputs| (result, outputs)));
             match response {
                 Ok((result, outputs)) => ProductDevWorkerResponse {
                     attribution: None,
@@ -3913,6 +3932,75 @@ mod tests {
             error.recovery(),
             product_dev_host::ProductDevRuntimeRecovery::not_applied()
         );
+    }
+
+    #[test]
+    fn worker_proxy_fetches_renderer_resource_at_requested_runtime_generation() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut worker = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (writer, _) = listener.accept().unwrap();
+        let (responses, response_rx) = mpsc::channel();
+        let (settlements, settlement_rx) = mpsc::channel();
+        let (outputs, _) = mpsc::sync_channel(8);
+        let (diagnostics, _) = worker_diagnostic_relay();
+        let (failures, _) = mpsc::sync_channel(8);
+        let mut proxy = WorkerRuntime {
+            connection: Arc::new(Mutex::new(WorkerConnection {
+                child: Command::new("sleep").arg("30").spawn().unwrap(),
+                writer,
+                responses: response_rx,
+                settlements: settlement_rx,
+                next_request_id: 1,
+                operation_timeout: Some(Duration::from_secs(1)),
+                pending_attribution: None,
+                terminal_cause: WorkerTerminalCause::default(),
+                retiring: Arc::new(AtomicBool::new(false)),
+                publication_wait: PublicationWait::default(),
+                reader: None,
+                generation: 17,
+            })),
+            outputs,
+            output_generation: Arc::new(AtomicUsize::new(17)),
+            diagnostics,
+            failures,
+            scheduler_inflight: Arc::new(Mutex::new(None)),
+            operation_timeout: Some(Duration::from_secs(1)),
+        };
+        let expected = ProductDevRendererResource::admit_font(
+            "content/fonts/worker.woff2",
+            b"wOF2worker-resource".to_vec(),
+        )
+        .unwrap();
+        settlements.send(1).unwrap();
+        responses
+            .send(Ok(WorkerResponse {
+                response: ProductDevWorkerResponse {
+                    attribution: None,
+                    request_id: 1,
+                    result: Some(expected.to_worker_value()),
+                    outputs: Vec::new(),
+                    error: None,
+                },
+                connection_output_cursor: None,
+            }))
+            .unwrap();
+
+        let received = proxy
+            .renderer_resource(expected.identity(), 9)
+            .expect("resource IPC succeeds")
+            .expect("worker returned a resource");
+        assert_eq!(received.identity(), expected.identity());
+        assert_eq!(received.bytes(), expected.bytes());
+        let request: ProductDevWorkerRequest = read_worker_frame(&mut worker).unwrap();
+        assert!(matches!(
+            request,
+            ProductDevWorkerRequest::RendererResource {
+                request_id: 1,
+                generation: 9,
+                ref identity,
+            } if identity == expected.identity()
+        ));
+        stop_worker(&mut proxy.connection.lock().unwrap());
     }
 
     #[test]

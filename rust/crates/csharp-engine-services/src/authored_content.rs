@@ -4282,7 +4282,9 @@ mod tests {
                     bytes: material_id.as_ptr(),
                     len: material_id.len(),
                 },
-                texture: texture.handle,
+                texture: NativeRenderResourceReference {
+                    value: texture.handle.value,
+                },
             };
             let mut material = NativeMaterialHandle::default();
             assert_eq!(
