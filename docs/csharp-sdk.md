@@ -44,6 +44,49 @@ keeps `IEngineContext` or the named services it needs. Exactly one concrete
 and NativeAOT bind implementations without assembly scanning or product-side
 registration infrastructure.
 
+## Read bundled product files
+
+Set `RustyEngineProductContentRoot` to the authored or build-generated content
+directory. Generate build-time files before `StageRustyEngineCoreClrProduct`
+runs. The SDK stages that tree under the Product bundle's `content/`; the host
+resolves the manifest location and supplies `ProductCreateContext.Content`.
+Game code does not need executable-relative paths, working directories or URLs.
+
+```csharp
+ProductContent content = context.Content;
+var rules = JsonSerializer.Deserialize<CombatRules>(
+    content.ReadBytes("rules/combat.json").Span);
+
+foreach (ProductContentFile file in content.ReadDirectory("rules/enemies"))
+{
+    // RelativePath is content-root-relative; Name is the final filename.
+    // Deserialize with the product's own types/options or source-gen context.
+    var enemy = JsonSerializer.Deserialize<EnemyDefinition>(file.Bytes.Span);
+    enemies.Add(enemy.Id, enemy);
+}
+```
+
+`ReadFile` returns path and bytes; `TryReadFile` handles optional files without
+an exception. `ReadBytes` returns admitted memory and `ReadText` decodes UTF-8
+(including an optional UTF-8 BOM). Required reads throw `FileNotFoundException`
+with the missing logical path. Names are case-sensitive and use `/` separators.
+
+`ReadDirectory` returns an array sorted by full relative path using ordinal
+comparison. It reads immediate children by default; pass `recursive: true`
+for descendants. `""` selects the root; a trailing slash is optional. An absent
+or empty directory returns an empty array. Files such as `_index.json` have no
+special Engine meaning: a product may find that conventional filename, read
+authored ordering/IDs and build its own dictionary without embedding each
+definition's filename in code. Do not depend on an index occupying element zero.
+
+The existing `Files`, UTF-8 `Path` and `Bytes` members remain available. Content
+is an eagerly admitted memory snapshot copied across the generated boundary;
+these helpers add no filesystem reads, streaming, parsing framework or writable
+store. Treat retained path/payload memory as read-only. `rusty dev` restaging
+supplies a new snapshot on product replacement. Tauri and sealed-container host
+flavors remain packaging investigations; these logical names do not promise an
+implemented standalone browser/WASM or Tauri runtime.
+
 ## Run and package
 
 For a clean downstream CI or developer setup, begin with one verified exact
