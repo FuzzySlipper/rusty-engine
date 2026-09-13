@@ -28744,7 +28744,7 @@ async function TD(e, t) {
 		if (!(a === "ready" || a === "degraded")) throw new Z(a === "disposed" ? "disposed" : "transport_failed", a === "failed" ? "Product Browser Host has failed and its runtime transport is closed" : "Product Browser Host is not ready");
 	}, Ee = (e, t) => {
 		let n = e instanceof Z ? e : new Z(t, e instanceof Error ? e.message : String(e), e instanceof Error ? { cause: e } : void 0);
-		return f === null && (f = p ?? n, a !== "disposed" && (a = "failed"), Se(!1)), f;
+		return f === null && (f = n, a !== "disposed" && (a = "failed"), Se(!1)), f;
 	}, P = null, De = null, Oe = null, ke = () => {
 		let e = Oe;
 		Oe = null, e?.();
@@ -28796,10 +28796,10 @@ async function TD(e, t) {
 		}
 	}, ze = (e) => {
 		let t = e[0];
-		t === void 0 || g !== null || (g = {
+		t === void 0 || g !== null || a !== "ready" && a !== "degraded" || (g = {
 			uncertainBinding: t.runtime,
 			inFlight: !1
-		}, a !== "disposed" && (a = "degraded", Se()), Re());
+		}, a = "degraded", Se(), Re());
 	}, Be = e.root.ownerDocument.defaultView;
 	if (Be !== null) {
 		let e = (e, t, n) => {

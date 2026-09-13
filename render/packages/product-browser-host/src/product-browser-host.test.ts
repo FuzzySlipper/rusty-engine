@@ -23,6 +23,7 @@ import {
   productBrowserBundleDescriptor,
   mountProductBrowserHostWithApplication,
   type ProductBrowserRuntimeOutputBatchListener,
+  type ProductBrowserRuntimeTerminalFailureListener,
 } from './product-browser-host.js';
 import { ProductBrowserLocalTransportError } from './local-transport.js';
 
@@ -374,6 +375,95 @@ test('host recovers an unknown input batch from a fresh binding after a lost con
     Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
   }
 });
+
+for (const terminalFirst of [false, true]) {
+  test(`terminal transport failure remains authoritative when input rejects ${terminalFirst ? 'after' : 'before'} closure`, async () => {
+    const previousHTMLElement = globalThis.HTMLElement;
+    class FakeElement {
+      readonly childNodes: unknown[] = [];
+      readonly dataset: Record<string, string> = {};
+      readonly ownerDocument = {
+        body: this,
+        defaultView: { addEventListener: () => undefined, removeEventListener: () => undefined },
+      };
+    }
+    Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: FakeElement });
+    try {
+      const runtime = { instanceId: '7', generation: '1', controlRevision: '2' } as const;
+      let emitTerminal: ProductBrowserRuntimeTerminalFailureListener = () => assert.fail('not subscribed');
+      let rejectInput: (cause: unknown) => void = () => assert.fail('input not started');
+      const inputResponse = new Promise<never>((_resolve, reject) => { rejectInput = reject; });
+      let inputCalls = 0;
+      let controlCalls = 0;
+      let disposed = 0;
+      const unknown = new ProductBrowserLocalTransportError('request_failed', 'earlier input NetworkError', {
+        route: 'input', mutation: { certainty: 'outcome-unknown', outputRecovery: 'none', outputThrough: null },
+      });
+      const transport = {
+        ...adapter,
+        admitDemandStep: async () => ({ accepted: true, ...ACCEPTED_FAULT, operation: 'admit-demand-step' as const }),
+        input: () => { inputCalls += 1; return inputResponse; },
+        replaceControl: async () => { controlCalls += 1; throw unknown; },
+        subscribeTerminalFailures: (listener: ProductBrowserRuntimeTerminalFailureListener) => {
+          emitTerminal = listener;
+          return () => undefined;
+        },
+        dispose: () => { disposed += 1; },
+      };
+      let inputAvailable = true;
+      const application = {
+        renderer: {
+          resetAudioRealizationOwner: () => undefined,
+          resetAnimationRealizationOwner: () => undefined,
+          audioRealizedFacts: () => null,
+          animationRealizedFacts: () => null,
+          ghostPlateReadout: () => null,
+          acknowledgeAudioRealizedFacts: () => undefined,
+          acknowledgeAnimationRealizedFacts: () => undefined,
+        },
+        input: {
+          sampleController: () => 0,
+          drain: () => {
+            if (!inputAvailable) return [];
+            inputAvailable = false;
+            return [{ runtime, sequence: '1', context: 'gameplay.default',
+              fact: { kind: 'key', code: 'key-w', edge: 'pressed' } }];
+          },
+        },
+        readout: () => ({ state: 'ready' }),
+        dispose: async () => undefined,
+      };
+      const host = await mountProductBrowserHostWithApplication({
+        root: new FakeElement() as unknown as HTMLElement,
+        transport,
+        lifecycleMode: 'demand',
+        mountUi: async () => undefined,
+        autoStart: false,
+      }, async () => application as never);
+      const pending = assert.rejects(host.admitDemandStep());
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(inputCalls, 1);
+      const terminate = () => emitTerminal({ kind: 'runtime-failure', diagnostic: 'fresh output stream failed' });
+      if (terminalFirst) terminate();
+      rejectInput(unknown);
+      await pending;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (!terminalFirst) {
+        assert.equal(host.readout().state, 'degraded');
+        assert.equal(host.readout().lastFailure, 'earlier input NetworkError');
+        terminate();
+      }
+      assert.equal(host.readout().state, 'failed');
+      assert.equal(host.readout().lastFailure, 'fresh output stream failed');
+      assert.equal(controlCalls, terminalFirst ? 0 : 1);
+      assert.equal(inputCalls, 1, 'uncertain input is never replayed');
+      assert.equal(disposed, 1);
+      await host.dispose();
+    } finally {
+      Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: previousHTMLElement });
+    }
+  });
+}
 
 test('host swaps a recovered output projection before applying current-epoch trailing output', async () => {
   const previousHTMLElement = globalThis.HTMLElement;

@@ -1561,7 +1561,9 @@ export async function mountProductBrowserHostWithApplication(
         cause instanceof Error ? { cause } : undefined,
       );
     if (failure === null) {
-      failure = recoveryFailure ?? error;
+      // A recoverable request failure may precede a different terminal fault.
+      // Keep its recoverable diagnostic, but attribute closure to this cause.
+      failure = error;
       if (state !== 'disposed') state = 'failed';
       // The DOM remains current now; the typed terminal report waits until
       // closeTransport has recorded the durable closed/closed state.
@@ -1734,12 +1736,11 @@ export async function mountProductBrowserHostWithApplication(
 
   const beginInputRecovery = (batch: readonly RustyApplicationRuntimeInputEnvelope[]): void => {
     const first = batch[0];
-    if (first === undefined || inputRecovery !== null) return;
+    if (first === undefined || inputRecovery !== null
+      || (state !== 'ready' && state !== 'degraded')) return;
     inputRecovery = { uncertainBinding: first.runtime, inFlight: false };
-    if (state !== 'disposed') {
-      state = 'degraded';
-      publishHealth();
-    }
+    state = 'degraded';
+    publishHealth();
     requestInputRecovery();
   };
 

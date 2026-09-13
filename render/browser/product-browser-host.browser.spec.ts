@@ -113,7 +113,7 @@ test('an uncertain input request replaces its control binding before accepting f
   expect(evidence.maximumActiveDiagnostics).toBe(1);
 });
 
-test('a delayed degraded report flushes the later terminal transition with its first cause', async ({ page }) => {
+test('a delayed degraded report preserves the distinct terminal cause', async ({ page }) => {
   await page.goto('/browser/product-browser-host.html?transientInputFailure=1&delayRecoveryDiagnostic=1&rejectNextAdvance=1');
   const canvas = page.locator('canvas[data-rusty-application-renderer="engine-owned"]');
   await canvas.focus();
@@ -125,6 +125,9 @@ test('a delayed degraded report flushes the later terminal transition with its f
       && report.outputState === 'closed'
       && report.firstTerminal?.code === 'BROWSER_HOST_TRANSPORT_FAILED',
   ))).toBe(true);
+  const terminal = await page.evaluate(() => (window.__rustyProductBrowserAcceptedDiagnosticReports ?? [])
+    .find((report) => report.firstTerminal !== undefined)?.firstTerminal);
+  expect(terminal?.message).toContain('rejected the next realtime advance before admission');
   await expect(page.locator('#application')).toHaveAttribute('data-transport-disposed', 'true');
 });
 
