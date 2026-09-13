@@ -416,3 +416,47 @@ fn add_quad(
     positions.extend([a, b, c, d]);
     triangles.extend([[index, index + 1, index + 2], [index, index + 2, index + 3]]);
 }
+
+#[test]
+fn join_reports_extracted_gap_even_when_source_fields_still_touch() {
+    let make = |id, field_min, field_max, mesh_min, mesh_max| {
+        let mut field = Field::new();
+        let root = field
+            .box_shape(Bounds {
+                min: field_min,
+                max: field_max,
+            })
+            .unwrap();
+        let (positions, triangles) = cube_mesh(mesh_min, mesh_max);
+        Arc::new(Piece::new(id, &field, root, positions, triangles, identity(), 0.1).unwrap())
+    };
+    let left = make(
+        10,
+        [-1., -1., -1.],
+        [1., 1., 0.],
+        [-1., -1., -1.],
+        [1., 1., -0.04],
+    );
+    let right = make(
+        11,
+        [-1., -1., 0.],
+        [1., 1., 1.],
+        [-1., -1., 0.04],
+        [1., 1., 1.],
+    );
+    let report = expected_join(
+        &[left, right],
+        Join {
+            center: [0.; 3],
+            half_u: [0.5, 0., 0.],
+            half_v: [0., 0.5, 0.],
+            tolerance_cells: 0.25,
+            ..rotated_join(128)
+        },
+    )
+    .unwrap();
+    assert!(
+        has(&report, AnalysisClassification::JoinGap),
+        "mesh separation must not be hidden by source fields: {report:?}"
+    );
+}

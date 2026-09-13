@@ -177,6 +177,36 @@ fn nearest(
         .min_by(|a, b| a.abs().total_cmp(&b.abs()))
 }
 
+// Parity uses extracted closed geometry, independent of field approximation or
+// triangle winding. Three non-axis-aligned rays expose ambiguous edge/tangent
+// cases instead of silently accepting inconsistent containment evidence.
+fn inside_mesh(piece: &Piece, point: Vector3<f64>) -> Option<bool> {
+    let epsilon = f64::EPSILON * point.norm().max(1.0) * 128.0;
+    let mut votes = Vec::new();
+    for direction in [
+        [1.0, 0.371, 0.129],
+        [-0.193, 1.0, 0.417],
+        [0.233, -0.337, 1.0],
+    ] {
+        let mut hits = piece
+            .triangles
+            .iter()
+            .filter_map(|triangle| {
+                intersection(
+                    point,
+                    Vector3::from(direction),
+                    triangle.map(|i| piece.positions[i as usize]),
+                )
+            })
+            .filter(|t| *t > epsilon)
+            .collect::<Vec<_>>();
+        hits.sort_by(f64::total_cmp);
+        hits.dedup_by(|a, b| (*a - *b).abs() <= epsilon);
+        votes.push(hits.len() % 2 == 1);
+    }
+    votes.iter().all(|v| *v == votes[0]).then_some(votes[0])
+}
+
 pub fn expected_join(pieces: &[Arc<Piece>], join: Join) -> Result<AnalysisReport, Error> {
     validate_spacing(join.sample_spacing)?;
     validate_spacing(join.search_distance)?;
@@ -241,6 +271,9 @@ pub fn expected_join(pieces: &[Arc<Piece>], join: Join) -> Result<AnalysisReport
         resolution,
         ..Default::default()
     };
+    let topology = super::integrity::inspect(&[Arc::clone(a), Arc::clone(b)], &[])?;
+    let closed_a = !topology.diagnostics.iter().any(|d| d.piece_a == a.id);
+    let closed_b = !topology.diagnostics.iter().any(|d| d.piece_a == b.id);
     let mut groups: BTreeMap<AnalysisClassification, AnalysisDiagnostic> = BTreeMap::new();
     for i in 0..counts[0] {
         for j in 0..counts[1] {
@@ -252,16 +285,27 @@ pub fn expected_join(pieces: &[Arc<Piece>], join: Join) -> Result<AnalysisReport
             report.sampled += 1;
             let (class, width) = match (left, right) {
                 (Some(l), Some(r)) if (l - r).abs() > tolerance => {
-                    // Separation of two facets inside an authored solid overlap
-                    // is not an air gap. Only use field signs, never field values
-                    // as distances; the measured width still comes from meshes.
-                    let midpoint = arr(p + normal * ((l + r) * 0.5));
-                    if a.field.sample(a.node, &[midpoint])?[0] <= 0.0
-                        || b.field.sample(b.node, &[midpoint])?[0] <= 0.0
-                    {
-                        continue;
+                    let midpoint = p + normal * ((l + r) * 0.5);
+                    let inside_a = if closed_a {
+                        inside_mesh(a, midpoint)
+                    } else {
+                        Some(false)
+                    };
+                    let inside_b = if closed_b {
+                        inside_mesh(b, midpoint)
+                    } else {
+                        Some(false)
+                    };
+                    match (inside_a, inside_b) {
+                        (Some(true), _) | (_, Some(true)) => continue,
+                        (Some(false), Some(false)) => {
+                            (AnalysisClassification::JoinGap, (l - r).abs())
+                        }
+                        _ => {
+                            report.complete = false;
+                            (AnalysisClassification::IncompleteCoverage, (l - r).abs())
+                        }
                     }
-                    (AnalysisClassification::JoinGap, (l - r).abs())
                 }
                 (Some(_), Some(_)) => continue,
                 _ => (AnalysisClassification::MissingJoinSurface, 0.0),

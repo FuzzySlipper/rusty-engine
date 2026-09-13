@@ -865,11 +865,14 @@ The same collection supports three separate continuity queries:
   rectangular contact patch. Its perpendicular half axes set orientation and
   size. Along the patch normal, the query finds each named mesh's nearest
   intersection within the search radius. It reports separation above the
-  extraction-relative tolerance when the midpoint is outside both source fields
-  (solid overlaps are not air gaps), or `MissingJoinSurface` when either side is
+  extraction-relative tolerance, or `MissingJoinSurface` when either side is
   absent. Choose the patch and radius to identify the intended surfaces, avoiding
   unrelated faces of the same pieces. Width is maximum sampled separation;
-  affected area is the sum of failed patch cells. This is not inferred intent.
+  affected area is the sum of failed patch cells. Closed-mesh ray containment
+  distinguishes solid overlaps from air gaps using extracted geometry, even
+  when the source fields still meet. Inconsistent containment rays produce
+  incomplete coverage. Open meshes provide facet-separation evidence without
+  a closed-solid containment guarantee. This is not inferred intent.
 - `ReadEnclosure(new(audit, minimum, maximum, interior, openings,
   sampleSpacing, maxSamples))` searches a bounded six-neighbor world grid from
   the declared interior point. Segment/triangle intersections block traversal.
