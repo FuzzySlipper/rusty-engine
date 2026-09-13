@@ -795,7 +795,7 @@ impl RuntimeSpatialBridge {
         // SAFETY: bind_appearance points at the sibling owner retained by
         // EngineServiceSet. The Geometry helper copies the staged inline
         // payload before this Spatial call returns.
-        unsafe { &mut *appearance }.copy_inline_mesh_collision(NativeMeshResourceHandle {
+        unsafe { &mut *appearance }.copy_inline_mesh_geometry(NativeMeshResourceHandle {
             value: resource.value,
         })
     }

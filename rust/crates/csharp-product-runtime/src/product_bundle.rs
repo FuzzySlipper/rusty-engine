@@ -35,6 +35,7 @@ pub(super) struct ProductBundle {
     ui_root: PathBuf,
     ui_entry: String,
     ui_projection: Option<ProductUiProjection>,
+    renderer_lighting: ProductRendererLighting,
     pub(super) lifecycle: RuntimeLifecycleConfig,
     pub(super) lifecycle_mode: &'static str,
     pub(super) direct_intents: Vec<DirectInputIntentDescriptor>,
@@ -109,6 +110,7 @@ impl ProductBundle {
             .ui_projection
             .map(ProductUiProjection::from_manifest)
             .transpose()?;
+        let renderer_lighting = ProductRendererLighting::from_manifest(manifest.renderer)?;
 
         let (lifecycle, lifecycle_mode) = lifecycle(&manifest.lifecycle)?;
         let (direct_intents, physical_mappings) = input(&manifest.input)?;
@@ -128,6 +130,7 @@ impl ProductBundle {
             ui_root,
             ui_entry,
             ui_projection,
+            renderer_lighting,
             lifecycle,
             lifecycle_mode,
             direct_intents,
@@ -183,6 +186,14 @@ impl ProductBundle {
                 mode: self.lifecycle_mode,
             },
             ui_projection: self.ui_projection.as_ref(),
+            renderer: ProductBootstrapRenderer {
+                lighting: ProductBootstrapLighting {
+                    default_lights: ProductBootstrapDefaultLights {
+                        world: self.renderer_lighting.world.as_str(),
+                        viewmodel: self.renderer_lighting.viewmodel.as_str(),
+                    },
+                },
+            },
         };
         entries.push(
             ProductDevBundleEntry::new(
@@ -400,6 +411,8 @@ struct Manifest {
     ui: ManifestUi,
     content: ManifestContent,
     ui_projection: Option<ManifestUiProjection>,
+    #[serde(default)]
+    renderer: ManifestRenderer,
     lifecycle: ManifestLifecycle,
     input: ManifestInput,
     #[serde(default)]
@@ -460,6 +473,75 @@ impl ProductUiProjection {
 #[derive(Debug, Deserialize)]
 struct ManifestContent {
     root: String,
+}
+#[derive(Debug, Default, Deserialize)]
+struct ManifestRenderer {
+    #[serde(default)]
+    lighting: ManifestRendererLighting,
+}
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestRendererLighting {
+    #[serde(default)]
+    default_lights: ManifestDefaultLights,
+}
+#[derive(Debug, Deserialize)]
+struct ManifestDefaultLights {
+    #[serde(default = "neutral_lights")]
+    world: String,
+    #[serde(default = "neutral_lights")]
+    viewmodel: String,
+}
+impl Default for ManifestDefaultLights {
+    fn default() -> Self {
+        Self {
+            world: neutral_lights(),
+            viewmodel: neutral_lights(),
+        }
+    }
+}
+fn neutral_lights() -> String {
+    "neutral".to_owned()
+}
+#[derive(Debug, Clone, Copy)]
+enum ProductDefaultLights {
+    Neutral,
+    Disabled,
+}
+impl ProductDefaultLights {
+    fn parse(value: String, field: &str) -> Result<Self, String> {
+        match value.as_str() {
+            "neutral" => Ok(Self::Neutral),
+            "disabled" => Ok(Self::Disabled),
+            _ => Err(field_error(field, "must be neutral or disabled")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Neutral => "neutral",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+#[derive(Debug)]
+struct ProductRendererLighting {
+    world: ProductDefaultLights,
+    viewmodel: ProductDefaultLights,
+}
+impl ProductRendererLighting {
+    fn from_manifest(value: ManifestRenderer) -> Result<Self, String> {
+        Ok(Self {
+            world: ProductDefaultLights::parse(
+                value.lighting.default_lights.world,
+                "renderer.lighting.defaultLights.world",
+            )?,
+            viewmodel: ProductDefaultLights::parse(
+                value.lighting.default_lights.viewmodel,
+                "renderer.lighting.defaultLights.viewmodel",
+            )?,
+        })
+    }
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -524,6 +606,7 @@ struct ProductBootstrap<'a> {
     lifecycle: ProductBootstrapLifecycle,
     #[serde(skip_serializing_if = "Option::is_none")]
     ui_projection: Option<&'a ProductUiProjection>,
+    renderer: ProductBootstrapRenderer,
 }
 #[derive(Serialize)]
 struct ProductBootstrapIdentity<'a> {
@@ -537,6 +620,20 @@ struct ProductBootstrapUi<'a> {
 #[derive(Serialize)]
 struct ProductBootstrapLifecycle {
     mode: &'static str,
+}
+#[derive(Serialize)]
+struct ProductBootstrapRenderer {
+    lighting: ProductBootstrapLighting,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductBootstrapLighting {
+    default_lights: ProductBootstrapDefaultLights,
+}
+#[derive(Serialize)]
+struct ProductBootstrapDefaultLights {
+    world: &'static str,
+    viewmodel: &'static str,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -649,6 +746,10 @@ mod tests {
             bootstrap["uiProjection"]["expectedContract"],
             "fixture.terrain.v1"
         );
+        assert_eq!(
+            bootstrap["renderer"]["lighting"]["defaultLights"],
+            serde_json::json!({ "world": "neutral", "viewmodel": "neutral" })
+        );
         assert!(!entries
             .iter()
             .any(|entry| entry.path().contains("trial.txt")));
@@ -661,6 +762,48 @@ mod tests {
         write_manifest(&root, "../product.so");
         let error = ProductBundle::read(&root).expect_err("escaping module is rejected");
         assert!(error.contains("product.json:nativeAot.module"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_default_light_modes_before_the_browser_bootstrap_is_staged() {
+        let root = fixture_root("invalid-default-lighting");
+        write_manifest(&root, "native/product.so");
+        let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
+        let manifest = fs::read_to_string(&manifest_path).unwrap().replace(
+            "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}",
+            "\"renderer\":{\"lighting\":{\"defaultLights\":{\"world\":\"lantern\",\"viewmodel\":\"disabled\"}}}",
+        );
+        fs::write(&manifest_path, manifest).unwrap();
+
+        let error = ProductBundle::read(&root).expect_err("invalid world lights reject admission");
+        assert!(error.contains("product.json:renderer.lighting.defaultLights.world"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stages_world_and_viewmodel_default_lights_independently() {
+        let root = fixture_root("independent-default-lighting");
+        write_manifest(&root, "native/product.so");
+        let manifest_path = root.join(PRODUCT_MANIFEST_NAME);
+        let manifest = fs::read_to_string(&manifest_path).unwrap().replace(
+            "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}",
+            "\"renderer\":{\"lighting\":{\"defaultLights\":{\"world\":\"disabled\",\"viewmodel\":\"neutral\"}}}",
+        );
+        fs::write(&manifest_path, manifest).unwrap();
+
+        let product = ProductBundle::read(&root).expect("independent light modes admit");
+        let bootstrap = product
+            .browser_entries(&[])
+            .expect("browser bootstrap stages")
+            .into_iter()
+            .find(|entry| entry.path() == PRODUCT_BOOTSTRAP_PATH)
+            .expect("browser bootstrap exists");
+        let bootstrap: serde_json::Value = serde_json::from_slice(bootstrap.bytes()).unwrap();
+        assert_eq!(
+            bootstrap["renderer"]["lighting"]["defaultLights"],
+            serde_json::json!({ "world": "disabled", "viewmodel": "neutral" })
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

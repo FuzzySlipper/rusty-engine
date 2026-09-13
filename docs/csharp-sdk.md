@@ -44,6 +44,23 @@ keeps `IEngineContext` or the named services it needs. Exactly one concrete
 and NativeAOT bind implementations without assembly scanning or product-side
 registration infrastructure.
 
+### Default browser lighting
+
+The packaged browser shell keeps its neutral world and viewmodel light rigs by
+default. A product can disable either rig independently through ordinary build
+properties; retained lights created through `Graphics` continue to be realized.
+
+```xml
+<PropertyGroup>
+  <RustyEngineProductDefaultWorldLights>disabled</RustyEngineProductDefaultWorldLights>
+  <RustyEngineProductDefaultViewmodelLights>neutral</RustyEngineProductDefaultViewmodelLights>
+</PropertyGroup>
+```
+
+Each value is `neutral` or `disabled`. These are host defaults, not product
+lights: disabling the world rig does not change the viewmodel setting or remove
+product-owned point, directional, or spot lights. Invalid values reject staging.
+
 ## Read bundled product files
 
 Set `RustyEngineProductContentRoot` to the authored or build-generated content
@@ -772,3 +789,40 @@ retained baseline, even after receiving numbered output. SSE cursors are local
 to a host process; they are never reused after interruption against a potentially
 replaced process. Input and product mutations are not replayed during this
 recovery. The browser remains gated until the replacement projection is applied.
+
+### Opt-in authored surface audit
+
+`ImplicitSurfaces.CreateAudit()` creates an authoring-only collection. In a
+`RecipeWriter` receiver, generate the ordinary mesh, then call
+`CaptureAuditPiece(new(audit, pieceId, surface.Field, surface.Root, mesh,
+surface.Placement, service.ReadGeneration(surface.Field).SampleSpacing))`.
+Use stable unique `ulong` piece IDs and keep a product dictionary for labels.
+The Engine copies geometry and retains an independent field snapshot; source
+fields, meshes and materials can be disposed before running the audit.
+
+`ReadAudit(new(audit, toleranceCells))` returns copied diagnostics, candidate
+piece-pair and triangle-pair counts. Each diagnostic identifies both pieces,
+classification, world-space bounds and approximate affected area. Coincident
+and near-coincident exposed surfaces are distinct from buried surfaces; an
+ordinary solid intersection need not be an exposed conflict. The report does
+not change meshes or decide product acceptance. Dispose the collection when
+authoring analysis ends; managed reports survive its disposal. Capture and
+analysis are explicit synchronous operations, with no ordinary update cost.
+
+The audit compares nearly parallel extracted facets and clips their projected
+triangles to estimate contact area, with spatial AABB filtering for piece and
+triangle candidates. It uses field **signs**, rather than treating constructive
+field values as distances. Tolerance is relative to the coarser world-space
+extraction spacing of each pair (largest placement stretch for nonuniform
+scale). Facet normals must be within about 2.6 degrees of parallel; separation
+within coordinate floating-point resolution is classified as coincident,
+and the remainder up to that tolerance as near-coincident. Side probes start
+at representable coordinate resolution and grow only when needed to straddle
+an extracted facet. Exposure and burial sample patches at extraction spacing,
+so pairwise area totals can count opposing internal faces separately.
+This is sampled diagnostic evidence: curved
+DC approximation, thin features or gaps between samples, open/clipped extraction
+boundaries, and partial buried-face coverage can make bounds/areas approximate
+or contacts unreported. A clean report is not a mesh-validity certificate.
+Camera depth precision, extreme near/far ratios, shadows, transparency sorting,
+texture aliasing and shader artifacts are outside this audit's guarantees.

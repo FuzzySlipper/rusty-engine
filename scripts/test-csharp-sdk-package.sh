@@ -112,6 +112,7 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
     <RustyEngineProductLifecycleMode>realtime</RustyEngineProductLifecycleMode>
     <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineProductDefaultWorldLights>disabled</RustyEngineProductDefaultWorldLights>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$package_version" />
@@ -152,6 +153,7 @@ cat > "$source_override_dir/SourceOverride.csproj" <<EOF
 EOF
 cp "$consumer_dir/Library.cs" "$source_override_dir/Library.cs"
 cp "$repo_root/scripts/fixtures/ImplicitRecipeChecks.cs" "$consumer_dir/ImplicitRecipeChecks.cs"
+cp "$repo_root/scripts/fixtures/ImplicitAuditChecks.cs" "$consumer_dir/ImplicitAuditChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
@@ -170,6 +172,7 @@ public sealed class Product : IEngineProduct
     public Product(ProductCreateContext context)
     {
         ImplicitRecipeChecks.Run();
+        ImplicitAuditChecks.Run(context.Engine);
         ProductContentBundleChecks.Run(context);
         _engine = context.Engine;
         _stream = _engine.Ui.OpenStream(new UiStreamRequest("sdk-package", "sdk.package.smoke"));
@@ -313,6 +316,27 @@ jq -e '.server == {"bindHost":"127.0.0.1","port":40821,"liveDebug":true}' \
 jq -e '.lifecycle == {"mode":"realtime","fixedStep":{"hz":60,"maxCatchUpSteps":4}} and .input.intents == [{"id":"runtime.exercise","value":"payload:runtime.exercise.payload"},{"id":"runtime.exercise.move","value":"digital"}] and .input.mappings == [{"id":"runtime.exercise.move","intent":"runtime.exercise.move","trigger":"key:key-w:held"}]' \
     "$staged_product_directory/product.json" >/dev/null || {
     echo "test-csharp-sdk-package: SDK staging did not emit the declared lifecycle/input metadata." >&2
+    exit 1
+}
+jq -e '.renderer.lighting.defaultLights == {"world":"disabled","viewmodel":"neutral"}' \
+    "$staged_product_directory/product.json" >/dev/null || {
+    echo "test-csharp-sdk-package: SDK staging did not emit independent default-light configuration." >&2
+    exit 1
+}
+if (
+    cd "$consumer_dir"
+    DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet msbuild Consumer.csproj -t:GenerateRustyEngineProductComposition \
+            -p:RustyEngineProductDefaultWorldLights=Neutral \
+            > "$work_dir/invalid-default-world-lights.log" 2>&1
+); then
+    echo "test-csharp-sdk-package: SDK staging accepted an invalid default world-light mode." >&2
+    exit 1
+fi
+rg -F -q 'RustyEngineProductDefaultWorldLights must be neutral or disabled.' \
+    "$work_dir/invalid-default-world-lights.log" || {
+    echo "test-csharp-sdk-package: invalid default world-light rejection was not actionable." >&2
+    cat "$work_dir/invalid-default-world-lights.log" >&2
     exit 1
 }
 if find "$consumer_dir" -path '*/NativeProduct.cs' -o -path '*/NativeProduct.csproj' | grep -q .; then

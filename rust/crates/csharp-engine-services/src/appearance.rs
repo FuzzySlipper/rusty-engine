@@ -4174,10 +4174,10 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
-    /// Copies the current staged inline mesh into a Spatial-owned collision
-    /// asset. The Graphics resource itself remains borrowed for this call and
+    /// Copies staged inline mesh geometry for Engine spatial or authoring
+    /// consumers. The Graphics resource remains borrowed for this call and
     /// may be released as soon as the copy completes.
-    pub(crate) fn copy_inline_mesh_collision(
+    pub(crate) fn copy_inline_mesh_geometry(
         &mut self,
         resource: NativeMeshResourceHandle,
     ) -> Result<CollisionMeshGeometry, CsharpEngineServicesError> {

@@ -14,6 +14,7 @@ use fidget::{
 use nalgebra::{Matrix4, Vector3};
 use std::{sync::Mutex, time::Instant};
 
+pub mod audit;
 pub mod surface;
 mod triangulate;
 pub mod volume;

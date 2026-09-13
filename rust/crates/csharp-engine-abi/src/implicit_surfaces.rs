@@ -456,4 +456,91 @@ pub struct NativeImplicitSurfacesApi {
     pub destroy_operation_diagnostic_lease: NativeDestroyImplicitOperationDiagnosticLease,
     pub add_frustum: NativeAddImplicitFrustum,
     pub displace_waves: NativeImplicitDisplaceWaves,
+    pub create_audit: NativeCreateImplicitAudit,
+    pub destroy_audit: NativeDestroyImplicitAudit,
+    pub capture_audit_piece: NativeCaptureImplicitAuditPiece,
+    pub read_audit: NativeReadImplicitAudit,
+    pub destroy_audit_report_lease: NativeDestroyImplicitAuditReportLease,
 }
+
+/// Opt-in authoring collection; captured fields and mesh facts outlive sources.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAuditHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAuditPieceRequest {
+    pub audit: NativeImplicitAuditHandle,
+    /// Stable product identity. Names and acceptance policy remain product-owned.
+    pub piece_id: u64,
+    pub field: NativeImplicitFieldHandle,
+    pub source: NativeImplicitNode,
+    pub mesh: NativeMeshResourceHandle,
+    pub placement: NativeTransform,
+    /// Actual extraction spacing in local coordinates (ReadGeneration).
+    pub sample_spacing: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAuditRequest {
+    pub audit: NativeImplicitAuditHandle,
+    /// Positive near-surface distance as a fraction of extraction spacing.
+    pub tolerance_cells: f32,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeImplicitAuditClassification {
+    CoincidentExposed = 0,
+    NearCoincidentExposed = 1,
+    BuriedSurface = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAuditDiagnostic {
+    pub piece_a: u64,
+    pub piece_b: u64,
+    pub classification: NativeImplicitAuditClassification,
+    pub minimum: NativeVec3,
+    pub maximum: NativeVec3,
+    pub approximate_area: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAuditReportLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeImplicitAuditReportLease {
+    pub handle: NativeImplicitAuditReportLeaseHandle,
+    pub candidate_pairs: u64,
+    pub triangle_pairs: u64,
+    pub diagnostics: *const NativeImplicitAuditDiagnostic,
+    pub diagnostics_len: usize,
+}
+
+pub type NativeCreateImplicitAudit =
+    unsafe extern "C" fn(*mut c_void, *mut NativeImplicitAuditHandle) -> i32;
+pub type NativeDestroyImplicitAudit =
+    unsafe extern "C" fn(*mut c_void, NativeImplicitAuditHandle) -> i32;
+pub type NativeCaptureImplicitAuditPiece = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitAuditPieceRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadImplicitAudit = unsafe extern "C" fn(
+    *mut c_void,
+    NativeImplicitAuditRequest,
+    *mut NativeImplicitAuditReportLease,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyImplicitAuditReportLease =
+    unsafe extern "C" fn(*mut c_void, NativeImplicitAuditReportLeaseHandle) -> i32;

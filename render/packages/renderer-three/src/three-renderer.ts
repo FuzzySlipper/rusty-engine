@@ -1,6 +1,7 @@
 // Retained Three.js scene projector for Rusty Engine render diffs.
 
 import * as THREE from 'three';
+import { UploadedMaterialPool, releaseUploadedMaterial, consolidateUploadedGroups } from './uploaded-mesh-batching.js';
 import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   RenderProjection,
@@ -360,6 +361,7 @@ export class ThreeRenderer {
   readonly #slotColors = new Map<number, THREE.Color>();
   /** Material descriptors defined by retained operations, keyed by asset id. */
   readonly #materials = new Map<string, RenderMaterialDescriptor>();
+  readonly #uploadedMaterialPool = new UploadedMaterialPool();
   /** How many times a slot fell back to a placeholder (no defined descriptor). */
   #fallbackMaterialCount = 0;
   /** Material ids that fell back to a placeholder (fallback diagnostic). */
@@ -2947,6 +2949,7 @@ export class ThreeRenderer {
     const materials = diff.payload.groups.map((group) =>
       this.#uploadedMeshMaterial(group.materialSlot, viewMaterial));
 
+    consolidateUploadedGroups(geometry, materials);
     const oldGeometry = object.geometry as THREE.BufferGeometry;
     const oldMaterial = object.material as THREE.Material | THREE.Material[];
     object.geometry = geometry;
@@ -2955,9 +2958,9 @@ export class ThreeRenderer {
 
     oldGeometry.dispose();
     if (Array.isArray(oldMaterial)) {
-      oldMaterial.forEach((m) => m.dispose());
+      oldMaterial.forEach(releaseUploadedMaterial);
     } else {
-      oldMaterial.dispose();
+      releaseUploadedMaterial(oldMaterial);
     }
     // Remember the authority source that produced this mesh so a pick can trace the
     // handle back to it. The renderer holds the provenance, never the coordinates.
@@ -2975,29 +2978,36 @@ export class ThreeRenderer {
       const textureDescriptor = descriptor.texture === null
         ? undefined
         : this.#textures.get(descriptor.texture);
-      const material = standardMaterial(descriptor, undefined, texture, textureDescriptor);
-      material.color.multiply(new THREE.Color(view.color[0], view.color[1], view.color[2]));
-      material.opacity *= view.color[3];
-      material.transparent = material.opacity < 1;
-      material.wireframe = view.wireframe;
-      this.#trackMaterialResource(material);
-      return material;
+      // Texture object identity participates: replacing bytes under one id must
+      // not share a material still referring to the previous GPU texture.
+      const key = JSON.stringify([{ ...descriptor, id: undefined }, texture?.uuid, view]);
+      return this.#uploadedMaterialPool.acquire(key, () => {
+        const material = standardMaterial(descriptor, undefined, texture, textureDescriptor);
+        material.color.multiply(new THREE.Color(view.color[0], view.color[1], view.color[2]));
+        material.opacity *= view.color[3];
+        material.transparent ||= material.opacity < 1;
+        material.wireframe = view.wireframe;
+        this.#trackMaterialResource(material);
+        return material;
+      });
     }
     const slotColor = this.#slotColor(slot);
-    const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(
-        slotColor.r * view.color[0],
-        slotColor.g * view.color[1],
-        slotColor.b * view.color[2],
-      ),
-      opacity: view.color[3],
-      transparent: view.color[3] < 1,
-      wireframe: view.wireframe,
-      roughness: 1,
-      metalness: 0,
+    return this.#uploadedMaterialPool.acquire(JSON.stringify(['fallback', slotColor.toArray(), view]), () => {
+      const material = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(
+          slotColor.r * view.color[0],
+          slotColor.g * view.color[1],
+          slotColor.b * view.color[2],
+        ),
+        opacity: view.color[3],
+        transparent: view.color[3] < 1,
+        wireframe: view.wireframe,
+        roughness: 1,
+        metalness: 0,
+      });
+      this.#trackMaterialResource(material);
+      return material;
     });
-    this.#trackMaterialResource(material);
-    return material;
   }
 
   #applyUploadedMeshMaterial(entry: NodeEntry, view: Material): void {
@@ -3005,7 +3015,8 @@ export class ThreeRenderer {
     const previous = meshMaterials(mesh);
     const next = (entry.meshMaterialSlots ?? []).map((slot) => this.#uploadedMeshMaterial(slot, view));
     mesh.material = next.length === 1 ? next[0]! : next;
-    previous.forEach((material) => material.dispose());
+    consolidateUploadedGroups(mesh.geometry, next);
+    previous.forEach(releaseUploadedMaterial);
   }
 
   #createLight(diff: Extract<RenderDiff, { op: 'createLight' }>): void {
@@ -3992,9 +4003,9 @@ function applyMaterial(entry: NodeEntry, material: Material): void {
   const previous = object.material;
   object.material = buildMaterial(entry.shape, material);
   if (Array.isArray(previous)) {
-    previous.forEach((m) => m.dispose());
+    previous.forEach(releaseUploadedMaterial);
   } else {
-    previous.dispose();
+    releaseUploadedMaterial(previous);
   }
 }
 
@@ -4005,9 +4016,9 @@ function disposeObject(object: THREE.Object3D): void {
   }>;
   disposable.geometry?.dispose();
   if (Array.isArray(disposable.material)) {
-    disposable.material.forEach((m) => m.dispose());
+    disposable.material.forEach(releaseUploadedMaterial);
   } else {
-    disposable.material?.dispose();
+    if (disposable.material !== undefined) releaseUploadedMaterial(disposable.material);
   }
 }
 

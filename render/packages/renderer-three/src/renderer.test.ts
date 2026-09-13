@@ -5241,3 +5241,37 @@ function firstMesh(root: THREE.Object3D): THREE.Mesh {
   assert.ok(selected);
   return selected;
 }
+
+void test('uploaded chunks consolidate equivalent opaque groups and retain shared materials through edits and disposal', () => {
+  const renderer = new ThreeRenderer();
+  for (const slot of [1, 2]) renderer.applyDiff({
+    op: 'defineMaterial', material: { ...woodMaterial(), id: `voxel-material/${slot}` },
+  });
+  for (const handle of [1, 2]) {
+    renderer.applyDiff(createDiff(handle, meshNode()));
+    renderer.applyDiff({ op: 'replaceMeshPayload', handle: renderHandle(handle), payload: quadPayload() });
+  }
+  const first = renderer.objectFor(renderHandle(1)) as THREE.Mesh;
+  const second = renderer.objectFor(renderHandle(2)) as THREE.Mesh;
+  const shared = (first.material as THREE.Material[])[0]!;
+  assert.equal(shared, (second.material as THREE.Material[])[1]);
+  assert.equal(first.geometry.groups.length, 1);
+  assert.deepEqual(Array.from(first.geometry.index!.array), [0, 1, 2, 0, 2, 3]);
+  assert.equal(renderer.resourceStatistics().materialResourceCount, 1);
+  let released = 0;
+  shared.addEventListener('dispose', () => { released += 1; });
+  const provenance = renderer.pickMesh(renderHandle(2));
+  renderer.applyDiff({ op: 'destroy', handle: renderHandle(1) });
+  assert.equal(released, 0);
+  assert.deepEqual(renderer.pickMesh(renderHandle(2)), provenance);
+  renderer.applyDiff({ op: 'defineMaterial', material: {
+    ...woodMaterial(), id: 'voxel-material/2', alphaMode: { kind: 'blend' },
+  } });
+  assert.equal(second.geometry.groups.length, 2);
+  assert.equal((second.material as THREE.Material[])[1]!.transparent, true);
+  assert.equal(released, 0);
+  renderer.applyDiff({ op: 'destroy', handle: renderHandle(2) });
+  assert.equal(released, 1);
+  assert.equal(renderer.resourceStatistics().materialResourceCount, 0);
+  renderer.dispose();
+});

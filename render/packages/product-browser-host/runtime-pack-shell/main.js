@@ -26,6 +26,13 @@ if (uiProjection !== undefined
     || typeof uiProjection.expectedContract !== 'string')) {
   throw new Error('Product bootstrap has an invalid UI projection declaration');
 }
+const defaultLights = bootstrap?.renderer?.lighting?.defaultLights;
+if (defaultLights === null
+  || typeof defaultLights !== 'object'
+  || (defaultLights.world !== 'neutral' && defaultLights.world !== 'disabled')
+  || (defaultLights.viewmodel !== 'neutral' && defaultLights.viewmodel !== 'disabled')) {
+  throw new Error('Product bootstrap has an invalid default lighting declaration');
+}
 const productUi = await import(`./${bootstrap.ui.entry}`);
 if (typeof productUi.mountProductUi !== 'function') {
   throw new Error('Product UI entry must export mountProductUi(root)');
@@ -44,7 +51,7 @@ void mountProductBrowserHost({
     maximumWheelDelta: 64,
     selectedController: { index: 0 },
   },
-  renderer: { initialContent: rendererInitialContent },
+  renderer: { initialContent: rendererInitialContent, lighting: { defaultLights } },
   ...(uiProjection === undefined ? {} : { uiProjection }),
   mountUi: (uiRoot, context) => productUi.mountProductUi(uiRoot, context),
 }).catch((error) => {

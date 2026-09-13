@@ -13,6 +13,10 @@ use svc_implicit::{
     Bounds, Field, GenerateOptions, Geometry, Node,
 };
 
+#[path = "implicit_audit.rs"]
+mod audit_bridge;
+use audit_bridge::*;
+
 const DEFAULT_EXTRACTION_CAPACITY: u32 = 262_144;
 fn extraction_capacity(requested: u32) -> u32 {
     if requested == 0 {
@@ -87,6 +91,7 @@ struct SurfaceGenerationOptions {
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeImplicitCall {
     fields: BTreeMap<u64, RetainedField>,
+    audits: BTreeMap<u64, AuditCollection>,
     volumes: BTreeMap<u64, RetainedVolume>,
 }
 pub(crate) struct RuntimeImplicitBridge {
@@ -106,6 +111,9 @@ pub(crate) struct RuntimeImplicitBridge {
     next_diagnostic_lease: u64,
     density_snapshot_leases: BTreeMap<u64, DensitySnapshotLease>,
     next_density_snapshot_lease: u64,
+    next_audit: u64,
+    next_audit_report: u64,
+    audit_reports: BTreeMap<u64, Vec<NativeImplicitAuditDiagnostic>>,
 }
 impl RuntimeImplicitBridge {
     pub(crate) fn new() -> Self {
@@ -121,6 +129,9 @@ impl RuntimeImplicitBridge {
             next_diagnostic_lease: 1,
             density_snapshot_leases: BTreeMap::new(),
             next_density_snapshot_lease: 1,
+            next_audit: 1,
+            next_audit_report: 1,
+            audit_reports: BTreeMap::new(),
         }
     }
     pub(crate) fn begin_call(&mut self) {
@@ -449,6 +460,11 @@ pub(crate) fn api(
         generate,
         read_generation,
         destroy_operation_diagnostic_lease,
+        create_audit,
+        destroy_audit,
+        capture_audit_piece,
+        read_audit,
+        destroy_audit_report_lease,
     }
 }
 fn call<T>(
