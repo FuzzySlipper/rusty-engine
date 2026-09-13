@@ -1,4 +1,16 @@
 <Project>
+  <!-- Keep bundle inventory generation in the packaged SDK. Products only
+       declare their content groups; this task owns validation and inventory
+       bytes after the ordinary content copy has completed. -->
+  <UsingTask TaskName="RustyEngineContentBundleManifestTask"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <Task>
+      <Code Type="Class" Language="cs"
+            Source="$(MSBuildThisFileDirectory)Tasks/RustyEngineContentBundleManifestTask.cs" />
+    </Task>
+  </UsingTask>
+
   <!-- This analyzer creates the private bind/export assembly. Ordinary product
        compilation must not run it; only the SDK-generated composition projects
        set this internal marker. -->
@@ -90,6 +102,11 @@
           DestinationFiles="@(_RustyEngineUiFiles->'$(_RustyEngineStagingDirectory)/ui/%(RecursiveDir)%(Filename)%(Extension)')" />
     <Copy SourceFiles="@(_RustyEngineContentFiles)"
           DestinationFiles="@(_RustyEngineContentFiles->'$(_RustyEngineStagingDirectory)/content/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <RustyEngineContentBundleManifestTask
+        Condition="'@(RustyEngineContentBundle)' != ''"
+        ContentRoot="$(RustyEngineProductContentRoot)"
+        StagedContentRoot="$(_RustyEngineStagingDirectory)/content"
+        Bundles="@(RustyEngineContentBundle)" />
     <WriteLinesToFile File="$(_RustyEngineStagingDirectory)/product.json" Overwrite="true"
                       Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;},&quot;coreclr&quot;:{&quot;assembly&quot;:&quot;coreclr/$(_RustyEngineProductAssembly)&quot;,&quot;runtimeconfig&quot;:&quot;coreclr/$(_RustyEngineProductRuntimeConfig)&quot;},&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;,&quot;assets&quot;:&quot;$(RustyEngineProductUiAssets)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;},&quot;lifecycle&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductLifecycleMode)&quot;$(_RustyEngineManifestFixedStep)},&quot;input&quot;:{&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}}" />
     <CallTarget Targets="PromoteRustyEngineStagedProduct" />

@@ -87,6 +87,63 @@ supplies a new snapshot on product replacement. Tauri and sealed-container host
 flavors remain packaging investigations; these logical names do not promise an
 implemented standalone browser/WASM or Tauri runtime.
 
+### Independently loaded content bundles
+
+Declare groups beneath `RustyEngineProductContentRoot` in the ordinary product
+project; omit `Root` when it equals the bundle ID:
+
+```xml
+<ItemGroup>
+  <RustyEngineContentBundle Include="procgen" />
+  <RustyEngineContentBundle Include="ui-art" Root="media/ui" />
+</ItemGroup>
+```
+
+SDK staging recursively inventories each declared directory, recording file
+names, lengths and SHA-256 identities in Engine-owned `.rusty-bundles.json`.
+Do not author that file. Restaging regenerates it after edits, additions or
+removals; JSON and asset bytes retain their formats. Bundle IDs are ASCII
+letters/digits followed by letters/digits, `.`, `_` or `-`. Roots are relative,
+nonempty directories; duplicate IDs and overlapping roots are rejected.
+
+```csharp
+ContentBundleInfo[] available = context.Content.ListBundles(); // metadata only
+using ProductContentBundle bundle = context.Content.OpenBundle("procgen");
+foreach (ContentReferenceInfo entry in bundle.Entries.Span) { /* metadata only */ }
+var index = bundle.ReadText("_index.json");
+ProductContentFile[] definitions = bundle.ReadDirectory("rooms", recursive: true);
+// Native content consumers can avoid a managed byte copy:
+using ContentReference source = bundle.OpenReference("rooms/entrance.json");
+```
+
+Declared bundle files are excluded from the legacy `ProductContent.Files`
+snapshot, global named reads and browser initial-content payload. Discovery
+reads only the inventory. Opening a bundle reads and verifies that collection's
+files into an immutable Rust snapshot; it does not load other bundles or copy
+all its bodies into C#. `Entries` exposes copied metadata; `ReadFile`, `ReadBytes`,
+`ReadText` and `ReadDirectory` copy the requested bodies. Directory semantics
+match ProductContent, with **bundle-relative** paths and ordinal ordering.
+Each open has independent ownership; a second open is not a global cached mount.
+
+Disposing a bundle releases its collection ownership and prevents further
+helper reads. Previously returned managed bytes remain valid. An independently
+opened `ContentReference`, admitted authored catalog, or created Engine resource
+has its own lifetime and must be disposed separately; bundle closure does not
+cascade-delete resources or invalidate consumers. Retained reference identity
+uses the original content-root-relative path and hash; `ResolveReference` can
+resolve it while its owning bundle is open. Cross-bundle dependencies are
+explicit product composition: open the required bundles and pass their content
+references to the existing typed services. No implicit dependency loader,
+path override, or catalog merge is introduced.
+
+Missing bundles/files report their logical names. A bundle whose files no
+longer match its staged inventory fails to open; rebuild/restage it. This is a
+directory-backed build-content capability for the current CoreCLR/NativeAOT
+hosts. It adds neither archive extraction nor a standalone browser runtime, and
+does not promise that closing a collection frees independent GPU resources or
+forces managed garbage collection. Browser DOM image delivery remains a
+separate consumer concern; bundle discovery alone does not produce image URLs.
+
 ## Run and package
 
 For a clean downstream CI or developer setup, begin with one verified exact

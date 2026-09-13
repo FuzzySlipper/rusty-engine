@@ -7,6 +7,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{composition::borrowed_utf8, composition::ABI_OK};
 
+mod bundles;
+pub use bundles::ProductContentBundles;
+
 const MAX_READ_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
@@ -25,8 +28,8 @@ pub(crate) struct RetainedContent {
 
 struct ContentReferenceInfoLease {
     // Keeps `reference.path` alive until the matching lease is released.
-    _path: String,
-    reference: NativeContentReferenceInfo,
+    _paths: Vec<String>,
+    references: Vec<NativeContentReferenceInfo>,
 }
 
 pub(crate) struct RuntimeContentBridge {
@@ -34,6 +37,7 @@ pub(crate) struct RuntimeContentBridge {
     references: BTreeMap<u64, AdmittedContent>,
     info_leases: BTreeMap<u64, ContentReferenceInfoLease>,
     byte_leases: BTreeMap<u64, Arc<[u8]>>,
+    bundles: bundles::BundleState,
     next_reference: u64,
     next_info_lease: u64,
     next_byte_lease: u64,
@@ -60,6 +64,7 @@ impl RuntimeContentBridge {
             references: BTreeMap::new(),
             info_leases: BTreeMap::new(),
             byte_leases: BTreeMap::new(),
+            bundles: bundles::BundleState::default(),
             next_reference: 1,
             next_info_lease: 1,
             next_byte_lease: 1,
@@ -102,31 +107,52 @@ impl RuntimeContentBridge {
         &mut self,
         reference: NativeContentReferenceHandle,
     ) -> Option<NativeContentReferenceInfoLease> {
-        let content = self.references.get(&reference.value)?;
+        let content = self.references.get(&reference.value)?.clone();
+        self.retain_info(vec![(
+            content.path,
+            content.sha256,
+            content.bytes.len() as u64,
+        )])
+    }
+
+    fn retain_info(
+        &mut self,
+        entries: Vec<(String, NativeContentSha256, u64)>,
+    ) -> Option<NativeContentReferenceInfoLease> {
         let value = self.next_info_lease;
         self.next_info_lease = value.checked_add(1)?;
-        let path = content.path.clone();
-        let info = NativeContentReferenceInfo {
-            path: NativeUtf8Slice {
-                bytes: path.as_ptr(),
-                len: path.len(),
-            },
-            sha256: content.sha256,
-            byte_length: u64::try_from(content.bytes.len()).ok()?,
-        };
+        let paths: Vec<String> = entries.iter().map(|entry| entry.0.clone()).collect();
+        let references = paths
+            .iter()
+            .zip(entries)
+            .map(
+                |(path, (_, sha256, byte_length))| NativeContentReferenceInfo {
+                    path: NativeUtf8Slice {
+                        bytes: path.as_ptr(),
+                        len: path.len(),
+                    },
+                    sha256,
+                    byte_length,
+                },
+            )
+            .collect();
         self.info_leases.insert(
             value,
             ContentReferenceInfoLease {
-                _path: path,
-                reference: info,
+                _paths: paths,
+                references,
             },
         );
         let lease = self.info_leases.get(&value)?;
         Some(NativeContentReferenceInfoLease {
             handle: NativeContentReferenceInfoLeaseHandle { value },
-            references: &lease.reference,
-            references_len: 1,
+            references: lease.references.as_ptr(),
+            references_len: lease.references.len(),
         })
+    }
+
+    pub(crate) fn bind_bundles(&mut self, bundles: ProductContentBundles) {
+        self.bundles.source = bundles;
     }
 
     fn read_bytes(&mut self, request: NativeContentReadBytesRequest) -> Option<NativeByteLease> {
@@ -155,6 +181,12 @@ impl RuntimeContentBridge {
 pub(crate) fn api(bridge: &mut RuntimeContentBridge) -> NativeContentApi {
     NativeContentApi {
         context: (bridge as *mut RuntimeContentBridge).cast(),
+        list_bundles: bundles::list_bundles,
+        destroy_bundle_info_lease: bundles::destroy_bundle_info_lease,
+        open_bundle: bundles::open_bundle,
+        destroy_bundle: bundles::destroy_bundle,
+        read_bundle_files: bundles::read_bundle_files,
+        open_bundle_reference: bundles::open_bundle_reference,
         open_reference,
         resolve_reference,
         destroy_reference,
@@ -210,6 +242,7 @@ unsafe extern "C" fn resolve_reference(
         .get(path)
         .filter(|content| content.sha256 == request.sha256)
         .cloned()
+        .or_else(|| bridge.bundles.resolve(path, request.sha256))
     else {
         return 0;
     };

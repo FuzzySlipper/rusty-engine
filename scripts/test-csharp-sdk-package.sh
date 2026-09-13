@@ -115,6 +115,7 @@ cat > "$consumer_dir/Consumer.csproj" <<EOF
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Rusty.Engine" Version="$package_version" />
+    <RustyEngineContentBundle Include="rules" />
     <RustyEngineProductInputIntent Include="runtime.exercise" Value="payload:runtime.exercise.payload" />
     <RustyEngineProductInputIntent Include="runtime.exercise.move" Value="digital" />
     <RustyEngineProductInputMapping Include="runtime.exercise.move" Intent="runtime.exercise.move" Trigger="key:key-w:held" />
@@ -151,6 +152,7 @@ cat > "$source_override_dir/SourceOverride.csproj" <<EOF
 EOF
 cp "$consumer_dir/Library.cs" "$source_override_dir/Library.cs"
 cp "$repo_root/scripts/fixtures/ImplicitRecipeChecks.cs" "$consumer_dir/ImplicitRecipeChecks.cs"
+cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
@@ -168,6 +170,7 @@ public sealed class Product : IEngineProduct
     public Product(ProductCreateContext context)
     {
         ImplicitRecipeChecks.Run();
+        ProductContentBundleChecks.Run(context);
         _engine = context.Engine;
         _stream = _engine.Ui.OpenStream(new UiStreamRequest("sdk-package", "sdk.package.smoke"));
         _voxelMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
@@ -223,6 +226,11 @@ cat > "$consumer_dir/product-ui/main.js" <<'EOF'
 // package-only staged product UI
 EOF
 printf 'package-only staged content\n' > "$consumer_dir/content/trial.txt"
+mkdir -p "$consumer_dir/content/rules/nested"
+printf '{"order":["enemy"]}' > "$consumer_dir/content/rules/_index.json"
+printf '{"id":"enemy"}' > "$consumer_dir/content/rules/renamed.json"
+printf '{}' > "$consumer_dir/content/rules/nested/other.json"
+dd if=/dev/zero of="$consumer_dir/content/rules/large.bin" bs=1048589 count=1 status=none
 
 # The only available package source is the fresh local feed. The SDK's source
 # tree is not an input to restore or build; consumer assets must not name it.

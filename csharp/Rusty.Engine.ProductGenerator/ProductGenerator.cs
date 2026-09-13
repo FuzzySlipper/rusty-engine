@@ -308,11 +308,12 @@ public sealed class ProductGenerator : IIncrementalGenerator
                     {
                         if (error is not null) *error = default;
                         if (args is null || handle is null || (args->content_len != 0 && args->content is null) || (args->input.context_len != 0 && args->input.context is null) || (args->input.direct_intents_len != 0 && args->input.direct_intents is null) || (args->input.physical_mappings_len != 0 && args->input.physical_mappings is null)) return 2;
-                        ProductContent content = new(CopyContent(args->content, args->content_len));
                         ProductInputConfiguration input = CopyInputConfiguration(args->input);
                         LeaseReleaseCoordinator leaseReleases = new();
                         ProductDebugExecutionContext debugging = new();
-                        IEngineProduct product = new {{type}}(new ProductCreateContext(new EngineContext(args->engine, leaseReleases), content, input, debugging));
+                        EngineContext engine = new(args->engine, leaseReleases);
+                        ProductContent content = new(CopyContent(args->content, args->content_len), engine.Content);
+                        IEngineProduct product = new {{type}}(new ProductCreateContext(engine, content, input, debugging));
                         lifetime = new ProductLifetime(product, leaseReleases, debugging);
                         *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(lifetime));
                         return 1;

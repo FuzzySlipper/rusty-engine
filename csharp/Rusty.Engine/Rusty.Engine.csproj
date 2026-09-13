@@ -17,12 +17,14 @@
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="buildTransitive/Tasks/**/*.cs" />
     <Compile Include="$(RustyEngineGeneratedBindingsDir)/EngineContracts.g.cs" Visible="false" />
     <Compile Include="$(RustyEngineGeneratedBindingsDir)/EngineValues.g.cs" Visible="false" />
     <None Include="PACKAGE_README.md" Pack="true" PackagePath="PACKAGE_README.md" />
     <None Include="$(RustyEngineProductGeneratorPath)" Pack="true" PackagePath="buildTransitive/analyzers" Visible="false" />
     <None Include="$(RustyEnginePackageMetadataDir)/Rusty.Engine.props" Pack="true" PackagePath="buildTransitive" />
     <None Include="buildTransitive/Rusty.Engine.targets" Pack="true" PackagePath="buildTransitive" />
+    <None Include="buildTransitive/Tasks/RustyEngineContentBundleManifestTask.cs" Pack="true" PackagePath="buildTransitive/Tasks" />
   </ItemGroup>
   <Target Name="GenerateEngineContracts" BeforeTargets="CoreCompile" Condition="'$(RustyEngineGenerateBindings)' == 'true'">
     <Exec Command="&quot;$(MSBuildThisFileDirectory)../../scripts/generate-csharp-native-bindings.sh&quot; &quot;$(RustyEngineGeneratedBindingsDir)&quot; &quot;$(RustyEngineGeneratedInputsDir)&quot;" />

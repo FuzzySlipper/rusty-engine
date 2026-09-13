@@ -100,3 +100,68 @@ pub type NativeReadContentBytes = unsafe extern "C" fn(
 ) -> i32;
 pub type NativeDestroyContentByteLease =
     unsafe extern "C" fn(*mut c_void, NativeByteLeaseHandle) -> i32;
+
+/// An independently admitted collection. File references retain their bytes
+/// independently of this handle; closing it does not invalidate consumers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeContentBundleHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentBundleInfo {
+    pub id: NativeUtf8Slice,
+    pub file_count: u64,
+    pub byte_length: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeContentBundleInfoLeaseHandle {
+    pub value: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentBundleInfoLease {
+    pub handle: NativeContentBundleInfoLeaseHandle,
+    pub bundles: *const NativeContentBundleInfo,
+    pub bundles_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentBundleOpenRequest {
+    pub id: NativeUtf8Slice,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeContentBundleReferenceRequest {
+    pub bundle: NativeContentBundleHandle,
+    pub path: NativeUtf8Slice,
+}
+
+pub type NativeListContentBundles =
+    unsafe extern "C" fn(*mut c_void, *mut NativeContentBundleInfoLease) -> i32;
+pub type NativeDestroyContentBundleInfoLease =
+    unsafe extern "C" fn(*mut c_void, NativeContentBundleInfoLeaseHandle) -> i32;
+pub type NativeOpenContentBundle = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContentBundleOpenRequest,
+    *mut NativeContentBundleHandle,
+) -> i32;
+pub type NativeDestroyContentBundle =
+    unsafe extern "C" fn(*mut c_void, NativeContentBundleHandle) -> i32;
+pub type NativeReadContentBundleFiles = unsafe extern "C" fn(
+    *mut c_void,
+    NativeContentBundleHandle,
+    *mut NativeContentReferenceInfoLease,
+) -> i32;
+pub type NativeOpenContentBundleReference = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeContentBundleReferenceRequest,
+    *mut NativeContentReferenceHandle,
+) -> i32;

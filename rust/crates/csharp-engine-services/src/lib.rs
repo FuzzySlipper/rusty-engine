@@ -33,3 +33,5 @@ pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
     CsharpEngineCallOutput, CsharpEngineServicesError, EngineServiceSet,
 };
+
+pub use content::ProductContentBundles;

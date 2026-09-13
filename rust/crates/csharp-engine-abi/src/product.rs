@@ -1034,6 +1034,12 @@ pub struct NativePresentationApi {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeContentApi {
     pub context: *mut c_void,
+    pub list_bundles: NativeListContentBundles,
+    pub destroy_bundle_info_lease: NativeDestroyContentBundleInfoLease,
+    pub open_bundle: NativeOpenContentBundle,
+    pub destroy_bundle: NativeDestroyContentBundle,
+    pub read_bundle_files: NativeReadContentBundleFiles,
+    pub open_bundle_reference: NativeOpenContentBundleReference,
     pub open_reference: NativeOpenContentReference,
     pub resolve_reference: NativeResolveContentReference,
     pub destroy_reference: NativeDestroyContentReference,

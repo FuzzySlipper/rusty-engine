@@ -1122,6 +1122,7 @@ impl CsharpProductRuntime {
         let CsharpProductContent {
             files: content,
             appearance_catalog,
+            bundles,
         } = content;
         let content_resources = content
             .iter()
@@ -1142,6 +1143,7 @@ impl CsharpProductRuntime {
             content_store_root,
             config.diagnostics.handle(),
         )?);
+        services.bind_content_bundles(bundles);
         let native_content: Vec<NativeContentFile> = content
             .iter()
             .map(|file| NativeContentFile {
@@ -4450,6 +4452,7 @@ struct ContentCandidate {
 pub struct CsharpProductContent {
     files: Vec<ContentFile>,
     appearance_catalog: CsharpAppearanceCatalog,
+    bundles: csharp_engine_services::ProductContentBundles,
 }
 
 impl CsharpProductContent {
@@ -4467,9 +4470,16 @@ impl CsharpProductContent {
                 ),
             ));
         }
+        let bundles = csharp_engine_services::ProductContentBundles::admit(root)
+            .map_err(|error| CsharpProductRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
         let candidates = discover_content(root)?;
         let mut files = Vec::with_capacity(candidates.len());
         for candidate in candidates {
+            if bundles.owns_path(
+                std::str::from_utf8(&candidate.product_path).expect("UTF-8 content path"),
+            ) {
+                continue;
+            }
             let bytes = fs::read(&candidate.host_path).map_err(|error| {
                 CsharpProductRuntimeError::new("CSHARP_CONTENT_READ", error.to_string())
             })?;
@@ -4487,6 +4497,7 @@ impl CsharpProductContent {
         Ok(Self {
             files,
             appearance_catalog,
+            bundles,
         })
     }
 }
@@ -7222,6 +7233,22 @@ mod tests {
         fs::remove_dir_all(&root).expect("remove fixture");
 
         assert_eq!(content.files.len(), 1);
+    }
+
+    #[test]
+    fn content_admission_excludes_independent_bundle_payloads() {
+        let root = content_fixture_root("bundle-content");
+        fs::create_dir_all(root.join("rules")).unwrap();
+        fs::write(root.join("legacy.txt"), b"legacy").unwrap();
+        fs::write(root.join("rules/body.bin"), b"not the inventory hash").unwrap();
+        fs::write(root.join(".rusty-bundles.json"), format!(
+            r#"{{"bundles":[{{"id":"rules","root":"rules","files":[{{"path":"body.bin","byteLength":8,"sha256":"{}"}}]}}]}}"#,
+            "0".repeat(64))).unwrap();
+        let content = CsharpProductContent::admit(&root).unwrap();
+        assert_eq!(content.files.len(), 1);
+        assert_eq!(content.files[0].path, b"legacy.txt");
+        assert!(content.bundles.owns_path("rules/body.bin"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

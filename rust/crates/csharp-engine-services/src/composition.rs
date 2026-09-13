@@ -310,6 +310,11 @@ pub enum CsharpAppearanceCallOutput {
 pub struct CsharpAppearanceCatalog(RuntimeAppearanceCatalog);
 
 impl EngineServiceSet {
+    /// Bind metadata-only build bundles before product creation.
+    pub fn bind_content_bundles(&mut self, bundles: crate::ProductContentBundles) {
+        self.content.bind_bundles(bundles);
+    }
+
     pub fn new(
         catalog: CsharpAppearanceCatalog,
         content_resources: BTreeMap<String, Arc<[u8]>>,

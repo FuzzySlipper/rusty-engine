@@ -13,9 +13,14 @@ public sealed class ProductContent
 {
     private readonly Dictionary<string, ProductContentFile> byPath;
     private readonly KeyValuePair<string, ProductContentFile>[] orderedFiles;
+    private readonly IContentService? service;
 
     public ProductContent(ReadOnlyMemory<ProductContentFile> files)
+        : this(files, null) { }
+
+    public ProductContent(ReadOnlyMemory<ProductContentFile> files, IContentService? service)
     {
+        this.service = service;
         Files = files.ToArray();
         byPath = new(StringComparer.Ordinal);
         foreach (ProductContentFile file in Files.Span)
@@ -25,6 +30,26 @@ public sealed class ProductContent
 
     /// <summary>The admitted entries in their original order, for existing bulk consumers.</summary>
     public ReadOnlyMemory<ProductContentFile> Files { get; }
+
+    /// <summary>Discover build-declared bundles without loading their file bodies.</summary>
+    public ContentBundleInfo[] ListBundles() => service is null ? [] :
+        service.ListBundles().ToArray().OrderBy(bundle => bundle.Id, StringComparer.Ordinal).ToArray();
+
+    /// <summary>Load one immutable bundle. Dispose it when its collection is no longer needed.</summary>
+    public ProductContentBundle OpenBundle(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        if (service is null || !ListBundles().Any(bundle => bundle.Id == id))
+            throw new FileNotFoundException($"ProductContent bundle was not found: {id}", id);
+        ContentBundle handle;
+        try { handle = service.OpenBundle(new(id)); }
+        catch (EngineCallException error)
+        {
+            throw new IOException($"ProductContent bundle '{id}' could not be loaded. Its staged files must match the build inventory; restage the product after editing content.", error);
+        }
+        try { return new ProductContentBundle(id, service, handle); }
+        catch { handle.Dispose(); throw; }
+    }
 
     /// <summary>Find an optional file by its exact content-relative path.</summary>
     public bool TryReadFile(string path, out ProductContentFile file) => byPath.TryGetValue(path, out file);
