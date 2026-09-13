@@ -48,18 +48,21 @@ where
                 let (batches, overflowed) = drain();
                 let mut input_errors = Vec::new();
                 if overflowed {
-                    match runtime.recover_input_overflow() {
+                    let result = runtime.recover_input_overflow();
+                    match owner.finish_call(runtime, result) {
                         Ok(receipt) => publish(receipt),
                         Err(error) => input_errors.push(error),
                     }
                 }
                 for batch in batches {
-                    match runtime.input(batch) {
+                    let result = runtime.input(batch);
+                    match owner.finish_call(runtime, result) {
                         Ok(receipt) => publish_input(receipt),
                         Err(error) => input_errors.push(error),
                     }
                 }
                 let result = runtime.advance_realtime(observed_time_ns);
+                let result = owner.finish_call(runtime, result);
                 let attribution = runtime.take_update_attribution();
                 match result {
                     Ok(receipt) => {
@@ -84,16 +87,21 @@ mod tests {
 
     use super::*;
     use crate::{
-        ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevRuntimeBinding,
-        ProductDevRuntimeMode, ProductDevRuntimeReadout, ProductDevRuntimeState,
-        ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
+        ProductDevLifecycleOperation, ProductDevOperationKind, ProductDevRendererResource,
+        ProductDevRuntimeBinding, ProductDevRuntimeMode, ProductDevRuntimeReadout,
+        ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
     };
+    use render_model::RenderFrameDiff;
     use runtime_input::RuntimeInputBinding;
     use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
     use runtime_publication::RuntimePublication;
 
     #[derive(Default)]
-    struct FixtureRuntime;
+    struct FixtureRuntime {
+        renderer_resources: Vec<String>,
+        retired_renderer_resources: Vec<ProductDevRendererResource>,
+        scheduled_asset_transition: Option<ProductDevRendererResource>,
+    }
 
     impl FixtureRuntime {
         fn binding() -> ProductDevRuntimeBinding {
@@ -135,6 +143,14 @@ mod tests {
     }
 
     impl ProductDevRuntime for FixtureRuntime {
+        fn renderer_resource_ids(&self) -> Option<Vec<String>> {
+            (!self.renderer_resources.is_empty()).then(|| self.renderer_resources.clone())
+        }
+
+        fn take_retired_renderer_resources(&mut self) -> Vec<ProductDevRendererResource> {
+            std::mem::take(&mut self.retired_renderer_resources)
+        }
+
         fn lifecycle(
             &mut self,
             operation: ProductDevLifecycleOperation,
@@ -174,6 +190,22 @@ mod tests {
             _observed_time_ns: CanonicalU64,
         ) -> Result<ProductDevRuntimeReceipt<ProductDevOperationResult>, ProductDevRuntimeError>
         {
+            if let Some(resource) = self.scheduled_asset_transition.take() {
+                self.renderer_resources.push(resource.identity().to_owned());
+                self.retired_renderer_resources.push(resource);
+                return Ok(ProductDevRuntimeReceipt::new(
+                    ProductDevOperationResult::accepted(
+                        ProductDevOperationKind::AdvanceRealtime,
+                        Self::binding(),
+                        CanonicalU64::new(0),
+                        Self::readout(),
+                    )
+                    .unwrap(),
+                    vec![RuntimePublication::frame(&RenderFrameDiff::new())
+                        .expect("empty frame is a valid logical publication")],
+                )
+                .unwrap());
+            }
             Ok(Self::operation(ProductDevOperationKind::AdvanceRealtime))
         }
 
@@ -213,7 +245,7 @@ mod tests {
 
     #[test]
     fn scheduled_publication_stays_inside_owner_serialization() {
-        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime));
+        let session = Arc::new(ProductDevOperationOwner::new(FixtureRuntime::default()));
         let (published, published_ready) = mpsc::channel();
         let (release, release_publication) = mpsc::channel();
         let order = Arc::new(Mutex::new(Vec::new()));
@@ -268,6 +300,56 @@ mod tests {
             *order.lock().expect("final order lock"),
             vec!["input", "advance"],
             "runtime input receipts must publish before the scheduled advance receipt"
+        );
+    }
+
+    #[test]
+    fn scheduled_asset_transition_publishes_inventory_and_retired_resource_bytes() {
+        let resource = ProductDevRendererResource::admit_font(
+            "content/fonts/scheduled.woff2",
+            b"wOF2scheduled-font".to_vec(),
+        )
+        .unwrap();
+        let identity = resource.identity().to_owned();
+        let owner = ProductDevOperationOwner::new(FixtureRuntime {
+            scheduled_asset_transition: Some(resource),
+            ..Default::default()
+        });
+        let mut published = None;
+
+        advance_realtime_with_input_and_publish(
+            &owner,
+            || (Vec::new(), false),
+            CanonicalU64::new(1),
+            |_| panic!("the fixture has no scheduled input receipt"),
+            |receipt| published = Some(receipt),
+            || {},
+            || {},
+        )
+        .unwrap();
+
+        let (_, outputs) = published
+            .expect("scheduled update receipt")
+            .into_wire_parts()
+            .expect("scheduled receipt encodes for publication");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].resources().len(), 1);
+        assert_eq!(outputs[0].resources()[0].identity(), identity);
+        assert_eq!(outputs[0].resources()[0].bytes(), b"wOF2scheduled-font");
+
+        let public_wire = serde_json::to_value(&outputs[0]).expect("public output wire");
+        assert_eq!(
+            public_wire["rendererResources"],
+            serde_json::json!([identity])
+        );
+        let worker_wire = outputs[0].to_worker_value().expect("worker output wire");
+        assert_eq!(
+            worker_wire["rendererResources"],
+            serde_json::json!([identity])
+        );
+        assert_eq!(
+            worker_wire["__retiredResources"][0]["bodyBase64"],
+            "d09GMnNjaGVkdWxlZC1mb250"
         );
     }
 }

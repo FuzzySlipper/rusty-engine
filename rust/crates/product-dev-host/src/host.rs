@@ -1708,7 +1708,8 @@ fn invoke_debug_catalog<R: ProductDevRuntime>(state: &HostState<R>) -> HttpRespo
         .with_locked_timed(
             || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
             |runtime| {
-                let receipt = match runtime.describe_debug() {
+                let result = runtime.describe_debug();
+                let receipt = match state.runtime.finish_call(runtime, result) {
                     Ok(receipt) => receipt,
                     Err(error) => {
                         return Ok(HttpResponse::error(500, error.code(), error.diagnostic()));
@@ -1752,7 +1753,8 @@ fn invoke_debug_execute<R: ProductDevRuntime>(state: &HostState<R>, body: &[u8])
         .with_locked_timed(
             || begin_telemetry(state, ProductDevOperationKind::ExecuteDebug),
             |runtime| {
-                let receipt = match runtime.execute_debug(command) {
+                let result = runtime.execute_debug(command);
+                let receipt = match state.runtime.finish_call(runtime, result) {
                     Ok(receipt) => receipt,
                     Err(error) => {
                         request_incarnation_replacement(state, &error);
@@ -2403,7 +2405,8 @@ where
         .with_locked_timed(
         || begin_telemetry(state, operation),
         |runtime| {
-        let receipt = match call(runtime) {
+        let call_result = call(runtime);
+        let receipt = match state.runtime.finish_call(runtime, call_result) {
             Ok(receipt) => receipt,
             Err(error) => {
                 let message = if error.diagnostic().is_empty() {
@@ -2576,7 +2579,8 @@ fn handle_sse<R: ProductDevRuntime>(
                 .with_locked_timed(
                 || begin_telemetry(&state, ProductDevOperationKind::Connect),
                 |runtime| {
-                    let receipt = runtime.connect()?;
+                    let result = runtime.connect();
+                    let receipt = state.runtime.finish_call(runtime, result)?;
                     let connection_output_cursor = receipt.connection_output_cursor();
                     let (result, outputs) = match receipt.into_wire_parts() {
                         Ok(parts) => parts,

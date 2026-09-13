@@ -29,6 +29,9 @@ struct FixtureRuntime {
     recovery_calls: Arc<AtomicUsize>,
     fail_lifecycle: bool,
     renderer_resource: Option<ProductDevRendererResource>,
+    renderer_resource_inventory: Vec<String>,
+    retired_renderer_resources: Vec<ProductDevRendererResource>,
+    debug_resource_transition: Option<ProductDevRendererResource>,
 }
 
 struct ReconnectRuntime {
@@ -230,6 +233,15 @@ impl ProductDevRuntime for ReconnectRuntime {
 }
 
 impl ProductDevRuntime for FixtureRuntime {
+    fn renderer_resource_ids(&self) -> Option<Vec<String>> {
+        (!self.renderer_resource_inventory.is_empty())
+            .then(|| self.renderer_resource_inventory.clone())
+    }
+
+    fn take_retired_renderer_resources(&mut self) -> Vec<ProductDevRendererResource> {
+        std::mem::take(&mut self.retired_renderer_resources)
+    }
+
     fn renderer_resource(
         &mut self,
         identity: &str,
@@ -290,6 +302,11 @@ impl ProductDevRuntime for FixtureRuntime {
         ProductDevRuntimeReceipt<ProductDevDebugCatalog>,
         product_dev_host::ProductDevRuntimeError,
     > {
+        if let Some(resource) = self.debug_resource_transition.take() {
+            let identity = resource.identity().to_owned();
+            self.renderer_resource_inventory = vec![identity];
+            self.retired_renderer_resources.push(resource);
+        }
         let catalog = ProductDevDebugCatalog::decode_json(
             br#"{"available":true,"commands":[{"name":"fixture.echo","description":"Echoes a fixture value.","parameters":[{"name":"value","type":"string"}]}]}"#,
         )
@@ -665,6 +682,68 @@ fn renderer_resource_route_serves_raw_bytes_and_fences_runtime_generation() {
         "GET /__rusty/product/runtime/resource?identity=font%2Fmissing&generation=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
     );
     assert!(missing.starts_with("HTTP/1.1 404 Not Found\r\n"));
+}
+
+#[test]
+fn timed_debug_call_and_fresh_baseline_publish_transitioned_resource_metadata() {
+    let resource = ProductDevRendererResource::admit_font(
+        "content/fonts/timed-transition.woff2",
+        b"wOF2timed-transition".to_vec(),
+    )
+    .unwrap();
+    let identity = resource.identity().to_owned();
+    let bundle = ProductDevBundle::new(vec![ProductDevBundleEntry::new(
+        "index.html",
+        "text/html; charset=utf-8",
+        b"<!doctype html>".to_vec(),
+    )
+    .unwrap()])
+    .unwrap();
+    let host = ProductDevHost::start(
+        FixtureRuntime {
+            debug_resource_transition: Some(resource),
+            ..Default::default()
+        },
+        ProductDevHostConfig::new(0, bundle).with_live_debug(true),
+    )
+    .unwrap();
+    let origin = host.origin();
+
+    // Establish an active binding so the timed catalog receipt takes the same
+    // incremental publication path as a running host.
+    let mut initial = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let initial_baseline = read_until(&mut initial, "\"operation\":\"start\"");
+    assert!(initial_baseline.contains("event: rusty-output-baseline"));
+    drop(initial);
+
+    let catalog = request(
+        &origin,
+        "GET /__rusty/product/runtime/debug/catalog HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    );
+    assert!(catalog.starts_with("HTTP/1.1 200 OK\r\n"), "{catalog}");
+    assert!(catalog.contains("X-Rusty-Output-Through:"), "{catalog}");
+
+    // The runtime deliberately cannot serve this resource itself. A 200 here
+    // proves the timed call retained the private bytes on its published output.
+    let encoded_identity = identity.replace('/', "%2F").replace(':', "%3A");
+    let bytes = request(
+        &origin,
+        &format!(
+            "GET /__rusty/product/runtime/resource?identity={encoded_identity}&generation=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    assert!(bytes.starts_with("HTTP/1.1 200 OK\r\n"), "{bytes}");
+    assert!(bytes.ends_with("wOF2timed-transition"), "{bytes}");
+
+    let mut fresh = open_sse(host.address(), "/__rusty/product/runtime/outputs/fresh");
+    let fresh_baseline = read_until(&mut fresh, "\"operation\":\"start\"");
+    assert!(fresh_baseline.contains("event: rusty-output-baseline"));
+    assert!(
+        fresh_baseline.contains(&format!("\"rendererResources\":[\"{identity}\"]")),
+        "{fresh_baseline}"
+    );
+    drop(fresh);
+    host.shutdown().unwrap();
 }
 
 fn start_debug() -> product_dev_host::RunningProductDevHost {

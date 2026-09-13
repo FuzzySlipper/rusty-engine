@@ -186,7 +186,7 @@ pub fn import_animated_glb_asset(
             .flat_map(|clip| &clip.channels)
             .map(|channel| channel.timestamps_microseconds.len() as u64)
             .sum::<u64>();
-        let rig = match derive_animation_rig_signature(&imported.model) {
+        let rig = match derive_animation_rig_signature(&imported.model, source) {
             Ok(rig) => rig,
             Err(message) => {
                 // Embedded clips remain independently usable. We retain no
@@ -359,6 +359,7 @@ pub fn import_animated_glb_asset(
 /// ancestry stays out of the skeleton and is never promoted into a joint.
 fn derive_animation_rig_signature(
     model: &voxel_convert::ImportedAnimatedModel,
+    source: &[u8],
 ) -> Result<Option<AnimationRigSignature>, String> {
     if model.skins.is_empty() {
         return Ok(None);
@@ -370,6 +371,21 @@ fn derive_animation_rig_signature(
         .map(|node| (node.source_node_index, node))
         .collect::<BTreeMap<_, _>>();
     let mut inverse_binds = BTreeMap::<u32, [f64; 16]>::new();
+    let root = glb_json_document(source, "source")
+        .map_err(|diagnostic| diagnostic.message)?;
+    let raw_nodes = root
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "GLB has no node table for renderer rig fingerprinting".to_owned())?;
+    let local_rests = raw_nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| {
+            let index = u32::try_from(index)
+                .map_err(|_| "GLB node index exceeds the renderer identity range".to_owned())?;
+            Ok((index, three_local_rest_matrix(node)?))
+        })
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
     let mut joint_nodes = BTreeSet::new();
     for skin in &model.skins {
         for (node_index, inverse_bind) in skin
@@ -424,7 +440,9 @@ fn derive_animation_rig_signature(
         fingerprint_joints.push(AnimationRigFingerprintJoint {
             id: id.clone(),
             parent: parent.clone(),
-            local_rest_matrix: node.local_transform,
+            local_rest_matrix: *local_rests.get(node_index).ok_or_else(|| {
+                format!("skin joint node {node_index} is absent from the GLB transform table")
+            })?,
             inverse_bind_matrix: inverse_bind,
         });
         joints.push(AnimationRigJoint { id, parent });
@@ -539,6 +557,203 @@ fn derive_animation_rig_signature(
         "derived named skin joint forest is not a valid renderer rig signature".to_owned()
     })?;
     Ok(Some(signature))
+}
+
+/// Reproduce the local matrix that Three's GLTFLoader exposes before the rig
+/// fingerprint quantizes it. For authored TRS, `GLTFLoader.loadNode` preserves
+/// the raw JSON components and `Bone.updateMatrix` runs `Matrix4.compose`.
+/// For an authored matrix, `loadNode` calls `Object3D.applyMatrix4`, which runs
+/// `Matrix4.decompose`; the later `Bone.updateMatrix` composes that TRS again.
+/// Rust's glTF reader eagerly produces an f32 matrix, so hashing it directly
+/// can cross a six-decimal boundary even for the same GLB.
+fn three_local_rest_matrix(node: &serde_json::Value) -> Result<[f64; 16], String> {
+    let node = node
+        .as_object()
+        .ok_or_else(|| "GLB node transform is not an object".to_owned())?;
+    if let Some(matrix) = node.get("matrix") {
+        let matrix = json_number_array::<16>(matrix, "matrix")?;
+        let (translation, rotation, scale) = three_decompose_matrix(matrix);
+        return Ok(three_compose_matrix(translation, rotation, scale));
+    }
+    let translation = match node.get("translation") {
+        Some(value) => json_number_array::<3>(value, "translation")?,
+        None => [0.0, 0.0, 0.0],
+    };
+    let rotation = match node.get("rotation") {
+        Some(value) => json_number_array::<4>(value, "rotation")?,
+        None => [0.0, 0.0, 0.0, 1.0],
+    };
+    let scale = match node.get("scale") {
+        Some(value) => json_number_array::<3>(value, "scale")?,
+        None => [1.0, 1.0, 1.0],
+    };
+    Ok(three_compose_matrix(translation, rotation, scale))
+}
+
+fn json_number_array<const N: usize>(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<[f64; N], String> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| format!("GLB node {field} is not an array"))?;
+    if values.len() != N {
+        return Err(format!("GLB node {field} must contain {N} numeric values"));
+    }
+    let parsed = values
+        .iter()
+        .map(|value| {
+            value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| format!("GLB node {field} contains a non-finite number"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    parsed
+        .try_into()
+        .map_err(|_| format!("GLB node {field} must contain {N} numeric values"))
+}
+
+fn three_compose_matrix(
+    translation: [f64; 3],
+    rotation: [f64; 4],
+    scale: [f64; 3],
+) -> [f64; 16] {
+    let [x, y, z, w] = rotation;
+    let x2 = x + x;
+    let y2 = y + y;
+    let z2 = z + z;
+    let xx = x * x2;
+    let xy = x * y2;
+    let xz = x * z2;
+    let yy = y * y2;
+    let yz = y * z2;
+    let zz = z * z2;
+    let wx = w * x2;
+    let wy = w * y2;
+    let wz = w * z2;
+    let [sx, sy, sz] = scale;
+    [
+        (1.0 - (yy + zz)) * sx,
+        (xy + wz) * sx,
+        (xz - wy) * sx,
+        0.0,
+        (xy - wz) * sy,
+        (1.0 - (xx + zz)) * sy,
+        (yz + wx) * sy,
+        0.0,
+        (xz + wy) * sz,
+        (yz - wx) * sz,
+        (1.0 - (xx + yy)) * sz,
+        0.0,
+        translation[0],
+        translation[1],
+        translation[2],
+        1.0,
+    ]
+}
+
+/// Equivalent to Three's `Matrix4.decompose` followed by `Matrix4.compose`,
+/// which is how GLTFLoader realizes authored matrix-form nodes.
+fn three_decompose_matrix(matrix: [f64; 16]) -> ([f64; 3], [f64; 4], [f64; 3]) {
+    let translation = [matrix[12], matrix[13], matrix[14]];
+    let determinant = three_matrix_determinant(matrix);
+    if determinant == 0.0 {
+        return (translation, [0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0]);
+    }
+    let mut sx = (matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2]).sqrt();
+    let sy = (matrix[4] * matrix[4] + matrix[5] * matrix[5] + matrix[6] * matrix[6]).sqrt();
+    let sz = (matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10]).sqrt();
+    if determinant < 0.0 {
+        sx = -sx;
+    }
+    let mut rotation_matrix = matrix;
+    for index in [0, 1, 2] {
+        rotation_matrix[index] /= sx;
+    }
+    for index in [4, 5, 6] {
+        rotation_matrix[index] /= sy;
+    }
+    for index in [8, 9, 10] {
+        rotation_matrix[index] /= sz;
+    }
+    let rotation = three_quaternion_from_rotation_matrix(rotation_matrix);
+    (translation, rotation, [sx, sy, sz])
+}
+
+fn three_matrix_determinant(matrix: [f64; 16]) -> f64 {
+    let n11 = matrix[0];
+    let n12 = matrix[4];
+    let n13 = matrix[8];
+    let n14 = matrix[12];
+    let n21 = matrix[1];
+    let n22 = matrix[5];
+    let n23 = matrix[9];
+    let n24 = matrix[13];
+    let n31 = matrix[2];
+    let n32 = matrix[6];
+    let n33 = matrix[10];
+    let n34 = matrix[14];
+    let n41 = matrix[3];
+    let n42 = matrix[7];
+    let n43 = matrix[11];
+    let n44 = matrix[15];
+    let t11 = n23 * n34 - n24 * n33;
+    let t12 = n22 * n34 - n24 * n32;
+    let t13 = n22 * n33 - n23 * n32;
+    let t21 = n21 * n34 - n24 * n31;
+    let t22 = n21 * n33 - n23 * n31;
+    let t23 = n21 * n32 - n22 * n31;
+    n11 * (n42 * t11 - n43 * t12 + n44 * t13)
+        - n12 * (n41 * t11 - n43 * t21 + n44 * t22)
+        + n13 * (n41 * t12 - n42 * t21 + n44 * t23)
+        - n14 * (n41 * t13 - n42 * t22 + n43 * t23)
+}
+
+fn three_quaternion_from_rotation_matrix(matrix: [f64; 16]) -> [f64; 4] {
+    let m11 = matrix[0];
+    let m12 = matrix[4];
+    let m13 = matrix[8];
+    let m21 = matrix[1];
+    let m22 = matrix[5];
+    let m23 = matrix[9];
+    let m31 = matrix[2];
+    let m32 = matrix[6];
+    let m33 = matrix[10];
+    let trace = m11 + m22 + m33;
+    if trace > 0.0 {
+        let scale = 0.5 / (trace + 1.0).sqrt();
+        [
+            (m32 - m23) * scale,
+            (m13 - m31) * scale,
+            (m21 - m12) * scale,
+            0.25 / scale,
+        ]
+    } else if m11 > m22 && m11 > m33 {
+        let scale = 2.0 * (1.0 + m11 - m22 - m33).sqrt();
+        [
+            0.25 * scale,
+            (m12 + m21) / scale,
+            (m13 + m31) / scale,
+            (m32 - m23) / scale,
+        ]
+    } else if m22 > m33 {
+        let scale = 2.0 * (1.0 + m22 - m11 - m33).sqrt();
+        [
+            (m12 + m21) / scale,
+            0.25 * scale,
+            (m23 + m32) / scale,
+            (m13 - m31) / scale,
+        ]
+    } else {
+        let scale = 2.0 * (1.0 + m33 - m11 - m22).sqrt();
+        [
+            (m13 + m31) / scale,
+            (m23 + m32) / scale,
+            0.25 * scale,
+            (m21 - m12) / scale,
+        ]
+    }
 }
 
 /// Derive dense Engine-facing slots from the admitted source parser's used
@@ -1056,6 +1271,30 @@ mod tests {
         let error = embedded_material_slots(vec![65_536], 65_537).unwrap_err();
         assert_eq!(error.code, ImportCode::ResourceLimit);
         assert!(error.message.contains("u16 representation"));
+    }
+
+    #[test]
+    fn matrix_form_rig_rest_uses_three_singular_decompose_fallback() {
+        // GLTFLoader applies an authored matrix to an Object3D, whose
+        // `Matrix4.decompose` uses identity scale/quaternion when det == 0;
+        // the later Bone.updateMatrix composes that exact fallback.
+        let node = serde_json::json!({
+            "matrix": [
+                0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0,
+                3.0, -2.0, 7.0, 1.0
+            ]
+        });
+        assert_eq!(
+            three_local_rest_matrix(&node).unwrap(),
+            [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                3.0, -2.0, 7.0, 1.0,
+            ],
+        );
     }
 
     #[test]

@@ -285,6 +285,35 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.complete_timeline(completion)
     }
 
+    /// Capture resources before releasing a caller-held runtime lock. Timed
+    /// host calls and the scheduler use this same completion path as direct calls.
+    pub(crate) fn finish_call<T>(
+        &self,
+        runtime: &mut R,
+        result: Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError>,
+    ) -> Result<ProductDevRuntimeReceipt<T>, ProductDevRuntimeError> {
+        let mut inventory = runtime.renderer_resource_ids();
+        let resources = runtime.take_retired_renderer_resources();
+        if let Some(inventory) = &mut inventory {
+            inventory.extend(
+                resources
+                    .iter()
+                    .map(|resource| resource.identity().to_owned()),
+            );
+            inventory.sort();
+            inventory.dedup();
+        }
+        result.map(|receipt| {
+            let mut previous = self
+                .resource_inventory
+                .lock()
+                .expect("inventory is only accessed under runtime serialization");
+            let changed = receipt.resource_baseline() || *previous != inventory;
+            *previous = inventory.clone();
+            receipt.with_resources(resources, if changed { inventory } else { None })
+        })
+    }
+
     pub(crate) fn with_runtime<T, F>(
         &self,
         call: F,
@@ -295,26 +324,7 @@ impl<R: ProductDevRuntime> ProductDevOperationOwner<R> {
         self.session
             .with_locked(|runtime| {
                 let result = call(runtime);
-                let mut inventory = runtime.renderer_resource_ids();
-                let resources = runtime.take_retired_renderer_resources();
-                if let Some(inventory) = &mut inventory {
-                    inventory.extend(
-                        resources
-                            .iter()
-                            .map(|resource| resource.identity().to_owned()),
-                    );
-                    inventory.sort();
-                    inventory.dedup();
-                }
-                result.map(|receipt| {
-                    let mut previous = self
-                        .resource_inventory
-                        .lock()
-                        .expect("inventory is only accessed under runtime serialization");
-                    let changed = receipt.resource_baseline() || *previous != inventory;
-                    *previous = inventory.clone();
-                    receipt.with_resources(resources, if changed { inventory } else { None })
-                })
+                self.finish_call(runtime, result)
             })
             .map_err(|_| runtime_poisoned())
             .and_then(|result| result)

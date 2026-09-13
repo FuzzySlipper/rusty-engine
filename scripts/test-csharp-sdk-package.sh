@@ -287,9 +287,20 @@ cp "$repo_root/fixtures/render/assets/noto-sans/LICENSE" "$consumer_dir/content/
 cp "$repo_root/content/assets/kenney-wall-a.voxel.json" "$consumer_dir/content/mixed/wall.voxel.json"
 printf 'bundle general bytes\000\377' > "$consumer_dir/content/mixed/general.bin"
 printf 'bundle text body\n' > "$consumer_dir/content/mixed/readme.txt"
-# A one-sample PCM WAV fixture. It keeps the package consumer portable while
-# exercising real RIFF/WAVE admission rather than a filename-only branch.
-printf 'RIFF\045\000\000\000WAVEfmt \020\000\000\000\001\000\001\000\100\037\000\000\100\037\000\000\001\000\010\000data\001\000\000\000\200' > "$consumer_dir/content/mixed/tone.wav"
+# A short audible PCM tone supports both admission and browser playback checks.
+python3 - "$consumer_dir/content/mixed/tone.wav" <<'PY'
+import math
+import struct
+import sys
+import wave
+
+sample_rate = 8000
+frames = b"".join(struct.pack("<h", round(4000 * math.sin(2 * math.pi * 440 * i / sample_rate)))
+                  for i in range(sample_rate // 2))
+with wave.open(sys.argv[1], "wb") as clip:
+    clip.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
+    clip.writeframes(frames)
+PY
 # StaticMeshAsset is the authored JSON contract whose inline payload the
 # Engine packs on admission. The collision importer fixture remains a separate
 # source-format test and is not substituted for this runtime asset contract.

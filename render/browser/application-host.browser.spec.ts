@@ -23,28 +23,43 @@ declare global {
 
 async function installResourceAdmissionGate(page: Page): Promise<void> {
   await page.evaluate(() => {
-    // Delay the exact private application-host resolver boundary without adding
-    // a production test hook or exposing renderer resource implementation.
-    const originalResolve = Promise.resolve.bind(Promise);
+    // Delay the replacement transaction before mutable catalog admission without
+    // adding a production test hook or exposing renderer resource implementation.
+    // ProductContent now admits directly into the catalog, so it no longer calls
+    // the old resolver-backed Promise.resolve(ArrayBuffer) path.
+    const originalThen = Promise.prototype.then;
     let armed = false;
     let pending = false;
     let release: (() => void) | null = null;
-    const gatedResolve = ((value?: unknown) => {
-      if (armed && value instanceof ArrayBuffer && value.byteLength === 72) {
+    const gatedThen = function(
+      this: Promise<unknown>,
+      onFulfilled?: (value: unknown) => unknown,
+      onRejected?: (reason: unknown) => unknown,
+    ) {
+      if (armed) {
         armed = false;
         pending = true;
-        return new Promise((resolve) => {
+        const gate = new Promise<void>((resolve) => {
           release = () => {
             pending = false;
-            resolve(value);
+            resolve();
           };
         });
+        return originalThen.call(
+          this,
+          (value) => originalThen.call(gate, () =>
+            onFulfilled === undefined ? value : onFulfilled(value)),
+          (reason) => originalThen.call(gate, () => {
+            if (onRejected === undefined) throw reason;
+            return onRejected(reason);
+          }),
+        );
       }
-      return originalResolve(value);
-    }) as typeof Promise.resolve;
-    Object.defineProperty(Promise, 'resolve', {
+      return originalThen.call(this, onFulfilled, onRejected);
+    };
+    Object.defineProperty(Promise.prototype, 'then', {
       configurable: true,
-      value: gatedResolve,
+      value: gatedThen,
       writable: true,
     });
     window.__rustyApplicationAdmissionGate = {
@@ -782,11 +797,11 @@ test('initial resource failure never publishes a surface or mounts downstream UI
   const message = await page.evaluate(() =>
     window.__rustyApplicationInitialResourceFailureProbe?.(),
   );
-  expect(message).toContain('expected sha256:');
+  expect(message).toContain('immutable body hash mismatch');
   await expect(page.locator('canvas')).toHaveCount(0);
   await expect(page.locator('[data-rusty-application-host]')).toHaveCount(0);
   await expect(page.locator('[data-rusty-application-failure]')).toContainText(
-    'expected sha256:',
+    'immutable body hash mismatch',
   );
 });
 

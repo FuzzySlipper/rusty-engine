@@ -20,6 +20,7 @@ import {
   RendererTerminalError,
   RenderResourceError,
   ThreeRenderer,
+  loadAnimationClipPackGlbResource,
   loadAnimatedMeshGlbResource,
   type MeshBufferView,
   type MeshBufferSource,
@@ -4210,6 +4211,105 @@ void test('committed animated GLB instances share GPU resources while playback r
     console.warn = priorWarn;
     console.error = priorError;
     testGlobal.self = priorSelf;
+  }
+});
+
+void test('the native rig fingerprint admits an actual same-GLB clip pack without weakening validation', async () => {
+  const testGlobal = globalThis as unknown as {
+    self: unknown;
+    createImageBitmap?: (blob: Blob, options?: ImageBitmapOptions) => Promise<ImageBitmap>;
+  };
+  const priorSelf = testGlobal.self;
+  const priorCreateImageBitmap = testGlobal.createImageBitmap;
+  const priorWarn = console.warn;
+  const priorError = console.error;
+  testGlobal.self = globalThis;
+  testGlobal.createImageBitmap = async () => ({ width: 1, height: 1, close() {} }) as ImageBitmap;
+  console.warn = () => undefined;
+  console.error = () => undefined;
+  try {
+    const bytes = readFileSync(
+      resolve(import.meta.dirname, '../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb'),
+    );
+    const data = () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const hash = 'sha256:c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674';
+    const primary = await loadAnimatedMeshGlbResource('mesh-animation/kenney-retro-character-medium', data(), hash);
+    const packResource = await loadAnimationClipPackGlbResource(
+      'animation-clip-pack/kenney-retro-character-same-glb',
+      data(),
+      hash,
+    );
+    const joints = new Map<string, string | null>();
+    primary.scene.traverse((node) => {
+      if (!(node instanceof THREE.Bone)) return;
+      joints.set(node.name, node.parent instanceof THREE.Bone ? node.parent.name : null);
+    });
+    const orderedJoints = [...joints]
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([id, parent]) => ({ id, parent }));
+    const structuralRootIds = orderedJoints.filter((joint) => joint.parent === null).map((joint) => joint.id);
+    const rootSet = new Set(structuralRootIds);
+    const poseTranslations = new Set<string>();
+    const changingRoots = new Set<string>();
+    let everyClipHasChangingRoot = true;
+    for (const clip of packResource.clips) {
+      const clipChangingRoots = new Set<string>();
+      for (const track of clip.tracks) {
+        if (!track.name.endsWith('.position')) continue;
+        const joint = track.name.slice(0, -'.position'.length);
+        if (!joints.has(joint)) continue;
+        poseTranslations.add(joint);
+        if (!rootSet.has(joint)) continue;
+        const originX = track.values[0]!;
+        const originZ = track.values[2]!;
+        for (let index = 0; index < track.values.length; index += 3) {
+          if (Math.abs(track.values[index]! - originX) > 1e-6
+            || Math.abs(track.values[index + 2]! - originZ) > 1e-6) {
+            clipChangingRoots.add(joint);
+            break;
+          }
+        }
+      }
+      everyClipHasChangingRoot &&= clipChangingRoots.size > 0;
+      clipChangingRoots.forEach((joint) => changingRoots.add(joint));
+    }
+    const designatedMotionRootIds = changingRoots.size === 1 && everyClipHasChangingRoot
+      ? [...changingRoots]
+      : [];
+    const designatedRoots = new Set(designatedMotionRootIds);
+    const pack = {
+      asset: 'animation-clip-pack/kenney-retro-character-same-glb',
+      runtimeFormat: 'glb' as const,
+      contentHash: hash,
+      rig: {
+        joints: orderedJoints,
+        bindRestHash: 'sha256:2e004c1c044c1e473e86227610b2057a81a03ef175a529058a027605bfb4a6f9',
+        bindRestConvention: 'localMatrixV1' as const,
+        rootConvention: designatedMotionRootIds.length === 0 ? 'inPlace' as const : 'authoredRootTranslation' as const,
+        rootJointId: designatedMotionRootIds[0] ?? structuralRootIds[0]!,
+        structuralRootIds,
+        designatedMotionRootIds,
+        authoredPoseTranslationJointIds: [...poseTranslations]
+          .filter((joint) => !designatedRoots.has(joint))
+          .sort(),
+      },
+      clips: packResource.clips.map((clip) => ({
+        id: clip.name,
+        name: clip.name,
+        durationSeconds: clip.duration,
+      })),
+      provenance: { producer: 'fixture', sourceHash: hash, targetHash: hash, license: 'CC0-1.0' },
+    };
+    const asset = animatedMeshAsset({ clipPacks: [pack] });
+    const registry = new AnimatedMeshRegistry(new MapAnimatedMeshAssetSource([primary], [packResource]));
+    assert.equal(animationRigFingerprint(primary.scene), pack.rig.bindRestHash);
+    assert.doesNotThrow(() => registry.define(asset));
+  } finally {
+    console.warn = priorWarn;
+    console.error = priorError;
+    testGlobal.self = priorSelf;
+    if (priorCreateImageBitmap === undefined) delete testGlobal.createImageBitmap;
+    else testGlobal.createImageBitmap = priorCreateImageBitmap;
   }
 });
 
